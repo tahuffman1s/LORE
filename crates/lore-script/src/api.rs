@@ -474,8 +474,8 @@ mod tests {
             }
             if line == "end" || line.starts_with('}') {
                 inside.pop();
-            } else if let Some(class) = line.strip_prefix("declare class ") {
-                inside.push(class);
+            } else if let Some(class) = line.strip_prefix("declare extern type ") {
+                inside.push(class.strip_suffix(" with").unwrap());
             } else if line == "declare game: {" {
                 inside.push("game");
             } else if let Some(method) = line.strip_prefix("function ") {
@@ -523,5 +523,28 @@ mod tests {
             .collect();
         real.sort();
         assert_eq!(declared(), real);
+    }
+
+    /// CI gives `everything.luau` to the Luau type checker to show the
+    /// definitions accept what the engine takes, which it can only show for
+    /// what the file uses.
+    #[test]
+    fn the_type_checked_script_uses_everything_declared() {
+        let script = include_str!("../tests/types/everything.luau");
+        let words: Vec<&str> = script
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .collect();
+        let unused: Vec<String> = declared()
+            .into_iter()
+            .filter(|path| {
+                let name = path.rsplit(['.', ':']).next().unwrap_or(path);
+                !words.contains(&name)
+            })
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "use these in crates/lore-script/tests/types/everything.luau, \
+             so the Luau type checker tries them in CI: {unused:?}"
+        );
     }
 }

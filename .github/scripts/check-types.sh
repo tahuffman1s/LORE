@@ -74,11 +74,14 @@ for new_solver in false true; do
     echo "Checking the template, the examples and everything.luau (new solver: $new_solver)"
     if ! out=$(analyze "$new_solver" crates/lore/template/main.luau examples "$fixtures/everything.luau"); then
         echo "$out"
-        if echo "$out" | grep -q "Failed to read definitions file"; then
-            echo "check-types: lore.d.luau itself does not load in the Luau language server. Fix the SyntaxError lines above in $defs." >&2
-        else
-            echo "check-types: the type checker found mistakes. Fix the script, or fix $defs if it describes the engine wrongly." >&2
-        fi
+        case "$out" in
+            *"Failed to read definitions file"*)
+                echo "check-types: lore.d.luau itself does not load in the Luau language server. Fix the SyntaxError lines above in $defs." >&2
+                ;;
+            *)
+                echo "check-types: the type checker found mistakes. Fix the script, or fix $defs if it describes the engine wrongly." >&2
+                ;;
+        esac
         failed=1
     fi
 done

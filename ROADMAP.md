@@ -23,10 +23,6 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
-- A caught engine error is slow, and slower each time, in a loop at the top of a script (#3)
-- Test require's capital-letter check on Windows and macOS, and try autocomplete across files in an editor (#4)
-- game.team("Red") at the top of the file fails right after game.mode lists the team (#5)
-- Check lore.d.luau with the real Luau type checker in CI (#6)
 
 ## M1 — Walk the world
 
