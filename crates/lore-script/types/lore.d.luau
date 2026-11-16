@@ -598,9 +598,18 @@ declare game: {
         finish: (winner: Team | Player | nil) -> (),
     },
 
-    --- Sound. A sound is a WAV file in a folder called `sounds` inside the
-    --- game's folder, named without the folder and without `.wav`:
-    --- `sounds/door.wav` is "door" and `sounds/ui/click.wav` is "ui/click".
+    --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
+    --- inside the game's folder, named without the folder and without `.wav`
+    --- or `.ogg`: `sounds/door.wav` is "door" and `sounds/ui/click.ogg` is
+    --- "ui/click".
+    ---
+    --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
+    --- is "music/theme". The sounds in that folder, and a sound called
+    --- "music", follow the player's music volume in the settings menu; every
+    --- other sound follows their effects volume. Music can be as long as you
+    --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
+    --- little at a time as it plays. A WAV file is held in memory whole, so
+    --- export long sounds as Ogg Vorbis.
     --- The engine also has starter sounds a new game can use straight away:
     --- "footstep", "gunshot", "landing", "dry-fire" and "reload". A file of
     --- your own with one of those names replaces the starter sound.
@@ -618,8 +627,9 @@ declare game: {
         ---     as fast and an octave higher, 0.5 half as fast. From 0.25 to 4.
         ---   loop: true to start again at the end, until it is stopped.
         --- A volume or pitch outside its range is brought into it.
+        --- A sound in `sounds/music` follows the player's music volume.
         --- Example: game.audio.play("gunshot")
-        --- Example: local music = game.audio.play("music", { volume = 0.4, loop = true })
+        --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
 
         --- Plays a sound from a place in the world: quieter the further the

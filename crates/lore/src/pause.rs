@@ -290,6 +290,8 @@ struct Widgets {
     /// The settings screen.
     settings: ScreenId,
     volume: WidgetId,
+    music_volume: WidgetId,
+    effects_volume: WidgetId,
     sensitivity: WidgetId,
     invert_look: WidgetId,
     ui_size: WidgetId,
@@ -329,6 +331,18 @@ impl Widgets {
                     slider(screen, "Volume", Settings::VOLUME, settings.volume),
                     slider(
                         screen,
+                        "Music volume",
+                        Settings::VOLUME,
+                        settings.music_volume,
+                    ),
+                    slider(
+                        screen,
+                        "Effects volume",
+                        Settings::VOLUME,
+                        settings.effects_volume,
+                    ),
+                    slider(
+                        screen,
                         "Look sensitivity",
                         Settings::SENSITIVITY,
                         settings.sensitivity,
@@ -345,7 +359,16 @@ impl Widgets {
                 ]);
             })
             .ok()?;
-        let [volume, sensitivity, invert_look, ui_size, reset, done] = sliders?;
+        let [
+            volume,
+            music_volume,
+            effects_volume,
+            sensitivity,
+            invert_look,
+            ui_size,
+            reset,
+            done,
+        ] = sliders?;
 
         let mut answers = None;
         let leaving = ui
@@ -365,6 +388,8 @@ impl Widgets {
             quit,
             settings: settings_screen,
             volume,
+            music_volume,
+            effects_volume,
             sensitivity,
             invert_look,
             ui_size,
@@ -529,6 +554,9 @@ impl Menu {
                     // The widgets are this UI's own and of these kinds, so
                     // setting them cannot fail.
                     let _ = self.ui.set_slider(widgets.volume, self.settings.volume);
+                    let _ = (self.ui).set_slider(widgets.music_volume, self.settings.music_volume);
+                    let _ =
+                        (self.ui).set_slider(widgets.effects_volume, self.settings.effects_volume);
                     let _ = (self.ui).set_slider(widgets.sensitivity, self.settings.sensitivity);
                     let _ = (self.ui).set_toggle(widgets.invert_look, self.settings.invert_look);
                     let _ = self.ui.set_slider(widgets.ui_size, self.settings.ui_size);
@@ -541,6 +569,12 @@ impl Menu {
                 match value {
                     Value::Slider(number) if widget == widgets.volume => {
                         self.settings.volume = number;
+                    }
+                    Value::Slider(number) if widget == widgets.music_volume => {
+                        self.settings.music_volume = number;
+                    }
+                    Value::Slider(number) if widget == widgets.effects_volume => {
+                        self.settings.effects_volume = number;
                     }
                     Value::Slider(number) if widget == widgets.sensitivity => {
                         self.settings.sensitivity = number;

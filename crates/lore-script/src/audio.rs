@@ -330,10 +330,10 @@ fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua:
     let known = |candidate: &str| names.iter().any(|name| name == candidate);
     // The two slips that are not typos: the file's name, or its whole path.
     let bare = name.strip_prefix("sounds/").unwrap_or(&name);
+    let ends_as_a_file =
+        |ending: &str| ending.eq_ignore_ascii_case(".wav") || ending.eq_ignore_ascii_case(".ogg");
     let bare = match bare.len().checked_sub(4) {
-        Some(cut) if bare.is_char_boundary(cut) && bare[cut..].eq_ignore_ascii_case(".wav") => {
-            &bare[..cut]
-        }
+        Some(cut) if bare.is_char_boundary(cut) && ends_as_a_file(&bare[cut..]) => &bare[..cut],
         _ => bare,
     };
     let mut message = format!("There is no sound called \"{name}\".");
@@ -341,7 +341,7 @@ fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua:
         let _ = write!(
             message,
             " A sound is named by its file in the sounds folder, without the folder \
-             and without .wav: write \"{bare}\"."
+             and without .wav or .ogg: write \"{bare}\"."
         );
     } else if let Some(near) = closest(bare, names.iter().map(String::as_str)) {
         let _ = write!(message, " Did you mean \"{near}\"?");
@@ -358,7 +358,8 @@ fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua:
         }
         let _ = write!(
             message,
-            ". To add one, put {bare}.wav in a folder called sounds inside the game's folder."
+            ". To add one, put {bare}.wav or {bare}.ogg in a folder called sounds inside the \
+             game's folder."
         );
     }
     Err(fail(lua, message))

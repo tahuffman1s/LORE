@@ -447,7 +447,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let level = cli::load_level(folder).inspect_err(|error| eprintln!("{error}"));
     // Read before the script runs, so a sound that cannot be played is not
     // one the script is let play. Each such file is logged as it is found.
-    game.load_sounds();
+    game.check_sounds();
     let mut input = lore::input::Input::new(config.actions.clone());
     let step = 1.0 / TICKS as f32;
     let mut played = false;

@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 
-use crate::{AudioError, Listener, Mixer, Play, Playing, Sound};
+use crate::mixer::Retired;
+use crate::stream::{self, Reader, Streamer};
+use crate::{AudioError, Group, Listener, Mixer, Play, Playing};
 
 /// How many requests can wait for the sound thread at once. More than a
 /// frame could sensibly ask for; past it, new requests are dropped.
@@ -17,12 +19,14 @@ const BLOCK_FRAMES: usize = 1024;
 
 /// A request from the game to the sound thread.
 enum Request {
-    Play(Playing, Play),
+    /// With the decoded sound of a streamed one.
+    Play(Playing, Play, Option<Reader>),
     Stop(Playing),
     StopAll,
     MoveTo(Playing, [f32; 3]),
     Listener(Listener),
     Volume(f32),
+    GroupVolume(Group, f32),
 }
 
 /// The computer's speakers or headphones, with a [`Mixer`] playing
@@ -50,6 +54,9 @@ enum Request {
 pub struct Speakers {
     link: Option<Link>,
     next_id: u64,
+    /// Decodes streamed sounds, so that neither the game's thread nor the
+    /// sound card's ever does.
+    streamer: Streamer,
 }
 
 /// The live connection to a sound device.
@@ -58,7 +65,7 @@ struct Link {
     _stream: cpal::Stream,
     requests: rtrb::Producer<Request>,
     /// Finished sounds coming back, so this thread is the one to free them.
-    finished: rtrb::Consumer<Sound>,
+    finished: rtrb::Consumer<Retired>,
     failed: Arc<AtomicBool>,
     rate: u32,
 }
@@ -74,6 +81,7 @@ impl Speakers {
         Ok(Self {
             link: Some(Link::open()?),
             next_id: 1,
+            streamer: Streamer::default(),
         })
     }
 
@@ -83,6 +91,7 @@ impl Speakers {
         Self {
             link: None,
             next_id: 1,
+            streamer: Streamer::default(),
         }
     }
 
@@ -127,7 +136,13 @@ impl Speakers {
     pub fn play(&mut self, play: Play) -> Playing {
         let playing = Playing(self.next_id);
         self.next_id += 1;
-        self.send(Request::Play(playing, play));
+        // Silent speakers decode nothing.
+        let reader = (self.link.is_some() && play.sound.is_streamed()).then(|| {
+            let (reader, feeder) = stream::open(&play.sound, play.looping);
+            self.streamer.feed(feeder);
+            reader
+        });
+        self.send(Request::Play(playing, play, reader));
         playing
     }
 
@@ -154,6 +169,12 @@ impl Speakers {
     /// Sets the volume of everything, from 0 (silent) to 1 (full).
     pub fn set_volume(&mut self, volume: f32) {
         self.send(Request::Volume(volume));
+    }
+
+    /// Sets the volume of music or of everything else, from 0 (silent) to
+    /// 1 (full). See [`Mixer::set_group_volume`].
+    pub fn set_group_volume(&mut self, group: Group, volume: f32) {
+        self.send(Request::GroupVolume(group, volume));
     }
 
     fn send(&mut self, request: Request) {
@@ -234,7 +255,7 @@ impl Link {
 struct Feed {
     mixer: Mixer,
     incoming: rtrb::Consumer<Request>,
-    outgoing: rtrb::Producer<Sound>,
+    outgoing: rtrb::Producer<Retired>,
     channels: usize,
     block: [f32; BLOCK_FRAMES * 2],
 }
@@ -279,12 +300,13 @@ impl Feed {
     {
         while let Ok(request) = self.incoming.pop() {
             match request {
-                Request::Play(playing, play) => self.mixer.play_as(playing, play),
+                Request::Play(playing, play, reader) => self.mixer.play_as(playing, play, reader),
                 Request::Stop(playing) => self.mixer.stop(playing),
                 Request::StopAll => self.mixer.stop_all(),
                 Request::MoveTo(playing, position) => self.mixer.move_to(playing, position),
                 Request::Listener(listener) => self.mixer.set_listener(listener),
                 Request::Volume(volume) => self.mixer.set_volume(volume),
+                Request::GroupVolume(group, volume) => self.mixer.set_group_volume(group, volume),
             }
         }
 
@@ -309,10 +331,10 @@ impl Feed {
         }
 
         let outgoing = &mut self.outgoing;
-        self.mixer.hand_over_retired(|sound| {
+        self.mixer.hand_over_retired(|done| {
             outgoing
-                .push(sound)
-                .map_err(|rtrb::PushError::Full(sound)| sound)
+                .push(done)
+                .map_err(|rtrb::PushError::Full(done)| done)
         });
     }
 }

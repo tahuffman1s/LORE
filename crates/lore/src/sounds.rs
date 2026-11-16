@@ -1,17 +1,22 @@
 //! The sounds a game can play by name: the engine's starter sounds, and the
-//! WAV files in the game's `sounds` folder.
+//! WAV and Ogg Vorbis files in the game's `sounds` folder.
 //!
-//! `sounds/door.wav` is the sound `door`, and `sounds/ui/click.wav` is
+//! `sounds/door.wav` is the sound `door`, and `sounds/ui/click.ogg` is
 //! `ui/click`. A file named like a starter sound (`gunshot.wav`) takes its
 //! place. A script only ever names a sound from this list, so nothing a
 //! script writes decides which file is read.
+//!
+//! Music is the sound `music` and every sound in `sounds/music`: it follows
+//! the player's music volume, where the rest follow the volume of effects.
+//! A long Ogg Vorbis file, music or not, is decoded as it plays and not
+//! held in memory whole; that is `lore_audio`'s doing.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use lore_audio::{Play, Range, Sound, SoundSet, starter};
+use lore_audio::{Group, Play, Range, Sound, SoundSet, starter};
 use lore_pack::Pack;
 use lore_script::SoundRequest;
 
@@ -31,11 +36,16 @@ const MAX_FILES: usize = 4096;
 /// How many folders deep inside `sounds` files are looked for.
 const MAX_DEPTH: usize = 8;
 
-/// Sound files that are not WAV. Anything else beside the sounds, such as a
-/// licence text, is nobody's mistake.
-const OTHER_SOUND_ENDINGS: [&str; 9] = [
-    "ogg", "mp3", "flac", "opus", "m4a", "aac", "aiff", "aif", "wma",
-];
+/// The endings of the sound files that can be played. What a file holds
+/// is read from the file itself; the ending only says it is a sound.
+const SOUND_ENDINGS: [&str; 3] = ["wav", "ogg", "oga"];
+
+/// Sound files of kinds that cannot be played. Anything else beside the
+/// sounds, such as a licence text, is nobody's mistake.
+const OTHER_SOUND_ENDINGS: [&str; 8] = ["mp3", "flac", "opus", "m4a", "aac", "aiff", "aif", "wma"];
+
+/// The sound, and the folder of sounds, that are music.
+const MUSIC: &str = "music";
 
 /// One take, or several to choose among.
 #[derive(Debug)]
@@ -49,6 +59,8 @@ struct Entry {
     source: Source,
     /// How far it carries when the script does not say.
     range: Range,
+    /// Which of the player's volume settings it follows.
+    group: Group,
 }
 
 /// A sound file in a game's folder, as it was when last looked at.
@@ -56,6 +68,8 @@ struct Entry {
 struct Found {
     /// The sound's name: `ui/click` for `sounds/ui/click.wav`.
     name: String,
+    /// The file as a creator knows it: `sounds/ui/click.wav`.
+    file: String,
     path: PathBuf,
     changed: Option<SystemTime>,
     bytes: u64,
@@ -127,8 +141,8 @@ impl Sounds {
             let read = pack
                 .read(&file)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| Sound::from_wav(&bytes).map_err(|error| error.to_string()));
-            if sounds.add(name, read) {
+                .and_then(|bytes| Sound::from_bytes(bytes).map_err(|error| error.to_string()));
+            if sounds.add(name, &file, read) {
                 sounds.own += 1;
             }
         }
@@ -167,7 +181,7 @@ impl Sounds {
         }
         for file in std::mem::take(&mut self.waiting) {
             let read = Sound::load(&file.path).map_err(|error| error.to_string());
-            if !self.add(file.name.clone(), read) {
+            if !self.add(file.name.clone(), &file.file, read) {
                 self.found.retain(|found| *found != file);
             }
         }
@@ -228,6 +242,7 @@ impl Sounds {
                     let about = entry.metadata().ok();
                     found.push(Found {
                         name,
+                        file: format!("{SOUNDS_FOLDER}/{within}"),
                         path: entry.path(),
                         changed: about.as_ref().and_then(|about| about.modified().ok()),
                         bytes: about.map_or(0, |about| about.len()),
@@ -242,7 +257,7 @@ impl Sounds {
             ));
         }
         found.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
-        // `door.wav` beside `door.WAV`: the same name twice.
+        // `door.wav` beside `door.WAV` or `door.ogg`: the same name twice.
         let mut kept: Vec<Found> = Vec::with_capacity(found.len());
         for file in found {
             match kept.last().filter(|kept| kept.name == file.name) {
@@ -289,22 +304,41 @@ impl Sounds {
         name_of(within, &mut self.problems)
     }
 
-    /// Makes `name` playable, or notes why it is not. Returns whether it is.
-    fn add(&mut self, name: String, read: Result<Sound, String>) -> bool {
+    /// Makes `name` playable from what was `read` from `file`, or notes
+    /// why it is not. Returns whether it is.
+    fn add(&mut self, name: String, file: &str, read: Result<Sound, String>) -> bool {
         match read {
             Ok(sound) => {
                 let entry = Entry {
                     source: Source::One(sound),
                     range: Range::default(),
+                    group: group_of(&name),
                 };
                 self.entries.insert(name, entry);
                 true
             }
             Err(error) => {
-                self.problems.push(format!(
-                    "{SOUNDS_FOLDER}/{name}.wav was not loaded. {error}"
-                ));
+                self.problems
+                    .push(format!("{file} was not loaded. {error}"));
                 false
+            }
+        }
+    }
+
+    /// Decodes the sounds that are otherwise decoded as they play, music
+    /// above all, from beginning to end, and notes the ones that are
+    /// damaged part way through. For `lore check`: a game never waits for
+    /// this, and would only find the damage when the music got there.
+    pub fn check_streamed(&mut self) {
+        for (name, entry) in &self.entries {
+            let Source::One(sound) = &entry.source else {
+                continue;
+            };
+            if let Err(error) = sound.check() {
+                let file = self.found.iter().find(|found| found.name == *name);
+                let file = file.map_or(name.as_str(), |found| found.file.as_str());
+                self.problems
+                    .push(format!("{file} stops part way through. {error}"));
             }
         }
     }
@@ -314,10 +348,11 @@ impl Sounds {
     /// name ready. `seed` chooses among its takes, if it has several.
     pub(crate) fn take(&mut self, name: &str, seed: u32) -> Option<Play> {
         let entry = self.entries.get_mut(name)?;
-        let play = match &mut entry.source {
+        let mut play = match &mut entry.source {
             Source::One(sound) => Play::everywhere(sound.clone()),
             Source::Takes(takes) => takes.everywhere(seed),
         };
+        play.group = entry.group;
         Some(play.range(entry.range))
     }
 
@@ -352,25 +387,35 @@ impl Sounds {
     }
 }
 
-/// The sound's name for a file inside the sounds folder: without `.wav`.
-/// `None` for a file that is not a sound to play; `problems` is told when
-/// it looks like one that was meant to be.
+/// The sound's name for a file inside the sounds folder: without `.wav`
+/// or `.ogg`. `None` for a file that is not a sound to play; `problems` is
+/// told when it looks like one that was meant to be.
 fn name_of(within: &str, problems: &mut Vec<String>) -> Option<String> {
     let (name, ending) = within.rsplit_once('.')?;
-    if ending.eq_ignore_ascii_case("wav") && !name.is_empty() {
+    let is = |endings: &[&str]| endings.iter().any(|one| ending.eq_ignore_ascii_case(one));
+    if is(&SOUND_ENDINGS) && !name.is_empty() {
         return Some(name.to_owned());
     }
-    if OTHER_SOUND_ENDINGS
-        .iter()
-        .any(|other| ending.eq_ignore_ascii_case(other))
-    {
+    if is(&OTHER_SOUND_ENDINGS) {
         problems.push(format!(
-            "{SOUNDS_FOLDER}/{within} was not loaded: only WAV files can be played for \
-             now. Export it as a 16-bit WAV file (in Audacity: File, Export Audio, WAV) \
-             and save it as {SOUNDS_FOLDER}/{name}.wav."
+            "{SOUNDS_FOLDER}/{within} was not loaded: only WAV and Ogg Vorbis files can \
+             be played. Export it as Ogg Vorbis, which is best for music (in Audacity: \
+             File, Export Audio, Ogg Vorbis Files), and save it as \
+             {SOUNDS_FOLDER}/{name}.ogg."
         ));
     }
     None
+}
+
+/// Which volume setting the sound called `name` follows: music for
+/// `music` itself and for everything in the `music` folder.
+fn group_of(name: &str) -> Group {
+    let folder = name.split('/').next().unwrap_or(name);
+    if folder.eq_ignore_ascii_case(MUSIC) {
+        Group::Music
+    } else {
+        Group::Effects
+    }
 }
 
 /// The engine's own sounds, made from arithmetic.
@@ -378,10 +423,12 @@ fn starters() -> BTreeMap<String, Entry> {
     let one = |sound, range| Entry {
         source: Source::One(sound),
         range,
+        group: Group::Effects,
     };
     let takes = |takes, range| Entry {
         source: Source::Takes(takes),
         range,
+        group: Group::Effects,
     };
     let close = Range::default();
     let entries = [
@@ -510,6 +557,7 @@ mod tests {
         let folder = game(
             "broken",
             &[
+                ("sounds/theme.mp3", b"ID3"),
                 ("sounds/music.ogg", b"OggS"),
                 ("sounds/door.wav", b"this is not a WAV file"),
                 ("sounds/gunshot.wav", b"neither is this"),
@@ -520,21 +568,139 @@ mod tests {
         let problems = sounds.problems().join("\n");
         assert!(
             problems.contains(
-                "sounds/music.ogg was not loaded: only WAV files can be played for now. \
-                 Export it as a 16-bit WAV file (in Audacity: File, Export Audio, WAV) and \
-                 save it as sounds/music.wav."
+                "sounds/theme.mp3 was not loaded: only WAV and Ogg Vorbis files can be \
+                 played. Export it as Ogg Vorbis, which is best for music (in Audacity: \
+                 File, Export Audio, Ogg Vorbis Files), and save it as sounds/theme.ogg."
             ),
             "{problems}"
         );
         assert!(
-            problems.contains("sounds/door.wav was not loaded."),
+            problems.contains(
+                "sounds/door.wav was not loaded. This is not really a WAV or an Ogg Vorbis \
+                 file, even if its name ends in .wav or .ogg."
+            ),
             "{problems}"
         );
-        assert_eq!(sounds.problems().len(), 3, "{problems}");
+        assert!(
+            problems.contains(
+                "sounds/music.ogg was not loaded. This is not an Ogg Vorbis file the engine \
+                 can read: it holds something else, not Vorbis."
+            ),
+            "{problems}"
+        );
+        assert_eq!(sounds.problems().len(), 4, "{problems}");
         // The starter gunshot is still there; the door is not.
         assert_eq!(names(&sounds), STARTER_SOUNDS);
         assert!(sounds.play(&request("gunshot")).is_some());
         assert_eq!(sounds.own(), 0);
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    /// Ogg Vorbis made by ffmpeg from sine waves (see `lore-audio`'s
+    /// tests): a quarter of a second, and eleven seconds.
+    const TONE: &[u8] = include_bytes!("../../lore-audio/tests/data/tone.ogg");
+    const SONG: &[u8] = include_bytes!("../../lore-audio/tests/data/song.ogg");
+
+    #[test]
+    fn ogg_vorbis_files_are_sounds_and_long_ones_are_not_held_in_memory() {
+        let folder = game(
+            "ogg",
+            &[
+                ("sounds/bell.ogg", TONE),
+                ("sounds/weather/rain.ogg", SONG),
+                // What a file holds is read from the file, not its name.
+                ("sounds/mislabelled.wav", TONE),
+            ],
+        );
+        let mut sounds = Sounds::in_folder(&folder);
+        assert!(names(&sounds).contains(&"bell"));
+        sounds.load();
+        assert!(sounds.problems().is_empty(), "{:?}", sounds.problems());
+        assert_eq!(sounds.own(), 3);
+
+        let bell = sounds.play(&request("bell")).unwrap();
+        assert_eq!(bell.sound.seconds(), 0.25);
+        assert!(!bell.sound.is_streamed());
+        assert!(sounds.play(&request("mislabelled")).is_some());
+
+        let rain = sounds.play(&request("weather/rain")).unwrap();
+        assert_eq!(rain.sound.seconds(), 11.0);
+        assert!(rain.sound.is_streamed());
+        // Long, but not music: it follows the volume of effects.
+        assert_eq!(rain.group, Group::Effects);
+
+        // Whole, so `lore check` has nothing more to say.
+        sounds.check_streamed();
+        assert!(sounds.problems().is_empty(), "{:?}", sounds.problems());
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn music_is_the_sound_called_music_and_the_sounds_in_the_music_folder() {
+        let wav = test_wav(&[1000; 480]);
+        let folder = game(
+            "music",
+            &[
+                ("sounds/music.wav", &wav),
+                ("sounds/music/theme.ogg", SONG),
+                ("sounds/Music/win.wav", &wav),
+                ("sounds/musical-box.wav", &wav),
+                ("sounds/ui/music.wav", &wav),
+            ],
+        );
+        let mut sounds = Sounds::in_folder(&folder);
+        sounds.load();
+        assert!(sounds.problems().is_empty(), "{:?}", sounds.problems());
+        let mut group = |name: &str| sounds.play(&request(name)).unwrap().group;
+        assert_eq!(group("music"), Group::Music);
+        assert_eq!(group("music/theme"), Group::Music);
+        assert_eq!(group("Music/win"), Group::Music);
+        assert_eq!(group("musical-box"), Group::Effects);
+        assert_eq!(group("ui/music"), Group::Effects);
+        assert_eq!(group("gunshot"), Group::Effects);
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_door_in_two_kinds_of_file_is_one_sound_and_the_other_is_explained() {
+        let folder = game(
+            "twice",
+            &[
+                ("sounds/door.wav", &test_wav(&[1000; 480])),
+                ("sounds/door.ogg", TONE),
+            ],
+        );
+        let mut sounds = Sounds::in_folder(&folder);
+        sounds.load();
+        assert_eq!(sounds.own(), 1);
+        assert_eq!(sounds.problems().len(), 1, "{:?}", sounds.problems());
+        assert!(sounds.problems()[0].contains("has the same name, \"door\""));
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn music_that_is_damaged_part_way_is_found_by_checking_it() {
+        // All but the last bytes of the file: it starts well, so it loads.
+        let folder = game(
+            "cut",
+            &[("sounds/music/theme.ogg", &SONG[..SONG.len() - 300])],
+        );
+        let mut sounds = Sounds::in_folder(&folder);
+        sounds.load();
+        assert!(sounds.problems().is_empty(), "{:?}", sounds.problems());
+        assert!(
+            sounds
+                .play(&request("music/theme"))
+                .unwrap()
+                .sound
+                .is_streamed()
+        );
+        sounds.check_streamed();
+        let problems = sounds.problems().join("\n");
+        assert!(
+            problems.starts_with("sounds/music/theme.ogg stops part way through. "),
+            "{problems}"
+        );
         let _ = fs::remove_dir_all(folder);
     }
 
@@ -644,6 +810,7 @@ mod tests {
             &[
                 ("door.wav", &test_wav(&[1000; 480])),
                 ("bad.wav", b"not a WAV file"),
+                ("theme.ogg", SONG),
                 ("main.luau", b""),
             ],
         );
@@ -659,14 +826,18 @@ mod tests {
                 source("main.luau", "main.luau"),
                 source("sounds/doors/front.wav", "door.wav"),
                 source("sounds/bad.wav", "bad.wav"),
+                source("sounds/music/theme.ogg", "theme.ogg"),
                 source("music/not-in-sounds.wav", "door.wav"),
             ],
         )
         .unwrap();
         let mut pack = Pack::open(&out).unwrap();
         let mut sounds = Sounds::in_pack(&mut pack);
-        assert_eq!(sounds.own(), 1);
-        assert_eq!(names(&sounds).len(), STARTER_SOUNDS.len() + 1);
+        assert_eq!(sounds.own(), 2);
+        assert_eq!(names(&sounds).len(), STARTER_SOUNDS.len() + 2);
+        let theme = sounds.play(&request("music/theme")).unwrap();
+        assert!(theme.sound.is_streamed());
+        assert_eq!(theme.group, Group::Music);
         assert_eq!(
             sounds
                 .play(&request("doors/front"))
