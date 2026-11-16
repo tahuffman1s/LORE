@@ -226,3 +226,27 @@ end)
 game.onWeaponReload(function(player)
     print(player.name .. " is reloading")
 end)
+
+local ammo = game.hud.text("30 / 90", { at = "bottom right", right = -20, down = -20, size = 40, color = "white" })
+local count = game.hud.text(3)
+local health = game.hud.bar(1, { at = "bottom left", width = 300, height = 24, color = "red" })
+local dot = game.hud.box({ at = "center", width = 6, height = 6, color = "#ffffff80" })
+game.hud.box()
+
+game.onDraw(function()
+    health.value = shown.value / 100
+    health.color = if health.value < 0.25 then "red" else "green"
+    ammo.text = "29 / 90"
+    local words: string = ammo.text .. ammo.color
+    ammo.visible = not ammo.visible
+    dot.visible = health.visible
+    dot.color = "green"
+    print(words)
+end)
+
+game.after(60, function()
+    ammo:remove()
+    count:remove()
+    health:remove()
+    dot:remove()
+end)

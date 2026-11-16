@@ -15,6 +15,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the server fires them (#8)
 - Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
+- Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
 - A headless server, snapshots with prediction and reconciliation, lag compensation, joining over the local network (FOSSPS#10, FOSSPS#11, FOSSPS#12, FOSSPS#14)
 - Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
@@ -30,7 +31,7 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Scripts build the HUD and menus (#14)
+- Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
 - Menus longer than the screen scroll, and settings show which button does what (#15)
 - Sound in a running game: players are heard walking and shooting (#16)
 - Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
@@ -71,6 +72,7 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
 - Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter
 - Dice in scripts are the game's own: `math.random` is the same in a replay and carries on through a save (#240)
+- The starter game and the tutorial show what happens on the HUD, not only in the terminal (#246)
 
 ## M2 — People and creatures
 
@@ -120,6 +122,7 @@ What turns a walk into a game: saving, one book of facts the world remembers (`g
 - Music that follows the game: calm, tense and fight, changing on the beat (#88)
 - Tutorial: your first adventure in ten minutes — walk, meet someone, finish a quest, save (#89)
 - Timers and tweens outlast a save: of the script, and of the game (#238)
+- HUD pieces in a list, text that wraps with a backing behind it, and pictures (#245)
 
 ## M4 — Modern graphics and performance
 
@@ -268,6 +271,7 @@ Co-op and competitive multiplayer. The netcode is already there, because single-
 - Other players are drawn: a body where each one stands, moving as snapshots arrive (#211)
 - Rumble for players who joined from another computer (player:rumble) (#212)
 - Script sounds for players who joined from another computer (#213)
+- The script's HUD for players who joined from another computer, and a HUD of each player's own (#247)
 - Levels sent to joining players arrive faster, and a big server can point at a web address (#214)
 - A level sent by a server is read within a memory budget (#215)
 - Co-op: a friend joins your single-player game, and the story is shared (#216)

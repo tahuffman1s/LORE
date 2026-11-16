@@ -402,6 +402,26 @@ impl Ui {
         }
     }
 
+    /// Shows a HUD text, bar or rectangle, or hides it: a hidden piece
+    /// keeps its place and its values and is not drawn.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD piece.
+    pub fn set_shown(&mut self, widget: WidgetId, shown: bool) -> Result<(), UiError> {
+        let node = self.node(widget)?;
+        match &node.kind {
+            Kind::HudText { .. } | Kind::HudBar { .. } | Kind::HudRect { .. } => {
+                node.visible = shown;
+                Ok(())
+            }
+            other => Err(UiError::WrongKind {
+                expected: "HUD piece",
+                found: other.name(),
+            }),
+        }
+    }
+
     /// Changes how full a HUD bar is, from 0 to 1.
     ///
     /// # Errors
@@ -883,7 +903,10 @@ impl Ui {
             scale: self.scale,
         };
         for &piece in &self.hud {
-            paint::hud(&self.nodes[piece as usize], &self.theme, &mut painter);
+            let node = &self.nodes[piece as usize];
+            if node.visible {
+                paint::hud(node, &self.theme, &mut painter);
+            }
         }
 
         let Some(screen) = self

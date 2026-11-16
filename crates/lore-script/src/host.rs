@@ -20,6 +20,7 @@ use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 use crate::api::{self, Handlers, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::error::{OpenError, ScriptError, is_time_limit};
+use crate::hud::{HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::mode_api::{Handles, ModeState};
@@ -168,6 +169,8 @@ pub struct ScriptHost {
     weapons: Rc<WeaponState>,
     /// The game's time. Kept here so a save does not start it again.
     clock: Rc<Clock>,
+    /// How many versions of the script have run: each has its own HUD.
+    versions: u32,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -270,6 +273,7 @@ impl ScriptHost {
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
+            versions: 0,
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -328,6 +332,64 @@ impl ScriptHost {
         self.clock.set_drawing(Some(alpha));
         self.call_all(|handlers| &handlers.draw, ());
         self.clock.set_drawing(None);
+    }
+
+    /// A number that changes whenever the script's HUD has a piece more or
+    /// fewer than before: one was made with `game.hud`, one was removed, or
+    /// the script was saved and its new version made the HUD again.
+    ///
+    /// While it stays the same, the pieces
+    /// [`each_hud_piece`](Self::each_hud_piece) gives are the same ones in
+    /// the same order, and only
+    /// [`take_hud_changes`](Self::take_hud_changes) need be asked.
+    #[must_use]
+    pub fn hud_layout(&self) -> u64 {
+        let pieces = self
+            .running
+            .as_ref()
+            .map_or(0, |version| version.shared.hud.layout());
+        (u64::from(self.versions) << 32) | u64::from(pieces)
+    }
+
+    /// Calls `see` with every piece of the HUD the script has made with
+    /// `game.hud`, first made first, and its place in that order. Draw them
+    /// in that order: a later piece goes on top of an earlier one.
+    ///
+    /// ```
+    /// use lore_script::ScriptHost;
+    ///
+    /// let script = r#"
+    /// local ammo = game.hud.text("30 / 90", { at = "bottom right" })
+    /// game.onTick(function() ammo.text = "29 / 90" end)
+    /// "#;
+    /// let mut host = ScriptHost::from_source(script, lore_input::ActionMap::default());
+    /// let mut pieces = Vec::new();
+    /// host.each_hud_piece(|_, piece| pieces.push(piece.clone()));
+    /// assert_eq!(pieces.len(), 1);
+    ///
+    /// // A tick later the text has changed, and nothing else has.
+    /// host.tick(&lore_input::InputFrame::default(), 1.0 / 60.0);
+    /// host.take_hud_changes(|place, piece| pieces[place] = piece.clone());
+    /// assert!(format!("{:?}", pieces[0].shape).contains("29 / 90"));
+    /// ```
+    pub fn each_hud_piece(&self, see: impl FnMut(usize, &HudPiece)) {
+        if let Some(version) = &self.running {
+            version.shared.hud.each(see);
+        }
+    }
+
+    /// Calls `see` with every piece of the HUD the script has changed since
+    /// this was last called, and its place in the order
+    /// [`each_hud_piece`](Self::each_hud_piece) gives them in. With nothing
+    /// changed it does nothing and costs nothing, so it can be asked on
+    /// every picture.
+    ///
+    /// A piece made or removed is not a change: [`hud_layout`](Self::hud_layout)
+    /// says so, and then every piece is to be read again.
+    pub fn take_hud_changes(&mut self, see: impl FnMut(usize, &HudPiece)) {
+        if let Some(version) = &self.running {
+            version.shared.hud.take_changes(see);
+        }
     }
 
     /// How many `game.after` and `game.every` functions have been waiting
@@ -674,6 +736,8 @@ impl ScriptHost {
                     }
                 }
                 self.running = Some(version);
+                // The new version has its own HUD, made as its file ran.
+                self.versions = self.versions.wrapping_add(1);
                 self.paused = false;
                 self.last_error = None;
                 self.reported.clear();
@@ -730,6 +794,7 @@ impl ScriptHost {
             rules: RefCell::new(None),
             rumble: Cell::new(None),
             audio: Rc::clone(&self.audio),
+            hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),
             kept: Kept::default(),
             store: Rc::clone(&self.kept),

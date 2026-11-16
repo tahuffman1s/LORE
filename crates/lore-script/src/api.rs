@@ -12,6 +12,7 @@ use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
 use crate::error::{TookTooLong, closest};
+use crate::hud::{self, HUD_FUNCTIONS, HudState};
 use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::mode_api::{self, Handles, ModeState};
@@ -108,6 +109,8 @@ pub(crate) struct Shared {
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
+    /// The HUD this version has made with `game.hud`.
+    pub hud: HudState,
     /// The script files this version has read, and what `require` gave for each.
     pub modules: Modules,
     /// The tables this version asked for with `game.keep`.
@@ -304,8 +307,13 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
     game.set("audio", sounds)?;
 
+    let pieces = hud::table(lua, shared)?;
+    strict(lua, &pieces, "game.hud", HUD_FUNCTIONS)?;
+    game.set("hud", pieces)?;
+
     let mut members = GAME_FUNCTIONS.to_vec();
     members.push("audio");
+    members.push("hud");
     members.push("input");
     members.push("round");
     strict(lua, &game, "game", &members)?;
@@ -585,10 +593,17 @@ mod tests {
             TEAM_METHODS,
         };
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 16] = [
+        let groups: [(&str, &[&str]); 23] = [
             ("game.", GAME_FUNCTIONS),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),
+            ("game.hud.", HUD_FUNCTIONS),
+            ("HudText.", hud::TEXT_FIELDS),
+            ("HudText:", hud::PIECE_METHODS),
+            ("HudBar.", hud::BAR_FIELDS),
+            ("HudBar:", hud::PIECE_METHODS),
+            ("HudBox.", hud::BOX_FIELDS),
+            ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
             ("game.round.", ROUND_FUNCTIONS),
             ("game.mode.", MODE_SETTINGS),

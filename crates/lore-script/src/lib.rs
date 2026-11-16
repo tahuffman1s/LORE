@@ -29,6 +29,10 @@
 //! `game.onDraw` is called once per picture ([`ScriptHost::draw`]) to show
 //! the game without being able to change it.
 //!
+//! `game.hud` puts text, bars and boxes on the screen. The script keeps
+//! each piece and changes it; whoever draws the game reads them from
+//! [`ScriptHost::each_hud_piece`].
+//!
 //! The script API is described for editors in `types/lore.d.luau`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -37,6 +41,7 @@ mod api;
 mod audio;
 mod error;
 mod host;
+mod hud;
 mod keep;
 mod limit;
 mod mode_api;
@@ -47,6 +52,7 @@ mod weapon_api;
 pub use audio::{AudioCommand, SoundId, SoundRequest};
 pub use error::{OpenError, ScriptError};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
+pub use hud::{HudPiece, HudShape};
 pub use lore_mode as mode;
 pub use lore_mode::PlayerId;
 pub use lore_weapons as weapons;

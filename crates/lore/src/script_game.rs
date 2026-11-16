@@ -8,11 +8,15 @@ use lore_script::{AudioCommand, OpenError, ScriptHost};
 use crate::error_overlay::ErrorOverlay;
 use crate::game::{Frame, Game};
 use crate::map::{Map, MapError, MapFile};
+use crate::script_hud::ScriptHud;
 use crate::sound_output::SoundAsk;
 use crate::sounds::Sounds;
 
 /// A [`Game`] that runs the `main.luau` in a game folder, with the scripts
 /// it requires, and loads them again whenever one of them is saved.
+///
+/// The HUD the script makes with `game.hud` is drawn over the game on
+/// every frame.
 ///
 /// A mistake in a script is logged, and a game opened from a folder also
 /// shows it on screen, over the game, until a save loads the script again.
@@ -38,6 +42,8 @@ pub struct ScriptGame {
     /// Shows the latest script error over the game. Only a game whose
     /// scripts are files that can be fixed and saved has one.
     errors: Option<ErrorOverlay>,
+    /// The HUD the script made with `game.hud`.
+    hud: ScriptHud,
     /// The sounds the script can play by name.
     sounds: Sounds,
     /// What is placed in the level.
@@ -62,6 +68,7 @@ impl ScriptGame {
         let mut game = Self {
             host,
             errors: None,
+            hud: ScriptHud::default(),
             sounds: Sounds::starter(),
             map: Map::default(),
             map_file: None,
@@ -133,6 +140,7 @@ impl ScriptGame {
         let mut game = Self {
             host,
             errors: Some(ErrorOverlay::default()),
+            hud: ScriptHud::default(),
             sounds: Sounds::in_folder(folder),
             map,
             map_file: Some(map_file),
@@ -249,6 +257,8 @@ impl Game for ScriptGame {
                 AudioCommand::StopAll => frame.sound(SoundAsk::StopAll),
             }
         }
+        // After the script has drawn, so what it changed is in this frame.
+        self.hud.show(&mut self.host, frame);
         // Last, so it is on top of anything the game draws.
         if let Some(errors) = &mut self.errors {
             errors.show(self.host.last_error(), frame);
@@ -320,6 +330,112 @@ mod tests {
         }
         let shown = words(&mut game);
         assert_eq!(shown[0], "Script error in main.luau, line 1", "{shown:?}");
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    /// The boxes `game` draws over one frame of a 1920 by 1080 screen:
+    /// where each is, how big, and its colour.
+    fn boxes(game: &mut ScriptGame) -> Vec<([f32; 2], [f32; 2], lore_ui::Color)> {
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        frame
+            .take_ui()
+            .draw()
+            .iter()
+            .filter_map(|draw| match draw {
+                Draw::Rect {
+                    position,
+                    size,
+                    color,
+                    ..
+                } => Some((position, size, color)),
+                Draw::Text { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_scripts_hud_is_drawn_and_follows_what_the_script_changes() {
+        let script = r#"
+            local ammo = game.hud.text("30 / 90", { at = "bottom right" })
+            local health = game.hud.bar(1, { at = "bottom left", width = 400, height = 20, color = "red" })
+            local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                ammo.text = (30 - ticks) .. " / 90"
+                if ticks == 3 then ammo.visible = false end
+                if ticks == 4 then
+                    ammo.visible = true
+                    game.hud.text("Reloading", { at = "center" })
+                end
+                if ticks == 5 then ammo:remove() end
+            end)
+            game.onDraw(function() health.value = 0.25 end)
+        "#;
+        let mut game = ScriptGame::from_source(script, &ActionMap::default());
+        // Before the first tick the HUD is as the file made it.
+        assert_eq!(words(&mut game), ["30 / 90"]);
+        let full = boxes(&mut game);
+        // The track, then the full part over all of it, inside the safe area.
+        assert_eq!(full.len(), 2);
+        assert_eq!(full[0].1, [400.0, 20.0]);
+        assert_eq!(full[1].1, [400.0, 20.0]);
+        assert_eq!(full[1].0, [96.0, 1080.0 - 54.0 - 20.0]);
+        assert!(full[1].2.r > 0.8 && full[1].2.g < 0.4, "{:?}", full[1].2);
+
+        let step = 1.0 / 60.0;
+        game.tick(&InputFrame::default(), step);
+        // What `game.onDraw` changes is in the frame it ran for.
+        assert_eq!(boxes(&mut game)[1].1, [100.0, 20.0]);
+        assert_eq!(words(&mut game), ["29 / 90"]);
+        game.tick(&InputFrame::default(), step);
+        assert_eq!(words(&mut game), ["28 / 90"]);
+        game.tick(&InputFrame::default(), step);
+        assert_eq!(words(&mut game), Vec::<String>::new());
+        assert_eq!(boxes(&mut game).len(), 2, "the bar is still there");
+        game.tick(&InputFrame::default(), step);
+        assert_eq!(words(&mut game), ["26 / 90", "Reloading"]);
+        game.tick(&InputFrame::default(), step);
+        assert_eq!(words(&mut game), ["Reloading"]);
+        assert!(
+            game.host().last_error().is_none(),
+            "{:?}",
+            game.host().last_error()
+        );
+    }
+
+    #[test]
+    fn a_game_with_no_hud_draws_nothing() {
+        let mut game =
+            ScriptGame::from_source("game.onTick(function() end)", &ActionMap::default());
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        assert!(frame.take_ui().draw().is_empty());
+    }
+
+    #[test]
+    fn a_save_puts_the_new_files_hud_on_screen() {
+        let folder =
+            std::env::temp_dir().join(format!("lore-script-game-hud-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        let script = folder.join("main.luau");
+        fs::write(&script, "game.hud.text(\"Score: 0\", { at = \"top\" })\n").unwrap();
+        let mut game = ScriptGame::open(&folder, &ActionMap::default()).unwrap();
+        assert_eq!(words(&mut game), ["Score: 0"]);
+
+        fs::write(
+            &script,
+            "game.hud.text(\"Points: 0\", { at = \"top\" })\ngame.hud.text(\"Lives: 3\")\n",
+        )
+        .unwrap();
+        let give_up = Instant::now() + Duration::from_secs(20);
+        while words(&mut game) == ["Score: 0"] && Instant::now() < give_up {
+            std::thread::sleep(Duration::from_millis(20));
+            game.tick(&InputFrame::default(), 1.0 / 60.0);
+        }
+        assert_eq!(words(&mut game), ["Points: 0", "Lives: 3"]);
         let _ = fs::remove_dir_all(&folder);
     }
 
@@ -434,6 +550,92 @@ mod tests {
         ] {
             assert_eq!(pixel(&shown, x, y), pixel(&bare, x, y), "at {x}, {y}");
         }
+    }
+
+    /// The script's HUD is drawn for real, with no window, and the picture
+    /// is read back: a box in the middle in the colour asked for, a bar a
+    /// quarter full in the bottom-left corner, light letters at the top,
+    /// and the game untouched where the HUD is not.
+    #[cfg(feature = "window")]
+    #[test]
+    fn the_scripts_hud_is_drawn_where_and_in_the_colours_it_asked_for() {
+        use lore_render::{Camera, Headless, RenderError, Upscaling};
+
+        const SCREEN: [u32; 2] = [1920, 1080];
+        let mut headless = match Headless::new(SCREEN[0], SCREEN[1], Upscaling::Off) {
+            Ok(headless) => headless,
+            Err(
+                error @ (RenderError::NoVulkan(_)
+                | RenderError::OldVulkan { .. }
+                | RenderError::NoSuitableGpu { .. }),
+            ) => {
+                let required = std::env::var("LORE_REQUIRE_VULKAN").is_ok_and(|value| value != "0");
+                assert!(!required, "LORE_REQUIRE_VULKAN is set, but: {error}");
+                eprintln!("Skipping the drawing test: {error}");
+                return;
+            }
+            Err(error) => panic!("{error}"),
+        };
+        let script = r##"
+            game.hud.box({ at = "center", width = 200, height = 100, color = "#3366cc" })
+            game.hud.bar(0.25, { at = "bottom left", width = 400, height = 40, color = "#00ff00" })
+            game.hud.text("SCORE 1250", { at = "top", size = 64 })
+            local hidden = game.hud.box({ at = "top right", width = 300, height = 300, color = "red" })
+            hidden.visible = false
+        "##;
+        let mut game = ScriptGame::from_source(script, &ActionMap::default());
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+
+        let camera = Camera::default();
+        let bare = headless.screenshot(&camera).unwrap();
+        let mut frame = Frame::new(0.0).for_window(Some(SCREEN), lore_ui::DrawBuffer::default());
+        game.frame(&mut frame);
+        let ui = frame.take_ui();
+        headless.set_ui(ui.draw());
+        let shown = headless.screenshot(&camera).unwrap();
+        assert_eq!(lore_render::validation_errors(), 0);
+
+        let pixel = |picture: &[u8], x: u32, y: u32| {
+            let start = ((y * SCREEN[0] + x) * 4) as usize;
+            [picture[start], picture[start + 1], picture[start + 2]]
+        };
+        let near = |[red, green, blue]: [u8; 3], wanted: [u8; 3]| {
+            red.abs_diff(wanted[0]) < 12
+                && green.abs_diff(wanted[1]) < 12
+                && blue.abs_diff(wanted[2]) < 12
+        };
+
+        // The box: 200 by 100 around the middle of the screen.
+        for (x, y) in [(960, 540), (865, 495), (1055, 585)] {
+            assert!(near(pixel(&shown, x, y), [0x33, 0x66, 0xcc]), "at {x}, {y}");
+        }
+        for (x, y) in [(850, 540), (1070, 540), (960, 480), (960, 600)] {
+            assert_eq!(pixel(&shown, x, y), pixel(&bare, x, y), "at {x}, {y}");
+        }
+
+        // The bar: its bottom-left corner in the safe area's, a quarter
+        // of its 400 pixels green and the rest the grey track.
+        let (left, bottom) = (96, 1080 - 54);
+        assert!(near(pixel(&shown, left + 50, bottom - 20), [0, 255, 0]));
+        let track = pixel(&shown, left + 250, bottom - 20);
+        assert!(near(track, [77, 82, 97]), "{track:?}");
+        assert_eq!(
+            pixel(&shown, left + 410, bottom - 20),
+            pixel(&bare, left + 410, bottom - 20)
+        );
+
+        // The text: light letters in a band across the top middle.
+        let mut light = 0_u32;
+        for y in 54..54 + 64 {
+            for x in 760..1160 {
+                let [red, green, blue] = pixel(&shown, x, y);
+                light += u32::from(red > 200 && green > 200 && blue > 200);
+            }
+        }
+        assert!(light > 1500, "{light} light pixels");
+
+        // The hidden box is not there.
+        assert_eq!(pixel(&shown, 1700, 200), pixel(&bare, 1700, 200));
     }
 
     #[test]
