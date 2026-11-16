@@ -199,6 +199,8 @@ declare game: {
 
     --- The one team with this name. Capital letters do not matter. For all
     --- of them, use `game.teams()`.
+    --- At the top of the file it works on any line below `game.mode`, so a
+    --- team can be kept in a local: local red = game.team("Red")
     --- Example: game.team("Red"):addScore(5)
     team: (name: string) -> Team,
 

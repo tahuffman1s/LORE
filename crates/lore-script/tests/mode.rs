@@ -339,6 +339,123 @@ fn changing_the_teams_starts_the_match_again() {
 }
 
 #[test]
+fn teams_can_be_read_at_the_top_of_the_file_after_the_mode_lists_them() {
+    let game = GameFolder::new(
+        r#"
+        game.mode { teams = { "Red", "Blue" }, warmup = 0, scoreToWin = 3 }
+        local red = game.team("red")
+        print(red.name, red.score, #red:players(), tostring(red), #game.teams())
+        print(game.teams()[2].name, game.teams()[1] == red)
+        red:addScore(5)
+        game.round.finish(red)
+        game.onKill(function(killer, victim)
+            print(killer.team == red, red.name, red.score)
+        end)
+        "#,
+    );
+    let mut host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["Red 0 0 Red 2", "Blue true"]);
+    let ann = host.player_joined("Ann");
+    let bo = host.player_joined("Bo");
+    run(&mut host, 1);
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert_eq!(host.mode().teams()[0].score, 0);
+    host.player_killed(Some(ann), bo);
+    assert_eq!(printed(), ["true Red 1"]);
+}
+
+#[test]
+fn a_save_reads_the_teams_it_lists_not_the_ones_before() {
+    let (game, mut host, ann, bo) = playing(TEAMS);
+    host.player_killed(Some(ann), bo);
+
+    // The same teams: the score and the players are the match's.
+    game.write(
+        r#"
+        game.mode { teams = { "Red", "Blue" }, warmup = 0, scoreToWin = 3 }
+        local red = game.team("Red")
+        print(red.score, #red:players(), game.players()[1].team == red)
+        "#,
+    );
+    host.reload().unwrap();
+    assert_eq!(printed(), ["1 1 true"]);
+
+    // New teams: the match is about to start again.
+    game.write(
+        r#"
+        game.mode { teams = { "Green", "Gold", "Grey" }, warmup = 0 }
+        local names = {}
+        for _, team in game.teams() do table.insert(names, team.name) end
+        local green = game.team("Green")
+        green:addScore(5)
+        game.round.finish(green)
+        print(table.concat(names, " "), green.score, #green:players(), game.players()[1].team)
+        game.onRoundStart(function() print(green.name, green.score, #green:players()) end)
+        "#,
+    );
+    host.reload().unwrap();
+    assert_eq!(printed(), ["Green Gold Grey 0 0 nil", "Green 0 1"]);
+    assert_eq!(host.mode().phase(), Phase::Playing);
+
+    // No mode at all: the old teams are gone as soon as the file starts.
+    game.write(r#"print(#game.teams(), #game.players())"#);
+    host.reload().unwrap();
+    assert_eq!(printed(), ["0 2"]);
+
+    // A save that fails changed nothing in the match.
+    let (game, mut host, ann, bo) = playing(TEAMS);
+    host.player_killed(Some(ann), bo);
+    game.write(
+        r#"
+        game.mode { teams = { "Green", "Gold" }, warmup = 0 }
+        game.team("Green"):addScore(5)
+        game.round.finish(game.team("Gold"))
+        oops()
+        "#,
+    );
+    assert!(host.reload().is_err());
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert_eq!(host.mode().teams()[0].name, "Red");
+    assert_eq!(host.mode().teams()[0].score, 1);
+}
+
+#[test]
+fn asking_for_a_team_while_the_file_loads_says_what_is_missing() {
+    assert_eq!(
+        load_error(r#"local red = game.team("Red") game.mode { teams = { "Red", "Blue" } }"#),
+        "There is no team called \"Red\". No teams have been listed yet: game.mode has to \
+         come before this line. Write it above: game.mode { teams = { \"Red\", \"Blue\" } }"
+    );
+    assert_eq!(
+        load_error(r#"game.mode { scoreToWin = 5 } game.team("Red")"#),
+        "There is no team called \"Red\". This mode has no teams. List them when you set up \
+         the mode: game.mode { teams = { \"Red\", \"Blue\" } }"
+    );
+    assert_eq!(
+        load_error(r#"game.mode { teams = { "Red", "Blue" } } game.team("Bleu")"#),
+        "There is no team called \"Bleu\". Did you mean \"Blue\"?"
+    );
+    assert_eq!(
+        load_error(r#"game.mode { teams = { "Red", "Blue" } } game.round.finish("Red")"#),
+        "game.round.finish needs the team that won, or nothing for a draw, but it was given \
+         text. Write it like this: game.round.finish(game.team(\"Red\"))"
+    );
+    // The same on a save, whatever teams the match had.
+    let (game, mut host, _, _) = playing(TEAMS);
+    game.write(r#"local red = game.team("Red") game.mode { teams = { "Red", "Blue" } }"#);
+    let problem = host.reload().unwrap_err();
+    assert!(
+        problem.message.starts_with(
+            "There is no team called \"Red\". No teams have been listed yet: game.mode has to \
+             come before this line."
+        ),
+        "{}",
+        problem.message
+    );
+}
+
+#[test]
 fn a_player_kept_after_they_left_says_so() {
     let (_game, mut host, ann, _) = playing(
         r#"
