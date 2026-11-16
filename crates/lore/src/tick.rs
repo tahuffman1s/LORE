@@ -1,6 +1,6 @@
 //! Fixed-step timing: turns uneven frame times into a whole number of ticks.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The longest stretch of real time one frame may account for.
 ///
@@ -13,6 +13,11 @@ const LONGEST_FRAME: Duration = Duration::from_millis(250);
 /// If ticks ever cost more than their step, catching up without a limit would
 /// make every frame slower than the last.
 const MOST_TICKS_PER_FRAME: u32 = 5;
+
+/// How long after saying that ticks were skipped nothing more is said about
+/// it. A game too slow for its tick rate skips ticks on every frame, and one
+/// line now and then says as much as a line a frame.
+const QUIET_AFTER_HITCH: Duration = Duration::from_secs(5);
 
 /// Decides how many simulation ticks to run each frame.
 ///
@@ -91,6 +96,61 @@ impl TickClock {
     #[must_use]
     pub fn until_next_tick(&self) -> Duration {
         self.step.saturating_sub(self.banked)
+    }
+}
+
+/// Says in the log that ticks were skipped: once for a hitch, and not again
+/// for a while however many more are skipped.
+#[cfg_attr(not(feature = "window"), allow(dead_code))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Hitches {
+    /// When something was last said.
+    said: Option<Instant>,
+    /// Ticks skipped since then that nothing was said about.
+    unsaid: u64,
+}
+
+#[cfg_attr(not(feature = "window"), allow(dead_code))]
+impl Hitches {
+    /// Notes that `skipped` ticks of `step` each were given up at `now`, and
+    /// gives the line to log about it, if one is due.
+    pub(crate) fn note(&mut self, skipped: u64, step: Duration, now: Instant) -> Option<String> {
+        if skipped == 0 {
+            return None;
+        }
+        let quiet = self
+            .said
+            .is_some_and(|said| now.saturating_duration_since(said) < QUIET_AFTER_HITCH);
+        if quiet {
+            self.unsaid = self.unsaid.saturating_add(skipped);
+            return None;
+        }
+        let lost = step.saturating_mul(u32::try_from(skipped).unwrap_or(u32::MAX));
+        let mut line = format!(
+            "The game fell {} ms behind, so {skipped} {} skipped and not run late: \
+             the game carries on from here and does not speed up to catch up.",
+            lost.as_millis(),
+            if skipped == 1 {
+                "tick was"
+            } else {
+                "ticks were"
+            },
+        );
+        if self.unsaid > 0 {
+            line.push_str(&format!(
+                " {} more were skipped since this was last said.",
+                self.unsaid
+            ));
+        }
+        line.push_str(
+            " One pause is nothing to fix (the window was dragged, a file was loading, \
+             the computer was busy). If this keeps being said, ticks or frames take too \
+             long here: lower the picture quality, or look for slow work in the game's \
+             tick.",
+        );
+        self.said = Some(now);
+        self.unsaid = 0;
+        Some(line)
     }
 }
 
@@ -184,5 +244,72 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn a_minute_is_the_same_ticks_at_any_frame_rate() {
+        for frames_per_second in [30_u32, 60, 144, 1000] {
+            let mut clock = TickClock::new(60);
+            let frame = Duration::from_secs(1) / frames_per_second;
+            let mut ticks = 0;
+            let mut played = Duration::ZERO;
+            for _ in 0..60 * frames_per_second {
+                played += frame;
+                let due = clock.advance_counting(frame);
+                assert_eq!(due.skipped, 0, "at {frames_per_second} frames a second");
+                ticks += due.ticks;
+            }
+            // A frame is a whole number of nanoseconds, so the frames may add
+            // up to a hair under the minute: every whole tick in them is run.
+            let whole = u32::try_from(played.as_nanos() / clock.step().as_nanos()).unwrap();
+            assert_eq!(ticks, whole, "at {frames_per_second} frames a second");
+            assert!((3599..=3600).contains(&ticks), "{ticks} ticks");
+        }
+    }
+
+    #[test]
+    fn real_time_is_counted_in_whole_nanoseconds() {
+        // A third of a tick, three times, is a nanosecond short of a tick,
+        // and the clock knows it: nothing is rounded away.
+        let mut clock = TickClock::new(1000);
+        let third = Duration::from_nanos(333_333);
+        assert_eq!(clock.advance(third) + clock.advance(third), 0);
+        assert_eq!(clock.advance(third), 0);
+        assert_eq!(clock.until_next_tick(), Duration::from_nanos(1));
+        assert_eq!(clock.advance(Duration::from_nanos(1)), 1);
+        assert_eq!(clock.until_next_tick(), clock.step());
+    }
+
+    #[test]
+    fn a_hitch_is_said_once() {
+        let step = Duration::from_secs(1) / 60;
+        let begin = Instant::now();
+        let mut hitches = Hitches::default();
+        assert_eq!(hitches.note(0, step, begin), None);
+
+        let said = hitches.note(10, step, begin).unwrap();
+        assert!(said.contains("166 ms behind"), "{said}");
+        assert!(said.contains("10 ticks were skipped"), "{said}");
+        assert!(!said.contains("more were skipped"), "{said}");
+
+        // A game that stays too slow skips ticks every frame: no more lines.
+        for frame in 1..100 {
+            assert_eq!(hitches.note(2, step, begin + frame * MS), None);
+        }
+        assert_eq!(hitches.note(0, step, begin + 6_000 * MS), None);
+
+        // The next line, a while later, counts what was kept quiet.
+        let said = hitches.note(1, step, begin + 6_000 * MS).unwrap();
+        assert!(said.contains("1 tick was skipped"), "{said}");
+        assert!(said.contains("198 more were skipped"), "{said}");
+        assert_eq!(hitches.note(1, step, begin + 6_001 * MS), None);
+    }
+
+    #[test]
+    fn a_hitch_of_any_length_can_be_said() {
+        let said = Hitches::default()
+            .note(u64::MAX, Duration::from_secs(1), Instant::now())
+            .unwrap();
+        assert!(said.contains("ticks were skipped"), "{said}");
     }
 }

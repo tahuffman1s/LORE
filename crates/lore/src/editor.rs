@@ -41,6 +41,7 @@ use self::panels::{LevelPanels, placed_name};
 use self::place::{Drag, Held, Hit, Keys, Snap};
 use self::play::Play;
 use crate::app::{self, AppError, Config};
+use crate::blend;
 use crate::game::{Frame, Game};
 use crate::map::{Map, MapFile, SPAWN};
 use crate::online::{MOUSE_TURN, STICK_TURN, World};
@@ -228,13 +229,11 @@ impl FlyCamera {
 
     /// The camera `alpha` of the way from `before` to this one.
     fn blended(&self, before: &Self, alpha: f32) -> Self {
-        let blend = |from: f32, to: f32| from + (to - from) * alpha;
-        // The short way round, in case one of the two was wrapped.
-        let turned = (self.yaw - before.yaw + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0;
         Self {
-            position: [0, 1, 2].map(|axis| blend(before.position[axis], self.position[axis])),
-            yaw: self.yaw - turned * (1.0 - alpha),
-            pitch: blend(before.pitch, self.pitch),
+            position: blend::position(before.position, self.position, alpha),
+            // The short way round, in case one of the two was wrapped.
+            yaw: blend::angle(before.yaw, self.yaw, alpha),
+            pitch: blend::number(before.pitch, self.pitch, alpha),
             speed: self.speed,
         }
     }
