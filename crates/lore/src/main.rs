@@ -17,7 +17,7 @@ use std::rc::Rc;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use lore::Upscaling;
 use lore::bench::Bench;
-use lore::cli::{self, quoted};
+use lore::cli::{self, Paced, quoted};
 use lore::input::ActionKind;
 use lore::level::{self, LEVEL_FILE};
 use lore::map::MAP_FILE;
@@ -119,7 +119,9 @@ enum Command {
         after_help = "Loads main.luau, starts the game, runs one second of it and a pretend \
                       match,\nand presses every action in turn so code that reads input is \
                       run too.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
-                      used by scripts,\nautomated checks and AI assistants. The game's level, \
+                      used by scripts,\nautomated checks and AI assistants. The start of the \
+                      game is then played again with pictures\ndrawn at other paces, and the \
+                      check fails if its rules depend on the frame rate.\nThe game's level, \
                       level.glb, is loaded too,\nand a level that cannot be loaded fails the \
                       check with what to change."
     )]
@@ -429,8 +431,9 @@ fn open(folder: &Path, config: &Config, verb: &str) -> Result<ScriptGame, String
 
 /// `lore check`: runs a second of the game and a pretend match with no
 /// window, has the script draw a picture of each, presses every action in turn, and loads the game's level and its
-/// sounds. Fails if the script has a mistake, or the level or a sound
-/// cannot be loaded.
+/// sounds. Then plays the start of the game again with pictures drawn at
+/// other paces. Fails if the script has a mistake, its rules depend on how
+/// often a picture is drawn, or the level or a sound cannot be loaded.
 fn check(folder: &Path) -> Result<(), String> {
     /// One second of game time.
     const TICKS: u32 = 60;
@@ -523,6 +526,36 @@ fn check(folder: &Path) -> Result<(), String> {
             error.file
         ));
     }
+    // Whether the rules depend on how often a picture is drawn: the game
+    // is played again from the start at other paces.
+    let paced = cli::paced(
+        || {
+            let mut game = open(folder, &config, "check").ok()?;
+            game.load_sounds();
+            Some(game)
+        },
+        &config.actions,
+    );
+    if let Some(Paced::Mistake(error)) = &paced {
+        eprintln!("{error}");
+        return Err(format!(
+            "{ENTRY_SCRIPT} has a mistake (the error is shown above) that only showed \
+             when the game was played again with more pictures drawn between ticks, so \
+             look in its game.onDraw functions. Fix it, then run `lore check` again."
+        ));
+    }
+    if let Some(Paced::Differs { tick }) = paced {
+        return Err(format!(
+            "The rules in {ENTRY_SCRIPT} depend on how often a picture is drawn. The check \
+             played the game four times from the start, changing nothing but how many \
+             pictures were drawn between ticks, and on tick {tick} the rules did something \
+             else: they printed another line, or called another function that changes the \
+             game. A game has to play the same on a fast computer, on a slow one and on a \
+             server, which draws nothing. Look for a variable that a game.onDraw function \
+             changes and that game.onTick, a timer or another game.on... function reads, \
+             and move the line that changes it into game.onTick. Then run `lore check` again."
+        ));
+    }
     let unplayable = game.sounds().problems().len();
     if unplayable > 0 {
         return Err(format!(
@@ -563,6 +596,23 @@ fn check(folder: &Path) -> Result<(), String> {
              ten minutes, so the round itself was not played. To have it played, set a \
              shorter warm-up in game.mode, such as warmup = 5."
         );
+    }
+    match paced {
+        Some(Paced::Same) => println!(
+            "The game was then played four more times from the start: three times with one \
+             picture drawn after every tick, and once with them drawn unevenly, from none \
+             to seven between two ticks. Its rules did the same on every tick each time: \
+             nothing they did there depends on the frame rate. That covers the first \
+             second and the presses below, not the pretend match."
+        ),
+        Some(Paced::NotRepeatable { tick }) => println!(
+            "The check also tried to find out whether the game's rules depend on how often \
+             a picture is drawn, and could not: played twice in exactly the same way, they \
+             already did something else on tick {tick}. Rules that roll dice with \
+             math.random do that, because LORE does not yet give a game the same dice \
+             twice. That alone does not mean anything is wrong with the game."
+        ),
+        Some(Paced::Differs { .. } | Paced::Mistake(_)) | None => {}
     }
     let waiting = game.host().timers_never_called();
     if waiting > 0 {

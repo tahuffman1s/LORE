@@ -17,7 +17,7 @@ use crate::game::{Frame, Game};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
 use crate::sound_output::{LazySpeakers, SoundOutput};
-use crate::tick::{Hitches, TickClock};
+use crate::tick::{self, Hitches, TickClock};
 use crate::translate;
 
 /// Where the eye is before a game says where to look from: as high as a
@@ -489,12 +489,13 @@ impl<G: Game> App<G> {
 
         self.gamepads.poll(&mut self.input, self.focused);
         let step = self.clock.step().as_secs_f32();
-        // Real time only decides how many ticks run. Each tick is told the
-        // same fixed step, so no frame time reaches the game's rules.
-        let due = self.clock.advance_counting(elapsed);
-        for _ in 0..due.ticks {
-            self.game.tick(self.input.tick(), step);
-        }
+        let due = tick::run_due(
+            &mut self.clock,
+            elapsed,
+            &mut self.input,
+            &mut self.game,
+            |_| {},
+        );
         if let Some(said) = self.hitches.note(due.skipped, self.clock.step(), now) {
             log::warn!("{said}");
         }

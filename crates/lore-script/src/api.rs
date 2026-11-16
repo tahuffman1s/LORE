@@ -311,7 +311,30 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
-    globals.set("print", lua.create_function(print)?)?;
+    let clock = Rc::clone(&shared.clock);
+    globals.set(
+        "print",
+        lua.create_function(move |_, values: Variadic<Value>| {
+            let line = printed(&values)?;
+            for value in values.iter() {
+                match value {
+                    // A table or a function prints as where it is in
+                    // memory, which is not the game's doing: only what
+                    // kind of thing it is counts as what the rules did.
+                    Value::Table(_)
+                    | Value::Function(_)
+                    | Value::Thread(_)
+                    | Value::UserData(_)
+                    | Value::LightUserData(_)
+                    | Value::Other(_) => clock.note(value.type_name()),
+                    plain => clock.note(&plain.to_string()?),
+                }
+            }
+            clock.note("print");
+            log::info!(target: "script", "{line}");
+            Ok(())
+        })?,
+    )?;
     modules::install(lua, shared)?;
     Ok(())
 }
@@ -503,8 +526,8 @@ pub(crate) fn strict(
     Ok(())
 }
 
-/// `print(...)`: writes to the engine's log, like a console line.
-fn print(_: &Lua, values: Variadic<Value>) -> mlua::Result<()> {
+/// The line `print(...)` writes to the engine's log, like a console line.
+fn printed(values: &Variadic<Value>) -> mlua::Result<String> {
     let mut line = String::new();
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
@@ -512,8 +535,7 @@ fn print(_: &Lua, values: Variadic<Value>) -> mlua::Result<()> {
         }
         line.push_str(&value.to_string()?);
     }
-    log::info!(target: "script", "{line}");
-    Ok(())
+    Ok(line)
 }
 
 #[cfg(test)]

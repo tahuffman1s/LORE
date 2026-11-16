@@ -341,6 +341,34 @@ impl ScriptHost {
         })
     }
 
+    /// One number for what the script's rules have done so far: every line
+    /// they printed and every call that changes the game (a score, a
+    /// weapon handed out, a timer started, the round ended), with the tick
+    /// each happened on. What `game.onDraw` functions do is left out.
+    ///
+    /// Two runs of the same game that are given the same input have the
+    /// same number after every tick. If they do not, the game's rules
+    /// depend on something outside the ticks, such as how often a picture
+    /// is drawn; `lore check` looks for that this way. It says nothing
+    /// about what the rules did, only whether two runs did the same.
+    ///
+    /// ```
+    /// use lore_input::{ActionMap, InputFrame};
+    /// use lore_script::ScriptHost;
+    ///
+    /// let script = "game.onTick(function() print(game.time()) end)";
+    /// let run = || {
+    ///     let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    ///     host.tick(&InputFrame::default(), 1.0 / 60.0);
+    ///     host.rules_fingerprint()
+    /// };
+    /// assert_eq!(run(), run());
+    /// ```
+    #[must_use]
+    pub fn rules_fingerprint(&self) -> u64 {
+        self.clock.done()
+    }
+
     /// The seconds of game time that have been run: the number of ticks
     /// times the length of one. It is what `game.time()` gives a script.
     #[must_use]

@@ -717,6 +717,34 @@ impl Controls {
             reload: find("reload"),
         }
     }
+
+    /// What `input` asks of a player for one tick of `step` seconds. The
+    /// view, `yaw` and `pitch`, is turned first.
+    fn asked(self, input: &InputFrame, step: f32, yaw: &mut f32, pitch: &mut f32) -> PlayerInput {
+        let held = |action: Option<ActionId>| action.is_some_and(|action| input.pressed(action));
+        let [right, forward] = self.walk.map_or([0.0; 2], |walk| input.axis2d(walk));
+        if let Some(look) = self.look {
+            // Everything the frames since the last tick showed being turned
+            // by, so what is asked for here (a step, a shot) goes where the
+            // player was looking on the screen.
+            let turn = look::asked(input, look, step);
+            (*yaw, *pitch) = look::turned(*yaw, *pitch, turn);
+        }
+        PlayerInput {
+            movement: MoveInput {
+                forward,
+                right,
+                yaw: *yaw,
+                jump: held(self.jump),
+                crouch: held(self.crouch),
+                sprint: held(self.sprint),
+            },
+            pitch: *pitch,
+            fire: held(self.fire),
+            aim: held(self.aim),
+            reload: held(self.reload),
+        }
+    }
 }
 
 /// Why a player could not join a server, or is no longer on it.
@@ -1322,30 +1350,8 @@ impl JoinedGame {
 
     /// What the player is asking for this tick. Turns the view as well.
     fn read(&mut self, input: &InputFrame, step: f32) -> PlayerInput {
-        let held = |action: Option<ActionId>| action.is_some_and(|action| input.pressed(action));
-        let controls = self.controls;
-        let [right, forward] = controls.walk.map_or([0.0; 2], |walk| input.axis2d(walk));
-        if let Some(look) = controls.look {
-            // Everything the frames since the last tick showed being turned
-            // by, so what is asked for here (a step, a shot) goes where the
-            // player was looking on the screen.
-            let turn = look::asked(input, look, step);
-            (self.yaw, self.pitch) = look::turned(self.yaw, self.pitch, turn);
-        }
-        PlayerInput {
-            movement: MoveInput {
-                forward,
-                right,
-                yaw: self.yaw,
-                jump: held(controls.jump),
-                crouch: held(controls.crouch),
-                sprint: held(controls.sprint),
-            },
-            pitch: self.pitch,
-            fire: held(controls.fire),
-            aim: held(controls.aim),
-            reload: held(controls.reload),
-        }
+        self.controls
+            .asked(input, step, &mut self.yaw, &mut self.pitch)
     }
 }
 
@@ -1573,6 +1579,9 @@ pub fn with_port(address: &str) -> String {
         Err(_) => format!("{address}:{DEFAULT_PORT}"),
     }
 }
+
+#[cfg(test)]
+mod rates;
 
 #[cfg(test)]
 mod tests {
