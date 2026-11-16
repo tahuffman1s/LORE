@@ -13,7 +13,7 @@ use std::rc::Rc;
 use mlua::{Function, Lua, Table, Value};
 
 use crate::api::{Shared, describe, fail};
-use crate::player_api::{self, PlayerId};
+use crate::character_api::{self, CharacterId};
 
 /// How many tables one version of a script can keep. Far more than a game
 /// needs: reaching it means `game.keep` is being called with made-up names.
@@ -37,7 +37,7 @@ const MAX_KEY_SHOWN: usize = 40;
 
 const EXAMPLE: &str = "local saved = game.keep(\"saved\", { best = 0 })";
 
-const KEEPS: &str = "A kept table can hold numbers, text, true and false, players, and \
+const KEEPS: &str = "A kept table can hold numbers, text, true and false, game.player, and \
      tables of those. Take this out of the table, or keep a name or a number in its place.";
 
 /// A value that can outlive the VM it was made in.
@@ -49,8 +49,8 @@ pub(crate) enum Plain {
     /// Luau text is bytes, and need not be UTF-8.
     Text(Box<[u8]>),
     Vector(mlua::Vector),
-    /// A player, who is given back if they are still in the game.
-    Player(PlayerId),
+    /// A character, who is given back if they are still in the world.
+    Character(CharacterId),
     /// The keys and values, in the order the table gave them.
     Table(Vec<(Plain, Plain)>),
 }
@@ -147,8 +147,8 @@ impl Copier {
                 self.bytes_left -= bytes.len();
                 Plain::Text(Box::from(&*bytes))
             }
-            Value::UserData(handle) if let Some(id) = player_api::player_id(handle) => {
-                Plain::Player(id)
+            Value::UserData(handle) if let Some(id) = character_api::character_id(handle) => {
+                Plain::Character(id)
             }
             Value::Table(_) if is_key => {
                 self.problem(format_args!("its key is a table"));
@@ -196,8 +196,8 @@ impl Copier {
             Value::Integer(number) => write!(path, "[{number}]"),
             Value::Number(number) => write!(path, "[{number}]"),
             Value::Boolean(value) => write!(path, "[{value}]"),
-            Value::UserData(handle) if player_api::player_id(handle).is_some() => {
-                write!(path, "[a player]")
+            Value::UserData(handle) if character_api::character_id(handle).is_some() => {
+                write!(path, "[a character]")
             }
             _ => write!(path, "[...]"),
         };
@@ -240,8 +240,8 @@ impl Copier {
     }
 }
 
-/// Builds a kept value in this VM. Gives nothing for a player who has left
-/// the game since.
+/// Builds a kept value in this VM. Gives nothing for a character who has
+/// gone from the world since.
 fn restore(lua: &Lua, shared: &Shared, plain: &Plain) -> mlua::Result<Option<Value>> {
     Ok(Some(match plain {
         Plain::Bool(value) => Value::Boolean(*value),
@@ -249,11 +249,11 @@ fn restore(lua: &Lua, shared: &Shared, plain: &Plain) -> mlua::Result<Option<Val
         Plain::Number(value) => Value::Number(*value),
         Plain::Vector(value) => Value::Vector(*value),
         Plain::Text(bytes) => Value::String(lua.create_string(bytes)?),
-        Plain::Player(id) => {
-            if !shared.players.has(*id) {
+        Plain::Character(id) => {
+            if !shared.characters.has(*id) {
                 return Ok(None);
             }
-            Value::UserData(shared.handles.player(lua, *id)?)
+            Value::UserData(shared.handles.character(lua, *id)?)
         }
         Plain::Table(pairs) => Value::Table(restore_table(lua, shared, pairs)?),
     }))

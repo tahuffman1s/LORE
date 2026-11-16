@@ -216,7 +216,6 @@ impl ActionMap {
     /// | `grenade` | G | right bumper |
     /// | `next_weapon` | wheel down | d-pad right |
     /// | `previous_weapon` | wheel up | d-pad left |
-    /// | `scoreboard` | Tab | select |
     /// | `pause` | Escape | start |
     ///
     /// A second set, `"menu"`, holds the actions menus are worked with. The
@@ -261,7 +260,6 @@ impl ActionMap {
             ("grenade", ["G", "RightBumper"]),
             ("next_weapon", ["MouseWheelDown", "DpadRight"]),
             ("previous_weapon", ["MouseWheelUp", "DpadLeft"]),
-            ("scoreboard", ["Tab", "GamepadSelect"]),
             ("pause", ["Escape", "GamepadStart"]),
         ];
         const MENU_BUTTONS: &[(&str, [&str; 2])] = &[
@@ -944,7 +942,10 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::default_fps();
-        assert_eq!(map.len(), 21);
+        assert_eq!(map.len(), 20);
+        // No scores are kept, so nothing shows them; Select is free for a
+        // game to use.
+        assert!(map.action("scoreboard").is_err());
         assert_eq!(map.parity_gaps(), Vec::new());
         for name in ["move", "look", "jump", "fire", "pause", "previous_weapon"] {
             assert!(map.action(name).is_ok(), "missing {name}");

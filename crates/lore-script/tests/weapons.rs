@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use lore_input::{ActionMap, InputFrame};
 use lore_script::weapons::{Delivery, FireMode, WeaponSettings, Zone};
-use lore_script::{ENTRY_SCRIPT, PlayerId, ScriptHost, WeaponHit};
+use lore_script::{CharacterId, ENTRY_SCRIPT, ScriptHost, WeaponHit};
 
 thread_local! {
     /// What scripts on this test's thread printed.
@@ -73,17 +73,19 @@ impl Drop for GameFolder {
     }
 }
 
-/// Runs `script` with Ann and Bo joined and one tick played.
-fn with_two(script: &str) -> (ScriptHost, PlayerId, PlayerId) {
+const PLAYER: CharacterId = CharacterId::PLAYER;
+
+/// Runs `script` for one tick, which puts the player in the world, with
+/// Bo, who is not the player, in it too.
+fn with_bo(script: &str) -> (ScriptHost, CharacterId) {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    let ann = host.player_joined("Ann");
-    let bo = host.player_joined("Bo");
+    let bo = host.add_character("Bo");
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    (host, ann, bo)
+    (host, bo)
 }
 
 /// The message of the mistake `script` makes as it loads.
@@ -95,11 +97,11 @@ fn load_error(script: &str) -> String {
         .clone()
 }
 
-/// The message of the mistake `body` makes inside `game.onPlayerJoin`.
-fn join_error(body: &str) -> String {
-    let script = format!("game.onPlayerJoin(function(player)\n{body}\nend)");
+/// The message of the mistake `body` makes inside `game.onSpawn`.
+fn spawn_error(body: &str) -> String {
+    let script = format!("game.onSpawn(function()\n{body}\nend)");
     let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
-    host.player_joined("Ann");
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
     host.last_error()
         .unwrap_or_else(|| panic!("no mistake in: {body}"))
         .message
@@ -108,70 +110,75 @@ fn join_error(body: &str) -> String {
 
 #[test]
 fn nobody_holds_a_weapon_until_the_script_hands_one_out() {
-    let (mut host, ann, bo) = with_two(
-        r#"game.onPlayerJoin(function(player)
+    let (mut host, bo) = with_bo(
+        r#"game.onSpawn(function()
+            local player = game.player
             print(player.name, player.weapon, player.ammo, player.reserve)
-            if player.name == "Ann" then
-                player:giveWeapon("Shotgun")
-                print(player.weapon, player.ammo, player.reserve)
-            end
+            player:giveWeapon("Shotgun")
+            print(player.weapon, player.ammo, player.reserve)
         end)"#,
     );
-    assert_eq!(printed(), ["Ann nil 0 0", "shotgun 6 24", "Bo nil 0 0"]);
+    assert_eq!(printed(), ["Player nil 0 0", "shotgun 6 24"]);
     assert!(host.held_weapon(bo).is_none());
-    let held = host.held_weapon(ann).unwrap();
+    let held = host.held_weapon(PLAYER).unwrap();
     assert_eq!(&*held.name, "shotgun");
     assert_eq!(held.settings, WeaponSettings::shotgun());
 
     // The engine hands back the weapon as it is after a tick of firing.
     let mut state = held.state;
     state.magazine = 2;
-    host.set_weapon_state(ann, state);
-    assert_eq!(host.held_weapon(ann).unwrap().state.magazine, 2);
+    host.set_weapon_state(PLAYER, state);
+    assert_eq!(host.held_weapon(PLAYER).unwrap().state.magazine, 2);
     // Nothing to hand back to for someone with empty hands.
     host.set_weapon_state(bo, state);
     assert!(host.held_weapon(bo).is_none());
-
-    // Whoever leaves takes nothing with them.
-    host.player_left(ann);
-    assert!(host.held_weapon(ann).is_none());
 }
 
 #[test]
 fn giving_again_is_a_new_full_weapon_and_taking_empties_the_hands() {
-    let (mut host, ann, _) = with_two(
-        r#"game.onPlayerJoin(function(player) player:giveWeapon("pistol") end)
-        game.onWeaponReload(function(player)
-            player:takeWeapon()
-            player:takeWeapon()
+    let (mut host, bo) = with_bo(
+        r#"game.onSpawn(function() game.player:giveWeapon("pistol") end)
+        game.onWeaponReload(function(shooter)
+            if shooter == game.player then
+                shooter:takeWeapon()
+                shooter:takeWeapon()
+            else
+                shooter:giveWeapon("pistol")
+            end
         end)
-        game.onWeaponFire(function(player) player:giveWeapon(player.weapon) end)"#,
+        game.onWeaponFire(function(shooter) shooter:giveWeapon(shooter.weapon) end)"#,
     );
-    let bo = host.players()[1];
+    // Whoever the script is told of can be handed a weapon, not only the
+    // player.
+    host.weapon_reloading(bo);
     let mut state = host.held_weapon(bo).unwrap().state;
     state.magazine = 1;
     host.set_weapon_state(bo, state);
-    host.weapon_reloading(ann);
+    host.weapon_reloading(PLAYER);
     host.weapon_fired(bo);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    assert!(host.held_weapon(ann).is_none());
+    assert!(host.held_weapon(PLAYER).is_none());
     assert_eq!(host.held_weapon(bo).unwrap().state.magazine, 12);
+
+    // Whoever is taken out of the world takes nothing with them.
+    host.remove_character(bo);
+    assert!(host.held_weapon(bo).is_none());
 }
 
 #[test]
 fn a_weapon_of_the_scripts_own_starts_from_another_and_changes_what_is_written() {
-    let (host, ann, bo) = with_two(
+    let (mut host, bo) = with_bo(
         r#"game.weapon("SMG", { from = "rifle", damage = 22, roundsPerMinute = 900, magazineSize = 25 })
         game.weapon("burst smg", { from = "smg", fireMode = "burst" })
         game.weapon("bow", { from = "pistol", fireMode = "single", pellets = 1, autoReload = false,
             projectile = { speed = 50, gravity = 10, blastRadius = 0, fuse = math.huge } })
         game.weapon("laser", { reach = 80 })
         game.weapon("plain")
-        game.onPlayerJoin(function(player)
-            player:giveWeapon(player.name == "Ann" and "smg" or "bow")
-        end)"#,
+        game.onSpawn(function() game.player:giveWeapon("smg") end)
+        game.onWeaponReload(function(shooter) shooter:giveWeapon("bow") end)"#,
     );
-    let smg = host.held_weapon(ann).unwrap();
+    host.weapon_reloading(bo);
+    let smg = host.held_weapon(PLAYER).unwrap();
     assert_eq!(&*smg.name, "SMG", "named as the script wrote it");
     assert_eq!(
         smg.settings,
@@ -198,21 +205,17 @@ fn a_weapon_of_the_scripts_own_starts_from_another_and_changes_what_is_written()
 
 #[test]
 fn the_engines_own_weapons_can_be_changed_and_keep_the_rest_of_their_numbers() {
-    let (host, ann, bo) = with_two(
+    let (mut host, bo) = with_bo(
         r#"game.weapon("Shotgun", { pellets = 12 })
         game.weapon("rocket launcher", { projectile = { speed = 10 } })
         game.weapon("three", { fireMode = "burst" })
         game.weapon("five", { from = "three", burstSize = 5 })
         game.weapon("still five", { from = "five", damage = 1 })
-        game.onPlayerJoin(function(player)
-            player:giveWeapon(player.name == "Ann" and "shotgun" or "rocket launcher")
-        end)
-        game.onTick(function()
-            for _, player in game.players() do
-                if player.name == "Ann" then player:giveWeapon("still five") end
-            end
-        end)"#,
+        game.onSpawn(function() game.player:giveWeapon("shotgun") end)
+        game.onWeaponReload(function(shooter) shooter:giveWeapon("rocket launcher") end)
+        game.onTick(function() game.player:giveWeapon("still five") end)"#,
     );
+    host.weapon_reloading(bo);
     let rockets = host.held_weapon(bo).unwrap().settings;
     let Delivery::Projectile(flight) = rockets.delivery else {
         panic!("still a launcher");
@@ -222,15 +225,15 @@ fn the_engines_own_weapons_can_be_changed_and_keep_the_rest_of_their_numbers() {
     };
     assert_eq!(flight.speed, 10.0);
     assert_eq!(flight.blast_radius, usual.blast_radius);
-    let five = host.held_weapon(ann).unwrap().settings;
+    let five = host.held_weapon(PLAYER).unwrap().settings;
     assert_eq!((five.fire_mode, five.damage), (FireMode::Burst(5), 1.0));
 
-    let (host, ann, _) = with_two(
+    let (host, _) = with_bo(
         r#"game.weapon("Shotgun", { pellets = 12 })
-        game.onPlayerJoin(function(player) player:giveWeapon("shotgun") end)"#,
+        game.onSpawn(function() game.player:giveWeapon("shotgun") end)"#,
     );
     assert_eq!(
-        host.held_weapon(ann).unwrap().settings,
+        host.held_weapon(PLAYER).unwrap().settings,
         WeaponSettings {
             pellets: 12,
             ..WeaponSettings::shotgun()
@@ -240,10 +243,13 @@ fn the_engines_own_weapons_can_be_changed_and_keep_the_rest_of_their_numbers() {
 
 #[test]
 fn the_script_hears_shots_hits_and_reloads() {
-    let (mut host, ann, bo) = with_two(
-        r#"game.onPlayerJoin(function(player) player:giveWeapon("rifle") end)
-        game.onWeaponFire(function(player) print("fire", player.name, player.weapon) end)
-        game.onWeaponReload(function(player) print("reload", player.name) end)
+    let (mut host, bo) = with_bo(
+        r#"game.onSpawn(function() game.player:giveWeapon("rifle") end)
+        game.onWeaponFire(function(shooter) print("fire", shooter.name, shooter.weapon) end)
+        game.onWeaponReload(function(shooter)
+            print("reload", shooter.name)
+            shooter:giveWeapon("rifle")
+        end)
         game.onWeaponHit(function(hit)
             print("hit", hit.shooter, hit.victim, hit.weapon, hit.damage, hit.part,
                 hit.position, hit.distance, hit.explosion)
@@ -256,10 +262,11 @@ fn the_script_hears_shots_hits_and_reloads() {
         end)"#,
     );
     printed();
-    host.weapon_fired(ann);
+    host.weapon_fired(PLAYER);
     host.weapon_reloading(bo);
+    assert!(host.held_weapon(bo).is_some());
     host.weapon_hit(&WeaponHit {
-        shooter: ann,
+        shooter: PLAYER,
         victim: Some(bo),
         weapon: Rc::from("rifle"),
         damage: 60.0,
@@ -269,7 +276,7 @@ fn the_script_hears_shots_hits_and_reloads() {
         explosion: false,
     });
     host.weapon_hit(&WeaponHit {
-        shooter: ann,
+        shooter: PLAYER,
         victim: None,
         weapon: Rc::from("rocket launcher"),
         damage: 0.0,
@@ -282,15 +289,15 @@ fn the_script_hears_shots_hits_and_reloads() {
     assert_eq!(
         printed(),
         [
-            "fire Ann rifle",
+            "fire Player rifle",
             "reload Bo",
-            "hit Ann Bo rifle 60 head vector(1, 1.5, -10) 9.5 false",
+            "hit Player Bo rifle 60 head vector(1, 1.5, -10) 9.5 false",
             "second 60 false",
-            "hit Ann nil rocket launcher 0 nil vector(0, 0, -30) 30 true",
+            "hit Player nil rocket launcher 0 nil vector(0, 0, -30) 30 true",
             "second 0 false",
         ]
     );
-    assert!(host.held_weapon(ann).is_some());
+    assert!(host.held_weapon(PLAYER).is_some());
     assert!(host.held_weapon(bo).is_none(), "the hit took Bo's rifle");
 }
 
@@ -299,13 +306,14 @@ fn saving_the_script_keeps_weapons_in_hand_and_applies_new_numbers() {
     let game = GameFolder::new(
         r#"game.weapon("smg", { damage = 22 })
         game.weapon("club", { damage = 5 })
-        game.onPlayerJoin(function(player)
-            player:giveWeapon(player.name == "Ann" and "smg" or "club")
-        end)"#,
+        game.onSpawn(function() game.player:giveWeapon("smg") end)
+        game.onWeaponReload(function(shooter) shooter:giveWeapon("club") end)"#,
     );
     let mut host = game.open();
-    let ann = host.player_joined("Ann");
-    let bo = host.player_joined("Bo");
+    let (ann, bo) = (PLAYER, host.add_character("Bo"));
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    host.weapon_reloading(bo);
+    assert_eq!(&*host.held_weapon(bo).unwrap().name, "club");
     let mut state = host.held_weapon(ann).unwrap().state;
     state.magazine = 7;
     host.set_weapon_state(ann, state);
@@ -324,10 +332,9 @@ fn saving_the_script_keeps_weapons_in_hand_and_applies_new_numbers() {
     assert_eq!(host.held_weapon(ann).unwrap().settings.damage, 40.0);
 
     // One of the engine's weapons is there whatever the script says.
-    game.write(r#"for _, player in game.players() do player:giveWeapon("pistol") end"#);
+    game.write(r#"game.player:giveWeapon("pistol")"#);
     host.reload().unwrap();
     assert_eq!(&*host.held_weapon(ann).unwrap().name, "pistol");
-    assert_eq!(&*host.held_weapon(bo).unwrap().name, "pistol");
 }
 
 #[test]
@@ -437,38 +444,40 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
 }
 
 #[test]
-fn mistakes_with_a_players_weapon_say_what_to_write() {
+fn mistakes_with_the_players_weapon_say_what_to_write() {
     assert_eq!(
-        join_error("player:giveWeapon(\"rifel\")"),
+        spawn_error("game.player:giveWeapon(\"rifel\")"),
         "There is no weapon called \"rifel\". Did you mean \"rifle\"?"
     );
     assert_eq!(
-        join_error("player:giveWeapon(\"sword\")"),
+        spawn_error("game.player:giveWeapon(\"sword\")"),
         "There is no weapon called \"sword\". The weapons are: rifle, pistol, shotgun, rocket \
          launcher, grenade. Make one of your own above this line: game.weapon(\"smg\", { from \
          = \"rifle\", damage = 22, roundsPerMinute = 900 })"
     );
     assert_eq!(
-        join_error("player:giveWeapon()"),
-        "player:giveWeapon needs a weapon's name in quotes, but it was given nothing. \
-         Write it like this: player:giveWeapon(\"rifle\")"
+        spawn_error("game.player:giveWeapon()"),
+        "giveWeapon needs a weapon's name in quotes, but it was given nothing. \
+         Write it like this: game.player:giveWeapon(\"rifle\")"
     );
     assert_eq!(
-        join_error("player.giveWeapon(\"rifle\")"),
-        "player.giveWeapon needs a colon, not a dot, because it acts on one player. \
-         Write it like this: player:giveWeapon(\"rifle\")"
+        spawn_error("game.player.giveWeapon(\"rifle\")"),
+        "giveWeapon needs a colon before it, not a dot, because it acts on the one it is \
+         called on. Write it like this: game.player:giveWeapon(\"rifle\")"
     );
     assert_eq!(
-        join_error("player.weapon = \"rifle\""),
-        "player.weapon cannot be set. To hand a player a weapon, write: \
-         player:giveWeapon(\"rifle\"). To empty their hands, write: player:takeWeapon()"
+        spawn_error("game.player.weapon = \"rifle\""),
+        "game.player.weapon cannot be set. To hand over a weapon, write: \
+         game.player:giveWeapon(\"rifle\"). To empty their hands, write: \
+         game.player:takeWeapon()"
     );
     assert!(
-        join_error("player.ammo = 30")
-            .starts_with("player.ammo cannot be set. A weapon's rounds are set where it is made")
+        spawn_error("game.player.ammo = 30").starts_with(
+            "game.player.ammo cannot be set. A weapon's rounds are set where it is made"
+        )
     );
     assert_eq!(
-        join_error("game.onWeaponHit(5)"),
+        spawn_error("game.onWeaponHit(5)"),
         "game.onWeaponHit needs a function, but it was given a number. \
          Write it like this: game.onWeaponHit(function(hit) ... end)"
     );

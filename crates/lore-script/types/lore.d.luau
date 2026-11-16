@@ -15,52 +15,64 @@
 -- `game.on...` functions. Only scripts inside the game's folder can be
 -- required, and scripts cannot require each other in a circle.
 
---- A player in the game. The same player is always the same value, so a
---- player can be a key in a table of your own: `jumps[player] = 3`.
-declare extern type Player with
-    --- The name the player goes by.
+--- Someone in the world. The player is one, `game.player`, and is always
+--- there. The people and creatures of a game will be characters too, once
+--- LORE has them; until then the only other one a script meets is the
+--- training dummy `lore check` stands in front of the player.
+--- The same character is always the same value, so one can be compared
+--- with `==` and be a key in a table of your own: `hits[hit.victim] = 3`.
+declare extern type Character with
+    --- What the character is called. The player is "Player" until a
+    --- later version lets a game name them.
+    --- Example: print(game.player.name)
     name: string
 
-    --- The name of the weapon in the player's hands, or nil when they hold
-    --- none. Nobody holds a weapon until the script hands one out. The name
-    --- is spelt as it was made: "smg" for `game.weapon("smg", ...)` however
-    --- `giveWeapon` wrote it, and the engine's own are in small letters.
-    --- Example: if player.weapon == "shotgun" then print("Careful!") end
+    --- Where the character's feet are now, in metres, with y up. It is
+    --- read, not set: the player moves by what they press.
+    --- Example: game.audio.playAt("landing", game.player.position)
+    position: vector
+
+    --- The name of the weapon in the character's hands, or nil when they
+    --- hold none. Nobody holds a weapon until the script hands one out. The
+    --- name is spelt as it was made: "smg" for `game.weapon("smg", ...)`
+    --- however `giveWeapon` wrote it, and the engine's own are in small
+    --- letters.
+    --- Example: if game.player.weapon == "shotgun" then print("Careful!") end
     weapon: string?
 
-    --- The rounds in the magazine of the player's weapon, ready to fire.
-    --- 0 when they hold no weapon.
-    --- Example: if player.ammo == 0 then print(player.name .. " is empty") end
+    --- The rounds in the magazine of the character's weapon, ready to
+    --- fire. 0 when they hold no weapon.
+    --- Example: if game.player.ammo == 0 then print("Empty!") end
     ammo: number
 
-    --- The spare rounds the player carries for their weapon, which
+    --- The spare rounds the character carries for their weapon, which
     --- reloading moves into the magazine. 0 when they hold no weapon.
-    --- Example: if player.ammo + player.reserve == 0 then player:giveWeapon("pistol") end
+    --- Example: if game.player.ammo + game.player.reserve == 0 then game.player:giveWeapon("pistol") end
     reserve: number
 
-    --- Puts a new, full weapon in the player's hands, in place of what they
-    --- held. The name is one of the engine's weapons ("rifle", "pistol",
-    --- "shotgun", "rocket launcher", "grenade") or one made with
+    --- Puts a new, full weapon in the character's hands, in place of what
+    --- they held. The name is one of the engine's weapons ("rifle",
+    --- "pistol", "shotgun", "rocket launcher", "grenade") or one made with
     --- `game.weapon`. The player fires it with the "fire" action, aims with
     --- "aim" and reloads with "reload". Capital letters do not matter.
-    --- Example: game.onSpawn(function(player) player:giveWeapon("rifle") end)
+    --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
     function giveWeapon(self, name: string): ()
 
-    --- Empties the player's hands. Does nothing if they hold no weapon.
-    --- Example: player:takeWeapon()
+    --- Empties the character's hands. Does nothing if they hold no weapon.
+    --- Example: game.player:takeWeapon()
     function takeWeapon(self): ()
 end
 
 --- Where a shot landed: what a `game.onWeaponHit` function is handed.
 --- Example: game.onWeaponHit(function(hit) if hit.victim and hit.part == "head" then print("Headshot!") end end)
 declare extern type WeaponHit with
-    --- The player who fired.
-    shooter: Player
+    --- Who fired. Only the player fires today, so this is `game.player`.
+    shooter: Character
 
-    --- The player who was hit, or nil when the shot hit the level (a wall,
-    --- the floor). A player caught in their own explosion is their own
-    --- victim.
-    victim: Player?
+    --- Who was hit, or nil when the shot hit the level (a wall, the
+    --- floor). The player caught in their own explosion is their own
+    --- victim: `hit.victim == game.player`.
+    victim: Character?
 
     --- The name of the weapon that fired, such as "rifle".
     weapon: string
@@ -82,7 +94,7 @@ declare extern type WeaponHit with
     distance: number
 
     --- True when this is an explosion: first the explosion itself, with no
-    --- victim and no damage, then one hit for each player caught in its
+    --- victim and no damage, then one hit for each character caught in its
     --- blast, with what the blast is worth where they stood.
     --- Example: if hit.explosion and not hit.victim then game.audio.playAt("gunshot", hit.position) end
     explosion: boolean
@@ -122,7 +134,7 @@ declare extern type Tween with
 
     --- Sends the number on to `target` over `seconds`, from wherever it has
     --- got to, so it never jumps. With 0 seconds it is there at once.
-    --- Example: shown:to(player.ammo, 0.3)
+    --- Example: shown:to(game.player.ammo, 0.3)
     function to(self, target: number, seconds: number): ()
 end
 
@@ -135,7 +147,7 @@ declare extern type HudText with
     --- The words shown, on one line. Set it whenever they change, from
     --- `game.onTick` or `game.onDraw`; setting the words it already has
     --- costs nothing. A number is shown as it would be printed.
-    --- Example: ammo.text = player.ammo .. " / " .. player.reserve
+    --- Example: ammo.text = game.player.ammo .. " / " .. game.player.reserve
     text: string
 
     --- The colour: a name ("white", "black", "gray", "red", "orange",
@@ -146,7 +158,7 @@ declare extern type HudText with
 
     --- False hides it until it is set to true again. It keeps its words
     --- while hidden.
-    --- Example: ammo.visible = player.weapon ~= nil
+    --- Example: ammo.visible = game.player.weapon ~= nil
     visible: boolean
 
     --- How far it sits right of and below where it is pinned, in pixels on
@@ -216,6 +228,12 @@ declare extern type HudBox with
 end
 
 declare game: {
+    --- The player: the one person playing. There from the first line of
+    --- the script to the last, so it needs no waiting for and no looking up.
+    --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
+    --- Example: print(game.player.position)
+    player: Character,
+
     --- Calls `handler` once, on the first tick, when the game starts.
     --- Example: game.onStart(function() print("Go!") end)
     onStart: (handler: () -> ()) -> (),
@@ -278,9 +296,8 @@ declare game: {
     --- `local best = saved.best` copies the number, so write `saved.best`
     --- where you change it.
     ---
-    --- A kept table can hold numbers, text, true and false, players, and
-    --- tables of those. A player can be a key: `streaks[player] = 3`.
-    --- Players who left are taken out. Functions are not kept.
+    --- A kept table can hold numbers, text, true and false, `game.player`,
+    --- and tables of those. Functions are not kept.
     ---
     --- What `start` has and the kept table lacks is added on the next save,
     --- also something you set to nil; what it already holds is not changed.
@@ -290,34 +307,21 @@ declare game: {
     --- Example: local saved = game.keep("saved", { best = 0 })
     keep: (<T>(name: string, start: T) -> T) & ((name: string) -> { [any]: any }),
 
-    --- Calls `handler` when a player joins the game. Players who were
-    --- already here when the file was saved and reloaded do not join again:
-    --- use `game.players()` for them.
-    --- Example: game.onPlayerJoin(function(player) print(player.name .. " joined") end)
-    onPlayerJoin: (handler: (player: Player) -> ()) -> (),
-
-    --- Calls `handler` when a player leaves the game. `player` can still be
-    --- read inside the handler, and not after it.
-    --- Example: game.onPlayerLeave(function(player) jumps[player] = nil end)
-    onPlayerLeave: (handler: (player: Player) -> ()) -> (),
-
-    --- Calls `handler` each time a player is put at a spawn point: when they
-    --- join, and again whenever they are sent back to one, keeping the
-    --- weapon they held. Dying sends a player back, though nothing has
-    --- health yet, so no shot kills anybody.
-    --- Example: game.onSpawn(function(player) print(player.name .. " is in") end)
-    onSpawn: (handler: (player: Player) -> ()) -> (),
-
-    --- Everyone in the game right now, in the order they joined.
-    --- Example: for _, player in game.players() do print(player.name, player.weapon) end
-    players: () -> { Player },
+    --- Calls `handler` each time the player is put at a spawn point: on
+    --- the first tick, right after `game.onStart`, and again whenever they
+    --- are sent back to one, keeping the weapon they held. Dying sends the
+    --- player back, though nothing has health yet, so no shot kills
+    --- anybody. The function is handed nothing: the player is `game.player`.
+    --- Giving a weapon here hands over a new, full one each time.
+    --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
+    onSpawn: (handler: () -> ()) -> (),
 
     --- Makes a kind of weapon, or changes one of the engine's, for
-    --- `player:giveWeapon` to hand out. Call it near the top of the file.
+    --- `game.player:giveWeapon` to hand out. Call it near the top of the file.
     --- Every setting can be left out, and so can the whole table
     --- (`game.weapon("carbine")` is another rifle): the weapon starts as a copy of the
     --- weapon `from` names and changes only what is written. Saving the file
-    --- with new numbers changes the weapons already in players' hands.
+    --- with new numbers changes the weapons already in hand.
     --- Times are in seconds, distances in metres and angles in degrees.
     ---
     --- The engine's weapons are "rifle" (automatic, 30 rounds), "pistol",
@@ -428,9 +432,9 @@ declare game: {
             bounciness: number?,
             --- Seconds until it goes off by itself. `math.huge` is no fuse.
             fuse: number?,
-            --- True when touching the level or a player sets it off at once.
+            --- True when touching the level or a character sets it off at once.
             explodesOnTouch: boolean?,
-            --- How far from the explosion players are hurt. 0 is no explosion.
+            --- How far from the explosion characters are hurt. 0 is no explosion.
             blastRadius: number?,
             --- The damage done at the very edge of the blast. At the centre
             --- it is the weapon's `damage`.
@@ -438,22 +442,23 @@ declare game: {
         }?,
     }?) -> (),
 
-    --- Calls `handler` each time a player fires a shot. A shotgun blast is
-    --- one shot. `player.weapon` is what they fired.
-    --- Example: game.onWeaponFire(function(player) game.audio.play("gunshot") end)
-    onWeaponFire: (handler: (player: Player) -> ()) -> (),
+    --- Calls `handler` each time a shot is fired, with who fired it:
+    --- `shooter.weapon` is what they fired. Only the player fires today, so
+    --- `shooter` is `game.player`. A shotgun blast is one shot.
+    --- Example: game.onWeaponFire(function(shooter) print(shooter.ammo .. " left") end)
+    onWeaponFire: (handler: (shooter: Character) -> ()) -> (),
 
-    --- Calls `handler` each time a shot lands, on a player or on the level.
-    --- Each pellet of a shotgun lands by itself. Nothing is hurt yet: players
-    --- have no health until a later version, so this is where your game
+    --- Calls `handler` each time a shot lands, on someone or on the level.
+    --- Each pellet of a shotgun lands by itself. Nothing is hurt yet:
+    --- nobody has health until a later version, so this is where your game
     --- decides what a hit means.
     --- Example: game.onWeaponHit(function(hit) if hit.victim then print(hit.shooter.name .. " hit " .. hit.victim.name .. " for " .. hit.damage) end end)
     onWeaponHit: (handler: (hit: WeaponHit) -> ()) -> (),
 
-    --- Calls `handler` when a player starts to reload. This is not
-    --- `game.onReload`, which is about the script file being saved.
-    --- Example: game.onWeaponReload(function(player) game.audio.play("reload") end)
-    onWeaponReload: (handler: (player: Player) -> ()) -> (),
+    --- Calls `handler` when someone starts to reload, with who it is. This
+    --- is not `game.onReload`, which is about the script file being saved.
+    --- Example: game.onWeaponReload(function(shooter) print(shooter.reserve .. " spare") end)
+    onWeaponReload: (handler: (shooter: Character) -> ()) -> (),
 
     --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
     --- inside the game's folder, named without the folder and without `.wav`
@@ -558,8 +563,7 @@ declare game: {
     ---
     --- The standard actions are: "move" and "look" (two directions), and the
     --- buttons "jump", "crouch", "sprint", "fire", "aim", "reload", "interact",
-    --- "melee", "grenade", "next_weapon", "previous_weapon", "scoreboard" and
-    --- "pause". Action names are lower case with underscores.
+    --- "melee", "grenade", "next_weapon", "previous_weapon" and "pause". Action names are lower case with underscores.
     ---
     --- "pause" opens the menu every game has. While it is open, the actions
     --- above all read as let go, and the menu's own are heard instead:
@@ -603,8 +607,8 @@ declare game: {
         --- (full). It stops by itself after `seconds`: 0.2 if left out, and
         --- at most 5. Numbers outside those ranges are brought into them. A
         --- new rumble replaces the one playing, so `rumble(0, 0)` stops it.
-        --- Only the player at the computer running the script feels it
-        --- (`lore run`), on a gamepad, on Linux and Windows.
+        --- It is felt on a gamepad, on Linux and Windows, when the game is
+        --- played (`lore run`).
         --- Example: if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
         rumble: (strong: number, weak: number, seconds: number?) -> (),
     },

@@ -1,4 +1,5 @@
-//! What can be shot: players, and the level behind them.
+//! What can be shot: the player and whoever else stands in the world, and
+//! the level behind them.
 
 use lore_physics::Level;
 

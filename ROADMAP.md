@@ -12,13 +12,15 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - `lore new`, `run`, `check`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
 - Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level (FOSSPS#6, FOSSPS#64)
 - Weapons in engine code: hitscan and projectile, recoil, reload (FOSSPS#7)
-- Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the engine fires them (#8)
+- Scripts hand the player weapons, tune them and make their own, and are told of every shot, hit and reload; the engine fires them (#8)
 - Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
 - A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the game lists with a place and a loudness (#16)
 - Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
 - One world, stepped on the fixed tick with the player's input and giving the same result from the same input at any frame rate, with no network layer under it (#278)
-- No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead, and `lore check` tries a script with a pretend player and a pretend shot (#279)
+- No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead (#279)
+- One player, who is `game.player` to a script from its first line: no list of players, no joining or leaving, and a script that asks for them is told what to write instead. `lore check` tells a script of pretend shots at a training dummy and at a wall, and of the player dying (#280)
+- The standard controls have no `scoreboard` action (#313)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
 
 
@@ -27,7 +29,6 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 Window, input, Vulkan, Luau scripts and the `lore` command, and removing the multiplayer LORE inherited.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
-- There is one player: `game.player` replaces players, joins and leaves (#280)
 - Fold the `window` Cargo feature: no program without a window is shipped any more (#310)
 
 ## M1 — Walk the world
@@ -73,7 +74,6 @@ One player in first or third person: move, look, use things, fight, hear and pau
 - The starter game and the tutorial show what happens on the HUD, not only in the terminal (#246)
 - A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
 - A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
-- The standard controls are an adventure's: no `scoreboard` action, and names that fit (#313)
 - The starter level is a place to explore, not a two-ended arena (#314)
 
 ## M2 — People and creatures

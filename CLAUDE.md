@@ -1,7 +1,7 @@
 # LORE (Lovely Open Rust Engine)
 
 Free, open-source engine for single-player open-world adventures and action RPGs (the kind of game Skyrim and The Legend of Zelda are), in first or third person.
-Rust core, Luau scripting, Vulkan 1.3. Licensed MIT OR Apache-2.0. Forked from FOSSPS, a multiplayer FPS engine; the multiplayer is being removed (#277 to #280).
+Rust core, Luau scripting, Vulkan 1.3. Licensed MIT OR Apache-2.0. Forked from FOSSPS, a multiplayer FPS engine; the multiplayer has been removed (#277 to #280).
 
 ## Pillars (earlier wins when they conflict)
 

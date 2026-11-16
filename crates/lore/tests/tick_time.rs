@@ -22,7 +22,7 @@ const TICKS: u32 = 200_000;
 fn measure(name: &str, level: Option<&lore::assets::Scene>) {
     let actions = ActionMap::default_fps();
     let script = ScriptGame::from_source("", &actions);
-    let mut game = Playing::start(script, level, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(script, level, &actions, TICK_RATE);
     let mut input = Input::new(actions);
     for _ in 0..60 {
         game.tick(input.tick(), STEP);

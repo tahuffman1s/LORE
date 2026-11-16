@@ -62,6 +62,12 @@ impl fmt::Display for BindingsError {
 
 impl std::error::Error for BindingsError {}
 
+/// Actions the standard controls once had. A bindings file written then
+/// names them, and is told they are gone rather than asked whether it
+/// meant some other action. A game that makes an action of its own by one
+/// of these names is not affected.
+const TAKEN_OUT: [&str; 1] = ["scoreboard"];
+
 /// One entry of a bindings file that was left out, and why.
 ///
 /// The rest of the file is still used. Each one prints as a sentence saying
@@ -84,6 +90,12 @@ pub enum ProblemKind {
     },
     /// The game has no action of this name.
     UnknownAction(UnknownName),
+    /// The standard controls had an action of this name once and no longer
+    /// do, so a file written back then still lists it.
+    TakenOut {
+        /// The action that is gone.
+        action: String,
+    },
     /// The entry is not a list of names.
     NotAList {
         /// The action being bound.
@@ -119,6 +131,11 @@ impl fmt::Display for BindingsProblem {
             ProblemKind::UnknownAction(unknown) => {
                 write!(f, "{unknown} The line is not used.")
             }
+            ProblemKind::TakenOut { action } => write!(
+                f,
+                "\"{action}\" is no longer an action: LORE keeps no scores, so there is no \
+                 scoreboard to show. Delete this line. The rest of the file is used."
+            ),
             ProblemKind::NotAList { action } => write!(
                 f,
                 "\"{action}\" needs a list of names in square brackets, like \
@@ -200,7 +217,15 @@ impl ActionMap {
 
     /// Gives the action called `name` the bindings in `list`, or says why not.
     fn read_entry(&mut self, name: &str, list: &DeValue<'_>) -> Result<(), ProblemKind> {
-        let action = self.action(name).map_err(ProblemKind::UnknownAction)?;
+        let action = self.action(name).map_err(|unknown| {
+            if TAKEN_OUT.contains(&name) {
+                ProblemKind::TakenOut {
+                    action: name.to_owned(),
+                }
+            } else {
+                ProblemKind::UnknownAction(unknown)
+            }
+        })?;
         let not_a_list = || ProblemKind::NotAList {
             action: name.to_owned(),
         };
@@ -453,6 +478,39 @@ mod tests {
             let action = map.action(name).unwrap();
             assert_eq!(map.bindings(action), defaults.bindings(action), "{name}");
         }
+    }
+
+    #[test]
+    fn a_file_from_when_there_was_a_scoreboard_still_loads_and_says_to_delete_the_line() {
+        let mut map = ActionMap::default_fps();
+        let problems = map
+            .read_bindings(
+                "[bindings]\n\
+                 jump = [\"J\", \"GamepadSouth\"]\n\
+                 scoreboard = [\"Tab\", \"GamepadSelect\"]\n\
+                 reload = [\"T\", \"GamepadWest\"]\n",
+            )
+            .unwrap();
+        assert_eq!(
+            said(&problems),
+            [
+                "Line 3: \"scoreboard\" is no longer an action: LORE keeps no scores, so there \
+              is no scoreboard to show. Delete this line. The rest of the file is used."
+            ]
+        );
+        // The lines around it took effect.
+        let bound = |map: &ActionMap, name: &str| map.bindings(map.action(name).unwrap()).to_vec();
+        assert_eq!(bound(&map, "jump")[0].to_string(), "J");
+        assert_eq!(bound(&map, "reload")[0].to_string(), "T");
+
+        // A game with a scoreboard action of its own binds it as any other.
+        let mut own = ActionMap::default_fps();
+        own.button("scoreboard", ["Tab", "GamepadSelect"]).unwrap();
+        let problems = own
+            .read_bindings("[bindings]\nscoreboard = [\"M\", \"GamepadSelect\"]\n")
+            .unwrap();
+        assert_eq!(said(&problems), [] as [&str; 0]);
+        assert_eq!(bound(&own, "scoreboard")[0].to_string(), "M");
     }
 
     #[test]

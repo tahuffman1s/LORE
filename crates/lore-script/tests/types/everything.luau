@@ -13,8 +13,8 @@ saved.best += 1
 local visits = game.keep("visits")
 visits.total = 1
 
--- A player can be a key in a table.
-local jumps: { [Player]: number } = {}
+-- A character, such as the player, can be a key in a table.
+local jumps: { [Character]: number } = {}
 local timeLeft = 10
 
 game.onStart(function()
@@ -48,23 +48,17 @@ game.onReload(function()
     print("New version loaded")
 end)
 
-game.onPlayerJoin(function(player)
-    jumps[player] = 0
-    visits[player] = 0
-    print(player.name .. " joined")
-end)
+-- The player is there from the first line.
+local player: Character = game.player
+jumps[player] = 0
+visits[game.player] = 0
+print(player.name, player.weapon)
 
-game.onPlayerLeave(function(player)
-    jumps[player] = nil
+game.onSpawn(function()
+    local at: vector = game.player.position
+    print(game.player.name .. " is in at", at.x, at.y, at.z)
+    jumps[game.player] = nil
 end)
-
-game.onSpawn(function(player)
-    print(player.name .. " is in")
-end)
-
-for _, player in game.players() do
-    print(player.name, player.weapon)
-end
 
 game.audio.stopAll()
 game.audio.play("gunshot")
@@ -145,30 +139,31 @@ game.weapon("launcher", {
 })
 game.weapon("rifle", {})
 
-game.onSpawn(function(player)
-    player:giveWeapon("smg")
-    local held: string? = player.weapon
-    local rounds: number = player.ammo + player.reserve
+game.onSpawn(function()
+    game.player:giveWeapon("smg")
+    local held: string? = game.player.weapon
+    local rounds: number = game.player.ammo + game.player.reserve
     print(held, rounds)
-    player:takeWeapon()
+    game.player:takeWeapon()
 end)
 
-game.onWeaponFire(function(player)
-    print(player.name .. " fired")
+game.onWeaponFire(function(shooter)
+    print(shooter.name .. " fired", shooter == game.player)
 end)
 
 game.onWeaponHit(function(hit)
     local where: vector = hit.position
     local headshot = hit.part == "head"
     if hit.victim then
+        jumps[hit.victim] = 0
         print(hit.shooter.name, hit.victim.name, hit.weapon, hit.damage, hit.distance, headshot)
     elseif hit.explosion then
         print("Boom at", where)
     end
 end)
 
-game.onWeaponReload(function(player)
-    print(player.name .. " is reloading")
+game.onWeaponReload(function(shooter)
+    print(shooter.name .. " is reloading")
 end)
 
 local ammo = game.hud.text("30 / 90", { at = "bottom right", right = -20, down = -20, size = 40, color = "white" })

@@ -1,5 +1,5 @@
-//! A player is put at a spawn point when they come into the world and
-//! when they die, and at no other time: nothing is counted down, started
+//! The player is put at a spawn point when the game starts and when they
+//! die, and at no other time: nothing is counted down, started
 //! again or moved behind the script's back.
 //!
 //! Time is counted in ticks, so every run plays the same.
@@ -48,12 +48,14 @@ fn printed() -> Vec<String> {
     PRINTED.with_borrow_mut(std::mem::take)
 }
 
-/// Says everything the engine does to a player, and hands each a pistol
-/// as they join.
+/// Says everything the engine does to the player, and hands them a pistol
+/// as the game starts.
 const TELLS_ALL: &str = r#"
-game.onPlayerJoin(function(player) print("join " .. player.name) player:giveWeapon("pistol") end)
-game.onPlayerLeave(function(player) print("leave " .. player.name) end)
-game.onSpawn(function(player) print("spawn " .. player.name .. " " .. tostring(player.weapon)) end)
+game.onStart(function() print("start " .. game.player.name) game.player:giveWeapon("pistol") end)
+game.onSpawn(function()
+    local where = if game.time() < 1 then "" else " " .. math.round(game.player.position.z)
+    print("spawn " .. game.player.name .. " " .. tostring(game.player.weapon) .. where)
+end)
 "#;
 
 /// Two places to start, 10 m apart on the flat floor.
@@ -84,12 +86,9 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// a millimetre. They used to sink 18 cm for a tick now and then (#261).
 const LEVEL: f32 = 0.0001;
 
-/// Where the world has its only player.
+/// Where the world has its player.
 fn feet(game: &Playing) -> [f32; 3] {
-    let [(_, player)] = game.world().players().collect::<Vec<_>>()[..] else {
-        panic!("one player");
-    };
-    player.position
+    game.world().player().position
 }
 
 /// What [`walk_about`] saw.
@@ -130,7 +129,7 @@ fn walk_about(game: &mut Playing, input: &mut Input, ticks: u32) -> Walk {
 #[test]
 fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
     let actions = ActionMap::default_fps();
-    let mut game = Playing::start(game(TELLS_ALL), None, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(game(TELLS_ALL), None, &actions, TICK_RATE);
     let mut input = Input::new(actions);
 
     // Settled at a spawn point.
@@ -138,7 +137,7 @@ fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
         game.tick(input.tick(), STEP);
     }
     let start = feet(&game);
-    assert_eq!(printed(), ["join Player 1", "spawn Player 1 pistol"]);
+    assert_eq!(printed(), ["start Player", "spawn Player pistol"]);
 
     // Forward for five seconds, then ten ticks more: a game with rounds
     // used to start one here and put everyone back (#259).
@@ -192,12 +191,10 @@ fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
     assert_eq!(printed(), Vec::<String>::new());
     let host = game.world().game().host();
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    assert_eq!(host.players().len(), 1);
-    assert_eq!(game.world().players().count(), 1);
 }
 
 #[test]
-fn someone_joining_moves_nobody_else() {
+fn a_dummy_put_in_the_world_moves_the_player_nowhere_and_tells_the_script_nothing() {
     let mut world = World::new(game(TELLS_ALL), TICK_RATE);
     let nothing = Input::new(ActionMap::default_fps());
     let play = |world: &mut World, ticks: u32| {
@@ -205,22 +202,28 @@ fn someone_joining_moves_nobody_else() {
             world.tick(nothing.frame(), STEP);
         }
     };
-    let ann = world.add_player().unwrap();
     play(&mut world, MINUTE);
-    let before = world.player(ann).unwrap().position;
-    assert_eq!(printed(), ["join Player 1", "spawn Player 1 pistol"]);
+    let before = world.player().position;
+    assert_eq!(printed(), ["start Player", "spawn Player pistol"]);
 
-    // A second player arrives a minute in: only they are spawned.
-    world.add_player().unwrap();
-    play(&mut world, 3 * MINUTE);
+    // A dummy is stood at the other spawn point a minute in, and taken
+    // away again two minutes later: nobody is spawned.
+    let other = if before[2] < -5.0 { 0.0 } else { -10.0 };
+    let dummy = world.add_dummy([0.0, 0.0, other]);
+    play(&mut world, 2 * MINUTE);
+    world.remove_dummy(dummy);
+    play(&mut world, MINUTE);
 
-    assert_eq!(printed(), ["join Player 2", "spawn Player 2 pistol"]);
-    assert!(distance(before, world.player(ann).unwrap().position) < 0.001);
-    assert_eq!(world.game().host().players().len(), 2);
+    assert_eq!(printed(), Vec::<String>::new());
+    assert!(distance(before, world.player().position) < 0.001);
+    let host = world.game().host();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }
 
 #[test]
 fn a_player_who_dies_is_put_back_at_a_spawn_point_with_what_they_held() {
+    use lore::script::CharacterId;
+
     let mut world = World::new(game(TELLS_ALL), TICK_RATE);
     let nothing = Input::new(ActionMap::default_fps());
     let play = |world: &mut World, ticks: u32| {
@@ -228,40 +231,45 @@ fn a_player_who_dies_is_put_back_at_a_spawn_point_with_what_they_held() {
             world.tick(nothing.frame(), STEP);
         }
     };
-    let ann = world.add_player().unwrap();
     play(&mut world, 30);
-    let start = world.player(ann).unwrap().position;
+    let start = world.player().position;
     printed();
 
     // Three seconds' walk to the side: metres from both spawn points.
-    let mut asked = world.asked(ann).unwrap();
+    let mut asked = world.asked();
     asked.movement.right = 1.0;
-    world.ask(ann, asked);
+    world.ask(asked);
     play(&mut world, 3 * SECOND);
     asked.movement.right = 0.0;
-    world.ask(ann, asked);
+    world.ask(asked);
     let spawns = [[0.0, 0.0, 0.0], [0.0, 0.0, -10.0]];
     let nearest = |here: [f32; 3]| {
         let to = spawns.map(|spawn| distance(spawn, here));
         to[0].min(to[1])
     };
-    let away = world.player(ann).unwrap().position;
+    let away = world.player().position;
     assert!(nearest(away) > 3.0, "walked from {start:?} to {away:?}");
     assert_eq!(printed(), Vec::<String>::new());
 
     // Nothing has health yet, so dying is the engine being told so.
-    let name = world.game().host().players()[0];
-    world.game_mut().host_mut().player_died(name);
-    assert_eq!(printed(), ["spawn Player 1 pistol"]);
+    // The script is told on the tick that puts them back, and reads the
+    // spawn point as where they are, not the place they died.
+    world.game_mut().host_mut().player_died();
+    assert_eq!(printed(), Vec::<String>::new());
     play(&mut world, 1);
-    let back = world.player(ann).unwrap().position;
+    let back = world.player().position;
     assert!(nearest(back) < 0.01, "put at a spawn point: {back:?}");
+    assert_eq!(
+        printed(),
+        [format!("spawn Player pistol {}", back[2].round())]
+    );
 
     // Once: they are left alone again, still holding the pistol.
     play(&mut world, MINUTE);
-    assert!(distance(back, world.player(ann).unwrap().position) < 0.01);
+    assert!(distance(back, world.player().position) < 0.01);
     assert_eq!(printed(), Vec::<String>::new());
     let host = world.game().host();
-    assert_eq!(&*host.held_weapon(name).unwrap().name, "pistol");
+    let held = host.held_weapon(CharacterId::PLAYER).unwrap();
+    assert_eq!(&*held.name, "pistol");
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }

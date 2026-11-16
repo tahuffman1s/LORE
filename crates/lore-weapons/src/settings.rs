@@ -57,7 +57,7 @@ pub struct ProjectileSettings {
     pub fuse: f32,
     /// Whether touching the level or a player sets it off at once.
     pub explodes_on_touch: bool,
-    /// How far from the explosion players are hurt, in metres. 0 is no
+    /// How far from the explosion anyone is hurt, in metres. 0 is no
     /// explosion.
     pub blast_radius: f32,
     /// The damage done at the very edge of the blast. At the centre it is

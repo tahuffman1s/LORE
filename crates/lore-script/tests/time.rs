@@ -449,10 +449,10 @@ fn drawing_cannot_change_the_game() {
         ("shown:to(1, 1)", "tween:to"),
         ("timer:cancel()", "timer:cancel"),
         (
-            "game.players()[1]:giveWeapon(\"rifle\")",
-            "player:giveWeapon",
+            "game.player:giveWeapon(\"rifle\")",
+            "game.player:giveWeapon",
         ),
-        ("game.players()[1]:takeWeapon()", "player:takeWeapon"),
+        ("game.player:takeWeapon()", "game.player:takeWeapon"),
         ("game.onTick(function() end)", "game.onTick"),
         ("game.onDraw(function() end)", "game.onDraw"),
     ] {
@@ -463,7 +463,6 @@ fn drawing_cannot_change_the_game() {
              {line}\n\
              end)"
         ));
-        host.player_joined("Ada");
         run(&mut host, 1, 60);
         assert!(host.last_error().is_none(), "{:?}", host.last_error());
         host.draw(0.5);
@@ -485,11 +484,10 @@ fn drawing_cannot_change_the_game() {
         game.onDraw(function() end)
         game.onTick(function()
             game.after(1, function() end):cancel()
-            game.players()[1]:takeWeapon()
+            game.player:takeWeapon()
         end)
         "#,
     );
-    host.player_joined("Ada");
     run(&mut host, 1, 60);
     host.draw(0.5);
     run(&mut host, 1, 60);

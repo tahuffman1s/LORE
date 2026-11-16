@@ -1,18 +1,18 @@
-//! Choosing which spawn point a player is put at.
+//! Choosing which spawn point the player is put at.
 
-/// Closer than this to anyone, in metres, a spawn point is taken: the new
+/// Closer than this to anyone, in metres, a spawn point is taken: the
 /// player would appear inside them.
 const TAKEN_WITHIN: f32 = 1.0;
 
 /// Someone this far away, in metres, is far enough. Points beyond it all
-/// count the same, so players are not always sent to the far corner.
+/// count the same, so the player is not always sent to the far corner.
 const FAR_ENOUGH: f32 = 40.0;
 
 /// The choice is made among the points at least this good compared with
-/// the best one, so a player does not always start at the same one.
+/// the best one, so the player does not always start at the same one.
 const NEARLY_AS_GOOD: f32 = 0.75;
 
-/// Picks the spawn point for a player about to be put in the world, as an
+/// Picks the spawn point for the player about to be put in the world, as an
 /// index into `points`. `None` only if there are no points at all.
 ///
 /// Points somebody in `standing` is on are left out while others are free.
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn a_player_is_put_away_from_whoever_is_there() {
+    fn the_player_is_put_away_from_whoever_is_there() {
         let points = [at(0.0), at(10.0), at(30.0)];
         for seed in 0..50 {
             assert_eq!(
@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn nobody_is_put_inside_another_player_while_a_point_is_free() {
+    fn nobody_is_put_inside_someone_else_while_a_point_is_free() {
         let points = [at(0.0), at(2.0)];
         for seed in 0..50 {
             assert_eq!(choose(&points, &[at(0.2)], seed), Some(1));

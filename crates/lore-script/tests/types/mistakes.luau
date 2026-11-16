@@ -22,11 +22,16 @@ print(game.team("Red")) -- wrong: there are no teams
 print(game.round.phase()) -- wrong: there are no rounds
 game.onKill(function() end) -- wrong: nobody dies yet
 
-game.onPlayerJoin(function(player)
-    print(player.nmae) -- wrong: no such field
-    print(player.team) -- wrong: there are no teams
-    player:addScore(1) -- wrong: there is no score
-end)
+-- There is one player, game.player: no list of them, and nobody joins or
+-- leaves.
+print(game.players()) -- wrong: there is one player, game.player
+game.onPlayerJoin(function() end) -- wrong: nobody joins
+game.onPlayerLeave(function() end) -- wrong: nobody leaves
+game.onSpawn(function(player) print(player) end) -- wrong: the function is handed nothing
+
+print(game.player.nmae) -- wrong: no such field
+print(game.player.team) -- wrong: there are no teams
+game.player:addScore(1) -- wrong: there is no score
 
 game.audio.playAt("gunshot", 1, 2, 3) -- wrong: a place is vector.create(1, 2, 3)
 
@@ -43,8 +48,8 @@ game.onWeaponHit(function(hit)
     print(hit.shooter.name)
 end)
 
-game.onSpawn(function(player)
-    player.giveWeapon("rifle") -- wrong: needs a colon, player:giveWeapon("rifle")
+game.onSpawn(function()
+    game.player.giveWeapon("rifle") -- wrong: needs a colon, game.player:giveWeapon("rifle")
 end)
 
 game.after(function() end, 3) -- wrong: the seconds come first
