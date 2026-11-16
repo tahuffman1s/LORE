@@ -17,7 +17,7 @@
 
 --- A team in the match. Get one from `player.team`, `game.team("Red")` or
 --- `game.teams()`.
-declare class Team
+declare extern type Team with
     --- The team's name, as written in `game.mode`.
     name: string
 
@@ -37,7 +37,7 @@ end
 
 --- A player in the match. The same player is always the same value, so a
 --- player can be a key in a table of your own: `streak[player] = 3`.
-declare class Player
+declare extern type Player with
     --- The name the player goes by.
     name: string
 
@@ -68,7 +68,7 @@ end
 --- A sound that was started with `game.audio.play` or `game.audio.playAt`.
 --- Keep it only if you mean to stop it; a sound that is not looped ends by
 --- itself.
-declare class Sound
+declare extern type Sound with
     --- Stops the sound, with a fade too short to hear so it does not click.
     --- Stopping a sound that has already ended does nothing.
     --- Example: music:stop()

@@ -48,6 +48,21 @@ jobs:
       # The `lore` command still builds with the editor left out.
       - run: cargo check -p lore --no-default-features --features window,cli
 
+  # Gives lore.d.luau, the template and the example games to the Luau type
+  # checker an editor uses, so the definitions are known to load there and the
+  # scripts a new author reads first show no mistakes.
+  types:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Type-check the scripts with luau-lsp
+        shell: bash
+        run: bash .github/scripts/check-types.sh
+
   # Draws the benchmark scene and fails if its frames have become much slower.
   bench:
     runs-on: ubuntu-latest
