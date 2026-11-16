@@ -32,6 +32,7 @@ mod audio;
 mod error;
 mod host;
 mod keep;
+mod limit;
 mod mode_api;
 mod modules;
 
