@@ -29,7 +29,6 @@ cli = ["dep:clap", "dep:tar", "dep:flate2"]
 [dependencies]
 lore-input = { path = "../lore-input" }
 lore-script = { path = "../lore-script" }
-lore-net = { path = "../lore-net" }
 lore-pack = { path = "../lore-pack" }
 lore-physics = { path = "../lore-physics" }
 # The weapons players hold: firing, what a shot hits, rockets and grenades.

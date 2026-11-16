@@ -12,9 +12,6 @@ const HEAD_FROM: f32 = 0.85;
 const LEGS_BELOW: f32 = 0.45;
 
 /// Something that can be shot: a player's body, as an upright capsule.
-///
-/// To shoot at where players were a moment ago (lag compensation), pass
-/// targets built from their old positions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
     /// Your own number for who this is; it comes back in the [`Hit`].

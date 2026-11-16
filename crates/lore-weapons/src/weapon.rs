@@ -21,7 +21,7 @@ const KICK_ROLL: u32 = u32::MAX;
 /// What the player holding the weapon is doing during one tick.
 ///
 /// Like movement input this is not tied to keys or sticks: fill it from
-/// actions, a recorded demo or a network packet alike.
+/// actions or a recording alike.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct WeaponInput {
     /// The trigger is held.
@@ -107,8 +107,8 @@ impl Shot {
 /// A weapon in a player's hands.
 ///
 /// This is everything a weapon remembers between ticks. Like the player's
-/// body it is small and `Copy`: it can be sent over the network, compared
-/// with what a server says, and kept to replay from.
+/// body it is small and `Copy`: it can be saved, compared with another,
+/// and kept to replay from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weapon {
     /// Rounds ready to fire.
@@ -218,7 +218,7 @@ impl Weapon {
     /// `seed` decides every roll made this tick; get it from
     /// [`shot_seed`](crate::shot_seed). Call this at a fixed rate with the
     /// same `dt` every time. The same weapon, settings, input, seed and
-    /// `dt` always give the same result, so a client can go back to an old
+    /// `dt` always give the same result, so a game can go back to an old
     /// `Weapon` and replay its inputs. A `dt` that is zero, negative or not
     /// a number does nothing.
     pub fn step(
@@ -294,7 +294,7 @@ impl Weapon {
     }
 
     /// Replaces numbers that are not numbers, which only a corrupted
-    /// snapshot could hold, so they cannot spread.
+    /// weapon could hold, so they cannot spread.
     fn repair(&mut self) {
         self.cooldown = positive(self.cooldown);
         self.added_spread = positive(self.added_spread);

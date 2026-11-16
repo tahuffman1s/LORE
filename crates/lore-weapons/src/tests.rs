@@ -686,7 +686,7 @@ fn replaying_from_a_kept_weapon_reaches_the_same_place() {
         bench.step(script(tick));
     }
 
-    // A client going back to tick 300 and running the same inputs again.
+    // Going back to tick 300 and running the same inputs again.
     let mut replay = Bench::new(WeaponSettings::default());
     replay.weapon = kept;
     replay.tick = 300;

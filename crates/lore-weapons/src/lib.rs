@@ -42,8 +42,8 @@
 //! Nothing here reads a clock or keeps a random number generator: chance
 //! comes from the seed handed to [`Weapon::step`]. The same weapon,
 //! settings, input, seed and tick length always give the same result, so
-//! a server and a predicting client fire the same bullets, and a client
-//! can go back to an old [`Weapon`] and replay its inputs.
+//! a replay fires the same bullets, and a game can go back to an old
+//! [`Weapon`] and run on from there.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 

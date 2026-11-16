@@ -3,9 +3,7 @@
 //! into the world once, when they join, and nothing the script did not ask
 //! for moves them, kills them, scores them or starts them again.
 //!
-//! The server and its players are in this one program and hand each other
-//! their packets directly, and time is counted in ticks, so every run plays
-//! the same.
+//! Time is counted in ticks, so every run plays the same.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -13,7 +11,7 @@ use std::cell::RefCell;
 
 use lore::input::{ActionMap, Input, Key};
 use lore::map::Map;
-use lore::online::{HostedGame, JoinedGame, LocalGame};
+use lore::world::{Playing, World};
 use lore::{Game, ScriptGame};
 use lore_mode::Phase;
 
@@ -95,25 +93,26 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// a millimetre. They used to sink 18 cm for a tick now and then (#261).
 const LEVEL: f32 = 0.0001;
 
-/// Where the server has its only player.
-fn on_server(game: &LocalGame) -> [f32; 3] {
-    let (_, player) = game.hosted().players().next().unwrap();
+/// Where the world has its only player.
+fn feet(game: &Playing) -> [f32; 3] {
+    let [(_, player)] = game.world().players().collect::<Vec<_>>()[..] else {
+        panic!("one player");
+    };
     player.position
 }
 
 /// What [`walk_about`] saw.
 struct Walk {
-    /// The furthest the server moved the player in any one tick.
+    /// The furthest the player moved in any one tick.
     furthest: f32,
-    /// The most the player's feet rose or sank from where they started, on
-    /// the server or in the player's own picture of themselves.
+    /// The most the player's feet rose or sank from where they started.
     off_level: f32,
 }
 
 /// Plays `ticks` ticks alone, walking forward and back by turns so the
 /// player is on the move through every second of it.
-fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> Walk {
-    let mut before = on_server(game);
+fn walk_about(game: &mut Playing, input: &mut Input, ticks: u32) -> Walk {
+    let mut before = feet(game);
     let height = before[1];
     let mut walk = Walk {
         furthest: 0.0,
@@ -130,13 +129,9 @@ fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> Walk {
         input.release(release);
         input.press(hold);
         game.tick(input.tick(), STEP);
-        let now = on_server(game);
-        let own = game.joined().player().position;
+        let now = feet(game);
         walk.furthest = walk.furthest.max(distance(before, now));
-        walk.off_level = walk
-            .off_level
-            .max((now[1] - height).abs())
-            .max((own[1] - height).abs());
+        walk.off_level = walk.off_level.max((now[1] - height).abs());
         before = now;
     }
     walk
@@ -145,14 +140,14 @@ fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> Walk {
 #[test]
 fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
     let actions = ActionMap::default_fps();
-    let mut game = LocalGame::start(game(TELLS_ALL), None, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(game(TELLS_ALL), None, &actions, TICK_RATE).unwrap();
     let mut input = Input::new(actions);
 
     // Settled at a spawn point.
     for _ in 0..30 {
         game.tick(input.tick(), STEP);
     }
-    let start = on_server(&game);
+    let start = feet(&game);
     assert_eq!(printed(), ["join Player 1", "spawn Player 1"]);
 
     // What the issue saw: forward for five seconds, then ten ticks more.
@@ -160,7 +155,7 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
     for _ in 0..5 * SECOND - 30 {
         game.tick(input.tick(), STEP);
     }
-    let at_five_seconds = on_server(&game);
+    let at_five_seconds = feet(&game);
     assert!(
         distance(start, at_five_seconds) > 10.0,
         "walked from {start:?} to {at_five_seconds:?}"
@@ -168,7 +163,7 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
     for _ in 0..10 {
         game.tick(input.tick(), STEP);
     }
-    let just_after = on_server(&game);
+    let just_after = feet(&game);
     assert!(
         distance(at_five_seconds, just_after) < 10.0 * A_STEP,
         "put somewhere else: {at_five_seconds:?} then {just_after:?}"
@@ -193,23 +188,19 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
         "the player's feet left the floor by {off_level} m"
     );
 
-    // Standing still again, the player's own picture of where they are
-    // agrees with the server's: nothing was put right on the way.
+    // Standing still again, the eyes the picture is drawn from are right
+    // over the feet: the view was never left behind.
     input.release(Key::W);
     input.release(Key::S);
     for _ in 0..SECOND {
         game.tick(input.tick(), STEP);
     }
-    let here = game.joined().player().position;
-    assert!(
-        distance(here, on_server(&game)) < 0.001,
-        "player {here:?}, server {:?}",
-        on_server(&game)
-    );
+    let (eye, here) = (game.eye_position(), feet(&game));
+    assert_eq!([eye[0], eye[2]], [here[0], here[2]]);
 
     // Nothing else happened to them, and nothing was said to the script.
     assert_eq!(printed(), Vec::<String>::new());
-    let host = game.hosted().game().host();
+    let host = game.world().game().host();
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     let mode = host.mode();
     assert_eq!(mode.phase(), Phase::Playing);
@@ -226,37 +217,25 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
 
 #[test]
 fn someone_joining_a_game_with_no_mode_moves_nobody_else() {
-    let actions = ActionMap::default_fps();
-    let mut hosted = HostedGame::in_program(game(TELLS_ALL), TICK_RATE);
-    let nothing = Input::new(actions.clone());
-    let mut ann = JoinedGame::in_program(&mut hosted, &actions).unwrap();
-    hosted.tick(nothing.frame(), STEP);
-    let mut ann_input = Input::new(actions.clone());
-    let mut play = |hosted: &mut HostedGame, players: &mut [&mut JoinedGame], ticks: u32| {
+    let mut world = World::new(game(TELLS_ALL), TICK_RATE);
+    let nothing = Input::new(ActionMap::default_fps());
+    let play = |world: &mut World, ticks: u32| {
         for _ in 0..ticks {
-            for joined in players.iter_mut() {
-                joined.tick(ann_input.tick(), STEP);
-            }
-            hosted.tick(nothing.frame(), STEP);
+            world.tick(nothing.frame(), STEP);
         }
     };
-    play(&mut hosted, &mut [&mut ann], MINUTE);
-    let ann_id = ann.id().unwrap();
-    let where_is = |hosted: &HostedGame, id| {
-        let (_, player) = hosted.players().find(|(other, _)| *other == id).unwrap();
-        player.position
-    };
-    let before = where_is(&hosted, ann_id);
+    let ann = world.add_player().unwrap();
+    play(&mut world, MINUTE);
+    let before = world.player(ann).unwrap().position;
     assert_eq!(printed(), ["join Player 1", "spawn Player 1"]);
 
     // A second player arrives a minute in: only they are spawned.
-    let mut bo = JoinedGame::in_program(&mut hosted, &actions).unwrap();
-    hosted.tick(nothing.frame(), STEP);
-    play(&mut hosted, &mut [&mut ann, &mut bo], 3 * MINUTE);
+    world.add_player().unwrap();
+    play(&mut world, 3 * MINUTE);
 
     assert_eq!(printed(), ["join Player 2", "spawn Player 2"]);
-    assert!(distance(before, where_is(&hosted, ann_id)) < 0.001);
-    let mode = hosted.game().host().mode();
+    assert!(distance(before, world.player(ann).unwrap().position) < 0.001);
+    let mode = world.game().host().mode();
     assert_eq!(mode.phase(), Phase::Playing);
     for player in mode.players() {
         assert!(player.alive);
@@ -268,20 +247,20 @@ fn someone_joining_a_game_with_no_mode_moves_nobody_else() {
 #[test]
 fn a_game_that_asks_for_a_mode_still_starts_its_round_after_the_warm_up() {
     let actions = ActionMap::default_fps();
-    let mut game = LocalGame::start(game(WITH_A_MODE), None, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(game(WITH_A_MODE), None, &actions, TICK_RATE).unwrap();
     let mut input = Input::new(actions);
     for _ in 0..30 {
         game.tick(input.tick(), STEP);
     }
     assert_eq!(printed(), ["spawn Player 1"]);
-    assert_eq!(game.hosted().game().host().mode().phase(), Phase::Warmup);
+    assert_eq!(game.world().game().host().mode().phase(), Phase::Warmup);
 
     // The round starts five seconds in and everyone starts it from a spawn
     // point, as before.
     let furthest = walk_about(&mut game, &mut input, 6 * SECOND).furthest;
     assert!(furthest > 5.0, "put back at a spawn point: {furthest}");
     assert_eq!(printed(), ["round", "spawn Player 1"]);
-    let mode = game.hosted().game().host().mode();
+    let mode = game.world().game().host().mode();
     assert_eq!(mode.phase(), Phase::Playing);
     assert!(mode.time_left().is_some());
 }

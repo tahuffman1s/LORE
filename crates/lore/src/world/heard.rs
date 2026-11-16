@@ -1,18 +1,16 @@
 //! A game is heard with no script code: the noises players make by
-//! walking and by firing are in the server's list, and the player at this
-//! computer hears them, their own in both ears and other players' from
-//! where they are.
+//! walking and by firing are in the world's list, and the player hears
+//! them, their own in both ears and anyone else's from where they are.
 //!
-//! The sound goes to a mixer whose output is read, not to speakers, and
-//! the server and its players are in this one program, so every run plays
-//! the same ticks.
+//! The sound goes to a mixer whose output is read, not to speakers, so
+//! every run plays the same ticks.
 
 use std::fs;
 
 use lore_audio::Mixer;
 use lore_input::{ActionMap, GamepadButton, Input, Key};
 
-use super::{HostedGame, JoinedGame, LocalGame, MOST_HEARD};
+use super::{MOST_HEARD, PlayerId, PlayerInput, Playing, World};
 use crate::game::{Frame, Game};
 use crate::map::Map;
 use crate::noise::{Noise, NoiseKind};
@@ -25,10 +23,10 @@ const STEP: f32 = 1.0 / 60.0;
 
 /// A game played alone whose sound goes to a mixer.
 struct Played {
-    game: LocalGame,
+    game: Playing,
     input: Input,
     output: SoundOutput<Mixer>,
-    /// Every noise the server has listed, tick after tick.
+    /// Every noise the world has listed, tick after tick.
     noises: Vec<Noise>,
     /// The loudest sample so far in the left ear and in the right.
     loudest: [f32; 2],
@@ -38,7 +36,7 @@ impl Played {
     fn of(script: ScriptGame) -> Self {
         assert_eq!(script.host().last_error(), None);
         let actions = ActionMap::default_fps();
-        let game = LocalGame::start(script, None, &actions, 60).unwrap();
+        let game = Playing::start(script, None, &actions, 60).unwrap();
         let mut played = Self {
             game,
             input: Input::new(actions),
@@ -46,12 +44,11 @@ impl Played {
             noises: Vec::new(),
             loudest: [0.0; 2],
         };
-        // Joining, being put at a spawn point and settling on the floor
-        // make no noise.
+        // Being put at a spawn point and settling on the floor make no
+        // noise.
         played.run(60);
         assert_eq!(played.noises, []);
         assert_eq!(played.loudest, [0.0; 2]);
-        assert!(played.game.joined.playing());
         played
     }
 
@@ -63,8 +60,8 @@ impl Played {
     /// One tick of the game with nothing drawn.
     fn tick(&mut self) {
         self.game.tick(self.input.tick(), STEP);
-        self.noises.extend_from_slice(self.game.hosted.noises());
-        assert_eq!(self.game.hosted.game().host().last_error(), None);
+        self.noises.extend_from_slice(self.game.world.noises());
+        assert_eq!(self.game.world.game().host().last_error(), None);
     }
 
     /// One frame, as the window's loop draws it, and the sixtieth of a
@@ -108,7 +105,18 @@ impl Played {
     }
 
     fn feet(&self) -> [f32; 3] {
-        self.game.joined.player().position
+        self.feet_of(self.game.id)
+    }
+
+    fn feet_of(&self, id: PlayerId) -> [f32; 3] {
+        self.game.world.player(id).unwrap().position
+    }
+
+    /// Changes what the player numbered `id` is asking for.
+    fn ask(&mut self, id: PlayerId, change: impl FnOnce(&mut PlayerInput)) {
+        let mut asked = self.game.world.asked(id).unwrap();
+        change(&mut asked);
+        self.game.world.ask(id, asked);
     }
 }
 
@@ -123,7 +131,7 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 fn a_player_walking_alone_is_heard_step_by_step_with_no_script() {
     // No rules at all: no teams, no rounds, no weapons.
     let mut played = Played::script("");
-    let me = played.game.joined.id().unwrap();
+    let me = played.game.id();
     let start = played.feet();
 
     played.input.press(Key::W);
@@ -195,8 +203,8 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
     use NoiseKind::{DryFire, Gunshot, Reload};
 
     let mut played = Played::script(SMALL_RIFLE);
-    let me = played.game.joined.id().unwrap();
-    let eyes = played.game.joined.eye_position();
+    let me = played.game.id();
+    let eyes = played.game.eye_position();
 
     // The trigger held until both magazines are gone and after.
     played.input.press(GamepadButton::RightTrigger);
@@ -260,19 +268,14 @@ fn another_player_is_heard_from_where_they_are() {
     )
     .with_map(map);
     let mut played = Played::of(script);
-    let me = played.game.joined.id().unwrap();
+    let me = played.game.id();
 
-    // Someone else joins the same game.
-    let mut other = JoinedGame::in_program(&mut played.game.hosted, &actions).unwrap();
-    let mut theirs = Input::new(actions);
-    for _ in 0..60 {
-        other.tick(theirs.tick(), STEP);
-        played.run(1);
-    }
-    let them = other.id().unwrap();
+    // Someone else comes into the same world.
+    let them = played.game.world.add_player().unwrap();
+    played.run(60);
     assert_ne!(me, them);
     assert_eq!(played.noises, []);
-    let (here, there) = (played.feet(), other.player().position);
+    let (here, there) = (played.feet(), played.feet_of(them));
     assert!(
         (distance(here, there) - 6.0).abs() < 0.1,
         "{here:?} {there:?}"
@@ -282,12 +285,9 @@ fn another_player_is_heard_from_where_they_are() {
     let (near, far) = if there[0] > here[0] { (1, 0) } else { (0, 1) };
 
     // They walk two steps or so, away along -Z, while this player stands.
-    theirs.press(Key::W);
-    for _ in 0..40 {
-        other.tick(theirs.tick(), STEP);
-        played.run(1);
-    }
-    theirs.release(Key::W);
+    played.ask(them, |asked| asked.movement.forward = 1.0);
+    played.run(40);
+    played.ask(them, |asked| asked.movement.forward = 0.0);
     assert!(!played.noises.is_empty());
     for noise in &played.noises {
         assert_eq!((noise.kind, noise.by), (NoiseKind::Footstep, them));
@@ -300,12 +300,9 @@ fn another_player_is_heard_from_where_they_are() {
     // Their rifle is louder than their feet, and on the same side.
     played.noises.clear();
     played.loudest = [0.0; 2];
-    theirs.press(GamepadButton::RightTrigger);
-    for _ in 0..12 {
-        other.tick(theirs.tick(), STEP);
-        played.run(1);
-    }
-    theirs.release(GamepadButton::RightTrigger);
+    played.ask(them, |asked| asked.fire = true);
+    played.run(12);
+    played.ask(them, |asked| asked.fire = false);
     assert!(played.kinds().contains(&NoiseKind::Gunshot));
     assert!(played.noises.iter().all(|noise| noise.by == them));
     let shots = played.loudest;
@@ -347,7 +344,7 @@ fn a_frame_plays_what_was_just_heard_and_not_what_it_missed_long_ago() {
     }
     assert!(played.noises.len() >= 4, "{:?}", played.noises);
     assert!(played.game.heard.len() <= MOST_HEARD);
-    let now = played.game.hosted.server.tick_number();
+    let now = played.game.world.tick_number();
     let recent = played
         .noises
         .iter()
@@ -370,19 +367,19 @@ fn a_frame_plays_what_was_just_heard_and_not_what_it_missed_long_ago() {
 }
 
 #[test]
-fn a_server_with_nobody_listening_still_lists_what_was_heard() {
+fn a_world_with_nobody_listening_still_lists_what_was_heard() {
     let actions = ActionMap::default_fps();
     let script = ScriptGame::from_source("", &actions);
-    let mut hosted = HostedGame::in_program(script, 60);
-    let mut joined = JoinedGame::in_program(&mut hosted, &actions).unwrap();
-    let mut input = Input::new(actions.clone());
+    let mut world = World::new(script, 60);
+    let walker = world.add_player().unwrap();
     let nothing = Input::new(actions);
-    input.press(Key::W);
+    let mut asked = world.asked(walker).unwrap();
+    asked.movement.forward = 1.0;
+    world.ask(walker, asked);
     let mut heard = Vec::new();
     for _ in 0..180 {
-        joined.tick(input.tick(), STEP);
-        hosted.tick(nothing.frame(), STEP);
-        heard.extend_from_slice(hosted.noises());
+        world.tick(nothing.frame(), STEP);
+        heard.extend_from_slice(world.noises());
     }
     assert!(heard.len() >= 2, "{heard:?}");
     assert!(heard.iter().all(|noise| noise.kind == NoiseKind::Footstep));

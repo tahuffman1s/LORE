@@ -296,15 +296,15 @@ mod tests {
 
     use super::*;
     use crate::game::{Frame, Game};
-    use crate::online::LocalGame;
     use crate::script_game::ScriptGame;
     use crate::sounds::test_wav;
+    use crate::world::Playing;
 
     const RATE: u32 = 48_000;
 
     /// A game played alone whose sounds go to a mixer, not to speakers.
     struct Played {
-        game: LocalGame,
+        game: Playing,
         input: Input,
         output: SoundOutput<Mixer>,
     }
@@ -315,7 +315,7 @@ mod tests {
             let actions = ActionMap::default_fps();
             let script = ScriptGame::open(folder, &actions).unwrap();
             assert!(script.host().last_error().is_none());
-            let game = LocalGame::start(script, None, &actions, 60).unwrap();
+            let game = Playing::start(script, None, &actions, 60).unwrap();
             Self {
                 game,
                 input: Input::new(actions),
@@ -346,7 +346,7 @@ mod tests {
         }
 
         fn error(&self) -> Option<String> {
-            let error = self.game.hosted().game().host().last_error()?;
+            let error = self.game.world().game().host().last_error()?;
             Some(error.message.clone())
         }
     }

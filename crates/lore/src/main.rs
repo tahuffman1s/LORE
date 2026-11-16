@@ -19,7 +19,6 @@ use lore::cli::{self, Paced, quoted};
 use lore::input::ActionKind;
 use lore::level::{self, LEVEL_FILE};
 use lore::map::MAP_FILE;
-use lore::online::LocalGame;
 use lore::package;
 use lore::player;
 use lore::press::{self, Pressed};
@@ -29,6 +28,7 @@ use lore::script::WeaponHit;
 use lore::script::mode::Phase;
 use lore::script::weapons::Zone;
 use lore::sounds::SOUNDS_FOLDER;
+use lore::world::Playing;
 use lore::{Config, Game, ScriptGame};
 
 use crate::demo::InputDemo;
@@ -598,7 +598,7 @@ fn check(folder: &Path) -> Result<(), String> {
         );
         print!(
             "{}",
-            cli::walked(&lore::online::try_walking(&level, game.map()))
+            cli::walked(&lore::world::try_walking(&level, game.map()))
         );
     }
     if !game.map().is_empty() {
@@ -692,7 +692,7 @@ fn not_started(error: &str, verb: &str) -> String {
 fn start(config: Config, game: ScriptGame) -> Result<(), String> {
     // The level that is drawn is the level that is walked.
     let level = config.level.as_ref();
-    let game = LocalGame::start(game, level, &config.actions, config.tick_rate)
+    let game = Playing::start(game, level, &config.actions, config.tick_rate)
         .map_err(|error| format!("The game could not start: {error}"))?;
     play(config, game)
 }

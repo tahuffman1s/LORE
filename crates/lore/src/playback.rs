@@ -14,7 +14,7 @@
 //! finely the hand is listened to, not a rule of the game changing; the
 //! moment of a press inside a tick is #201.
 //!
-//! The tests here play a script; `online/rates.rs` plays a player walking.
+//! The tests here play a script; `world/rates.rs` plays a player walking.
 
 use std::time::Duration;
 

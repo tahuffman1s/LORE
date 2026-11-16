@@ -208,7 +208,7 @@ pub fn load_level(folder: &Path) -> Result<Option<lore_assets::Scene>, String> {
 /// What `lore check` says after trying a level out for walking: that a
 /// player can start at every spawn point, or what to change, a line each.
 #[must_use]
-pub fn walked(check: &crate::online::WalkCheck) -> String {
+pub fn walked(check: &crate::world::WalkCheck) -> String {
     if check.problems.is_empty() {
         let places = match check.spawn_points {
             1 => "its one spawn point".to_owned(),

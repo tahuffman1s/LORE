@@ -25,9 +25,9 @@
 //!
 //! Nothing here reads a clock, a random number or anything else outside its
 //! arguments: the same player, level, settings and inputs always give the
-//! same result. A server and a predicting client can therefore run the same
-//! moves and agree, and a client can go back to an old [`Player`] (it is a
-//! small `Copy` value) and replay its inputs.
+//! same result. A recording of a player's inputs therefore replays to the
+//! same place, and a game can go back to an old [`Player`] (it is a small
+//! `Copy` value) and run on from there.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 

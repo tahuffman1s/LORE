@@ -45,8 +45,8 @@ use crate::blend;
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::map::{Map, MapFile, SPAWN};
-use crate::online::World;
 use crate::sound_output::SoundAsk;
+use crate::world::Ground;
 
 /// How fast the camera flies to begin with, in metres a second: a little
 /// faster than a sprinting player.
@@ -388,7 +388,7 @@ struct Editor {
     /// Every action the window reads: the game's and the editor's.
     actions: ActionMap,
     /// The level's solid shapes, as a game played from here walks them.
-    world: World,
+    ground: Ground,
     /// The level being played, while it is.
     play: Option<Play>,
     /// The "Play from here" button was clicked: the next tick starts.
@@ -420,7 +420,7 @@ impl Editor {
     ) -> Option<(Self, ActionMap)> {
         let (actions, controls) = controls(game)?;
         // A game with no level of its own is played on a flat floor.
-        let world = World::for_editor((!stand_in).then_some(level), tick_rate);
+        let ground = Ground::for_editor((!stand_in).then_some(level), tick_rate);
         let camera = FlyCamera::default();
         let (map, file) = match placed {
             Some((map, file)) => (map, Some(file)),
@@ -441,7 +441,7 @@ impl Editor {
             held: None,
             aiming: false,
             actions: actions.clone(),
-            world,
+            ground,
             play: None,
             play_asked: false,
             play_problem: String::new(),
@@ -463,7 +463,7 @@ impl Editor {
         match Play::start(
             folder,
             &self.map,
-            &self.world,
+            &self.ground,
             &self.actions,
             camera.position,
             [camera.yaw, camera.pitch],
@@ -650,11 +650,8 @@ impl Game for Editor {
             self.keep_map(step);
             if input.just_pressed(self.controls.back) {
                 self.stop_playing();
-            } else if let Some(problem) = self.play.as_mut().and_then(|play| play.tick(input, step))
-            {
-                log::error!("{problem}");
-                self.play_problem = problem;
-                self.stop_playing();
+            } else if let Some(play) = &mut self.play {
+                play.tick(input, step);
             }
             return;
         }

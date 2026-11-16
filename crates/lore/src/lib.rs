@@ -43,7 +43,6 @@ pub mod level;
 mod look;
 pub mod map;
 pub mod noise;
-pub mod online;
 #[cfg(feature = "window")]
 mod pace;
 #[cfg(feature = "cli")]
@@ -68,6 +67,7 @@ mod starter_level;
 mod tick;
 #[cfg(feature = "window")]
 mod translate;
+pub mod world;
 
 pub use lore_assets as assets;
 pub use lore_audio as audio;

@@ -1,9 +1,8 @@
 //! Playing the level from the editor: one key, or one gamepad button,
 //! starts the game where the camera is, and the same one comes back.
 //!
-//! What is played is the game as `lore run` plays it (its script, real
-//! netcode with no network in between, the level's shapes solid), on
-//! a copy of the map the editor holds, saved or not. Nothing done while
+//! What is played is the game as `lore run` plays it (its script, the
+//! level's shapes solid), on a copy of the map the editor holds, saved or not. Nothing done while
 //! playing reaches the editor: its camera, what is chosen and the map are
 //! as they were when playing stops.
 //!
@@ -18,8 +17,8 @@ use lore_input::ActionMap;
 
 use crate::game::{Frame, Game};
 use crate::map::Map;
-use crate::online::{LocalGame, World};
 use crate::script_game::ScriptGame;
+use crate::world::{Ground, Playing};
 
 /// Said on the screen for as long as the level is played.
 const PLAYING: &str = "Playing    F5 or Select: back to editing";
@@ -30,14 +29,14 @@ const NOT_FROM_HERE: &str = "There is nothing under the camera to stand on, so y
 /// The level being played from the editor.
 #[derive(Debug)]
 pub(super) struct Play {
-    game: LocalGame,
+    game: Playing,
     /// Whether the player started where the camera was.
     from_here: bool,
 }
 
 impl Play {
     /// Starts the game in `folder` (or, with no folder, a game with no
-    /// script) in `world`, with `map` placed in it, and puts the player's
+    /// script) on `ground`, with `map` placed in it, and puts the player's
     /// eyes at `eye` looking the way `facing` says (yaw, then pitch).
     ///
     /// # Errors
@@ -46,7 +45,7 @@ impl Play {
     pub(super) fn start(
         folder: Option<&Path>,
         map: &Map,
-        world: &World,
+        ground: &Ground,
         actions: &ActionMap,
         eye: [f32; 3],
         facing: [f32; 2],
@@ -58,19 +57,14 @@ impl Play {
         };
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
-        let (game, from_here) = LocalGame::start_from(game, world, actions, eye, facing)
+        let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing)
             .map_err(|error| format!("Could not play: {error}"))?;
         Ok(Self { game, from_here })
     }
 
-    /// Plays one tick. Says why if the game has ended by itself, which is
-    /// not expected of a game on this computer.
-    pub(super) fn tick(&mut self, input: &lore_input::InputFrame, step: f32) -> Option<String> {
+    /// Plays one tick.
+    pub(super) fn tick(&mut self, input: &lore_input::InputFrame, step: f32) {
         self.game.tick(input, step);
-        self.game
-            .joined()
-            .closed()
-            .map(|error| format!("Playing stopped. {error}"))
     }
 
     /// Presents the game's frame, with a line over it that says how to get
@@ -93,13 +87,13 @@ impl Play {
     /// Where the player's eyes are.
     #[cfg(test)]
     pub(super) fn eye(&self) -> [f32; 3] {
-        self.game.joined().eye_position()
+        self.game.eye_position()
     }
 
     /// Which way the player looks: yaw, then pitch.
     #[cfg(test)]
     pub(super) fn facing(&self) -> [f32; 2] {
-        [self.game.joined().yaw(), self.game.joined().pitch()]
+        [self.game.yaw(), self.game.pitch()]
     }
 
     /// Whether the player started where the camera was.
@@ -111,7 +105,7 @@ impl Play {
     /// The map the game is played with.
     #[cfg(test)]
     pub(super) fn map(&self) -> &Map {
-        self.game.hosted().game().map()
+        self.game.world().game().map()
     }
 }
 

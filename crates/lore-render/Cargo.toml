@@ -37,5 +37,5 @@ workspace = true
 
 [features]
 # Draws the editor's panels, made with egui, over the picture:
-# `Renderer::set_panels`. Off for games and servers.
+# `Renderer::set_panels`. Off for games.
 panels = ["dep:egui", "dep:egui-ash-renderer"]

@@ -20,7 +20,7 @@ pub struct ActionState {
 /// Every action's state for one simulation tick.
 ///
 /// This is plain data. The simulation reads it, and it is also what gets
-/// recorded for replays and sent to the server.
+/// recorded for replays.
 #[derive(Debug, Default, PartialEq)]
 pub struct InputFrame {
     /// Which tick this is. The first tick is 1; 0 means no tick has run yet.

@@ -19,8 +19,8 @@ const LOWEST_STEP: f32 = 0.02;
 /// A player's body in the level.
 ///
 /// This is everything movement remembers between ticks. It is small and
-/// `Copy`, so it can be sent over the network, compared with what a server
-/// says, and kept to replay from.
+/// `Copy`, so it can be saved, compared with another, and kept to replay
+/// from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Player {
     /// Where the feet are, in metres.

@@ -1,19 +1,18 @@
 //! The noises players make by walking and by using what they hold.
 //!
 //! A noise is something that happened in the game, not something the
-//! speakers were told: the server works out each tick whose foot came down
+//! speakers were told: the world works out each tick whose foot came down
 //! and whose weapon fired, and keeps the list
-//! ([`HostedGame::noises`](crate::online::HostedGame::noises)) with where
-//! each was made and how loud. The player at this computer hears them
-//! because their game reads that list, and anything else in the game that
-//! listens can read the same one.
+//! ([`World::noises`](crate::world::World::noises)) with where each was
+//! made and how loud. The player hears them because their game reads that
+//! list, and anything else in the game that listens can read the same one.
 
 use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Place, Play, Range};
-use lore_net::{MAX_PLAYERS, PlayerId, Server};
 use lore_script::ScriptHost;
 
-use crate::shooting::{Names, alive, name_of};
+use crate::shooting::alive;
 use crate::sounds::Sounds;
+use crate::world::{Bodies, MAX_PLAYERS, PlayerId};
 
 /// What made a noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,7 +75,7 @@ pub struct Noise {
     /// How long after the tick began it was made, in seconds: a weapon
     /// that fires faster than the game ticks fires partway through one.
     pub delay: f32,
-    /// The server's tick it was made on.
+    /// The tick it was made on.
     pub tick: u32,
 }
 
@@ -97,7 +96,7 @@ impl Default for Walking {
 }
 
 impl Walking {
-    /// Forgets how far `id` has walked: for a player who has joined, left
+    /// Forgets how far `id` has walked: for a player who has come, gone
     /// or been put somewhere new, so the next step is counted from there.
     pub(crate) fn forget(&mut self, id: PlayerId) {
         if let Some(feet) = self.feet.get_mut(usize::from(id)) {
@@ -105,22 +104,24 @@ impl Walking {
         }
     }
 
-    /// Adds to `noises` the steps and landings of the tick `server` has
-    /// just run: call it after [`Server::tick`], every tick. `step` is the
-    /// length of a tick in seconds. The dead make no noise.
+    /// Adds to `noises` the steps and landings of the tick numbered `tick`,
+    /// which has just moved `bodies`: call it every tick, after everyone
+    /// has moved. `step` is the length of a tick in seconds. The dead make
+    /// no noise.
     pub(crate) fn tick(
         &mut self,
-        server: &Server,
-        names: &Names,
+        bodies: &Bodies,
+        tick: u32,
         host: &ScriptHost,
         step: f32,
         noises: &mut Vec<Noise>,
     ) {
-        for (id, player) in server.players() {
+        for (id, body) in bodies.iter() {
+            let player = &body.player;
             let Some(walked) = self.feet.get_mut(usize::from(id)) else {
                 continue;
             };
-            if !name_of(names, id.into()).is_some_and(|name| alive(host, name)) {
+            if !alive(host, body.name) {
                 *walked = Footsteps::default();
                 continue;
             }
@@ -143,15 +144,14 @@ impl Walking {
                 position: player.position,
                 loudness,
                 delay: 0.0,
-                tick: server.tick_number(),
+                tick,
             });
         }
     }
 }
 
-/// What to hand the speakers so that the player at this computer hears
-/// `noise`: equally in both ears when it is their `own`, and from where it
-/// was made otherwise. `nth` is its place among the noises of its tick, so
+/// What to hand the speakers so that the player hears `noise`: equally in
+/// both ears when it is their `own`, and from where it was made otherwise. `nth` is its place among the noises of its tick, so
 /// two at once do not play the same take. `None` when the game has no
 /// sound of that name ready.
 pub(crate) fn play(noise: &Noise, own: bool, nth: u32, sounds: &mut Sounds) -> Option<Play> {
