@@ -76,6 +76,20 @@ impl Files {
         }
     }
 
+    /// The name a script's author knows the file at `path` by: its place in
+    /// the game with `/` between folders, such as `weapons/rifle.luau`.
+    pub(crate) fn name_of(&self, path: &Path) -> String {
+        let inside = match self {
+            Self::Folder(root) => path.strip_prefix(root).unwrap_or(path),
+            Self::Memory(_) => path,
+        };
+        inside
+            .components()
+            .map(|step| step.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
     /// Reads the script called `name`, a name [`resolve`] made.
     fn read(&self, name: &str) -> Result<String, ReadProblem> {
         // `resolve` only makes names that stay inside the game. Checked
