@@ -978,7 +978,7 @@ mod tests {
 
     /// The same, for `level`.
     fn editor_of(level: &Scene) -> (Editor, Input) {
-        let (editor, map) = Editor::new(level, true, None, ActionMap::default_fps(), 60).unwrap();
+        let (editor, map) = Editor::new(level, true, None, ActionMap::standard(), 60).unwrap();
         let mut input = Input::new(map);
         input.set_active_set(editor.controls.set);
         (editor, input)
@@ -1013,7 +1013,7 @@ mod tests {
         // Added to a game's actions, they leave the game's as they were
         // and bring no gap. The usual controls leave Select alone, so
         // nothing else answers to it while playing.
-        let game = ActionMap::default_fps();
+        let game = ActionMap::standard();
         let (map, controls) = super::controls(game.clone()).unwrap();
         assert_eq!(map.parity_gaps(), Vec::new());
         for action in game.actions() {
@@ -1026,7 +1026,7 @@ mod tests {
 
         // A game that already has an action by one of these names is not
         // edited over: the editor says it cannot start.
-        let mut taken = ActionMap::default_fps();
+        let mut taken = ActionMap::standard();
         taken.button("editor_play", ["F6", "DpadUp"]).unwrap();
         assert!(super::controls(taken).is_none());
     }
@@ -1557,7 +1557,7 @@ mod tests {
             &small_level(),
             false,
             Some((map.unwrap(), file)),
-            ActionMap::default_fps(),
+            ActionMap::standard(),
             60,
         )
         .unwrap();
@@ -2261,14 +2261,8 @@ mod tests {
         .unwrap();
         let folder = scratch("marks");
         let (file, _) = MapFile::open(&folder);
-        let (mut editor, mut input) = Editor::new(
-            &level,
-            false,
-            Some((map, file)),
-            ActionMap::default_fps(),
-            60,
-        )
-        .unwrap();
+        let (mut editor, mut input) =
+            Editor::new(&level, false, Some((map, file)), ActionMap::standard(), 60).unwrap();
         let mut input = {
             let mut made = Input::new(std::mem::take(&mut input));
             made.set_active_set(editor.controls.set);
@@ -2539,7 +2533,7 @@ mod tests {
         let (file, map) = MapFile::open(&folder);
         let placed = Some((map.unwrap(), file));
         let (editor, actions) =
-            Editor::new(&level, false, placed, ActionMap::default_fps(), 60).unwrap();
+            Editor::new(&level, false, placed, ActionMap::standard(), 60).unwrap();
         let mut input = Input::new(actions);
         input.set_active_set(editor.controls.set);
         (folder, editor, input)

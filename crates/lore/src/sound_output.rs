@@ -312,7 +312,7 @@ mod tests {
     impl Played {
         /// Plays the game in `folder`, which is then removed.
         fn open(folder: &std::path::Path) -> Self {
-            let actions = ActionMap::default_fps();
+            let actions = ActionMap::standard();
             let script = ScriptGame::open(folder, &actions).unwrap();
             assert!(script.host().last_error().is_none());
             let game = Playing::start(script, None, &actions, 60);

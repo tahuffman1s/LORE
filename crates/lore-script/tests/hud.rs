@@ -8,7 +8,7 @@ use lore_script::{HudPiece, HudShape, ScriptHost};
 use lore_ui::{Anchor, Color};
 
 fn host(script: &str) -> ScriptHost {
-    ScriptHost::from_source(script, ActionMap::default_fps())
+    ScriptHost::from_source(script, ActionMap::standard())
 }
 
 /// A game running `script`, which has no mistake in it.
@@ -200,7 +200,7 @@ fn a_change_is_handed_over_once_and_only_when_something_changed() {
 
 /// An input in which `jump` has just been pressed.
 fn host_jump() -> InputFrame {
-    let mut input = lore_input::Input::new(ActionMap::default_fps());
+    let mut input = lore_input::Input::new(ActionMap::standard());
     input.press(lore_input::Key::Space);
     input.tick().clone()
 }
@@ -498,7 +498,7 @@ fn a_save_makes_the_hud_again_from_the_new_file() {
         "game.hud.text(\"old\")\ngame.onStart(function() game.hud.text(\"made later\") end)\n",
     )
     .unwrap();
-    let mut host = ScriptHost::open(&folder, ActionMap::default_fps()).unwrap();
+    let mut host = ScriptHost::open(&folder, ActionMap::standard()).unwrap();
     tick(&mut host);
     assert_eq!(pieces(&host).len(), 2);
     let before = host.hud_layout();

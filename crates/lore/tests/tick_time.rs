@@ -20,7 +20,7 @@ const TICKS: u32 = 200_000;
 /// Walks forward and back by turns, seven seconds each way, for `TICKS`
 /// ticks, and says how long a tick took.
 fn measure(name: &str, level: Option<&lore::assets::Scene>) {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let script = ScriptGame::from_source("", &actions);
     let mut game = Playing::start(script, level, &actions, TICK_RATE);
     let mut input = Input::new(actions);

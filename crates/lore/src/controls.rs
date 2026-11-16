@@ -125,16 +125,16 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_not_a_problem() {
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
         let said = load(&scratch("missing").join("bindings.toml"), &mut actions);
         assert_eq!(said, Vec::<String>::new());
-        assert_eq!(actions, ActionMap::default_fps());
+        assert_eq!(actions, ActionMap::standard());
     }
 
     #[test]
     fn saved_controls_are_loaded_again() {
         let path = scratch("saved").join("deeper").join("bindings.toml");
-        let defaults = ActionMap::default_fps();
+        let defaults = ActionMap::standard();
         let mut changed = defaults.clone();
         changed
             .read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")
@@ -161,7 +161,7 @@ mod tests {
             "[bindings]\njmup = [\"F\"]\nreload = [\"E\", \"GamepadWest\"]\n",
         )
         .unwrap();
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
 
         let said = load(&path, &mut actions);
 
@@ -180,7 +180,7 @@ mod tests {
     fn a_file_that_is_not_toml_leaves_the_games_own_controls() {
         let path = scratch("broken").join("bindings.toml");
         fs::write(&path, "[bindings\njump = [\"F\"]\n").unwrap();
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
 
         let said = load(&path, &mut actions);
 
@@ -190,6 +190,6 @@ mod tests {
             "{said:?}"
         );
         assert!(said[0].ends_with("the game's own controls are in place."));
-        assert_eq!(actions, ActionMap::default_fps());
+        assert_eq!(actions, ActionMap::standard());
     }
 }

@@ -64,7 +64,7 @@ impl GameFolder {
     }
 
     fn open(&self) -> ScriptHost {
-        ScriptHost::open(&self.0, ActionMap::default_fps()).unwrap()
+        ScriptHost::open(&self.0, ActionMap::standard()).unwrap()
     }
 }
 

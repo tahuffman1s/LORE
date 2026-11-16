@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn actions_are_pressed_one_at_a_time_in_the_maps_order() {
-        let map = ActionMap::default_fps();
+        let map = ActionMap::standard();
         let names: Vec<String> = (map.actions())
             .map(|action| map.name(action).to_owned())
             .collect();

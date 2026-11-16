@@ -55,7 +55,7 @@ fn listen() {
 fn game(script: &str) -> ScriptHost {
     listen();
     printed();
-    let host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let host = ScriptHost::from_source(script, ActionMap::standard());
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     host
 }
@@ -326,7 +326,7 @@ fn a_timer_written_wrongly_says_how_to_write_it() {
         ),
     ] {
         listen();
-        let host = ScriptHost::from_source(line, ActionMap::default_fps());
+        let host = ScriptHost::from_source(line, ActionMap::standard());
         let error = host
             .last_error()
             .unwrap_or_else(|| panic!("`{line}` should be a mistake"));
@@ -358,7 +358,7 @@ fn a_timer_started_on_every_tick_is_stopped_with_advice() {
 fn the_computers_clock_is_not_the_scripts_to_read() {
     for call in ["os.clock()", "os.time()", "os.date()", "os.difftime(2, 1)"] {
         listen();
-        let host = ScriptHost::from_source(format!("local now = {call}"), ActionMap::default_fps());
+        let host = ScriptHost::from_source(format!("local now = {call}"), ActionMap::standard());
         let error = host
             .last_error()
             .unwrap_or_else(|| panic!("`{call}` should be refused"));
@@ -664,7 +664,7 @@ fn a_save_keeps_the_time_and_says_which_timers_it_dropped() {
     let folder = GameFolder::new(script);
     printed();
     warnings();
-    let mut host = ScriptHost::open(&folder.0, ActionMap::default_fps()).unwrap();
+    let mut host = ScriptHost::open(&folder.0, ActionMap::standard()).unwrap();
     run(&mut host, 36, 60);
     assert_eq!(printed(), ["done before the save", "top 0.5"]);
     assert_eq!(warnings(), [] as [&str; 0]);

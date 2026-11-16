@@ -110,7 +110,7 @@ region = "north"
 
 IDs are made by chance and entities are written in ID order, so two people who each place something get changes that merge. The file can be written by hand as well: the open editor and a game that is running (`lore run`) read it again when it is saved, and say which line to fix when it has a mistake, keeping the map they had. `lore check` reads it too, and a packaged game carries it. So far the running game uses one thing from it: the player starts at one of its `spawn` entities, looking the way it faces. A spawn point with a `team` property, from a map made for a game with teams, still loads: LORE has no teams, says so once when it reads the file, and uses the point like any other. As soon as the map has one spawn point, the level's own spawn markers are no longer used; with none in either, the player starts in the middle of the level. Scripts cannot read the map yet, things are placed with a button and numbers rather than by clicking and dragging in the picture, properties are added in the file rather than in the editor, and there is no undo (FOSSPS#41, #158). The editor is the `editor` Cargo feature of the `lore` crate, on by default.
 
-`lore controls` shows which key and button does what, and makes the text file that changes it: `bindings.toml` in the `lore` folder of your settings (`~/.config` on Linux, `%APPDATA%` on Windows, `~/Library/Application Support` on macOS). Every action is listed there as a comment; take the `#` away from a line, edit it (`jump = ["F", "GamepadSouth"]`) and save, and every game played with LORE uses it from its next start. A line with a mistake is skipped with a message saying which line and why, and the game still starts; a key that ends up doing two things gets a warning. There is no controls screen inside a game yet (#197).
+`lore controls` shows which key and button does what, and makes the text file that changes it: `bindings.toml` in the `lore` folder of your settings (`~/.config` on Linux, `%APPDATA%` on Windows, `~/Library/Application Support` on macOS). Every action is listed there as a comment; take the `#` away from a line, edit it (`jump = ["F", "GamepadSouth"]`) and save, and every game played with LORE uses it from its next start. A line with a mistake is skipped with a message saying which line and why, and the game still starts; a key that ends up doing two things gets a warning. A file from before `grenade`, `next_weapon` and `previous_weapon` became `use_item`, `next_item` and `previous_item` still works, with a note saying what to call each line now. There is no controls screen inside a game yet (#197).
 
 ## Scripting
 
@@ -128,7 +128,7 @@ game.onTick(function(step)
 end)
 ```
 
-`print` writes to the terminal you started the game from. `game.input` reads actions by name (`jump`, `fire`, `move`, `look`, `reload` and [the rest of the standard set](crates/lore-input/src/map.rs)), so the same line works for keyboard, mouse and gamepad. When a script has a mistake, the game keeps running, and the terminal and the game's window both show the file, the line and what to try:
+`print` writes to the terminal you started the game from. `game.input` reads actions by name (`jump`, `fire`, `move`, `look`, `interact`, `map`, `inventory` and [the rest of the standard set](crates/lore-input/src/map.rs)), so the same line works for keyboard, mouse and gamepad. When a script has a mistake, the game keeps running, and the terminal and the game's window both show the file, the line and what to try:
 
 ```text
 Script error in main.luau, line 1:

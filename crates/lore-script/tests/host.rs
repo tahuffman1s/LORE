@@ -87,7 +87,7 @@ impl GameFolder {
     }
 
     fn open(&self) -> ScriptHost {
-        ScriptHost::open(&self.0, ActionMap::default_fps()).unwrap()
+        ScriptHost::open(&self.0, ActionMap::standard()).unwrap()
     }
 }
 
@@ -147,7 +147,7 @@ fn scripts_read_keyboard_and_gamepad_through_the_same_action() {
         "#,
     );
     let mut host = game.open();
-    let mut input = Input::new(ActionMap::default_fps());
+    let mut input = Input::new(ActionMap::standard());
 
     input.press(Key::Space);
     host.tick(input.tick(), STEP);
@@ -184,7 +184,7 @@ fn a_script_rumbles_the_gamepad_and_the_latest_call_wins() {
         "#,
     );
     let mut host = game.open();
-    let mut input = Input::new(ActionMap::default_fps());
+    let mut input = Input::new(ActionMap::standard());
     host.tick(input.tick(), STEP);
     assert_eq!(host.take_rumble(), None);
 
@@ -248,7 +248,7 @@ fn a_rumble_with_no_time_given_is_a_short_one() {
 fn a_missing_script_says_where_to_put_one() {
     let game = GameFolder::new("");
     std::fs::remove_file(game.0.join(ENTRY_SCRIPT)).unwrap();
-    let error = ScriptHost::open(&game.0, ActionMap::default_fps()).unwrap_err();
+    let error = ScriptHost::open(&game.0, ActionMap::standard()).unwrap_err();
     assert!(matches!(error, OpenError::Missing { .. }));
     let text = error.to_string();
     assert!(text.contains("main.luau"), "{text}");
@@ -464,8 +464,8 @@ fn the_example_game_runs_cleanly() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
-    let mut host = ScriptHost::open(example, ActionMap::default_fps()).unwrap();
-    let mut input = Input::new(ActionMap::default_fps());
+    let mut host = ScriptHost::open(example, ActionMap::standard()).unwrap();
+    let mut input = Input::new(ActionMap::standard());
     input.press(Key::Space);
     host.tick(input.tick(), STEP);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
@@ -536,7 +536,7 @@ fn a_script_given_as_text_runs_and_is_never_loaded_again() {
     let _ = printed();
     let mut host = ScriptHost::from_source(
         "game.onStart(function() print('packed') end)",
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
 
     host.tick(&InputFrame::default(), 1.0 / 60.0);
@@ -548,7 +548,7 @@ fn a_script_given_as_text_runs_and_is_never_loaded_again() {
     assert!(host.reload().is_ok());
     assert!(host.last_error().is_none());
 
-    let broken = ScriptHost::from_source("game.onTik()", ActionMap::default_fps());
+    let broken = ScriptHost::from_source("game.onTik()", ActionMap::standard());
     assert!(broken.last_error().is_some());
 }
 
@@ -969,7 +969,7 @@ fn capital_letters_in_the_path_to_the_game_do_not_matter() {
     if capitals_are_overlooked(&game) {
         let name = game.0.file_name().unwrap().to_str().unwrap().to_uppercase();
         let shouted = game.0.with_file_name(name);
-        let host = ScriptHost::open(&shouted, ActionMap::default_fps()).unwrap();
+        let host = ScriptHost::open(&shouted, ActionMap::standard()).unwrap();
         assert!(host.last_error().is_none(), "{:?}", host.last_error());
         assert_eq!(printed(), ["loaded"]);
     }
@@ -1025,14 +1025,14 @@ fn scripts_given_as_text_require_each_other() {
     };
     let host = ScriptHost::from_sources(
         scripts("print(require(\"./weapons/rifle\").damage)"),
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     assert_eq!(printed(), ["30"]);
 
     let host = ScriptHost::from_sources(
         scripts("require(\"./weapons/Rifle\")"),
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
     let error = host.last_error().expect("the name's capitals differ");
     assert!(
@@ -1042,7 +1042,7 @@ fn scripts_given_as_text_require_each_other() {
 
     let host = ScriptHost::from_sources(
         [("weapons.luau".to_owned(), String::new())],
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
     let error = host.last_error().expect("there is no main.luau");
     assert!(

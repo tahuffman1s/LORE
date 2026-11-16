@@ -75,7 +75,7 @@ struct Played {
 
 impl Played {
     fn new() -> Self {
-        Self::with(ActionMap::default_fps(), Settings::default(), None)
+        Self::with(ActionMap::standard(), Settings::default(), None)
     }
 
     fn with(actions: ActionMap, settings: Settings, file: Option<PathBuf>) -> Self {
@@ -273,7 +273,7 @@ fn escape_opens_the_menu_over_a_game_that_keeps_running_but_hears_nothing() {
 fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     let scratch = Scratch::new("gamepad");
     let mut played = Played::with(
-        ActionMap::default_fps(),
+        ActionMap::standard(),
         Settings::default(),
         Some(scratch.file()),
     );
@@ -488,7 +488,7 @@ fn a_press_that_came_and_went_between_two_frames_still_counts() {
 
 #[test]
 fn the_menu_goes_back_to_the_action_set_the_game_was_using() {
-    let mut actions = ActionMap::default_fps();
+    let mut actions = ActionMap::standard();
     let driving = actions.add_set("driving", MouseMode::Look).unwrap();
     actions.button("horn", ["H", "GamepadNorth"]).unwrap();
     let mut played = Played::with(actions, Settings::default(), None);
@@ -545,7 +545,7 @@ fn a_game_with_other_controls_or_its_own_menu_is_left_alone() {
         ..Settings::default()
     };
     let mut off = PauseMenu::off(Probe::default(), bigger);
-    off.tick(Input::new(ActionMap::default_fps()).tick(), FRAME);
+    off.tick(Input::new(ActionMap::standard()).tick(), FRAME);
     off.frame(&mut Frame::default());
     assert_eq!(off.game.ticks, 1);
     assert_eq!(off.game.ui_scale, 1.25);
@@ -555,7 +555,7 @@ fn a_game_with_other_controls_or_its_own_menu_is_left_alone() {
 fn settings_changed_when_the_window_closes_are_still_saved() {
     let scratch = Scratch::new("closing");
     let mut played = Played::with(
-        ActionMap::default_fps(),
+        ActionMap::standard(),
         Settings::default(),
         Some(scratch.file()),
     );
@@ -758,7 +758,7 @@ fn the_menu_names_the_buttons_of_whatever_the_player_last_touched() {
 
 #[test]
 fn hints_name_what_the_menu_is_bound_to_not_what_it_usually_is() {
-    let mut actions = ActionMap::default_fps();
+    let mut actions = ActionMap::standard();
     let confirm = actions.action("menu_confirm").unwrap();
     let back = actions.action("menu_back").unwrap();
     actions
@@ -790,7 +790,7 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
         ui_size: Settings::UI_SIZE.highest,
         ..Settings::default()
     };
-    let mut played = Played::with(ActionMap::default_fps(), settings, None);
+    let mut played = Played::with(ActionMap::standard(), settings, None);
     played.tap(GamepadButton::GamepadStart);
     played.tap(GamepadButton::DpadDown);
     played.tap(GamepadButton::GamepadSouth);

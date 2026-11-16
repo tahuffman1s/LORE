@@ -584,7 +584,7 @@ mod tests {
     fn a_script_played_alone_rumbles_the_players_gamepad() {
         use lore_input::{GamepadButton, Input, Rumble};
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source(
             r#"game.onTick(function()
                 if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
@@ -613,7 +613,7 @@ mod tests {
     fn a_frame_between_two_ticks_is_seen_from_between_them() {
         use lore_input::{Input, Key};
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         let mut game = Playing::start(script, None, &actions, 60);
         let mut input = Input::new(actions);
@@ -673,7 +673,7 @@ mod tests {
 
     /// A game played alone, and its controls.
     fn playing_alone() -> (Playing, lore_input::Input) {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         let game = Playing::start(script, None, &actions, 60);
         (game, lore_input::Input::new(actions))

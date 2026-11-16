@@ -34,7 +34,7 @@ struct Played {
 impl Played {
     fn of(script: ScriptGame) -> Self {
         assert_eq!(script.host().last_error(), None);
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let game = Playing::start(script, None, &actions, 60);
         let mut played = Self {
             game,
@@ -53,7 +53,7 @@ impl Played {
 
     /// A game with `script` as its rules and no files.
     fn script(script: &str) -> Self {
-        Self::of(ScriptGame::from_source(script, &ActionMap::default_fps()))
+        Self::of(ScriptGame::from_source(script, &ActionMap::standard()))
     }
 
     /// One tick of the game with nothing drawn.
@@ -267,7 +267,7 @@ fn a_games_own_sound_file_takes_the_place_of_the_engines_footstep() {
         test_wav(&vec![i16::MAX / 2; RATE as usize / 10]),
     )
     .unwrap();
-    let script = ScriptGame::open(&folder, &ActionMap::default_fps()).unwrap();
+    let script = ScriptGame::open(&folder, &ActionMap::standard()).unwrap();
     let mut played = Played::of(script);
     played.input.press(Key::W);
     played.run(60);
@@ -313,7 +313,7 @@ fn a_frame_plays_what_was_just_heard_and_not_what_it_missed_long_ago() {
 
 #[test]
 fn a_world_with_nobody_listening_still_lists_what_was_heard() {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let script = ScriptGame::from_source("", &actions);
     let mut world = World::new(script, 60);
     let nothing = Input::new(actions);

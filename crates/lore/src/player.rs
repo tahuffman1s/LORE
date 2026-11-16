@@ -284,7 +284,7 @@ mod tests {
                 "local ticks = 0\ngame.onTick(function() ticks += 1 end)",
             )],
         );
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
 
         let mut packed = open(&made, &actions).unwrap();
 
@@ -356,7 +356,7 @@ mod tests {
                 ("notes.txt", "not a script"),
             ],
         );
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
 
         let packed = open(&made, &actions).unwrap();
 
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn a_pack_that_cannot_be_played_says_why() {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
 
         let folder = scratch("no-script");
         let said = open(&pack(&folder, &[("notes.txt", "hello")]), &actions)
