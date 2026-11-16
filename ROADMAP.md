@@ -30,7 +30,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Menus in a running game: menu actions, a built-in pause and settings menu (#13)
 - Scripts build the HUD and menus (#14)
 - Menus longer than the screen scroll, and settings show which button does what (#15)
 - Sound in a running game: players are heard walking and shooting (#16)

@@ -55,6 +55,9 @@ pub(crate) struct Action {
     pub(crate) set: ActionSetId,
     pub(crate) bindings: Range<usize>,
     pub(crate) stick_curve: f32,
+    /// What the action's direction and mouse movement are multiplied by:
+    /// sideways, then up and down.
+    pub(crate) sensitivity: [f32; 2],
 }
 
 /// Named actions and the keys, buttons and sticks that drive them.
@@ -96,8 +99,11 @@ pub struct ActionMap {
     actions: Vec<Action>,
     bindings: Vec<Binding>,
     deadzone: Deadzone,
-    /// Never empty: the first is [`Self::GAMEPLAY`]. New actions join the last.
+    /// Never empty: the first is [`Self::GAMEPLAY`].
     sets: Vec<Set>,
+    /// The set new actions join: the newest, except that the standard
+    /// controls go back to [`Self::GAMEPLAY`] once their menu set is made.
+    adding_to: ActionSetId,
 }
 
 impl Default for ActionMap {
@@ -110,6 +116,7 @@ impl Default for ActionMap {
                 name: "gameplay".into(),
                 mouse: MouseMode::Look,
             }],
+            adding_to: Self::GAMEPLAY,
         }
     }
 }
@@ -151,7 +158,8 @@ impl ActionMap {
             name: name.into(),
             mouse,
         });
-        Ok(ActionSetId(self.sets.len() - 1))
+        self.adding_to = ActionSetId(self.sets.len() - 1);
+        Ok(self.adding_to)
     }
 
     /// Finds an action set by name.
@@ -210,6 +218,35 @@ impl ActionMap {
     /// | `previous_weapon` | wheel up | d-pad left |
     /// | `scoreboard` | Tab | select |
     /// | `pause` | Escape | start |
+    ///
+    /// A second set, `"menu"`, holds the actions menus are worked with. The
+    /// mouse points in it, and a click needs no action. `pause` opens the
+    /// engine's own pause menu, which makes this set live; a game with its
+    /// own menus switches to it with `Frame::use_action_set`.
+    ///
+    /// | Action | Keyboard | Gamepad |
+    /// | --- | --- | --- |
+    /// | `menu_move` | arrow keys or WASD | d-pad or left stick |
+    /// | `menu_confirm` | Enter or Space | south button |
+    /// | `menu_back` | Escape | east button |
+    /// | `menu_previous_tab` | Q | left bumper |
+    /// | `menu_next_tab` | E | right bumper |
+    /// | `menu_close` | P | start |
+    ///
+    /// An action a game adds to these joins `"gameplay"`, with `jump` and
+    /// the rest, not the menu's.
+    ///
+    /// ```
+    /// use lore_input::{ActionMap, MouseMode};
+    ///
+    /// let mut map = ActionMap::default_fps();
+    /// let menu = map.set("menu")?;
+    /// assert_eq!(map.mouse_mode(menu), Some(MouseMode::Pointer));
+    /// assert_eq!(map.set_of(map.action("menu_confirm")?), Some(menu));
+    /// let dash = map.button("dash", ["LeftAlt", "LeftBumper"])?;
+    /// assert_eq!(map.set_of(dash), Some(ActionMap::GAMEPLAY));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[must_use]
     pub fn default_fps() -> Self {
         const BUTTONS: &[(&str, [&str; 2])] = &[
@@ -227,6 +264,12 @@ impl ActionMap {
             ("scoreboard", ["Tab", "GamepadSelect"]),
             ("pause", ["Escape", "GamepadStart"]),
         ];
+        const MENU_BUTTONS: &[(&str, [&str; 2])] = &[
+            ("menu_back", ["Escape", "GamepadEast"]),
+            ("menu_previous_tab", ["Q", "LeftBumper"]),
+            ("menu_next_tab", ["E", "RightBumper"]),
+            ("menu_close", ["P", "GamepadStart"]),
+        ];
         let mut map = Self::new();
         // The names and bindings above are fixed and covered by a test, so none
         // of these calls can fail; ignoring the results keeps this infallible.
@@ -237,6 +280,15 @@ impl ActionMap {
         for (name, bindings) in BUTTONS {
             let _ = map.button(name, bindings);
         }
+        let _ = map.add_set("menu", MouseMode::Pointer);
+        let _ = map.axis2d("menu_move", ["ArrowKeys", "WASD", "Dpad", "LeftStick"]);
+        let _ = map.button("menu_confirm", ["Enter", "Space", "GamepadSouth"]);
+        for (name, bindings) in MENU_BUTTONS {
+            let _ = map.button(name, bindings);
+        }
+        // What a game adds to these is something the player does in the
+        // game, not in a menu.
+        map.adding_to = Self::GAMEPLAY;
         map
     }
 
@@ -370,9 +422,10 @@ impl ActionMap {
         self.actions.push(Action {
             name: name.into(),
             kind,
-            set: ActionSetId(self.sets.len() - 1),
+            set: self.adding_to,
             bindings: start..self.bindings.len(),
             stick_curve: 1.0,
+            sensitivity: [1.0, 1.0],
         });
         Ok(ActionId(self.actions.len() - 1))
     }
@@ -568,6 +621,43 @@ impl ActionMap {
         {
             action.stick_curve = curve.max(0.01);
         }
+    }
+
+    /// Multiplies what this action reports, sideways and then up and down:
+    /// its direction and its mouse movement alike. This is how a player's
+    /// sensitivity setting reaches every game the same way.
+    ///
+    /// `[1.0, 1.0]` is the default. `[2.0, 2.0]` turns twice as fast, and a
+    /// negative second number swaps up and down, for players who invert
+    /// their view. A direction can then be longer than 1. Numbers that are
+    /// not finite and ids from a different map are ignored.
+    ///
+    /// ```
+    /// use lore_input::ActionMap;
+    ///
+    /// let mut map = ActionMap::default_fps();
+    /// let look = map.action("look")?;
+    /// // Half as fast, with up and down swapped.
+    /// map.set_sensitivity(look, [0.5, -0.5]);
+    /// assert_eq!(map.sensitivity(look), [0.5, -0.5]);
+    /// # Ok::<(), lore_input::UnknownName>(())
+    /// ```
+    pub fn set_sensitivity(&mut self, action: ActionId, sensitivity: [f32; 2]) {
+        if let Some(action) = self.actions.get_mut(action.0)
+            && sensitivity.iter().all(|axis| axis.is_finite())
+        {
+            action.sensitivity = sensitivity;
+        }
+    }
+
+    /// What the action's direction and mouse movement are multiplied by;
+    /// see [`set_sensitivity`](Self::set_sensitivity). `[1.0, 1.0]` for an
+    /// id from a different map.
+    #[must_use]
+    pub fn sensitivity(&self, action: ActionId) -> [f32; 2] {
+        self.actions
+            .get(action.0)
+            .map_or([1.0, 1.0], |action| action.sensitivity)
     }
 
     /// The dead zone applied to both thumbsticks.
@@ -854,7 +944,7 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::default_fps();
-        assert_eq!(map.len(), 15);
+        assert_eq!(map.len(), 21);
         assert_eq!(map.parity_gaps(), Vec::new());
         for name in ["move", "look", "jump", "fire", "pause", "previous_weapon"] {
             assert!(map.action(name).is_ok(), "missing {name}");
@@ -1081,12 +1171,36 @@ mod tests {
         assert_eq!(map.set("gameplay"), Ok(ActionMap::GAMEPLAY));
         assert_eq!(map.mouse_mode(ActionMap::GAMEPLAY), Some(MouseMode::Look));
         assert_eq!(map.set_of(jump), Some(ActionMap::GAMEPLAY));
-        for action in ActionMap::default_fps().actions() {
-            assert_eq!(
-                ActionMap::default_fps().set_of(action),
-                Some(ActionMap::GAMEPLAY)
-            );
+    }
+
+    #[test]
+    fn the_standard_controls_have_a_menu_set_where_the_mouse_points() {
+        let map = ActionMap::default_fps();
+        let menu = map.set("menu").unwrap();
+        assert_eq!(map.sets().collect::<Vec<_>>(), [ActionMap::GAMEPLAY, menu]);
+        assert_eq!(map.mouse_mode(menu), Some(MouseMode::Pointer));
+        // Escape and Start each do one thing in each set.
+        assert_eq!(map.conflicts(), Vec::new());
+        for action in map.actions() {
+            let in_menu = map.name(action).starts_with("menu_");
+            let set = if in_menu { menu } else { ActionMap::GAMEPLAY };
+            assert_eq!(map.set_of(action), Some(set), "{}", map.name(action));
         }
+        let names: Vec<&str> = (map.actions())
+            .filter(|action| map.set_of(*action) == Some(menu))
+            .map(|action| map.name(action))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "menu_move",
+                "menu_confirm",
+                "menu_back",
+                "menu_previous_tab",
+                "menu_next_tab",
+                "menu_close"
+            ]
+        );
     }
 
     #[test]
