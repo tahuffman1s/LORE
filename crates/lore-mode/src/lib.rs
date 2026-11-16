@@ -43,6 +43,11 @@
 //! side reaches the score to win or time runs out, stays `Over` for the
 //! intermission with the final score on show, and the next round warms up.
 //!
+//! A game does not have to have a mode. Under [`Rules::none`], which is what
+//! [`Match::without_mode`] plays, there are no rounds and no teams: the match
+//! is `Playing` for as long as anyone is in it, a player comes into the
+//! world on joining, and nothing is timed, won or started again.
+//!
 //! Where a player appears is not decided here, because that needs the map.
 //! The match says [`Event::Spawned`], and [`choose_spawn`] picks the place
 //! from the map's spawn points and where everyone is standing.

@@ -94,7 +94,6 @@ fn idle() -> Input {
 
 /// What the script says about every shot, hit and reload.
 const TELLS_ALL: &str = r#"
-game.mode { warmup = 0 }
 game.onSpawn(function(player) player:giveWeapon("rifle") end)
 game.onWeaponFire(function(player)
     print("fire " .. player.name .. " " .. player.weapon .. " " .. player.ammo)
