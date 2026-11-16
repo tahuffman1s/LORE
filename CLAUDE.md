@@ -1,14 +1,14 @@
 # LORE (Lovely Open Rust Engine)
 
-Free, open-source engine for 3D games played in first or third person, built single-player first.
-Rust core, Luau scripting, Vulkan 1.3. Licensed MIT OR Apache-2.0. Forked from FOSSPS, a multiplayer FPS engine.
+Free, open-source engine for single-player open-world adventures and action RPGs (the kind of game Skyrim and The Legend of Zelda are), in first or third person.
+Rust core, Luau scripting, Vulkan 1.3. Licensed MIT OR Apache-2.0. Forked from FOSSPS, a multiplayer FPS engine; the multiplayer is being removed (#277 to #280).
 
 ## Pillars (earlier wins when they conflict)
 
 1. **Easy** — install to a game you can walk around in minutes. Script API reads like plain English. Error messages say what to do next. This is the "lovely".
-2. **Fast** — high, stable frame rate and low input latency on mid-range hardware; a town of NPCs has a known cost.
-3. **Focused** — 3D worlds a player walks through in first or third person: adventures, action games, shooters, stories. Decline what those do not need (2D, VR, mobile, node graphs, visual scripting).
-4. **Modern** — current rendering techniques, upscaling, first-class controllers.
+2. **Fast** — high, stable frame rate and low input latency on mid-range hardware. A big world loads as you cross it without a hitch, and a town of NPCs has a known cost. Every such claim has a benchmark.
+3. **Focused** — single-player worlds a player explores on foot: open worlds, dungeons, people, quests, melee, bows and magic. Decline everything else: multiplayer of any kind, servers, match rules, arena-shooter features, 2D, VR, mobile, node graphs, visual scripting. An idea that does not help make a game like Skyrim or Zelda is closed, not parked.
+4. **Modern** — current rendering techniques, upscaling, first-class controllers. Beautiful matters: sky, light, water and growing things are core features, not polish.
 
 ## Decisions
 
@@ -17,10 +17,11 @@ Rust core, Luau scripting, Vulkan 1.3. Licensed MIT OR Apache-2.0. Forked from F
 - Upscaling: FSR 3.1 (MIT) only. No closed-source upscalers (XeSS was dropped: closed, Windows-only).
 - Scripting: Luau through `mlua` (`luau` feature). Sandboxed, hot-reloadable, typed API definitions shipped for editor autocomplete.
 - Both views are first-class: anything that works in first person works in third, and the other way round. Switching is one line.
-- Single-player first, on the multiplayer core. A game played alone still runs on the server-authoritative, deterministic simulation, inside the program. That is what makes a save a snapshot, a replay free, `lore check` able to live a day in seconds, and co-op a later switch instead of a rewrite. Never add a single-player shortcut that breaks it.
+- Single-player only. There is no network code, no server and no second player; do not add any, and remove what is left of it when you meet it. What is kept from the multiplayer past is the fixed tick and a simulation that gives the same result from the same input: that is what makes a save a snapshot, a replay free, and `lore check` able to live a day in seconds. Never add a shortcut that breaks it.
 - A game is a folder of text you can read: rules (`main.luau`), what is where (`map.toml`), and, as they are built, people, conversations and quests. All hot-reload, merge cleanly, and are understood by `lore check`. Story state lives in one place, `game.lore`.
 - NPC behaviour is a readable list of rules, and every NPC can say why it is doing what it does.
-- Netcode: server-authoritative, client prediction, lag compensation. The headless dedicated server stays a first-class binary; multiplayer features are built last (M8).
+- Open worlds are the goal the rest serves: one continuous world in pieces on disk that stream inside a stated memory and frame-time budget, land and growth made by rule rather than placed by hand, and far land drawn from stand-ins the engine makes itself. `lore bench --world` is the proof.
+- The editor exists to build such worlds quickly: sketch a map and walk it, paint regions, draw roads, see cost and sight lines. It edits levels and what lives in them and nothing else.
 - Controller parity: every action is bindable on a gamepad; nothing ships keyboard/mouse-only.
 - Targets: Linux (`.tar.gz`, AppImage optional), Windows (`.exe`), macOS (`.app` through MoltenVK — stretch goal, feasibility unverified). Keep code portable; CI builds all three.
 
