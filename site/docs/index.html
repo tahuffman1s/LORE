@@ -41,6 +41,7 @@
       <tr><td>Make a game with one command and walk around its level: solid walls, ramps and spawn points. A player who joins is sent the level by the server</td><td>Other players on screen: a joined player walks your level but does not see the others yet</td></tr>
       <tr><td>Change the script and see the running game update, with the script split over as many files as you like</td><td>A HUD or menu built from a script</td></tr>
       <tr><td>Write a game mode: teams, scores, rounds, your own rules</td><td>A scoreboard on screen</td></tr>
+      <tr><td>Wait, repeat and move a number over time in a script, the same at any frame rate, with no clock to read and nothing to multiply</td><td>Timers that outlast a save of the script (<a href="https://github.com/tahuffman1s/LORE/issues/238">#238</a>)</td></tr>
       <tr><td>Hand players weapons from a script, tune them or make your own, and be told where every shot lands</td><td>Health and kills from those hits (<a href="https://github.com/tahuffman1s/LORE/issues/40">#40</a>), and anything of a shot on screen: recoil, a weapon in view, the HUD (<a href="https://github.com/tahuffman1s/LORE/issues/232">#232</a>)</td></tr>
       <tr><td>Serve a game and have others on your network join it and walk around</td><td>Seeing the other players</td></tr>
       <tr><td>Play with keyboard and mouse or a gamepad, and change which key or button does what in a text file</td><td>A controls screen inside the game</td></tr>
@@ -85,6 +86,7 @@
     <tbody>
       <tr><td><code>game.mode { … }</code></td><td>Sets up the match: teams, the score to win, the time limit, how long the dead wait.</td></tr>
       <tr><td><code>game.onStart</code>, <code>game.onTick</code>, <code>game.onReload</code></td><td>Run your code when the game starts, 60 times a second, and when the script is saved.</td></tr>
+      <tr><td><code>game.after</code>, <code>game.every</code>, <code>game.tween</code>, <code>game.time()</code>, <code>game.onDraw</code></td><td>Waits, repeats, numbers that move and the game's clock, so a script never counts time: see <a href="#time">Time</a>.</td></tr>
       <tr><td><code>game.keep("saved", { best = 0 })</code></td><td>Gives a table that keeps what you put in it when the script is saved and reloads; everything else in the file starts over. It holds numbers, text, true and false, players, and tables of those, until the game is closed.</td></tr>
       <tr><td><code>game.onPlayerJoin</code>, <code>game.onPlayerLeave</code>, <code>game.onSpawn</code>, <code>game.onKill</code></td><td>Run your code when something happens to a player.</td></tr>
       <tr><td><code>player:giveWeapon("rifle")</code>, <code>player:takeWeapon()</code></td><td>Puts a weapon in a player's hands, or empties them. The engine's weapons are <code>"rifle"</code>, <code>"pistol"</code>, <code>"shotgun"</code>, <code>"rocket launcher"</code> and <code>"grenade"</code>. The player fires with <code>"fire"</code>, aims with <code>"aim"</code> and reloads with <code>"reload"</code>; <code>player.weapon</code>, <code>player.ammo</code> and <code>player.reserve</code> say what they hold. Nobody holds a weapon until a script hands one out.</td></tr>
@@ -98,6 +100,22 @@
       <tr><td><code>game.input.rumble</code></td><td>Shakes the gamepad of the player at this computer: <code>game.input.rumble(0.2, 0.6, 0.1)</code> is the heavy motor, the light motor, then seconds. On Linux and Windows, in <code>lore run</code>; not on macOS yet.</td></tr>
     </tbody>
   </table>
+  <h3 id="time">Time</h3>
+  <p>The game's rules run in <code>game.onTick</code> and in timers, 60 times a second on every computer however fast it draws, so a game plays the same on a slow laptop and a fast desktop with nothing multiplied by a frame time. To wait or repeat, write <code>game.after(3, …)</code> or <code>game.every(0.5, …)</code>, and for a number that moves <code>game.tween(0, 100, 1)</code>; <code>game.time()</code> is the seconds the game has run, and the computer's own clock (<code>os.clock</code>) is not there to read. <code>game.onDraw</code> runs once for every picture drawn and is only for showing the game: a tween read there is smooth between ticks, and changing the game there is an error that says where to move the line.</p>
+  <div class="code">
+<pre data-file="main.luau" tabindex="0"><code>game.onStart(function()
+    print("The door opens in 3 seconds.")
+    game.after(3, function()
+        print("The door is open.")
+    end)
+end)
+
+game.every(10, function()
+    print(game.time() .. " seconds played")
+end)</code></pre>
+  </div>
+  <p>A timer is called on the first tick that is not before its time, and a repeating one keeps its beat for ever. <code>timer:cancel()</code> calls one off. Saving the script drops the timers started inside functions (the terminal says how many) and starts the ones at the top of the file again; nothing a script can draw on screen is built yet, so for now <code>game.onDraw</code> has only <code>print</code> and sounds to show with.</p>
+
   <p>The full list, with every setting and what each function is given, is <a href="https://github.com/tahuffman1s/LORE/blob/main/crates/lore-script/types/lore.d.luau"><code>lore.d.luau</code></a>. A copy is in every game's folder, which is what gives your editor autocomplete: in VS Code, install the <a href="https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp">Luau Language Server</a> extension and open the game's folder.</p>
   <p>Two games to read: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/hello/main.luau">hello</a>, the smallest one, and <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/team-deathmatch/main.luau">team-deathmatch</a>, with kill streaks kept in <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/team-deathmatch/streaks.luau">a second file</a>.</p>
 

@@ -17,6 +17,9 @@ thread_local! {
     static ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// What else the engine logged on this test's thread.
     static NOTES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// When each line in `PRINTED` was printed. A script cannot read a clock,
+    /// so this is how a test times one.
+    static PRINTED_AT: RefCell<Vec<Instant>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Collects `print` output per thread, so tests can run side by side.
@@ -29,6 +32,7 @@ impl log::Log for Capture {
 
     fn log(&self, record: &log::Record<'_>) {
         if record.target() == "script" {
+            PRINTED_AT.with_borrow_mut(|times| times.push(Instant::now()));
             PRINTED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         } else if record.level() == log::Level::Error {
             ERRORS.with_borrow_mut(|lines| lines.push(record.args().to_string()));
@@ -1320,11 +1324,13 @@ fn a_kept_table_cannot_carry_anything_but_plain_values_into_the_new_version() {
     assert_eq!(errors(), [] as [&str; 0]);
 }
 
-/// The milliseconds a script printed, one number to a line.
+/// The milliseconds between each line a script printed and the next.
 fn printed_times() -> Vec<f64> {
-    printed()
-        .iter()
-        .map(|line| line.parse().expect("the script prints a number"))
+    printed();
+    PRINTED_AT
+        .with_borrow_mut(std::mem::take)
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]).as_secs_f64() * 1000.0)
         .collect()
 }
 
@@ -1340,13 +1346,14 @@ fn a_caught_engine_error_costs_the_same_however_many_came_before() {
     // the time limit.
     let game = GameFolder::new(
         r#"
+        print("began")
         for round = 1, 10 do
-            local began = os.clock()
             for n = 1, 500 do pcall(game.onTick, 1) end
-            print((os.clock() - began) * 1000)
+            print("round", round)
         end
         "#,
     );
+    PRINTED_AT.with_borrow_mut(Vec::clear);
     let host = game.open();
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     let times = printed_times();
@@ -1368,18 +1375,18 @@ fn a_caught_engine_error_costs_the_same_wherever_it_is_raised() {
     let game = GameFolder::new(
         r#"
         local function caught() pcall(game.onTick, 1) end
+        print("began")
         for round = 1, 5 do
-            local began = os.clock()
             for n = 1, 500 do caught() end
-            print((os.clock() - began) * 1000)
+            print("round", round)
         end
         for round = 1, 5 do
-            local began = os.clock()
             for n = 1, 500 do pcall(game.onTick, 1) end
-            print((os.clock() - began) * 1000)
+            print("round", round)
         end
         "#,
     );
+    PRINTED_AT.with_borrow_mut(Vec::clear);
     let host = game.open();
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     let times = printed_times();

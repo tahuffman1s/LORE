@@ -13,6 +13,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level (FOSSPS#6, FOSSPS#64)
 - Weapons in engine code: hitscan and projectile, recoil, reload (FOSSPS#7)
 - Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the server fires them (#8)
+- Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
 - A headless server, snapshots with prediction and reconciliation, lag compensation, joining over the local network (FOSSPS#10, FOSSPS#11, FOSSPS#12, FOSSPS#14)
 - Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
@@ -29,7 +30,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Scripts behave the same at any frame rate without delta-time maths (#11)
 - Test: the same inputs give the same match at 30, 60, 144 and 1000 frames a second (#12)
 - Menus in a running game: menu actions, a built-in pause and settings menu (#13)
 - Scripts build the HUD and menus (#14)
@@ -120,6 +120,7 @@ What turns a walk into a game: saving, one book of facts the world remembers (`g
 - When the player dies: checkpoints, and one line that says what happens (#87)
 - Music that follows the game: calm, tense and fight, changing on the beat (#88)
 - Tutorial: your first adventure in ten minutes — walk, meet someone, finish a quest, save (#89)
+- Timers and tweens outlast a save: of the script, and of the game (#238)
 
 ## M4 — Modern graphics and performance
 

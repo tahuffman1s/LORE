@@ -398,6 +398,49 @@ fn check_reports_a_mistake_that_only_a_press_reaches_and_names_the_action() {
 }
 
 #[test]
+fn check_draws_a_picture_and_says_which_timers_it_did_not_wait_for() {
+    let folder = scratch("check-draw");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    let script = folder.join("game").join("main.luau");
+    std::fs::write(
+        &script,
+        "game.after(0.5, function() print(\"Half a second in\") end)\n\
+         game.after(3600, function() print(\"An hour in\") end)\n\
+         game.onDraw(function() end)\n",
+    )
+    .unwrap();
+
+    let output = lore(&folder, &["check", "game"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("Half a second in"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains("An hour in"));
+    let said = stdout(&output);
+    assert!(
+        said.contains("1 of the script's timers (game.after, game.every) had not come due"),
+        "{said}"
+    );
+
+    // A rule in a function that only draws is found without a window.
+    std::fs::write(
+        &script,
+        "game.onDraw(function()\n    game.after(1, function() end)\nend)\n",
+    )
+    .unwrap();
+    let output = lore(&folder, &["check", "game"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("game.after changes the game, and game.onDraw is only for"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn check_presses_every_action_of_a_new_game_and_says_so() {
     let folder = scratch("check-press");
     assert!(lore(&folder, &["new", "game"]).status.success());

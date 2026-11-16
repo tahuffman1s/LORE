@@ -23,6 +23,12 @@
 //! end)
 //! ```
 //!
+//! A script never counts time or reads a clock: `game.after` and
+//! `game.every` call a function later, `game.tween` moves a number,
+//! `game.time` is the seconds of game time, all counted in ticks, and
+//! `game.onDraw` is called once per picture ([`ScriptHost::draw`]) to show
+//! the game without being able to change it.
+//!
 //! The script API is described for editors in `types/lore.d.luau`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -35,6 +41,7 @@ mod keep;
 mod limit;
 mod mode_api;
 mod modules;
+mod time_api;
 mod weapon_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};

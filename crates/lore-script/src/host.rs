@@ -24,6 +24,7 @@ use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::mode_api::{Handles, ModeState};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
+use crate::time_api::Clock;
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 
 /// The file every game starts from, inside the game's folder.
@@ -165,6 +166,8 @@ pub struct ScriptHost {
     /// The kinds of weapon in effect and who holds which. Kept here so a
     /// save empties nobody's hands.
     weapons: Rc<WeaponState>,
+    /// The game's time. Kept here so a save does not start it again.
+    clock: Rc<Clock>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -266,6 +269,7 @@ impl ScriptHost {
             spawns: Vec::new(),
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
+            clock: Rc::default(),
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -289,18 +293,59 @@ impl ScriptHost {
 
     /// Runs one simulation tick of `step` seconds with this tick's `input`.
     ///
-    /// The first tick calls the script's `game.onStart` functions before its
-    /// `game.onTick` ones. Then the match moves on by one tick, and the
-    /// script is told what happened in it. A function that fails is reported
-    /// once and the others still run.
+    /// The first tick calls the script's `game.onStart` functions first.
+    /// Every tick then calls the `game.after` and `game.every` functions
+    /// whose time has come, then the `game.onTick` ones. Then the match
+    /// moves on by one tick, and the script is told what happened in it. A
+    /// function that fails is reported once and the others still run.
+    ///
+    /// `step` must be the same on every tick: it is what the script's
+    /// seconds are counted in.
     pub fn tick(&mut self, input: &InputFrame, step: f32) {
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
         }
+        self.clock.begin_tick(step);
         self.start();
+        self.run_timers();
         self.call_all(|handlers| &handlers.tick, step);
         self.mode.game.borrow_mut().tick(step);
         self.tell_script();
+        self.clock.end_tick();
+    }
+
+    /// Calls the script's `game.onDraw` functions for one picture, drawn
+    /// `alpha` of the way from the tick before last (0) to the last one (1).
+    ///
+    /// While they run the script cannot change the game, and what it reads
+    /// of the game's time and its tweens is where the picture is, between
+    /// the two ticks. Nothing is called before the first tick, and a server,
+    /// which draws nothing, never calls this.
+    pub fn draw(&mut self, alpha: f32) {
+        if !self.started {
+            return;
+        }
+        self.clock.set_drawing(Some(alpha));
+        self.call_all(|handlers| &handlers.draw, ());
+        self.clock.set_drawing(None);
+    }
+
+    /// How many `game.after` and `game.every` functions have been waiting
+    /// since they were asked for and have not been called once. `lore check`
+    /// says so, because a mistake in one of them has not been found.
+    #[must_use]
+    pub fn timers_never_called(&self) -> usize {
+        self.running.as_ref().map_or(0, |version| {
+            let timers = version.shared.timers.borrow();
+            timers.iter().filter(|timer| timer.never_called()).count()
+        })
+    }
+
+    /// The seconds of game time that have been run: the number of ticks
+    /// times the length of one. It is what `game.time()` gives a script.
+    #[must_use]
+    pub fn time(&self) -> f64 {
+        self.clock.now()
     }
 
     /// The rumble the script asked for with `game.input.rumble` since this
@@ -585,6 +630,21 @@ impl ScriptHost {
                          player:giveWeapon(\"rifle\")"
                     );
                 }
+                if let Some(old) = &self.running {
+                    let timers = old.shared.timers.borrow();
+                    let lost = timers
+                        .iter()
+                        .filter(|timer| !timer.finished && !timer.from_loading)
+                        .count();
+                    if lost > 0 {
+                        log::warn!(
+                            "{lost} of the script's timers (game.after, game.every) were \
+                             waiting when it was saved, and will not be called: they belong \
+                             to the version before. Timers started at the top of the file \
+                             have started again."
+                        );
+                    }
+                }
                 self.running = Some(version);
                 self.paused = false;
                 self.last_error = None;
@@ -647,6 +707,9 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             kinds: RefCell::new(Vec::new()),
+            clock: Rc::clone(&self.clock),
+            timers: RefCell::new(Vec::new()),
+            next_timer: Cell::new(0),
         });
         let built = self.run(&shared);
         (shared.modules.take_touched(), built)
@@ -776,35 +839,86 @@ impl ScriptHost {
             return;
         }
         let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
         // Handlers added while these run are first called on the next pass,
         // so a handler that keeps adding handlers cannot hold up the tick.
-        let count = list(&version.shared.handlers.borrow()).len();
+        let count = list(&shared.handlers.borrow()).len();
         for index in 0..count {
             // The list is borrowed only for this lookup, so a handler may
             // register more handlers while it runs.
-            let handler = list(&version.shared.handlers.borrow()).get(index).cloned();
+            let handler = list(&shared.handlers.borrow()).get(index).cloned();
             let Some(handler) = handler else { break };
-            let Err(error) =
-                within_time_limit(&version.shared, || handler.call::<()>(args.clone()))
-            else {
-                continue;
-            };
-            let too_long = is_time_limit(&error);
-            let sources = version.shared.modules.sources.borrow();
-            let error = ScriptError::from_lua(&error, &self.file, &sources)
-                .with_note(if too_long { PAUSED } else { KEEPS_RUNNING });
-            let text = error.to_string();
-            if self.reported.len() < MAX_REPORTED && self.reported.insert(text.clone()) {
-                log::error!("{text}");
-            }
-            self.last_error = Some(error);
-            if too_long {
-                // Calling it again would freeze the game for the whole time
-                // limit on every tick.
-                self.paused = true;
+            if !self.call(&shared, &handler, args.clone()) {
                 break;
             }
         }
+    }
+
+    /// Calls the `game.after` and `game.every` functions whose tick has
+    /// come, oldest timer first.
+    fn run_timers(&mut self) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let (now, rate) = (self.clock.tick(), self.clock.rate());
+        // Seconds cannot be counted in ticks of no length.
+        if rate <= 0.0 {
+            return;
+        }
+        // A timer started by one of these is first looked at on the next
+        // tick, so a timer that starts timers cannot hold up this one.
+        let count = shared.timers.borrow().len();
+        for index in 0..count {
+            // A repeating timer shorter than a tick is called more than once.
+            loop {
+                let call = {
+                    let mut timers = shared.timers.borrow_mut();
+                    let Some(timer) = timers.get_mut(index) else {
+                        break;
+                    };
+                    if timer.finished || timer.due(rate) > now {
+                        break;
+                    }
+                    timer.fire();
+                    timer.call.clone()
+                };
+                // The list is not borrowed here, so the function may start
+                // and cancel timers, its own among them.
+                if !self.call(&shared, &call, ()) {
+                    return;
+                }
+            }
+        }
+        shared.timers.borrow_mut().retain(|timer| !timer.finished);
+    }
+
+    /// Calls one of the script's functions and reports it if it fails.
+    /// Gives false when the script has been paused and no more of it should
+    /// be called.
+    fn call(&mut self, shared: &Rc<Shared>, function: &Function, args: impl IntoLuaMulti) -> bool {
+        let Err(error) = within_time_limit(shared, || function.call::<()>(args)) else {
+            return true;
+        };
+        let too_long = is_time_limit(&error);
+        let error = {
+            let sources = shared.modules.sources.borrow();
+            ScriptError::from_lua(&error, &self.file, &sources).with_note(if too_long {
+                PAUSED
+            } else {
+                KEEPS_RUNNING
+            })
+        };
+        let text = error.to_string();
+        if self.reported.len() < MAX_REPORTED && self.reported.insert(text.clone()) {
+            log::error!("{text}");
+        }
+        self.last_error = Some(error);
+        // Calling it again would freeze the game for the whole time limit
+        // on every tick.
+        self.paused = too_long;
+        !too_long
     }
 }
 

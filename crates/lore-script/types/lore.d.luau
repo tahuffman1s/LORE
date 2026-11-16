@@ -141,17 +141,79 @@ declare extern type Sound with
     function stop(self): ()
 end
 
+--- A wait started with `game.after` or `game.every`. Keep it only to stop
+--- it later.
+--- Example: local countdown = game.after(10, function() print("Too late!") end)
+declare extern type Timer with
+    --- Stops the timer: its function is not called, or not called again.
+    --- Cancelling one that has finished does nothing.
+    --- Example: countdown:cancel()
+    function cancel(self): ()
+end
+
+--- A number on its way from one value to another: what `game.tween` gives.
+--- Example: local shown = game.tween(0, 100, 1)
+declare extern type Tween with
+    --- Where the number is now. In `game.onDraw` it is where the picture
+    --- being drawn is, so it moves smoothly however fast pictures are drawn.
+    --- Example: game.onDraw(function() print(shown.value) end)
+    value: number
+
+    --- True once the number has arrived.
+    --- Example: if shown.done then print("Arrived") end
+    done: boolean
+
+    --- Sends the number on to `target` over `seconds`, from wherever it has
+    --- got to, so it never jumps. With 0 seconds it is there at once.
+    --- Example: shown:to(player.score, 0.3)
+    function to(self, target: number, seconds: number): ()
+end
+
 declare game: {
     --- Calls `handler` once, on the first tick, when the game starts.
     --- Example: game.onStart(function() print("Go!") end)
     onStart: (handler: () -> ()) -> (),
 
-    --- Calls `handler` on every simulation tick. `step` is the length of one
-    --- tick in seconds. It is always the same (1/60 by default), so
-    --- `position += speed * step` moves at the same speed on every computer.
+    --- Calls `handler` on every tick: 60 times a second on every computer,
+    --- however fast it draws. The game's rules go here. `step` is the length
+    --- of one tick in seconds, and it is always the same, so
+    --- `distance += speed * step` moves at the same speed everywhere. To wait
+    --- or to repeat, use `game.after` and `game.every` instead of counting.
     --- You can add several handlers; they run in the order they were added.
-    --- Example: game.onTick(function(step) timeLeft -= step end)
+    --- Example: game.onTick(function() if game.input.justPressed("jump") then print("Jump!") end end)
     onTick: (handler: (step: number) -> ()) -> (),
+
+    --- Calls `handler` once for every picture drawn, which is more often on
+    --- a faster computer and never on a server. It is for showing the game,
+    --- not for its rules: changing the game from here (a score, a weapon, a
+    --- timer) is an error. Reading is fine, and `game.time()` and
+    --- `tween.value` give where the picture is, between two ticks.
+    --- Example: game.onDraw(function() print(shown.value) end)
+    onDraw: (handler: () -> ()) -> (),
+
+    --- The seconds the game has been running. It counts ticks, not the
+    --- computer's clock, so it is the same for everyone, does not jump when
+    --- the computer stutters, and carries on when the script is saved.
+    --- Example: local began = game.time()
+    time: () -> number,
+
+    --- Calls `handler` once, `seconds` from now. Give it back to
+    --- `timer:cancel()` to call it off. A save of the script drops timers
+    --- started inside functions; those at the top of the file start again.
+    --- Example: game.after(3, function() print("Go!") end)
+    after: (seconds: number, handler: () -> ()) -> Timer,
+
+    --- Calls `handler` again and again, `seconds` apart, until
+    --- `timer:cancel()`. It keeps its beat exactly: 0.5 is every 30th tick.
+    --- Example: game.every(0.5, function() print("tick tock") end)
+    every: (seconds: number, handler: () -> ()) -> Timer,
+
+    --- A number that moves from `from` to `to` over `seconds` at a steady
+    --- rate (it does not ease in or out yet). Read it with `tween.value` and send it on with `tween:to`.
+    --- Make it in the game's rules and read it in `game.onDraw`: the engine
+    --- fills in the pictures between ticks.
+    --- Example: local shown = game.tween(0, 100, 1)
+    tween: (from: number, to: number, seconds: number) -> Tween,
 
     --- Calls `handler` each time this file is saved and loaded again while
     --- the game is running. Variables in the file start over on a reload;

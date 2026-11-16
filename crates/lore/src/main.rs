@@ -428,7 +428,7 @@ fn open(folder: &Path, config: &Config, verb: &str) -> Result<ScriptGame, String
 }
 
 /// `lore check`: runs a second of the game and a pretend match with no
-/// window, presses every action in turn, and loads the game's level and its
+/// window, has the script draw a picture of each, presses every action in turn, and loads the game's level and its
 /// sounds. Fails if the script has a mistake, or the level or a sound
 /// cannot be loaded.
 fn check(folder: &Path) -> Result<(), String> {
@@ -454,6 +454,8 @@ fn check(folder: &Path) -> Result<(), String> {
         for _ in 0..TICKS {
             game.tick(input.tick(), step);
         }
+        // A picture, so the game.onDraw functions run too.
+        game.host_mut().draw(0.5);
         // A pretend match, so the functions that wait for players run too.
         let first = game.host_mut().player_joined("Check Bot 1");
         let second = game.host_mut().player_joined("Check Bot 2");
@@ -509,6 +511,8 @@ fn check(folder: &Path) -> Result<(), String> {
         game.host_mut().player_left(second);
         game.host_mut().player_left(first);
         game.tick(input.tick(), step);
+        // And one of the match, for what is only drawn while it is played.
+        game.host_mut().draw(0.5);
     }
 
     // The error itself was printed when it happened.
@@ -558,6 +562,14 @@ fn check(folder: &Path) -> Result<(), String> {
             "A pretend match was started with two players, but its warm-up is longer than \
              ten minutes, so the round itself was not played. To have it played, set a \
              shorter warm-up in game.mode, such as warmup = 5."
+        );
+    }
+    let waiting = game.host().timers_never_called();
+    if waiting > 0 {
+        println!(
+            "{waiting} of the script's timers (game.after, game.every) had not come due \
+             when the check ended, so their functions were not run. A mistake in one of \
+             them is not caught: read that code carefully, and try it with `lore run`."
         );
     }
     println!(
