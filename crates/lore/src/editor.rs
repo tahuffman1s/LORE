@@ -1022,7 +1022,7 @@ mod tests {
         for action in game.actions() {
             assert_eq!(map.action(game.name(action)), Ok(action));
             assert_eq!(map.bindings(action), game.bindings(action));
-            assert_eq!(map.set_of(action), Some(ActionMap::GAMEPLAY));
+            assert_eq!(map.set_of(action), game.set_of(action));
         }
         assert_eq!(map.set_of(controls.back), Some(ActionMap::GAMEPLAY));
         assert_eq!(map.conflicts().len(), 1, "{:?}", map.conflicts());
