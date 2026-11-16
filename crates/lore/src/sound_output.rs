@@ -16,6 +16,9 @@ pub(crate) use output::Voices;
 pub(crate) enum SoundAsk {
     /// Start a sound, to be known by this id from now on.
     Play(SoundId, Play),
+    /// Start a sound that ends by itself and is never stopped: a footstep,
+    /// a gunshot.
+    Once(Play),
     /// Stop the sound started with this id, if it is still playing.
     Stop(SoundId),
     /// Stop every sound started with an id.
@@ -129,6 +132,9 @@ mod output {
                                 self.playing.remove(&oldest);
                             }
                         }
+                    }
+                    SoundAsk::Once(play) => {
+                        self.voices.play(play);
                     }
                     SoundAsk::Stop(id) => {
                         // One that ends by itself stays remembered until it

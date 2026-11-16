@@ -15,6 +15,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the server fires them (#8)
 - Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
+- A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the server lists with a place and a loudness (#16)
 - Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
 - A headless server, snapshots with prediction and reconciliation, lag compensation, joining over the local network (FOSSPS#10, FOSSPS#11, FOSSPS#12, FOSSPS#14)
 - Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
@@ -33,7 +34,6 @@ One player, offline, in first or third person: move, look, use things, fight, he
 
 - Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
 - A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
-- Sound in a running game: players are heard walking and shooting (#16)
 - Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
 - Read the bindings file again while the game runs, and keep a file per game once scripts declare actions (#18)
 - Scripts switch action sets and declare their own (a vehicle, a buy menu) (#19)
@@ -68,6 +68,8 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Slow motion and fast forward: one number, and everything still plays the same (#48)
 - Other views from the same few words: top-down, side-on, fixed and on rails (#49)
 - The player's own side fires their weapon too: recoil moves the camera and ammo is known at once (#232)
+- A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
+- A game with no game mode puts the player back at a spawn point five seconds in (#259)
 - Carry more than one weapon and switch between them (#233)
 - Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
 - Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter
@@ -272,6 +274,7 @@ Co-op and competitive multiplayer. The netcode is already there, because single-
 - Other players are drawn: a body where each one stands, moving as snapshots arrive (#211)
 - Rumble for players who joined from another computer (player:rumble) (#212)
 - Script sounds for players who joined from another computer (#213)
+- Footsteps and gunfire for players who joined from another computer (#257)
 - The script's HUD for players who joined from another computer, and a HUD of each player's own (#247)
 - Levels sent to joining players arrive faster, and a big server can point at a web address (#214)
 - A level sent by a server is read within a memory budget (#215)
