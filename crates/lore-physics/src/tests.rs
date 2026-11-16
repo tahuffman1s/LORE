@@ -872,8 +872,9 @@ fn a_long_erratic_run_never_ends_up_inside_or_outside_the_level() {
         // The player keeps a 1 cm gap from everything; squeezed into a
         // wedge it may give up some of that gap, but never more.
         let height = if player.crouched { 1.1 } else { 1.8 };
-        let middle = parry3d::math::Vector::new(x, y + height / 2.0, z);
-        let core = parry3d::shape::Capsule::new_y(height / 2.0 - 0.35, 0.35 - SKIN);
+        let middle = crate::level::Vector::new(x, y + height / 2.0, z);
+        let core =
+            parry3d::shape::Capsule::new_y(f64::from(height / 2.0 - 0.35), f64::from(0.35 - SKIN));
         assert!(
             !level.overlaps(&core, middle),
             "inside something solid at tick {tick}: {player:?}"
@@ -922,4 +923,143 @@ fn a_ray_stops_at_its_reach_and_ignores_nonsense() {
             .raycast(from, [0.0, -1.0, 0.0], 9.0)
             .is_none()
     );
+}
+
+/// A flat floor at height 0, `across` metres on a side, made of four
+/// squares of two triangles each: seams run along x = 0 and z = 0, and one
+/// slants across every square.
+fn seamed_floor(across: f32) -> Vec<Triangle> {
+    let h = across / 2.0;
+    let mut triangles = Vec::new();
+    for (x, z) in [(-h, -h), (0.0, -h), (-h, 0.0), (0.0, 0.0)] {
+        triangles.extend(quad(
+            [x, 0.0, z + h],
+            [x + h, 0.0, z + h],
+            [x + h, 0.0, z],
+            [x, 0.0, z],
+        ));
+    }
+    triangles
+}
+
+#[test]
+fn a_walker_stays_on_the_plane_of_a_floor_of_big_triangles_in_every_direction() {
+    // The floor of a game with no level is two triangles a kilometre
+    // across, and a level's ground is often one big quad. Measuring the
+    // player against a triangle that size used to be out by centimetres,
+    // which dropped a walker into the floor or lifted them off it (#261).
+    let settings = MoveSettings::default();
+    for across in [80.0, 1000.0, 8000.0] {
+        let level = level(&[seamed_floor(across)]);
+        // The middle, where every seam meets; beside the seams; on a
+        // slanted seam (x = z in the +x, +z square); and far from the middle.
+        // Not so far that a position, which is single precision, is coarse.
+        let far = (across / 2.0 - 15.0).min(400.0);
+        for start in [[0.0, 0.0], [0.4, -0.3], [9.0, 9.0], [far, 0.2], [-far, far]] {
+            for turn in 0..16 {
+                let yaw = turn as f32 * std::f32::consts::TAU / 16.0 + 0.05;
+                let mut player = standing_at(&level, [start[0], 0.0, start[1]]);
+                let rest = player.position;
+                let aside = (rest[0] - start[0]).hypot(rest[2] - start[1]);
+                assert!(aside < 1.0e-6, "settling moved them {aside} m sideways");
+                // Out for a second and a half and back, again and again:
+                // every seam near the start is crossed both ways.
+                for tick in 0..1_260_u32 {
+                    let forward = if (tick / 90).is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    let input = MoveInput {
+                        forward,
+                        yaw,
+                        ..MoveInput::default()
+                    };
+                    player.step(&level, &settings, &input, DT);
+                    let [x, y, z] = player.position;
+                    let about = format!("{across} m floor, from {start:?}, yaw {yaw}, tick {tick}");
+                    assert!(player.grounded, "left the ground: {about}: {player:?}");
+                    assert!(
+                        (y - rest[1]).abs() < 1.0e-5,
+                        "feet at {y}, not {}: {about}",
+                        rest[1]
+                    );
+                    // And never to one side of the line being walked.
+                    let (along_x, along_z) = (-yaw.sin(), -yaw.cos());
+                    let aside = (x - start[0]) * along_z - (z - start[1]) * along_x;
+                    assert!(aside.abs() < 2.0e-3, "{aside} m off the line: {about}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_player_started_on_a_flat_floor_only_moves_up() {
+    // Started with the feet exactly on the floor, a player is lifted to
+    // the gap they keep from it and pushed nowhere else (#222).
+    let settings = MoveSettings::default();
+    for floor in [floor(), seamed_floor(1000.0)] {
+        let level = level(&[floor]);
+        for [x, z] in [[3.0, -2.0], [0.0, 0.0], [-17.25, 17.25], [31.0, 0.0]] {
+            for depth in [0.0, 0.004, 0.2] {
+                let mut player = Player::at([x, -depth, z], &settings);
+                run(&mut player, &level, MoveInput::default(), SECOND / 2);
+                let [here_x, y, here_z] = player.position;
+                assert!(player.grounded, "{player:?}");
+                // Not by a thousandth of a millimetre.
+                let aside = (here_x - x).hypot(here_z - z);
+                assert!(aside < 1.0e-6, "pushed {aside} m sideways: {player:?}");
+                assert!(close(y, SKIN, 1.0e-5), "{player:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_shape_over_a_kilometre_wide_triangle_is_measured_to_a_hair() {
+    // The questions the player asks of the level, asked directly: how far
+    // down is the floor, how near is it, and is it in the way of a move
+    // along it. In single precision the answers were out by up to 18 cm.
+    let level = level(&[seamed_floor(2000.0)]);
+    let shape = MoveSettings::default().shape(false);
+    let mut seed = 0x2545_f491_u32;
+    let mut random = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed >> 8) as f32 / (1_u32 << 24) as f32
+    };
+    for _ in 0..5_000 {
+        let (x, z) = (random() * 120.0 - 60.0, random() * 120.0 - 60.0);
+        let gap = 0.002 + random() * 0.012;
+        let middle = crate::level::Vector::new(x, 0.9 + gap, z);
+        let about = format!("at {middle:?}");
+
+        let down = crate::level::Vector::NEG_Y * 0.4;
+        let touch = level
+            .sweep(&shape, middle, down, SKIN)
+            .expect("floor below");
+        let drop = 0.4 * touch.fraction;
+        assert!(close(drop, (gap - SKIN).max(0.0), 1.0e-5), "{drop} {about}");
+        assert!(touch.normal.y > 0.999_999, "{:?} {about}", touch.normal);
+
+        match level.nearest(&shape, middle, SKIN) {
+            Some((normal, distance)) => {
+                assert!(close(distance, gap, 1.0e-5), "{distance} {about}");
+                assert!(normal.y > 0.999_999, "{normal:?} {about}");
+            }
+            None => assert!(gap > SKIN - 1.0e-5, "nothing near {about}"),
+        }
+
+        let angle = random() * std::f32::consts::TAU;
+        let along = crate::level::Vector::new(angle.cos(), 0.0, angle.sin()) * 0.075;
+        if gap > 0.001 {
+            let met = level.sweep(&shape, middle, along, 0.0);
+            assert!(
+                met.is_none(),
+                "the floor stopped a move along it: {met:?} {about}"
+            );
+        }
+    }
 }

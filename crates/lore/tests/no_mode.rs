@@ -86,13 +86,14 @@ fn game(script: &str) -> ScriptGame {
     game
 }
 
-/// How far apart two places are over the ground. Height is left out: being
-/// put back at a spawn point is a move across the floor, and the flat floor
-/// has a fault of its own that drops a walker a few centimetres into it for
-/// a tick now and then (#261).
+/// How far apart two places are.
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    (a[0] - b[0]).hypot(a[2] - b[2])
+    (a[0] - b[0]).hypot(a[1] - b[1]).hypot(a[2] - b[2])
 }
+
+/// The most a walker's feet may rise or sink on the flat floor: a tenth of
+/// a millimetre. They used to sink 18 cm for a tick now and then (#261).
+const LEVEL: f32 = 0.0001;
 
 /// Where the server has its only player.
 fn on_server(game: &LocalGame) -> [f32; 3] {
@@ -100,12 +101,24 @@ fn on_server(game: &LocalGame) -> [f32; 3] {
     player.position
 }
 
+/// What [`walk_about`] saw.
+struct Walk {
+    /// The furthest the server moved the player in any one tick.
+    furthest: f32,
+    /// The most the player's feet rose or sank from where they started, on
+    /// the server or in the player's own picture of themselves.
+    off_level: f32,
+}
+
 /// Plays `ticks` ticks alone, walking forward and back by turns so the
-/// player is on the move through every second of it, and gives the furthest
-/// the server moved the player in any one tick.
-fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> f32 {
-    let mut furthest: f32 = 0.0;
+/// player is on the move through every second of it.
+fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> Walk {
     let mut before = on_server(game);
+    let height = before[1];
+    let mut walk = Walk {
+        furthest: 0.0,
+        off_level: 0.0,
+    };
     for tick in 0..ticks {
         // Seven seconds each way: forward right through the fifth second,
         // when the round used to start.
@@ -118,10 +131,15 @@ fn walk_about(game: &mut LocalGame, input: &mut Input, ticks: u32) -> f32 {
         input.press(hold);
         game.tick(input.tick(), STEP);
         let now = on_server(game);
-        furthest = furthest.max(distance(before, now));
+        let own = game.joined().player().position;
+        walk.furthest = walk.furthest.max(distance(before, now));
+        walk.off_level = walk
+            .off_level
+            .max((now[1] - height).abs())
+            .max((own[1] - height).abs());
         before = now;
     }
-    furthest
+    walk
 }
 
 #[test]
@@ -160,11 +178,19 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
 
     // Eleven minutes: past the warm-up, the ten-minute round and the
     // intermission a deathmatch would have had.
-    let furthest = walk_about(&mut game, &mut input, 11 * MINUTE);
+    let Walk {
+        furthest,
+        off_level,
+    } = walk_about(&mut game, &mut input, 11 * MINUTE);
     assert!(furthest > 0.01, "the player walked: {furthest}");
     assert!(
         furthest < A_STEP,
         "the player was moved {furthest} m in one tick"
+    );
+    // The floor is flat, so all of it was at one height (#261).
+    assert!(
+        off_level < LEVEL,
+        "the player's feet left the floor by {off_level} m"
     );
 
     // Standing still again, the player's own picture of where they are
@@ -252,7 +278,7 @@ fn a_game_that_asks_for_a_mode_still_starts_its_round_after_the_warm_up() {
 
     // The round starts five seconds in and everyone starts it from a spawn
     // point, as before.
-    let furthest = walk_about(&mut game, &mut input, 6 * SECOND);
+    let furthest = walk_about(&mut game, &mut input, 6 * SECOND).furthest;
     assert!(furthest > 5.0, "put back at a spawn point: {furthest}");
     assert_eq!(printed(), ["round", "spawn Player 1"]);
     let mode = game.hosted().game().host().mode();

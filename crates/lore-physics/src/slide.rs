@@ -1,10 +1,9 @@
 //! Moving a shape through the level: stop at what it touches, then carry
 //! on along the surface.
 
-use parry3d::math::Vector;
 use parry3d::shape::Capsule;
 
-use crate::level::Level;
+use crate::level::{Level, Vector};
 
 /// The gap kept between the player and every surface, in metres. Resting a
 /// hair away instead of exactly touching keeps the arithmetic well behaved.

@@ -1,9 +1,8 @@
 //! The player: where they are, and how one tick of input moves them.
 
-use parry3d::math::Vector;
 use parry3d::shape::Capsule;
 
-use crate::level::Level;
+use crate::level::{Level, Vector};
 use crate::settings::{MoveInput, MoveSettings, positive};
 use crate::slide::{SKIN, Slid, slide, unstick};
 
@@ -98,6 +97,7 @@ impl Player {
             level,
             settings,
             shape: settings.shape(self.crouched),
+            to_feet: settings.height(self.crouched) / 2.0,
             steep: settings.flattest_wall(),
             dt,
         };
@@ -234,6 +234,8 @@ struct Body<'a> {
     level: &'a Level,
     settings: &'a MoveSettings,
     shape: Capsule,
+    /// How far below the shape's middle the feet are.
+    to_feet: f32,
     /// Surfaces facing less upward than this cannot be stood on.
     steep: f32,
     dt: f32,
@@ -267,7 +269,7 @@ impl Body<'_> {
             .try_normalize()
             .unwrap_or(Vector::ZERO);
         let past_edge = touch.point + outward * EDGE_PROBE + Vector::Y * EDGE_PROBE;
-        let feet = middle - Vector::Y * (drop + self.shape.half_height() + self.shape.radius);
+        let feet = middle - Vector::Y * (drop + self.to_feet);
         self.level
             .surface_below(past_edge, 2.0 * EDGE_PROBE)
             .filter(standable)
@@ -308,7 +310,7 @@ impl Body<'_> {
         let landing = self.ground_below(across.position, rise)?;
         // Only a real step up counts. Landing back on the same floor would
         // just be the blocked move again, pressed closer to the wall.
-        let feet = middle.y - self.shape.half_height() - self.shape.radius;
+        let feet = middle.y - self.to_feet;
         let climbed = landing.height - feet;
         (LOWEST_STEP..=step + SKIN)
             .contains(&climbed)
