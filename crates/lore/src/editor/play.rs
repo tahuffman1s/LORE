@@ -2,7 +2,7 @@
 //! starts the game where the camera is, and the same one comes back.
 //!
 //! What is played is the game as `lore run` plays it (its script, real
-//! netcode over this computer's own network, the level's shapes solid), on
+//! netcode with no network in between, the level's shapes solid), on
 //! a copy of the map the editor holds, saved or not. Nothing done while
 //! playing reaches the editor: its camera, what is chosen and the map are
 //! as they were when playing stops.

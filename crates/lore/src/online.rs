@@ -251,6 +251,16 @@ impl World {
         Some([eye[0], feet, eye[2]])
     }
 
+    /// How long one tick is, for sides in one program that count time
+    /// in ticks. A sixtieth of a second when the rate is not a usable
+    /// number, so that time still goes by.
+    fn tick(&self) -> Duration {
+        Duration::try_from_secs_f32(self.step)
+            .ok()
+            .filter(|tick| !tick.is_zero())
+            .unwrap_or(Duration::from_nanos(16_666_667))
+    }
+
     /// A player where one may start, before the server has said where this
     /// one does.
     fn first(&self) -> Player {
@@ -465,10 +475,32 @@ impl HostedGame {
         Self::open_in(game, address, World::flat(tick_rate))
     }
 
+    /// A server for `game` that is on no network and opens no port: only
+    /// players in this program join it, with [`JoinedGame::in_program`].
+    /// It is what a game played alone runs on, and what a test of a game's
+    /// rules should use: packets are handed over directly, so nothing is
+    /// late or lost and the same game goes the same way every time.
+    ///
+    /// `tick_rate` must be the rate the game is then ticked at.
+    #[must_use]
+    pub fn in_program(game: ScriptGame, tick_rate: u32) -> Self {
+        Self::in_program_in(game, World::flat(tick_rate))
+    }
+
+    fn in_program_in(game: ScriptGame, world: World) -> Self {
+        let host = UdpHost::in_program(HostSettings::default(), world.tick());
+        Self::hosting(game, host, world)
+    }
+
     fn open_in(game: ScriptGame, address: &str, world: World) -> Result<Self, SocketError> {
-        Ok(Self {
+        let host = UdpHost::bind(address, HostSettings::default())?;
+        Ok(Self::hosting(game, host, world))
+    }
+
+    fn hosting(game: ScriptGame, host: UdpHost, world: World) -> Self {
+        Self {
             game,
-            host: UdpHost::bind(address, HostSettings::default())?,
+            host,
             server: Server::new(world.step, ServerSettings::default()),
             world,
             names: [None; MAX_PLAYERS],
@@ -477,7 +509,7 @@ impl HostedGame {
             from_here: None,
             packet: Vec::new(),
             offered_map: Map::default(),
-        })
+        }
     }
 
     /// Hands `file` to every player who joins without it: the bytes of the
@@ -550,6 +582,7 @@ impl HostedGame {
     }
 
     /// The address and port players join through, if the system can say.
+    /// `None` for a server on no network ([`in_program`](Self::in_program)).
     #[must_use]
     pub fn address(&self) -> Option<SocketAddr> {
         self.host.local_addr().ok()
@@ -599,7 +632,12 @@ impl HostedGame {
                         Ok(id) => {
                             host.accept(request, id);
                             let name = format!("Player {}", u32::from(id) + 1);
-                            log::info!("{name} joined from {}.", request.address());
+                            if request.address().ip().is_unspecified() {
+                                // From this program: there is no address.
+                                log::info!("{name} joined.");
+                            } else {
+                                log::info!("{name} joined from {}.", request.address());
+                            }
                             if let Some(slot) = names.get_mut(usize::from(id)) {
                                 *slot = Some(game.host_mut().player_joined(&name));
                             }
@@ -1102,11 +1140,59 @@ impl JoinedGame {
         fetches: bool,
     ) -> Result<Self, JoinError> {
         let address = with_port(address);
-        Ok(Self {
-            link: match UdpLink::connect(&address, LinkSettings::default()) {
-                Ok(link) => link,
-                Err(error) => return Err(JoinError::Address { address, error }),
-            },
+        let link = match UdpLink::connect(&address, LinkSettings::default()) {
+            Ok(link) => link,
+            Err(error) => return Err(JoinError::Address { address, error }),
+        };
+        Ok(Self::on(link, address, actions, world, fetches))
+    }
+
+    /// Joins `hosted`, a server in this same program, without the
+    /// network: what either side sends is with the other at its next tick,
+    /// whole and in order, and no port is used. Any server can be joined
+    /// this way, one that is open to the network too
+    /// ([`HostedGame::open`]) or one that is not
+    /// ([`HostedGame::in_program`]).
+    ///
+    /// The player walks the level the server has and knows its map, and
+    /// is in the game when this comes back. `actions` is as for
+    /// [`connect`](Self::connect).
+    ///
+    /// # Errors
+    ///
+    /// When the server is full.
+    pub fn in_program(hosted: &mut HostedGame, actions: &ActionMap) -> Result<Self, JoinError> {
+        let world = hosted.world.clone();
+        let link = hosted
+            .host
+            .link_in_program(LinkSettings::default(), world.tick());
+        let address = "this program".to_owned();
+        let mut joined =
+            Self::on(link, address, actions, world, false).with_map(hosted.game.map().clone());
+        // Each side in turn until the server has answered. It always
+        // does: were it not to, the link would give up after its five
+        // seconds of ticks, which are counted here and not waited for.
+        loop {
+            joined.listen();
+            if let Some(error) = joined.closed() {
+                return Err(error);
+            }
+            if joined.link.id().is_some() {
+                return Ok(joined);
+            }
+            hosted.listen();
+        }
+    }
+
+    fn on(
+        link: UdpLink,
+        address: String,
+        actions: &ActionMap,
+        world: World,
+        fetches: bool,
+    ) -> Self {
+        Self {
+            link,
             client: Client::new(world.first(), world.step, ClientSettings::default()),
             world,
             controls: Controls::new(actions),
@@ -1121,7 +1207,7 @@ impl JoinedGame {
             arrivals: Arrivals::new(fetches),
             level: None,
             before: None,
-        })
+        }
     }
 
     /// Keeps levels fetched from servers in `folder` instead of the usual
@@ -1396,9 +1482,11 @@ impl Game for JoinedGame {
     }
 }
 
-/// A server and one player joined to it, in one program, talking over this
-/// machine's own network. [`start`](Self::start) is a game played alone;
-/// [`open`](Self::open) lets other players join it too.
+/// A server and one player joined to it, in one program. The two hand
+/// each other their packets directly, with no network in between, so the
+/// player's own game is never late or lost. [`start`](Self::start) is a
+/// game played alone, which opens no port; [`open`](Self::open) lets other
+/// players join it too.
 #[derive(Debug)]
 pub struct LocalGame {
     hosted: HostedGame,
@@ -1413,8 +1501,7 @@ impl LocalGame {
     ///
     /// # Errors
     ///
-    /// When this machine will not open a port for the game, or the game
-    /// cannot be joined through it; neither is expected.
+    /// When the game cannot be joined, which is not expected.
     pub fn start(
         game: ScriptGame,
         level: Option<&Scene>,
@@ -1422,7 +1509,7 @@ impl LocalGame {
         tick_rate: u32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let world = World::of(level, game.map(), tick_rate);
-        Self::join_own(HostedGame::open_in(game, "127.0.0.1:0", world)?, actions)
+        Self::join_own(HostedGame::in_program_in(game, world), actions)
     }
 
     /// Starts `game` for other players to join on the UDP port `port`, and
@@ -1466,7 +1553,7 @@ impl LocalGame {
         eye: [f32; 3],
         [yaw, pitch]: [f32; 2],
     ) -> Result<(Self, bool), Box<dyn std::error::Error>> {
-        let mut hosted = HostedGame::open_in(game, "127.0.0.1:0", world.clone())?;
+        let mut hosted = HostedGame::in_program_in(game, world.clone());
         let feet = world
             .feet_under(eye)
             .filter(|_| yaw.is_finite() && pitch.is_finite());
@@ -1484,17 +1571,13 @@ impl LocalGame {
         Ok((local, feet.is_some()))
     }
 
-    /// Joins `hosted` from this program, over this machine's own network,
-    /// walking the very level the server has.
+    /// Joins `hosted` from this program, walking the very level the
+    /// server has.
     fn join_own(
         mut hosted: HostedGame,
         actions: &ActionMap,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let port = hosted.host.local_addr()?.port();
-        let address = format!("127.0.0.1:{port}");
-        let mut joined = JoinedGame::connect_in(&address, actions, hosted.world.clone(), false)?
-            .with_map(hosted.game.map().clone());
-        joined.wait_until_joined(|| hosted.listen())?;
+        let joined = JoinedGame::in_program(&mut hosted, actions)?;
         Ok(Self { hosted, joined })
     }
 
@@ -1653,7 +1736,6 @@ mod tests {
         for _ in 0..300 {
             let before = game.joined.seen();
             game.tick(input.tick(), 1.0 / 60.0);
-            std::thread::sleep(Duration::from_millis(1));
             let after = game.joined.seen();
             assert_eq!(
                 game.joined.before.is_some(),
@@ -1708,7 +1790,6 @@ mod tests {
                 break;
             }
             game.tick(input.tick(), STEP);
-            std::thread::sleep(Duration::from_millis(1));
         }
         assert!(game.joined.playing(), "the player joins their own game");
         (game, input)
@@ -1801,7 +1882,6 @@ mod tests {
         let id = game.joined.id().unwrap();
         let mut fired = None;
         for _ in 0..300 {
-            std::thread::sleep(Duration::from_millis(1));
             game.tick(input.tick(), STEP);
             let asked = game.hosted.server.input(id).unwrap_or_default();
             if asked.fire {

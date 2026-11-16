@@ -6,10 +6,9 @@
 //! The player is moved as a game played alone moves them: predicted on
 //! their own side by the controls that [`JoinedGame`](super::JoinedGame)
 //! reads, and by the server from the commands that sends. The two sides
-//! are handed each other's packets directly here. [`LocalGame`] sends them
-//! through this computer's network, where the moment a packet arrives is
-//! not the game's to decide, so its state cannot be compared bit for bit
-//! until a game played alone opens no port (#47).
+//! are handed each other's packets directly here, as [`LocalGame`] has
+//! handed them over since it stopped using this computer's network
+//! (#254). Playing the recording through [`LocalGame`] itself is #47.
 
 use std::f32::consts::TAU;
 use std::time::Duration;

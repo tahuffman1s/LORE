@@ -64,6 +64,12 @@
 //! and a server given the same commands work out the same moves to the
 //! last digit. Only the two UDP types read the time, to tell who has gone
 //! silent.
+//!
+//! A game played alone has its server and its player in one program, and
+//! needs no network between them: [`UdpHost::in_program`] and
+//! [`UdpHost::link_in_program`] hand the same datagrams over directly,
+//! with no socket and no clock, so such a game goes the same way every
+//! time.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -73,6 +79,7 @@ mod connect;
 #[cfg(test)]
 mod connect_tests;
 mod find;
+mod inside;
 mod server;
 mod share;
 #[cfg(test)]

@@ -2,21 +2,30 @@
 //! cut them off, and not to mix. Footsteps and sound sets must not either.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use lore_audio::{
     Feet, FootstepSettings, Footsteps, Importance, Listener, Mixer, Play, Range, starter,
 };
 
-/// Counts every allocation made by the process.
+/// Counts the allocations each thread makes.
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// How many times this thread has asked for memory. Each thread has
+    /// its own count, because the test is not alone in its process: the
+    /// thread that started it prints and keeps time meanwhile, and what
+    /// that sets aside is not the code under test's.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 // SAFETY: every method forwards to `System` unchanged, so its contract is upheld.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        // A plain number with nothing to set up or tear down, so reading
+        // it asks for no memory itself. A thread that is ending no longer
+        // has one, and is not counted.
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
         unsafe { System.alloc(layout) }
     }
@@ -30,8 +39,19 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-// This file holds a single test on purpose: a second test running on another
-// thread would add its own allocations to the count.
+/// How many allocations this thread has made so far, having first made
+/// sure that they are being counted at all.
+fn counted() -> usize {
+    let before = ALLOCATIONS.get();
+    drop(std::hint::black_box(Box::new(0_u64)));
+    assert!(
+        ALLOCATIONS.get() > before,
+        "this thread's allocations are not being counted"
+    );
+    ALLOCATIONS.get()
+}
+
+// Only what this test's own thread sets aside is counted.
 #[test]
 fn playing_and_mixing_never_allocate() {
     let mut mixer = Mixer::with_voices(48_000, 8);
@@ -48,7 +68,7 @@ fn playing_and_mixing_never_allocate() {
         ..Feet::default()
     };
 
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = counted();
     let mut heard = 0.0_f32;
     for tick in 0..2_000_u32 {
         let turn = tick as f32 * 0.01;
@@ -73,7 +93,7 @@ fn playing_and_mixing_never_allocate() {
         mixer.mix(&mut buffer);
         heard = heard.max(buffer[0].abs());
     }
-    let allocations = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let allocations = ALLOCATIONS.get() - before;
 
     assert!(heard > 0.0, "the test should have mixed something");
     assert_eq!(allocations, 0);

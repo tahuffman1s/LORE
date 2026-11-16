@@ -11,7 +11,7 @@
 //! [`crate::UdpSearch`] puts it on a real one.
 
 use std::hash::{BuildHasher, RandomState};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::snapshot::MAX_PLAYERS;
 use crate::wire::{Reader, VERSION, Writer};
@@ -112,8 +112,12 @@ pub(crate) struct Search {
     /// somebody else's question, or made up by a stranger who cannot see
     /// the question, are not believed.
     salt: u64,
-    /// The servers heard from already.
+    /// The servers heard from already and given to the searcher.
     seen: Vec<u64>,
+    /// Servers on this machine heard only at an address others reach it
+    /// by, kept back for their answer from this machine's own address:
+    /// see [`receive`](Self::receive).
+    held: Vec<(u64, FoundServer)>,
 }
 
 impl Search {
@@ -121,6 +125,7 @@ impl Search {
         Self {
             salt: RandomState::new().hash_one(1_u8),
             seen: Vec::new(),
+            held: Vec::new(),
         }
     }
 
@@ -134,7 +139,20 @@ impl Search {
 
     /// Reads one datagram that came from `from`: a server not heard from
     /// before in this search, or nothing.
-    pub(crate) fn receive(&mut self, from: SocketAddr, datagram: &[u8]) -> Option<FoundServer> {
+    ///
+    /// A server on this machine answers twice, from `127.0.0.1` and from
+    /// the address the rest of the network knows the machine by, and
+    /// which answer comes first is up to the system. It is to be found at
+    /// `127.0.0.1`, the address that always works, so its other answer is
+    /// kept back: `is_here` says whether an address is one of this
+    /// machine's own. [`give_held`](Self::give_held) hands over those whose
+    /// answer from `127.0.0.1` never came.
+    pub(crate) fn receive(
+        &mut self,
+        from: SocketAddr,
+        datagram: &[u8],
+        is_here: impl FnOnce(IpAddr) -> bool,
+    ) -> Option<FoundServer> {
         if datagram.len() > QUERY_BYTES {
             return None;
         }
@@ -154,8 +172,7 @@ impl Search {
         if self.seen.contains(&id) || self.seen.len() >= MOST_FOUND {
             return None;
         }
-        self.seen.push(id);
-        Some(FoundServer {
+        let found = FoundServer {
             address: from,
             // A name is shown in a terminal: nothing in it may move the
             // cursor, ring the bell, hide, or turn the line's order round.
@@ -175,7 +192,30 @@ impl Search {
             players,
             places,
             same_version: version == VERSION,
-        })
+        };
+        if from.ip().is_loopback() {
+            self.held.retain(|(held, _)| *held != id);
+        } else if is_here(from.ip()) {
+            let known = self.held.iter().any(|(held, _)| *held == id);
+            if !known && self.held.len() < MOST_FOUND {
+                self.held.push((id, found));
+            }
+            return None;
+        }
+        self.seen.push(id);
+        Some(found)
+    }
+
+    /// A server on this machine that answered only from an address others
+    /// reach it by, at that address. Call it once every answer from
+    /// `127.0.0.1` has had time to come.
+    pub(crate) fn give_held(&mut self) -> Option<FoundServer> {
+        if self.held.is_empty() || self.seen.len() >= MOST_FOUND {
+            return None;
+        }
+        let (id, found) = self.held.remove(0);
+        self.seen.push(id);
+        Some(found)
     }
 }
 
@@ -185,6 +225,20 @@ mod tests {
 
     fn address(last: u8) -> SocketAddr {
         SocketAddr::from(([192, 168, 1, last], 24680))
+    }
+
+    /// No address is this machine's: every server is someone else's.
+    fn elsewhere(_: IpAddr) -> bool {
+        false
+    }
+
+    /// This machine is `192.168.1.20` to the others on its network.
+    fn at_20(address: IpAddr) -> bool {
+        address == IpAddr::from([192, 168, 1, 20])
+    }
+
+    fn loopback() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 24680))
     }
 
     fn asked(search: &Search) -> Vec<u8> {
@@ -208,7 +262,7 @@ mod tests {
         let reply = answered(&notice, &asked(&search), 3);
 
         assert_eq!(
-            search.receive(address(20), &reply),
+            search.receive(address(20), &reply, elsewhere),
             Some(FoundServer {
                 address: address(20),
                 name: "zombie-night".to_owned(),
@@ -242,11 +296,60 @@ mod tests {
         let mut search = Search::new();
         let reply = answered(&notice, &asked(&search), 0);
 
-        assert!(search.receive(address(20), &reply).is_some());
-        assert_eq!(search.receive(address(21), &reply), None);
+        assert!(search.receive(address(20), &reply, elsewhere).is_some());
+        assert_eq!(search.receive(address(21), &reply, elsewhere), None);
 
         let other = answered(&Notice::new(), &asked(&search), 0);
-        assert!(search.receive(address(22), &other).is_some());
+        assert!(search.receive(address(22), &other, elsewhere).is_some());
+    }
+
+    #[test]
+    fn a_server_on_this_machine_is_found_at_localhost_whichever_answer_comes_first() {
+        let mut notice = Notice::new();
+        notice.set_name("zombie-night");
+        let other = Notice::new();
+        for network_first in [false, true] {
+            let mut search = Search::new();
+            let query = asked(&search);
+            let reply = answered(&notice, &query, 0);
+
+            let mut found = Vec::new();
+            let order = if network_first {
+                [address(20), loopback()]
+            } else {
+                [loopback(), address(20)]
+            };
+            for from in order {
+                found.extend(search.receive(from, &reply, at_20));
+                // Somebody else's server is given the moment it is heard.
+                let theirs = answered(&other, &query, 0);
+                let heard = search.receive(address(21), &theirs, at_20);
+                assert_eq!(heard.is_some(), from == order[0]);
+            }
+            // Asked again, as a search does: nothing is given twice.
+            for from in order {
+                found.extend(search.receive(from, &reply, at_20));
+            }
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert_eq!(found[0].address, loopback());
+            assert_eq!(found[0].name, "zombie-night");
+            assert_eq!(search.give_held(), None);
+        }
+    }
+
+    #[test]
+    fn a_server_here_that_never_answers_at_localhost_is_given_where_it_was_heard() {
+        // As when it was opened on the network's address alone.
+        let mut search = Search::new();
+        let reply = answered(&Notice::new(), &asked(&search), 2);
+
+        assert_eq!(search.receive(address(20), &reply, at_20), None);
+        assert_eq!(search.receive(address(20), &reply, at_20), None);
+        let found = search.give_held().unwrap();
+        assert_eq!((found.address, found.players), (address(20), 2));
+        assert_eq!(search.give_held(), None);
+        // It has been given: its answer from localhost comes too late.
+        assert_eq!(search.receive(loopback(), &reply, at_20), None);
     }
 
     #[test]
@@ -254,7 +357,7 @@ mod tests {
         let notice = Notice::new();
         let reply = answered(&notice, &asked(&Search::new()), 0);
 
-        assert_eq!(Search::new().receive(address(20), &reply), None);
+        assert_eq!(Search::new().receive(address(20), &reply, elsewhere), None);
     }
 
     #[test]
@@ -267,7 +370,7 @@ mod tests {
         assert!(!reply.is_empty(), "another version's question is answered");
         reply[1] = VERSION + 1;
 
-        let found = search.receive(address(20), &reply).unwrap();
+        let found = search.receive(address(20), &reply, elsewhere).unwrap();
         assert!(!found.same_version);
     }
 
@@ -277,18 +380,21 @@ mod tests {
         let mut search = Search::new();
         assert!(answered(&notice, &[0; QUERY_BYTES], 0).is_empty());
         assert!(answered(&notice, &[], 0).is_empty());
-        assert_eq!(search.receive(address(20), &[]), None);
-        assert_eq!(search.receive(address(20), &[INFO; 200]), None);
+        assert_eq!(search.receive(address(20), &[], elsewhere), None);
+        assert_eq!(search.receive(address(20), &[INFO; 200], elsewhere), None);
 
         let mut reply = answered(&notice, &asked(&search), 0);
         // A name that claims more bytes than came is not read.
         let last = reply.len() - 1;
         reply[last] = 9;
-        assert_eq!(search.receive(address(20), &reply), None);
+        assert_eq!(search.receive(address(20), &reply, elsewhere), None);
 
         reply[last] = 6;
         reply.extend_from_slice("a\x1b\u{202E}b".as_bytes());
-        assert_eq!(search.receive(address(20), &reply).unwrap().name, "ab");
+        assert_eq!(
+            search.receive(address(20), &reply, elsewhere).unwrap().name,
+            "ab"
+        );
     }
 
     #[test]
@@ -298,7 +404,7 @@ mod tests {
         let found = (0..100)
             .filter(|_| {
                 let reply = answered(&Notice::new(), &query, 0);
-                search.receive(address(20), &reply).is_some()
+                search.receive(address(20), &reply, elsewhere).is_some()
             })
             .count();
         assert_eq!(found, MOST_FOUND);
