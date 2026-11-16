@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a version tag (v0.1.0) builds FOSSPS for Linux, Windows and macOS and
+# Pushing a version tag (v0.1.0) builds LORE for Linux, Windows and macOS and
 # publishes the three downloads as a GitHub release. How to cut one is in
 # docs/releasing.md.
 #
@@ -42,9 +42,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "fossps") | .version')
+            | jq -r '.packages[] | select(.name == "lore") | .version')
           if [ -z "$version" ]; then
-            echo "::error::Could not read the version of the fossps crate from Cargo.toml."
+            echo "::error::Could not read the version of the lore crate from Cargo.toml."
             exit 1
           fi
           publish=false
@@ -59,7 +59,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "FOSSPS $version; publish: $publish" >> "$GITHUB_STEP_SUMMARY"
+          echo "LORE $version; publish: $publish" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: plan
@@ -107,24 +107,24 @@ jobs:
           sudo apt-get install -y libudev-dev libasound2-dev
       - name: Build
         # Two builds, not one: built together, the server would be given the
-        # window, graphics and gamepad code that `fossps` asks for.
+        # window, graphics and gamepad code that `lore` asks for.
         run: |
-          cargo build --release --locked -p fossps
-          cargo build --release --locked -p fossps-server
+          cargo build --release --locked -p lore
+          cargo build --release --locked -p lore-server
       - name: Make the archive
         run: |
-          folder="fossps-$VERSION-$SYSTEM"
+          folder="lore-$VERSION-$SYSTEM"
           mkdir -p "dist/$folder/licenses"
-          cp "target/release/fossps$EXE" "target/release/fossps-server$EXE" "dist/$folder/"
+          cp "target/release/lore$EXE" "target/release/lore-server$EXE" "dist/$folder/"
           sed "s/@VERSION@/$VERSION/g" .github/release/README.txt > "dist/$folder/README.txt"
           cp LICENSE-MIT LICENSE-APACHE "dist/$folder/"
-          cp crates/fossps-fsr/vendor/FidelityFX-SDK/LICENSE.txt "dist/$folder/licenses/FidelityFX-SDK.txt"
-          cp crates/fossps-render/fonts/OFL.txt "dist/$folder/licenses/AtkinsonHyperlegibleNext-OFL.txt"
+          cp crates/lore-fsr/vendor/FidelityFX-SDK/LICENSE.txt "dist/$folder/licenses/FidelityFX-SDK.txt"
+          cp crates/lore-render/fonts/OFL.txt "dist/$folder/licenses/AtkinsonHyperlegibleNext-OFL.txt"
           cd dist
           if [ "$ARCHIVE" = zip ]; then
-            7z a -tzip "fossps-$SYSTEM.zip" "$folder"
+            7z a -tzip "lore-$SYSTEM.zip" "$folder"
           else
-            tar -czf "fossps-$SYSTEM.tar.gz" "$folder"
+            tar -czf "lore-$SYSTEM.tar.gz" "$folder"
           fi
       - name: Try the archive
         # Unpacks what a person would download and uses it the way they would.
@@ -132,35 +132,35 @@ jobs:
           mkdir try
           cd try
           if [ "$ARCHIVE" = zip ]; then
-            7z x "../dist/fossps-$SYSTEM.zip"
+            7z x "../dist/lore-$SYSTEM.zip"
           else
-            tar -xzf "../dist/fossps-$SYSTEM.tar.gz"
+            tar -xzf "../dist/lore-$SYSTEM.tar.gz"
           fi
-          bin="$PWD/fossps-$VERSION-$SYSTEM"
+          bin="$PWD/lore-$VERSION-$SYSTEM"
           ls -l "$bin" "$bin/licenses"
           test -s "$bin/README.txt"
-          for program in fossps fossps-server; do
+          for program in lore lore-server; do
             said=$("$bin/$program$EXE" --version)
             if [ "$said" != "$program $VERSION" ]; then
               echo "::error::$program --version said '$said', not '$program $VERSION'."
               exit 1
             fi
           done
-          "$bin/fossps$EXE" new try-game
-          "$bin/fossps$EXE" check try-game
+          "$bin/lore$EXE" new try-game
+          "$bin/lore$EXE" check try-game
           if [ "$RUNNER_OS" = Linux ]; then
-            (cd try-game && "$bin/fossps" package)
+            (cd try-game && "$bin/lore" package)
             ls -l try-game/dist/try-game-linux-x86_64.tar.gz
             # A dedicated server has no use for sound or gamepads.
-            if ldd "$bin/fossps-server" | grep -E 'libasound|libudev|libvulkan|libwayland|libX11'; then
-              echo "::error::fossps-server links a library only a game with a window needs (listed above)."
+            if ldd "$bin/lore-server" | grep -E 'libasound|libudev|libvulkan|libwayland|libX11'; then
+              echo "::error::lore-server links a library only a game with a window needs (listed above)."
               exit 1
             fi
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: fossps-${{ matrix.system }}
-          path: dist/fossps-${{ matrix.system }}.${{ matrix.archive }}
+          name: lore-${{ matrix.system }}
+          path: dist/lore-${{ matrix.system }}.${{ matrix.archive }}
           if-no-files-found: error
 
   # Gathers the three archives and writes their checksums. Runs every time.
@@ -171,18 +171,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: fossps-*
+          pattern: lore-*
           merge-multiple: true
       - name: Write checksums
         run: |
           cd dist
-          for file in fossps-linux-x86_64.tar.gz fossps-windows-x86_64.zip fossps-macos-arm64.tar.gz; do
+          for file in lore-linux-x86_64.tar.gz lore-windows-x86_64.zip lore-macos-arm64.tar.gz; do
             if [ ! -s "$file" ]; then
               echo "::error::$file was not built, so there is nothing to release."
               exit 1
             fi
           done
-          sha256sum fossps-* > SHA256SUMS
+          sha256sum lore-* > SHA256SUMS
           sha256sum --check SHA256SUMS
           {
             echo '```'
@@ -229,7 +229,7 @@ jobs:
             prerelease=()
             case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
             gh release create "$TAG" dist/* --draft --verify-tag \
-              --title "FOSSPS $VERSION" --generate-notes "${prerelease[@]}"
+              --title "LORE $VERSION" --generate-notes "${prerelease[@]}"
           fi
           gh release edit "$TAG" --draft=false
           gh release view "$TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

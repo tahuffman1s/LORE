@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FOSSPS — FOSS Person Shooter</title>
-<meta name="description" content="FOSSPS (FOSS Person Shooter) is a free, open-source engine for multiplayer first-person shooters. Rust core, Luau scripting, Vulkan 1.3.">
-<meta property="og:title" content="FOSSPS — FOSS Person Shooter">
-<meta property="og:description" content="A free, open-source engine for multiplayer first-person shooters.">
+<title>LORE — Lovely Open Rust Engine</title>
+<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source engine for 3D games you walk through, in first or third person, built single-player first. Rust core, Luau scripting, Vulkan 1.3.">
+<meta property="og:title" content="LORE — Lovely Open Rust Engine">
+<meta property="og:description" content="A free, open-source engine for first- and third-person 3D games, single-player first.">
 <meta name="color-scheme" content="dark light">
 <style>
   :root {
     --bg: #0d0f12; --panel: #15181d; --line: #262b33;
-    --text: #e8eaed; --muted: #9aa3ae; --accent: #ff7a1a; --accent-ink: #14100b;
+    --text: #e8eaed; --muted: #9aa3ae; --accent: #ff6f91; --accent-ink: #1c0a10;
     --code-bg: #0a0c0f; --kw: #ff9d57; --str: #9bd68a; --com: #6b7480; --num: #7cc4ff;
   }
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f7f6f3; --panel: #ffffff; --line: #dedbd4;
-      --text: #17191c; --muted: #5b6370; --accent: #d9540a; --accent-ink: #ffffff;
+      --text: #17191c; --muted: #5b6370; --accent: #c2255c; --accent-ink: #ffffff;
       --code-bg: #14171b; --kw: #ff9d57; --str: #9bd68a; --com: #7d8793; --num: #7cc4ff;
     }
   }
@@ -41,18 +41,22 @@
   nav ul a:hover { color: var(--text); }
 
   .hero { padding: 84px 0 72px; position: relative; overflow: hidden; }
-  .hero::before {
-    content: ""; position: absolute; right: -80px; top: 50%; width: 420px; height: 420px;
-    transform: translateY(-50%); border: 1px solid var(--line); border-radius: 50%;
-    background:
-      linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat,
-      linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat;
-    opacity: .7; pointer-events: none;
+  /* The mark: a player (the dot) and a camera that can sit in their eyes or circle behind them. */
+  .orbit {
+    position: absolute; right: -80px; top: 50%; width: 420px; height: 420px; margin-top: -210px;
+    border: 1px solid var(--line); border-radius: 50%; opacity: .9; pointer-events: none;
+    animation: orbit 48s linear infinite;
   }
-  .hero::after {
-    content: ""; position: absolute; right: 124px; top: 50%; width: 12px; height: 12px;
-    transform: translateY(-50%); border-radius: 50%; background: var(--accent); pointer-events: none;
+  .orbit::before {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+    border-radius: 50%; background: var(--accent);
   }
+  .orbit i {
+    position: absolute; left: 50%; top: -8px; width: 16px; height: 16px; margin-left: -8px;
+    border-radius: 50%; border: 2px solid var(--accent); background: var(--bg);
+  }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .orbit { animation: none; transform: rotate(40deg); } }
   .hero > .wrap { position: relative; z-index: 1; }
   .status {
     display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; margin-bottom: 26px;
@@ -64,6 +68,10 @@
   h1 em { font-style: normal; color: var(--accent); }
   .expand { font-size: 15px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted); margin: 0 0 26px; }
   .lead { font-size: clamp(19px, 2.6vw, 23px); max-width: 620px; margin: 0 0 34px; text-wrap: balance; }
+  .views { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: -14px 0 30px; font-size: 13.5px; color: var(--muted); }
+  .views span { display: inline-flex; align-items: center; gap: 8px; }
+  .views b { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .views b.ring { background: none; border: 2px solid var(--accent); }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .btn {
     display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 650;
@@ -82,12 +90,18 @@
   .card .n { color: var(--accent); font-size: 13px; margin-bottom: 10px; display: block; }
 
   .split { display: grid; gap: 32px; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; }
-  @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } .hero::before, .hero::after { display: none; } nav ul li.hide { display: none; } }
+  @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } .orbit { display: none; } nav ul li.hide { display: none; } pre { font-size: 12px; padding: 14px; } }
   pre {
     margin: 0; padding: 20px; border-radius: 12px; background: var(--code-bg); color: #dfe3e8;
     border: 1px solid var(--line); overflow-x: auto; font-size: 14.5px; line-height: 1.65;
   }
   .kw { color: var(--kw); } .str { color: var(--str); } .com { color: var(--com); } .num { color: var(--num); }
+  .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-bottom: 10px; }
+  .tag.now { border-color: var(--accent); color: var(--accent); }
+  .tag a { text-decoration: none; }
+  pre .now { color: var(--str); } pre .later { color: var(--com); }
+  h3.over { margin: 0 0 10px; font-size: 16px; }
+  .two { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; margin-top: 8px; }
   .note { font-size: 13.5px; color: var(--muted); margin-top: 10px; }
   ul.checks { list-style: none; padding: 0; margin: 0; }
   ul.checks li { padding: 9px 0 9px 26px; position: relative; border-bottom: 1px solid var(--line); }
@@ -107,85 +121,137 @@
 
 <header>
   <nav class="wrap" aria-label="Main">
-    <a class="brand mono" href="#top">FOSS<span>PS</span></a>
+    <a class="brand mono" href="#top">LO<span>RE</span></a>
     <ul>
-      <li class="hide"><a href="#why">Why</a></li>
+      <li class="hide"><a href="#idea">The idea</a></li>
       <li class="hide"><a href="#scripting">Scripting</a></li>
       <li><a href="docs/index.html">Docs</a></li>
       <li><a href="#roadmap">Roadmap</a></li>
-      <li><a href="https://github.com/tahuffman1s/FOSSPS">GitHub</a></li>
+      <li><a href="https://github.com/tahuffman1s/LORE">GitHub</a></li>
     </ul>
   </nav>
 </header>
 
 <main id="top">
   <div class="hero">
+    <div class="orbit" aria-hidden="true"><i></i></div>
     <div class="wrap">
-      <div class="status"><i></i>Early development — you can walk around together, not shoot yet</div>
-      <h1>FOSS<em>PS</em></h1>
-      <p class="expand mono">FOSS Person Shooter</p>
-      <p class="lead">A free, open-source engine built for one thing: multiplayer first-person shooters that are fast to play and easy to make.</p>
+      <div class="status"><i></i>Early development — today you can walk a level in first person. Third person, NPCs and saving are planned.</div>
+      <h1>LO<em>RE</em></h1>
+      <p class="expand mono">Lovely Open Rust Engine</p>
+      <p class="lead">A free, open-source engine for 3D games you walk through, in first or third person. Easy to make, fast to play, and built single-player first.</p>
+      <p class="views mono"><span><b></b>the player: first person</span><span><b class="ring"></b>the camera behind them: third person</span></p>
       <div class="cta">
-        <a class="btn primary" href="docs/first-match.html">Make your first match</a>
-        <a class="btn" href="https://github.com/tahuffman1s/FOSSPS">View on GitHub</a>
+        <a class="btn primary" href="docs/first-match.html">Try the ten-minute tutorial</a>
+        <a class="btn" href="https://github.com/tahuffman1s/LORE">View on GitHub</a>
         <a class="btn" href="#roadmap">See the roadmap</a>
       </div>
     </div>
   </div>
+
+  <section id="idea">
+    <div class="wrap split">
+      <div>
+        <h2>A game is a folder you can read</h2>
+        <p class="sub">Everything a game is made of is a text file beside its level. Save one and the running game changes. Two people can change the same game and their work merges. And <span class="mono">lore check</span> reads all of it without opening a window, and says what to fix.</p>
+        <ul class="checks">
+          <li>No project file, no import step, no node graphs</li>
+          <li>Levels come from Blender and are never rewritten by the engine</li>
+          <li>Your own editor stays first-class, with autocomplete</li>
+        </ul>
+      </div>
+      <div>
+<pre class="mono">my-game/
+ main.luau the rules        <span class="now">works today</span>
+ level.glb the place        <span class="now">works today</span>
+ map.toml  what is where    <span class="now">works today</span>
+ people    who lives there  <span class="later">planned</span>
+ talk      what they say    <span class="later">planned</span>
+ quests    what to do       <span class="later">planned</span></pre>
+        <p class="note">The planned names are a sketch and will change as each piece is designed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="different">
+    <div class="wrap">
+      <h2>Where it is going</h2>
+      <p class="sub">LORE starts from <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>, an engine for multiplayer shooters, and turns it toward worlds with people and stories in them. These four ideas are the plan. None of them is built yet; each links to the work.</p>
+      <div class="grid">
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/31">Planned · #31, #32</a></span><h3>One world, either view</h3><p>First and third person are the same game with a different camera. Choosing is one line in a script, and one button for the player if the game allows it.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/57">Planned · #57, #58</a></span><h3>People who explain themselves</h3><p>What an NPC does is a short list of "when this, do that". Ask any NPC why, and it answers in one sentence.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/73">Planned · #73, #70</a></span><h3>Save anywhere, for free</h3><p>The whole world is one snapshot, so a save needs nothing listed by the game. The same trick lets <span class="mono">lore check</span> live a day in seconds and say which NPC got stuck.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/76">Planned · #76, #77</a></span><h3>A story has one home</h3><p>What has happened is kept in one book of facts, <span class="mono">game.lore</span>. Quests, conversations written like a screenplay, and NPCs all read it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="scripting">
+    <div class="wrap">
+      <h2>Scripting that reads like the game</h2>
+      <p class="sub">Games are written in Luau, a small typed scripting language. The goal is that someone who has played games can read a script and guess what it does.</p>
+      <div class="two">
+        <div>
+          <h3 class="over"><span class="tag now">Runs today</span></h3>
+<pre class="mono"><span class="com">-- main.luau</span>
+game.onStart(<span class="kw">function</span>()
+  print(<span class="str">"Hello from Luau!"</span>)
+<span class="kw">end</span>)
+
+game.onTick(<span class="kw">function</span>(step)
+  <span class="kw">if</span> game.input.justPressed(<span class="str">"jump"</span>) <span class="kw">then</span>
+    game.input.rumble(<span class="num">0.2</span>, <span class="num">0.6</span>, <span class="num">0.1</span>)
+    print(<span class="str">"Jump!"</span>)
+  <span class="kw">end</span>
+<span class="kw">end</span>)</pre>
+          <p class="note">Save the file and the running game updates. <span class="mono">"jump"</span> is an action, so the same line works on a keyboard and a gamepad. A game also draws its own level, plays sounds, runs team game modes and can be joined over the local network: <a href="docs/index.html#today">what works today</a>.</p>
+        </div>
+        <div>
+          <h3 class="over"><span class="tag">A sketch — does not run yet</span></h3>
+<pre class="mono">game.view = <span class="str">"third"</span>
+
+<span class="kw">local</span> guard = game.npc {
+  name = <span class="str">"Guard"</span>, at = <span class="str">"Gate"</span>,
+}
+
+guard:does {
+  { when = <span class="str">"sees an enemy"</span>, doing = <span class="str">"attack"</span> },
+  { when = <span class="str">"heard something"</span>,
+    doing = <span class="str">"investigate"</span> },
+  { otherwise = <span class="str">"patrol"</span>, along = <span class="str">"Gate walk"</span> },
+}
+
+print(guard:why())
+<span class="com">-- Guard is investigating a sound he heard
+-- 4 seconds ago at the well.</span></pre>
+          <p class="note">This is where the script API is heading. Every name here will be researched and may change before it is built.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section id="why">
     <div class="wrap">
       <h2>What it is aiming for</h2>
       <p class="sub">Four goals, in priority order. When they conflict, the earlier one wins.</p>
       <div class="grid">
-        <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>From install to a playable networked match in minutes, with error messages that tell you what to do next.</p></div>
-        <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, stable frame rates and low input latency on mid-range hardware. Dedicated servers that are cheap to run.</p></div>
-        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>Only multiplayer shooters. No general-purpose engine features to learn around.</p></div>
+        <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>From install to a game you can walk around in minutes, with error messages that tell you what to do next. This is the "lovely".</p></div>
+        <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, stable frame rates and low input latency on mid-range hardware.</p></div>
+        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>3D worlds you walk through in first or third person: adventures, action games, shooters, stories. No 2D, VR or visual scripting to learn around.</p></div>
         <div class="card"><span class="n mono">04</span><h3>Modern</h3><p>Vulkan 1.3 rendering, FSR 3.1 upscaling and first-class controller support.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="scripting">
-    <div class="wrap split">
-      <div>
-        <h2>Scripting that reads like the game</h2>
-        <p class="sub">Game modes, weapons and rules are written in Luau, a small typed scripting language. The goal is that someone who has played shooters can read a script and guess what it does.</p>
-        <ul class="checks">
-          <li>Save the file and the running game updates</li>
-          <li>Autocomplete and type checking in your editor</li>
-          <li>Sandboxed, so community servers and mods are safe to run</li>
-          <li>The server decides what happens; clients can't cheat by editing scripts</li>
-        </ul>
-      </div>
-      <div>
-<pre class="mono"><span class="com">-- main.luau: a whole team deathmatch</span>
-game.mode {
-  teams = { <span class="str">"Red"</span>, <span class="str">"Blue"</span> },
-  scoreToWin = <span class="num">50</span>,
-  respawnDelay = <span class="num">3</span>,
-}
-
-<span class="com">-- A rule of your own: team kills cost a point</span>
-game.onKill(<span class="kw">function</span>(killer, victim)
-  <span class="kw">if</span> killer <span class="kw">and</span> killer.team == victim.team <span class="kw">then</span>
-    killer.team:addScore(<span class="num">-1</span>)
-  <span class="kw">end</span>
-<span class="kw">end</span>)</pre>
-        <p class="note">This script runs today: the engine keeps the teams, the score, the respawns and the rounds, and tests play it to a win. A game draws its own level from a <span class="mono">level.glb</span> in its folder. Players walk a game's level, with solid walls and spawn points, and can join a server over the network (<span class="mono">fossps serve</span>, then <span class="mono">fossps join</span> on any computer on the same network finds it with no address), and joining puts them on a team. A player who joins needs no copy of the game: the server sends them its level. Kills do not reach this script from a running match yet: weapons there, other players on screen and a scoreboard on screen are still being built. <a href="docs/first-match.html">The tutorial</a> takes ten minutes and shows all of it.</p>
       </div>
     </div>
   </section>
 
   <section id="tech">
     <div class="wrap">
-      <h2>Planned, not promised</h2>
-      <p class="sub">What the engine is being built toward. None of this ships today.</p>
+      <h2>Under it</h2>
+      <p class="sub">What the engine is made of. There are no downloads yet: it is built from source.</p>
       <div class="grid">
-        <div class="card"><h3>Rust core</h3><p>Memory-safe engine and server code, built with one command.</p></div>
-        <div class="card"><h3>Server-authoritative netcode</h3><p>Client prediction, lag compensation and a headless dedicated server.</p></div>
+        <div class="card"><h3>Rust core</h3><p>Memory-safe engine code, built with one command.</p></div>
+        <div class="card"><h3>Alone first, together later</h3><p>A game played alone runs on the same server code as a game played together, inside the program. Co-op is planned as a switch, not a rewrite.</p></div>
         <div class="card"><h3>Controller parity</h3><p>Every action bindable on a gamepad. Nothing keyboard-only.</p></div>
-        <div class="card"><h3>Linux, Windows, macOS</h3><p>Linux and Windows builds, with macOS as a stretch goal.</p></div>
+        <div class="card"><h3>Linux, Windows, macOS</h3><p>The engine runs on Linux and Windows. Packaging a game works on Linux today; Windows is planned and macOS is a stretch goal.</p></div>
       </div>
     </div>
   </section>
@@ -193,14 +259,17 @@ game.onKill(<span class="kw">function</span>(killer, victim)
   <section id="roadmap">
     <div class="wrap">
       <h2>Roadmap</h2>
-      <p class="sub">Work is tracked in the open as <a href="https://github.com/tahuffman1s/FOSSPS/milestones">GitHub milestones</a>.</p>
+      <p class="sub">Work is tracked in the open as <a href="https://github.com/tahuffman1s/LORE/milestones">GitHub milestones</a>, and built in issue order.</p>
       <ol class="road">
-        <li><b class="mono">M0</b><div><strong>Foundations</strong><span>Window, input, a Vulkan triangle, a running Luau script and a one-command template game.</span></div></li>
-        <li><b class="mono">M1</b><div><strong>Playable offline</strong><span>Levels, movement, weapons, HUD and audio.</span></div></li>
-        <li><b class="mono">M2</b><div><strong>Multiplayer</strong><span>Dedicated servers, prediction, lag compensation and a sample team deathmatch.</span></div></li>
-        <li><b class="mono">M3</b><div><strong>Modern graphics</strong><span>Lighting, shadows, anti-aliasing, FSR 3.1 and performance budgets.</span></div></li>
-        <li><b class="mono">M4</b><div><strong>Ship</strong><span>Packaged builds for each platform, releases and <a href="docs/first-match.html">a ten-minute tutorial</a>.</span></div></li>
-        <li><b class="mono">M5</b><div><strong>Editor</strong><span>A map editor for shooters only: fly around a level, place spawns and zones, block out geometry, press play.</span></div></li>
+        <li><b class="mono">M0</b><div><strong>Foundations</strong><span>Window, input, Vulkan, a running Luau script and a one-command template game. Mostly built.</span></div></li>
+        <li><b class="mono">M1</b><div><strong>Walk the world</strong><span>One player, offline, in first or third person: move, use things, fight, hear and pause.</span></div></li>
+        <li><b class="mono">M2</b><div><strong>People and creatures</strong><span>NPCs that find their way, see and hear, follow rules you can read, and say why.</span></div></li>
+        <li><b class="mono">M3</b><div><strong>Stories</strong><span>Saving, <span class="mono">game.lore</span>, conversations, quests, items, scenes and more than one level.</span></div></li>
+        <li><b class="mono">M4</b><div><strong>Modern graphics</strong><span>Lighting, shadows, anti-aliasing, effects and performance budgets.</span></div></li>
+        <li><b class="mono">M5</b><div><strong>Ship</strong><span>Packaged builds for each platform, and releases of the engine.</span></div></li>
+        <li><b class="mono">M6</b><div><strong>Editor</strong><span>Fly around a level, place things and people, block out geometry, press play.</span></div></li>
+        <li><b class="mono">M7</b><div><strong>Tools</strong><span>A debugger, replays, and jumping to any point in a story.</span></div></li>
+        <li><b class="mono">M8</b><div><strong>Play together</strong><span>Co-op and competitive multiplayer, on the netcode single-player already runs on.</span></div></li>
       </ol>
     </div>
   </section>
@@ -208,8 +277,8 @@ game.onKill(<span class="kw">function</span>(killer, victim)
 
 <footer>
   <div class="wrap">
-    FOSSPS is free software under your choice of the <a href="https://github.com/tahuffman1s/FOSSPS/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/FOSSPS/blob/main/LICENSE-APACHE">Apache 2.0</a> license.
-    Follow or contribute on <a href="https://github.com/tahuffman1s/FOSSPS">GitHub</a>; ideas and bug reports go in <a href="https://github.com/tahuffman1s/FOSSPS/issues">issues</a>.
+    LORE is free software under your choice of the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license, and a fork of <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>.
+    Follow or contribute on <a href="https://github.com/tahuffman1s/LORE">GitHub</a>; ideas and bug reports go in <a href="https://github.com/tahuffman1s/LORE/issues">issues</a>.
   </div>
 </footer>
 

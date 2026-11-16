@@ -935,143 +935,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
-name = "fossps"
-version = "0.0.0"
-dependencies = [
- "clap",
- "ctrlc",
- "egui",
- "egui-winit",
- "flate2",
- "fossps-assets",
- "fossps-audio",
- "fossps-input",
- "fossps-mode",
- "fossps-net",
- "fossps-pack",
- "fossps-physics",
- "fossps-render",
- "fossps-script",
- "fossps-ui",
- "gilrs",
- "log",
- "tar",
- "toml",
- "winit",
-]
-
-[[package]]
-name = "fossps-assets"
-version = "0.0.0"
-dependencies = [
- "base64",
- "bevy_mikktspace",
- "gltf",
- "image",
- "log",
-]
-
-[[package]]
-name = "fossps-audio"
-version = "0.0.0"
-dependencies = [
- "cpal",
- "hound",
- "log",
- "rtrb",
-]
-
-[[package]]
-name = "fossps-fsr"
-version = "0.0.0"
-dependencies = [
- "ash",
- "cc",
- "glslang",
-]
-
-[[package]]
-name = "fossps-input"
-version = "0.0.0"
-dependencies = [
- "toml",
-]
-
-[[package]]
-name = "fossps-mode"
-version = "0.0.0"
-
-[[package]]
-name = "fossps-net"
-version = "0.0.0"
-dependencies = [
- "fossps-physics",
- "fossps-weapons",
- "libm",
- "sha2",
-]
-
-[[package]]
-name = "fossps-pack"
-version = "0.0.0"
-
-[[package]]
-name = "fossps-physics"
-version = "0.0.0"
-dependencies = [
- "fossps-assets",
- "libm",
- "parry3d",
-]
-
-[[package]]
-name = "fossps-render"
-version = "0.0.0"
-dependencies = [
- "ash",
- "ash-window",
- "egui",
- "egui-ash-renderer",
- "fontdue",
- "fossps-assets",
- "fossps-fsr",
- "fossps-ui",
- "log",
- "naga",
- "raw-window-handle",
-]
-
-[[package]]
-name = "fossps-script"
-version = "0.0.0"
-dependencies = [
- "fossps-input",
- "fossps-mode",
- "log",
- "mlua",
-]
-
-[[package]]
-name = "fossps-server"
-version = "0.0.0"
-dependencies = [
- "clap",
- "fossps",
-]
-
-[[package]]
-name = "fossps-ui"
-version = "0.0.0"
-
-[[package]]
-name = "fossps-weapons"
-version = "0.0.0"
-dependencies = [
- "fossps-physics",
- "libm",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1611,6 +1474,143 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "lore"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "ctrlc",
+ "egui",
+ "egui-winit",
+ "flate2",
+ "gilrs",
+ "log",
+ "lore-assets",
+ "lore-audio",
+ "lore-input",
+ "lore-mode",
+ "lore-net",
+ "lore-pack",
+ "lore-physics",
+ "lore-render",
+ "lore-script",
+ "lore-ui",
+ "tar",
+ "toml",
+ "winit",
+]
+
+[[package]]
+name = "lore-assets"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "bevy_mikktspace",
+ "gltf",
+ "image",
+ "log",
+]
+
+[[package]]
+name = "lore-audio"
+version = "0.0.0"
+dependencies = [
+ "cpal",
+ "hound",
+ "log",
+ "rtrb",
+]
+
+[[package]]
+name = "lore-fsr"
+version = "0.0.0"
+dependencies = [
+ "ash",
+ "cc",
+ "glslang",
+]
+
+[[package]]
+name = "lore-input"
+version = "0.0.0"
+dependencies = [
+ "toml",
+]
+
+[[package]]
+name = "lore-mode"
+version = "0.0.0"
+
+[[package]]
+name = "lore-net"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-physics",
+ "lore-weapons",
+ "sha2",
+]
+
+[[package]]
+name = "lore-pack"
+version = "0.0.0"
+
+[[package]]
+name = "lore-physics"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-assets",
+ "parry3d",
+]
+
+[[package]]
+name = "lore-render"
+version = "0.0.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "egui",
+ "egui-ash-renderer",
+ "fontdue",
+ "log",
+ "lore-assets",
+ "lore-fsr",
+ "lore-ui",
+ "naga",
+ "raw-window-handle",
+]
+
+[[package]]
+name = "lore-script"
+version = "0.0.0"
+dependencies = [
+ "log",
+ "lore-input",
+ "lore-mode",
+ "mlua",
+]
+
+[[package]]
+name = "lore-server"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "lore",
+]
+
+[[package]]
+name = "lore-ui"
+version = "0.0.0"
+
+[[package]]
+name = "lore-weapons"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-physics",
+]
 
 [[package]]
 name = "luau0-src"

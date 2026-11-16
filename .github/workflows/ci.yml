@@ -30,23 +30,23 @@ jobs:
         # mesa-vulkan-drivers brings lavapipe, a software Vulkan, so the
         # renderer's drawing test runs for real instead of being skipped.
         # vulkan-validationlayers checks every Vulkan call those tests make;
-        # FOSSPS_REQUIRE_VALIDATION fails them if the layer did not load.
+        # LORE_REQUIRE_VALIDATION fails them if the layer did not load.
         run: |
           sudo apt-get update
           sudo apt-get install -y libudev-dev libasound2-dev libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
-          echo "FOSSPS_REQUIRE_VULKAN=1" >> "$GITHUB_ENV"
-          echo "FOSSPS_REQUIRE_VALIDATION=1" >> "$GITHUB_ENV"
+          echo "LORE_REQUIRE_VULKAN=1" >> "$GITHUB_ENV"
+          echo "LORE_REQUIRE_VALIDATION=1" >> "$GITHUB_ENV"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       # A dedicated server reads levels without the image decoders.
-      - run: cargo test -p fossps-assets --no-default-features
+      - run: cargo test -p lore-assets --no-default-features
       # Sound mixes into a buffer without linking a sound library.
-      - run: cargo test -p fossps-audio --no-default-features --lib --tests
+      - run: cargo test -p lore-audio --no-default-features --lib --tests
       # The dedicated server builds on its own, without the window feature.
-      - run: cargo build -p fossps-server
-      # The `fossps` command still builds with the editor left out.
-      - run: cargo check -p fossps --no-default-features --features window,cli
+      - run: cargo build -p lore-server
+      # The `lore` command still builds with the editor left out.
+      - run: cargo check -p lore --no-default-features --features window,cli
 
   # Draws the benchmark scene and fails if its frames have become much slower.
   bench:
@@ -62,13 +62,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libudev-dev libasound2-dev libvulkan1 mesa-vulkan-drivers
-      - run: cargo build --release -p fossps
+      - run: cargo build --release -p lore
       # The budget is for a slow frame (99 of 100 are faster) on lavapipe on
       # this kind of machine, with room for a busy one; see docs/decisions.md.
       - name: Benchmark
         run: |
           set -o pipefail
-          ./target/release/fossps bench --budget-ms 300 --json bench.json | tee bench.txt
+          ./target/release/lore bench --budget-ms 300 --json bench.json | tee bench.txt
       - name: Show the numbers
         if: always()
         run: |

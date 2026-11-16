@@ -14,4 +14,4 @@ body:
   - type: input
     attributes:
       label: System
-      description: OS, GPU and driver version, FOSSPS version or commit.
+      description: OS, GPU and driver version, LORE version or commit.
