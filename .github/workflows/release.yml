@@ -106,16 +106,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libasound2-dev
       - name: Build
-        # Two builds, not one: built together, the server would be given the
-        # window, graphics and gamepad code that `lore` asks for.
-        run: |
-          cargo build --release --locked -p lore
-          cargo build --release --locked -p lore-server
+        run: cargo build --release --locked -p lore
       - name: Make the archive
         run: |
           folder="lore-$VERSION-$SYSTEM"
           mkdir -p "dist/$folder/licenses"
-          cp "target/release/lore$EXE" "target/release/lore-server$EXE" "dist/$folder/"
+          cp "target/release/lore$EXE" "dist/$folder/"
           sed "s/@VERSION@/$VERSION/g" .github/release/README.txt > "dist/$folder/README.txt"
           cp LICENSE-MIT LICENSE-APACHE "dist/$folder/"
           cp crates/lore-fsr/vendor/FidelityFX-SDK/LICENSE.txt "dist/$folder/licenses/FidelityFX-SDK.txt"
@@ -139,23 +135,16 @@ jobs:
           bin="$PWD/lore-$VERSION-$SYSTEM"
           ls -l "$bin" "$bin/licenses"
           test -s "$bin/README.txt"
-          for program in lore lore-server; do
-            said=$("$bin/$program$EXE" --version)
-            if [ "$said" != "$program $VERSION" ]; then
-              echo "::error::$program --version said '$said', not '$program $VERSION'."
-              exit 1
-            fi
-          done
+          said=$("$bin/lore$EXE" --version)
+          if [ "$said" != "lore $VERSION" ]; then
+            echo "::error::lore --version said '$said', not 'lore $VERSION'."
+            exit 1
+          fi
           "$bin/lore$EXE" new try-game
           "$bin/lore$EXE" check try-game
           if [ "$RUNNER_OS" = Linux ]; then
             (cd try-game && "$bin/lore" package)
             ls -l try-game/dist/try-game-linux-x86_64.tar.gz
-            # A dedicated server has no use for sound or gamepads.
-            if ldd "$bin/lore-server" | grep -E 'libasound|libudev|libvulkan|libwayland|libX11'; then
-              echo "::error::lore-server links a library only a game with a window needs (listed above)."
-              exit 1
-            fi
           fi
       - uses: actions/upload-artifact@v4
         with:

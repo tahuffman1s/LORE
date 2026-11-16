@@ -1,6 +1,6 @@
 # Releasing LORE
 
-A release is made by pushing a version tag. `.github/workflows/release.yml` does the rest: it builds `lore` and `lore-server` for Linux, Windows and macOS, tries each download, and publishes them on the [releases page](https://github.com/tahuffman1s/LORE/releases).
+A release is made by pushing a version tag. `.github/workflows/release.yml` does the rest: it builds `lore` for Linux, Windows and macOS, tries each download, and publishes them on the [releases page](https://github.com/tahuffman1s/LORE/releases).
 
 ## Cutting a release
 
@@ -15,7 +15,7 @@ A release is made by pushing a version tag. `.github/workflows/release.yml` does
 
 3. Watch it: `gh run watch` or the Actions tab. When it is green the release is public.
 
-The tag has to be `v` followed by the version in `Cargo.toml`. If they differ the run stops in its first minute and says what to change, because the programs would otherwise report the wrong version.
+The tag has to be `v` followed by the version in `Cargo.toml`. If they differ the run stops in its first minute and says what to change, because the program would otherwise report the wrong version.
 
 A version with a dash in it (`0.2.0-rc.1`) is published as a pre-release, which GitHub does not offer as the latest one.
 
@@ -28,7 +28,7 @@ A version with a dash in it (`0.2.0-rc.1`) is published as a pre-release, which 
 | `lore-macos-arm64.tar.gz` | macOS 11 or newer on Apple silicon (experimental: needs MoltenVK) |
 | `SHA256SUMS` | checksums of the three, for `sha256sum --check SHA256SUMS` |
 
-Each archive unpacks to one folder, `lore-<version>-<system>`, holding `lore`, `lore-server`, a short `README.txt` (from `.github/release/README.txt`) and the licences.
+Each archive unpacks to one folder, `lore-<version>-<system>`, holding `lore`, a short `README.txt` (from `.github/release/README.txt`) and the licences.
 
 The file names carry no version, so the newest release is always at the same address:
 

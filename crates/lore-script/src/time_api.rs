@@ -223,7 +223,7 @@ impl Timer {
 /// The error for changing the game from `game.onDraw`, if that is where
 /// `function` is being called from.
 ///
-/// A picture is drawn more often on a faster computer and never on a server,
+/// A picture is drawn more often on a faster computer,
 /// so a rule run from there would make the game differ between them.
 pub(crate) fn rules_only(lua: &Lua, shared: &Shared, function: &str) -> mlua::Result<()> {
     if !shared.clock.is_drawing() {
@@ -234,8 +234,7 @@ pub(crate) fn rules_only(lua: &Lua, shared: &Shared, function: &str) -> mlua::Re
         lua,
         format!(
             "{function} changes the game, and game.onDraw is only for showing it: it runs \
-             once for every picture drawn, so more often on a faster computer, and never \
-             on a server. Move this line into game.onTick(function() ... end), or another \
+             once for every picture drawn, so more often on a faster computer. Move this line into game.onTick(function() ... end), or another \
              game.on... function. Reading is fine here: game.time(), tween.value, \
              player.score."
         ),

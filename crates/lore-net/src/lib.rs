@@ -52,12 +52,7 @@
 //! Packets travel over UDP: a server opens a [`UdpHost`] and each player a
 //! [`UdpLink`], which also take care of joining, leaving and dropping
 //! whoever goes silent. Packets may be lost, repeated or arrive out of
-//! order, and the rest of the crate is built for that. A player who does
-//! not know a server's address finds the ones on their own network with a
-//! [`UdpSearch`].
-//!
-//! A server can also hand players the files they need before they join,
-//! such as the game's level: [`UdpHost::share`] and [`UdpLink::fetch`].
+//! order, and the rest of the crate is built for that.
 //!
 //! [`Client`] and [`Server`] read no clock and no random number. The same
 //! packets in the same order always give the same result, and a client
@@ -78,12 +73,8 @@ mod command;
 mod connect;
 #[cfg(test)]
 mod connect_tests;
-mod find;
 mod inside;
 mod server;
-mod share;
-#[cfg(test)]
-mod share_tests;
 mod snapshot;
 #[cfg(test)]
 mod tests;
@@ -93,9 +84,7 @@ mod wire;
 pub use client::{Client, ClientSettings, Received};
 pub use command::{Command, PlayerInput};
 pub use connect::{Closed, Gone, HostSettings, JoinRequest, LinkSettings, Refusal};
-pub use find::{FoundServer, MAX_NAME_BYTES};
 pub use server::{Server, ServerSettings};
-pub use share::{MAX_SHARED_BYTES, MAX_SHARED_FILES, Offer, ShareError, SharedFile, hash_of};
 pub use snapshot::{MAX_PLAYERS, PlayerId, RemotePlayer};
-pub use udp::{HostEvent, LinkEvent, SocketError, UdpHost, UdpLink, UdpSearch, lan_address};
+pub use udp::{HostEvent, LinkEvent, SocketError, UdpHost, UdpLink};
 pub use wire::{MAX_PACKET_BYTES, NetError};

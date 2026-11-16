@@ -23,8 +23,8 @@ pub(crate) const AUDIO_FUNCTIONS: &[&str] = &["play", "playAt", "stopAll"];
 pub(crate) const SOUND_METHODS: &[&str] = &["stop"];
 
 /// How many requests wait for the engine before the oldest are dropped. An
-/// engine that takes them every frame never comes near it; a server, where
-/// nobody listens, drops them all.
+/// engine that takes them every frame never comes near it; a game run with
+/// no window, where nobody listens, drops them all.
 const MAX_WAITING: usize = 256;
 
 /// How many sound names an error lists before it says how many more there are.

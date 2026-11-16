@@ -273,7 +273,7 @@ declare game: {
     onTick: (handler: (step: number) -> ()) -> (),
 
     --- Calls `handler` once for every picture drawn, which is more often on
-    --- a faster computer and never on a server. It is for showing the game,
+    --- a faster computer. It is for showing the game,
     --- not for its rules: changing the game from here (a score, a weapon, a
     --- timer) is an error. Reading is fine, and `game.time()` and
     --- `tween.value` give where the picture is, between two ticks.
@@ -335,10 +335,9 @@ declare game: {
     keep: (<T>(name: string, start: T) -> T) & ((name: string) -> { [any]: any }),
 
     --- Sets up the match: its teams and its numbers. Call it once, near the
-    --- top of the file. Every setting can be left out. The script runs on the
-    --- server, so players cannot change the rules or the score. Saving
-    --- the file with new numbers changes the running match and keeps the
-    --- score; changing the teams starts the match again.
+    --- top of the file. Every setting can be left out. Saving the file with
+    --- new numbers changes the running match and keeps the score; changing
+    --- the teams starts the match again.
     ---
     --- With this alone the game is a complete deathmatch: players are put on
     --- the smallest team, a kill scores, the dead respawn, and rounds start
@@ -615,9 +614,7 @@ declare game: {
     --- your own with one of those names replaces the starter sound.
     ---
     --- Sounds are played from functions that run while the game is on, such
-    --- as `game.onStart` and `game.onTick`, not while the script loads. For
-    --- now only the player at the computer running the script hears them
-    --- (`lore run`); players who joined over the network do not yet.
+    --- as `game.onStart` and `game.onTick`, not while the script loads.
     audio: {
         --- Plays a sound that is not in the world: it is as loud wherever the
         --- player stands. For music, menus and announcements. Options, all
@@ -676,10 +673,6 @@ declare game: {
     --- A piece made later is drawn on top of one made before. The HUD keeps
     --- clear of the very edge of the screen, which televisions cut off, and
     --- grows with the size the player chose in the settings menu.
-    ---
-    --- For now the HUD is shown to the player at the computer running the
-    --- script (`lore run`); players who joined over the network do not see
-    --- it yet.
     hud: {
         --- Puts one line of text on the HUD. Its own option:
         ---   size: the height of the text in pixels on a screen 1080 high.

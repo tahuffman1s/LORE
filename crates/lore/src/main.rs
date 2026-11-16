@@ -1,7 +1,6 @@
 //! The `lore` command: `lore new` creates a game, `lore run` plays it,
-//! `lore serve` hosts it, `lore join` joins a hosted one,
-//! `lore servers` lists the ones on this network, `lore package` makes a
-//! download for players, `lore controls` shows and keeps the player's own
+//! `lore edit` opens its level, `lore check` tests it with no window,
+//! `lore package` makes a download for players, `lore controls` shows and keeps the player's own
 //! controls and `lore bench` measures how fast this computer draws.
 //!
 //! The same program is the player inside a packaged game: started with a
@@ -9,7 +8,6 @@
 
 mod demo;
 
-use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -21,7 +19,7 @@ use lore::cli::{self, Paced, quoted};
 use lore::input::ActionKind;
 use lore::level::{self, LEVEL_FILE};
 use lore::map::MAP_FILE;
-use lore::online::{DEFAULT_PORT, FoundServer, JoinedGame, LocalGame, SEARCH_TIME, find_servers};
+use lore::online::LocalGame;
 use lore::package;
 use lore::player;
 use lore::press::{self, Pressed};
@@ -71,17 +69,12 @@ enum Command {
     #[command(
         after_help = "Examples:\n  lore run            Play the game in this folder\n  \
                             lore run my-game    Play the game in the folder my-game\n  \
-                            lore run --open     Play it, and let others on your network join \
-                            with `lore join`\n  \
                             lore run dist/my-game.lpk    Play a game pack, as a packaged game does"
     )]
     Run {
         /// The game's folder, or a game pack (.lpk). Leave it out to play the game in the
         /// folder you are in
         folder: Option<PathBuf>,
-        /// Let other players on your network join this game with `lore join`
-        #[arg(long)]
-        open: bool,
     },
     /// Open a game's level in the editor: fly around it and place spawn points
     #[cfg(feature = "editor")]
@@ -128,53 +121,6 @@ enum Command {
     Check {
         /// The game's folder. Leave it out to check the game in the folder you are in
         folder: Option<PathBuf>,
-    },
-    /// Run a game as a server, with no window
-    #[command(
-        after_help = "Examples:\n  lore serve                Serve the game in this folder\n  \
-                            lore serve my-game        Serve the game in the folder my-game\n  \
-                            lore serve --port 7000    Take players on UDP port 7000\n\n\
-                      Players on your network join with `lore join`, which finds the \
-                      server by itself.\nFrom elsewhere they add this computer's address. \
-                      They need no copy of the game:\nthe server sends them its level.\n\
-                      Press Ctrl-C to stop the server. For a machine that only hosts, the \
-                      separate\nlore-server program does the same and needs no graphics \
-                      card or desktop."
-    )]
-    Serve {
-        /// The game's folder. Leave it out to serve the game in the folder you are in
-        folder: Option<PathBuf>,
-        /// The UDP port players join through
-        #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-        port: u16,
-    },
-    /// Join a game someone is serving
-    #[command(
-        after_help = "Examples:\n  lore join                     Find a game on this network or this \
-                            computer and join it\n  \
-                            lore join 192.168.1.20        Join the server at that address\n  \
-                            lore join example.com:7000    Join a server on another port than 24680\n\n\
-                      With no address, `lore join` joins the game it finds. If it finds \
-                      several, it lists\nthem and asks which one.\n\n\
-                      No copy of the game is needed: the server sends its level, which is \
-                      kept on this\ncomputer so it is fetched once. Set LORE_CACHE to a \
-                      folder to keep levels there."
-    )]
-    Join {
-        /// The server's address. Leave it out to find a game on this network
-        address: Option<String>,
-    },
-    /// List the games being served on this network
-    #[command(
-        after_help = "Examples:\n  lore servers                Games on this network and this computer\n  \
-                            lore servers --port 7000    Games served with `--port 7000`\n\n\
-                      Only games on the same network are found. `lore join` uses the same \
-                      search and\njoins what it finds."
-    )]
-    Servers {
-        /// The UDP port the games are served on
-        #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-        port: u16,
     },
     /// Make a download of a game that players can unpack and run
     #[command(
@@ -351,22 +297,10 @@ fn main() -> ExitCode {
 fn command() -> Result<(), String> {
     match Cli::parse().command {
         Some(Command::New { folder }) => new(&folder),
-        Some(Command::Run { folder, open }) => {
-            run(folder.as_deref().unwrap_or(Path::new(".")), open)
-        }
+        Some(Command::Run { folder }) => run(folder.as_deref().unwrap_or(Path::new("."))),
         #[cfg(feature = "editor")]
         Some(Command::Edit { folder }) => edit(folder.as_deref().unwrap_or(Path::new("."))),
         Some(Command::Check { folder }) => check(folder.as_deref().unwrap_or(Path::new("."))),
-        Some(Command::Serve { folder, port }) => cli::serve_game(
-            folder.as_deref().unwrap_or(Path::new(".")),
-            "lore serve",
-            port,
-        ),
-        Some(Command::Join { address }) => match address {
-            Some(address) => join(&address),
-            None => find_and_join(),
-        },
-        Some(Command::Servers { port }) => servers(port),
         Some(Command::Package {
             folder,
             target,
@@ -553,8 +487,8 @@ fn check(folder: &Path) -> Result<(), String> {
              played the game four times from the start, changing nothing but how many \
              pictures were drawn between ticks, and on tick {tick} the rules did something \
              else: they printed another line, or called another function that changes the \
-             game. A game has to play the same on a fast computer, on a slow one and on a \
-             server, which draws nothing. Look for a variable that a game.onDraw function \
+             game. A game has to play the same on a fast computer and on a slow \
+             one. Look for a variable that a game.onDraw function \
              changes and that game.onTick, a timer or another game.on... function reads, \
              and move the line that changes it into game.onTick. Then run `lore check` again."
         ));
@@ -677,18 +611,13 @@ fn check(folder: &Path) -> Result<(), String> {
 }
 
 /// `lore run`: plays the game in `folder` until its window is closed.
-/// With `others_may_join`, other players can join it meanwhile.
-fn run(folder: &Path, others_may_join: bool) -> Result<(), String> {
+fn run(folder: &Path) -> Result<(), String> {
     if folder.is_file() && player::is_pack(folder) {
-        return play_packed(folder, others_may_join);
+        return play_pack(folder);
     }
     let mut config = player_config();
     let game = open(folder, &config, "run")?;
-    let level = cli::load_level_file(folder).map_err(|error| not_started(&error, "run"))?;
-    // The level's file is only needed to hand to players who join.
-    let (level, file) = level.unzip();
-    let file = file.filter(|_| others_may_join);
-    config.level = level;
+    config.level = cli::load_level(folder).map_err(|error| not_started(&error, "run"))?;
 
     match scaffold::refresh_types(folder) {
         Ok(true) => log::info!(
@@ -712,7 +641,7 @@ fn run(folder: &Path, others_may_join: bool) -> Result<(), String> {
     if !name.is_empty() {
         config.title = format!("{name} | LORE");
     }
-    start(config, game, &name, others_may_join.then_some(file))
+    start(config, game)
 }
 
 /// `lore edit`: opens the level of the game in `folder` to fly around
@@ -759,74 +688,25 @@ fn not_started(error: &str, verb: &str) -> String {
     )
 }
 
-/// Starts `game`, called `name`, and plays it until its window is closed.
-/// With `open_with`, other players can join it meanwhile, and are sent the
-/// level file in it if the game has one.
-fn start(
-    config: Config,
-    game: ScriptGame,
-    name: &str,
-    open_with: Option<Option<Vec<u8>>>,
-) -> Result<(), String> {
+/// Starts `game` and plays it until its window is closed.
+fn start(config: Config, game: ScriptGame) -> Result<(), String> {
     // The level that is drawn is the level that is walked.
     let level = config.level.as_ref();
-    let game = if let Some(level_file) = open_with {
-        let mut game = LocalGame::open(
-            game,
-            level,
-            name,
-            DEFAULT_PORT,
-            &config.actions,
-            config.tick_rate,
-        )
-        .map_err(|error| {
-            format!(
-                "The game could not be opened for others to join: {error}\nIf another \
-                 game is already open or served on this computer, close it first. To \
-                 play alone, leave out `--open`."
-            )
-        })?;
-        if let Some(file) = level_file {
-            game = game
-                .share_level(file)
-                .map_err(|error| cli::not_shared(&error, "lore run --open"))?;
-        }
-        log::info!(
-            "Open for others to join. {}",
-            cli::how_to_join(DEFAULT_PORT, lore::online::lan_address())
-        );
-        game
-    } else {
-        LocalGame::start(game, level, &config.actions, config.tick_rate).map_err(|error| {
-            format!(
-                "The game could not start: {error}\nIt is played over this computer's own \
-                 network (127.0.0.1), which a firewall or security program may be blocking."
-            )
-        })?
-    };
+    let game = LocalGame::start(game, level, &config.actions, config.tick_rate)
+        .map_err(|error| format!("The game could not start: {error}"))?;
     play(config, game)
 }
 
-/// A packaged game started by its player: plays the game in the pack at
-/// `pack` until its window is closed.
+/// Plays the game in the pack at `pack` until its window is closed: a
+/// packaged game started by its player, or `lore run` given a pack.
 fn play_pack(pack: &Path) -> Result<(), String> {
-    play_packed(pack, false)
-}
-
-/// Plays the game in the pack at `pack` until its window is closed. With
-/// `others_may_join`, other players can join it meanwhile.
-fn play_packed(pack: &Path, others_may_join: bool) -> Result<(), String> {
     let mut config = player_config();
     let packed = player::open(pack, &config.actions).map_err(|error| error.to_string())?;
     // The window carries the game's own name; one with none keeps the usual title.
     if !packed.name.is_empty() {
         config.title.clone_from(&packed.name);
     }
-    let mut level_file = None;
     if let Some(bytes) = &packed.level {
-        if others_may_join {
-            level_file = Some(bytes.clone());
-        }
         let name = format!("{LEVEL_FILE} in {}", pack.display());
         let level = level::from_bytes(&name, bytes).map_err(|error| {
             format!(
@@ -838,12 +718,7 @@ fn play_packed(pack: &Path, others_may_join: bool) -> Result<(), String> {
         })?;
         config.level = Some(level);
     }
-    start(
-        config,
-        packed.game,
-        &packed.name,
-        others_may_join.then_some(level_file),
-    )
+    start(config, packed.game)
 }
 
 /// `lore package`: makes a download of the game in `folder` for `target`.
@@ -896,134 +771,6 @@ fn package(folder: &Path, target: Target, runtime_dir: Option<&Path>) -> Result<
         );
     }
     Ok(())
-}
-
-/// `lore join`: plays on the server at `address` until the window is
-/// closed or the server lets go.
-fn join(address: &str) -> Result<(), String> {
-    let mut config = player_config();
-    let mut game = JoinedGame::connect(address, &config.actions, config.tick_rate)
-        .map_err(|error| error.to_string())?;
-    log::info!("Joining {address}...");
-    let id = game
-        .wait_until_joined(|| {})
-        .map_err(|error| error.to_string())?;
-    // The server's level, sent on joining: what is walked is what is drawn.
-    config.level = game.take_level();
-    match &config.level {
-        Some(level) => log::info!(
-            "Joined as Player {}, in the server's level ({}). Close the window to leave.",
-            u32::from(id) + 1,
-            level::summary(level)
-        ),
-        None => log::info!(
-            "Joined as Player {}. The server's game has no level, so it is played on the \
-             engine's test floor. Close the window to leave.",
-            u32::from(id) + 1
-        ),
-    }
-    config.title = format!("{address} | LORE");
-    lore::run(config, &mut game).map_err(|error| error.to_string())?;
-    // The window closing by itself needs a reason; the player closing it does not.
-    game.closed().map_or(Ok(()), |error| Err(error.to_string()))
-}
-
-/// Looks for games on this network for a second.
-fn search(port: u16) -> Result<Vec<FoundServer>, String> {
-    log::info!("Looking for games on this network...");
-    find_servers(port, SEARCH_TIME).map_err(|error| {
-        let mut said = error.to_string();
-        if let Some(first) = said.get_mut(..1) {
-            first.make_ascii_uppercase();
-        }
-        said
-    })
-}
-
-/// `lore servers`: lists the games found on this network.
-fn servers(port: u16) -> Result<(), String> {
-    let found = search(port)?;
-    if found.is_empty() {
-        println!("{}", cli::no_servers_found(port));
-        return Ok(());
-    }
-    print!("{}", cli::server_list(&found));
-    if let Some(server) = found.iter().find(|server| server.same_version) {
-        println!(
-            "Join one with its address, like `lore join {}`.",
-            cli::join_address(server.address)
-        );
-    }
-    Ok(())
-}
-
-/// `lore join` with no address: joins the game found on this network,
-/// asking which when there are several.
-fn find_and_join() -> Result<(), String> {
-    let found = search(DEFAULT_PORT)?;
-    let server = match found.as_slice() {
-        [] => return Err(cli::no_servers_found(DEFAULT_PORT)),
-        [only] => only,
-        several => {
-            let list = cli::server_list(several);
-            if !std::io::stdin().is_terminal() {
-                return Err(format!(
-                    "Found {} games:\n{list}Say which one by its address, like \
-                     `lore join {}`.",
-                    several.len(),
-                    cli::join_address(several.first().map_or_else(
-                        || std::net::SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
-                        |server| server.address
-                    ))
-                ));
-            }
-            println!("Found {} games:\n{list}", several.len());
-            match ask_which(several)? {
-                Some(server) => server,
-                None => return Ok(()),
-            }
-        }
-    };
-    if !server.same_version {
-        return Err(format!(
-            "Found {} at {}, but it runs another version of LORE, so it cannot be joined. \
-             Update LORE on both computers to the same version.",
-            cli::server_name(server),
-            cli::join_address(server.address)
-        ));
-    }
-    log::info!(
-        "Found {} ({} of {} players).",
-        cli::server_name(server),
-        server.players,
-        server.places
-    );
-    join(&cli::join_address(server.address))
-}
-
-/// Asks which of `found` to join until the answer is one of them, or
-/// nothing.
-fn ask_which(found: &[FoundServer]) -> Result<Option<&FoundServer>, String> {
-    let mut line = String::new();
-    loop {
-        print!("Which one? Type its number and press Enter: ");
-        std::io::stdout()
-            .flush()
-            .map_err(|error| error.to_string())?;
-        line.clear();
-        let read = std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        // Nothing to read at all: the terminal was closed.
-        if read == 0 {
-            return Ok(None);
-        }
-        match cli::chosen(&line, found.len()) {
-            Ok(choice) => return Ok(choice.and_then(|place| found.get(place))),
-            Err(advice) => println!("{advice}"),
-        }
-    }
 }
 
 /// `lore controls`: shows the player's controls and where they are kept.

@@ -3,9 +3,8 @@ Free, open-source engine for first- and third-person 3D games.
 https://github.com/tahuffman1s/LORE
 
 In this folder
-  lore            makes, plays, checks, hosts and packages games
-  lore-server     hosts a game on a machine with no screen or graphics card
-  licenses/       licences of the code built into both programs
+  lore            makes, plays, checks, edits and packages games
+  licenses/       licences of the code built into the program
 
 Start here (in a terminal opened in this folder; on Windows leave out "./")
   ./lore new my-game      creates a game in the folder my-game
@@ -14,7 +13,7 @@ Start here (in a terminal opened in this folder; on Windows leave out "./")
   ./lore --help           lists everything else
 
 To use "lore" from any folder, add this folder to your PATH, or move the
-two programs into a folder that is already on it.
+program into a folder that is already on it.
 
 If it does not start
   "Vulkan is missing or too old": update your graphics driver. LORE needs

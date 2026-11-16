@@ -26,7 +26,7 @@ const READABLE_EXTENSIONS: &[&str] = &[
 /// ```
 /// use lore_assets::LoadOptions;
 ///
-/// // A dedicated server needs shapes, not pictures.
+/// // Collision needs shapes, not pictures.
 /// let options = LoadOptions::shapes_only();
 /// assert!(!options.textures);
 /// ```

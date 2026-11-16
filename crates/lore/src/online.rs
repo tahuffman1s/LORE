@@ -1,61 +1,31 @@
-//! Playing over a network: the game on a server, and a player joined to one.
+//! The game and its player, each on its own side of the netcode, in one
+//! program.
 //!
-//! [`HostedGame`] is the server's side. It opens a UDP port, gives everyone
-//! who joins a player, moves the players with the commands they send and
-//! tells them all where everybody is, sixty times a second. The game's
-//! script hears about each player joining and leaving.
+//! [`HostedGame`] is the game's side. It gives whoever joins a player,
+//! moves the players with the commands they send and tells them where
+//! everybody is, sixty times a second. The game's script hears about each
+//! player joining and leaving.
 //!
 //! [`JoinedGame`] is a player's side. It moves its own player the moment a
-//! key is pressed, without waiting for the server, and corrects itself when
-//! the server disagrees.
+//! key is pressed, without waiting for the game's side, and corrects itself
+//! when the two disagree.
 //!
-//! A player needs no copy of the game. A server hands its level file and
-//! its map to whoever joins ([`HostedGame::share_level`]), before giving
-//! them a place; the level is kept on the player's computer
-//! ([`crate::cache`]) so it is fetched once.
-//!
-//! [`LocalGame`] is both in one program, which is what `lore run` plays:
-//! the same code runs alone as runs over the internet.
-//!
-//! [`find_servers`] looks for the games being served on the local network,
-//! so a player can join one without knowing its address.
-//!
-//! ```no_run
-//! use lore::online::{DEFAULT_PORT, HostedGame};
-//! use lore::server::{ServerConfig, StopSignal, serve};
-//! use lore::ScriptGame;
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = ServerConfig::default();
-//!     let game = ScriptGame::open("my-game", &config.actions)?;
-//!     let address = format!("0.0.0.0:{DEFAULT_PORT}");
-//!     let mut hosted = HostedGame::open(game, &address, config.tick_rate)?;
-//!     // Players walk the game's level, if it has one, and are sent it
-//!     // when they join.
-//!     if let Some((level, file)) = lore::level::load_file("my-game".as_ref())? {
-//!         hosted = hosted.with_level(&level).share_level(file)?;
-//!     }
-//!     serve(&config, &mut hosted, &StopSignal::on_ctrl_c()?);
-//!     Ok(())
-//! }
-//! ```
+//! [`LocalGame`] is both, handing each other their packets directly, which
+//! is what `lore run` plays. Nothing here opens a port or touches a
+//! network.
 
 use std::f32::consts::TAU;
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lore_assets::{Marker, Scene};
 use lore_input::{ActionId, ActionMap, InputFrame};
 use lore_mode::{SpawnPoint, Stander, choose_spawn};
 use lore_net::{
     Client, ClientSettings, Closed, HostEvent, HostSettings, LinkEvent, LinkSettings, MAX_PLAYERS,
-    MAX_SHARED_BYTES, Offer, PlayerId, PlayerInput, Refusal, RemotePlayer, Server, ServerSettings,
-    SocketError, UdpHost, UdpLink, UdpSearch, hash_of,
+    PlayerId, PlayerInput, Refusal, RemotePlayer, Server, ServerSettings, UdpHost, UdpLink,
 };
-pub use lore_net::{FoundServer, ShareError, lan_address};
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
 use crate::blend;
@@ -68,18 +38,8 @@ use crate::script_game::ScriptGame;
 use crate::shooting::{Names, Shooting};
 use crate::sound_output::SoundAsk;
 
-/// The UDP port a server opens and a player joins when none is named.
-pub const DEFAULT_PORT: u16 = 24680;
-
 /// Half the width of the floor players stand on until a game has a level.
 const FLOOR_REACH: f32 = 500.0;
-
-/// How long [`find_servers`] is usually given: long enough for every server
-/// on a local network to answer, short enough not to feel like waiting.
-pub const SEARCH_TIME: Duration = Duration::from_secs(1);
-
-/// How long to wait between looks at the socket while joining.
-const JOIN_POLL: Duration = Duration::from_millis(5);
 
 /// What a marker in a level is called to be a place players start: `spawn`,
 /// or anything that begins with it, such as `spawn.001` or `Spawn Red`.
@@ -97,19 +57,6 @@ const STEP_CLEAR: f32 = 0.01;
 /// A player's first snapshot puts them this near a spawn point, in metres
 /// across the ground, if that is where the server started them.
 const AT_SPAWN: f32 = 0.5;
-
-/// Which of the files a server offers is the game's level file.
-const LEVEL_SLOT: usize = 0;
-
-/// Which of the files a server offers is the game's map, as text.
-const MAP_SLOT: usize = 1;
-
-/// The most bytes of map a server offers and a player takes: 1 MiB, far
-/// more than any map written by hand or by the editor.
-const MOST_MAP_BYTES: usize = 1024 * 1024;
-
-/// How often a player waiting for a level is told how far along it is.
-const PROGRESS_EVERY: Duration = Duration::from_secs(2);
 
 /// What a server and its players must agree on to work out the same moves.
 ///
@@ -417,7 +364,7 @@ pub struct WalkCheck {
     pub problems: Vec<String>,
 }
 
-/// Tries `level` out for walking, with no window and no server: starts a
+/// Tries `level` out for walking, with no window: starts a
 /// player at each spawn point, lets them stand for three seconds and says
 /// which ones never landed. `lore check` prints what it finds.
 ///
@@ -433,11 +380,9 @@ pub fn try_walking(level: &Scene, map: &Map) -> WalkCheck {
     }
 }
 
-/// A game being played on a server: its script, its players and the UDP
-/// port they join through.
+/// The game's side: its script and its players.
 ///
-/// Hand it to [`serve`](crate::server::serve) (or [`run`](crate::run)): each
-/// tick it reads what the players sent, moves them, fires the weapons the
+/// Each tick it reads what the players sent, moves them, fires the weapons the
 /// script has handed them, sends everyone the result and then runs the
 /// script's tick.
 #[derive(Debug)]
@@ -460,27 +405,9 @@ pub struct HostedGame {
     /// editor's "play from here". Used until the first tick is over.
     from_here: Option<[f32; 3]>,
     packet: Vec<u8>,
-    /// The map as players who join are sent it.
-    offered_map: Map,
 }
 
 impl HostedGame {
-    /// Opens `address` for players to join `game`. `address` is an address
-    /// of this machine and a port: `0.0.0.0:24680` takes players from
-    /// anywhere, `127.0.0.1:0` only from this machine on a port the system
-    /// chooses ([`address`](Self::address) says which).
-    ///
-    /// `tick_rate` must be the rate the game is then ticked at, and the rate
-    /// its players tick at.
-    ///
-    /// # Errors
-    ///
-    /// When the port cannot be opened, most often because another server
-    /// already has it.
-    pub fn open(game: ScriptGame, address: &str, tick_rate: u32) -> Result<Self, SocketError> {
-        Self::open_in(game, address, World::flat(tick_rate))
-    }
-
     /// A server for `game` that is on no network and opens no port: only
     /// players in this program join it, with [`JoinedGame::in_program`].
     /// It is what a game played alone runs on, and what a test of a game's
@@ -498,11 +425,6 @@ impl HostedGame {
         Self::hosting(game, host, world)
     }
 
-    fn open_in(game: ScriptGame, address: &str, world: World) -> Result<Self, SocketError> {
-        let host = UdpHost::bind(address, HostSettings::default())?;
-        Ok(Self::hosting(game, host, world))
-    }
-
     fn hosting(game: ScriptGame, host: UdpHost, world: World) -> Self {
         Self {
             game,
@@ -516,50 +438,6 @@ impl HostedGame {
             spawned: 0,
             from_here: None,
             packet: Vec::new(),
-            offered_map: Map::default(),
-        }
-    }
-
-    /// Hands `file` to every player who joins without it: the bytes of the
-    /// level file that [`with_level`](Self::with_level) was given, as
-    /// [`level::load_file`](crate::level::load_file) reads them. A player
-    /// who joins with `lore join` has no copy of the game, and without
-    /// this walks a flat floor and is pulled back at every wall.
-    ///
-    /// The file is fetched before the player is given a place, and kept on
-    /// their computer for next time. The game's map file needs nothing
-    /// like this: players are always sent the map as the game has it.
-    /// Scripts are not sent; they run on the server only.
-    ///
-    /// # Errors
-    ///
-    /// When the file is empty or holds more than 256 MiB, the most a
-    /// player is sent.
-    pub fn share_level(mut self, file: impl Into<Arc<[u8]>>) -> Result<Self, ShareError> {
-        self.host.share(LEVEL_SLOT, file)?;
-        Ok(self)
-    }
-
-    /// Offers players who join the map as the game now has it, if it has
-    /// changed since it was last offered.
-    fn offer_map(&mut self) {
-        if *self.game.map() == self.offered_map {
-            return;
-        }
-        self.offered_map.clone_from(self.game.map());
-        let text = self.offered_map.to_text();
-        if self.offered_map.is_empty() {
-            self.host.unshare(MAP_SLOT);
-        } else if text.len() > MOST_MAP_BYTES {
-            self.host.unshare(MAP_SLOT);
-            log::warn!(
-                "{MAP_FILE} is {} KB, more than the {} KB sent to players who join, so they \
-                 are not sent it and start out facing north. Take entities out of it.",
-                text.len() / 1024,
-                MOST_MAP_BYTES / 1024
-            );
-        } else if let Err(error) = self.host.share(MAP_SLOT, text.into_bytes()) {
-            log::warn!("{MAP_FILE} is not sent to players who join: {error}");
         }
     }
 
@@ -579,21 +457,6 @@ impl HostedGame {
     pub fn with_level(mut self, level: &Scene) -> Self {
         self.world = World::of(Some(level), self.game.map(), self.world.tick_rate);
         self
-    }
-
-    /// Names the game for players looking for one to join
-    /// ([`find_servers`]). The game's folder name is the usual choice.
-    #[must_use]
-    pub fn named(mut self, name: &str) -> Self {
-        self.host.set_name(name);
-        self
-    }
-
-    /// The address and port players join through, if the system can say.
-    /// `None` for a server on no network ([`in_program`](Self::in_program)).
-    #[must_use]
-    pub fn address(&self) -> Option<SocketAddr> {
-        self.host.local_addr().ok()
     }
 
     /// The game being played.
@@ -652,12 +515,7 @@ impl HostedGame {
                             host.accept(request, id);
                             walking.forget(id);
                             let name = format!("Player {}", u32::from(id) + 1);
-                            if request.address().ip().is_unspecified() {
-                                // From this program: there is no address.
-                                log::info!("{name} joined.");
-                            } else {
-                                log::info!("{name} joined from {}.", request.address());
-                            }
+                            log::info!("{name} joined.");
                             if let Some(slot) = names.get_mut(usize::from(id)) {
                                 *slot = Some(game.host_mut().player_joined(&name));
                             }
@@ -718,7 +576,6 @@ impl HostedGame {
 
 impl Game for HostedGame {
     fn tick(&mut self, input: &InputFrame, step: f32) {
-        self.offer_map();
         self.listen();
         // Before anyone is told where they are: a player the match brought
         // into the world, on joining or in the script's last tick, is at
@@ -819,262 +676,17 @@ impl Controls {
     }
 }
 
-/// Why a player could not join a server, or is no longer on it.
+/// Why a player could not join a game, or is no longer in it.
 #[derive(Debug)]
-pub enum JoinError {
-    /// The address could not be read, or its name is not known.
-    Address {
-        /// The address that was given, with its port.
-        address: String,
-        /// What went wrong.
-        error: SocketError,
-    },
-    /// The server did not let the player in, or the stay has ended.
-    Closed {
-        /// The address that was joined.
-        address: String,
-        /// What happened.
-        why: Closed,
-    },
-    /// The level the server plays could not be used on this computer.
-    Level {
-        /// The address that was joined.
-        address: String,
-        /// What is wrong with the level, as a sentence or more.
-        problem: String,
-    },
-}
+pub struct JoinError(Closed);
 
 impl fmt::Display for JoinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Address { address, error } => {
-                write!(f, "Could not join: there is no server address `{address}`")?;
-                if let Some(cause) = std::error::Error::source(error) {
-                    write!(f, " ({cause})")?;
-                }
-                write!(
-                    f,
-                    ". Write the server's address like `192.168.1.20` or `example.com`. \
-                     The port can be left out when the server uses {DEFAULT_PORT}, the usual \
-                     one; otherwise add it after a colon, like `192.168.1.20:7000`."
-                )
-            }
-            Self::Closed {
-                address,
-                why: Closed::NoAnswer,
-            } => write!(
-                f,
-                "Could not join {address}: no server answered. Check that the server is \
-                 running (`lore serve`), that the address and port are right, and that \
-                 the server's firewall and router let UDP (not TCP) through on that port."
-            ),
-            // Only a player who has not joined yet is sent files.
-            Self::Closed {
-                address,
-                why: why @ Closed::DamagedFile,
-            } => write!(f, "Could not join {address}: {why}"),
-            Self::Closed { address, why } => write!(f, "The game at {address} ended: {why}"),
-            Self::Level { address, problem } => {
-                write!(f, "Could not join {address}: {problem}")
-            }
-        }
+        write!(f, "The game ended: {}", self.0)
     }
 }
 
-impl std::error::Error for JoinError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Address { error, .. } => Some(error),
-            Self::Closed { .. } | Self::Level { .. } => None,
-        }
-    }
-}
-
-/// Why a player's stay is over.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Ended {
-    /// The server or the network ended it.
-    Closed(Closed),
-    /// The server's level could not be used; this is what is wrong with it.
-    Level(String),
-}
-
-/// What a player takes from a server before joining: the level and the map.
-#[derive(Debug)]
-struct Arrivals {
-    /// Whether to fetch what the server offers. A player in the server's
-    /// own program has it all already.
-    wanted: bool,
-    /// Where fetched levels are kept, if anywhere.
-    cache: Option<PathBuf>,
-    /// The hash of the level in hand, fetched or given.
-    level_held: Option<[u8; 32]>,
-    /// The hash of the map in hand.
-    map_held: Option<[u8; 32]>,
-    /// The caller gave the level itself, so the server's is not fetched.
-    level_given: bool,
-    /// The caller gave the map itself.
-    map_given: bool,
-    /// What the server last said it offers.
-    offer: Offer,
-    /// A level that has arrived, until the game takes it to walk.
-    level: Option<Scene>,
-    /// A map that has arrived, until the game takes it.
-    map: Option<Map>,
-    /// When the player was last told how the fetch is going.
-    told: Instant,
-    /// What went wrong, if the server's level cannot be used.
-    problem: Option<String>,
-}
-
-impl Arrivals {
-    fn new(wanted: bool) -> Self {
-        Self {
-            wanted,
-            cache: crate::cache::folder(),
-            level_held: None,
-            map_held: None,
-            level_given: false,
-            map_given: false,
-            offer: Offer::default(),
-            level: None,
-            map: None,
-            told: Instant::now(),
-            problem: None,
-        }
-    }
-
-    /// The server said what it offers. Gives the slot to fetch first, or
-    /// `None` when everything wanted is in hand.
-    fn offered(&mut self, offer: Offer) -> Option<usize> {
-        self.offer = offer;
-        self.next()
-    }
-
-    /// The slot to fetch next, or `None` when everything wanted is in hand
-    /// or something has gone wrong.
-    fn next(&mut self) -> Option<usize> {
-        if !self.wanted || self.problem.is_some() {
-            return None;
-        }
-        if let Some(file) = self.offer.file(LEVEL_SLOT)
-            && !self.level_given
-            && self.level_held != Some(file.hash)
-        {
-            if file.len as usize > MAX_SHARED_BYTES {
-                self.problem = Some(format!(
-                    "its level is {} MB, and the most a server can send a player is {} MB. \
-                     Ask whoever runs the server to make the level smaller.",
-                    file.len / (1024 * 1024),
-                    MAX_SHARED_BYTES / (1024 * 1024)
-                ));
-                return None;
-            }
-            let kept = self
-                .cache
-                .as_deref()
-                .and_then(|folder| crate::cache::find(folder, file));
-            let Some(kept) = kept else {
-                log::info!(
-                    "Getting the level from the server ({})...",
-                    size_text(u64::from(file.len))
-                );
-                self.told = Instant::now();
-                return Some(LEVEL_SLOT);
-            };
-            log::info!("This computer already has the server's level from an earlier visit.");
-            self.take_level(&kept, file.hash);
-            if self.problem.is_some() {
-                return None;
-            }
-        }
-        if let Some(file) = self.offer.file(MAP_SLOT)
-            && !self.map_given
-            && self.map_held != Some(file.hash)
-        {
-            if file.len as usize <= MOST_MAP_BYTES {
-                return Some(MAP_SLOT);
-            }
-            // Only which way spawn points face is lost.
-            self.map_held = Some(file.hash);
-        }
-        None
-    }
-
-    /// The file in `slot` arrived. Gives the slot to fetch next, as
-    /// [`next`](Self::next) does.
-    fn fetched(&mut self, slot: usize, file: &[u8]) -> Option<usize> {
-        let hash = hash_of(file);
-        if slot == LEVEL_SLOT {
-            self.take_level(file, hash);
-            if self.problem.is_none()
-                && let Some(folder) = &self.cache
-            {
-                match crate::cache::keep(folder, file) {
-                    Ok(path) => log::info!(
-                        "Got the level. It is kept in {} so it is not fetched again.",
-                        path.display()
-                    ),
-                    // The game is played all the same.
-                    Err(error) => log::warn!(
-                        "Got the level, but could not keep it in {} ({error}), so it will be \
-                         fetched again next time.",
-                        folder.display()
-                    ),
-                }
-            }
-        } else if slot == MAP_SLOT {
-            self.map_held = Some(hash);
-            // What a server sends is read as any stranger's file: a map
-            // that does not read is done without.
-            let read = std::str::from_utf8(file)
-                .map_err(|error| error.to_string())
-                .and_then(|text| Map::parse(MAP_FILE, text).map_err(|error| error.to_string()));
-            match read {
-                Ok(map) => self.map = Some(map),
-                Err(error) => log::warn!(
-                    "The server's map could not be read, so you may start out facing the \
-                     wrong way: {}",
-                    plain(&error)
-                ),
-            }
-        }
-        self.next()
-    }
-
-    /// Reads `file` as the level the server plays.
-    fn take_level(&mut self, file: &[u8], hash: [u8; 32]) {
-        match crate::level::from_bytes("the server's level", file) {
-            Ok(level) => {
-                self.level_held = Some(hash);
-                self.level = Some(level);
-            }
-            Err(error) => {
-                let error = plain(&error.to_string());
-                self.problem = Some(format!(
-                    "the level it plays could not be read on this computer.\n{error}\nIf the \
-                     server runs a newer LORE than this, update this copy; otherwise tell \
-                     whoever runs the server that its level does not load."
-                ));
-            }
-        }
-    }
-
-    /// Tells the player how far along a fetch is, every couple of seconds.
-    fn tell(&mut self, progress: Option<(u64, u64)>) {
-        let Some((fetched, whole)) = progress else {
-            return;
-        };
-        if self.told.elapsed() >= PROGRESS_EVERY {
-            self.told = Instant::now();
-            log::info!("{} of {} so far...", size_text(fetched), size_text(whole));
-        }
-    }
-}
-
-/// The most of an error about a server's file that is shown, in characters.
-const MOST_SHOWN: usize = 600;
+impl std::error::Error for JoinError {}
 
 /// A view that moves further than this in one tick, in metres, has been put
 /// somewhere new (a respawn, a teleport) and is not drawn gliding there.
@@ -1096,24 +708,6 @@ fn cut(before: [f32; 3], now: [f32; 3]) -> bool {
     moved.is_nan() || moved > CUT_METRES * CUT_METRES
 }
 
-/// `text`, which quotes a file a server sent, made safe to show in a
-/// terminal: no control characters but new lines, and not too long.
-fn plain(text: &str) -> String {
-    text.chars()
-        .filter(|letter| *letter == '\n' || !letter.is_control())
-        .take(MOST_SHOWN)
-        .collect()
-}
-
-/// `bytes` as a person reads a file's size: `812 KB`, `12.3 MB`.
-fn size_text(bytes: u64) -> String {
-    if bytes < 1024 * 1024 {
-        format!("{} KB", bytes.div_ceil(1024))
-    } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    }
-}
-
 /// A player's side of a game on a server.
 ///
 /// Each tick it reads the server's news, moves its own player with what is
@@ -1124,10 +718,9 @@ pub struct JoinedGame {
     client: Client,
     world: World,
     controls: Controls,
-    address: String,
     yaw: f32,
     pitch: f32,
-    closed: Option<Ended>,
+    closed: Option<Closed>,
     packet: Vec<u8>,
     /// The game's map as this side has it, for which way spawn points face.
     map: Map,
@@ -1136,10 +729,6 @@ pub struct JoinedGame {
     /// Which way the player looks to begin with (yaw, then pitch) in place
     /// of the way their spawn point faces: the editor's "play from here".
     start_looking: Option<[f32; 2]>,
-    /// What is fetched from the server before joining.
-    arrivals: Arrivals,
-    /// The level the server sent, until it is taken to be drawn.
-    level: Option<Scene>,
     /// Where the eyes were on the tick before the newest, to draw frames
     /// between the two from. `None` when the newest tick is to be drawn as
     /// it is: before the first tick, and when the eyes were put somewhere
@@ -1148,61 +737,37 @@ pub struct JoinedGame {
 }
 
 impl JoinedGame {
-    /// Starts joining the server at `address`: `203.0.113.5`,
-    /// `example.com:24680` or `[2001:db8::1]`. Without a port,
-    /// [`DEFAULT_PORT`] is used.
+    /// Joins `hosted`, which is in this same program: what either side
+    /// sends is with the other at its next tick, whole and in order, and
+    /// no port is used.
     ///
     /// The player is moved by the actions in `actions` called `move`,
-    /// `look`, `jump`, `crouch`, `sprint`, `fire`, `aim` and `reload`.
-    /// `tick_rate` must be the server's.
-    ///
-    /// Whether the server answered is known later: call
-    /// [`wait_until_joined`](Self::wait_until_joined), or keep ticking and
-    /// look at [`closed`](Self::closed).
+    /// `look`, `jump`, `crouch`, `sprint`, `fire`, `aim` and `reload`,
+    /// walks the level the game has and knows its map, and is in the game
+    /// when this comes back.
     ///
     /// # Errors
     ///
-    /// When the address cannot be read or its name is not known.
-    pub fn connect(address: &str, actions: &ActionMap, tick_rate: u32) -> Result<Self, JoinError> {
-        Self::connect_in(address, actions, World::flat(tick_rate), true)
-    }
-
-    fn connect_in(
-        address: &str,
-        actions: &ActionMap,
-        world: World,
-        fetches: bool,
-    ) -> Result<Self, JoinError> {
-        let address = with_port(address);
-        let link = match UdpLink::connect(&address, LinkSettings::default()) {
-            Ok(link) => link,
-            Err(error) => return Err(JoinError::Address { address, error }),
-        };
-        Ok(Self::on(link, address, actions, world, fetches))
-    }
-
-    /// Joins `hosted`, a server in this same program, without the
-    /// network: what either side sends is with the other at its next tick,
-    /// whole and in order, and no port is used. Any server can be joined
-    /// this way, one that is open to the network too
-    /// ([`HostedGame::open`]) or one that is not
-    /// ([`HostedGame::in_program`]).
-    ///
-    /// The player walks the level the server has and knows its map, and
-    /// is in the game when this comes back. `actions` is as for
-    /// [`connect`](Self::connect).
-    ///
-    /// # Errors
-    ///
-    /// When the server is full.
+    /// When the game is full.
     pub fn in_program(hosted: &mut HostedGame, actions: &ActionMap) -> Result<Self, JoinError> {
         let world = hosted.world.clone();
         let link = hosted
             .host
             .link_in_program(LinkSettings::default(), world.tick());
-        let address = "this program".to_owned();
-        let mut joined =
-            Self::on(link, address, actions, world, false).with_map(hosted.game.map().clone());
+        let mut joined = Self {
+            link,
+            client: Client::new(world.first(), world.step, ClientSettings::default()),
+            world,
+            controls: Controls::new(actions),
+            yaw: 0.0,
+            pitch: 0.0,
+            closed: None,
+            packet: Vec::new(),
+            map: hosted.game.map().clone(),
+            faced: false,
+            start_looking: None,
+            before: None,
+        };
         // Each side in turn until the server has answered. It always
         // does: were it not to, the link would give up after its five
         // seconds of ticks, which are counted here and not waited for.
@@ -1218,131 +783,11 @@ impl JoinedGame {
         }
     }
 
-    fn on(
-        link: UdpLink,
-        address: String,
-        actions: &ActionMap,
-        world: World,
-        fetches: bool,
-    ) -> Self {
-        Self {
-            link,
-            client: Client::new(world.first(), world.step, ClientSettings::default()),
-            world,
-            controls: Controls::new(actions),
-            address,
-            yaw: 0.0,
-            pitch: 0.0,
-            closed: None,
-            packet: Vec::new(),
-            map: Map::default(),
-            faced: false,
-            start_looking: None,
-            arrivals: Arrivals::new(fetches),
-            level: None,
-            before: None,
-        }
-    }
-
-    /// Keeps levels fetched from servers in `folder` instead of the usual
-    /// place ([`cache::folder`](crate::cache::folder)).
-    ///
-    /// Call it before the first tick.
-    #[must_use]
-    pub fn with_cache(mut self, folder: impl Into<PathBuf>) -> Self {
-        self.arrivals.cache = Some(folder.into());
-        self
-    }
-
-    /// The level the server sent, to draw: put it in
-    /// [`Config::level`](crate::Config). `None` if the server plays on the
-    /// flat floor or shares no level, if the level was given with
-    /// [`with_level`](Self::with_level), or once it has been taken.
-    ///
-    /// It is there by the time
-    /// [`wait_until_joined`](Self::wait_until_joined) comes back. It is
-    /// what the server chose to send, read with the same care as any file
-    /// from a stranger.
-    pub fn take_level(&mut self) -> Option<Scene> {
-        self.level.take()
-    }
-
-    /// Gives this side the game's map file as the server has it
-    /// ([`ScriptGame::map`]), so the player starts out looking the way
-    /// their spawn point faces. Without it a player started at one of the
-    /// map's spawn points looks north, along -Z.
-    ///
-    /// A player given no map takes the one the server sends, so this is
-    /// only for a program that has the game already.
-    ///
-    /// Call it before the first tick.
-    #[must_use]
-    pub fn with_map(mut self, map: Map) -> Self {
-        self.map = map;
-        self.arrivals.map_given = true;
-        self
-    }
-
-    /// Walks `level`, which must be the level the server plays
-    /// ([`HostedGame::with_level`]): this side works out the player's moves
-    /// against it without waiting for the server. Without this, or with a
-    /// different level, the player still ends up where the server says, but
-    /// is pulled back each time the two disagree, at a wall for one.
-    ///
-    /// A player given no level takes the one the server sends
-    /// ([`HostedGame::share_level`]), so this is only for a program that
-    /// has the game already; the server's level is then not fetched.
-    ///
-    /// Call it before the first tick.
-    #[must_use]
-    pub fn with_level(mut self, level: &Scene) -> Self {
-        self.world = World::from_level(level, self.world.tick_rate);
-        self.arrivals.level_given = true;
-        self
-    }
-
-    /// Waits until the server has let this player in and gives the
-    /// player's number. A server that does not answer is given up on after
-    /// five seconds. One that shares its level
-    /// ([`HostedGame::share_level`]) is waited on for as long as the level
-    /// keeps arriving, which is logged as it goes; a level this computer
-    /// has from an earlier visit is not fetched again. `meanwhile` is
-    /// called over and over while waiting; a server in the same program
-    /// must be given its turn there.
-    ///
-    /// # Errors
-    ///
-    /// When nothing answers, the server turns the player away, or the
-    /// server's level does not arrive whole or cannot be read.
-    pub fn wait_until_joined(
-        &mut self,
-        mut meanwhile: impl FnMut(),
-    ) -> Result<PlayerId, JoinError> {
-        loop {
-            self.listen();
-            if let Some(error) = self.closed() {
-                return Err(error);
-            }
-            if let Some(id) = self.link.id() {
-                return Ok(id);
-            }
-            meanwhile();
-            std::thread::sleep(JOIN_POLL);
-        }
-    }
-
     /// Why this player is no longer on the server, once that is so. The
     /// game goes on being ticked but nothing moves.
     #[must_use]
     pub fn closed(&self) -> Option<JoinError> {
-        let address = self.address.clone();
-        Some(match self.closed.as_ref()? {
-            Ended::Closed(why) => JoinError::Closed { address, why: *why },
-            Ended::Level(problem) => JoinError::Level {
-                address,
-                problem: problem.clone(),
-            },
-        })
+        self.closed.map(JoinError)
     }
 
     /// This player's number on the server, once joined.
@@ -1421,40 +866,19 @@ impl JoinedGame {
     /// Takes in everything the server has sent since the last call.
     fn listen(&mut self) {
         while let Some(event) = self.link.poll() {
-            let fetch = match event {
-                LinkEvent::Joined(_) => None,
-                LinkEvent::Offered(offer) => self.arrivals.offered(offer),
-                LinkEvent::Fetched(slot, file) => self.arrivals.fetched(slot, file),
+            match event {
+                LinkEvent::Joined(_) => {}
                 // A snapshot that cannot be read is one more lost packet.
                 LinkEvent::Packet(snapshot) => {
                     let _ = self
                         .client
                         .receive(&self.world.level, &self.world.rules, snapshot);
-                    None
                 }
                 LinkEvent::Closed(why) => {
-                    self.closed.get_or_insert(Ended::Closed(why));
-                    None
+                    self.closed.get_or_insert(why);
                 }
-            };
-            // What has arrived is taken up before a place is asked for.
-            if let Some(level) = self.arrivals.level.take() {
-                self.world = World::from_level(&level, self.world.tick_rate);
-                self.level = Some(level);
-            }
-            if let Some(map) = self.arrivals.map.take() {
-                self.map = map;
-            }
-            if let Some(problem) = self.arrivals.problem.take() {
-                // No place is taken on a server whose level cannot be used.
-                self.arrivals.wanted = false;
-                self.closed.get_or_insert(Ended::Level(problem));
-                self.link.leave();
-            } else if let Some(slot) = fetch {
-                self.link.fetch(slot);
             }
         }
-        self.arrivals.tell(self.link.progress());
         // The server's first word says where this player starts: look the
         // way that spawn point faces.
         if !self.faced && self.client.server_tick() > 0 {
@@ -1516,11 +940,9 @@ impl Game for JoinedGame {
     }
 }
 
-/// A server and one player joined to it, in one program. The two hand
-/// each other their packets directly, with no network in between, so the
-/// player's own game is never late or lost. [`start`](Self::start) is a
-/// game played alone, which opens no port; [`open`](Self::open) lets other
-/// players join it too.
+/// A game and the one player in it, in one program. The two sides hand
+/// each other their packets directly, with no network in between, so
+/// nothing is late or lost and no port is opened.
 #[derive(Debug)]
 pub struct LocalGame {
     hosted: HostedGame,
@@ -1562,28 +984,6 @@ impl LocalGame {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let world = World::of(level, game.map(), tick_rate);
         Self::join_own(HostedGame::in_program_in(game, world), actions)
-    }
-
-    /// Starts `game` for other players to join on the UDP port `port`, and
-    /// joins it. `name` is what players looking for a game are shown, and
-    /// `level` is as for [`start`](Self::start). `actions` and `tick_rate`
-    /// must be the ones the game is then run with.
-    ///
-    /// # Errors
-    ///
-    /// When the port cannot be opened, most often because another server
-    /// already has it, or the game cannot be joined through it.
-    pub fn open(
-        game: ScriptGame,
-        level: Option<&Scene>,
-        name: &str,
-        port: u16,
-        actions: &ActionMap,
-        tick_rate: u32,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let world = World::of(level, game.map(), tick_rate);
-        let hosted = HostedGame::open_in(game, &format!("0.0.0.0:{port}"), world)?.named(name);
-        Self::join_own(hosted, actions)
     }
 
     /// Starts `game` in `world` and joins it, as the editor does to play
@@ -1637,19 +1037,6 @@ impl LocalGame {
         })
     }
 
-    /// Hands `file`, the bytes of the level file the game is played in, to
-    /// every player who joins without it: see
-    /// [`HostedGame::share_level`].
-    ///
-    /// # Errors
-    ///
-    /// When the file is empty or holds more than 256 MiB, the most a
-    /// player is sent.
-    pub fn share_level(mut self, file: impl Into<Arc<[u8]>>) -> Result<Self, ShareError> {
-        self.hosted = self.hosted.share_level(file)?;
-        Ok(self)
-    }
-
     /// The server's side.
     #[must_use]
     pub fn hosted(&self) -> &HostedGame {
@@ -1701,50 +1088,6 @@ impl Game for LocalGame {
     }
 }
 
-/// Looks for `wait` (usually [`SEARCH_TIME`]) for games being served on
-/// this computer and its local network on the UDP port `port` (usually
-/// [`DEFAULT_PORT`]), and gives the ones that answered, first to answer
-/// first. A game on this computer is found at `127.0.0.1`.
-///
-/// Only games reached without a router in between are found; one
-/// elsewhere on the internet is joined by its address.
-///
-/// # Errors
-///
-/// When this machine will not open a socket to search with.
-pub fn find_servers(port: u16, wait: Duration) -> Result<Vec<FoundServer>, SocketError> {
-    let mut search = UdpSearch::start(port)?;
-    let mut found = Vec::new();
-    loop {
-        while let Some(server) = search.poll() {
-            found.push(server);
-        }
-        if search.elapsed() >= wait {
-            return Ok(found);
-        }
-        std::thread::sleep(JOIN_POLL);
-    }
-}
-
-/// `address` with [`DEFAULT_PORT`] added if it names no port.
-///
-/// `203.0.113.5`, `example.com`, `[2001:db8::1]` and a bare `2001:db8::1`
-/// have no port; `203.0.113.5:7000` and `[2001:db8::1]:7000` do.
-#[must_use]
-pub fn with_port(address: &str) -> String {
-    let address = address.trim();
-    if address.parse::<SocketAddr>().is_ok() {
-        return address.to_owned();
-    }
-    match address.parse::<IpAddr>() {
-        Ok(IpAddr::V4(ip)) => format!("{ip}:{DEFAULT_PORT}"),
-        Ok(IpAddr::V6(ip)) => format!("[{ip}]:{DEFAULT_PORT}"),
-        // A name with a port, or something only the lookup can judge.
-        Err(_) if address.contains(':') && !address.ends_with(']') => address.to_owned(),
-        Err(_) => format!("{address}:{DEFAULT_PORT}"),
-    }
-}
-
 #[cfg(test)]
 mod heard;
 #[cfg(test)]
@@ -1755,18 +1098,6 @@ mod tests {
     use std::f32::consts::FRAC_PI_2;
 
     use super::*;
-
-    #[test]
-    fn what_a_servers_file_says_is_shown_without_control_characters_and_cut_short() {
-        assert_eq!(
-            plain("uses \u{1b}[2J\"a.png\"\r\nnext\u{7}"),
-            "uses [2J\"a.png\"\nnext"
-        );
-        assert_eq!(plain(&"x".repeat(5000)).len(), MOST_SHOWN);
-        assert_eq!(size_text(1), "1 KB");
-        assert_eq!(size_text(42_492), "42 KB");
-        assert_eq!(size_text(12_897_484), "12.3 MB");
-    }
 
     #[test]
     fn a_script_played_alone_rumbles_the_players_gamepad() {
@@ -2194,21 +1525,5 @@ mod tests {
             "{}",
             walked.problems[0]
         );
-    }
-
-    #[test]
-    fn an_address_without_a_port_gets_the_usual_one() {
-        for (written, meant) in [
-            ("203.0.113.5", "203.0.113.5:24680"),
-            (" 203.0.113.5:7000 ", "203.0.113.5:7000"),
-            ("example.com", "example.com:24680"),
-            ("example.com:7000", "example.com:7000"),
-            ("localhost", "localhost:24680"),
-            ("::1", "[::1]:24680"),
-            ("[::1]", "[::1]:24680"),
-            ("[2001:db8::1]:7000", "[2001:db8::1]:7000"),
-        ] {
-            assert_eq!(with_port(written), meant, "{written}");
-        }
     }
 }

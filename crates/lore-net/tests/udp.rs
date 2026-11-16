@@ -11,8 +11,7 @@ use std::time::{Duration, Instant};
 
 use lore_net::{
     Client, ClientSettings, Closed, Gone, HostEvent, HostSettings, LinkEvent, LinkSettings,
-    MAX_SHARED_FILES, Offer, PlayerId, PlayerInput, Received, Refusal, Server, ServerSettings,
-    UdpHost, UdpLink, hash_of,
+    PlayerId, PlayerInput, Received, Refusal, Server, ServerSettings, UdpHost, UdpLink,
 };
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
@@ -109,11 +108,6 @@ struct Joining {
     packet: Vec<u8>,
     matched: usize,
     closed: Option<Closed>,
-    /// The files fetched from the server, by slot.
-    files: Vec<(usize, Vec<u8>)>,
-    offer: Offer,
-    /// Whether to fetch what the server offers.
-    fetches: bool,
 }
 
 impl Joining {
@@ -126,22 +120,13 @@ impl Joining {
             packet: Vec::new(),
             matched: 0,
             closed: None,
-            files: Vec::new(),
-            offer: Offer::default(),
-            fetches: false,
         }
     }
 
     fn tick(&mut self) {
         while let Some(event) = self.link.poll() {
-            let mut offer = None;
             match event {
                 LinkEvent::Joined(_) => {}
-                LinkEvent::Offered(offered) => offer = Some(offered),
-                LinkEvent::Fetched(slot, file) => {
-                    self.files.push((slot, file.to_vec()));
-                    offer = Some(Offer::default());
-                }
                 LinkEvent::Packet(snapshot) => {
                     if self.client.receive(&self.level, &self.rules, snapshot)
                         == Ok(Received::Matched)
@@ -150,16 +135,6 @@ impl Joining {
                     }
                 }
                 LinkEvent::Closed(why) => self.closed = Some(why),
-            }
-            if let (Some(offer), true) = (offer, self.fetches) {
-                self.offer = if offer.is_empty() { self.offer } else { offer };
-                let held = &self.files;
-                let next = (0..MAX_SHARED_FILES).find(|slot| {
-                    self.offer.file(*slot).is_some() && held.iter().all(|(had, _)| had != slot)
-                });
-                if let Some(slot) = next {
-                    assert!(self.link.fetch(slot));
-                }
             }
         }
         if self.link.id().is_some() {
@@ -207,47 +182,6 @@ fn two_players_join_walk_and_see_each_other() {
     for (id, on_server) in hosted.server.players() {
         assert!(on_server.position[2] < -0.5, "player {id} never moved");
     }
-}
-
-#[test]
-fn a_player_fetches_the_servers_files_before_joining_and_another_does_not() {
-    let mut hosted = Hosted::new(HostSettings::default());
-    let level: Vec<u8> = (0..3_000_000_usize)
-        .map(|at| (at.wrapping_mul(31) ^ (at >> 9)) as u8)
-        .collect();
-    let map = b"version = 1\n".to_vec();
-    hosted.host.share(0, level.clone()).unwrap();
-    hosted.host.share(1, map.clone()).unwrap();
-
-    let mut fetching = Joining::new(&hosted.address(), LinkSettings::default());
-    fetching.fetches = true;
-    let mut plain = Joining::new(&hosted.address(), LinkSettings::default());
-    let mut most = 0;
-    until("the files to arrive and both to join", || {
-        hosted.tick();
-        fetching.tick();
-        plain.tick();
-        if let Some((fetched, whole)) = fetching.link.progress() {
-            assert!(fetched <= whole);
-            most = most.max(fetched);
-            // Nobody has a place while they are still fetching.
-            assert_eq!(fetching.link.id(), None);
-        }
-        fetching.link.id().is_some() && plain.link.id().is_some()
-    });
-    assert_eq!(fetching.closed, None);
-    assert_eq!(fetching.files.len(), 2);
-    assert!(most > 0, "progress was never reported");
-    assert_eq!(fetching.files[0].0, 0);
-    assert_eq!(hash_of(&fetching.files[0].1), hash_of(&level));
-    assert_eq!(fetching.files[1], (1, map));
-    assert!(plain.files.is_empty());
-    // The one who fetched nothing was not kept waiting by the one who did.
-    assert_eq!(hosted.joined.len(), 2);
-    assert_eq!(
-        hosted.host.address(hosted.joined[0]),
-        plain.link.local_addr().ok()
-    );
 }
 
 #[test]
@@ -487,59 +421,4 @@ fn two_processes_exchange_commands_and_snapshots() {
     drop(player);
     said.for_each(drop);
     assert!(server.0.wait().unwrap().success());
-}
-
-/// Polls `search` for half a second and gives what it found.
-fn found_by(
-    search: &mut lore_net::UdpSearch,
-    mut meanwhile: impl FnMut(),
-) -> Vec<lore_net::FoundServer> {
-    let mut found = Vec::new();
-    while search.elapsed() < Duration::from_millis(500) {
-        meanwhile();
-        while let Some(server) = search.poll() {
-            found.push(server);
-        }
-        sleep(TICK);
-    }
-    found
-}
-
-#[test]
-fn a_search_finds_the_server_on_this_machine_with_its_name_and_players() {
-    let mut hosted = Hosted::new(HostSettings::default());
-    hosted.host.set_name("zombie-night");
-    let address = hosted.host.local_addr().unwrap();
-    let mut joined = Joining::new(&address.to_string(), LinkSettings::default());
-    let deadline = Instant::now() + PATIENCE;
-    while joined.link.id().is_none() {
-        assert!(Instant::now() < deadline, "never joined");
-        joined.tick();
-        hosted.tick();
-        sleep(TICK);
-    }
-
-    let mut search = lore_net::UdpSearch::start(address.port()).unwrap();
-    let found = found_by(&mut search, || {
-        joined.tick();
-        hosted.tick();
-    });
-
-    assert_eq!(found.len(), 1, "{found:?}");
-    let server = &found[0];
-    assert_eq!(server.address, address);
-    assert_eq!(server.name, "zombie-night");
-    assert_eq!((server.players, server.places), (1, 64));
-    assert!(server.same_version);
-}
-
-#[test]
-fn a_search_with_no_server_finds_nothing() {
-    let free = UdpSocket::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let mut search = lore_net::UdpSearch::start(free).unwrap();
-    assert_eq!(found_by(&mut search, || {}), Vec::new());
 }

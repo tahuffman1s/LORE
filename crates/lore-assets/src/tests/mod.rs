@@ -580,7 +580,7 @@ fn textured(image: &str) -> Vec<u8> {
 
 #[test]
 fn shapes_only_reads_no_pictures() {
-    // The picture is not even looked at, so a server never trips over one.
+    // The picture is not even looked at, so a reader of shapes never trips over one.
     let scene = Scene::from_bytes(
         "level.glb",
         &textured("missing.png"),

@@ -140,8 +140,7 @@ const SCRIPT_ENDING: &str = ".luau";
 /// Opens the game in the pack at `pack`. The script reads input through
 /// `actions`, which should be the same actions the engine is started with.
 ///
-/// The level is handed over as bytes and not read here, so a server can
-/// open a pack without any level-reading code. The pack's `map.toml`, if it
+/// The level is handed over as bytes and not read here. The pack's `map.toml`, if it
 /// has one, is read and placed in the game.
 ///
 /// # Errors

@@ -89,17 +89,6 @@ impl std::error::Error for LevelError {
 /// level was exported as `level.gltf` with its data in separate files. The
 /// message says what to change in the 3D tool.
 pub fn load(folder: &Path) -> Result<Option<Scene>, LevelError> {
-    Ok(load_file(folder)?.map(|(level, _)| level))
-}
-
-/// Loads the level of the game in `folder` as [`load`] does, and gives the
-/// file's bytes with it: what a server hands to players who join
-/// ([`HostedGame::share_level`](crate::online::HostedGame::share_level)).
-///
-/// # Errors
-///
-/// As [`load`].
-pub fn load_file(folder: &Path) -> Result<Option<(Scene, Vec<u8>)>, LevelError> {
     let path = folder.join(LEVEL_FILE);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -113,8 +102,7 @@ pub fn load_file(folder: &Path) -> Result<Option<(Scene, Vec<u8>)>, LevelError> 
         }
         Err(source) => return Err(LevelError::Load(AssetError::Read { path, source })),
     };
-    let level = from_bytes(&path.display().to_string(), &bytes)?;
-    Ok(Some((level, bytes)))
+    from_bytes(&path.display().to_string(), &bytes).map(Some)
 }
 
 /// Reads a level that is already in memory, as a packaged game's is. `name`

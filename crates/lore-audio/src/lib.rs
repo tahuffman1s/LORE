@@ -47,7 +47,7 @@
 //! Music has its own volume ([`Play::music`], [`Group`]).
 //!
 //! Everything but [`Speakers`] is plain arithmetic. The mixer fills a
-//! buffer and can be tested, or run on a server, with no sound card; while
+//! buffer and can be tested with no sound card; while
 //! mixing it never asks for memory, waits or reads a file. [`Footsteps`] and [`SoundSet`] read no
 //! clock and keep no random number generator, so the same movement and
 //! the same seeds always give the same sounds.

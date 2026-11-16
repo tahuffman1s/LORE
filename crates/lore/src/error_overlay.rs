@@ -52,7 +52,7 @@ struct Line {
 }
 
 /// What text is measured with: the font it is drawn in when there is a
-/// window, and a guess on a server, where nothing is drawn.
+/// window, and a guess without one, where nothing is drawn.
 pub(crate) fn measure() -> Box<dyn TextMeasure> {
     #[cfg(feature = "window")]
     {

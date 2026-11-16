@@ -9,15 +9,15 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - A window, a main loop that steps the game at a fixed tick at any frame rate and blends the view between ticks (FOSSPS#1, #9), and keyboard, mouse and gamepad input through one action map
 - A Vulkan 1.3 renderer: glTF levels and models, PBR materials, a sun light, HDR and tone mapping, FSR 3.1 upscaling (FOSSPS#2, FOSSPS#5, FOSSPS#58, FOSSPS#59, FOSSPS#15, FOSSPS#16)
 - Luau scripts that reload on save, split over files, with errors that say what to do (FOSSPS#3)
-- `lore new`, `run`, `check`, `serve`, `join`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
+- `lore new`, `run`, `check`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
 - Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level (FOSSPS#6, FOSSPS#64)
 - Weapons in engine code: hitscan and projectile, recoil, reload (FOSSPS#7)
-- Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the server fires them (#8)
+- Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the engine fires them (#8)
 - Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
-- A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the server lists with a place and a loudness (#16)
+- A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the game lists with a place and a loudness (#16)
 - Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
-- A headless server, snapshots with prediction and reconciliation, lag compensation, joining over the local network (FOSSPS#10, FOSSPS#11, FOSSPS#12, FOSSPS#14)
+- The netcode a game played alone still runs through, in one program with no network: snapshots with prediction and reconciliation, lag compensation (FOSSPS#11, FOSSPS#12); it is being removed (#278)
 - Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
 
@@ -27,10 +27,10 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 Window, input, Vulkan, Luau scripts and the `lore` command, and removing the multiplayer LORE inherited.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
-- Cut multiplayer, part 1: no servers, joining or server lists (#277)
 - Cut multiplayer, part 2: the world runs in the program, with no network layer under it (#278)
 - Cut multiplayer, part 3: no teams, rounds or match rules (#279)
 - There is one player: `game.player` replaces players, joins and leaves (#280)
+- Fold the `window` Cargo feature: no program without a window is shipped any more (#310)
 
 ## M1 — Walk the world
 

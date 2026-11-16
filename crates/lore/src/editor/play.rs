@@ -58,13 +58,8 @@ impl Play {
         };
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
-        let (game, from_here) =
-            LocalGame::start_from(game, world, actions, eye, facing).map_err(|error| {
-                format!(
-                    "Could not play: {error} The game is played over this computer's own \
-                     network (127.0.0.1), which a firewall or security program may be blocking."
-                )
-            })?;
+        let (game, from_here) = LocalGame::start_from(game, world, actions, eye, facing)
+            .map_err(|error| format!("Could not play: {error}"))?;
         Ok(Self { game, from_here })
     }
 

@@ -10,7 +10,7 @@ pub(crate) use output::SoundOutput;
 pub(crate) use output::Voices;
 
 /// One thing a game asks of the sound in a frame.
-// A server gathers these and plays none of them.
+// A build with no window gathers these and plays none of them.
 #[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) enum SoundAsk {
@@ -25,8 +25,8 @@ pub(crate) enum SoundAsk {
     StopAll,
 }
 
-/// Playing what was asked for. A server has nothing to play through, so
-/// it is built without this.
+/// Playing what was asked for. A build with no window has nothing to play
+/// through, so it is built without this.
 #[cfg(any(feature = "window", test))]
 mod output {
     use std::collections::{HashMap, VecDeque};

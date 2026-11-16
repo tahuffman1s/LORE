@@ -323,8 +323,8 @@ impl ScriptHost {
     ///
     /// While they run the script cannot change the game, and what it reads
     /// of the game's time and its tweens is where the picture is, between
-    /// the two ticks. Nothing is called before the first tick, and a server,
-    /// which draws nothing, never calls this.
+    /// the two ticks. Nothing is called before the first tick, and a game
+    /// run with no window, which draws nothing, need not call this.
     pub fn draw(&mut self, alpha: f32) {
         if !self.started {
             return;
@@ -461,8 +461,8 @@ impl ScriptHost {
     /// `game.audio.playAt` or a sound's `stop`, oldest first, for whoever
     /// owns the speakers. Call it until it gives `None`, every frame.
     ///
-    /// Only the latest 256 are kept, so a server, where nobody listens, can
-    /// leave them be.
+    /// Only the latest 256 are kept, so a game run with no window, where
+    /// nobody listens, can leave them be.
     ///
     /// ```
     /// use lore_input::{ActionMap, InputFrame};
