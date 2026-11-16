@@ -5,7 +5,9 @@ use lore_audio::Play;
 use lore_script::SoundId;
 
 #[cfg(any(feature = "window", test))]
-pub(crate) use output::{SoundOutput, Voices};
+pub(crate) use output::SoundOutput;
+#[cfg(feature = "window")]
+pub(crate) use output::Voices;
 
 /// One thing a game asks of the sound in a frame.
 // A server gathers these and plays none of them.
