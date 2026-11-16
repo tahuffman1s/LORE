@@ -25,7 +25,8 @@ pub enum Phase {
     Waiting,
     /// Players can move and shoot, and nothing counts yet.
     Warmup,
-    /// The round is on and scores count.
+    /// The round is on and scores count. A game with no rounds is always
+    /// here while anyone is in it.
     Playing,
     /// The round has ended and the final score is on show.
     Over,
@@ -124,6 +125,13 @@ impl Default for Match {
 }
 
 impl Match {
+    /// A match with no mode ([`Rules::none`]) and nobody in it: what a game
+    /// is until it asks for rounds.
+    #[must_use]
+    pub fn without_mode() -> Self {
+        Self::unchecked(Rules::none())
+    }
+
     /// Starts a match with nobody in it.
     ///
     /// # Errors
@@ -157,31 +165,36 @@ impl Match {
     /// Changes the rules while the match goes on.
     ///
     /// New numbers take effect at once and the score is kept. If the teams
-    /// themselves changed, the match starts again from the warm-up with
-    /// everyone shared out over the new teams.
+    /// themselves changed, or the game went from having rounds to having
+    /// none or back, the match starts again (from the warm-up, if it has
+    /// rounds) with everyone shared out over the new teams.
     ///
     /// # Errors
     ///
     /// Fails, changing nothing, if the rules cannot be played.
     pub fn set_rules(&mut self, rules: Rules) -> Result<(), RulesError> {
         rules.check()?;
-        let same_teams = rules.teams == self.rules.teams;
+        let same_shape = rules.teams == self.rules.teams && rules.rounds == self.rules.rounds;
         self.rules = rules;
-        if same_teams {
-            // A countdown already running is not made longer than its new length.
-            let length = match self.phase {
-                Phase::Waiting => 0.0,
-                Phase::Warmup => self.rules.warmup,
-                Phase::Playing => self.rules.time_limit,
-                Phase::Over => self.rules.intermission,
-            };
-            self.time_left = self.time_left.min(f64::from(length));
-            if self.phase == Phase::Playing && self.rules.time_limit > 0.0 && self.time_left <= 0.0
-            {
-                // The round had no time limit until now: start counting.
-                self.time_left = f64::from(self.rules.time_limit);
+        if same_shape {
+            if self.rules.rounds {
+                // A countdown already running is not made longer than its new length.
+                let length = match self.phase {
+                    Phase::Waiting => 0.0,
+                    Phase::Warmup => self.rules.warmup,
+                    Phase::Playing => self.rules.time_limit,
+                    Phase::Over => self.rules.intermission,
+                };
+                self.time_left = self.time_left.min(f64::from(length));
+                if self.phase == Phase::Playing
+                    && self.rules.time_limit > 0.0
+                    && self.time_left <= 0.0
+                {
+                    // The round had no time limit until now: start counting.
+                    self.time_left = f64::from(self.rules.time_limit);
+                }
+                self.end_if_won();
             }
-            self.end_if_won();
         } else {
             self.teams = teams_of(&self.rules);
             for index in 0..self.players.len() {
@@ -189,8 +202,12 @@ impl Match {
                 self.players[index].team = self.smallest_team();
             }
             self.round = 0;
-            if !self.players.is_empty() {
+            if self.players.is_empty() {
+                // Nobody is here to play: the first to join starts it.
+            } else if self.rules.rounds {
                 self.begin_warmup();
+            } else {
+                self.begin_without_rounds();
             }
         }
         Ok(())
@@ -209,12 +226,13 @@ impl Match {
     pub fn time_left(&self) -> Option<f32> {
         match self.phase {
             Phase::Waiting => None,
-            Phase::Playing if self.rules.time_limit <= 0.0 => None,
+            Phase::Playing if !self.timed() => None,
             _ => Some(self.time_left.max(0.0) as f32),
         }
     }
 
-    /// Which round this is, counting from 1. 0 while waiting for players.
+    /// Which round this is, counting from 1. 0 while waiting for players, and
+    /// always in a game with no rounds.
     #[must_use]
     pub fn round(&self) -> u32 {
         self.round
@@ -285,7 +303,8 @@ impl Match {
     ///
     /// The first player in starts the warm-up. Someone who joins during a
     /// warm-up or a round comes into the world at once; someone who joins
-    /// while the final score is up waits for the next round.
+    /// while the final score is up waits for the next round. In a game with
+    /// no rounds everyone comes into the world as they join.
     pub fn join(&mut self, name: impl Into<String>) -> PlayerId {
         let id = PlayerId(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
@@ -303,6 +322,7 @@ impl Match {
         self.respawns.push(None);
         self.push(Event::Joined(id));
         match self.phase {
+            Phase::Waiting if !self.rules.rounds => self.begin_without_rounds(),
             Phase::Waiting => self.begin_warmup(),
             Phase::Warmup | Phase::Playing => self.spawn(self.players.len() - 1),
             Phase::Over => {}
@@ -437,9 +457,10 @@ impl Match {
     }
 
     /// Ends the round now with this winner, or as a draw with `None`.
-    /// Returns `false`, changing nothing, unless a round is being played.
+    /// Returns `false`, changing nothing, unless a round is being played: a
+    /// game with no rounds has none to end.
     pub fn finish(&mut self, winner: Option<Winner>) -> bool {
-        if self.phase != Phase::Playing {
+        if self.phase != Phase::Playing || !self.rules.rounds {
             return false;
         }
         self.phase = Phase::Over;
@@ -471,7 +492,7 @@ impl Match {
             }
             Phase::Playing => {
                 self.count_down_respawns(step, done);
-                if self.rules.time_limit > 0.0 {
+                if self.timed() {
                     self.time_left -= step;
                     if self.time_left <= done {
                         self.finish(self.leader());
@@ -485,6 +506,11 @@ impl Match {
                 }
             }
         }
+    }
+
+    /// Whether the round being played ends when its time runs out.
+    fn timed(&self) -> bool {
+        self.rules.rounds && self.rules.time_limit > 0.0
     }
 
     fn index(&self, id: PlayerId) -> Option<usize> {
@@ -538,6 +564,19 @@ impl Match {
         }
     }
 
+    /// Lets everyone play in a game with no rounds: nothing is counted down,
+    /// no round starts, and only those who are not in the world come into it.
+    fn begin_without_rounds(&mut self) {
+        self.phase = Phase::Playing;
+        self.time_left = 0.0;
+        self.round = 0;
+        for index in 0..self.players.len() {
+            if !self.players[index].alive {
+                self.spawn(index);
+            }
+        }
+    }
+
     /// Starts the next round's warm-up, or the round itself if the rules
     /// have no warm-up.
     fn begin_warmup(&mut self) {
@@ -581,7 +620,7 @@ impl Match {
 
     /// Ends the round if a score has reached the score to win.
     fn end_if_won(&mut self) {
-        if self.phase != Phase::Playing || self.rules.score_to_win == 0 {
+        if self.phase != Phase::Playing || !self.rules.rounds || self.rules.score_to_win == 0 {
             return;
         }
         let target = i64::from(self.rules.score_to_win);

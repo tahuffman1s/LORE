@@ -484,6 +484,141 @@ fn the_same_calls_give_the_same_match() {
     assert_eq!(play(), play());
 }
 
+#[test]
+fn a_game_with_no_mode_spawns_a_player_once_and_never_starts_a_round() {
+    let mut game = Match::without_mode();
+    let ann = game.join("Ann");
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(game.round(), 0);
+    assert_eq!(game.time_left(), None);
+    assert_eq!(events(&mut game), [Event::Joined(ann), Event::Spawned(ann)]);
+
+    // Three hours: longer than any default time, and nothing happens.
+    run(&mut game, 3 * 3600 * SECOND);
+    assert_eq!(events(&mut game), []);
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(game.round(), 0);
+    assert_eq!(game.time_left(), None);
+    assert!(game.teams().is_empty());
+    let ann = game.player(ann).unwrap();
+    assert!(ann.alive);
+    assert_eq!(
+        (ann.team, ann.score, ann.kills, ann.deaths),
+        (None, 0, 0, 0)
+    );
+
+    // A second player comes in at once and moves nobody else.
+    let bo = game.join("Bo");
+    assert_eq!(events(&mut game), [Event::Joined(bo), Event::Spawned(bo)]);
+}
+
+#[test]
+fn with_no_mode_no_kill_scores_and_no_score_or_call_ends_anything() {
+    let mut game = Match::without_mode();
+    let ann = game.join("Ann");
+    let bo = game.join("Bo");
+    events(&mut game);
+
+    assert!(game.kill(Some(ann), bo));
+    assert_eq!(game.player(ann).unwrap().score, 0);
+    assert_eq!(game.player(ann).unwrap().kills, 1);
+    // A game can still keep score for itself; no score wins anything.
+    assert!(game.add_score(ann, 1_000_000));
+    assert!(!game.finish(Some(Winner::Player(ann))));
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(
+        events(&mut game),
+        [Event::Killed {
+            killer: Some(ann),
+            victim: bo
+        }]
+    );
+
+    // The dead still come back after the wait, and only they are spawned.
+    run(&mut game, 3 * SECOND);
+    assert_eq!(events(&mut game), [Event::Spawned(bo)]);
+    assert_eq!(game.player(ann).unwrap().score, 1_000_000);
+}
+
+#[test]
+fn rules_without_rounds_ignore_their_times_and_score_to_win() {
+    let rules = Rules {
+        rounds: false,
+        score_to_win: 1,
+        kill_points: 1,
+        time_limit: 1.0,
+        warmup: 1.0,
+        ..Rules::default()
+    };
+    let mut game = Match::new(rules).unwrap();
+    let ann = game.join("Ann");
+    let bo = game.join("Bo");
+    events(&mut game);
+    game.kill(Some(ann), bo);
+    run(&mut game, 10 * SECOND);
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(game.time_left(), None);
+    assert_eq!(game.player(ann).unwrap().score, 1);
+    let happened = events(&mut game);
+    assert!(!happened.contains(&Event::RoundStarted));
+    assert!(
+        !happened
+            .iter()
+            .any(|event| matches!(event, Event::RoundEnded { .. }))
+    );
+}
+
+#[test]
+fn asking_for_a_mode_starts_its_first_round_and_dropping_it_stops_the_rounds() {
+    let mut game = Match::without_mode();
+    let ann = game.join("Ann");
+    run(&mut game, 60 * SECOND);
+    events(&mut game);
+
+    // The script now calls `game.mode`: the match starts from its warm-up.
+    game.set_rules(Rules::default()).unwrap();
+    assert_eq!(game.phase(), Phase::Warmup);
+    assert_eq!(game.round(), 1);
+    run(&mut game, 5 * SECOND);
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(
+        events(&mut game),
+        [Event::RoundStarted, Event::Spawned(ann)]
+    );
+
+    // The same rules again change nothing.
+    game.set_rules(Rules::default()).unwrap();
+    assert_eq!(events(&mut game), []);
+    assert_eq!(game.time_left(), Some(600.0));
+
+    // The call is taken out again, while the final score is up and a
+    // player is waiting for the next round.
+    game.finish(None);
+    let bo = game.join("Bo");
+    events(&mut game);
+    game.set_rules(Rules::none()).unwrap();
+    assert_eq!(game.phase(), Phase::Playing);
+    assert_eq!(game.round(), 0);
+    assert_eq!(events(&mut game), [Event::Spawned(bo)]);
+    run(&mut game, 3600 * SECOND);
+    assert_eq!(events(&mut game), []);
+
+    // And saving the file again, still with no mode, changes nothing.
+    game.set_rules(Rules::none()).unwrap();
+    assert_eq!(events(&mut game), []);
+}
+
+#[test]
+fn a_match_with_no_mode_and_nobody_in_it_waits() {
+    let mut game = Match::without_mode();
+    run(&mut game, 10 * SECOND);
+    assert_eq!(game.phase(), Phase::Waiting);
+    let ann = game.join("Ann");
+    assert!(game.leave(ann));
+    assert_eq!(game.phase(), Phase::Waiting);
+    assert!(Rules::none().check().is_ok());
+}
+
 fn point(x: f32, team: Option<TeamId>) -> SpawnPoint {
     SpawnPoint {
         position: [x, 0.0, 0.0],

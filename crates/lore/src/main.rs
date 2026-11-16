@@ -451,6 +451,8 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut input = lore::input::Input::new(config.actions.clone());
     let step = 1.0 / TICKS as f32;
     let mut played = false;
+    // Whether the game has rounds: it has none unless it calls game.mode.
+    let mut rounds = true;
     let mut pressed = Pressed::default();
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
@@ -468,6 +470,7 @@ fn check(folder: &Path) -> Result<(), String> {
             waited += 1;
         }
         played = game.host().mode().phase() == Phase::Playing;
+        rounds = game.host().mode().rules().rounds;
         // Every action in turn, so code that only runs on input runs too:
         // while the round is on, when a press is most likely to do something.
         let mut seen = game.host().mistakes_logged();
@@ -581,7 +584,15 @@ fn check(folder: &Path) -> Result<(), String> {
         "{ENTRY_SCRIPT} is fine: it loaded and ran for {TICKS} ticks (1 second of game time) \
          with no errors."
     );
-    if played {
+    if played && !rounds {
+        println!(
+            "Then two pretend players joined: one fired a shot that hit the other and \
+             reloaded, one killed the other, one died alone, and both left. Each \
+             game.on... function in the script was called at least once, with no errors. \
+             The game has no rounds, because it does not call game.mode, so \
+             game.onRoundStart and game.onRoundEnd functions were not run."
+        );
+    } else if played {
         println!(
             "Then a pretend match was played: two players joined, the round started, one \
              fired a shot that hit the other and reloaded, one killed the other, one died \

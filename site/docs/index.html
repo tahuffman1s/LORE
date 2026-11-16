@@ -87,7 +87,7 @@
   <table>
     <thead><tr><th scope="col">In a script</th><th scope="col">What it is for</th></tr></thead>
     <tbody>
-      <tr><td><code>game.mode { … }</code></td><td>Sets up the match: teams, the score to win, the time limit, how long the dead wait.</td></tr>
+      <tr><td><code>game.mode { … }</code></td><td>Sets up the match: teams, the score to win, the time limit, how long the dead wait. A game that never calls it has no teams and no rounds: a player comes in once and is left alone.</td></tr>
       <tr><td><code>game.onStart</code>, <code>game.onTick</code>, <code>game.onReload</code></td><td>Run your code when the game starts, 60 times a second, and when the script is saved.</td></tr>
       <tr><td><code>game.after</code>, <code>game.every</code>, <code>game.tween</code>, <code>game.time()</code>, <code>game.onDraw</code></td><td>Waits, repeats, numbers that move and the game's clock, so a script never counts time: see <a href="#time">Time</a>.</td></tr>
       <tr><td><code>game.keep("saved", { best = 0 })</code></td><td>Gives a table that keeps what you put in it when the script is saved and reloads; everything else in the file starts over. It holds numbers, text, true and false, players, and tables of those, until the game is closed.</td></tr>

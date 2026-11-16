@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use lore_input::{ActionMap, InputFrame, Rumble};
-use lore_mode::{Event, Match, PlayerId};
+use lore_mode::{Event, Match, PlayerId, Rules};
 use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
@@ -705,9 +705,25 @@ impl ScriptHost {
         self.watch(touched, built.is_ok());
         match built {
             Ok(version) => {
-                // A script with no `game.mode` plays the default rules.
+                // A script with no `game.mode` has no mode: no rounds, no teams.
                 let rules = version.shared.rules.borrow_mut().take();
-                let rules = rules.map(|(rules, _)| rules).unwrap_or_default();
+                let rules = rules.map_or_else(Rules::none, |(rules, _)| rules);
+                if !rules.rounds {
+                    let handlers = version.shared.handlers.borrow();
+                    for (function, waiting) in [
+                        ("game.onRoundStart", &handlers.round_start),
+                        ("game.onRoundEnd", &handlers.round_end),
+                    ] {
+                        if !waiting.is_empty() {
+                            log::warn!(
+                                "The script uses {function}, but it never calls game.mode, \
+                                 so the game has no rounds and that function is never \
+                                 called. To play in rounds, add a line near the top of the \
+                                 file: game.mode {{ timeLimit = 300 }}"
+                            );
+                        }
+                    }
+                }
                 // `game.mode` only keeps rules that can be played.
                 if let Err(problem) = self.mode.game.borrow_mut().set_rules(rules) {
                     log::error!("The rules from game.mode were not used: {problem}");

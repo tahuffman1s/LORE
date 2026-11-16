@@ -121,16 +121,85 @@ fn one_call_is_a_whole_team_deathmatch() {
 }
 
 #[test]
-fn a_script_without_a_mode_is_a_free_for_all() {
+fn a_script_without_a_mode_has_no_teams_and_no_rounds() {
     let game = GameFolder::new(
         r#"
         game.onPlayerJoin(function(player) print(player.name, player.team, #game.teams()) end)
+        game.onSpawn(function(player) print("spawn", player.name) end)
+        game.onKill(function(killer, victim) print("kill", killer.score, victim.name) end)
+        game.onTick(function()
+            if game.time() == 200 then
+                print(game.round.phase(), game.round.timeLeft() == math.huge)
+            end
+        end)
         "#,
     );
     let mut host = game.open();
+    let ann = host.player_joined("Ann");
+    assert_eq!(printed(), ["Ann nil 0", "spawn Ann"]);
+    assert!(!host.mode().rules().rounds);
+
+    // Twenty minutes: past the warm-up, the round and the intermission a
+    // deathmatch would have had. Nobody is spawned again.
+    run(&mut host, 20 * 60 * SECOND);
+    assert_eq!(printed(), ["playing true"]);
+    assert_eq!(host.take_spawns().count(), 1);
+
+    // A kill is told to the script and counted, and scores nothing.
+    let bo = host.player_joined("Bo");
+    host.player_killed(Some(ann), bo);
+    assert_eq!(printed(), ["Bo nil 0", "spawn Bo", "kill 0 Bo"]);
+    assert_eq!(host.mode().player(ann).unwrap().kills, 1);
+    // Ending the round from outside, as `lore check` does, ends nothing.
+    host.end_round();
+    run(&mut host, 60 * SECOND);
+    assert_eq!(printed(), ["spawn Bo"]);
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn ending_a_round_in_a_game_with_no_mode_says_to_ask_for_one() {
+    let game = GameFolder::new("game.onPlayerJoin(function() game.round.finish() end)");
+    let mut host = game.open();
     host.player_joined("Ann");
-    assert_eq!(printed(), ["Ann nil 0"]);
-    assert_eq!(host.mode().rules().name, "Deathmatch");
+    assert_eq!(
+        error(&host),
+        "game.round.finish ends the round, but this game has no rounds, because it never \
+         calls game.mode. To play in rounds, add a line near the top of the file: \
+         game.mode { timeLimit = 300 }"
+    );
+    assert_eq!(host.mode().phase(), Phase::Playing);
+}
+
+#[test]
+fn adding_a_mode_to_a_running_game_starts_its_rounds_and_removing_it_stops_them() {
+    let game = GameFolder::new("");
+    let mut host = game.open();
+    host.player_joined("Ann");
+    run(&mut host, 10 * SECOND);
+    host.take_spawns().for_each(drop);
+
+    game.write(
+        r#"
+        game.mode { warmup = 1 }
+        game.onRoundStart(function() print("round") end)
+        "#,
+    );
+    host.reload().unwrap();
+    assert_eq!(host.mode().phase(), Phase::Warmup);
+    run(&mut host, SECOND);
+    assert_eq!(printed(), ["round"]);
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert_eq!(host.take_spawns().count(), 1);
+
+    game.write("");
+    host.reload().unwrap();
+    run(&mut host, 20 * 60 * SECOND);
+    assert_eq!(printed(), Vec::<String>::new());
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert_eq!(host.mode().time_left(), None);
+    assert_eq!(host.take_spawns().count(), 0);
 }
 
 #[test]
@@ -694,8 +763,10 @@ fn handlers_that_set_each_other_off_do_not_hang_the_game() {
 
 #[test]
 fn the_match_goes_on_while_the_script_is_broken() {
-    let game = GameFolder::new("this is not luau");
+    let game = GameFolder::new("game.mode {}");
     let mut host = game.open();
+    game.write("this is not luau");
+    assert!(host.reload().is_err());
     assert!(host.last_error().is_some());
     let ann = host.player_joined("Ann");
     let bo = host.player_joined("Bo");
@@ -704,6 +775,17 @@ fn the_match_goes_on_while_the_script_is_broken() {
     assert_eq!(host.mode().phase(), Phase::Playing);
     assert_eq!(host.mode().player(ann).unwrap().score, 1);
     assert_eq!(host.take_spawns().count(), 4);
+}
+
+#[test]
+fn a_script_that_never_loaded_has_no_mode() {
+    let game = GameFolder::new("this is not luau");
+    let mut host = game.open();
+    assert!(host.last_error().is_some());
+    host.player_joined("Ann");
+    run(&mut host, 20 * 60 * SECOND);
+    assert_eq!(host.mode().phase(), Phase::Playing);
+    assert_eq!(host.take_spawns().count(), 1);
 }
 
 #[test]

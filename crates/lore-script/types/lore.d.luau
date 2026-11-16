@@ -344,6 +344,11 @@ declare game: {
     --- the smallest team, a kill scores, the dead respawn, and rounds start
     --- and end by themselves. The `game.on...` functions below are for
     --- adding rules of your own.
+    ---
+    --- A game that never calls `game.mode` has no mode: no teams, no rounds,
+    --- no warm-up, no time limit and no score for a kill. A player comes into
+    --- the world when they join and is left alone from then on. That is what
+    --- a game played alone usually wants.
     --- Example: game.mode { teams = { "Red", "Blue" }, scoreToWin = 50 }
     mode: (settings: {
         --- What the mode is called. "Team Deathmatch" if left out and there
@@ -390,18 +395,21 @@ declare game: {
     onKill: (handler: (killer: Player?, victim: Player) -> ()) -> (),
 
     --- Calls `handler` each time a player comes into the world: when they
-    --- join, when they respawn, and when a round starts.
+    --- join, when they respawn, and, in a game with a `game.mode`, when a
+    --- round starts.
     --- Example: game.onSpawn(function(player) print(player.name .. " is in") end)
     onSpawn: (handler: (player: Player) -> ()) -> (),
 
     --- Calls `handler` when the warm-up ends and the round starts counting.
-    --- Every score is back to 0.
+    --- Every score is back to 0. Never called in a game with no `game.mode`,
+    --- which has no rounds.
     --- Example: game.onRoundStart(function() print("Go!") end)
     onRoundStart: (handler: () -> ()) -> (),
 
     --- Calls `handler` when the round ends. `winner` is the winning team (or
     --- the winning player when there are no teams), or nil for a draw. Both
-    --- have a `name` and a `score`.
+    --- have a `name` and a `score`. Never called in a game with no
+    --- `game.mode`, which has no rounds.
     --- Example: game.onRoundEnd(function(winner) if winner then print(winner.name .. " wins!") end end)
     onRoundEnd: (handler: (winner: Team | Player | nil) -> ()) -> (),
 
@@ -565,7 +573,9 @@ declare game: {
     onWeaponReload: (handler: (player: Player) -> ()) -> (),
 
     --- The round being played. A match is one round after another: a short
-    --- warm-up, the round itself, then the final score for a while.
+    --- warm-up, the round itself, then the final score for a while. A game
+    --- with no `game.mode` has no rounds: it is "playing" for as long as
+    --- anyone is here, with no time limit.
     round: {
         --- Where the round is: "waiting" (nobody is here), "warmup",
         --- "playing" or "over". It is a function, so write the brackets:
@@ -574,14 +584,16 @@ declare game: {
         phase: () -> "waiting" | "warmup" | "playing" | "over",
 
         --- Seconds until the current phase ends by itself. It is `math.huge`
-        --- while waiting for players and in a round with no time limit. It
-        --- is a function, so write the brackets.
+        --- while waiting for players, in a round with no time limit and in
+        --- a game with no `game.mode`. It is a function, so write the
+        --- brackets.
         --- Example: if game.round.timeLeft() < 60 then print("Last minute!") end
         timeLeft: () -> number,
 
         --- Ends the round now. Give it the winning team (or player, when
         --- there are no teams), or nothing for a draw. Does nothing unless a
-        --- round is being played.
+        --- round is being played. In a game with no `game.mode` there is no
+        --- round to end, and calling this is an error that says so.
         --- Example: game.round.finish(game.team("Red"))
         finish: (winner: Team | Player | nil) -> (),
     },

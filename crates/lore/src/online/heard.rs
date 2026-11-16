@@ -184,11 +184,8 @@ fn a_jump_is_heard_when_it_lands() {
     assert!(played.loudest[0] > 0.01);
 }
 
-/// A rifle with three rounds in it and three to spare, 600 a minute, in a
-/// game whose round starts at once: a round starting hands out a new one
-/// (#259).
+/// A rifle with three rounds in it and three to spare, 600 a minute.
 const SMALL_RIFLE: &str = r#"
-game.mode { warmup = 0 }
 game.weapon("rifle", { magazineSize = 3, reserve = 3, roundsPerMinute = 600 })
 game.onSpawn(function(player) player:giveWeapon("rifle") end)
 "#;

@@ -66,7 +66,7 @@ pub(crate) struct ModeState {
 impl ModeState {
     pub fn new() -> Self {
         Self {
-            game: RefCell::new(Match::default()),
+            game: RefCell::new(Match::without_mode()),
             gone: RefCell::new(Vec::new()),
         }
     }
@@ -604,6 +604,21 @@ fn finish(lua: &Lua, winner: Value) -> mlua::Result<()> {
         }
         other => return Err(wrong_winner(lua, other, has_teams)),
     };
+    // While the file loads, the rounds are the ones this version of it has
+    // asked for so far; afterwards, the ones the match is playing.
+    let has_rounds = if shared.loading.get() {
+        shared.rules.borrow().is_some()
+    } else {
+        shared.mode.game.borrow().rules().rounds
+    };
+    if !has_rounds {
+        return Err(fail(
+            lua,
+            "game.round.finish ends the round, but this game has no rounds, because it \
+             never calls game.mode. To play in rounds, add a line near the top of the \
+             file: game.mode { timeLimit = 300 }",
+        ));
+    }
     // A match whose teams are about to change starts again: there is no
     // round to end.
     if planned.is_none() {

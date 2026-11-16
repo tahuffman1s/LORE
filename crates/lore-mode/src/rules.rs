@@ -15,6 +15,8 @@ pub const MAX_SECONDS: f32 = 86_400.0;
 ///
 /// The default is a free-for-all deathmatch: first player to 50, ten minutes
 /// at most. Give it [`teams`](Self::teams) and it is a team deathmatch.
+/// [`Rules::none`] is a game with no mode at all: nothing is counted, timed
+/// or started again.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rules {
     /// What the mode is called, for server lists and the scoreboard.
@@ -39,6 +41,10 @@ pub struct Rules {
     pub warmup: f32,
     /// How long the final score stays up before the next round, in seconds.
     pub intermission: f32,
+    /// Whether the game is played in rounds. Without them there is no
+    /// warm-up, no time limit, no score to win and no intermission, whatever
+    /// the numbers above say: players come in when they join and stay.
+    pub rounds: bool,
 }
 
 impl Default for Rules {
@@ -52,11 +58,30 @@ impl Default for Rules {
             respawn_delay: 3.0,
             warmup: 5.0,
             intermission: 10.0,
+            rounds: true,
         }
     }
 }
 
 impl Rules {
+    /// The rules of a game that has no mode: no teams, no rounds, and no
+    /// score for a kill. A player comes into the world when they join and is
+    /// only put back at a spawn point after dying or when the game says so.
+    #[must_use]
+    pub fn none() -> Self {
+        Self {
+            name: "No mode".to_owned(),
+            teams: Vec::new(),
+            score_to_win: 0,
+            kill_points: 0,
+            time_limit: 0.0,
+            warmup: 0.0,
+            intermission: 0.0,
+            rounds: false,
+            ..Self::default()
+        }
+    }
+
     /// Checks that a match can be played with these rules.
     ///
     /// # Errors
