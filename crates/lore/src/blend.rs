@@ -31,6 +31,11 @@
 //! Something that was moved in one go (a respawn, a teleport) should not be
 //! drawn sliding there: set its place before to its place now.
 //!
+//! Which way the player looks is the one thing not to blend: blended, the
+//! view would trail the hand by up to a tick. Draw it from the newest
+//! tick's angles plus what has been turned since, which
+//! [`Frame::input`](crate::Frame::input) gives.
+//!
 //! Blending is for the picture only. Nothing here may be fed back into the
 //! game's rules, which see whole ticks and nothing in between.
 

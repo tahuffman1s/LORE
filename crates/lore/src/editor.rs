@@ -43,8 +43,9 @@ use self::play::Play;
 use crate::app::{self, AppError, Config};
 use crate::blend;
 use crate::game::{Frame, Game};
+use crate::look;
 use crate::map::{Map, MapFile, SPAWN};
-use crate::online::{MOUSE_TURN, STICK_TURN, World};
+use crate::online::World;
 use crate::sound_output::SoundAsk;
 
 /// How fast the camera flies to begin with, in metres a second: a little
@@ -227,13 +228,21 @@ impl FlyCamera {
         Some((at, ahead))
     }
 
-    /// The camera `alpha` of the way from `before` to this one.
-    fn blended(&self, before: &Self, alpha: f32) -> Self {
+    /// The camera to draw a frame with that is `alpha` of the way from
+    /// the tick before (`before`) to this one, and has turned by `turn` (to
+    /// the right, then upwards) since. Its place is between the two ticks;
+    /// its angles are this tick's plus the turn no tick has seen yet, so
+    /// the view never trails the mouse.
+    fn drawn(&self, before: &Self, alpha: f32, turn: [f32; 2]) -> Self {
+        let turn = if turn.iter().all(|part| part.is_finite()) {
+            turn
+        } else {
+            [0.0; 2]
+        };
         Self {
             position: blend::position(before.position, self.position, alpha),
-            // The short way round, in case one of the two was wrapped.
-            yaw: blend::angle(before.yaw, self.yaw, alpha),
-            pitch: blend::number(before.pitch, self.pitch, alpha),
+            yaw: self.yaw - turn[0],
+            pitch: (self.pitch + turn[1]).clamp(-STEEPEST, STEEPEST),
             speed: self.speed,
         }
     }
@@ -549,13 +558,12 @@ impl Editor {
     /// What the person at the controls asks for this tick.
     fn read(&self, input: &InputFrame, step: f32) -> Asked {
         let controls = self.controls;
-        let (mouse, stick) = (input.delta(controls.look), input.axis2d(controls.look));
         let steps = i8::from(input.just_pressed(controls.faster))
             - i8::from(input.just_pressed(controls.slower));
         Asked {
             fly: input.axis2d(controls.fly),
             rise: input.value(controls.rise),
-            turn: [0, 1].map(|axis| mouse[axis] * MOUSE_TURN + stick[axis] * STICK_TURN * step),
+            turn: look::asked(input, controls.look, step),
             fast: input.pressed(controls.fast),
             speed_steps: steps,
         }
@@ -708,6 +716,9 @@ impl Game for Editor {
             ..
         } = self;
         let alpha = frame.alpha();
+        // What the mouse and the stick have turned the view by since the
+        // last tick: the picture follows them on every frame.
+        let turn = look::asked(frame.input(), self.controls.look, frame.since_tick());
         let mut changed = false;
         frame.panels(|ui| {
             let spot = camera.place_spot(0.0, *snap);
@@ -722,7 +733,7 @@ impl Game for Editor {
             }
             // Over the picture, in what the panels leave of the window, as
             // the camera of this frame sees it.
-            let seen = camera.blended(before, alpha);
+            let seen = camera.drawn(before, alpha, turn);
             let picture = ui.available_rect_before_wrap();
             let window = ui.ctx().content_rect();
             let size = [window.width(), window.height()];
@@ -815,7 +826,7 @@ impl Game for Editor {
         if changed {
             self.unsaved = Some(0.0);
         }
-        let seen = self.camera.blended(&self.before, alpha);
+        let seen = self.camera.drawn(&self.before, alpha, turn);
         frame.look_from(seen.position, seen.yaw, seen.pitch);
     }
 }
@@ -1150,8 +1161,8 @@ mod tests {
         input.move_mouse(100.0, 50.0);
         editor.tick(input.tick(), STEP);
         // Right turns right, which is yaw going down; up looks up.
-        assert!(close(editor.camera.yaw, yaw - 100.0 * MOUSE_TURN));
-        assert!(close(editor.camera.pitch, pitch + 50.0 * MOUSE_TURN));
+        assert!(close(editor.camera.yaw, yaw - 100.0 * look::MOUSE_TURN));
+        assert!(close(editor.camera.pitch, pitch + 50.0 * look::MOUSE_TURN));
 
         input.move_mouse(0.0, 100_000.0);
         editor.tick(input.tick(), STEP);
@@ -1221,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn frames_between_ticks_are_blended_the_short_way_round() {
+    fn a_frame_between_ticks_is_placed_between_them_and_turned_as_of_now() {
         let before = FlyCamera {
             position: [0.0, 0.0, 0.0],
             yaw: 0.1,
@@ -1230,17 +1241,50 @@ mod tests {
         };
         let after = FlyCamera {
             position: [2.0, 0.0, -4.0],
-            // The same as -0.1, one turn on.
-            yaw: TAU - 0.1,
+            yaw: 0.4,
             pitch: 0.2,
             speed: 8.0,
         };
-        let half = after.blended(&before, 0.5);
+        // Half way there, facing as the newest tick does: the angles of
+        // the tick before are not in it.
+        let half = after.drawn(&before, 0.5, [0.0, 0.0]);
         assert_eq!(half.position, [1.0, 0.0, -2.0]);
-        assert!(close(half.pitch, 0.1));
-        assert!(close(half.yaw.rem_euclid(TAU), 0.0) || close(half.yaw.rem_euclid(TAU), TAU));
-        assert_eq!(after.blended(&before, 1.0).position, after.position);
-        assert!(close(after.blended(&before, 0.0).yaw.rem_euclid(TAU), 0.1));
+        assert_eq!((half.yaw, half.pitch), (0.4, 0.2));
+        assert_eq!(after.drawn(&before, 1.0, [0.0, 0.0]), after);
+
+        // What has been turned since is added, and never tips it over.
+        let turned = after.drawn(&before, 0.5, [0.3, 0.1]);
+        assert!(close(turned.yaw, 0.1) && close(turned.pitch, 0.3));
+        assert_eq!(after.drawn(&before, 0.5, [0.0, 9.0]).pitch, STEEPEST);
+        assert_eq!(after.drawn(&before, 0.5, [f32::NAN, 0.0]), half);
+    }
+
+    #[test]
+    fn the_view_follows_the_mouse_on_every_frame_without_waiting_for_a_tick() {
+        let (mut editor, mut input) = editor();
+        editor.tick(input.tick(), STEP);
+        let camera = editor.camera;
+        let view = |editor: &mut Editor, input: &Input, alpha: f32| {
+            let mut frame = Frame::between_ticks(input, alpha, STEP);
+            editor.frame(&mut frame);
+            frame.view().unwrap()
+        };
+
+        input.move_mouse(100.0, 50.0);
+        let seen = view(&mut editor, &input, 0.5);
+        assert!(close(seen.yaw, camera.yaw - 100.0 * look::MOUSE_TURN));
+        assert!(close(seen.pitch, camera.pitch + 50.0 * look::MOUSE_TURN));
+        assert_eq!(editor.camera, camera, "drawing moves nothing");
+
+        // The tick takes the same movement in, and the picture stays put.
+        editor.tick(input.tick(), STEP);
+        let after = view(&mut editor, &input, 0.0);
+        assert!(close(after.yaw, seen.yaw) && close(after.pitch, seen.pitch));
+
+        // The stick turns by how long it has been held since the tick.
+        input.set_stick(Stick::RightStick, StickAxis::X, 1.0);
+        let held = view(&mut editor, &input, 0.5);
+        assert!(close(held.yaw, after.yaw - look::STICK_TURN * STEP * 0.5));
     }
 
     /// A crate placed twice (once named, once turned a quarter to the

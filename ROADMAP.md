@@ -29,7 +29,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Any frame rate: looking around follows the mouse and stick on every drawn frame (#10)
 - Scripts behave the same at any frame rate without delta-time maths (#11)
 - Test: the same inputs give the same match at 30, 60, 144 and 1000 frames a second (#12)
 - Menus in a running game: menu actions, a built-in pause and settings menu (#13)
