@@ -10,8 +10,8 @@
 //!
 //! This crate has no platform dependencies. A window layer feeds device events
 //! into [`Input`], and once per simulation tick [`Input::tick`] produces an
-//! [`InputFrame`]: a plain snapshot of every action that game code, replays and
-//! the network layer can all consume.
+//! [`InputFrame`]: a plain snapshot of every action that game code and replays
+//! can both consume.
 //!
 //! One thing goes the other way: a [`Rumble`] is what a game asks the
 //! player's gamepad to do.

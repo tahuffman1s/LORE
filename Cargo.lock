@@ -1439,7 +1439,6 @@ dependencies = [
  "lore-audio",
  "lore-input",
  "lore-mode",
- "lore-net",
  "lore-pack",
  "lore-physics",
  "lore-render",
@@ -1492,15 +1491,6 @@ dependencies = [
 [[package]]
 name = "lore-mode"
 version = "0.0.0"
-
-[[package]]
-name = "lore-net"
-version = "0.0.0"
-dependencies = [
- "libm",
- "lore-physics",
- "lore-weapons",
-]
 
 [[package]]
 name = "lore-pack"

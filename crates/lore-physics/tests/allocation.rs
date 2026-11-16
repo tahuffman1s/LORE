@@ -1,5 +1,5 @@
 //! Moving a player must not touch the heap: it runs for every player on
-//! every tick, and again for every tick a client replays.
+//! every tick.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
 

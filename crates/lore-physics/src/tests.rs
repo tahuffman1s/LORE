@@ -549,7 +549,7 @@ fn the_same_inputs_replay_to_the_same_bits() {
     assert!(first.iter().map(bits).eq(second.iter().map(bits)));
     assert!(first.iter().any(|p| !p.grounded) && first.iter().any(|p| p.crouched));
 
-    // A client that goes back to tick 300 and replays ends in the same place.
+    // Going back to tick 300 and replaying ends in the same place.
     let replayed = play(first[299], 300..600);
     assert_eq!(bits(&replayed[299]), bits(&first[599]));
     assert_eq!(replayed[299], first[599]);

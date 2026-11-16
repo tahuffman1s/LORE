@@ -1,11 +1,8 @@
 //! The menu every game gets: `pause` opens it over the game, and it holds
 //! the player's settings and the way out.
 //!
-//! The game underneath is not stopped yet. A game with other players in it
-//! goes on whether or not one of them has a menu open, and a game played
-//! alone still runs through the same netcode, which cannot simply be held
-//! still, so the menu is drawn over a world that keeps moving. Stopping
-//! the world for a player who is alone is #47. What stops is the player's
+//! The game underneath is not stopped yet: the menu is drawn over a world
+//! that keeps moving. Stopping the world is #47. What stops is the player's
 //! own input: while the menu is open the `menu` action set is live, so no
 //! gameplay action hears a key, and the mouse points instead of turning
 //! the view.

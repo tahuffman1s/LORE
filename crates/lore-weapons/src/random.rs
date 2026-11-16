@@ -1,12 +1,12 @@
-//! Chance that a server and a client roll the same way.
+//! Chance that rolls the same way every time a game is played.
 
 /// The number to hand [`Weapon::step`](crate::Weapon::step) for one player's
 /// tick.
 ///
 /// Every roll a weapon makes during that tick (where in the spread a bullet
 /// goes, which way the recoil pulls) is worked out from this number alone,
-/// so a server and a client that agree on who fired and on which tick see
-/// the same bullets. Nothing is remembered between ticks.
+/// so the same player firing on the same tick always fires the same
+/// bullets. Nothing is remembered between ticks.
 #[must_use]
 pub fn shot_seed(player: u32, tick: u32) -> u32 {
     mix(mix(player ^ 0x9E37_79B9) ^ tick)

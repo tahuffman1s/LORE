@@ -5,7 +5,7 @@ use parry3d::shape::Capsule;
 /// What the player is asking for during one tick.
 ///
 /// This is deliberately not tied to keys or sticks: fill it from actions,
-/// from a recorded demo or from a network packet alike.
+/// or from a recording alike.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MoveInput {
     /// Forward (1) or back (-1). A stick pushed halfway gives 0.5.

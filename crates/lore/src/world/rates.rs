@@ -3,128 +3,89 @@
 //! ([`playback`](crate::playback)) and where they are after every tick
 //! must be the same to the last bit.
 //!
-//! The player is moved as a game played alone moves them: predicted on
-//! their own side by the controls that [`JoinedGame`](super::JoinedGame)
-//! reads, and by the server from the commands that sends. The two sides
-//! are handed each other's packets directly here, as [`LocalGame`] has
-//! handed them over since it stopped using this computer's network
-//! (#254). Playing the recording through [`LocalGame`] itself is #47.
+//! The recording is played through [`Playing`] itself, the game `lore run`
+//! plays: its controls, its world and its view.
 
 use std::f32::consts::TAU;
 use std::time::Duration;
 
 use lore_input::{ActionMap, GamepadButton, InputFrame, Key, Stick, StickAxis};
-use lore_net::{Client, ClientSettings, PlayerId, Server, ServerSettings};
-use lore_physics::Player;
 
-use super::{Controls, World};
+use super::{Ground, Playing};
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::playback::{
     Did, Played, Recording, TICK_RATE, first_difference, paces, play, recording, steady,
 };
-
-/// A server and the one player on it, with no network between them.
-struct Walker {
-    world: World,
-    server: Server,
-    client: Client,
-    id: PlayerId,
-    controls: Controls,
-    yaw: f32,
-    pitch: f32,
-    /// The player's commands on their way to the server.
-    commands: Vec<u8>,
-    /// The server's word on its way to the player.
-    snapshot: Vec<u8>,
-    /// The yaw and pitch the newest frame was drawn with.
-    drawn: (f32, f32),
-}
+use crate::script_game::ScriptGame;
 
 /// The yaw every walk starts with.
 const START_YAW: f32 = 1.0;
 
+/// A game played alone, and the yaw and pitch its newest frame was drawn
+/// with.
+struct Walker {
+    game: Playing,
+    drawn: (f32, f32),
+}
+
 impl Walker {
+    /// A game with no rules on the flat floor, the player facing
+    /// [`START_YAW`].
     fn new() -> Self {
-        let world = World::flat(TICK_RATE);
-        let mut server = Server::new(world.step, ServerSettings::default());
-        let id = server.join(world.first()).unwrap();
+        let actions = ActionMap::default_fps();
+        let script = ScriptGame::from_source("", &actions);
+        let mut game = Playing::start(script, None, &actions, TICK_RATE).unwrap();
+        game.yaw = START_YAW;
         Self {
-            client: Client::new(world.first(), world.step, ClientSettings::default()),
-            server,
-            id,
-            controls: Controls::new(&ActionMap::default_fps()),
-            yaw: START_YAW,
-            pitch: 0.0,
-            commands: Vec::new(),
-            snapshot: Vec::new(),
+            game,
             drawn: (START_YAW, 0.0),
-            world,
         }
     }
 
-    /// Everything that is the game's state, as bits: the player as the
-    /// server has them, as their own side has them, and the view.
-    fn state(&self) -> Vec<u32> {
-        let bits = |player: &Player| {
-            let mut bits: Vec<u32> = [
-                player.position,
-                player.velocity,
-                player.ground_normal,
-                [player.eye_height, 0.0, 0.0],
-            ]
-            .iter()
-            .flatten()
-            .map(|part| part.to_bits())
-            .collect();
-            bits.extend(
-                [
-                    player.grounded,
-                    player.crouched,
-                    player.sprinting,
-                    player.jump_held,
-                ]
-                .map(u32::from),
-            );
-            bits
-        };
-        let mut state = bits(self.server.player(self.id).unwrap());
-        state.extend(bits(self.client.player()));
-        state.extend([self.yaw.to_bits(), self.pitch.to_bits()]);
-        state
+    fn player(&self) -> &lore_physics::Player {
+        self.game.world.player(self.game.id).unwrap()
     }
 }
 
 impl Game for Walker {
-    /// The server's side and then the player's, as [`LocalGame`] ticks.
-    ///
-    /// [`LocalGame`]: super::LocalGame
     fn tick(&mut self, input: &InputFrame, step: f32) {
-        let (level, rules) = (&self.world.level, &self.world.rules);
-        if !self.commands.is_empty() {
-            self.server.receive(self.id, &self.commands).unwrap();
-        }
-        self.server.tick(level, rules);
-        self.server
-            .write_snapshot(self.id, &mut self.snapshot)
-            .unwrap();
-
-        self.client.receive(level, rules, &self.snapshot).unwrap();
-        let asked = self
-            .controls
-            .asked(input, step, &mut self.yaw, &mut self.pitch);
-        self.client
-            .predict(level, rules, &asked, &mut self.commands);
+        self.game.tick(input, step);
     }
 
-    /// The view as [`JoinedGame`](super::JoinedGame) draws it: the newest
-    /// tick's angles and what no tick has seen yet.
     fn frame(&mut self, frame: &mut Frame) {
-        let look = self.controls.look.unwrap();
-        let turn = look::asked(frame.input(), look, frame.since_tick());
-        self.drawn = look::turned(self.yaw, self.pitch, turn);
-        frame.look_from(self.client.view_position(), self.drawn.0, self.drawn.1);
+        self.game.frame(frame);
+        let view = frame.view().unwrap();
+        self.drawn = (view.yaw, view.pitch);
     }
+}
+
+/// Everything that is the game's state, as bits: the player as the world
+/// has them, and the view.
+fn state(walker: &Walker) -> Vec<u32> {
+    let (game, player) = (&walker.game, walker.player());
+    let mut state: Vec<u32> = [
+        player.position,
+        player.velocity,
+        player.ground_normal,
+        [player.eye_height, 0.0, 0.0],
+    ]
+    .iter()
+    .flatten()
+    .map(|part| part.to_bits())
+    .collect();
+    state.extend(
+        [
+            player.grounded,
+            player.crouched,
+            player.sprinting,
+            player.jump_held,
+        ]
+        .map(u32::from),
+    );
+    state.extend(game.eye.map(f32::to_bits));
+    state.extend([game.yaw.to_bits(), game.pitch.to_bits()]);
+    state
 }
 
 fn key(key: Key) -> lore_input::Button {
@@ -175,13 +136,13 @@ fn walk_at(
     frame_times: impl IntoIterator<Item = Duration>,
 ) -> (Walker, Played<Vec<u32>>) {
     let mut walker = Walker::new();
-    let played = play(&mut walker, recording, frame_times, Walker::state);
+    let played = play(&mut walker, recording, frame_times, state);
     (walker, played)
 }
 
 /// How high the feet were after each tick of `played`.
 fn heights(played: &Played<Vec<u32>>) -> Vec<f32> {
-    // The server's player comes first, and height is the second part.
+    // The player's place comes first, and height is its second part.
     played
         .states
         .iter()
@@ -197,7 +158,7 @@ fn a_walk_is_the_same_to_the_last_bit_at_any_frame_rate() {
 
     // The recording does what it is meant to: the player went somewhere,
     // left the ground four times and came down, and turned.
-    let player = walker.client.player();
+    let player = walker.player();
     let [x, _, z] = player.position;
     assert!(x.hypot(z) > 10.0, "walked {} m", x.hypot(z));
     let heights = heights(&expected);
@@ -207,18 +168,15 @@ fn a_walk_is_the_same_to_the_last_bit_at_any_frame_rate() {
         .count();
     assert_eq!(jumps, 4, "jumps");
     assert!(player.grounded && player.position[1].abs() < 0.01);
-    assert!((walker.yaw - START_YAW).abs() > 0.5);
-    // What the player's own side worked out is what the server did, a
-    // fixed few ticks later: nothing was ever put right.
-    let half = expected.states[0].len() / 2 - 1;
-    let server = |tick: usize| &expected.states[tick][..half];
-    let own = |tick: usize| &expected.states[tick][half..2 * half];
-    let late = (1..8)
-        .find(|late| server(100) == own(100 - late))
-        .expect("the server runs what the player sent");
-    for tick in 10..600 {
-        assert_eq!(server(tick), own(tick - late), "tick {tick}, {late} late");
-    }
+    assert!((walker.game.yaw - START_YAW).abs() > 0.5);
+    // A key moves the player in the very tick that sees it: W goes down
+    // before tick 30 and the player is under way when it is over.
+    let speed = |tick: usize| {
+        let velocity = |axis: usize| f32::from_bits(expected.states[tick][3 + axis]);
+        velocity(0).hypot(velocity(2))
+    };
+    assert_eq!(speed(29), 0.0);
+    assert!(speed(30) > 0.0, "{}", speed(30));
 
     for (pace, frame_times) in paces() {
         let (_, found) = walk_at(&recording, frame_times);
@@ -236,7 +194,7 @@ fn a_jump_is_as_high_at_any_frame_rate() {
     recording[40].push(Did::Release(key(Key::Space)));
     let top = |frame_times: Box<dyn Iterator<Item = Duration>>| {
         let (walker, played) = walk_at(&recording, frame_times);
-        assert!(walker.client.player().grounded, "landed again");
+        assert!(walker.player().grounded, "landed again");
         heights(&played).into_iter().fold(0.0_f32, f32::max)
     };
     let expected = top(Box::new(steady(TICK_RATE)));
@@ -253,7 +211,7 @@ fn a_jump_is_as_high_at_any_frame_rate() {
 }
 
 fn walker_jump_height() -> f32 {
-    World::flat(TICK_RATE).rules.jump_height
+    Ground::flat(TICK_RATE).rules.jump_height
 }
 
 #[test]
@@ -277,13 +235,14 @@ fn the_same_mouse_movement_turns_the_view_by_the_same_angle_at_any_frame_rate() 
     for (pace, frame_times) in paces() {
         let (walker, found) = walk_at(&recording, frame_times);
         assert!(
-            (walker.yaw - turned.0).abs() < 1e-4 && (walker.pitch - turned.1).abs() < 1e-4,
+            (walker.game.yaw - turned.0).abs() < 1e-4
+                && (walker.game.pitch - turned.1).abs() < 1e-4,
             "{pace}: turned to {} and {}, not {turned:?}",
-            walker.yaw,
-            walker.pitch
+            walker.game.yaw,
+            walker.game.pitch
         );
         // The picture ends where the game's rules have the view.
-        assert_eq!(walker.drawn, (walker.yaw, walker.pitch), "{pace}");
+        assert_eq!(walker.drawn, (walker.game.yaw, walker.game.pitch), "{pace}");
         if let Some(difference) = first_difference(&expected.states, &found.states) {
             panic!("At {pace}, {difference}");
         }

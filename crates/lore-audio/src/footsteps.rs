@@ -81,8 +81,8 @@ pub enum Footfall {
 /// Decides when one player's feet hit the ground. Keep one per player.
 ///
 /// It reads no clock and rolls no dice: the same movement always gives
-/// the same steps, on a server, a client or in a replay. It is a small
-/// `Copy` value, so it can be kept with the player and rolled back.
+/// the same steps, in a game or in a replay of it. It is a small
+/// `Copy` value, so it can be kept with the player and saved.
 ///
 /// ```
 /// use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps};
