@@ -47,6 +47,10 @@ jobs:
       - run: cargo build -p lore-server
       # The `lore` command still builds with the editor left out.
       - run: cargo check -p lore --no-default-features --features window,cli
+      # The build with no window (the one a dedicated server uses) stays
+      # free of warnings too. Linux only: the lint is the same everywhere.
+      - if: runner.os == 'Linux'
+        run: cargo clippy -p lore --no-default-features --all-targets -- -D warnings
 
   # Gives lore.d.luau, the template and the example games to the Luau type
   # checker an editor uses, so the definitions are known to load there and the
