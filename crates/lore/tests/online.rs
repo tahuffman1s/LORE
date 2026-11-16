@@ -589,8 +589,9 @@ fn a_player_is_sent_the_map_and_faces_the_way_its_spawn_point_does() {
     play_over_network(&mut hosted, &mut [(&mut joined, &mut still)], 30);
     let here = joined.player().position;
     let (_, on_server) = hosted.players().next().unwrap();
-    // Dropped on the floor, a player settles within a centimetre or two.
-    assert!(distance(here, at) < 0.05, "{here:?}");
+    // Started with their feet on the floor, a player is lifted the
+    // centimetre they keep clear of it and moved no other way.
+    assert!(distance(here, [at[0], 0.01, at[2]]) < 0.0001, "{here:?}");
     assert!(distance(here, on_server.position) < 0.001, "{here:?}");
     let yaw = joined.yaw();
     assert!(

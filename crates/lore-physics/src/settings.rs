@@ -151,7 +151,10 @@ impl MoveSettings {
     /// The player's collision shape in the given stance, centred on its middle.
     pub(crate) fn shape(&self, crouched: bool) -> Capsule {
         let radius = self.radius();
-        Capsule::new_y(self.height(crouched) / 2.0 - radius, radius)
+        Capsule::new_y(
+            f64::from(self.height(crouched) / 2.0 - radius),
+            f64::from(radius),
+        )
     }
 
     pub(crate) fn radius(&self) -> f32 {

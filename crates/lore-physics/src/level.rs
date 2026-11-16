@@ -1,13 +1,23 @@
 //! The level's triangles, and the few questions the player asks of them.
 
 use lore_assets::{Scene, Transform};
-use parry3d::math::{Pose, Vector};
+use parry3d::glamx::Vec3;
+use parry3d::math::{Pose, Vector as Wide};
 use parry3d::query::{self, Ray, RayCast, ShapeCastOptions};
 use parry3d::shape::{Capsule, TriMesh};
 
 /// A triangle thinner than this (twice its area, in square metres) is left
 /// out: it has no direction to push the player in.
 const THINNEST_TRIANGLE: f32 = 1.0e-10;
+
+/// A place or a direction as the player's movement works with it.
+///
+/// Movement is single precision, like the positions it starts from and
+/// ends at. The questions below are worked out in double precision
+/// (`Wide`) and their answers handed back in single: a triangle may be a
+/// kilometre across and the gap to it a centimetre, and in single
+/// precision that gap came out wrong by up to 18 cm.
+pub(crate) type Vector = Vec3;
 
 /// The longest a ray is followed, in metres, however far was asked for.
 const FARTHEST_RAY: f32 = 100_000.0;
@@ -84,7 +94,7 @@ impl Level {
             let Ok(first) = u32::try_from(points.len()) else {
                 break;
             };
-            points.extend([a, b, c]);
+            points.extend([a, b, c].map(Vec3::as_dvec3));
             indices.push([first, first + 1, first + 2]);
         }
         let count = indices.len();
@@ -114,16 +124,17 @@ impl Level {
         if !(from.is_finite() && heading.is_finite() && reach > 0.0) {
             return None;
         }
-        let ray = Ray::new(from, heading);
-        let hit = mesh.cast_local_ray_and_get_normal(&ray, reach.min(FARTHEST_RAY), false)?;
-        let normal = hit.normal.try_normalize()?;
+        let ray = Ray::new(from.as_dvec3(), heading.as_dvec3());
+        let reach = f64::from(reach.min(FARTHEST_RAY));
+        let hit = mesh.cast_local_ray_and_get_normal(&ray, reach, false)?;
+        let normal = hit.normal.as_vec3().try_normalize()?;
         // A triangle seen from behind reports its back; face the looker.
         let normal = if normal.dot(heading) > 0.0 {
             -normal
         } else {
             normal
         };
-        let distance = hit.time_of_impact;
+        let distance = hit.time_of_impact as f32;
         distance.is_finite().then(|| RayHit {
             distance,
             point: (from + heading * distance).to_array(),
@@ -146,6 +157,7 @@ impl Level {
         gap: f32,
     ) -> Option<Touch> {
         let mesh = self.mesh.as_ref()?;
+        let (travel, gap) = (travel.as_dvec3(), f64::from(gap));
         let length = travel.length();
         let heading = travel.try_normalize()?;
         let options = ShapeCastOptions {
@@ -157,9 +169,9 @@ impl Level {
         };
         let hit = query::cast_shapes(
             &Pose::IDENTITY,
-            Vector::ZERO,
+            Wide::ZERO,
             mesh,
-            &Pose::from_translation(centre),
+            &Pose::from_translation(centre.as_dvec3()),
             heading * (length + gap),
             shape,
             options,
@@ -172,9 +184,9 @@ impl Level {
         let reached = hit.time_of_impact.clamp(0.0, 1.0) * (length + gap);
         let fraction = ((reached - gap / head_on) / length).clamp(0.0, 1.0);
         (fraction.is_finite() && hit.witness1.is_finite()).then_some(Touch {
-            fraction,
-            normal,
-            point: hit.witness1,
+            fraction: fraction as f32,
+            normal: normal.as_vec3(),
+            point: hit.witness1.as_vec3(),
         })
     }
 
@@ -184,7 +196,7 @@ impl Level {
             query::intersection_test(
                 &Pose::IDENTITY,
                 mesh,
-                &Pose::from_translation(centre),
+                &Pose::from_translation(centre.as_dvec3()),
                 shape,
             )
             .is_ok_and(|found| found.intersecting)
@@ -204,26 +216,29 @@ impl Level {
         let contact = query::contact(
             &Pose::IDENTITY,
             mesh,
-            &Pose::from_translation(centre),
+            &Pose::from_translation(centre.as_dvec3()),
             shape,
-            gap,
+            f64::from(gap),
         )
         .ok()
         .flatten()?;
         let normal = contact.normal1.try_normalize()?;
-        contact.dist.is_finite().then_some((normal, contact.dist))
+        contact
+            .dist
+            .is_finite()
+            .then_some((normal.as_vec3(), contact.dist as f32))
     }
 
     /// Which way the surface straight below `from` faces, looking no
     /// further down than `reach`.
     pub(crate) fn surface_below(&self, from: Vector, reach: f32) -> Option<Vector> {
-        let ray = Ray::new(from, Vector::NEG_Y);
-        let hit = self
-            .mesh
-            .as_ref()?
-            .cast_local_ray_and_get_normal(&ray, reach, false)?;
+        let ray = Ray::new(from.as_dvec3(), Wide::NEG_Y);
+        let hit =
+            self.mesh
+                .as_ref()?
+                .cast_local_ray_and_get_normal(&ray, f64::from(reach), false)?;
         // A triangle seen from behind reports its back; either side is floor.
-        let normal = hit.normal.try_normalize()?;
+        let normal = hit.normal.as_vec3().try_normalize()?;
         Some(if normal.y < 0.0 { -normal } else { normal })
     }
 }

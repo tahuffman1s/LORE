@@ -69,7 +69,6 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Other views from the same few words: top-down, side-on, fixed and on rails (#49)
 - The player's own side fires their weapon too: recoil moves the camera and ammo is known at once (#232)
 - A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
-- A player walking the flat floor drops 18 cm into it for a tick or two, now and then (#261)
 - Carry more than one weapon and switch between them (#233)
 - Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
 - Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter

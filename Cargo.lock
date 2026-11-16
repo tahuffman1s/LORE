@@ -1563,7 +1563,7 @@ version = "0.0.0"
 dependencies = [
  "libm",
  "lore-assets",
- "parry3d",
+ "parry3d-f64",
 ]
 
 [[package]]
@@ -2244,10 +2244,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry3d"
+name = "parry3d-f64"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b626edc0b497dba4bdf6e1e0797895294ed9f61dac2bd28cb5d34d37ad2ca7e"
+checksum = "ffb9e04261f1783d8f66f36767b2b73132a63c9b30b12a5ed47e1faa240f7591"
 dependencies = [
  "approx",
  "arrayvec",
@@ -2268,7 +2268,6 @@ dependencies = [
  "slab",
  "smallvec",
  "spade",
- "static_assertions",
  "thiserror 2.0.21",
 ]
 
@@ -2797,12 +2796,6 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
-
-[[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strict-num"
