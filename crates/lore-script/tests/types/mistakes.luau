@@ -6,10 +6,14 @@
 -- line that ends in a `wrong` comment, and on no other line. It is what
 -- shows the check can fail: a checker that had not read lore.d.luau would
 -- pass everything.
+--
+-- A misspelt setting or option, such as `game.mode { teems = ... }` or
+-- `{ volum = 1 }`, is not here: Luau lets a table hold more than a type asks
+-- for, so the type checker says nothing. The engine catches those when the
+-- script runs ("game.mode has no setting called teems. Did you mean teams?").
 
 game.onStrat(function() end) -- wrong: no such function
 game.input.pressed(5) -- wrong: an action is text
-game.mode { teems = { "Red", "Blue" } } -- wrong: no such setting
 game.mode { scoreToWin = "fifty" } -- wrong: a score is a number
 
 local red = game.team("Red")
@@ -25,7 +29,6 @@ game.onPlayerJoin(function(player)
     print(player.team.name) -- wrong: a player has no team when the mode has none
 end)
 
-game.audio.play("gunshot", { volum = 1 }) -- wrong: no such option
 game.audio.playAt("gunshot", 1, 2, 3) -- wrong: a place is vector.create(1, 2, 3)
 
 if game.round.phase() == "playng" then -- wrong: no such phase
