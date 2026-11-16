@@ -30,10 +30,8 @@ else
 fi
 echo "sha $got (want $sha)"
 unzip -oq "$tools/$asset" -d "$tools"
-ls -la "$tools"
 luau_lsp="$tools/luau-lsp"
 "$luau_lsp" --version
-"$luau_lsp" analyze --help
 
 defs=crates/lore-script/types/lore.d.luau
 fixtures=crates/lore-script/tests/types
@@ -56,10 +54,6 @@ for solver in false true; do
     done
 done
 
-sed 's/^declare class \(.*\)$/declare extern type \1 with/' "$defs" > "$tools/extern.d.luau"
-echo "##### extern type form"
-"$luau_lsp" analyze --platform=standard "--defs=@lore=$tools/extern.d.luau" "$fixtures/everything.luau" 2>&1
-echo "--- exit $?"
 echo "##### broken definitions"
 echo "declare game: {" > "$tools/broken.d.luau"
 "$luau_lsp" analyze --platform=standard "--defs=@lore=$tools/broken.d.luau" "$fixtures/everything.luau" 2>&1 | head -5
