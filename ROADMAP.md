@@ -1,12 +1,12 @@
 # Roadmap
 
-An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, and built in issue order: the numbers below are the order of work. Single-player comes first; multiplayer is last because it is the part that already works best.
+An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, and built a milestone at a time, earliest first, and within a milestone lowest issue number first, so a follow-up filed in an early milestone is not left until last. Single-player comes first; multiplayer is last because it is the part that already works best.
 
 ## Already built
 
 LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts with what it had. `FOSSPS#N` is an issue or pull request there.
 
-- A window, a fixed-rate main loop, and keyboard, mouse and gamepad input through one action map (FOSSPS#1)
+- A window, a main loop that steps the game at a fixed tick at any frame rate and blends the view between ticks (FOSSPS#1, #9), and keyboard, mouse and gamepad input through one action map
 - A Vulkan 1.3 renderer: glTF levels and models, PBR materials, a sun light, HDR and tone mapping, FSR 3.1 upscaling (FOSSPS#2, FOSSPS#5, FOSSPS#58, FOSSPS#59, FOSSPS#15, FOSSPS#16)
 - Luau scripts that reload on save, split over files, with errors that say what to do (FOSSPS#3)
 - `lore new`, `run`, `check`, `serve`, `join`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
@@ -29,7 +29,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Any frame rate: the game steps at a fixed tick and the picture is blended between ticks (#9)
 - Any frame rate: looking around follows the mouse and stick on every drawn frame (#10)
 - Scripts behave the same at any frame rate without delta-time maths (#11)
 - Test: the same inputs give the same match at 30, 60, 144 and 1000 frames a second (#12)

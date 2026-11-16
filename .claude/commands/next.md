@@ -5,8 +5,9 @@ argument-hint: Optional issue number or task instead of the next roadmap issue
 
 Build one roadmap issue to completion without asking the user anything.
 
-Task: $ARGUMENTS. If empty, take the lowest-numbered open issue labelled `roadmap` and not `blocked`:
-`gh issue list -l roadmap -S "-label:blocked sort:created-asc" -L 1 --json number,title,body`
+Task: $ARGUMENTS. If empty, take the open issue labelled `roadmap` and not `blocked` in the earliest milestone (M0, then M1, up to M8), and within that milestone the lowest number. A follow-up filed in an early milestone has a high number and must not wait until last. This prints its number and title:
+`gh issue list -l roadmap -S "-label:blocked" -L 300 --json number,title,milestone --jq 'map(select(.milestone)) | sort_by(.milestone.title, .number) | .[0] | "\(.number) \(.title)"'`
+Then read it: `gh issue view <number> --json number,title,body`.
 
 1. **Scope** — read the issue and only the code it touches. If it is too big for one session, split it into new `roadmap` issues in the same milestone and take the first.
 2. **Branch** — `git switch main && git pull -q && git switch -c <number>-<short-slug>`.

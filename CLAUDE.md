@@ -35,7 +35,7 @@ The owner wants to give very little input. `/next` builds the next roadmap issue
 
 ## GitHub (`gh`, repo `tahuffman1s/LORE`)
 
-- Issues are the source of truth. Roadmap work carries the `roadmap` label and a milestone (M0–M8); issue numbers are the build order; `ROADMAP.md` is only an overview. New work found along the way becomes an issue, not a TODO.
+- Issues are the source of truth. Roadmap work carries the `roadmap` label and a milestone (M0–M8); the build order is earliest milestone first, then lowest issue number; `ROADMAP.md` is only an overview. New work found along the way becomes an issue, not a TODO.
 - Every change goes through a PR from a branch named `<issue>-<slug>`, with `Closes #<issue>`. Never commit to `main` directly, never force-push.
 - The owner has authorized Claude to open, review and merge its own PRs without asking. Review the diff with `code-reviewer` before pushing. On the PR, the Claude GitHub app (`claude[bot]`, workflow `claude-code-review.yml`) gives an independent review: wait for it, then fix or answer every comment it leaves. Squash-merge once that is settled and CI (Linux, Windows, macOS) is green.
 - Ask for JSON and only the fields you need (`gh ... --json number,title`); never dump full issue or PR lists.

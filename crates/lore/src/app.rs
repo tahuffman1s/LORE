@@ -17,7 +17,7 @@ use crate::game::{Frame, Game};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
 use crate::sound_output::{LazySpeakers, SoundOutput};
-use crate::tick::TickClock;
+use crate::tick::{Hitches, TickClock};
 use crate::translate;
 
 /// Where the eye is before a game says where to look from: as high as a
@@ -51,7 +51,21 @@ pub struct Config {
     pub width: u32,
     /// Window height in pixels, before display scaling.
     pub height: u32,
-    /// Simulation ticks per second.
+    /// Simulation ticks per second: how often [`Game::tick`] is called,
+    /// however often a picture is drawn. 0 is treated as 1.
+    ///
+    /// The game's rules step this many times a second on any computer; what
+    /// is drawn in between is blended from the last two ticks (see
+    /// [`blend`](crate::blend)). After a frame that took very long, at most
+    /// five ticks are run to catch up and the rest are skipped, which is
+    /// logged once.
+    ///
+    /// ```
+    /// let config = lore::Config {
+    ///     tick_rate: 30,
+    ///     ..lore::Config::default()
+    /// };
+    /// ```
     pub tick_rate: u32,
     /// Wait for the display before showing each frame.
     ///
@@ -208,6 +222,7 @@ fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError>
     let event_loop = EventLoop::new().map_err(AppError::EventLoop)?;
     let mut app = App {
         clock: TickClock::new(config.tick_rate),
+        hitches: Hitches::default(),
         pacer: FramePacer::new(config.max_fps, Instant::now()),
         input: Input::new(config.actions.clone()),
         gamepads: Gamepads::new(),
@@ -241,6 +256,8 @@ struct App<G> {
     editing: bool,
     input: Input,
     clock: TickClock,
+    /// Says so when ticks are skipped after a frame that took too long.
+    hitches: Hitches,
     /// Holds frames back to the frame rate limit.
     pacer: FramePacer,
     gamepads: Gamepads,
@@ -467,8 +484,14 @@ impl<G: Game> App<G> {
 
         self.gamepads.poll(&mut self.input, self.focused);
         let step = self.clock.step().as_secs_f32();
-        for _ in 0..self.clock.advance(elapsed) {
+        // Real time only decides how many ticks run. Each tick is told the
+        // same fixed step, so no frame time reaches the game's rules.
+        let due = self.clock.advance_counting(elapsed);
+        for _ in 0..due.ticks {
             self.game.tick(self.input.tick(), step);
+        }
+        if let Some(said) = self.hitches.note(due.skipped, self.clock.step(), now) {
+            log::warn!("{said}");
         }
 
         let screen = self.window.as_ref().map(|window| {

@@ -58,6 +58,7 @@ use lore_net::{
 pub use lore_net::{FoundServer, ShareError, lan_address};
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
+use crate::blend;
 use crate::game::{Frame, Game};
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
@@ -980,6 +981,39 @@ impl Arrivals {
 /// The most of an error about a server's file that is shown, in characters.
 const MOST_SHOWN: usize = 600;
 
+/// A view that moves further than this in one tick, in metres, has been put
+/// somewhere new (a respawn, a teleport) and is not drawn gliding there.
+/// Falling at terminal speed at 20 ticks a second is under 3 m a tick.
+const CUT_METRES: f32 = 5.0;
+
+/// Where a player's eyes are and which way they face, on one tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Seen {
+    eye: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+}
+
+impl Seen {
+    /// The view `alpha` of the way from `before` to this one.
+    fn blended(&self, before: &Self, alpha: f32) -> Self {
+        Self {
+            eye: blend::position(before.eye, self.eye, alpha),
+            yaw: blend::angle(before.yaw, self.yaw, alpha),
+            pitch: blend::number(before.pitch, self.pitch, alpha),
+        }
+    }
+
+    /// Whether the eyes went further from `before` than anyone walks or
+    /// falls in one tick. A distance that is not a number counts as far.
+    fn cut_from(&self, before: &Self) -> bool {
+        let moved: f32 = (0..3)
+            .map(|axis| (self.eye[axis] - before.eye[axis]).powi(2))
+            .sum();
+        moved.is_nan() || moved > CUT_METRES * CUT_METRES
+    }
+}
+
 /// `text`, which quotes a file a server sent, made safe to show in a
 /// terminal: no control characters but new lines, and not too long.
 fn plain(text: &str) -> String {
@@ -1024,6 +1058,10 @@ pub struct JoinedGame {
     arrivals: Arrivals,
     /// The level the server sent, until it is taken to be drawn.
     level: Option<Scene>,
+    /// The view on the tick before the newest, to draw frames between the
+    /// two from. `None` when the newest tick is to be drawn as it is:
+    /// before the first tick, and when the view was put somewhere new.
+    before: Option<Seen>,
 }
 
 impl JoinedGame {
@@ -1071,6 +1109,7 @@ impl JoinedGame {
             start_looking: None,
             arrivals: Arrivals::new(fetches),
             level: None,
+            before: None,
         })
     }
 
@@ -1208,6 +1247,25 @@ impl JoinedGame {
         self.pitch
     }
 
+    /// The view as of the newest tick.
+    fn seen(&self) -> Seen {
+        Seen {
+            eye: self.eye_position(),
+            yaw: self.yaw,
+            pitch: self.pitch,
+        }
+    }
+
+    /// The view to draw a frame from that is `alpha` of the way from the
+    /// tick before to the newest tick.
+    fn seen_at(&self, alpha: f32) -> Seen {
+        let now = self.seen();
+        match &self.before {
+            Some(before) => now.blended(before, alpha),
+            None => now,
+        }
+    }
+
     /// The other players as the server last told of them.
     pub fn others(&self) -> impl Iterator<Item = RemotePlayer> + '_ {
         self.client.others()
@@ -1297,28 +1355,36 @@ impl JoinedGame {
 
 impl Game for JoinedGame {
     fn tick(&mut self, input: &InputFrame, step: f32) {
+        let before = self.seen();
+        // Until the server has said where this player starts, what is seen
+        // is a guess, and the first real view is not glided to from it.
+        let placed = self.faced;
         self.listen();
         // Nothing moves until the server has said where this player starts:
         // a step taken from a guessed place would be taken back.
-        if self.closed.is_some() || self.link.id().is_none() || !self.faced {
-            return;
+        if self.closed.is_none() && self.link.id().is_some() && self.faced {
+            let asked = self.read(input, step);
+            self.client.predict(
+                &self.world.level,
+                &self.world.rules,
+                &asked,
+                &mut self.packet,
+            );
+            self.link.send(&self.packet);
         }
-        let asked = self.read(input, step);
-        self.client.predict(
-            &self.world.level,
-            &self.world.rules,
-            &asked,
-            &mut self.packet,
-        );
-        self.link.send(&self.packet);
+        self.before = (placed && !self.seen().cut_from(&before)).then_some(before);
     }
 
+    /// Looks from the player's eyes. A frame drawn between two ticks sees
+    /// from between where the eyes were on the one and on the other, so
+    /// walking is smooth however many frames are drawn to a tick.
     fn frame(&mut self, frame: &mut Frame) {
         if self.closed.is_some() {
             frame.close();
             return;
         }
-        frame.look_from(self.eye_position(), self.yaw, self.pitch);
+        let seen = self.seen_at(frame.alpha());
+        frame.look_from(seen.eye, seen.yaw, seen.pitch);
     }
 }
 
@@ -1550,6 +1616,90 @@ mod tests {
             Some(Rumble::new(0.2, 0.6, 0.1))
         );
         assert_eq!(asked(&mut game, &mut input), None);
+    }
+
+    #[test]
+    fn a_frame_between_two_ticks_is_seen_from_between_them() {
+        use lore_input::{Input, Key};
+
+        let actions = ActionMap::default_fps();
+        let script = ScriptGame::from_source("", &actions);
+        let mut game = LocalGame::start(script, None, &actions, 60).unwrap();
+        let mut input = Input::new(actions);
+        let view = |game: &mut LocalGame, alpha: f32| {
+            let mut frame = Frame::new(alpha);
+            game.frame(&mut frame);
+            frame.view().unwrap()
+        };
+
+        // Before the first tick there is one view, whatever the frame.
+        assert_eq!(view(&mut game, 0.0), view(&mut game, 1.0));
+
+        // Walk until a tick has moved the eyes.
+        input.press(Key::W);
+        let mut walked = None;
+        for _ in 0..300 {
+            let before = game.joined.seen();
+            game.tick(input.tick(), 1.0 / 60.0);
+            std::thread::sleep(Duration::from_millis(1));
+            let after = game.joined.seen();
+            let moved = (after.eye[2] - before.eye[2]).abs();
+            if game.joined.before.is_some() && moved > 0.01 {
+                walked = Some((before, after));
+                break;
+            }
+        }
+        let (before, after) = walked.expect("the player walks when W is held");
+
+        // A frame right on the tick before, halfway, and right on the newest.
+        assert_eq!(view(&mut game, 0.0).position, before.eye);
+        assert_eq!(view(&mut game, 1.0).position, after.eye);
+        let halfway = view(&mut game, 0.5).position;
+        for axis in 0..3 {
+            let middle = (before.eye[axis] + after.eye[axis]) / 2.0;
+            assert!((halfway[axis] - middle).abs() < 1e-5, "{halfway:?}");
+        }
+        // Frames drawn at an even pace between two ticks move the eyes by
+        // even steps: the same walk at 60 frames a second or at 240.
+        let quarters: Vec<f32> = (0..=4)
+            .map(|frame| view(&mut game, frame as f32 / 4.0).position[2])
+            .collect();
+        let stride = (after.eye[2] - before.eye[2]) / 4.0;
+        for pair in quarters.windows(2) {
+            assert!((pair[1] - pair[0] - stride).abs() < 1e-5, "{quarters:?}");
+        }
+        // Drawing does not change the game: the ticks are where they were.
+        assert_eq!(game.joined.seen(), after);
+    }
+
+    #[test]
+    fn a_view_turns_the_short_way_and_is_not_glided_to_a_new_place() {
+        let before = Seen {
+            eye: [0.0, 1.6, 0.0],
+            yaw: TAU - 0.1,
+            pitch: 0.2,
+        };
+        let after = Seen {
+            eye: [0.0, 1.6, -0.1],
+            yaw: 0.1,
+            pitch: 0.4,
+        };
+        let halfway = after.blended(&before, 0.5);
+        assert!(halfway.yaw.abs() < 1e-5, "{halfway:?}");
+        assert!((halfway.pitch - 0.3).abs() < 1e-5, "{halfway:?}");
+        assert!(!after.cut_from(&before));
+
+        // A respawn across the level, and a place that is not a number.
+        let respawned = Seen {
+            eye: [0.0, 1.6, -28.0],
+            ..after
+        };
+        assert!(respawned.cut_from(&before));
+        let nowhere = Seen {
+            eye: [f32::NAN, 1.6, 0.0],
+            ..after
+        };
+        assert!(nowhere.cut_from(&before));
     }
 
     /// A marker called `name` at `position`, turned `yaw` radians to the left.

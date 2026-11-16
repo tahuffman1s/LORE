@@ -28,6 +28,7 @@
 mod app;
 #[cfg(feature = "window")]
 pub mod bench;
+pub mod blend;
 pub mod cache;
 #[cfg(feature = "cli")]
 #[doc(hidden)]
