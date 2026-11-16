@@ -643,7 +643,6 @@ mod tests {
             &[
                 ("sounds/music.wav", &wav),
                 ("sounds/music/theme.ogg", SONG),
-                ("sounds/Music/win.wav", &wav),
                 ("sounds/musical-box.wav", &wav),
                 ("sounds/ui/music.wav", &wav),
             ],
@@ -654,10 +653,12 @@ mod tests {
         let mut group = |name: &str| sounds.play(&request(name)).unwrap().group;
         assert_eq!(group("music"), Group::Music);
         assert_eq!(group("music/theme"), Group::Music);
-        assert_eq!(group("Music/win"), Group::Music);
         assert_eq!(group("musical-box"), Group::Effects);
         assert_eq!(group("ui/music"), Group::Effects);
         assert_eq!(group("gunshot"), Group::Effects);
+        // However the folder is capitalised: on Windows and macOS `Music`
+        // and `music` are one folder, so this is asked of the name alone.
+        assert_eq!(group_of("Music/win"), Group::Music);
         let _ = fs::remove_dir_all(folder);
     }
 
