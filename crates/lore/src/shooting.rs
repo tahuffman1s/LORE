@@ -16,6 +16,8 @@ use lore_weapons::{
     hitscan, shot_seed,
 };
 
+use crate::noise::{Noise, NoiseKind};
+
 /// Who each place on the server is to the script.
 pub(crate) type Names = [Option<lore_script::PlayerId>; MAX_PLAYERS];
 
@@ -68,12 +70,12 @@ fn body(id: PlayerId, feet: [f32; 3], crouched: bool, rules: &MoveSettings) -> T
 }
 
 /// Who a target is to the script.
-fn name_of(names: &Names, target: u32) -> Option<lore_script::PlayerId> {
+pub(crate) fn name_of(names: &Names, target: u32) -> Option<lore_script::PlayerId> {
     names.get(usize::try_from(target).ok()?).copied().flatten()
 }
 
 /// Whether the player the script knows as `name` is in the world.
-fn alive(host: &ScriptHost, name: lore_script::PlayerId) -> bool {
+pub(crate) fn alive(host: &ScriptHost, name: lore_script::PlayerId) -> bool {
     host.mode().player(name).is_some_and(|player| player.alive)
 }
 
@@ -110,6 +112,10 @@ impl Shooting {
     /// Bullets are judged against where the shooter saw the others
     /// ([`Server::seen_by`]); rockets and grenades fly through the present.
     /// A player who is dead neither fires nor is hit.
+    ///
+    /// What the weapons were heard to do (each shot, the click of an empty
+    /// magazine, a reload beginning) is added to `noises`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn tick(
         &mut self,
         server: &Server,
@@ -118,10 +124,11 @@ impl Shooting {
         rules: &MoveSettings,
         step: f32,
         host: &mut ScriptHost,
+        noises: &mut Vec<Noise>,
     ) {
         self.told.clear();
         for (id, player) in server.players() {
-            self.fire(server, id, player, names, level, rules, step, host);
+            self.fire(server, id, player, names, level, rules, step, host, noises);
         }
         self.fly(server, names, level, rules, step, host);
         // Told last, and in the order it happened: a function of the
@@ -148,6 +155,7 @@ impl Shooting {
         rules: &MoveSettings,
         step: f32,
         host: &mut ScriptHost,
+        noises: &mut Vec<Noise>,
     ) {
         let Some(name) = name_of(names, id.into()) else {
             return;
@@ -165,8 +173,28 @@ impl Shooting {
             .state
             .step(&held.settings, &input, seed, step, &mut self.shots);
         host.set_weapon_state(name, held.state);
-        for _ in 0..events.shots {
+        let heard = |kind, delay: f32| Noise {
+            kind,
+            by: id,
+            position: player.eye_position(),
+            loudness: 1.0,
+            delay: if delay.is_finite() {
+                delay.clamp(0.0, step.max(0.0))
+            } else {
+                0.0
+            },
+            tick: server.tick_number(),
+        };
+        // A blast of pellets is one shot, and is heard once: when its
+        // first pellet left.
+        let pellets = (self.shots.len() / events.shots.max(1) as usize).max(1);
+        for shot in 0..events.shots as usize {
             self.told.push(Told::Fired(name));
+            let left = self.shots.get(shot * pellets).map_or(0.0, |shot| shot.time);
+            noises.push(heard(NoiseKind::Gunshot, left));
+        }
+        if events.dry_fire {
+            noises.push(heard(NoiseKind::DryFire, 0.0));
         }
         if !self.shots.is_empty() {
             self.land(server, id, player, names, level, rules, host, name, &held);
@@ -174,6 +202,7 @@ impl Shooting {
         // An empty magazine starts its reload after the shot that emptied it.
         if events.reload_started {
             self.told.push(Told::Reloading(name));
+            noises.push(heard(NoiseKind::Reload, 0.0));
         }
     }
 

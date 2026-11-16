@@ -99,6 +99,11 @@ impl ScriptGame {
         &self.sounds
     }
 
+    /// The sounds, to take one to play.
+    pub(crate) fn sounds_mut(&mut self) -> &mut Sounds {
+        &mut self.sounds
+    }
+
     /// Reads the game's sound files if they have not been read, as the
     /// first frame of a game with a window does, and logs the ones that
     /// cannot be played. A server never needs to.

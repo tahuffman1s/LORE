@@ -309,16 +309,25 @@ impl Sounds {
         }
     }
 
+    /// The sound called `name`, to play equally in both ears and as far as
+    /// it carries by itself, or `None` when the game has no sound of that
+    /// name ready. `seed` chooses among its takes, if it has several.
+    pub(crate) fn take(&mut self, name: &str, seed: u32) -> Option<Play> {
+        let entry = self.entries.get_mut(name)?;
+        let play = match &mut entry.source {
+            Source::One(sound) => Play::everywhere(sound.clone()),
+            Source::Takes(takes) => takes.everywhere(seed),
+        };
+        Some(play.range(entry.range))
+    }
+
     /// What to hand the speakers for `request`, or `None` when the game has
     /// no sound of that name ready.
     pub(crate) fn play(&mut self, request: &SoundRequest) -> Option<Play> {
-        let entry = self.entries.get_mut(&request.name)?;
-        let mut play = match &mut entry.source {
-            Source::One(sound) => Play::everywhere(sound.clone()),
-            // Which take plays only has to differ from sound to sound.
-            #[allow(clippy::cast_possible_truncation)]
-            Source::Takes(takes) => takes.everywhere(request.id.0 as u32),
-        };
+        // Which take plays only has to differ from sound to sound.
+        #[allow(clippy::cast_possible_truncation)]
+        let mut play = self.take(&request.name, request.id.0 as u32)?;
+        let own = play.range;
         if let Some(position) = request.position {
             play.place = lore_audio::Place::At(position);
         }
@@ -334,10 +343,10 @@ impl Sounds {
             // The whole range is stretched, so the sound falls away the
             // same way over a longer or shorter distance.
             Some(far) => Range {
-                near: entry.range.near * far / entry.range.far,
+                near: own.near * far / own.far,
                 far,
             },
-            None => entry.range,
+            None => own,
         };
         Some(play)
     }

@@ -62,9 +62,11 @@ use crate::blend;
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::map::{MAP_FILE, Map};
+use crate::noise::{self, Noise, Walking};
 use crate::scaffold::LEVEL_FILE;
 use crate::script_game::ScriptGame;
 use crate::shooting::{Names, Shooting};
+use crate::sound_output::SoundAsk;
 
 /// The UDP port a server opens and a player joins when none is named.
 pub const DEFAULT_PORT: u16 = 24680;
@@ -448,6 +450,10 @@ pub struct HostedGame {
     names: Names,
     /// The weapons players hold, and what they have launched.
     shooting: Shooting,
+    /// When each player's feet come down.
+    walking: Walking,
+    /// The noises players made in the newest tick.
+    noises: Vec<Noise>,
     /// How many times a player has been put at a spawn point.
     spawned: u32,
     /// Where the first player starts in place of a spawn point: the
@@ -505,6 +511,8 @@ impl HostedGame {
             world,
             names: [None; MAX_PLAYERS],
             shooting: Shooting::default(),
+            walking: Walking::default(),
+            noises: Vec::new(),
             spawned: 0,
             from_here: None,
             packet: Vec::new(),
@@ -604,6 +612,16 @@ impl HostedGame {
         self.server.players()
     }
 
+    /// The noises players made in the newest tick, in the order they were
+    /// made: every footstep and landing, every shot, the click of an empty
+    /// weapon and each reload, with where it was made and how loud. The
+    /// player at this computer hears what is in this list
+    /// ([`LocalGame`]), and so can anything else that listens.
+    #[must_use]
+    pub fn noises(&self) -> &[Noise] {
+        &self.noises
+    }
+
     /// Deals with everything players have sent since the last call: lets
     /// in who wants to join, takes commands, and lets go of who left.
     fn listen(&mut self) {
@@ -615,6 +633,7 @@ impl HostedGame {
             names,
             spawned,
             from_here,
+            walking,
             ..
         } = self;
         while let Some(event) = host.poll() {
@@ -631,6 +650,7 @@ impl HostedGame {
                     match server.join(player) {
                         Ok(id) => {
                             host.accept(request, id);
+                            walking.forget(id);
                             let name = format!("Player {}", u32::from(id) + 1);
                             if request.address().ip().is_unspecified() {
                                 // From this program: there is no address.
@@ -649,6 +669,7 @@ impl HostedGame {
                 HostEvent::Packet(id, commands) => drop(server.receive(id, commands)),
                 HostEvent::Left(id, why) => {
                     server.leave(id);
+                    walking.forget(id);
                     log::info!("Player {} left ({why:?}).", u32::from(id) + 1);
                     if let Some(name) = names.get_mut(usize::from(id)).and_then(Option::take) {
                         game.host_mut().player_left(name);
@@ -688,6 +709,8 @@ impl HostedGame {
             };
             if let Some(player) = self.server.player_mut(id) {
                 *player = placed;
+                // Being put somewhere is not a step taken or a fall ended.
+                self.walking.forget(id);
             }
         }
     }
@@ -702,6 +725,16 @@ impl Game for HostedGame {
         // their spawn point in the first snapshot that shows them there.
         self.place_spawned();
         self.server.tick(&self.world.level, &self.world.rules);
+        // What was heard of the tick just run: whose feet came down, and
+        // below, whose weapon did what.
+        self.noises.clear();
+        self.walking.tick(
+            &self.server,
+            &self.names,
+            self.game.host(),
+            self.world.step,
+            &mut self.noises,
+        );
         // The weapons players hold, by what each pressed in the tick just
         // run. The script hears of every shot, hit and reload here.
         self.shooting.tick(
@@ -711,6 +744,7 @@ impl Game for HostedGame {
             &self.world.rules,
             self.world.step,
             self.game.host_mut(),
+            &mut self.noises,
         );
         for id in self.host.players() {
             if self.server.write_snapshot(id, &mut self.packet).is_ok() {
@@ -1491,6 +1525,24 @@ impl Game for JoinedGame {
 pub struct LocalGame {
     hosted: HostedGame,
     joined: JoinedGame,
+    /// The noises of the ticks since the last frame, for the frame to play.
+    heard: Vec<Noise>,
+}
+
+/// The most noises kept for a frame to play. With more than this in a
+/// quarter of a second the newest are left out: nobody could tell them
+/// apart.
+const MOST_HEARD: usize = 128;
+
+/// A noise this many seconds old when a frame is next drawn is not
+/// played: a window that drew nothing for a while does not owe a burst of
+/// everything that happened meanwhile.
+const HEARD_FOR: f32 = 0.25;
+
+/// Whether `noise` is new enough to play on the server's tick `now`.
+#[allow(clippy::cast_precision_loss)]
+fn fresh(noise: &Noise, now: u32, tick_rate: u32) -> bool {
+    now.wrapping_sub(noise.tick) as f32 <= HEARD_FOR * tick_rate as f32
 }
 
 impl LocalGame {
@@ -1578,7 +1630,11 @@ impl LocalGame {
         actions: &ActionMap,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let joined = JoinedGame::in_program(&mut hosted, actions)?;
-        Ok(Self { hosted, joined })
+        Ok(Self {
+            hosted,
+            joined,
+            heard: Vec::with_capacity(MOST_HEARD),
+        })
     }
 
     /// Hands `file`, the bytes of the level file the game is played in, to
@@ -1610,11 +1666,37 @@ impl LocalGame {
 impl Game for LocalGame {
     fn tick(&mut self, input: &InputFrame, step: f32) {
         self.hosted.tick(input, step);
+        // What no frame came for in time is let go, so the newest noises
+        // always have room.
+        let now = self.hosted.server.tick_number();
+        let tick_rate = self.hosted.world.tick_rate;
+        self.heard.retain(|noise| fresh(noise, now, tick_rate));
+        let room = MOST_HEARD.saturating_sub(self.heard.len());
+        let noises = self.hosted.noises();
+        self.heard
+            .extend_from_slice(&noises[..noises.len().min(room)]);
         self.joined.tick(input, step);
     }
 
+    /// The player hears what was heard in the game since the last frame:
+    /// their own feet and weapon equally in both ears, everyone else's
+    /// from where they are.
     fn frame(&mut self, frame: &mut Frame) {
+        // First: this reads the game's sound files, if it has not yet.
         self.hosted.frame(frame);
+        let me = self.joined.id();
+        let now = self.hosted.server.tick_number();
+        let tick_rate = self.hosted.world.tick_rate;
+        for (nth, noise) in (0..).zip(self.heard.drain(..)) {
+            if !fresh(&noise, now, tick_rate) {
+                continue;
+            }
+            let own = me == Some(noise.by);
+            let sounds = self.hosted.game.sounds_mut();
+            if let Some(play) = noise::play(&noise, own, nth, sounds) {
+                frame.sound(SoundAsk::Once(play));
+            }
+        }
         self.joined.frame(frame);
     }
 }
@@ -1663,6 +1745,8 @@ pub fn with_port(address: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod heard;
 #[cfg(test)]
 mod rates;
 
