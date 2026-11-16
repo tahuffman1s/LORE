@@ -1,6 +1,6 @@
-# Releasing FOSSPS
+# Releasing LORE
 
-A release is made by pushing a version tag. `.github/workflows/release.yml` does the rest: it builds `fossps` and `fossps-server` for Linux, Windows and macOS, tries each download, and publishes them on the [releases page](https://github.com/tahuffman1s/FOSSPS/releases).
+A release is made by pushing a version tag. `.github/workflows/release.yml` does the rest: it builds `lore` and `lore-server` for Linux, Windows and macOS, tries each download, and publishes them on the [releases page](https://github.com/tahuffman1s/LORE/releases).
 
 ## Cutting a release
 
@@ -23,17 +23,17 @@ A version with a dash in it (`0.2.0-rc.1`) is published as a pre-release, which 
 
 | File | For |
 | --- | --- |
-| `fossps-linux-x86_64.tar.gz` | Linux, 64-bit Intel/AMD, glibc 2.35 or newer (Ubuntu 22.04, Fedora 36, Debian 12 and later) |
-| `fossps-windows-x86_64.zip` | Windows 10 and 11, 64-bit; needs no Visual C++ installer |
-| `fossps-macos-arm64.tar.gz` | macOS 11 or newer on Apple silicon (experimental: needs MoltenVK) |
+| `lore-linux-x86_64.tar.gz` | Linux, 64-bit Intel/AMD, glibc 2.35 or newer (Ubuntu 22.04, Fedora 36, Debian 12 and later) |
+| `lore-windows-x86_64.zip` | Windows 10 and 11, 64-bit; needs no Visual C++ installer |
+| `lore-macos-arm64.tar.gz` | macOS 11 or newer on Apple silicon (experimental: needs MoltenVK) |
 | `SHA256SUMS` | checksums of the three, for `sha256sum --check SHA256SUMS` |
 
-Each archive unpacks to one folder, `fossps-<version>-<system>`, holding `fossps`, `fossps-server`, a short `README.txt` (from `.github/release/README.txt`) and the licences.
+Each archive unpacks to one folder, `lore-<version>-<system>`, holding `lore`, `lore-server`, a short `README.txt` (from `.github/release/README.txt`) and the licences.
 
 The file names carry no version, so the newest release is always at the same address:
 
 ```
-https://github.com/tahuffman1s/FOSSPS/releases/latest/download/fossps-linux-x86_64.tar.gz
+https://github.com/tahuffman1s/LORE/releases/latest/download/lore-linux-x86_64.tar.gz
 ```
 
 ## If a run fails

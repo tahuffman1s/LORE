@@ -1,7 +1,7 @@
--- Team Deathmatch: a FOSSPS game mode.
+-- Team Deathmatch: a LORE game mode.
 --
 -- Check it for mistakes by running this in the game's folder:
---     fossps check
+--     lore check
 -- Change anything here and save: a running game picks it up and keeps the score
 -- and the kill streaks.
 

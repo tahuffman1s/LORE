@@ -1,12 +1,12 @@
--- hello: a FOSSPS game.
+-- hello: a LORE game.
 --
 -- Play it by running this in the game's folder:
---     fossps run
+--     lore run
 -- Change anything here and save: the running game picks it up.
 --
 -- The window shows the game's level: level.glb, which you can export your own
 -- over from Blender as glTF Binary. What happens in the game shows up as text:
--- print() writes to the terminal you ran `fossps run` from.
+-- print() writes to the terminal you ran `lore run` from.
 
 -- What is in this table is kept when the file is saved and loaded again,
 -- until the game is closed. Everything else in the file starts over.

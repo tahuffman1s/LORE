@@ -1,23 +1,23 @@
-FOSSPS @VERSION@
-Free, open-source engine for multiplayer first-person shooters.
-https://github.com/tahuffman1s/FOSSPS
+LORE @VERSION@
+Free, open-source engine for first- and third-person 3D games.
+https://github.com/tahuffman1s/LORE
 
 In this folder
-  fossps          makes, plays, checks, hosts and packages games
-  fossps-server   hosts a game on a machine with no screen or graphics card
+  lore            makes, plays, checks, hosts and packages games
+  lore-server     hosts a game on a machine with no screen or graphics card
   licenses/       licences of the code built into both programs
 
 Start here (in a terminal opened in this folder; on Windows leave out "./")
-  ./fossps new my-game      creates a game in the folder my-game
-  ./fossps run my-game      plays it
-  ./fossps check my-game    tests its script without opening a window
-  ./fossps --help           lists everything else
+  ./lore new my-game      creates a game in the folder my-game
+  ./lore run my-game      plays it
+  ./lore check my-game    tests its script without opening a window
+  ./lore --help           lists everything else
 
-To use "fossps" from any folder, add this folder to your PATH, or move the
+To use "lore" from any folder, add this folder to your PATH, or move the
 two programs into a folder that is already on it.
 
 If it does not start
-  "Vulkan is missing or too old": update your graphics driver. FOSSPS needs
+  "Vulkan is missing or too old": update your graphics driver. LORE needs
   Vulkan 1.3. On Linux, also install your distribution's Vulkan loader
   (for example: sudo dnf install vulkan-loader, sudo apt install libvulkan1).
 
@@ -31,7 +31,7 @@ If it does not start
   then "Run anyway". These builds are not signed yet.
 
 Something else wrong, or an idea?
-  https://github.com/tahuffman1s/FOSSPS/issues
+  https://github.com/tahuffman1s/LORE/issues
 
-FOSSPS is licensed under MIT or Apache-2.0, at your choice (LICENSE-MIT,
+LORE is licensed under MIT or Apache-2.0, at your choice (LICENSE-MIT,
 LICENSE-APACHE).

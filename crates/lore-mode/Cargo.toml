@@ -1,0 +1,12 @@
+[package]
+name = "lore-mode"
+description = "Game-mode rules for LORE: teams, rounds, scoring, respawning and choosing spawn points"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

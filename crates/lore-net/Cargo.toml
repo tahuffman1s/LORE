@@ -1,0 +1,23 @@
+[package]
+name = "lore-net"
+description = "Netcode for LORE: commands to the server, snapshots back, prediction and correction on the client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lore-physics = { path = "../lore-physics" }
+
+# An exponential that gives the same digits on every machine.
+libm = "0.2"
+
+# The hash a file offered to joining players is known and checked by.
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+# For shooting at what lag compensation gives back, in tests and examples.
+lore-weapons = { path = "../lore-weapons" }
+
+[lints]
+workspace = true

@@ -1,13 +1,13 @@
 /* Styles for the pages under docs/. The colours match the front page. */
 :root {
   --bg: #0d0f12; --panel: #15181d; --line: #262b33;
-  --text: #e8eaed; --muted: #9aa3ae; --accent: #ff7a1a; --accent-ink: #14100b;
+  --text: #e8eaed; --muted: #9aa3ae; --accent: #ff6f91; --accent-ink: #1c0a10;
   --code-bg: #0a0c0f; --code-text: #dfe3e8; --out-text: #aab3be;
 }
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f7f6f3; --panel: #ffffff; --line: #dedbd4;
-    --text: #17191c; --muted: #5b6370; --accent: #c44a06; --accent-ink: #ffffff;
+    --text: #17191c; --muted: #5b6370; --accent: #c2255c; --accent-ink: #ffffff;
     --code-bg: #14171b; --code-text: #dfe3e8; --out-text: #aab3be;
   }
 }

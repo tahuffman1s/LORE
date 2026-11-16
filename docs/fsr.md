@@ -1,6 +1,6 @@
-# FSR 3.1 upscaling (`fossps-fsr`)
+# FSR 3.1 upscaling (`lore-fsr`)
 
-`fossps-fsr` builds AMD's FSR 3.1 upscaler from source and gives the renderer
+`lore-fsr` builds AMD's FSR 3.1 upscaler from source and gives the renderer
 a small Rust type, `Upscaler`, to run it. It works on Linux, Windows and
 macOS with plain `cargo build`: no CMake, Vulkan SDK or shader compiler to
 install.
@@ -26,11 +26,11 @@ AMD's FidelityFX SDK 1.1.4 only builds on Windows. Checked on Fedora with GCC 16
 | When creating a context fails half-way it frees nothing | the shim notes when the backend was created and, on failure, asks the SDK to take down whatever exists |
 
 The vendored files and the three patches are listed in
-`crates/fossps-fsr/vendor/README.md`.
+`crates/lore-fsr/vendor/README.md`.
 
 ## Choices made once, at build time
 
-The SDK compiles every shader for every combination of options. FOSSPS has one
+The SDK compiles every shader for every combination of options. LORE has one
 renderer, so `build.rs` compiles only what it uses:
 
 - the picture is high dynamic range (before tone mapping);
@@ -42,7 +42,7 @@ The last frames are resampled with the Lanczos curve worked out in the shader.
 AMD's other variant reads the curve from a small texture and is picked on cards
 with 32- to 64-wide subgroups (AMD's own). Built this way it made a still
 picture drift up and left and blur on an RX 7800 XT with RADV, so it is not
-built (#191 looks into why).
+built (#125 looks into why).
 
 Half-precision and 64-wide shader variants are not built; the plain ones run on
 every card. The two pyramid passes are compiled without subgroup operations
@@ -50,20 +50,20 @@ every card. The two pyramid passes are compiled without subgroup operations
 
 ## What the device needs
 
-Vulkan 1.2 or newer, and the two features in `fossps_fsr::REQUIRED_FEATURES`:
+Vulkan 1.2 or newer, and the two features in `lore_fsr::REQUIRED_FEATURES`:
 `shaderStorageImageExtendedFormats` and `shaderStorageImageWriteWithoutFormat`.
 
 ## In the renderer
 
-`fossps_render::Upscaling` picks how much smaller than the window the scene is
+`lore_render::Upscaling` picks how much smaller than the window the scene is
 drawn: `Off`, `Native` (full size, edges smoothed), `Quality` (1.5 times
 smaller each way, the default), `Balanced` (1.7), `Performance` (2) and
-`UltraPerformance` (3). It is set in `RenderConfig` (`fossps::Config` for a
+`UltraPerformance` (3). It is set in `RenderConfig` (`lore::Config` for a
 game) and changed while running with `Renderer::set_upscaling`.
 
 Each frame:
 
-1. The camera is moved by part of a pixel (`fossps_fsr::jitter`), a different
+1. The camera is moved by part of a pixel (`lore_fsr::jitter`), a different
    part each frame. The picture moves `x` pixels right and `y` pixels down.
 2. The mesh pass draws colour, depth and motion at the smaller size. Motion is
    where a pixel was last frame minus where it is now, without the camera's
@@ -74,7 +74,7 @@ Each frame:
 4. Tone mapping reads that picture instead of the drawn one.
 
 After a jump of the view (`Renderer::cut_to`, a new scene, a resized window)
-FSR is told to forget the frames before. A game run through `fossps::run`
+FSR is told to forget the frames before. A game run through `lore::run`
 gets this by itself when the view moves more than 5 m in one frame.
 
 If the graphics card lacks the two features below, or FSR cannot start, a
@@ -86,8 +86,8 @@ when the view is made (`view.rs`) and applied in the mesh shader, so no
 sampler has to be remade when the size changes.
 
 Not done yet: see-through surfaces are drawn but FSR's reactive mask is not
-written for them (#239), so what moves behind glass can smear; nothing
-animated is drawn; the frame rate does not yet pick the size (#139).
+written for them (#128), so what moves behind glass can smear; nothing
+animated is drawn; the frame rate does not yet pick the size (#98).
 
 ## Limits
 
@@ -97,14 +97,14 @@ animated is drawn; the frame rate does not yet pick the size (#139).
 
 ## Testing
 
-`cargo test -p fossps-render` draws a tilted square at a quarter of the pixels,
+`cargo test -p lore-render` draws a tilted square at a quarter of the pixels,
 upscales it over 48 frames, still and with the camera sliding, and checks the
 result is closer to the same scene drawn four times too large and averaged
 down than plain stretching is. It fails if the camera's part-of-a-pixel move
 or the motion goes the wrong way. Another test reads the motion image back
 and checks the numbers.
 
-`cargo test -p fossps-fsr` upscales a 64x48 picture to 128x96 on whatever
+`cargo test -p lore-fsr` upscales a 64x48 picture to 128x96 on whatever
 Vulkan 1.3 device is there and checks the colours, with the validation layer
 on if it is installed. CI runs it on lavapipe. It has also been run on an AMD
 Radeon RX 7800 XT (RADV).
