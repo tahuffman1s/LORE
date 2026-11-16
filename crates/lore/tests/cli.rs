@@ -3,7 +3,7 @@
 //! Playing a game needs a window and a graphics card, so `lore run` is only
 //! tested up to the point where it would open one.
 
-#![cfg(all(feature = "window", feature = "cli"))]
+#![cfg(feature = "cli")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;

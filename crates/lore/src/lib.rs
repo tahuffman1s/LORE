@@ -24,9 +24,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-#[cfg(feature = "window")]
 mod app;
-#[cfg(feature = "window")]
 pub mod bench;
 pub mod blend;
 #[cfg(feature = "cli")]
@@ -37,17 +35,14 @@ pub mod controls;
 pub mod editor;
 mod error_overlay;
 mod game;
-#[cfg(feature = "window")]
 mod gamepad;
 pub mod level;
 mod look;
 pub mod map;
 pub mod noise;
-#[cfg(feature = "window")]
 mod pace;
 #[cfg(feature = "cli")]
 pub mod package;
-#[cfg(feature = "window")]
 mod pause;
 #[cfg(test)]
 mod playback;
@@ -60,12 +55,10 @@ pub mod settings;
 mod shooting;
 mod sound_output;
 pub mod sounds;
-#[cfg(feature = "window")]
 mod standin;
-#[cfg(all(test, feature = "window"))]
+#[cfg(test)]
 mod starter_level;
 mod tick;
-#[cfg(feature = "window")]
 mod translate;
 pub mod world;
 
@@ -73,13 +66,10 @@ pub use lore_assets as assets;
 pub use lore_audio as audio;
 pub use lore_input as input;
 pub use lore_input::{ActionId, ActionMap, ActionSetId, InputFrame, MouseMode, Rumble};
-#[cfg(feature = "window")]
 pub use lore_render as render;
 
-#[cfg(feature = "window")]
 pub use app::{AppError, Config, run};
 pub use game::{Frame, Game};
-#[cfg(feature = "window")]
 pub use lore_render::Upscaling;
 pub use lore_script as script;
 pub use lore_ui as ui;

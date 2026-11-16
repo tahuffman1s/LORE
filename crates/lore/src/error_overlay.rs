@@ -51,17 +51,9 @@ struct Line {
     color: Color,
 }
 
-/// What text is measured with: the font it is drawn in when there is a
-/// window, and a guess without one, where nothing is drawn.
+/// What text is measured with: the font it is drawn in.
 pub(crate) fn measure() -> Box<dyn TextMeasure> {
-    #[cfg(feature = "window")]
-    {
-        Box::new(lore_render::Font::bundled())
-    }
-    #[cfg(not(feature = "window"))]
-    {
-        Box::new(lore_ui::EstimatedText)
-    }
+    Box::new(lore_render::Font::bundled())
 }
 
 /// Shows a script error over the game.

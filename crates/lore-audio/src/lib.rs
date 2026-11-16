@@ -60,7 +60,6 @@ mod footsteps;
 mod mixer;
 mod play;
 mod sound;
-#[cfg(feature = "device")]
 mod speakers;
 pub mod starter;
 mod stream;
@@ -73,6 +72,5 @@ pub use footsteps::{Feet, Footfall, FootstepSettings, Footsteps};
 pub use mixer::{Mixer, Playing};
 pub use play::{Group, Importance, Listener, Place, Play, Range};
 pub use sound::Sound;
-#[cfg(feature = "device")]
 pub use speakers::Speakers;
 pub use vary::SoundSet;

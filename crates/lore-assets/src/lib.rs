@@ -17,9 +17,6 @@
 //!
 //! Directions and sizes are glTF's: +Y is up, -Z is forward, +X is right,
 //! and one unit is one metre.
-//!
-//! The `textures` feature (on by default) decodes PNG and JPEG pictures.
-//! Without it no image decoder is built and scenes load without textures.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 

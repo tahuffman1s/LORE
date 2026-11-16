@@ -597,7 +597,6 @@ fn shapes_only_reads_no_pictures() {
     assert_eq!(part.positions, QUAD);
 }
 
-#[cfg(feature = "textures")]
 mod textures {
     use super::*;
     use crate::{AlphaMode, Filter, TextureRef, TextureTransform, Wrap};

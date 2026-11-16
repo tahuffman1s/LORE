@@ -193,7 +193,6 @@ pub(crate) fn extras(extras: &gltf::json::Extras) -> Option<String> {
 }
 
 /// Decodes a PNG or JPEG into four bytes per pixel.
-#[cfg(feature = "textures")]
 pub(crate) fn decode(name: Option<String>, bytes: &[u8]) -> Result<crate::scene::Image, String> {
     let format =
         image::guess_format(bytes).map_err(|_| "it is not a PNG or JPEG file".to_owned())?;

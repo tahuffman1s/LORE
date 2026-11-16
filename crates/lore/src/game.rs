@@ -127,7 +127,6 @@ impl Default for Frame {
 
 impl Frame {
     /// A frame that is `alpha` of the way from the last tick to the next.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn new(alpha: f32) -> Self {
         Self {
             alpha,
@@ -274,7 +273,6 @@ impl Frame {
     /// Gives the frame what no tick has seen yet (`input`, from
     /// [`Input::peek`](lore_input::Input::peek)) and the length of a tick
     /// in seconds.
-    #[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
     pub(crate) fn with_input(mut self, input: InputFrame, step: f32) -> Self {
         self.input = input;
         self.since_tick = if self.alpha.is_finite() && step.is_finite() {
@@ -287,7 +285,6 @@ impl Frame {
 
     /// The input the frame was given, to be filled again for the next
     /// frame without asking for memory.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn take_input(&mut self) -> InputFrame {
         std::mem::take(&mut self.input)
     }
@@ -373,7 +370,6 @@ impl Frame {
     }
 
     /// Says what the player last used and whose gamepad it is.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn with_device(mut self, device: Device, style: GamepadStyle) -> Self {
         self.device = device;
         self.gamepad_style = style;
@@ -381,7 +377,6 @@ impl Frame {
     }
 
     /// Says how far the wheel was rolled over the free pointer.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn with_wheel(mut self, notches: f32) -> Self {
         self.wheel = notches;
         self
@@ -398,7 +393,6 @@ impl Frame {
 
     /// Says how long the frame before this one took, and where the free
     /// mouse pointer is and whether its main button is held.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn with_pointer(
         mut self,
         seconds: f32,
@@ -412,20 +406,17 @@ impl Frame {
     }
 
     /// Sets the player's own size for the HUD and menus, for the game to read.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn set_ui_scale(&mut self, scale: f32) {
         self.ui_scale = scale;
     }
 
     /// Puts the player's settings into effect: how loud the speakers are
     /// and how the view turns.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
         self.settings = Some(settings);
     }
 
     /// The settings to put into effect, if they changed this frame.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn take_settings(&mut self) -> Option<Settings> {
         self.settings.take()
     }
@@ -486,7 +477,6 @@ impl Frame {
 
     /// Starts the frame for a window of `screen` pixels, if there is one yet, with `buffer` to
     /// gather the UI in: the last frame's, so its memory is used again.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn for_window(mut self, screen: Option<[u32; 2]>, mut buffer: DrawBuffer) -> Self {
         buffer.clear();
         // A minimised window has no size; a UI still needs one to lay out in.
@@ -496,7 +486,6 @@ impl Frame {
     }
 
     /// Everything the game asked to be drawn over it this frame.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn take_ui(&mut self) -> DrawBuffer {
         std::mem::take(&mut self.ui)
     }
@@ -566,25 +555,21 @@ impl Frame {
     }
 
     /// Whether the game asked to end this frame.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn closing(&self) -> bool {
         self.close
     }
 
     /// Where the game asked the world to be seen from this frame, if it did.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn view(&self) -> Option<View> {
         self.view
     }
 
     /// The action set requested this frame, if any.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn action_set(&self) -> Option<ActionSetId> {
         self.action_set
     }
 
     /// The rumble requested this frame, if any.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn rumble_requested(&self) -> Option<Rumble> {
         self.rumble
     }
@@ -596,13 +581,11 @@ impl Frame {
     }
 
     /// The sounds asked for this frame, in order.
-    #[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
     pub(crate) fn take_sounds(&mut self) -> Vec<SoundAsk> {
         std::mem::take(&mut self.sounds)
     }
 
     /// The title requested this frame, if any.
-    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn take_title(&mut self) -> Option<String> {
         self.title.take()
     }
