@@ -6,7 +6,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lore_ui::{Anchor, Color, Draw, Ui, UiInput};
+use lore_ui::{Anchor, ButtonNames, Color, Draw, Ui, UiInput};
 
 /// Counts every allocation made by the process.
 struct Counting;
@@ -75,6 +75,34 @@ fn a_built_ui_never_allocates() {
         })
         .unwrap();
 
+    // Longer than the window, so it scrolls.
+    let long = ui
+        .add_screen("Long", |screen| {
+            for number in 0..30 {
+                screen.button(&format!("Item {number}"));
+            }
+        })
+        .unwrap();
+    // The hints, with the names of two devices. The longer names come
+    // first, so the shorter ones fit where they were.
+    let names = [
+        ButtonNames {
+            confirm: "Enter",
+            back: "Esc",
+            previous_tab: "Q",
+            next_tab: "E",
+            round: false,
+        },
+        ButtonNames {
+            confirm: "A",
+            back: "B",
+            previous_tab: "LB",
+            next_tab: "RB",
+            round: true,
+        },
+    ];
+    ui.show_button_hints(&names[0]);
+
     let ammo_counts = ["30 / 90", "9 / 90", "0 / 0"];
     let mut drawn = 0_usize;
     let mut events = 0_usize;
@@ -90,14 +118,17 @@ fn a_built_ui_never_allocates() {
             next_tab: step % 5 == 0,
             pointer: (step % 3 != 0).then_some([phase * 1920.0, 1080.0 - phase * 1080.0]),
             pointer_down: step % 4 < 2,
+            wheel: f32::from(step % 5) - 2.0,
         };
         match step % 50 {
             0 => ui.open(pause).unwrap(),
             10 => ui.open(settings).unwrap(),
             25 => ui.open(loadout).unwrap(),
+            30 => ui.open(long).unwrap(),
             40 => ui.close_all(),
             _ => {}
         }
+        ui.show_button_hints(&names[usize::from(step / 20 % 2)]);
         ui.set_text(ammo, ammo_counts[usize::from(step % 3)])
             .unwrap();
         ui.set_bar(health, phase).unwrap();

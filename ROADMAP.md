@@ -32,7 +32,7 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
 - Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
-- Menus longer than the screen scroll, and settings show which button does what (#15)
+- A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
 - Sound in a running game: players are heard walking and shooting (#16)
 - Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
 - Read the bindings file again while the game runs, and keep a file per game once scripts declare actions (#18)
@@ -192,6 +192,7 @@ Package a game for Linux, Windows and macOS, and release the engine.
 - On Wayland, a game whose window is not shown never draws and its script does not reload (#147)
 - Tutorial shows a picture of the game window at the steps that open one (#148)
 - Gamepad rumble on macOS (#149)
+- Button hints name a key as it is on a US keyboard, whatever the player's layout (#251)
 
 ## M6 — Editor
 

@@ -9,11 +9,17 @@
 //! own input: while the menu is open the `menu` action set is live, so no
 //! gameplay action hears a key, and the mouse points instead of turning
 //! the view.
+//!
+//! Along the bottom the menu says which button does what ("A Select",
+//! "B Back"), with the names printed on the device the player last
+//! touched and on the buttons the menu's actions are bound to.
 
 use std::path::PathBuf;
 
-use lore_input::{ActionId, ActionMap, ActionSetId, InputFrame, Rumble};
-use lore_ui::{ScreenId, Ui, UiEvent, UiInput, Value, WidgetId};
+use lore_input::{
+    ActionId, ActionMap, ActionSetId, Binding, Button, Device, GamepadStyle, InputFrame, Rumble,
+};
+use lore_ui::{ButtonNames, ScreenId, Ui, UiEvent, UiInput, Value, WidgetId};
 
 use crate::game::{Frame, Game};
 use crate::settings::{self, Settings};
@@ -138,6 +144,77 @@ impl Actions {
     }
 }
 
+/// The key and the gamepad button a menu action is bound to, if it has one
+/// of each.
+#[derive(Debug, Clone, Copy, Default)]
+struct Bound {
+    key: Option<Button>,
+    pad: Option<Button>,
+}
+
+impl Bound {
+    /// The first key or mouse button, and the first gamepad button, that
+    /// `action` is bound to: the ones a player is most likely to know.
+    fn of(actions: &ActionMap, action: ActionId) -> Self {
+        let mut bound = Self::default();
+        for binding in actions.bindings(action) {
+            if let Binding::Button(button) = *binding {
+                let slot = if button.is_gamepad() {
+                    &mut bound.pad
+                } else {
+                    &mut bound.key
+                };
+                slot.get_or_insert(button);
+            }
+        }
+        bound
+    }
+
+    /// What is printed on the one the player has in their hand, or
+    /// nothing if the action cannot be done from that device.
+    fn label(self, device: Device, style: GamepadStyle) -> &'static str {
+        let button = match device {
+            Device::KeyboardAndMouse => self.key,
+            Device::Gamepad => self.pad,
+        };
+        button.map_or("", |button| button.label(style))
+    }
+}
+
+/// What the buttons that work the menu are bound to, for its hints.
+///
+/// Read once, from the controls the game starts with. Bindings changed
+/// while the game runs are not followed yet (#18).
+#[derive(Debug, Clone, Copy)]
+struct Hints {
+    confirm: Bound,
+    back: Bound,
+    previous_tab: Bound,
+    next_tab: Bound,
+}
+
+impl Hints {
+    fn of(map: &ActionMap, actions: &Actions) -> Self {
+        Self {
+            confirm: Bound::of(map, actions.confirm),
+            back: Bound::of(map, actions.back),
+            previous_tab: Bound::of(map, actions.previous_tab),
+            next_tab: Bound::of(map, actions.next_tab),
+        }
+    }
+
+    /// The names to show for the device the player last used.
+    fn names(&self, device: Device, style: GamepadStyle) -> ButtonNames<'static> {
+        ButtonNames {
+            confirm: self.confirm.label(device, style),
+            back: self.back.label(device, style),
+            previous_tab: self.previous_tab.label(device, style),
+            next_tab: self.next_tab.label(device, style),
+            round: device == Device::Gamepad,
+        }
+    }
+}
+
 /// What the menu actions were doing in the ticks since the last frame.
 ///
 /// Ticks and frames do not line up: a slow frame spans several ticks and a
@@ -197,6 +274,7 @@ impl Keys {
             next_tab: held.next_tab || tapped.next_tab,
             pointer: None,
             pointer_down: false,
+            wheel: 0.0,
         }
     }
 }
@@ -302,6 +380,7 @@ impl Widgets {
 /// The pause menu itself.
 struct Menu {
     actions: Actions,
+    hints: Hints,
     keys: Keys,
     ui: Ui,
     widgets: Widgets,
@@ -329,13 +408,16 @@ struct Menu {
 
 impl Menu {
     fn new(actions: &ActionMap, settings: Settings, file: Option<PathBuf>) -> Option<Self> {
-        let actions = Actions::find(actions)?;
+        let map = actions;
+        let actions = Actions::find(map)?;
+        let hints = Hints::of(map, &actions);
         let mut ui = Ui::default();
         ui.set_text_measure(crate::error_overlay::measure());
         ui.set_ui_scale(settings.ui_scale());
         let widgets = Widgets::build(&mut ui, &settings)?;
         Some(Self {
             actions,
+            hints,
             keys: Keys::default(),
             ui,
             widgets,
@@ -374,6 +456,10 @@ impl Menu {
         let mut input = self.keys.take();
         input.pointer = frame.pointer();
         input.pointer_down = frame.pointer_down();
+        input.wheel = frame.wheel();
+        // The hints name the buttons of whatever the player last touched.
+        let names = (self.hints).names(frame.device(), frame.gamepad_style());
+        self.ui.show_button_hints(&names);
 
         let screen = frame.screen_size();
         let mut events = [None; MOST_EVENTS];
@@ -395,7 +481,9 @@ impl Menu {
         }
         if changed {
             // What was just done is shown in this frame, not the next. The
-            // same input again presses nothing new.
+            // same input again presses nothing new, once the wheel, which
+            // is how far it rolled and not what is held, is taken out.
+            input.wheel = 0.0;
             self.ui.update(&input, 0.0, screen);
         }
 

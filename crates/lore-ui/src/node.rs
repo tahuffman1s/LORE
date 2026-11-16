@@ -74,6 +74,18 @@ impl Rect {
             && point[1] < self.bottom()
     }
 
+    /// The part of this box that is inside `other`; nothing has no size.
+    pub(crate) fn inside(self, other: Self) -> Self {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        Self {
+            x,
+            y,
+            w: (self.right().min(other.right()) - x).max(0.0),
+            h: (self.bottom().min(other.bottom()) - y).max(0.0),
+        }
+    }
+
     /// The same box, `by` bigger on every side.
     pub(crate) fn grown(self, by: f32) -> Self {
         Self {
@@ -220,6 +232,9 @@ pub(crate) struct Screen {
     pub start: u32,
     pub wrap: bool,
     pub stays_open: bool,
+    /// How far a screen longer than the window has been moved up, kept
+    /// while the screen is closed.
+    pub scroll: f32,
 }
 
 /// The children of `parent`, first to last.

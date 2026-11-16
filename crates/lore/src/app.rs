@@ -301,6 +301,7 @@ fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError>
         focused: false,
         captured: false,
         scroll: 0.0,
+        wheel: 0.0,
         last_frame: Instant::now(),
         last_view: None,
         ui: lore_ui::DrawBuffer::default(),
@@ -351,6 +352,9 @@ struct App<G> {
     captured: bool,
     /// Smooth-scroll pixels that have not yet added up to a whole notch.
     scroll: f32,
+    /// How far the wheel was rolled over the free pointer since the last
+    /// frame, in notches, for a menu to scroll by.
+    wheel: f32,
     last_frame: Instant,
     /// Where the game was last seen from, to notice the view jumping.
     last_view: Option<[f32; 3]>,
@@ -508,12 +512,18 @@ impl<G: Game> App<G> {
 
     /// Feeds whole wheel notches into the input state.
     fn scroll(&mut self, delta: MouseScrollDelta) {
-        self.scroll += match delta {
+        let notches = match delta {
             MouseScrollDelta::LineDelta(_, lines) => lines,
             // Pixel deltas are f64; a wheel notch needs nowhere near that precision.
             #[allow(clippy::cast_possible_truncation)]
             MouseScrollDelta::PixelDelta(position) => position.y as f32 / PIXELS_PER_NOTCH,
         };
+        if !self.captured && notches.is_finite() {
+            // A menu scrolls by parts of a notch too, so a touchpad is smooth.
+            self.wheel =
+                (self.wheel + notches).clamp(-MOST_NOTCHES_PER_EVENT, MOST_NOTCHES_PER_EVENT);
+        }
+        self.scroll += notches;
         // A faulty device can report absurd distances. Without a limit, a
         // value too large for subtracting 1 to change would loop forever below.
         self.scroll = if self.scroll.is_finite() {
@@ -584,15 +594,18 @@ impl<G: Game> App<G> {
         self.input.peek(&mut self.unseen);
         // A captured mouse turns the view; it points at nothing.
         let tapped = std::mem::take(&mut self.pointer_tapped);
-        let (pointer, pointer_down) = if self.captured {
-            (None, false)
+        let wheel = std::mem::take(&mut self.wheel);
+        let (pointer, pointer_down, wheel) = if self.captured {
+            (None, false, 0.0)
         } else {
-            (self.pointer, self.pointer_down || tapped)
+            (self.pointer, self.pointer_down || tapped, wheel)
         };
         let mut frame = Frame::new(self.clock.alpha())
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
-            .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down);
+            .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
+            .with_wheel(wheel)
+            .with_device(self.input.last_device(), self.gamepads.style());
         #[cfg(feature = "editor")]
         if let (Some(panels), Some(window)) = (&mut self.panels, &self.window) {
             let input = panels.state.take_egui_input(window);
@@ -790,7 +803,15 @@ impl<G: Game> ApplicationHandler for App<G> {
             // the pointer is over.
             #[allow(clippy::cast_possible_truncation)]
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer = Some([position.x as f32, position.y as f32]);
+                let now = [position.x as f32, position.y as f32];
+                // A pointer moved on purpose means the mouse is in the
+                // hand again, and hints show the keyboard's names.
+                if let Some(before) = self.pointer.replace(now)
+                    && !self.captured
+                {
+                    self.input
+                        .pointer_moved((now[0] - before[0]).abs() + (now[1] - before[1]).abs());
+                }
             }
             WindowEvent::CursorLeft { .. } => self.pointer = None,
             WindowEvent::MouseInput { state, button, .. } => {
