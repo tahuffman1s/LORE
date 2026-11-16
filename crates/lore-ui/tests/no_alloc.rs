@@ -4,19 +4,28 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use lore_ui::{Anchor, ButtonNames, Color, Draw, Ui, UiInput};
 
-/// Counts every allocation made by the process.
+/// Counts the allocations each thread makes.
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// How many times this thread has asked for memory. Each thread has
+    /// its own count, because the test is not alone in its process: the
+    /// thread that started it prints and keeps time meanwhile, and what
+    /// that sets aside is not the code under test's.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 // SAFETY: every method forwards to `System` unchanged, so its contract is upheld.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        // A plain number with nothing to set up or tear down, so reading
+        // it asks for no memory itself. A thread that is ending no longer
+        // has one, and is not counted.
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
         unsafe { System.alloc(layout) }
     }
@@ -30,8 +39,19 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-// This file holds a single test on purpose: a second test running on another
-// thread would add its own allocations to the count.
+/// How many allocations this thread has made so far, having first made
+/// sure that they are being counted at all.
+fn counted() -> usize {
+    let before = ALLOCATIONS.get();
+    drop(std::hint::black_box(Box::new(0_u64)));
+    assert!(
+        ALLOCATIONS.get() > before,
+        "this thread's allocations are not being counted"
+    );
+    ALLOCATIONS.get()
+}
+
+// Only what this test's own thread sets aside is counted.
 #[test]
 fn a_built_ui_never_allocates() {
     let mut ui = Ui::default();
@@ -107,7 +127,7 @@ fn a_built_ui_never_allocates() {
     let mut drawn = 0_usize;
     let mut events = 0_usize;
 
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = counted();
     for step in 0..2_000_u16 {
         let phase = f32::from(step % 100) / 100.0;
         let input = UiInput {
@@ -143,7 +163,7 @@ fn a_built_ui_never_allocates() {
             drawn += usize::from(matches!(draw, Draw::Text { .. }));
         }
     }
-    let after = ALLOCATIONS.load(Ordering::Relaxed);
+    let after = ALLOCATIONS.get();
 
     assert!(
         events > 100,

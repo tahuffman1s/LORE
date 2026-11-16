@@ -1,12 +1,13 @@
-//! Weapons in a running game: players joined to a server over this machine's
-//! own network fire what the game's script handed them, and the script
-//! hears what came of it.
+//! Weapons in a running game: players joined to a server fire what the
+//! game's script handed them, and the script hears what came of it.
+//!
+//! The server and its players are in this one program and hand each other
+//! their packets directly, so every run plays the same ticks: which tick a
+//! shot leaves on settles where in its spread it goes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::cell::RefCell;
-use std::path::PathBuf;
-use std::time::Duration;
 
 use lore::input::{ActionMap, GamepadButton, Input, Key};
 use lore::map::Map;
@@ -48,8 +49,8 @@ const FACING_EACH_OTHER: &str = "version = 1\n\n\
     [[entity]]\nid = \"north\"\ntype = \"spawn\"\nposition = [0.0, 0.0, -10.0]\nfacing = 180.0\n";
 
 /// A server running `script` on the flat floor with those two places to
-/// start, and the address to join it at.
-fn host(script: &str) -> (HostedGame, String) {
+/// start.
+fn host(script: &str) -> HostedGame {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     let map = Map::parse("map.toml", FACING_EACH_OTHER).unwrap();
@@ -59,35 +60,26 @@ fn host(script: &str) -> (HostedGame, String) {
         "{:?}",
         game.host().last_error()
     );
-    let hosted = HostedGame::open(game, "127.0.0.1:0", TICK_RATE).unwrap();
-    let address = hosted.address().unwrap().to_string();
-    (hosted, address)
+    HostedGame::in_program(game, TICK_RATE)
 }
 
-fn join(hosted: &mut HostedGame, address: &str) -> JoinedGame {
-    let nothing = Input::new(ActionMap::default_fps());
-    // Nothing these tests fetch is kept on the computer they run on.
-    let cache = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("weapons-cache-unused");
-    let mut joined = JoinedGame::connect(address, &ActionMap::default_fps(), TICK_RATE)
-        .unwrap()
-        .with_cache(cache);
-    joined
-        .wait_until_joined(|| hosted.tick(nothing.frame(), STEP))
-        .unwrap();
+/// A player joins, and the server runs on for a tick before the next
+/// does, which puts the newcomer in the world.
+fn join(hosted: &mut HostedGame) -> JoinedGame {
+    let joined = JoinedGame::in_program(hosted, &ActionMap::default_fps()).unwrap();
+    hosted.tick(idle().frame(), STEP);
     joined
 }
 
 /// Runs `ticks` ticks of the server and each player, with each player's
-/// own keys. A short wait lets this machine carry the packets across.
+/// own keys.
 fn play(hosted: &mut HostedGame, players: &mut [(&mut JoinedGame, &mut Input)], ticks: u32) {
     let nothing = Input::new(ActionMap::default_fps());
     for _ in 0..ticks {
         for (joined, input) in players.iter_mut() {
             joined.tick(input.tick(), STEP);
         }
-        std::thread::sleep(Duration::from_millis(1));
         hosted.tick(nothing.frame(), STEP);
-        std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
         hosted.game().host().last_error().is_none(),
@@ -108,9 +100,12 @@ game.onWeaponFire(function(player)
     print("fire " .. player.name .. " " .. player.weapon .. " " .. player.ammo)
 end)
 game.onWeaponHit(function(hit)
-    print(string.format("hit %s>%s %s %s %d %.1f %.0f,%.0f %s",
+    -- Where it landed to the nearest metre. Rounded here, because "%.0f"
+    -- writes a few millimetres west of the middle as "-0".
+    print(string.format("hit %s>%s %s %s %d %.1f %d,%d %s",
         hit.shooter.name, hit.victim and hit.victim.name or "level", hit.weapon,
-        hit.part or "none", hit.damage, hit.distance, hit.position.x, hit.position.z,
+        hit.part or "none", hit.damage, hit.distance,
+        math.floor(hit.position.x + 0.5), math.floor(hit.position.z + 0.5),
         tostring(hit.explosion)))
 end)
 game.onWeaponReload(function(player)
@@ -120,9 +115,9 @@ end)
 
 #[test]
 fn a_player_fires_the_rifle_they_were_given_and_the_script_hears_it_land() {
-    let (mut hosted, address) = host(TELLS_ALL);
-    let mut first = join(&mut hosted, &address);
-    let mut second = join(&mut hosted, &address);
+    let mut hosted = host(TELLS_ALL);
+    let mut first = join(&mut hosted);
+    let mut second = join(&mut hosted);
     let (mut shooting, mut still) = (idle(), idle());
     // Both land and turn to face each other; nothing is fired meanwhile.
     play(
@@ -202,9 +197,9 @@ fn nobody_fires_without_a_weapon_and_the_dead_are_not_hit() {
         "player:giveWeapon(\"rifle\")",
         "if player.name == \"Player 1\" then player:giveWeapon(\"pistol\") end",
     );
-    let (mut hosted, address) = host(&script);
-    let mut first = join(&mut hosted, &address);
-    let mut second = join(&mut hosted, &address);
+    let mut hosted = host(&script);
+    let mut first = join(&mut hosted);
+    let mut second = join(&mut hosted);
     let (mut armed, mut unarmed) = (idle(), idle());
     armed.press(GamepadButton::RightTrigger);
     unarmed.press(GamepadButton::RightTrigger);
@@ -238,7 +233,18 @@ fn nobody_fires_without_a_weapon_and_the_dead_are_not_hit() {
         &mut [(&mut first, &mut armed), (&mut second, &mut unarmed)],
         20,
     );
-    assert_eq!(printed(), ["fire Player 1 pistol 10"]);
+    let said = printed();
+    assert_eq!(said[0], "fire Player 1 pistol 10");
+    // Where in its spread the shot goes is settled by the tick it leaves
+    // on: level, and it flies on for good; a touch low, and it lands on
+    // the floor far behind where the dead player stood. Nobody is hit.
+    assert!(said.len() <= 2, "{said:#?}");
+    assert!(
+        said[1..]
+            .iter()
+            .all(|line| line.starts_with("hit Player 1>level pistol none 0 ")),
+        "{said:#?}"
+    );
 }
 
 #[test]
@@ -250,8 +256,8 @@ fn a_thrown_bomb_goes_off_on_its_fuse_and_catches_whoever_is_near() {
          projectile = { speed = 2, fuse = 1, blastRadius = 6 } })\n\
          game.onSpawn(function(player) player:giveWeapon(\"bomb\") end)",
     );
-    let (mut hosted, address) = host(&script);
-    let mut alone = join(&mut hosted, &address);
+    let mut hosted = host(&script);
+    let mut alone = join(&mut hosted);
     let mut input = idle();
     play(&mut hosted, &mut [(&mut alone, &mut input)], 30);
     input.press(GamepadButton::RightTrigger);

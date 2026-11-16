@@ -4,19 +4,28 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// How many times this thread has asked for memory. Each thread has
+    /// its own count, because the test is not alone in its process: the
+    /// thread that started it prints and keeps time meanwhile, and what
+    /// that sets aside is not the code under test's.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 // SAFETY: every call is passed straight to the system allocator, which
 // upholds the contract; counting does not touch the memory.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        // A plain number with nothing to set up or tear down, so reading
+        // it asks for no memory itself. A thread that is ending no longer
+        // has one, and is not counted.
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         // SAFETY: the caller's layout is passed on unchanged.
         unsafe { System.alloc(layout) }
     }
@@ -30,7 +39,19 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-// The only test in this file, so nothing else allocates while it counts.
+/// How many allocations this thread has made so far, having first made
+/// sure that they are being counted at all.
+fn counted() -> usize {
+    let before = ALLOCATIONS.get();
+    drop(std::hint::black_box(Box::new(0_u64)));
+    assert!(
+        ALLOCATIONS.get() > before,
+        "this thread's allocations are not being counted"
+    );
+    ALLOCATIONS.get()
+}
+
+// Only what this test's own thread sets aside is counted.
 #[test]
 fn stepping_a_player_does_not_allocate() {
     // A floor, a wall to slide along and a stair to climb.
@@ -64,7 +85,7 @@ fn stepping_a_player_does_not_allocate() {
     let settings = MoveSettings::default();
     let mut player = Player::at([0.0, 0.5, 0.0], &settings);
 
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = counted();
     for tick in 0..300_u32 {
         let input = MoveInput {
             forward: 1.0,
@@ -76,7 +97,7 @@ fn stepping_a_player_does_not_allocate() {
         };
         player.step(&level, &settings, &input, 1.0 / 60.0);
     }
-    let allocated = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let allocated = ALLOCATIONS.get() - before;
 
     assert!(player.position[1] > 0.25, "climbed the stair: {player:?}");
     assert_eq!(allocated, 0, "allocations in 300 ticks");

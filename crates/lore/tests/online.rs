@@ -1,4 +1,13 @@
-//! A server and players joined to it over this machine's own network.
+//! A server and players joined to it.
+//!
+//! Where a test is about the game and not the network, the players are in
+//! the server's own program and are handed its packets directly
+//! (`inside`, `join_inside`, `play`), so every run goes the same way.
+//! Where it is about what crosses a network (finding a server, being sent
+//! its level and map, being told it stopped), they join over this
+//! machine's own network (`host`, `join`, `play_over_network`), with a
+//! short wait each tick for the packets to cross and time to settle
+//! before anything is compared.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -28,6 +37,19 @@ fn host(test: &str) -> (HostedGame, String) {
     (hosted, address)
 }
 
+/// A server for a new game that is on no network.
+fn inside(test: &str) -> HostedGame {
+    HostedGame::in_program(new_game(test), TICK_RATE)
+}
+
+/// A player joins from the server's own program, and the server runs on
+/// for a tick, which puts the newcomer in the world.
+fn join_inside(hosted: &mut HostedGame) -> JoinedGame {
+    let joined = JoinedGame::in_program(hosted, &ActionMap::default_fps()).unwrap();
+    hosted.tick(Input::new(ActionMap::default_fps()).frame(), STEP);
+    joined
+}
+
 fn join(hosted: &mut HostedGame, address: &str) -> JoinedGame {
     let nothing = Input::new(ActionMap::default_fps());
     // Nothing these tests fetch is kept on the computer they run on.
@@ -42,8 +64,25 @@ fn join(hosted: &mut HostedGame, address: &str) -> JoinedGame {
 }
 
 /// Runs `ticks` ticks of the server and each player, with each player's
-/// own keys. A short wait lets this machine carry the packets across.
+/// own keys, for players in the server's program.
 fn play(hosted: &mut HostedGame, players: &mut [(&mut JoinedGame, &mut Input)], ticks: u32) {
+    let nothing = Input::new(ActionMap::default_fps());
+    for _ in 0..ticks {
+        for (joined, input) in players.iter_mut() {
+            joined.tick(input.tick(), STEP);
+        }
+        hosted.tick(nothing.frame(), STEP);
+    }
+}
+
+/// As [`play`], for players joined over this machine's own network. A
+/// short wait lets the machine carry the packets across; when they arrive
+/// is still the machine's to decide.
+fn play_over_network(
+    hosted: &mut HostedGame,
+    players: &mut [(&mut JoinedGame, &mut Input)],
+    ticks: u32,
+) {
     let nothing = Input::new(ActionMap::default_fps());
     for _ in 0..ticks {
         for (joined, input) in players.iter_mut() {
@@ -61,8 +100,9 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 #[test]
 fn a_joined_player_walks_at_once_and_the_server_agrees() {
-    let (mut hosted, address) = host("walk");
-    let mut joined = join(&mut hosted, &address);
+    let mut hosted = inside("walk");
+    assert_eq!(hosted.address(), None, "nothing is opened on the network");
+    let mut joined = join_inside(&mut hosted);
     let mut input = Input::new(ActionMap::default_fps());
     assert_eq!(hosted.game().host().mode().players().len(), 1);
 
@@ -94,9 +134,9 @@ fn a_joined_player_walks_at_once_and_the_server_agrees() {
 
 #[test]
 fn players_see_each_other_and_the_script_hears_them_come_and_go() {
-    let (mut hosted, address) = host("two");
-    let mut first = join(&mut hosted, &address);
-    let mut second = join(&mut hosted, &address);
+    let mut hosted = inside("two");
+    let mut first = join_inside(&mut hosted);
+    let mut second = join_inside(&mut hosted);
     let (mut still, mut walking) = (
         Input::new(ActionMap::default_fps()),
         Input::new(ActionMap::default_fps()),
@@ -157,11 +197,15 @@ fn a_game_played_alone_goes_through_the_same_netcode() {
     input.press(Key::W);
     for _ in 0..120 {
         game.tick(input.tick(), STEP);
-        std::thread::sleep(Duration::from_millis(1));
     }
 
     let here = game.joined().player().position;
     assert!(here[2] < -3.0, "{here:?}");
+    assert_eq!(
+        game.hosted().address(),
+        None,
+        "a game played alone opens no port"
+    );
     assert_eq!(game.hosted().players().count(), 1);
     assert_eq!(game.hosted().game().host().mode().players().len(), 1);
     assert!(game.joined().closed().is_none());
@@ -250,7 +294,6 @@ fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
     let play = |game: &mut LocalGame, input: &mut Input, ticks: u32| {
         for _ in 0..ticks {
             game.tick(input.tick(), STEP);
-            std::thread::sleep(Duration::from_millis(1));
         }
     };
 
@@ -310,7 +353,7 @@ fn players_who_join_a_level_start_apart_and_one_without_it_is_put_right() {
         Input::new(ActionMap::default_fps()),
         Input::new(ActionMap::default_fps()),
     );
-    play(
+    play_over_network(
         &mut hosted,
         &mut [(&mut first, &mut still), (&mut second, &mut walking)],
         30,
@@ -324,14 +367,14 @@ fn players_who_join_a_level_start_apart_and_one_without_it_is_put_right() {
     // Without the level the second player looks north and thinks the way
     // is clear; the server knows where the walls are and has the last word.
     walking.press(if b[2] < 0.0 { Key::W } else { Key::S });
-    play(
+    play_over_network(
         &mut hosted,
         &mut [(&mut first, &mut still), (&mut second, &mut walking)],
         150,
     );
     walking.release(Key::W);
     walking.release(Key::S);
-    play(
+    play_over_network(
         &mut hosted,
         &mut [(&mut first, &mut still), (&mut second, &mut walking)],
         60,
@@ -376,7 +419,7 @@ fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
     // side, which started in the middle, is brought there.
     let mut one = join(&mut hosted, &address);
     let mut still = Input::new(ActionMap::default_fps());
-    play(&mut hosted, &mut [(&mut one, &mut still)], 30);
+    play_over_network(&mut hosted, &mut [(&mut one, &mut still)], 30);
     let (_, on_server) = hosted.players().next().unwrap();
     assert!(distance(on_server.position, first) < 0.01, "{on_server:?}");
     assert!(
@@ -400,13 +443,13 @@ fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
         if moved(&hosted) {
             break;
         }
-        play(&mut hosted, &mut [(&mut one, &mut still)], 1);
+        play_over_network(&mut hosted, &mut [(&mut one, &mut still)], 1);
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(moved(&hosted), "the saved map was never picked up");
     let mut two = join(&mut hosted, &address);
     let mut also_still = Input::new(ActionMap::default_fps());
-    play(
+    play_over_network(
         &mut hosted,
         &mut [(&mut one, &mut still), (&mut two, &mut also_still)],
         30,
@@ -423,7 +466,7 @@ fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
         if hosted.game().map_error().is_some() {
             break;
         }
-        play(&mut hosted, &mut [], 1);
+        play_over_network(&mut hosted, &mut [], 1);
         std::thread::sleep(Duration::from_millis(5));
     }
     let said = hosted.game().map_error().unwrap().to_string();
@@ -467,7 +510,7 @@ fn a_player_with_no_copy_of_the_game_is_sent_its_level_and_walks_it() {
 
     // Started at a spawn point of the level, looking at the other end.
     let mut input = Input::new(ActionMap::default_fps());
-    play(&mut hosted, &mut [(&mut joined, &mut input)], 30);
+    play_over_network(&mut hosted, &mut [(&mut joined, &mut input)], 30);
     let start = joined.player().position;
     assert!((start[2].abs() - 14.0).abs() < 0.01, "{start:?}");
     let yaw = joined.yaw();
@@ -483,9 +526,9 @@ fn a_player_with_no_copy_of_the_game_is_sent_its_level_and_walks_it() {
     // Backing into the wall 2 m behind, the player stops at it on their
     // own side, where the server has them too: nothing to put right.
     input.press(Key::S);
-    play(&mut hosted, &mut [(&mut joined, &mut input)], 120);
+    play_over_network(&mut hosted, &mut [(&mut joined, &mut input)], 120);
     input.release(Key::S);
-    play(&mut hosted, &mut [(&mut joined, &mut input)], 60);
+    play_over_network(&mut hosted, &mut [(&mut joined, &mut input)], 60);
     let here = joined.player().position;
     let out = here[2].abs();
     assert!(out > 15.5 && out < 15.7, "stopped by the wall: {here:?}");
@@ -496,7 +539,7 @@ fn a_player_with_no_copy_of_the_game_is_sent_its_level_and_walks_it() {
         on_server.position
     );
     drop(joined);
-    play(&mut hosted, &mut [], 5);
+    play_over_network(&mut hosted, &mut [], 5);
 
     // The next visit uses the kept file and leaves it as it is.
     let written = std::fs::metadata(&path).unwrap().modified().unwrap();
@@ -510,7 +553,7 @@ fn a_player_with_no_copy_of_the_game_is_sent_its_level_and_walks_it() {
     assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
     assert!(std::fs::metadata(&path).unwrap().modified().unwrap() >= written);
     drop(again);
-    play(&mut hosted, &mut [], 5);
+    play_over_network(&mut hosted, &mut [], 5);
 
     // A kept file that is no longer what the server offers is not
     // trusted: the level is fetched afresh.
@@ -543,7 +586,7 @@ fn a_player_is_sent_the_map_and_faces_the_way_its_spawn_point_does() {
 
     let mut joined = join(&mut hosted, &address);
     let mut still = Input::new(ActionMap::default_fps());
-    play(&mut hosted, &mut [(&mut joined, &mut still)], 30);
+    play_over_network(&mut hosted, &mut [(&mut joined, &mut still)], 30);
     let here = joined.player().position;
     let (_, on_server) = hosted.players().next().unwrap();
     // Dropped on the floor, a player settles within a centimetre or two.

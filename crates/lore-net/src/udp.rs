@@ -3,10 +3,13 @@
 //! A server holds one [`UdpHost`], a player one [`UdpLink`]. Neither ever
 //! waits: [`UdpHost::poll`] and [`UdpLink::poll`] hand over what has
 //! arrived and come straight back, so both fit in a game's tick.
+//!
+//! A player in the same program as the server needs no socket: see
+//! [`UdpHost::link_in_program`].
 
 use std::fmt;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +18,7 @@ use crate::connect::{
     LinkSettings, MAX_DATAGRAM_BYTES, Refusal,
 };
 use crate::find::{FoundServer, QUERY_BYTES, Search};
+use crate::inside::{Clock, HostEnd, LinkEnd, is_inside};
 use crate::share::{Offer, ShareError, WINDOW};
 use crate::snapshot::PlayerId;
 
@@ -140,6 +144,54 @@ impl Budget {
     }
 }
 
+/// Reads a host's next datagram: from the players in its own program
+/// first, then from the network.
+fn host_read(
+    inside: &HostEnd,
+    socket: Option<&UdpSocket>,
+    inbox: &mut [u8],
+) -> io::Result<(usize, SocketAddr)> {
+    match inside.recv_from(inbox) {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+        heard => return heard,
+    }
+    let Some(socket) = socket else {
+        return Err(io::ErrorKind::WouldBlock.into());
+    };
+    let (len, from) = socket.recv_from(inbox)?;
+    if is_inside(from) {
+        // No network delivers this; it must not pass for a player here.
+        return Err(io::Error::other("a datagram from no address"));
+    }
+    Ok((len, from))
+}
+
+/// What a link's datagrams travel over.
+#[derive(Debug)]
+enum LinkWire {
+    /// A socket that hears only the server.
+    Udp(UdpSocket),
+    /// The server is in this program.
+    Inside(LinkEnd),
+}
+
+impl LinkWire {
+    fn recv(&self, inbox: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Udp(socket) => socket.recv(inbox),
+            Self::Inside(end) => end.recv(inbox),
+        }
+    }
+
+    /// A datagram that cannot be sent is one more lost one.
+    fn send(&self, datagram: &[u8]) {
+        match self {
+            Self::Udp(socket) => drop(socket.send(datagram)),
+            Self::Inside(end) => end.send(datagram),
+        }
+    }
+}
+
 /// Something a server's game should act on, from [`UdpHost::poll`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostEvent<'a> {
@@ -197,9 +249,12 @@ pub enum HostEvent<'a> {
 /// Dropping the host tells every player the server has stopped.
 #[derive(Debug)]
 pub struct UdpHost {
-    socket: UdpSocket,
+    /// `None` for a server only players in this program join.
+    socket: Option<UdpSocket>,
+    /// Where players in this program are heard and answered.
+    inside: HostEnd,
     host: Host,
-    started: Instant,
+    clock: Clock,
     inbox: Box<[u8]>,
     outbox: Vec<u8>,
     budget: Budget,
@@ -222,18 +277,61 @@ impl UdpHost {
             socket.set_nonblocking(true)?;
             Ok(socket)
         };
-        Ok(Self {
-            socket: open().map_err(|source| SocketError {
-                purpose: Purpose::Hosting,
-                address: address.to_owned(),
-                source,
-            })?,
+        let socket = open().map_err(|source| SocketError {
+            purpose: Purpose::Hosting,
+            address: address.to_owned(),
+            source,
+        })?;
+        Ok(Self::new(
+            Some(socket),
+            settings,
+            Clock::Wall(Instant::now()),
+        ))
+    }
+
+    /// A server with no socket, for a game that only players in this
+    /// program join ([`link_in_program`](Self::link_in_program)): one
+    /// played alone, or tested. Nothing on any network can find or reach
+    /// it, and no port is opened.
+    ///
+    /// It reads no clock. `tick` is how long one of the game's ticks is,
+    /// and time goes by one tick for each [`poll`](Self::poll) that comes
+    /// back with `None`, so a player counts as silent after so many
+    /// ticks, however long the computer took over them.
+    #[must_use]
+    pub fn in_program(settings: HostSettings, tick: Duration) -> Self {
+        Self::new(None, settings, Clock::Ticks { tick, gone: 0 })
+    }
+
+    fn new(socket: Option<UdpSocket>, settings: HostSettings, clock: Clock) -> Self {
+        Self {
+            socket,
+            inside: HostEnd::default(),
             host: Host::new(settings),
-            started: Instant::now(),
+            clock,
             inbox: vec![0; INBOX_BYTES].into(),
             outbox: Vec::with_capacity(MAX_DATAGRAM_BYTES),
             budget: Budget::default(),
-        })
+        }
+    }
+
+    /// Starts joining this server from the same program, with no socket:
+    /// what the link sends is here at the server's next
+    /// [`poll`](Self::poll), and what the server sends is there at the
+    /// link's next, whole and in order. Joining, leaving and everything
+    /// else go as over a network. Any server can be joined this way,
+    /// whether or not it also has a socket.
+    ///
+    /// The link reads no clock: `tick` is how long one of the game's ticks
+    /// is, and time goes by one tick for each [`UdpLink::poll`] that
+    /// comes back with `None`.
+    #[must_use]
+    pub fn link_in_program(&self, settings: LinkSettings, tick: Duration) -> UdpLink {
+        UdpLink::new(
+            LinkWire::Inside(self.inside.link()),
+            settings,
+            Clock::Ticks { tick, gone: 0 },
+        )
     }
 
     /// Names the server for players looking for one with a
@@ -271,25 +369,40 @@ impl UdpHost {
     ///
     /// # Errors
     ///
-    /// When the system cannot say, which it always can for an open
-    /// socket.
+    /// When there is no socket ([`in_program`](Self::in_program)), or the
+    /// system cannot say, which it always can for an open socket.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.local_addr()
+        match &self.socket {
+            Some(socket) => socket.local_addr(),
+            None => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this server has no address: it is joined only from inside its own program",
+            )),
+        }
+    }
+
+    /// Sends what is in the outbox to `to`, in this program or over the
+    /// network. A datagram that cannot be sent is one more lost one.
+    fn send_to(&self, to: SocketAddr) {
+        if is_inside(to) {
+            self.inside.send_to(&self.outbox, to);
+        } else if let Some(socket) = &self.socket {
+            let _ = socket.send_to(&self.outbox, to);
+        }
     }
 
     /// The next thing the game should act on, or `None` when everything
     /// that has arrived is dealt with. Never waits. Call it in a loop
     /// once per tick.
     pub fn poll(&mut self) -> Option<HostEvent<'_>> {
-        let now = self.started.elapsed();
-        while let Some((len, from)) =
-            next_datagram(&mut self.budget, || self.socket.recv_from(&mut self.inbox))
-        {
+        let now = self.clock.now();
+        while let Some((len, from)) = next_datagram(&mut self.budget, || {
+            host_read(&self.inside, self.socket.as_ref(), &mut self.inbox)
+        }) {
             let datagram = self.inbox.get(..len).unwrap_or_default();
             let heard = self.host.receive(now, from, datagram, &mut self.outbox);
             if !self.outbox.is_empty() {
-                // A datagram that cannot be sent is one more lost one.
-                let _ = self.socket.send_to(&self.outbox, from);
+                self.send_to(from);
             }
             match heard {
                 Some(Heard::Join(request)) => return Some(HostEvent::Join(request)),
@@ -304,7 +417,7 @@ impl UdpHost {
                         && self.host.write_piece(fetch, ahead, &mut self.outbox)
                     {
                         // A piece that cannot be sent is asked for again.
-                        let _ = self.socket.send_to(&self.outbox, from);
+                        self.send_to(from);
                         self.budget.pieces += 1;
                         ahead += 1;
                     }
@@ -316,6 +429,7 @@ impl UdpHost {
             return Some(HostEvent::Left(id, Gone::TimedOut));
         }
         self.budget = Budget::default();
+        self.clock.polled();
         None
     }
 
@@ -323,23 +437,23 @@ impl UdpHost {
     /// [`Server::join`](crate::Server::join) gave, and tells them.
     pub fn accept(&mut self, request: JoinRequest, id: PlayerId) {
         self.host
-            .accept(self.started.elapsed(), request, id, &mut self.outbox);
+            .accept(self.clock.now(), request, id, &mut self.outbox);
         if !self.outbox.is_empty() {
-            let _ = self.socket.send_to(&self.outbox, request.address());
+            self.send_to(request.address());
         }
     }
 
     /// Turns the player behind `request` away and tells them why.
     pub fn refuse(&mut self, request: JoinRequest, why: Refusal) {
         Host::refuse(request, why, &mut self.outbox);
-        let _ = self.socket.send_to(&self.outbox, request.address());
+        self.send_to(request.address());
     }
 
     /// Sends a snapshot to the player `id`. Does nothing if nobody has
     /// that place.
     pub fn send(&mut self, id: PlayerId, packet: &[u8]) {
         if let Some(to) = self.host.wrap(id, packet, &mut self.outbox) {
-            let _ = self.socket.send_to(&self.outbox, to);
+            self.send_to(to);
         }
     }
 
@@ -349,7 +463,7 @@ impl UdpHost {
     pub fn kick(&mut self, id: PlayerId, why: Refusal) {
         if let Some(to) = self.host.drop_player(id, why, &mut self.outbox) {
             for _ in 0..GOODBYES {
-                let _ = self.socket.send_to(&self.outbox, to);
+                self.send_to(to);
             }
         }
     }
@@ -442,9 +556,9 @@ pub enum LinkEvent<'a> {
 /// Dropping the link tells the server this player has left.
 #[derive(Debug)]
 pub struct UdpLink {
-    socket: UdpSocket,
+    wire: LinkWire,
     link: Link,
-    started: Instant,
+    clock: Clock,
     inbox: Box<[u8]>,
     outbox: Vec<u8>,
     budget: Budget,
@@ -479,19 +593,27 @@ impl UdpLink {
             socket.set_nonblocking(true)?;
             Ok(socket)
         };
-        let started = Instant::now();
-        Ok(Self {
-            socket: open().map_err(|source| SocketError {
-                purpose: Purpose::Joining,
-                address: address.to_owned(),
-                source,
-            })?,
-            link: Link::new(started.elapsed(), settings),
-            started,
+        let socket = open().map_err(|source| SocketError {
+            purpose: Purpose::Joining,
+            address: address.to_owned(),
+            source,
+        })?;
+        Ok(Self::new(
+            LinkWire::Udp(socket),
+            settings,
+            Clock::Wall(Instant::now()),
+        ))
+    }
+
+    fn new(wire: LinkWire, settings: LinkSettings, clock: Clock) -> Self {
+        Self {
+            wire,
+            link: Link::new(clock.now(), settings),
+            clock,
             inbox: vec![0; INBOX_BYTES].into(),
             outbox: Vec::with_capacity(MAX_DATAGRAM_BYTES),
             budget: Budget::default(),
-        })
+        }
     }
 
     /// The next thing the game should act on, or `None` when everything
@@ -499,9 +621,8 @@ impl UdpLink {
     /// once per tick, joined or not: it is also what keeps asking the
     /// server for a place.
     pub fn poll(&mut self) -> Option<LinkEvent<'_>> {
-        let now = self.started.elapsed();
-        while let Some(len) = next_datagram(&mut self.budget, || self.socket.recv(&mut self.inbox))
-        {
+        let now = self.clock.now();
+        while let Some(len) = next_datagram(&mut self.budget, || self.wire.recv(&mut self.inbox)) {
             let datagram = self.inbox.get(..len).unwrap_or_default();
             match self.link.receive(now, datagram) {
                 Some(LinkHeard::Joined(id)) => {
@@ -523,10 +644,11 @@ impl UdpLink {
         }
         let closed = self.link.update(now, &mut self.outbox);
         if !self.outbox.is_empty() {
-            let _ = self.socket.send(&self.outbox);
+            self.wire.send(&self.outbox);
         }
         if closed.is_none() {
             self.budget = Budget::default();
+            self.clock.polled();
         }
         closed.map(LinkEvent::Closed)
     }
@@ -544,7 +666,7 @@ impl UdpLink {
     /// [`MAX_SHARED_BYTES`](crate::MAX_SHARED_BYTES). The file is whatever
     /// the server chose to send: check it as any file from a stranger.
     pub fn fetch(&mut self, slot: usize) -> bool {
-        self.link.fetch(self.started.elapsed(), slot)
+        self.link.fetch(self.clock.now(), slot)
     }
 
     /// How many bytes of the file being fetched have arrived, and how many
@@ -559,7 +681,7 @@ impl UdpLink {
     /// while takes the player to be gone.
     pub fn send(&mut self, packet: &[u8]) {
         if self.link.wrap(packet, &mut self.outbox) {
-            let _ = self.socket.send(&self.outbox);
+            self.wire.send(&self.outbox);
         }
     }
 
@@ -568,7 +690,7 @@ impl UdpLink {
     pub fn leave(&mut self) {
         if self.link.leave(&mut self.outbox) {
             for _ in 0..GOODBYES {
-                let _ = self.socket.send(&self.outbox);
+                self.wire.send(&self.outbox);
             }
         }
     }
@@ -586,14 +708,20 @@ impl UdpLink {
         self.link.closed()
     }
 
-    /// The address and port this side's socket is open on.
+    /// The address and port this side's socket is open on. A link to a
+    /// server in the same program ([`UdpHost::link_in_program`]) has no
+    /// socket and gives the address that server knows it by, `0.0.0.0`
+    /// and a number.
     ///
     /// # Errors
     ///
     /// When the system cannot say, which it always can for an open
     /// socket.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.local_addr()
+        match &self.wire {
+            LinkWire::Udp(socket) => socket.local_addr(),
+            LinkWire::Inside(end) => Ok(end.address()),
+        }
     }
 }
 
@@ -610,6 +738,18 @@ const ASK_AT: [Duration; 3] = [
     Duration::from_millis(250),
     Duration::from_millis(500),
 ];
+
+/// When, counted from the start of a search, a server on this machine
+/// that has answered only from the address the network knows the machine
+/// by is given at that address: after every question has had a quarter of
+/// a second to be answered from `127.0.0.1`.
+const OWN_ANSWERS_BY: Duration = Duration::from_millis(750);
+
+/// Whether `address` is one of this machine's own: only those can have a
+/// socket opened on them. Nothing is sent.
+fn is_here(address: IpAddr) -> bool {
+    UdpSocket::bind((address, 0)).is_ok()
+}
 
 /// A search for the servers on this machine and its local network.
 ///
@@ -686,6 +826,11 @@ impl UdpSearch {
     /// Never waits, and gives each server once. Call it in a loop, again
     /// and again, for as long as the search should go on: it is also what
     /// sends the question.
+    ///
+    /// A server on this machine is given at `127.0.0.1`, the address that
+    /// always works, whichever of its answers comes first. One that can
+    /// only be reached at the address the network knows this machine by
+    /// is given three quarters of a second into the search.
     pub fn poll(&mut self) -> Option<FoundServer> {
         if ASK_AT
             .get(self.asked)
@@ -698,11 +843,14 @@ impl UdpSearch {
             next_datagram(&mut self.budget, || self.socket.recv_from(&mut self.inbox))
         {
             let datagram = self.inbox.get(..len).unwrap_or_default();
-            if let Some(found) = self.search.receive(from, datagram) {
+            if let Some(found) = self.search.receive(from, datagram, is_here) {
                 return Some(found);
             }
         }
         self.budget = Budget::default();
+        if self.started.elapsed() >= OWN_ANSWERS_BY {
+            return self.search.give_held();
+        }
         None
     }
 

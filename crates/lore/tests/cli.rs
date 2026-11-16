@@ -806,7 +806,7 @@ fn a_player_joins_a_running_serve_and_walks() {
     use lore::Game;
     use lore::input::{ActionMap, Input, Key};
     use lore::online::JoinedGame;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// Stops the server even when the test fails.
     struct Running(std::process::Child);
@@ -846,21 +846,49 @@ fn a_player_joins_a_running_serve_and_walks() {
         }
     };
 
+    // The server is another program, keeping its own time on a machine
+    // that may be busy, so what happens is waited for and not expected
+    // by a set tick: each wait is over the moment it has happened, and
+    // fails only after half a minute.
     let mut input = Input::new(actions);
-    input.press(Key::W);
     let step = Duration::from_secs_f32(1.0 / 60.0);
-    for _ in 0..90 {
-        joined.tick(input.tick(), step.as_secs_f32());
-        std::thread::sleep(step);
-    }
+    let play_until = |joined: &mut JoinedGame,
+                      input: &mut Input,
+                      what: &str,
+                      done: &dyn Fn(&JoinedGame) -> bool| {
+        let started = Instant::now();
+        while !done(joined) {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "waited half a minute for the player to {what}: at {:?}, {:?}",
+                joined.player().position,
+                joined.closed().map(|error| error.to_string())
+            );
+            joined.tick(input.tick(), step.as_secs_f32());
+            std::thread::sleep(step);
+        }
+    };
 
-    // Players start 14 m from the middle at either end, looking at the other
-    // end, and the one in the middle of an end has a low wall 3 m ahead. How
-    // far the others get depends on how well this machine keeps time: the
-    // server goes on with the held key while a packet is late.
-    let here = joined.player().position;
-    assert!(here[2].abs() < 12.5, "walked towards the middle: {here:?}");
-    assert!(here[1].abs() < 0.05, "on the floor: {here:?}");
+    // Players start 14 m from the middle at either end, looking at the
+    // other end. Until the server has said where, this side has the player
+    // at the middle.
+    let far = |joined: &JoinedGame| joined.player().position[2].abs();
+    play_until(&mut joined, &mut input, "be given a place", &|joined| {
+        far(joined) > 13.5
+    });
+    // The one who starts in the middle of an end has a low wall 3 m ahead,
+    // so a metre and a half is as far as every start is sure to allow.
+    input.press(Key::W);
+    play_until(
+        &mut joined,
+        &mut input,
+        "walk towards the middle",
+        &|joined| far(joined) < 12.5,
+    );
+    input.release(Key::W);
+    play_until(&mut joined, &mut input, "stand on the floor", &|joined| {
+        joined.player().position[1].abs() < 0.05
+    });
     assert!(joined.closed().is_none());
 }
 
