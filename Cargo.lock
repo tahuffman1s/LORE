@@ -1496,6 +1496,7 @@ dependencies = [
  "lore-render",
  "lore-script",
  "lore-ui",
+ "lore-weapons",
  "tar",
  "toml",
  "winit",
@@ -1589,6 +1590,7 @@ dependencies = [
  "log",
  "lore-input",
  "lore-mode",
+ "lore-weapons",
  "mlua",
 ]
 

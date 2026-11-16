@@ -32,6 +32,13 @@ game.onPlayerJoin(function(player)
     print(player.name .. " joined " .. player.team.name .. ".")
 end)
 
+-- Everyone comes into the world with a rifle, full each time. The engine fires
+-- it when the player presses "fire" and tells the script where each shot lands
+-- (game.onWeaponHit). Nobody is hurt yet: players have no health so far.
+game.onSpawn(function(player)
+    player:giveWeapon("rifle")
+end)
+
 game.onPlayerLeave(function(player)
     streaks.forget(player)
     print(player.name .. " left.")

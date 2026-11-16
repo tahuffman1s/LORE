@@ -12,6 +12,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - `lore new`, `run`, `check`, `serve`, `join`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
 - Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level (FOSSPS#6, FOSSPS#64)
 - Weapons in engine code: hitscan and projectile, recoil, reload (FOSSPS#7)
+- Scripts hand players weapons, tune them and make their own, and are told of every shot, hit and reload; the server fires them (#8)
 - HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
 - A headless server, snapshots with prediction and reconciliation, lag compensation, joining over the local network (FOSSPS#10, FOSSPS#11, FOSSPS#12, FOSSPS#14)
 - Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
@@ -28,7 +29,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Players fire weapons: scripts choose and tune weapons and hear about hits (#8)
 - Any frame rate: the game steps at a fixed tick and the picture is blended between ticks (#9)
 - Any frame rate: looking around follows the mouse and stick on every drawn frame (#10)
 - Scripts behave the same at any frame rate without delta-time maths (#11)
@@ -70,6 +70,8 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - A single-player game opens no network port, and stops when paused (#47)
 - Slow motion and fast forward: one number, and everything still plays the same (#48)
 - Other views from the same few words: top-down, side-on, fixed and on rails (#49)
+- The player's own side fires their weapon too: recoil moves the camera and ammo is known at once (#232)
+- Carry more than one weapon and switch between them (#233)
 - Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
 - Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter
 

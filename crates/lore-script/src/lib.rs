@@ -35,12 +35,15 @@ mod keep;
 mod limit;
 mod mode_api;
 mod modules;
+mod weapon_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
 pub use error::{OpenError, ScriptError};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use lore_mode as mode;
 pub use lore_mode::PlayerId;
+pub use lore_weapons as weapons;
+pub use weapon_api::{HeldWeapon, WeaponHit};
 
 /// Type definitions for the script API, in the format the Luau language
 /// server reads, so editors can autocomplete and check `game`.

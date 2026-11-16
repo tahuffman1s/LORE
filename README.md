@@ -161,7 +161,25 @@ end)
 
 [`examples/team-deathmatch`](examples/team-deathmatch/main.luau) is a complete one with kill streaks, kept in a second file, and [`lore.d.luau`](crates/lore-script/types/lore.d.luau) lists everything a script can call. Saving the script changes the rules of the running match and keeps the score. A player who joins a served game is put on a team and the round starts, so the join and round rules run in a real match; kills there, spawn points for each team and the scoreboard on screen are still being built (#206, #207), so the rest of the rules run under tests and `lore check`.
 
-So far scripts can set up a game mode and react to the game starting, to each tick, to input and to what happens in the match. A game starts from `main.luau` and can be split over files: `local streaks = require("./streaks")` runs `streaks.luau`, the file beside the one that asks, and gives back what that file returns, saving any of the files reloads the game, and an error names the file and line it is in. A reload starts every variable in the scripts over, except what is in a table from `game.keep`: `local saved = game.keep("saved", { best = 0 })` gives a table that still holds what was put in it (numbers, text, true and false, players, and tables of those) after a save. It lasts until the game is closed; nothing is written to a file. Scripts can only be required from inside the game's folder. A new game is also set up for [Claude Code](https://claude.com/claude-code): it has a `CLAUDE.md` that explains the script API and tells Claude to test each change with `lore check`, which runs a second of the game and a pretend match with no window and fails if the script has a mistake.
+A script hands out weapons and hears what they do. Nobody holds one until it says so:
+
+```lua
+game.weapon("smg", { from = "rifle", damage = 22, roundsPerMinute = 900 })
+
+game.onSpawn(function(player)
+    player:giveWeapon("smg")
+end)
+
+game.onWeaponHit(function(hit)
+    if hit.victim then
+        print(hit.shooter.name .. " hit " .. hit.victim.name .. " for " .. hit.damage)
+    end
+end)
+```
+
+The engine's weapons are `"rifle"`, `"pistol"`, `"shotgun"`, `"rocket launcher"` and `"grenade"`; `game.weapon` makes one of your own from any of them, or changes one of them, and saving the file with new numbers changes the weapons already in players' hands. The player fires with the `fire` action, aims with `aim` and reloads with `reload`, on the server: it keeps the rate of fire, the spread, the recoil and the rounds, judges a bullet against where the shooter saw the others (lag compensation), and flies rockets and grenades through the level. `game.onWeaponFire`, `game.onWeaponHit` and `game.onWeaponReload` tell the script; a hit says who fired, who was hit (nobody, for the level), with what, where on the body, where in the world and what it is worth, and an explosion is told once for itself and once for each player caught in it. `player.weapon`, `player.ammo` and `player.reserve` say what a player holds. So far a hit hurts nobody: players have no health yet (#40), so the script decides what a hit means. Nothing of a shot is on screen yet either: the player's own view does not kick with the recoil, though the shots do climb, and ammo is known on the server only (#232); a player carries one weapon at a time (#233); and gunfire is heard only if the script plays it (#16).
+
+So far scripts can set up a game mode, hand out weapons, and react to the game starting, to each tick, to input, to shots and hits, and to what happens in the match. A game starts from `main.luau` and can be split over files: `local streaks = require("./streaks")` runs `streaks.luau`, the file beside the one that asks, and gives back what that file returns, saving any of the files reloads the game, and an error names the file and line it is in. A reload starts every variable in the scripts over, except what is in a table from `game.keep`: `local saved = game.keep("saved", { best = 0 })` gives a table that still holds what was put in it (numbers, text, true and false, players, and tables of those) after a save. It lasts until the game is closed; nothing is written to a file. Scripts can only be required from inside the game's folder. A new game is also set up for [Claude Code](https://claude.com/claude-code): it has a `CLAUDE.md` that explains the script API and tells Claude to test each change with `lore check`, which runs a second of the game and a pretend match with no window and fails if the script has a mistake.
 
 A new game comes with autocomplete set up for VS Code: install the [Luau Language Server](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp) extension and open the game's folder. For another editor, point the Luau language server at the `lore.d.luau` in the game's folder.
 

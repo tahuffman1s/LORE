@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 lore-input = { path = "../lore-input" }
 lore-mode = { path = "../lore-mode" }
+# What a weapon is made of, for `game.weapon`, and the state of each one held.
+lore-weapons = { path = "../lore-weapons" }
 log = "0.4"
 mlua = { version = "0.12", features = ["luau"] }
 

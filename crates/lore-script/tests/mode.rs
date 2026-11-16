@@ -503,7 +503,8 @@ fn mistakes_with_players_and_teams_say_what_to_write() {
     assert_eq!(
         kill_error("print(killer.health)"),
         "player.health does not exist. A player has: name, team, score, kills, deaths, alive, \
-         and the functions player:addScore."
+         weapon, ammo, reserve, and the functions player:addScore, player:giveWeapon, \
+         player:takeWeapon."
     );
     assert_eq!(
         kill_error("print(killer.team.colour)"),

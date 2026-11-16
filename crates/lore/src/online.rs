@@ -62,6 +62,7 @@ use crate::game::{Frame, Game};
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
 use crate::script_game::ScriptGame;
+use crate::shooting::{Names, Shooting};
 
 /// The UDP port a server opens and a player joins when none is named.
 pub const DEFAULT_PORT: u16 = 24680;
@@ -428,8 +429,9 @@ pub fn try_walking(level: &Scene, map: &Map) -> WalkCheck {
 /// port they join through.
 ///
 /// Hand it to [`serve`](crate::server::serve) (or [`run`](crate::run)): each
-/// tick it reads what the players sent, moves them, sends everyone the
-/// result and then runs the script's tick.
+/// tick it reads what the players sent, moves them, fires the weapons the
+/// script has handed them, sends everyone the result and then runs the
+/// script's tick.
 #[derive(Debug)]
 pub struct HostedGame {
     game: ScriptGame,
@@ -437,7 +439,9 @@ pub struct HostedGame {
     server: Server,
     world: World,
     /// Who each place on the server is to the script.
-    names: [Option<lore_script::PlayerId>; MAX_PLAYERS],
+    names: Names,
+    /// The weapons players hold, and what they have launched.
+    shooting: Shooting,
     /// How many times a player has been put at a spawn point.
     spawned: u32,
     /// Where the first player starts in place of a spawn point: the
@@ -472,6 +476,7 @@ impl HostedGame {
             server: Server::new(world.step, ServerSettings::default()),
             world,
             names: [None; MAX_PLAYERS],
+            shooting: Shooting::default(),
             spawned: 0,
             from_here: None,
             packet: Vec::new(),
@@ -663,6 +668,16 @@ impl Game for HostedGame {
         // their spawn point in the first snapshot that shows them there.
         self.place_spawned();
         self.server.tick(&self.world.level, &self.world.rules);
+        // The weapons players hold, by what each pressed in the tick just
+        // run. The script hears of every shot, hit and reload here.
+        self.shooting.tick(
+            &self.server,
+            &self.names,
+            &self.world.level,
+            &self.world.rules,
+            self.world.step,
+            self.game.host_mut(),
+        );
         for id in self.host.players() {
             if self.server.write_snapshot(id, &mut self.packet).is_ok() {
                 self.host.send(id, &self.packet);

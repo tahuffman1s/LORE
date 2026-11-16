@@ -40,3 +40,14 @@ print(held)
 
 local saved = game.keep("saved", { best = 0 })
 saved.best = "high" -- wrong: best started as a number
+
+game.weapon("smg", { damage = "lots" }) -- wrong: damage is a number
+
+game.onWeaponHit(function(hit)
+    print(hit.victim.name) -- wrong: victim is nil when the level was hit
+    print(hit.shooter.name)
+end)
+
+game.onSpawn(function(player)
+    player.giveWeapon("rifle") -- wrong: needs a colon, player:giveWeapon("rifle")
+end)

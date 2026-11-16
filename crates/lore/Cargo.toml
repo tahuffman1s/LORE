@@ -34,6 +34,8 @@ lore-script = { path = "../lore-script" }
 lore-net = { path = "../lore-net" }
 lore-pack = { path = "../lore-pack" }
 lore-physics = { path = "../lore-physics" }
+# The weapons players hold: firing, what a shot hits, rockets and grenades.
+lore-weapons = { path = "../lore-weapons" }
 # Reads a game's sound files and mixes them. Its `device` feature, which
 # plays through the speakers and links a sound library, comes with `window`:
 # a dedicated server has neither.

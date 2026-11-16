@@ -51,6 +51,7 @@ pub mod press;
 pub mod scaffold;
 mod script_game;
 pub mod server;
+mod shooting;
 mod sound_output;
 pub mod sounds;
 #[cfg(feature = "window")]
