@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use lore_net::{
     Client, ClientSettings, Closed, Gone, HostEvent, HostSettings, LinkEvent, LinkSettings,
-    PlayerId, PlayerInput, Refusal, Server, ServerSettings, UdpHost, UdpLink, hash_of,
+    PlayerId, PlayerInput, Refusal, Server, ServerSettings, UdpHost, UdpLink,
 };
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
@@ -96,7 +96,6 @@ impl Hosted {
             rules: MoveSettings::default(),
             packet: Vec::new(),
             closed: None,
-            file: None,
         }
     }
 }
@@ -109,27 +108,19 @@ struct Joining {
     rules: MoveSettings,
     packet: Vec<u8>,
     closed: Option<Closed>,
-    /// What the server offered in its first slot, once fetched.
-    file: Option<Vec<u8>>,
 }
 
 impl Joining {
     fn tick(&mut self, input: &PlayerInput) {
         while let Some(event) = self.link.poll() {
-            let mut fetch = false;
             match event {
                 LinkEvent::Joined(_) => {}
-                LinkEvent::Offered(offer) => fetch = offer.file(0).is_some(),
-                LinkEvent::Fetched(_, file) => self.file = Some(file.to_vec()),
                 LinkEvent::Packet(snapshot) => {
                     self.client
                         .receive(&self.level, &self.rules, snapshot)
                         .unwrap();
                 }
                 LinkEvent::Closed(why) => self.closed = Some(why),
-            }
-            if fetch && self.file.is_none() {
-                assert!(self.link.fetch(0));
             }
         }
         if self.link.id().is_some() {
@@ -270,21 +261,4 @@ fn a_server_that_stops_or_is_full_says_so_at_once() {
     drop(hosted);
     player.tick(&PlayerInput::default());
     assert_eq!(player.closed, Some(Closed::ServerStopped));
-}
-
-#[test]
-fn a_file_the_server_offers_is_fetched_in_the_program_too() {
-    let mut hosted = Hosted::new(HostSettings::default());
-    let level: Vec<u8> = (0..200_000_u32).map(|byte| (byte % 251) as u8).collect();
-    hosted.host.share(0, level.clone()).unwrap();
-    let mut player = hosted.join();
-    let mut ticks = 0;
-    while player.link.id().is_none() {
-        player.tick(&PlayerInput::default());
-        hosted.tick();
-        ticks += 1;
-        assert!(ticks < 600, "the file never arrived");
-    }
-    let fetched = player.file.as_deref().unwrap();
-    assert_eq!(hash_of(fetched), hash_of(&level));
 }

@@ -196,7 +196,7 @@ fn a_rigged_bar_reads_its_skeleton_and_its_clip() {
         Keys::Translation(vec![[0.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 0.0]])
     );
 
-    // A server reading shapes only gets the same skeleton and clip.
+    // A reader of shapes only gets the same skeleton and clip.
     let shapes = Scene::from_bytes(
         "level.glb",
         &bar().glb(&bar_json()),

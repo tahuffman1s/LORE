@@ -9,8 +9,7 @@ publish.workspace = true
 [features]
 default = ["window", "cli", "editor"]
 # Opens a window, draws into it and reads keyboard, mouse and gamepads. A
-# dedicated server builds without it and links no windowing, graphics or
-# gamepad libraries.
+# build without it links no windowing, graphics or gamepad libraries.
 window = [
     "dep:winit",
     "dep:gilrs",
@@ -20,8 +19,7 @@ window = [
     "lore-assets/textures",
 ]
 # Edit mode, `lore edit`: a game's level with a fly camera and a ground
-# grid, in the same program. A build for players only can leave it out, and
-# a dedicated server never has it.
+# grid, in the same program. A build for players only can leave it out.
 editor = ["window", "lore-render/panels", "dep:egui", "dep:egui-winit"]
 # The `lore` command (`lore new`, `lore run`, `lore package`). Off when
 # the crate is used as a library, so a game written in Rust does not build a
@@ -37,23 +35,20 @@ lore-physics = { path = "../lore-physics" }
 # The weapons players hold: firing, what a shot hits, rockets and grenades.
 lore-weapons = { path = "../lore-weapons" }
 # Reads a game's sound files and mixes them. Its `device` feature, which
-# plays through the speakers and links a sound library, comes with `window`:
-# a dedicated server has neither.
+# plays through the speakers and links a sound library, comes with `window`.
 lore-audio = { path = "../lore-audio", default-features = false }
 # The HUD and menus a game hands over each frame. No dependencies of its own.
 lore-ui = { path = "../lore-ui" }
 lore-render = { path = "../lore-render", optional = true }
-# Reads a game's `level.glb`, for the server too: players collide with its
-# shapes. Its `textures` feature, which decodes the pictures in it, is
-# switched on by `window`, so a dedicated server links no image decoders.
+# Reads a game's `level.glb`: players collide with its shapes. Its
+# `textures` feature, which decodes the pictures in it, is switched on by
+# `window`, so a build with no window links no image decoders.
 lore-assets = { path = "../lore-assets", default-features = false }
 log = "0.4"
 # Reads a game's `map.toml`. The same reader the bindings file uses.
 toml = { version = "1.2", default-features = false, features = ["parse", "std"] }
 # Chooses which of a map's spawn points a player gets.
 lore-mode = { path = "../lore-mode" }
-# Ctrl-C and the operating system's "please end" requests, for a clean server stop.
-ctrlc = { version = "3.4", features = ["termination"] }
 # `lore package` writes the Linux `.tar.gz` itself, so packaging needs no
 # `tar` program (Windows has none to rely on). No extended attributes: an
 # archive should say nothing about the computer that made it.

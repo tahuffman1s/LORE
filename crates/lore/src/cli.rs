@@ -1,18 +1,14 @@
-//! What the `lore` and `lore-server` commands share.
+//! What the `lore` command says and does, apart from its window.
 
 use std::fmt::Write as _;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::time::Duration;
 
 use lore_input::{ActionMap, Input};
 use lore_script::{ENTRY_SCRIPT, OpenError};
 
 use crate::game::Game;
-use crate::online::{DEFAULT_PORT, FoundServer, HostedGame};
 use crate::press;
 use crate::script_game::ScriptGame;
-use crate::server::{ServerConfig, StopSignal, serve};
 
 /// Prints log messages to standard error.
 struct StderrLog;
@@ -191,23 +187,11 @@ pub fn find_game(folder: &Path, command: &str) -> Result<(), String> {
 /// Fails with a message for the person if the level is there but cannot be
 /// loaded.
 pub fn load_level(folder: &Path) -> Result<Option<lore_assets::Scene>, String> {
-    Ok(load_level_file(folder)?.map(|(level, _)| level))
-}
-
-/// Loads the level of the game in `folder` as [`load_level`] does, and
-/// gives the file's bytes with it, for a server to hand to the players who
-/// join.
-///
-/// # Errors
-///
-/// Fails with a message for the person if the level is there but cannot be
-/// loaded.
-pub fn load_level_file(folder: &Path) -> Result<Option<(lore_assets::Scene, Vec<u8>)>, String> {
     use crate::level::LEVEL_FILE;
 
-    let level = crate::level::load_file(folder).map_err(|error| error.to_string())?;
+    let level = crate::level::load(folder).map_err(|error| error.to_string())?;
     match &level {
-        Some((level, _)) => {
+        Some(level) => {
             for warning in &level.warnings {
                 log::warn!("{LEVEL_FILE}: {warning}");
             }
@@ -274,85 +258,6 @@ fn no_game_in(folder: &Path, command: &str) -> String {
         } else {
             folder.display().to_string()
         }
-    )
-}
-
-/// Runs the game in `folder` as a dedicated server until Ctrl-C, taking
-/// players on the UDP port `port`. `command` is what the person typed before
-/// the folder, such as `lore serve`.
-///
-/// # Errors
-///
-/// Fails with a message for the person if `folder` is not a game's folder or
-/// the server could not start.
-pub fn serve_game(folder: &Path, command: &str, port: u16) -> Result<(), String> {
-    let config = ServerConfig::default();
-    let game = open_game(folder, &config.actions, command)?;
-    // Before the port is opened: a server whose players would walk through
-    // the level's walls is not worth joining.
-    let level = load_level_file(folder).map_err(|error| {
-        format!(
-            "{error}\nThe server was not started, because the level could not be loaded. \
-             Export it again, then run `{command}` again. To serve the game on the engine's \
-             test floor meanwhile, move the level's file out of the game's folder."
-        )
-    })?;
-    let mut game = HostedGame::open(game, &format!("0.0.0.0:{port}"), config.tick_rate)
-        .map_err(|error| {
-            format!(
-                "The server could not start: {error}\nTo use another port: \
-                 `{command} --port {}`.",
-                port.checked_add(1).unwrap_or(DEFAULT_PORT)
-            )
-        })?
-        .named(&game_name(folder));
-    // Only the level's shapes are kept, for players to collide with, and
-    // its file, for players who join to be sent.
-    if let Some((level, file)) = level {
-        let size = file.len();
-        game = game
-            .with_level(&level)
-            .share_level(file)
-            .map_err(|error| not_shared(&error, command))?;
-        log::info!(
-            "Players walk {}: {}. Players who join are sent it ({} KB), so they need no copy \
-             of the game.",
-            crate::level::LEVEL_FILE,
-            crate::level::summary(&level),
-            size.div_ceil(1024)
-        );
-    }
-    let stop = StopSignal::on_ctrl_c().map_err(|error| error.to_string())?;
-
-    log::info!(
-        "Serving {} at {} ticks a second, with no window. Press Ctrl-C to stop.",
-        folder.join(ENTRY_SCRIPT).display(),
-        config.tick_rate
-    );
-    log::info!("{}", how_to_join(port, lore_net::lan_address()));
-    let report = serve(&config, &mut game, &stop);
-    log::info!(
-        "Server stopped after {}. It ran {} ticks{}.",
-        long_time(report.uptime),
-        report.ticks,
-        if report.skipped == 0 {
-            String::new()
-        } else {
-            format!(" and skipped {}", report.skipped)
-        }
-    );
-    Ok(())
-}
-
-/// What to say when a game's level cannot be handed to the players who
-/// join, so `command` started nothing.
-#[must_use]
-pub fn not_shared(error: &crate::online::ShareError, command: &str) -> String {
-    format!(
-        "{} cannot be sent to players who join: {error}\nNothing was started, because \
-         players without the level would walk through its walls. Export the level with \
-         smaller or fewer textures, then run `{command}` again.",
-        crate::level::LEVEL_FILE
     )
 }
 
@@ -435,8 +340,7 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
     Ok((said, problems))
 }
 
-/// The name players looking for a game are shown for the game in `folder`:
-/// the folder's own name.
+/// The name of the game in `folder`: the folder's own name.
 #[must_use]
 pub fn game_name(folder: &Path) -> String {
     std::path::absolute(folder)
@@ -445,127 +349,6 @@ pub fn game_name(folder: &Path) -> String {
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
-}
-
-/// What to tell the person hosting about getting players in. `lan` is this
-/// computer's address on its network, when it has one.
-#[must_use]
-pub fn how_to_join(port: u16, lan: Option<Ipv4Addr>) -> String {
-    let suffix = if port == DEFAULT_PORT {
-        String::new()
-    } else {
-        format!(":{port}")
-    };
-    let by_address = match lan {
-        Some(lan) => format!("`lore join {lan}{suffix}`"),
-        None => format!(
-            "`lore join` and this computer's address, such as \
-             `lore join 192.168.1.20{suffix}`"
-        ),
-    };
-    let on_network = if port == DEFAULT_PORT {
-        format!(
-            "Players on this network join with just `lore join`, which finds this game \
-             by itself, or by address: {by_address}."
-        )
-    } else {
-        format!(
-            "Players on this network join with {by_address}. (`lore join` alone only \
-             finds games on the usual port, {DEFAULT_PORT}.)"
-        )
-    };
-    format!(
-        "{on_network} On this computer: `lore join localhost{suffix}`. Over the internet, \
-         the router has to pass UDP port {port} on to this computer."
-    )
-}
-
-/// `address` as a player would type it after `lore join`: `localhost` for
-/// this computer, and no port when it is the usual one.
-#[must_use]
-pub fn join_address(address: SocketAddr) -> String {
-    match (address.ip().is_loopback(), address.port() == DEFAULT_PORT) {
-        (true, true) => "localhost".to_owned(),
-        (true, false) => format!("localhost:{}", address.port()),
-        (false, true) => address.ip().to_string(),
-        (false, false) => address.to_string(),
-    }
-}
-
-/// The name of a found game, or its address when it gave no name.
-#[must_use]
-pub fn server_name(server: &FoundServer) -> String {
-    if server.name.is_empty() {
-        join_address(server.address)
-    } else {
-        server.name.clone()
-    }
-}
-
-/// A numbered list of found games, one to a line: name, address to join,
-/// how full it is.
-#[must_use]
-pub fn server_list(found: &[FoundServer]) -> String {
-    let names: Vec<String> = found.iter().map(server_name).collect();
-    let addresses: Vec<String> = found
-        .iter()
-        .map(|server| join_address(server.address))
-        .collect();
-    let width = |texts: &[String]| texts.iter().map(|text| text.chars().count()).max();
-    let (name_width, address_width) = (width(&names).unwrap_or(0), width(&addresses).unwrap_or(0));
-    let mut list = String::new();
-    for (number, ((server, name), address)) in (1..).zip(found.iter().zip(&names).zip(&addresses)) {
-        // Writing to a `String` cannot fail.
-        let _ = write!(
-            list,
-            "  {number}. {name:name_width$}   {address:address_width$}   {} of {} players",
-            server.players, server.places
-        );
-        if server.address.ip().is_loopback() {
-            list.push_str(" (on this computer)");
-        }
-        if !server.same_version {
-            list.push_str(" (another version of LORE: update to join)");
-        }
-        list.push('\n');
-    }
-    list
-}
-
-/// What to say when a search on the UDP port `port` found no game.
-#[must_use]
-pub fn no_servers_found(port: u16) -> String {
-    format!(
-        "No games were found on this network.\n\
-         - Is one running? Start one with `lore serve` inside a game's folder, or \
-         `lore run --open` to play in it too.\n\
-         - Are both computers on the same network? Games elsewhere on the internet are \
-         not found: join those by address, like `lore join example.com`.\n\
-         - The server's firewall has to let UDP (not TCP) through on port {port}. \
-         If the search is being blocked, the address still works: `lore join 192.168.1.20`, \
-         with the address the server showed when it started."
-    )
-}
-
-/// What a person meant by `line`, typed to pick one of `count` listed
-/// games: `Ok(None)` for nothing (an empty line), otherwise the place in
-/// the list, counted from zero.
-///
-/// # Errors
-///
-/// Fails with what to type instead when `line` is not a number on the list.
-pub fn chosen(line: &str, count: usize) -> Result<Option<usize>, String> {
-    let line = line.trim().trim_end_matches('.');
-    if line.is_empty() {
-        return Ok(None);
-    }
-    match line.parse::<usize>() {
-        Ok(number) if (1..=count).contains(&number) => Ok(Some(number - 1)),
-        _ => Err(format!(
-            "`{line}` is not on the list. Type a number from 1 to {count}, or press Enter \
-             alone to join nothing."
-        )),
-    }
 }
 
 /// Reads a picture size typed as `1280x720`.
@@ -757,20 +540,6 @@ pub fn quoted(text: &str) -> String {
     }
 }
 
-/// `time` in hours, minutes and seconds, leaving out the parts that are zero
-/// at the front: `2 h 5 min 9 s`, `5 min 9 s`, `9 s`.
-fn long_time(time: Duration) -> String {
-    let seconds = time.as_secs();
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours} h {minutes} min {seconds} s")
-    } else if minutes > 0 {
-        format!("{minutes} min {seconds} s")
-    } else {
-        format!("{seconds} s")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,75 +643,6 @@ mod tests {
     #[test]
     fn a_game_that_cannot_be_opened_again_is_not_judged() {
         assert_eq!(paced(|| None, &ActionMap::default_fps()), None);
-    }
-
-    #[test]
-    fn long_times_leave_out_leading_zero_parts() {
-        assert_eq!(long_time(Duration::from_millis(9_400)), "9 s");
-        assert_eq!(long_time(Duration::from_secs(309)), "5 min 9 s");
-        assert_eq!(long_time(Duration::from_secs(7_509)), "2 h 5 min 9 s");
-        assert_eq!(long_time(Duration::from_secs(7_200)), "2 h 0 min 0 s");
-    }
-
-    #[test]
-    fn joining_advice_names_the_port_only_when_it_is_not_the_usual_one() {
-        let usual = how_to_join(DEFAULT_PORT, None);
-        assert!(usual.contains("`lore join localhost`"), "{usual}");
-        assert!(usual.contains("just `lore join`"), "{usual}");
-        let other = how_to_join(7000, None);
-        assert!(other.contains("`lore join localhost:7000`"), "{other}");
-        assert!(other.contains("`lore join 192.168.1.20:7000`"), "{other}");
-        assert!(other.contains("UDP port 7000"), "{other}");
-        assert!(!other.contains("just `lore join`"), "{other}");
-    }
-
-    #[test]
-    fn joining_advice_gives_this_computers_own_address_when_it_has_one() {
-        let lan = Some(Ipv4Addr::new(10, 0, 0, 7));
-        let usual = how_to_join(DEFAULT_PORT, lan);
-        assert!(usual.contains("`lore join 10.0.0.7`"), "{usual}");
-        assert!(!usual.contains("192.168.1.20"), "{usual}");
-        let other = how_to_join(7000, lan);
-        assert!(other.contains("`lore join 10.0.0.7:7000`"), "{other}");
-    }
-
-    fn server(name: &str, address: &str, players: u8) -> FoundServer {
-        FoundServer {
-            address: address.parse().unwrap(),
-            name: name.to_owned(),
-            players,
-            places: 64,
-            same_version: true,
-        }
-    }
-
-    #[test]
-    fn found_games_are_listed_in_columns_with_the_address_to_type() {
-        let mut old = server("old", "192.168.1.9:24680", 0);
-        old.same_version = false;
-        let found = [
-            server("zombie-night", "192.168.1.20:24680", 2),
-            server("", "127.0.0.1:7000", 0),
-            old,
-        ];
-        assert_eq!(
-            server_list(&found),
-            "  1. zombie-night     192.168.1.20     2 of 64 players\n  \
-             2. localhost:7000   localhost:7000   0 of 64 players (on this computer)\n  \
-             3. old              192.168.1.9      0 of 64 players (another version of \
-             LORE: update to join)\n"
-        );
-    }
-
-    #[test]
-    fn a_typed_choice_is_a_number_on_the_list_or_nothing() {
-        assert_eq!(chosen("2\n", 3), Ok(Some(1)));
-        assert_eq!(chosen(" 1. ", 3), Ok(Some(0)));
-        assert_eq!(chosen("\n", 3), Ok(None));
-        for wrong in ["0", "4", "two", "-1"] {
-            let said = chosen(wrong, 3).unwrap_err();
-            assert!(said.contains("from 1 to 3"), "{said}");
-        }
     }
 
     #[test]

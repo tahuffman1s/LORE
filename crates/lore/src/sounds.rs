@@ -113,8 +113,8 @@ impl Sounds {
     }
 
     /// The sounds of the game in the folder `game`. The files are only
-    /// listed here; [`load`](Self::load) reads them, which a server, where
-    /// nobody listens, never needs to do.
+    /// listed here; [`load`](Self::load) reads them, which a game run with no
+    /// window, where nobody listens, never needs to do.
     #[must_use]
     pub fn in_folder(game: &Path) -> Self {
         let mut sounds = Self::starter();

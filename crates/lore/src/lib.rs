@@ -29,7 +29,6 @@ mod app;
 #[cfg(feature = "window")]
 pub mod bench;
 pub mod blend;
-pub mod cache;
 #[cfg(feature = "cli")]
 #[doc(hidden)]
 pub mod cli;
@@ -58,7 +57,6 @@ pub mod press;
 pub mod scaffold;
 mod script_game;
 mod script_hud;
-pub mod server;
 pub mod settings;
 mod shooting;
 mod sound_output;

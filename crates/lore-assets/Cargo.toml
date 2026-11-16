@@ -8,8 +8,8 @@ publish.workspace = true
 
 [features]
 default = ["textures"]
-# Decodes the PNG and JPEG images a file uses. A dedicated server only needs
-# the shapes, so it builds without this and links no image decoders.
+# Decodes the PNG and JPEG images a file uses. A build that only needs
+# the shapes goes without this and links no image decoders.
 textures = ["dep:image"]
 
 [dependencies]

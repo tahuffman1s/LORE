@@ -48,7 +48,7 @@ impl FrameTime {
 /// Draws a scene exactly as [`Renderer`](crate::Renderer) does, but into a
 /// picture that is never shown, and waits for each frame to finish.
 ///
-/// It needs no window or display, so it runs on a server or in automated
+/// It needs no window or display, so it runs in automated
 /// checks, on any computer with Vulkan 1.3. It is what `lore bench` times.
 ///
 /// ```no_run

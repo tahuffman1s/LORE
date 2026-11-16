@@ -4,8 +4,8 @@
 //! (`.glb` or `.gltf`), which Blender and most other 3D tools export.
 //! [`Scene::load`] turns one into plain data: shapes, where they stand,
 //! materials and pictures, and for rigged models their skeletons
-//! ([`Skin`]) and animation clips ([`Animation`]). Nothing here talks to a graphics card, so a
-//! dedicated server reads the same files for collision.
+//! ([`Skin`]) and animation clips ([`Animation`]). Nothing here talks to a graphics card, so
+//! `lore check` reads the same files with no window.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), lore_assets::AssetError> {

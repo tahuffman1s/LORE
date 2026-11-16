@@ -106,7 +106,7 @@ impl ScriptGame {
 
     /// Reads the game's sound files if they have not been read, as the
     /// first frame of a game with a window does, and logs the ones that
-    /// cannot be played. A server never needs to.
+    /// cannot be played. A game run with no window never needs to.
     pub fn load_sounds(&mut self) {
         if self.sounds.load() {
             for problem in self.sounds.problems() {

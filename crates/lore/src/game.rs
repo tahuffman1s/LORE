@@ -33,8 +33,8 @@ impl<G: Game + ?Sized> Game for &mut G {
     }
 }
 
-/// The size a frame says the window is when there is no window: on a
-/// server and in tests. It is the size HUD and menu sizes are written for.
+/// The size a frame says the window is when there is no window: in
+/// `lore check` and in tests. It is the size HUD and menu sizes are written for.
 const NO_WINDOW: [u32; 2] = [1920, 1080];
 
 /// What a game can read and change while presenting one frame.
@@ -256,8 +256,8 @@ impl Frame {
     ///
     /// It is for the picture only: the game's rules read the input their
     /// tick is given and nothing else, or they would depend on the frame
-    /// rate. A game on a server has no player at the keyboard, and every
-    /// action here reads as idle.
+    /// rate. A game run with no window has no player at the keyboard, and
+    /// every action here reads as idle.
     #[must_use]
     pub fn input(&self) -> &InputFrame {
         &self.input
@@ -307,7 +307,7 @@ impl Frame {
     /// itself is moved by. Gameplay belongs in [`Game::tick`], which has
     /// its own fixed step.
     ///
-    /// A game on a server draws no frames; there this is 0.
+    /// A game run with no window draws no frames; there this is 0.
     #[must_use]
     pub fn delta_seconds(&self) -> f32 {
         self.seconds
@@ -318,7 +318,7 @@ impl Frame {
     /// its `pointer`.
     ///
     /// `None` while the mouse is captured to look around with, while the
-    /// pointer is outside the window, and on a server.
+    /// pointer is outside the window, and in a game run with no window.
     #[must_use]
     pub fn pointer(&self) -> Option<[f32; 2]> {
         self.pointer
@@ -355,8 +355,8 @@ impl Frame {
     /// other one.
     ///
     /// A stick that drifts or a mouse on a bumped desk does not count;
-    /// see [`Input::last_device`](lore_input::Input::last_device). On a
-    /// server it is always the keyboard and mouse.
+    /// see [`Input::last_device`](lore_input::Input::last_device). With
+    /// no window it is always the keyboard and mouse.
     #[must_use]
     pub fn device(&self) -> Device {
         self.device
@@ -433,7 +433,7 @@ impl Frame {
     /// The size of the window in pixels, `[width, height]`: what a
     /// [`Ui`] is updated with so that it fills the window.
     ///
-    /// A game on a server has no window; there this is 1920 by 1080.
+    /// For a game run with no window this is 1920 by 1080.
     #[must_use]
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen
@@ -479,7 +479,7 @@ impl Frame {
     /// it the font text is drawn in, so that centred text is centred
     /// exactly: `ui.set_text_measure(Box::new(lore::render::Font::bundled()))`.
     ///
-    /// A game on a server has no window, so nothing is drawn there.
+    /// In a game run with no window nothing is drawn.
     pub fn draw_ui(&mut self, ui: &Ui) {
         self.ui.add(ui.draw());
     }
@@ -511,8 +511,8 @@ impl Frame {
     ///
     /// `yaw` is which way the eye faces, in radians: 0 looks along -Z and it
     /// turns left as the number grows. `pitch` is how far it looks up
-    /// (positive) or down. These are the angles the player physics uses. A
-    /// game on a server has no window, so nothing happens there.
+    /// (positive) or down. These are the angles the player physics uses. In
+    /// a game run with no window nothing happens.
     pub fn look_from(&mut self, position: [f32; 3], yaw: f32, pitch: f32) {
         self.view = Some(View {
             position,
@@ -535,8 +535,8 @@ impl Frame {
     /// [`Input::set_active_set`](lore_input::Input::set_active_set).
     ///
     /// Asking for the set that is already live does nothing, so a game can
-    /// call this every frame. A game on a server has no player at the
-    /// keyboard, so nothing happens there.
+    /// call this every frame. A game run with no window has no player at
+    /// the keyboard, so nothing happens there.
     pub fn use_action_set(&mut self, set: ActionSetId) {
         self.action_set = Some(set);
     }
@@ -553,15 +553,14 @@ impl Frame {
     /// Nothing happens when the player is on keyboard and mouse, when the
     /// gamepad has no rumble motors, or on macOS, where rumble is not
     /// supported yet. Never make rumble the only sign of something: show or
-    /// play it as well. A game on a server has no gamepad, so nothing happens
-    /// there.
+    /// play it as well. A game run with no window has no gamepad, so nothing
+    /// happens there.
     pub fn rumble(&mut self, rumble: Rumble) {
         self.rumble = Some(rumble);
     }
 
     /// Closes the window and ends the game after this frame, as if the
-    /// player had closed it. A game on a server has no window, so nothing
-    /// happens there.
+    /// player had closed it. In a game run with no window nothing happens.
     pub fn close(&mut self) {
         self.close = true;
     }
@@ -590,8 +589,8 @@ impl Frame {
         self.rumble
     }
 
-    /// Starts or stops a sound for the player at this computer. A game on
-    /// a server has no speakers, so nothing happens there.
+    /// Starts or stops a sound for the player at this computer. A game run
+    /// with no window has no speakers, so nothing happens there.
     pub(crate) fn sound(&mut self, ask: SoundAsk) {
         self.sounds.push(ask);
     }

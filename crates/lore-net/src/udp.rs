@@ -9,17 +9,14 @@
 
 use std::fmt;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::Arc;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::connect::{
     Closed, DATA_HEADER, Gone, Heard, Host, HostSettings, JoinRequest, Link, LinkHeard,
     LinkSettings, MAX_DATAGRAM_BYTES, Refusal,
 };
-use crate::find::{FoundServer, QUERY_BYTES, Search};
 use crate::inside::{Clock, HostEnd, LinkEnd, is_inside};
-use crate::share::{Offer, ShareError, WINDOW};
 use crate::snapshot::PlayerId;
 
 /// How many times a goodbye is sent, since any one copy may be lost.
@@ -33,15 +30,6 @@ const MOST_ERRORS: usize = 16;
 /// rest is read on the next tick. A full server's players send 64 a tick.
 const MOST_DATAGRAMS: usize = 1024;
 
-/// How many pieces of offered files one `poll` sends before leaving the
-/// rest unanswered, to be asked for again: four requests' worth. It keeps
-/// a tick short and caps what a server uploads at about 8 MB a second at
-/// 60 ticks, however many are fetching.
-const MOST_PIECES: u32 = MOST_SERVED as u32 * WINDOW;
-
-/// How many askers one `poll` sends pieces to: one request's worth each.
-const MOST_SERVED: usize = 4;
-
 /// Room for one datagram and one byte more, so one that is too long is
 /// seen to be too long instead of being cut to fit.
 const INBOX_BYTES: usize = MAX_DATAGRAM_BYTES + 1;
@@ -51,7 +39,6 @@ const INBOX_BYTES: usize = MAX_DATAGRAM_BYTES + 1;
 enum Purpose {
     Hosting,
     Joining,
-    Searching,
 }
 
 /// Why a socket could not be opened.
@@ -69,14 +56,7 @@ impl fmt::Display for SocketError {
             address,
             source,
         } = self;
-        if *purpose == Purpose::Searching {
-            write!(
-                f,
-                "could not look for servers on this network: {source}. A firewall or \
-                 security program may be stopping this program from using the network; \
-                 a server whose address is known can still be joined by that address."
-            )
-        } else if *purpose == Purpose::Hosting {
+        if *purpose == Purpose::Hosting {
             write!(
                 f,
                 "could not open `{address}` for players to join: {source}. Another server may \
@@ -122,26 +102,6 @@ fn next_datagram<T>(budget: &mut Budget, mut read: impl FnMut() -> io::Result<T>
 struct Budget {
     datagrams: usize,
     errors: usize,
-    /// Pieces of offered files sent.
-    pieces: u32,
-    /// The addresses pieces were sent to.
-    served: [Option<SocketAddr>; MOST_SERVED],
-}
-
-impl Budget {
-    /// Whether `from`, who asked for pieces of a file, is answered: once
-    /// each `poll`, so that one asker cannot take what is sent in a tick
-    /// from everybody else, and not at all once [`MOST_PIECES`] are sent.
-    fn serves(&mut self, from: SocketAddr) -> bool {
-        if self.pieces >= MOST_PIECES || self.served.contains(&Some(from)) {
-            return false;
-        }
-        let Some(place) = self.served.iter_mut().find(|place| place.is_none()) else {
-            return false;
-        };
-        *place = Some(from);
-        true
-    }
 }
 
 /// Reads a host's next datagram: from the players in its own program
@@ -334,37 +294,6 @@ impl UdpHost {
         )
     }
 
-    /// Names the server for players looking for one with a
-    /// [`UdpSearch`]; a game's name is the usual choice. Only the first
-    /// [`MAX_NAME_BYTES`](crate::MAX_NAME_BYTES) bytes are told. Without
-    /// a name the server is still found, by its address alone.
-    pub fn set_name(&mut self, name: &str) {
-        self.host.set_name(name);
-    }
-
-    /// Offers `bytes` to players about to join, in `slot` (0 to
-    /// [`MAX_SHARED_FILES`](crate::MAX_SHARED_FILES) - 1), in place of
-    /// what was offered there. What a slot holds is for the game to
-    /// decide: `lore` keeps the level in slot 0. Players see the offer
-    /// as [`LinkEvent::Offered`] and fetch what they lack with
-    /// [`UdpLink::fetch`]; `poll` sends the pieces.
-    ///
-    /// A file is only sent to an address that has proved it asked, and no
-    /// more than a few megabytes a second leave the server whoever asks.
-    ///
-    /// # Errors
-    ///
-    /// When there is no such slot, or the file is empty or holds more
-    /// than [`MAX_SHARED_BYTES`](crate::MAX_SHARED_BYTES).
-    pub fn share(&mut self, slot: usize, bytes: impl Into<Arc<[u8]>>) -> Result<(), ShareError> {
-        self.host.share(slot, bytes.into())
-    }
-
-    /// Stops offering what is in `slot`.
-    pub fn unshare(&mut self, slot: usize) {
-        self.host.unshare(slot);
-    }
-
     /// The address and port the socket is open on.
     ///
     /// # Errors
@@ -411,17 +340,6 @@ impl UdpHost {
                     return Some(HostEvent::Packet(id, packet));
                 }
                 Some(Heard::Left(id)) => return Some(HostEvent::Left(id, Gone::Quit)),
-                Some(Heard::Fetch(fetch)) => {
-                    let mut ahead = 0;
-                    while (ahead > 0 || self.budget.serves(from))
-                        && self.host.write_piece(fetch, ahead, &mut self.outbox)
-                    {
-                        // A piece that cannot be sent is asked for again.
-                        self.send_to(from);
-                        self.budget.pieces += 1;
-                        ahead += 1;
-                    }
-                }
                 None => {}
             }
         }
@@ -497,15 +415,6 @@ impl Drop for UdpHost {
 pub enum LinkEvent<'a> {
     /// The server gave this player a place, with this number.
     Joined(PlayerId),
-    /// The server offers these files ([`UdpHost::share`]). To have one
-    /// before joining, call [`UdpLink::fetch`] before the next `poll`;
-    /// otherwise the player joins without it. It comes again if the server
-    /// changes what it offers before the player has joined.
-    Offered(Offer),
-    /// The file in this slot has arrived whole, with the hash the server
-    /// gave. Call [`UdpLink::fetch`] before the next `poll` for another;
-    /// otherwise the player joins.
-    Fetched(usize, &'a [u8]),
     /// A snapshot from the server, for
     /// [`Client::receive`](crate::Client::receive).
     Packet(&'a [u8]),
@@ -533,8 +442,6 @@ pub enum LinkEvent<'a> {
 ///     while let Some(event) = link.poll() {
 ///         match event {
 ///             LinkEvent::Joined(_) => println!("joined"),
-///             // Files the server offers; see `UdpLink::fetch`.
-///             LinkEvent::Offered(_) | LinkEvent::Fetched(..) => {}
 ///             // A packet that cannot be read is thrown away.
 ///             LinkEvent::Packet(snapshot) => drop(client.receive(&level, &rules, snapshot)),
 ///             LinkEvent::Closed(why) => {
@@ -625,15 +532,7 @@ impl UdpLink {
         while let Some(len) = next_datagram(&mut self.budget, || self.wire.recv(&mut self.inbox)) {
             let datagram = self.inbox.get(..len).unwrap_or_default();
             match self.link.receive(now, datagram) {
-                Some(LinkHeard::Joined(id)) => {
-                    self.link.forget_fetched();
-                    return Some(LinkEvent::Joined(id));
-                }
-                Some(LinkHeard::Offered) => return Some(LinkEvent::Offered(*self.link.offer())),
-                Some(LinkHeard::Fetched(slot)) => {
-                    let file = self.link.fetched().unwrap_or_default();
-                    return Some(LinkEvent::Fetched(slot, file));
-                }
+                Some(LinkHeard::Joined(id)) => return Some(LinkEvent::Joined(id)),
                 Some(LinkHeard::Packet) => {
                     let packet = self.inbox.get(DATA_HEADER..len).unwrap_or_default();
                     return Some(LinkEvent::Packet(packet));
@@ -651,29 +550,6 @@ impl UdpLink {
             self.clock.polled();
         }
         closed.map(LinkEvent::Closed)
-    }
-
-    /// Fetches the file the server offers in `slot` before joining. Call
-    /// it straight after [`LinkEvent::Offered`] or [`LinkEvent::Fetched`],
-    /// before the next [`poll`](Self::poll); the file comes in a later
-    /// [`LinkEvent::Fetched`], and [`progress`](Self::progress) says how
-    /// far along it is. A server that stops sending ends the stay with
-    /// [`Closed::TimedOut`], and a file that does not match the hash the
-    /// server gave with [`Closed::DamagedFile`].
-    ///
-    /// Gives `false`, and fetches nothing, when the player is past that
-    /// point, the slot is empty, or the file is longer than
-    /// [`MAX_SHARED_BYTES`](crate::MAX_SHARED_BYTES). The file is whatever
-    /// the server chose to send: check it as any file from a stranger.
-    pub fn fetch(&mut self, slot: usize) -> bool {
-        self.link.fetch(self.clock.now(), slot)
-    }
-
-    /// How many bytes of the file being fetched have arrived, and how many
-    /// it holds. `None` when no file is on its way.
-    #[must_use]
-    pub fn progress(&self) -> Option<(u64, u64)> {
-        self.link.progress()
     }
 
     /// Sends a packet of commands to the server. Does nothing until
@@ -728,201 +604,5 @@ impl UdpLink {
 impl Drop for UdpLink {
     fn drop(&mut self) {
         self.leave();
-    }
-}
-
-/// When, counted from the start of a search, the question is sent. It
-/// goes out three times because any one copy may be lost.
-const ASK_AT: [Duration; 3] = [
-    Duration::ZERO,
-    Duration::from_millis(250),
-    Duration::from_millis(500),
-];
-
-/// When, counted from the start of a search, a server on this machine
-/// that has answered only from the address the network knows the machine
-/// by is given at that address: after every question has had a quarter of
-/// a second to be answered from `127.0.0.1`.
-const OWN_ANSWERS_BY: Duration = Duration::from_millis(750);
-
-/// Whether `address` is one of this machine's own: only those can have a
-/// socket opened on them. Nothing is sent.
-fn is_here(address: IpAddr) -> bool {
-    UdpSocket::bind((address, 0)).is_ok()
-}
-
-/// A search for the servers on this machine and its local network.
-///
-/// It asks everyone on the network at once on one UDP port, so it finds
-/// servers that listen on that port and are reached without a router in
-/// between; a server elsewhere is joined by its address. Only IPv4 is
-/// searched.
-///
-/// ```no_run
-/// use std::time::Duration;
-/// use lore_net::UdpSearch;
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut search = UdpSearch::start(27015)?;
-/// while search.elapsed() < Duration::from_secs(1) {
-///     while let Some(server) = search.poll() {
-///         println!("{} at {}: {} of {}", server.name, server.address, server.players, server.places);
-///     }
-///     std::thread::sleep(Duration::from_millis(10));
-/// }
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Debug)]
-pub struct UdpSearch {
-    socket: UdpSocket,
-    search: Search,
-    port: u16,
-    started: Instant,
-    asked: usize,
-    inbox: [u8; QUERY_BYTES + 1],
-    outbox: Vec<u8>,
-    budget: Budget,
-}
-
-impl UdpSearch {
-    /// Starts looking for servers that listen on the UDP port `port`.
-    /// Nothing is sent until the first [`poll`](Self::poll).
-    ///
-    /// # Errors
-    ///
-    /// When this machine will not open a socket to search with.
-    pub fn start(port: u16) -> Result<Self, SocketError> {
-        let open = || {
-            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-            socket.set_broadcast(true)?;
-            socket.set_nonblocking(true)?;
-            Ok(socket)
-        };
-        Ok(Self {
-            socket: open().map_err(|source| SocketError {
-                purpose: Purpose::Searching,
-                address: format!("0.0.0.0:{port}"),
-                source,
-            })?,
-            search: Search::new(),
-            port,
-            started: Instant::now(),
-            asked: 0,
-            inbox: [0; QUERY_BYTES + 1],
-            outbox: Vec::with_capacity(QUERY_BYTES),
-            budget: Budget::default(),
-        })
-    }
-
-    /// How long the search has been going. A second is long enough on a
-    /// local network.
-    #[must_use]
-    pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
-    }
-
-    /// The next server found, or `None` when no more have answered yet.
-    /// Never waits, and gives each server once. Call it in a loop, again
-    /// and again, for as long as the search should go on: it is also what
-    /// sends the question.
-    ///
-    /// A server on this machine is given at `127.0.0.1`, the address that
-    /// always works, whichever of its answers comes first. One that can
-    /// only be reached at the address the network knows this machine by
-    /// is given three quarters of a second into the search.
-    pub fn poll(&mut self) -> Option<FoundServer> {
-        if ASK_AT
-            .get(self.asked)
-            .is_some_and(|at| self.started.elapsed() >= *at)
-        {
-            self.asked += 1;
-            self.ask();
-        }
-        while let Some((len, from)) =
-            next_datagram(&mut self.budget, || self.socket.recv_from(&mut self.inbox))
-        {
-            let datagram = self.inbox.get(..len).unwrap_or_default();
-            if let Some(found) = self.search.receive(from, datagram, is_here) {
-                return Some(found);
-            }
-        }
-        self.budget = Budget::default();
-        if self.started.elapsed() >= OWN_ANSWERS_BY {
-            return self.search.give_held();
-        }
-        None
-    }
-
-    /// Sends the question to this machine, to everyone on the network,
-    /// and to everyone on the network this machine reaches the internet
-    /// through. A send that fails is one more lost datagram.
-    fn ask(&mut self) {
-        self.search.write_query(&mut self.outbox);
-        // This machine first, so a server here is found at the address
-        // that always works.
-        let _ = self
-            .socket
-            .send_to(&self.outbox, (Ipv4Addr::LOCALHOST, self.port));
-        let _ = self
-            .socket
-            .send_to(&self.outbox, (Ipv4Addr::BROADCAST, self.port));
-        // With two networks (cable and Wi-Fi, or a VPN) the line above
-        // goes out on one of them only, and not always the home one. Most
-        // home networks end at the last number of the address.
-        if let Some([a, b, c, _]) = lan_address().map(|here| here.octets()) {
-            let _ = self
-                .socket
-                .send_to(&self.outbox, (Ipv4Addr::new(a, b, c, 255), self.port));
-        }
-    }
-}
-
-/// This machine's address on its local network, such as `192.168.1.20`:
-/// what a player on the same network types to join a server here. `None`
-/// when the machine is on no network.
-///
-/// It is the address this machine reaches the internet from. Nothing is
-/// sent to find it out. A machine on several networks has several
-/// addresses and this gives one.
-#[must_use]
-pub fn lan_address() -> Option<Ipv4Addr> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    // Connecting a UDP socket sends nothing: it only makes the system
-    // choose which of its addresses would be used. The address is one
-    // set aside for examples (RFC 5737), so it belongs to nobody.
-    socket.connect((Ipv4Addr::new(198, 51, 100, 1), 9)).ok()?;
-    match socket.local_addr().ok()? {
-        SocketAddr::V4(here) if !here.ip().is_loopback() && !here.ip().is_unspecified() => {
-            Some(*here.ip())
-        }
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn one_asker_is_sent_one_answer_a_poll_and_a_poll_serves_four() {
-        let asker = |port| SocketAddr::from(([203, 0, 113, 5], port));
-        let mut budget = Budget::default();
-        // The same asker again and again, as someone hogging would.
-        assert!(budget.serves(asker(1)));
-        for _ in 0..100 {
-            assert!(!budget.serves(asker(1)));
-        }
-        // Everybody else still has their turn, up to four in all.
-        assert!(budget.serves(asker(2)));
-        assert!(budget.serves(asker(3)));
-        assert!(budget.serves(asker(4)));
-        assert!(!budget.serves(asker(5)));
-        // The next poll starts afresh.
-        budget = Budget::default();
-        assert!(budget.serves(asker(5)));
-        // Nobody is served once a poll's pieces are all sent.
-        budget.pieces = MOST_PIECES;
-        assert!(!budget.serves(asker(6)));
     }
 }

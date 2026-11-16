@@ -1,11 +1,14 @@
-//! Follows the website's "Your first match" tutorial with the built `lore`,
+//! Follows the website's "Your first steps" tutorial with the built `lore`,
 //! so the page cannot drift from what the engine does.
 //!
 //! The page marks what it shows: `<pre data-cmd>` is a command to type,
 //! `<pre data-file="main.luau">` is a whole file to save, `<pre data-finds>`
-//! is a line the reader is told to find in the new game's script, and
+//! is a line the reader is told to find in the new game's script
+//! (`data-finds="hud"`: in the script the page has them paste) and
+//! `<pre data-adds="hud">` the line to put under it, and
 //! `<pre data-says="new">` is what a command is said to print. Steps that
-//! open a window are not run here.
+//! open a window are not run here: what the editor writes is stood in for
+//! by the `map.toml` the page shows.
 
 #![cfg(all(feature = "window", feature = "cli"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -20,7 +23,7 @@ fn site() -> PathBuf {
 
 fn tutorial() -> String {
     // A Windows checkout may end the page's lines with a carriage return too.
-    fs::read_to_string(site().join("docs/first-match.html"))
+    fs::read_to_string(site().join("docs/first-steps.html"))
         .unwrap()
         .replace("\r\n", "\n")
 }
@@ -128,9 +131,9 @@ fn assert_shows(shown: &str, printed: &str) {
 /// Makes the tutorial's game the way step 2 does and returns its folder.
 fn new_game(test: &str) -> PathBuf {
     let folder = scratch(test);
-    let output = lore(&folder, &["new", "first-match"]);
+    let output = lore(&folder, &["new", "first-steps"]);
     assert!(output.status.success(), "{}", printed(&output));
-    folder.join("first-match")
+    folder.join("first-steps")
 }
 
 #[test]
@@ -160,7 +163,7 @@ fn every_lore_command_in_the_tutorial_exists() {
 fn new_prints_what_the_tutorial_shows() {
     let folder = scratch("new");
 
-    let output = lore(&folder, &["new", "first-match"]);
+    let output = lore(&folder, &["new", "first-steps"]);
 
     assert!(output.status.success(), "{}", printed(&output));
     assert_shows(&block("data-says", "new"), &printed(&output));
@@ -223,15 +226,76 @@ fn the_lines_the_tutorial_edits_are_in_a_new_game() {
     assert_shows(same, &printed(&output));
 }
 
+/// The script the page has the reader paste, with the line it then has
+/// them add put under the line it names.
+fn script_with_the_sound() -> String {
+    let pasted = block("data-file", "main.luau");
+    let find = block("data-finds", "hud");
+    let add = block("data-adds", "hud");
+    let lines: Vec<&str> = pasted.lines().collect();
+    let found: Vec<usize> = (0..lines.len())
+        .filter(|&line| lines[line] == find.trim_end_matches('\n'))
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "the pasted script has this line once: {find}"
+    );
+    let mut script = String::new();
+    for (number, line) in lines.iter().enumerate() {
+        script.push_str(line);
+        script.push('\n');
+        if number == found[0] {
+            script.push_str(add.trim_end_matches('\n'));
+            script.push('\n');
+        }
+    }
+    script
+}
+
 #[test]
-fn the_tutorial_script_passes_check_and_prints_what_is_shown() {
-    let game = new_game("mode");
-    fs::write(game.join("main.luau"), block("data-file", "main.luau")).unwrap();
+fn the_tutorial_script_passes_check_before_and_after_the_sound_is_added() {
+    let game = new_game("hud");
+    let pasted = block("data-file", "main.luau");
+    assert!(pasted.contains("game.hud.text("), "{pasted}");
+    fs::write(game.join("main.luau"), &pasted).unwrap();
 
     let output = lore(&game, &["check"]);
-
     assert!(output.status.success(), "{}", printed(&output));
     assert_shows(&block("data-says", "check"), &printed(&output));
+
+    let script = script_with_the_sound();
+    assert!(script.contains("game.audio.play("), "{script}");
+    fs::write(game.join("main.luau"), script).unwrap();
+
+    let output = lore(&game, &["check"]);
+    assert!(output.status.success(), "{}", printed(&output));
+    // The check jumps, so the line that plays the sound ran: a name that
+    // is not a sound would have failed it.
+    assert_shows(&block("data-says", "check"), &printed(&output));
+}
+
+#[test]
+fn a_spawn_point_like_the_one_the_tutorial_shows_is_where_the_game_starts() {
+    let game = new_game("map");
+    fs::write(game.join("main.luau"), script_with_the_sound()).unwrap();
+
+    // Before anything is placed there is no map file to speak of.
+    let output = lore(&game, &["check"]);
+    assert!(output.status.success(), "{}", printed(&output));
+    assert!(
+        !printed(&output).contains("map.toml is fine"),
+        "{}",
+        printed(&output)
+    );
+
+    fs::write(game.join("map.toml"), block("data-file", "map.toml")).unwrap();
+    let output = lore(&game, &["check"]);
+    assert!(output.status.success(), "{}", printed(&output));
+    let said = printed(&output);
+    assert_shows(&block("data-says", "map"), &said);
+    // The one spawn point placed is the one a player was started at.
+    assert!(said.contains("started at its one spawn point"), "{said}");
 }
 
 /// Every `.html` file under `folder`.

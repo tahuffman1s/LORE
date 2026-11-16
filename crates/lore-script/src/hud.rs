@@ -6,7 +6,7 @@
 //! ([`ScriptHost::each_hud_piece`](crate::ScriptHost::each_hud_piece)) and
 //! then only what has changed
 //! ([`ScriptHost::take_hud_changes`](crate::ScriptHost::take_hud_changes)).
-//! A server reads neither, and the pieces cost it nothing.
+//! A game run with no window reads neither, and the pieces cost it nothing.
 //!
 //! The list belongs to one version of the script: a save makes the HUD
 //! again from the top of the file, so no piece is left over from the

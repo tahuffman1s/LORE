@@ -33,7 +33,7 @@ const GUESSED_WIDTH: f32 = 0.55;
 /// assert!(font.width("i", 28.0) < font.width("m", 28.0));
 /// ```
 ///
-/// It holds no graphics card memory and needs no window, so a server or a
+/// It holds no graphics card memory and needs no window, so `lore check` or a
 /// test can measure text too. Copies are cheap: they share one font.
 #[derive(Clone)]
 pub struct Font {
