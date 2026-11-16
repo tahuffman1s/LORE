@@ -136,6 +136,26 @@ fn shared_of(lua: &Lua) -> mlua::Result<Rc<Shared>> {
         .ok_or_else(|| mlua::Error::runtime("the game is not ready yet"))
 }
 
+/// The teams the file being loaded will play with, when they are not the
+/// teams the match has now. Nothing once the file has loaded, or when the
+/// teams stay as they are.
+///
+/// The rules from `game.mode` reach the match only after the whole file has
+/// loaded without a mistake, so until then the match still has the teams of
+/// the version before (none, the first time). Lines further down the file
+/// are shown the teams they are about to get instead: the ones `game.mode`
+/// listed, or none if it has not been called. Changing the teams starts the
+/// match again, so these teams have no score and nobody on them yet.
+fn planned_teams(shared: &Shared) -> Option<Vec<String>> {
+    if !shared.loading.get() {
+        return None;
+    }
+    let rules = shared.rules.borrow();
+    let planned = rules.as_ref().map_or(&[][..], |(rules, _)| &rules.teams);
+    let same = shared.mode.game.borrow().rules().teams == planned;
+    (!same).then(|| planned.to_vec())
+}
+
 impl PlayerRef {
     /// Reads something about the player, who may have just left.
     fn read<R>(self, lua: &Lua, field: &str, read: impl FnOnce(&Player) -> R) -> mlua::Result<R> {
@@ -168,8 +188,11 @@ impl UserData for PlayerRef {
             this.read(lua, "name", |player| player.name.clone())
         });
         fields.add_field_method_get("team", |lua, this| {
+            let shared = shared_of(lua)?;
             match this.read(lua, "team", |player| player.team)? {
-                Some(team) => shared_of(lua)?.handles.team(lua, team).map(Some),
+                // Players are shared out again when the teams change.
+                Some(_) if planned_teams(&shared).is_some() => Ok(None),
+                Some(team) => shared.handles.team(lua, team).map(Some),
                 None => Ok(None),
             }
         });
@@ -216,15 +239,31 @@ impl UserData for PlayerRef {
     }
 }
 
+impl TeamRef {
+    /// What the team is called, if the mode has it.
+    fn name(self, shared: &Shared) -> Option<String> {
+        let index = usize::from(self.0.0);
+        match planned_teams(shared) {
+            Some(mut planned) => (index < planned.len()).then(|| planned.swap_remove(index)),
+            None => {
+                let game = shared.mode.game.borrow();
+                game.team(self.0).map(|team| team.name.clone())
+            }
+        }
+    }
+}
+
 impl UserData for TeamRef {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("name", |lua, this| {
             let shared = shared_of(lua)?;
-            let game = shared.mode.game.borrow();
-            Ok(game.team(this.0).map(|team| team.name.clone()))
+            Ok(this.name(&shared))
         });
         fields.add_field_method_get("score", |lua, this| {
             let shared = shared_of(lua)?;
+            if planned_teams(&shared).is_some() {
+                return Ok(0);
+            }
             let game = shared.mode.game.borrow();
             Ok(game.team(this.0).map_or(0, |team| team.score))
         });
@@ -238,20 +277,18 @@ impl UserData for TeamRef {
         methods.add_function("addScore", |lua, (this, points): (Value, Value)| {
             let this = receiver::<Self>(lua, &this, "team", "addScore", "(1)")?;
             let points = whole_points(lua, &points, "team")?;
-            shared_of(lua)?
-                .mode
-                .game
-                .borrow_mut()
-                .add_team_score(this.0, points);
+            let shared = shared_of(lua)?;
+            // Like every score outside a round, it does nothing for a team
+            // the match does not have yet.
+            if planned_teams(&shared).is_none() {
+                shared.mode.game.borrow_mut().add_team_score(this.0, points);
+            }
             Ok(())
         });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             let shared = shared_of(lua)?;
-            let game = shared.mode.game.borrow();
-            Ok(game
-                .team(this.0)
-                .map_or_else(|| "a team".to_owned(), |team| team.name.clone()))
+            Ok(this.name(&shared).unwrap_or_else(|| "a team".to_owned()))
         });
         methods.add_meta_function(MetaMethod::Index, |lua, (_, key): (Value, Value)| {
             Err::<(), _>(missing(lua, "team", &key, TEAM_FIELDS, TEAM_METHODS))
@@ -366,6 +403,10 @@ fn read_only(lua: &Lua, what: &str, key: &Value) -> mlua::Error {
 fn players(lua: &Lua, team: Option<TeamId>) -> mlua::Result<Table> {
     let shared = shared_of(lua)?;
     let list = lua.create_table()?;
+    if team.is_some() && planned_teams(&shared).is_some() {
+        // Nobody is on a team the match does not have yet.
+        return Ok(list);
+    }
     // The ids are copied out first: making a value can run the garbage
     // collector, and nothing of the script's may run while the match is
     // borrowed.
@@ -397,7 +438,10 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
         lua.create_function(|lua, ()| {
             let shared = shared_of(lua)?;
             let list = lua.create_table()?;
-            let count = shared.mode.game.borrow().teams().len();
+            let count = planned_teams(&shared).map_or_else(
+                || shared.mode.game.borrow().teams().len(),
+                |planned| planned.len(),
+            );
             for index in 0..count {
                 if let Ok(index) = u8::try_from(index) {
                     list.raw_push(shared.handles.team(lua, TeamId(index))?)?;
@@ -450,14 +494,33 @@ fn team_by_name(lua: &Lua, name: Value) -> mlua::Result<AnyUserData> {
     };
     let name = name.to_str()?;
     let shared = shared_of(lua)?;
-    let found = shared.mode.game.borrow().team_named(&name);
+    let planned = planned_teams(&shared);
+    let found = match &planned {
+        Some(planned) => {
+            let name = name.to_lowercase();
+            planned
+                .iter()
+                .position(|team| team.to_lowercase() == name)
+                .and_then(|index| u8::try_from(index).ok())
+                .map(TeamId)
+        }
+        None => shared.mode.game.borrow().team_named(&name),
+    };
     if let Some(id) = found {
         return shared.handles.team(lua, id);
     }
-    let game = shared.mode.game.borrow();
-    let names: Vec<&str> = game.teams().iter().map(|team| team.name.as_str()).collect();
+    let names = planned.unwrap_or_else(|| {
+        let game = shared.mode.game.borrow();
+        game.teams().iter().map(|team| team.name.clone()).collect()
+    });
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut message = format!("There is no team called \"{name}\".");
-    if names.is_empty() {
+    if names.is_empty() && shared.loading.get() && shared.rules.borrow().is_none() {
+        message.push_str(
+            " No teams have been listed yet: game.mode has to come before this line. \
+             Write it above: game.mode { teams = { \"Red\", \"Blue\" } }",
+        );
+    } else if names.is_empty() {
         message.push_str(
             " This mode has no teams. List them when you set up the mode: \
              game.mode { teams = { \"Red\", \"Blue\" } }",
@@ -473,7 +536,11 @@ fn team_by_name(lua: &Lua, name: Value) -> mlua::Result<AnyUserData> {
 /// `game.round.finish(winner)`.
 fn finish(lua: &Lua, winner: Value) -> mlua::Result<()> {
     let shared = shared_of(lua)?;
-    let has_teams = !shared.mode.game.borrow().teams().is_empty();
+    let planned = planned_teams(&shared);
+    let has_teams = planned.as_ref().map_or_else(
+        || !shared.mode.game.borrow().teams().is_empty(),
+        |planned| !planned.is_empty(),
+    );
     let winner = match &winner {
         Value::Nil => None,
         Value::UserData(handle) => {
@@ -494,7 +561,11 @@ fn finish(lua: &Lua, winner: Value) -> mlua::Result<()> {
         }
         other => return Err(wrong_winner(lua, other, has_teams)),
     };
-    shared.mode.game.borrow_mut().finish(winner);
+    // A match whose teams are about to change starts again: there is no
+    // round to end.
+    if planned.is_none() {
+        shared.mode.game.borrow_mut().finish(winner);
+    }
     Ok(())
 }
 
@@ -515,7 +586,8 @@ fn wrong_winner(lua: &Lua, given: &Value, has_teams: bool) -> mlua::Error {
 }
 
 /// `game.mode { ... }`: remembers the rules the script asks for. The host
-/// puts them into effect once the whole file has loaded without a mistake.
+/// puts them into effect once the whole file has loaded without a mistake;
+/// until then the rest of the file reads the teams through [`planned_teams`].
 fn mode_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, settings: Value| {
