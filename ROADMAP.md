@@ -1,6 +1,6 @@
 # Roadmap
 
-An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, and built a milestone at a time, earliest first, and within a milestone lowest issue number first, so a follow-up filed in an early milestone is not left until last. Single-player comes first; multiplayer is last because it is the part that already works best.
+An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, built earliest milestone first and, within a milestone, lowest number first. LORE is single-player only: multiplayer is not on this list because it is being taken out.
 
 ## Already built
 
@@ -24,16 +24,18 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 
 ## M0 — Foundations
 
-Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
+Window, input, Vulkan, Luau scripts and the `lore` command, and removing the multiplayer LORE inherited.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
+- Cut multiplayer, part 1: no servers, joining or server lists (#277)
+- Cut multiplayer, part 2: the world runs in the program, with no network layer under it (#278)
+- Cut multiplayer, part 3: no teams, rounds or match rules (#279)
+- There is one player: `game.player` replaces players, joins and leaves (#280)
 
 ## M1 — Walk the world
 
-One player, offline, in first or third person: move, look, use things, fight, hear and pause.
+One player in first or third person: move, look, use things, fight, hear and pause.
 
-- Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
-- A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
 - Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
 - Read the bindings file again while the game runs, and keep a file per game once scripts declare actions (#18)
 - Scripts switch action sets and declare their own (a vehicle, a buy menu) (#19)
@@ -55,7 +57,7 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Third-person movement: the character turns the way they walk, or faces where they aim (#35)
 - Shots and throws land where the crosshair points, in either view (#36)
 - A new game comes with a character that walks: the engine's own mannequin and its animations (#37)
-- `lore new` asks what kind of game: first-person, third-person, or an arena shooter (#38)
+- `lore new` asks what kind of game: first-person or third-person (#38)
 - Use things: look at it, see which button, press it (#39)
 - Anything can have health: damage, death, and what happens next (#40)
 - Zones tell scripts who walked in and who left (#41)
@@ -64,16 +66,16 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Doors, lifts and moving platforms carry whoever stands on them (#44)
 - Climb, vault, swim and use ladders: each is one switch (#45)
 - Melee: swings that hit what they pass through, blocking, and a lock-on (#46)
-- A single-player game opens no network port, and stops when paused (#47)
+- The world stops when the game is paused (#47)
 - Slow motion and fast forward: one number, and everything still plays the same (#48)
 - Other views from the same few words: top-down, side-on, fixed and on rails (#49)
-- The player's own side fires their weapon too: recoil moves the camera and ammo is known at once (#232)
-- A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
+- Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51)
 - Carry more than one weapon and switch between them (#233)
-- Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
-- Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter
-- Dice in scripts are the game's own: `math.random` is the same in a replay and carries on through a save (#240)
+- Dice in scripts are the game's own: math.random is the same in a replay and carries on through a save (#240)
+- Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
 - The starter game and the tutorial show what happens on the HUD, not only in the terminal (#246)
+- A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
+- A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
 
 ## M2 — People and creatures
 
@@ -109,10 +111,11 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - Companions take orders: wait, follow, go there, attack that — one button and a look (#271)
 - Companions fight beside you, go down instead of dying, and can be helped back up (#272)
 - Companions notice things: remarks about places, fights and what you did, and they point the way (#273)
+- A speech volume: spoken lines follow a slider of their own (#275)
 
 ## M3 — Stories
 
-What turns a walk into a game: saving, one book of facts the world remembers (`game.lore`), conversations written like a screenplay, quests as checklists, items, scenes, and more than one level.
+What turns a walk into an adventure: saving, one book of facts the world remembers (`game.lore`), conversations written like a screenplay, quests as checklists, items, equipment, skills, magic, dungeons and scenes.
 
 - Text in other alphabets: Cyrillic, Greek and East Asian names and menus, and a game's own font (#72)
 - Save anywhere: a save is a snapshot of the world, and loading it is exact (#73)
@@ -125,7 +128,6 @@ What turns a walk into a game: saving, one book of facts the world remembers (`g
 - `lore check` reads the story to its ends: dead ends, unreachable lines, quests nobody can finish (#80)
 - Items and a bag: one list of what exists, and an inventory screen that works with a controller (#81)
 - A game has more than one level: doors between them, and each remembers how you left it (#82)
-- Big worlds load as you walk: no loading screen between their pieces (#83)
 - Scenes are written as stage directions: who walks where, who says what, where the camera is (#84)
 - Subtitles and captions for everything spoken, and for sounds that matter (#85)
 - A game in several languages: every line has a home in one table per language (#86)
@@ -134,8 +136,44 @@ What turns a walk into a game: saving, one book of facts the world remembers (`g
 - Tutorial: your first adventure in ten minutes — walk, meet someone, finish a quest, save (#89)
 - Timers and tweens outlast a save: of the script, and of the game (#238)
 - HUD pieces in a list, text that wraps with a backing behind it, and pictures (#245)
+- Who the character is: stats, levels and skills from one table (#301)
+- Equipment: what you wear and hold shows on the character and changes what they can do (#302)
+- Bows, thrown weapons and shields: aim, draw, arc, and block (#303)
+- Magic and abilities: spells as short recipes, with costs, cooldowns and things they can change (#304)
+- Dungeon pieces: switches, plates, keys, locked doors and pushable blocks that wire together by name (#305)
+- Chests, loot and drops: what is inside is a table, and the world decides fairly (#306)
+- Shops, money and making things: trade and crafting from the same item list (#307)
+- Crime and consequence: stealing, trespass and guards who come, from the rules NPCs already have (#308)
 
-## M4 — Modern graphics and performance
+## M4 — Open worlds
+
+One continuous world you can see across and walk into: land, sky, water and growing things that load as you go and stay fast, built in the editor by sketching and painting rather than placing every rock.
+
+- Big worlds load as you walk: no loading screen between their pieces (#83)
+- Day, night and weather: the sun follows the clock, and rain is one word (#130)
+- Editor: outdoor ground shaped with a few brushes, and painted by slope and height (#186)
+- A world is one place: a game's land is a grid of pieces on disk that the engine joins up (#281)
+- The whole world to the horizon: far land draws as stand-ins the engine makes by itself (#282)
+- Ground that goes on: terrain drawn sharp at your feet and cheap at the horizon, and solid everywhere (#283)
+- Grass, trees and rocks place themselves by rule, and move when you walk through them (#284)
+- One wind: grass, trees, cloth, clouds, rain, smoke and sound all follow it (#285)
+- Water: lakes, rivers and sea that you can see into, swim in and sail on (#286)
+- Light that follows the day: the sky lights the land, and nothing is baked (#287)
+- A sky worth looking at: air that scatters light, clouds with shape, stars and a moon (#288)
+- Regions: name a part of the world once, and its weather, music, creatures and look follow (#289)
+- The world is alive where you are not: creatures and people appear by rule, and never in view (#290)
+- Things happen on the road: encounters written as short rules, chosen by where and when (#291)
+- Find your way: a map that fills in, a compass, places discovered, and fast travel (#292)
+- Climb anything, glide and ride: getting about a big world, with stamina (#293)
+- Interiors, caves and dungeons: step through a door with no loading screen (#294)
+- A world that fits: loading stays inside a memory and time budget, proven by flying across it (#295)
+- Editor: sketch a map from above and walk it seconds later (#296)
+- Editor: roads and paths you draw in one stroke, that people and creatures follow (#297)
+- Editor: see the world as the player will: what catches the eye from here, and how far it is on foot (#298)
+- Editor: many hands on one world, and a world too big to open at once (#299)
+- Editor: what the world costs, piece by piece, before a player finds out (#300)
+
+## M5 — Modern graphics and performance
 
 Lighting, upscaling, effects and a steady frame rate on mid-range hardware.
 
@@ -155,7 +193,6 @@ Lighting, upscaling, effects and a steady frame rate on mid-range hardware.
 - Ambient occlusion: soft contact shadows in corners and under objects (#104)
 - Fog that is the same for every player: one height fog per map, almost free (#105)
 - Light shafts through fog and dust: sun and lamps light the air (#106)
-- Smoke grenades as real volumes the server knows about (#107) — shooter
 - Particle effects: muzzle flashes, impacts, explosions and dust from ready-made recipes (#108)
 - Surface depth, painted: bricks and cobbles that look raised for almost nothing (parallax) (#109)
 - Reflections that place themselves: one captured view per named area (#110)
@@ -178,9 +215,8 @@ Lighting, upscaling, effects and a steady frame rate on mid-range hardware.
 - Metal and glossy surfaces mirror the sky and the level around them (#127)
 - FSR: say where see-through surfaces are, so what moves behind glass does not smear (#128)
 - Draw glTF's glass, clear coat and cloth: transmission, clearcoat and sheen (#129)
-- Day, night and weather: the sun follows the clock, and rain is one word (#130)
 
-## M5 — Ship
+## M6 — Ship
 
 Package a game for Linux, Windows and macOS, and release the engine.
 
@@ -190,7 +226,6 @@ Package a game for Linux, Windows and macOS, and release the engine.
 - Packaging checks the game first and says what to fix (#134)
 - Package for Windows from any computer: name, icon and version stamped into the `.exe` (#135)
 - Package for macOS from any computer: a `.app` that opens (#136)
-- Package a dedicated server: `lore package --server` (#137)
 - Packaged assets: compression that changes nothing, and `--exact` to use only that (#138)
 - Packaged assets are shrunk for size and speed by default (GPU textures, Opus); `--exact` keeps them bit-for-bit (#139)
 - Scripting in VS Code: problems as you type, plain-English snippets, run and reload (#140)
@@ -205,17 +240,15 @@ Package a game for Linux, Windows and macOS, and release the engine.
 - Gamepad rumble on macOS (#149)
 - Button hints name a key as it is on a US keyboard, whatever the player's layout (#251)
 
-## M6 — Editor
+## M7 — Editor
 
 A graphical editor for levels and what lives in them: fly around, place things and people, block out, press play. No material graphs or visual scripting.
 
 - Editor: blockout boxes and ramps, and dropping in models (#150)
 - Editor: checks that say what to fix before you play (#151)
-- Editor: the game mode writes your to-do list (#152)
 - Editor: shapes sized to the player (cover, jump, climb) (#153)
 - Editor: build while standing in the map, with a controller (#154)
 - Editor: see travel time and sight lines on the map (#155)
-- Editor: mirror mode for two-team maps (#156) — shooter
 - Editor: script values become sliders (#157)
 - Editor: no save button, and a history you can scrub (#158)
 - Editor: one search box for everything, and panels that stay out of the way (#159)
@@ -226,12 +259,9 @@ A graphical editor for levels and what lives in them: fly around, place things a
 - Editor: bots walk the map and report what is unreachable or stuck (#164)
 - Editor: name areas once, for the minimap, the HUD and scripts (#165)
 - Editor: the minimap draws itself (#166)
-- Editor: bot matches paint heatmaps, with a one-line reading (#167)
-- Editor: playtest with friends in one key, and watch the match back as ghosts (#168)
 - Editor: swap blockout for finished models without losing the gameplay (#169)
 - Editor: lighting that looks good in one choice (#170)
 - Editor: see what each view costs to draw (#171)
-- Editor: sketch lanes from above and get a walkable blockout (#172)
 - Editor: choose a map's look from pictures, and tune it with a few sliders while you watch (#173)
 - Editor: a graphics panel with each effect's cost beside its switch, and a preview of what other players see (#174)
 - Editor: pick, preview and tune particle effects, smoke and decals without a node graph (#175)
@@ -245,9 +275,8 @@ A graphical editor for levels and what lives in them: fly around, place things a
 - Editor: see what an NPC sees and hears, and where it can walk (#183)
 - Editor: a conversation is a page you can play from any line (#184)
 - Editor: the story on one board — quests, facts, and what each one unlocks (#185)
-- Editor: outdoor ground shaped with a few brushes, and painted by slope and height (#186)
 
-## M7 — Script and game tools
+## M8 — Script and game tools
 
 Tools that make scripting and tuning easy. Not a general IDE: your own editor stays first-class, and the built-in panels do what only the engine can.
 
@@ -258,33 +287,8 @@ Tools that make scripting and tuning easy. Not a general IDE: your own editor st
 - Editor: drag a number, colour or position in a script and watch the game change (#191)
 - Editor: click a thing in the map to see its script, and a script to see its things (#192)
 - Rewind play: replays you can scrub tick by tick (#193)
-- Weapon workbench: a firing range where you draw recoil and see time-to-kill (#194) — shooter
-- Game mode rules as a form: teams, rounds and scoring, with a plain-English summary (#195) — shooter
 - HUD layout editor: drag pieces into place, check safe areas, and never lose controller reach (#196)
 - Bindings screen with gamepad pictures, and a check that every action has a gamepad binding (#197)
-- Weapon animations: mark the fire and reload moments on a timeline (#198) — shooter
+- Weapon animations: mark the fire and reload moments on a timeline (#198)
 - Footstep and impact sounds per surface, with a walk-the-level preview (#199)
 - Start from any point in the story: named moments you can jump to (#200)
-
-## M8 — Play together
-
-Co-op and competitive multiplayer. The netcode is already there, because single-player runs on it; this is the work that only matters once a second person joins.
-
-- Shots and jumps count from the moment they were pressed, not the next tick (#201)
-- Bad-connection simulator and a network graph (#202)
-- Test that Ctrl-C stops the dedicated server cleanly on Windows (#203)
-- Other players move smoothly between snapshots (#204)
-- Keep each player's waiting commands at the target by nudging their tick rate (#205)
-- Game modes in a running match: joins, deaths and the map's spawn points reach the mode script (#206)
-- Scoreboard, round clock and the winner on screen, drawn from the match (#207) — shooter
-- Spawn points out of an enemy's sight are preferred (#208) — shooter
-- Server browser inside the game window (#209)
-- Internet server list: find games beyond the local network (#210) — blocked
-- Other players are drawn: a body where each one stands, moving as snapshots arrive (#211)
-- Rumble for players who joined from another computer (player:rumble) (#212)
-- Script sounds for players who joined from another computer (#213)
-- Footsteps and gunfire for players who joined from another computer (#257)
-- The script's HUD for players who joined from another computer, and a HUD of each player's own (#247)
-- Levels sent to joining players arrive faster, and a big server can point at a web address (#214)
-- A level sent by a server is read within a memory budget (#215)
-- Co-op: a friend joins your single-player game, and the story is shared (#216)

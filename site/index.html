@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LORE — Lovely Open Rust Engine</title>
-<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source engine for 3D games you walk through, in first or third person, built single-player first. Rust core, Luau scripting, Vulkan 1.3.">
+<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source engine for single-player open-world adventures and action RPGs, in first or third person. Rust core, Luau scripting, Vulkan 1.3.">
 <meta property="og:title" content="LORE — Lovely Open Rust Engine">
-<meta property="og:description" content="A free, open-source engine for first- and third-person 3D games, single-player first.">
+<meta property="og:description" content="A free, open-source engine for single-player open-world adventures and action RPGs.">
 <meta name="color-scheme" content="dark light">
 <style>
   :root {
@@ -136,10 +136,10 @@
   <div class="hero">
     <div class="orbit" aria-hidden="true"><i></i></div>
     <div class="wrap">
-      <div class="status"><i></i>Early development — today you can walk a level in first person. Third person, NPCs and saving are planned.</div>
+      <div class="status"><i></i>Early development — today you can walk a level in first person. Third person, NPCs, saving and open worlds are planned.</div>
       <h1>LO<em>RE</em></h1>
       <p class="expand mono">Lovely Open Rust Engine</p>
-      <p class="lead">A free, open-source engine for 3D games you walk through, in first or third person. Easy to make, fast to play, and built single-player first.</p>
+      <p class="lead">A free, open-source engine for single-player open-world adventures and action RPGs, in first or third person. Easy to make, fast to play, and worth looking at.</p>
       <p class="views mono"><span><b></b>the player: first person</span><span><b class="ring"></b>the camera behind them: third person</span></p>
       <div class="cta">
         <a class="btn primary" href="docs/first-match.html">Try the ten-minute tutorial</a>
@@ -176,12 +176,16 @@
   <section id="different">
     <div class="wrap">
       <h2>Where it is going</h2>
-      <p class="sub">LORE starts from <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>, an engine for multiplayer shooters, and turns it toward worlds with people and stories in them. These four ideas are the plan. None of them is built yet; each links to the work.</p>
+      <p class="sub">LORE starts from <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>, an engine for multiplayer shooters, drops the multiplayer, and turns toward big worlds with people and stories in them. These ideas are the plan. None of them is built yet; each links to the work.</p>
       <div class="grid">
         <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/31">Planned · #31, #32</a></span><h3>One world, either view</h3><p>First and third person are the same game with a different camera. Choosing is one line in a script, and one button for the player if the game allows it.</p></div>
         <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/57">Planned · #57, #58</a></span><h3>People who explain themselves</h3><p>What an NPC does is a short list of "when this, do that". Ask any NPC why, and it answers in one sentence.</p></div>
         <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/73">Planned · #73, #70</a></span><h3>Save anywhere, for free</h3><p>The whole world is one snapshot, so a save needs nothing listed by the game. The same trick lets <span class="mono">lore check</span> live a day in seconds and say which NPC got stuck.</p></div>
         <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/76">Planned · #76, #77</a></span><h3>A story has one home</h3><p>What has happened is kept in one book of facts, <span class="mono">game.lore</span>. Quests, conversations written like a screenplay, and NPCs all read it.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/281">Planned · #281, #282</a></span><h3>A world you can see across</h3><p>One continuous world, kept in pieces that load as you cross it with no loading screen, and drawn to the horizon from stand-ins the engine makes by itself.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/284">Planned · #284, #289</a></span><h3>Land that grows by rule</h3><p>Grass, trees and rocks place themselves from a few lines you can read. Name a region once and its weather, music and creatures follow.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/296">Planned · #296, #297</a></span><h3>Sketch a map, walk it</h3><p>In the editor, paint mountains, water, forest and roads from above. Seconds later you are standing in it.</p></div>
+        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/268">Planned · #264, #268</a></span><h3>Enemies, bosses, companions</h3><p>An enemy is a kind you describe once. A boss is a list of phases. A companion takes orders with one button and a look.</p></div>
       </div>
     </div>
   </section>
@@ -204,7 +208,7 @@ game.onTick(<span class="kw">function</span>(step)
     print(<span class="str">"Jump!"</span>)
   <span class="kw">end</span>
 <span class="kw">end</span>)</pre>
-          <p class="note">Save the file and the running game updates. <span class="mono">"jump"</span> is an action, so the same line works on a keyboard and a gamepad. A game also draws its own level, plays sounds, runs team game modes and can be joined over the local network: <a href="docs/index.html#today">what works today</a>.</p>
+          <p class="note">Save the file and the running game updates. <span class="mono">"jump"</span> is an action, so the same line works on a keyboard and a gamepad. A game also draws its own level, puts text and bars on the HUD, plays sounds and has a pause menu: <a href="docs/index.html#today">what works today</a>.</p>
         </div>
         <div>
           <h3 class="over"><span class="tag">A sketch — does not run yet</span></h3>
@@ -237,7 +241,7 @@ print(guard:why())
       <div class="grid">
         <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>From install to a game you can walk around in minutes, with error messages that tell you what to do next. This is the "lovely".</p></div>
         <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, stable frame rates and low input latency on mid-range hardware.</p></div>
-        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>3D worlds you walk through in first or third person: adventures, action games, shooters, stories. No 2D, VR or visual scripting to learn around.</p></div>
+        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>Single-player worlds you explore on foot: open worlds, dungeons, people, quests, melee, bows and magic. No multiplayer, 2D, VR or visual scripting to learn around.</p></div>
         <div class="card"><span class="n mono">04</span><h3>Modern</h3><p>Vulkan 1.3 rendering, FSR 3.1 upscaling and first-class controller support.</p></div>
       </div>
     </div>
@@ -249,7 +253,7 @@ print(guard:why())
       <p class="sub">What the engine is made of. There are no downloads yet: it is built from source.</p>
       <div class="grid">
         <div class="card"><h3>Rust core</h3><p>Memory-safe engine code, built with one command.</p></div>
-        <div class="card"><h3>Alone first, together later</h3><p>A game played alone runs on the same server code as a game played together, inside the program. Co-op is planned as a switch, not a rewrite.</p></div>
+        <div class="card"><h3>Single-player only</h3><p>No servers, no netcode, no match rules. The multiplayer LORE inherited is being removed, so every part of the engine serves one player in one world.</p></div>
         <div class="card"><h3>Controller parity</h3><p>Every action bindable on a gamepad. Nothing keyboard-only.</p></div>
         <div class="card"><h3>Linux, Windows, macOS</h3><p>The engine runs on Linux and Windows. Packaging a game works on Linux today; Windows is planned and macOS is a stretch goal.</p></div>
       </div>
@@ -259,17 +263,17 @@ print(guard:why())
   <section id="roadmap">
     <div class="wrap">
       <h2>Roadmap</h2>
-      <p class="sub">Work is tracked in the open as <a href="https://github.com/tahuffman1s/LORE/milestones">GitHub milestones</a>, and built in issue order.</p>
+      <p class="sub">Work is tracked in the open as <a href="https://github.com/tahuffman1s/LORE/milestones">GitHub milestones</a>, built earliest milestone first.</p>
       <ol class="road">
-        <li><b class="mono">M0</b><div><strong>Foundations</strong><span>Window, input, Vulkan, a running Luau script and a one-command template game. Mostly built.</span></div></li>
-        <li><b class="mono">M1</b><div><strong>Walk the world</strong><span>One player, offline, in first or third person: move, use things, fight, hear and pause.</span></div></li>
+        <li><b class="mono">M0</b><div><strong>Foundations</strong><span>Window, input, Vulkan, Luau scripts, and removing the multiplayer LORE was born with.</span></div></li>
+        <li><b class="mono">M1</b><div><strong>Walk the world</strong><span>One player in first or third person: move, climb, use things, fight, hear and pause.</span></div></li>
         <li><b class="mono">M2</b><div><strong>People and creatures</strong><span>NPCs that find their way, see and hear, follow rules you can read, and say why. Enemies, bosses, flying enemies and companions.</span></div></li>
-        <li><b class="mono">M3</b><div><strong>Stories</strong><span>Saving, <span class="mono">game.lore</span>, conversations, quests, items, scenes and more than one level.</span></div></li>
-        <li><b class="mono">M4</b><div><strong>Modern graphics</strong><span>Lighting, shadows, anti-aliasing, effects and performance budgets.</span></div></li>
-        <li><b class="mono">M5</b><div><strong>Ship</strong><span>Packaged builds for each platform, and releases of the engine.</span></div></li>
-        <li><b class="mono">M6</b><div><strong>Editor</strong><span>Fly around a level, place things and people, block out geometry, press play.</span></div></li>
-        <li><b class="mono">M7</b><div><strong>Tools</strong><span>A debugger, replays, and jumping to any point in a story.</span></div></li>
-        <li><b class="mono">M8</b><div><strong>Play together</strong><span>Co-op and competitive multiplayer, on the netcode single-player already runs on.</span></div></li>
+        <li><b class="mono">M3</b><div><strong>Stories</strong><span>Saving, <span class="mono">game.lore</span>, conversations, quests, items, equipment, skills, magic and dungeons.</span></div></li>
+        <li><b class="mono">M4</b><div><strong>Open worlds</strong><span>One continuous world: streaming, terrain, growth by rule, water, sky, regions, encounters, and a map you sketch and then walk.</span></div></li>
+        <li><b class="mono">M5</b><div><strong>Modern graphics</strong><span>Lighting, shadows, anti-aliasing, effects and performance budgets.</span></div></li>
+        <li><b class="mono">M6</b><div><strong>Ship</strong><span>Packaged builds for each platform, and releases of the engine.</span></div></li>
+        <li><b class="mono">M7</b><div><strong>Editor</strong><span>Fly around a level, place things and people, block out geometry, press play.</span></div></li>
+        <li><b class="mono">M8</b><div><strong>Tools</strong><span>A debugger, replays, and jumping to any point in a story.</span></div></li>
       </ol>
     </div>
   </section>

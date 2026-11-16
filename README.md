@@ -1,6 +1,6 @@
 # LORE — Lovely Open Rust Engine
 
-A free, open-source engine for 3D games you walk through, in first or third person. Single-player comes first; playing together is already underneath.
+A free, open-source engine for single-player open-world adventures and action RPGs, in first or third person: the kind of game Skyrim and The Legend of Zelda are.
 
 [Website](https://tahuffman1s.github.io/LORE/) · [Docs](https://tahuffman1s.github.io/LORE/docs/) · [Tutorial](https://tahuffman1s.github.io/LORE/docs/first-match.html) · [Roadmap](ROADMAP.md) · [Issues](https://github.com/tahuffman1s/LORE/issues)
 
@@ -8,7 +8,7 @@ A free, open-source engine for 3D games you walk through, in first or third pers
 
 **Status:** early. There is no finished game to play yet, but you can make one and walk around its level. So far: a Vulkan 1.3 window that draws meshes with a depth buffer from the player's eyes (a game's own level from the `level.glb` in its folder, in flat colours, with solid walls and floors that players walk on), a main loop that steps the game 60 times a second whatever the frame rate and draws the view blended between the last two steps, so walking is smooth at 30 or 240 frames a second, while looking around follows the mouse and the stick on every frame drawn and never waits for a step, keyboard, mouse and gamepad input through one action map with controls the player can change in a text file, and Luau scripts that reload when you save them.
 
-LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS), an engine for multiplayer first-person shooters, so what works today is what FOSSPS had on the day of the fork, and it is all seen in first person. Third person, NPCs, saving and stories are planned and not built: the "Planned" lines below say so, and the [roadmap](ROADMAP.md) has the order.
+LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS), an engine for multiplayer first-person shooters. What works today is mostly what FOSSPS had, seen in first person, and it still includes servers, joining and team matches. **Those are being removed** (#277, #278, #279, #280): LORE is single-player only, and the sections below that describe `lore serve`, `lore join`, `lore-server` and `game.mode` describe code on its way out. Third person, NPCs, saving, stories and open worlds are planned and not built: the "Planned" lines below say so, and the [roadmap](ROADMAP.md) has the order.
 
 ## The idea
 
@@ -26,7 +26,9 @@ my-game/
 
 **One world, either view.** First person and third person are the same game with a different camera. Planned: choosing is one line in a script and, if the game allows it, one button for the player (#31, #32).
 
-**Alone first, together later, on one engine.** A game played alone still runs on the engine's server, inside the program, and every computer works out the same world from the same inputs. Planned on top of that: a save is a snapshot of everything, with nothing for the game to list (#73); `lore check` lives a day of the world in seconds and says which NPC got stuck (#70); and letting a friend into a single-player game is one line (#216).
+**One world, worked out the same way every time.** The game steps at a fixed rate and the same input always gives the same world. Planned on top of that: a save is a snapshot of everything, with nothing for the game to list (#73), and `lore check` lives a day of the world in seconds and says which NPC got stuck (#70). There is no multiplayer and none is planned.
+
+**A world you can see across.** Planned: one continuous world kept in pieces on disk that load as you cross it with no loading screen (#281, #83), land to the horizon drawn from stand-ins the engine makes itself (#282), and grass, trees and rocks that place themselves by rules you can read (#284). In the editor, sketch a map from above and walk it seconds later (#296).
 
 **People who can explain themselves.** Planned: what an NPC does is a short list of "when this, do that" you can read, and every NPC can say in one sentence why it is doing what it does (#57, #58).
 
@@ -35,13 +37,13 @@ my-game/
 ## Goals
 
 - **Easy to use** — go from install to a game you can walk around in minutes, with a Luau scripting API that reads like plain English. This is the "lovely".
-- **Fast** — high, stable frame rates and low input latency on mid-range hardware.
-- **Focused** — 3D worlds a player walks through in first or third person: adventures, action games, shooters, stories. No 2D, VR, node graphs or visual scripting.
-- **Modern** — Vulkan 1.3 renderer, FSR 3.1 upscaling, first-class controller support.
+- **Fast** — high, stable frame rates and low input latency on mid-range hardware, in a big world that loads as you cross it.
+- **Focused** — single-player worlds you explore on foot: open worlds, dungeons, people, quests, melee, bows and magic. No multiplayer, no 2D, VR, node graphs or visual scripting.
+- **Modern** — Vulkan 1.3 renderer, FSR 3.1 upscaling, first-class controller support, and a world worth looking at.
 
 Planned platforms: Linux, Windows, and macOS as a stretch goal.
 
-New here? [Your first match](https://tahuffman1s.github.io/LORE/docs/first-match.html) is a ten-minute tutorial from LORE's shooter beginnings: install with one command, make a game, change it while it runs, turn it into a team deathmatch and join it from a second window. A single-player tutorial follows once there is a story to make (#89). The pages are plain HTML in [`site/docs`](site/docs), and a test follows the tutorial's steps with the built `lore`, so a change that makes the page wrong fails CI.
+New here? [Your first match](https://tahuffman1s.github.io/LORE/docs/first-match.html) is a ten-minute tutorial from LORE's shooter beginnings, and is being replaced with a single-player one (#277): install with one command, make a game, change it while it runs, turn it into a team deathmatch and join it from a second window. A single-player tutorial follows once there is a story to make (#89). The pages are plain HTML in [`site/docs`](site/docs), and a test follows the tutorial's steps with the built `lore`, so a change that makes the page wrong fails CI.
 
 ## Building
 
