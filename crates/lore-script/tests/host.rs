@@ -15,6 +15,8 @@ thread_local! {
     static PRINTED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The errors the engine logged on this test's thread.
     static ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// What else the engine logged on this test's thread.
+    static NOTES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Collects `print` output per thread, so tests can run side by side.
@@ -30,6 +32,8 @@ impl log::Log for Capture {
             PRINTED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         } else if record.level() == log::Level::Error {
             ERRORS.with_borrow_mut(|lines| lines.push(record.args().to_string()));
+        } else if record.level() == log::Level::Info {
+            NOTES.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         }
     }
 
@@ -42,6 +46,10 @@ fn printed() -> Vec<String> {
 
 fn errors() -> Vec<String> {
     ERRORS.with_borrow_mut(std::mem::take)
+}
+
+fn notes() -> Vec<String> {
+    NOTES.with_borrow_mut(std::mem::take)
 }
 
 /// A game folder that is deleted when the test ends.
@@ -847,6 +855,120 @@ fn saving_a_required_script_reloads_the_game() {
     wait_for_reload(&mut host, |host| host.last_error().is_none());
     host.tick(&idle(), STEP);
     assert_eq!(printed(), ["60"]);
+}
+
+#[test]
+fn the_log_names_the_script_that_was_saved() {
+    let game = GameFolder::new(
+        r#"local rifle = require("./weapons/rifle")
+        print(rifle.damage)"#,
+    );
+    game.write_file("weapons/rifle.luau", "return { damage = 30 }");
+    let mut host = game.open();
+    assert_eq!(printed(), ["30"]);
+    notes();
+
+    // A longer file each time, so the save shows even if the clock has not moved.
+    game.write_file("weapons/rifle.luau", "return { damage = 45 } -- more");
+    wait_for_reload(&mut host, |_| printed() == ["45"]);
+    assert_eq!(
+        notes(),
+        ["weapons/rifle.luau was saved: reloaded the game's scripts."]
+    );
+
+    game.write(
+        r#"local rifle = require("./weapons/rifle")
+        print(rifle.damage + 1)"#,
+    );
+    wait_for_reload(&mut host, |_| printed() == ["46"]);
+    assert_eq!(
+        notes(),
+        ["main.luau was saved: reloaded the game's scripts."]
+    );
+
+    // Asked for by the program, with no save behind it.
+    host.reload().unwrap();
+    assert_eq!(notes(), ["Reloaded the game's scripts."]);
+}
+
+/// Whether the folder the tests make their games in takes `Weapons.luau`
+/// and `weapons.luau` for the same file, as Windows and macOS do.
+fn capitals_are_overlooked(game: &GameFolder) -> bool {
+    game.write_file("capitals.txt", "");
+    let overlooked = game.0.join("CAPITALS.TXT").exists();
+    // The machines that test LORE on Windows and macOS are the only place
+    // the check below is tried against a real disk: it must not be skipped.
+    if std::env::var_os("GITHUB_ACTIONS").is_some() && cfg!(any(windows, target_os = "macos")) {
+        assert!(overlooked, "expected a disk that overlooks capitals here");
+    }
+    overlooked
+}
+
+#[test]
+fn a_script_saved_with_other_capital_letters_is_refused_on_every_system() {
+    // (what main.luau asks for, the file on disk, what the error says where
+    // the disk overlooks capitals, and where it does not)
+    let cases = [
+        (
+            "./Weapons",
+            "weapons.luau",
+            "saved as weapons.luau, but it was asked for as Weapons.luau",
+            "no script called Weapons.luau",
+        ),
+        (
+            "./weapons",
+            "Weapons.luau",
+            "saved as Weapons.luau, but it was asked for as weapons.luau",
+            "no script called weapons.luau",
+        ),
+        (
+            "./Weapons/rifle",
+            "weapons/rifle.luau",
+            "saved as weapons/rifle.luau, but it was asked for as Weapons/rifle.luau",
+            "no script called Weapons/rifle.luau",
+        ),
+        (
+            "./weapons/Rifle",
+            "weapons/rifle.luau",
+            "saved as weapons/rifle.luau, but it was asked for as weapons/Rifle.luau",
+            "no script called weapons/Rifle.luau",
+        ),
+    ];
+    for (asked, on_disk, overlooked, told_apart) in cases {
+        let game = GameFolder::new(&format!("print(require(\"{asked}\"))"));
+        game.write_file(on_disk, "return \"loaded\"");
+        let expected = if capitals_are_overlooked(&game) {
+            overlooked
+        } else {
+            told_apart
+        };
+        let host = game.open();
+        let error = host
+            .last_error()
+            .unwrap_or_else(|| panic!("{asked} for {on_disk} should be refused"));
+        assert!(error.message.contains(expected), "{asked}: {error}");
+        // The script never ran.
+        assert_eq!(printed(), [] as [&str; 0], "{asked}");
+    }
+}
+
+#[test]
+fn capital_letters_in_the_path_to_the_game_do_not_matter() {
+    // Only names inside the game are held to their capitals: the folder the
+    // game is in can be typed however the system accepts it.
+    let game = GameFolder::new("print(require(\"./Weapons/Rifle\"))");
+    game.write_file("Weapons/Rifle.luau", "return \"loaded\"");
+    let host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["loaded"]);
+
+    if capitals_are_overlooked(&game) {
+        let name = game.0.file_name().unwrap().to_str().unwrap().to_uppercase();
+        let shouted = game.0.with_file_name(name);
+        let host = ScriptHost::open(&shouted, ActionMap::default_fps()).unwrap();
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        assert_eq!(printed(), ["loaded"]);
+    }
 }
 
 #[test]

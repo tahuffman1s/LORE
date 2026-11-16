@@ -61,6 +61,22 @@ struct Version {
     shared: Rc<Shared>,
 }
 
+/// What the log says after a reload: which scripts were saved, so that the
+/// author sees the save they just made was the one picked up.
+fn reloaded(saved: &[String]) -> String {
+    match saved {
+        [] => "Reloaded the game's scripts.".to_owned(),
+        [one] => format!("{one} was saved: reloaded the game's scripts."),
+        [first, second] => {
+            format!("{first} and {second} were saved: reloaded the game's scripts.")
+        }
+        [first, rest @ ..] => format!(
+            "{first} and {} more scripts were saved: reloaded the game's scripts.",
+            rest.len()
+        ),
+    }
+}
+
 /// A script file the game looked for, found or not.
 #[derive(Debug)]
 struct Watched {
@@ -399,14 +415,18 @@ impl ScriptHost {
                 self.watch(touched, false);
             }
         }
-        let mut saved = false;
+        // Nothing is saved on nearly every look, and then this stays empty.
+        let mut saved = Vec::new();
         for file in &mut self.watched {
             // Every file is asked, so each one's save settles on its own.
-            saved |= file.watch.should_reload(stamp(&file.path));
+            if file.watch.should_reload(stamp(&file.path)) {
+                saved.push(self.files.name_of(&file.path));
+            }
         }
-        if saved {
+        if !saved.is_empty() {
+            saved.sort();
             // A script error is already logged and kept in `last_error`.
-            let _ = self.reload();
+            let _ = self.reload_after(&saved);
         }
     }
 
@@ -426,6 +446,12 @@ impl ScriptHost {
     /// If the new version has a mistake, the error is returned (and logged) and
     /// the previous version keeps running.
     pub fn reload(&mut self) -> Result<(), ScriptError> {
+        self.reload_after(&[])
+    }
+
+    /// Reloads because the scripts called `saved` were saved, or, with no
+    /// names, because the program asked.
+    fn reload_after(&mut self, saved: &[String]) -> Result<(), ScriptError> {
         if !self.files.on_disk() {
             return Ok(());
         }
@@ -441,7 +467,7 @@ impl ScriptHost {
         }
         self.install()?;
         if had_version {
-            log::info!("Reloaded {}.", self.file);
+            log::info!("{}", reloaded(saved));
         }
         if self.started {
             self.call_all(|handlers| &handlers.reload, ());
