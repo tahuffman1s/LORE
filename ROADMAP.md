@@ -28,7 +28,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Read skins and animations from glTF (characters and weapon view models) (#7)
 - Players fire weapons: scripts choose and tune weapons and hear about hits (#8)
 - Any frame rate: the game steps at a fixed tick and the picture is blended between ticks (#9)
 - Any frame rate: looking around follows the mouse and stick on every drawn frame (#10)
