@@ -1197,3 +1197,93 @@ fn a_kept_table_cannot_carry_anything_but_plain_values_into_the_new_version() {
     assert_eq!(printed(), ["1 nil nil 4 true"]);
     assert_eq!(errors(), [] as [&str; 0]);
 }
+
+/// The milliseconds a script printed, one number to a line.
+fn printed_times() -> Vec<f64> {
+    printed()
+        .iter()
+        .map(|line| line.parse().expect("the script prints a number"))
+        .collect()
+}
+
+fn fastest(times: &[f64]) -> f64 {
+    times.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn a_caught_engine_error_costs_the_same_however_many_came_before() {
+    // Ten rounds of 500 errors the engine raises, caught in a loop at the top
+    // of the file. Before #3 each error made the next one slower, the tenth
+    // round took about twenty times the first, and the whole file ran past
+    // the time limit.
+    let game = GameFolder::new(
+        r#"
+        for round = 1, 10 do
+            local began = os.clock()
+            for n = 1, 500 do pcall(game.onTick, 1) end
+            print((os.clock() - began) * 1000)
+        end
+        "#,
+    );
+    let host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let times = printed_times();
+    assert_eq!(times.len(), 10);
+    // The fastest of the last three rounds, so one hiccup of the machine
+    // running the test cannot fail it. A twentieth of a millisecond is added
+    // for clocks too coarse to time a round.
+    let (early, late) = (fastest(&times[..3]), fastest(&times[7..]));
+    assert!(
+        late <= early * 4.0 + 0.05,
+        "the last rounds took {late} ms and the first {early} ms: {times:?}"
+    );
+}
+
+#[test]
+fn a_caught_engine_error_costs_the_same_wherever_it_is_raised() {
+    // At the top of the file, where the loop's function never returns, and
+    // inside a function that is called afresh for each error.
+    let game = GameFolder::new(
+        r#"
+        local function caught() pcall(game.onTick, 1) end
+        for round = 1, 5 do
+            local began = os.clock()
+            for n = 1, 500 do caught() end
+            print((os.clock() - began) * 1000)
+        end
+        for round = 1, 5 do
+            local began = os.clock()
+            for n = 1, 500 do pcall(game.onTick, 1) end
+            print((os.clock() - began) * 1000)
+        end
+        "#,
+    );
+    let host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let times = printed_times();
+    assert_eq!(times.len(), 10);
+    let (in_a_function, at_the_top) = (fastest(&times[..5]), fastest(&times[5..]));
+    assert!(
+        at_the_top <= in_a_function * 4.0 + 0.05,
+        "500 errors took {at_the_top} ms at the top of the file and {in_a_function} ms \
+         inside a function: {times:?}"
+    );
+}
+
+#[test]
+fn many_caught_engine_errors_in_one_tick_do_not_use_up_the_time_limit() {
+    // On Windows 2,000 of these in one call used to run past the one second
+    // a call may take, which paused the script (#3).
+    let game = GameFolder::new(
+        r#"
+        game.onTick(function()
+            for n = 1, 20000 do pcall(game.team, "nobody") end
+            print("done")
+        end)
+        "#,
+    );
+    let mut host = game.open();
+    host.tick(&idle(), STEP);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["done"]);
+}

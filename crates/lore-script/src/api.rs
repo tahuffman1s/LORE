@@ -13,6 +13,7 @@ use mlua::{Function, Lua, Table, Value, Variadic};
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
 use crate::error::{TookTooLong, closest};
 use crate::keep::{self, Kept, Store};
+use crate::limit::Interrupt;
 use crate::mode_api::{self, Handles, ModeState};
 use crate::modules::{self, Modules};
 
@@ -76,6 +77,8 @@ pub(crate) struct Shared {
     pub stopped: RefCell<Option<TookTooLong>>,
     /// How many times the time limit has been checked.
     pub checks: Cell<u32>,
+    /// What stops the script once time is up: see [`crate::limit`].
+    pub raise: Cell<Option<Interrupt>>,
     /// The match being played. It outlives this version of the script.
     pub mode: Rc<ModeState>,
     /// The values this version of the script holds for players and teams.

@@ -14,21 +14,18 @@ use std::time::{Duration, Instant};
 
 use lore_input::{ActionMap, InputFrame, Rumble};
 use lore_mode::{Event, Match, PlayerId};
-use mlua::{AnyUserData, Function, IntoLuaMulti, Lua, VmState};
+use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
 use crate::api::{self, Handlers, Shared};
 use crate::audio::{AudioCommand, AudioState};
-use crate::error::{OpenError, ScriptError, TookTooLong, is_time_limit};
+use crate::error::{OpenError, ScriptError, is_time_limit};
 use crate::keep::{Kept, Store};
+use crate::limit::{self, within_time_limit};
 use crate::mode_api::{Handles, ModeState};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
 
 /// The file every game starts from, inside the game's folder.
 pub const ENTRY_SCRIPT: &str = "main.luau";
-
-/// How long one call into the script may run before it is stopped. A healthy
-/// tick takes well under a millisecond; this only catches loops that never end.
-const TIME_LIMIT: Duration = Duration::from_secs(1);
 
 /// How much memory one script may use.
 const MEMORY_LIMIT: usize = 256 * 1024 * 1024;
@@ -48,9 +45,6 @@ const MAX_EVENTS_AT_ONCE: usize = 10_000;
 /// How many spawns wait for the engine to place them before the oldest are
 /// dropped. An engine that takes them every tick never comes near it.
 const MAX_WAITING_SPAWNS: usize = 1024;
-
-/// The time limit reads the clock once in this many checks.
-const CLOCK_EVERY: u32 = 256;
 
 const KEEPS_RUNNING: &str =
     "The game keeps running. Fix this and save the file: it reloads by itself.";
@@ -521,6 +515,7 @@ impl ScriptHost {
             deadline: Cell::new(None),
             stopped: RefCell::new(None),
             checks: Cell::new(0),
+            raise: Cell::new(None),
             mode: Rc::clone(&self.mode),
             handles: Handles::default(),
             loading: Cell::new(true),
@@ -546,37 +541,7 @@ impl ScriptHost {
             lua.set_memory_limit(MEMORY_LIMIT)?;
             api::install(&lua, shared)?;
             lua.sandbox(true)?;
-            let limit = Rc::clone(shared);
-            lua.set_interrupt(move |lua| {
-                let Some(deadline) = limit.deadline.get() else {
-                    return Ok(VmState::Continue);
-                };
-                // Once time is up every check fails, so a script that catches
-                // the error with pcall still cannot carry on.
-                let mut stopped = limit.stopped.borrow().clone();
-                if stopped.is_none() {
-                    // This runs at every function call and loop turn, so the
-                    // clock is only read now and then.
-                    let checks = limit.checks.get().wrapping_add(1);
-                    limit.checks.set(checks);
-                    if !checks.is_multiple_of(CLOCK_EVERY) || Instant::now() < deadline {
-                        return Ok(VmState::Continue);
-                    }
-                    let place = lua.inspect_stack(0, |running| {
-                        let file = running.source().source;
-                        let file = file.and_then(|file| Some(file.strip_prefix('@')?.to_owned()));
-                        (file, running.current_line())
-                    });
-                    let (file, line) = place.unwrap_or_default();
-                    let line = line.and_then(|line| u32::try_from(line).ok());
-                    stopped = Some(TookTooLong { file, line });
-                    limit.stopped.borrow_mut().clone_from(&stopped);
-                }
-                match stopped {
-                    Some(stopped) => Err(mlua::Error::external(stopped)),
-                    None => Ok(VmState::Continue),
-                }
-            });
+            limit::install(&lua, shared)?;
             let chunk = lua.load(&source).set_name(format!("@{}", self.file));
             let result = within_time_limit(shared, || chunk.exec());
             shared.loading.set(false);
@@ -718,24 +683,6 @@ impl ScriptHost {
                 break;
             }
         }
-    }
-}
-
-/// Runs `call` with the time limit armed.
-///
-/// Running out of time is an error even if the script caught it with `pcall`
-/// and returned normally.
-fn within_time_limit<R>(
-    shared: &Shared,
-    call: impl FnOnce() -> mlua::Result<R>,
-) -> mlua::Result<R> {
-    shared.stopped.replace(None);
-    shared.deadline.set(Some(Instant::now() + TIME_LIMIT));
-    let result = call();
-    shared.deadline.set(None);
-    match shared.stopped.take() {
-        Some(stopped) => Err(mlua::Error::external(stopped)),
-        None => result,
     }
 }
 
