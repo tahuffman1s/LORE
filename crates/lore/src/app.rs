@@ -4,7 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use lore_input::{ActionMap, ActionSetId, Input, MouseMode, MouseWheel};
+use lore_input::{ActionMap, ActionSetId, Input, InputFrame, MouseMode, MouseWheel};
 use lore_render::{Camera, RenderConfig, RenderError, Renderer, Upscaling};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -56,7 +56,8 @@ pub struct Config {
     ///
     /// The game's rules step this many times a second on any computer; what
     /// is drawn in between is blended from the last two ticks (see
-    /// [`blend`](crate::blend)). After a frame that took very long, at most
+    /// [`blend`](crate::blend)), and turned by what the mouse and the stick
+    /// have done since (see [`Frame::input`]). After a frame that took very long, at most
     /// five ticks are run to catch up and the rest are skipped, which is
     /// logged once.
     ///
@@ -239,6 +240,7 @@ fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError>
         last_frame: Instant::now(),
         last_view: None,
         ui: lore_ui::DrawBuffer::default(),
+        unseen: InputFrame::default(),
         sound: SoundOutput::new(LazySpeakers::default()),
         #[cfg(feature = "editor")]
         panels: None,
@@ -280,6 +282,9 @@ struct App<G> {
     /// The HUD and menus the game asked for this frame. Kept from frame to
     /// frame so that gathering them stops asking for memory.
     ui: lore_ui::DrawBuffer,
+    /// What the player did that no tick has seen yet, read again for every
+    /// frame. Kept from frame to frame for the same reason.
+    unseen: InputFrame,
     /// Plays the sounds the game asks for through the speakers.
     sound: SoundOutput<LazySpeakers>,
     /// What the editor's panels are made with; `None` in a game.
@@ -498,8 +503,12 @@ impl<G: Game> App<G> {
             let size = window.inner_size();
             [size.width, size.height]
         });
-        let mut frame =
-            Frame::new(self.clock.alpha()).for_window(screen, std::mem::take(&mut self.ui));
+        // What the ticks above did not take: the frame turns the view by
+        // it, so looking around never waits for a tick.
+        self.input.peek(&mut self.unseen);
+        let mut frame = Frame::new(self.clock.alpha())
+            .with_input(std::mem::take(&mut self.unseen), step)
+            .for_window(screen, std::mem::take(&mut self.ui));
         #[cfg(feature = "editor")]
         if let (Some(panels), Some(window)) = (&mut self.panels, &self.window) {
             let input = panels.state.take_egui_input(window);
@@ -514,6 +523,7 @@ impl<G: Game> App<G> {
         if let (Some(shown), Some(renderer)) = (frame.grid(), &mut self.renderer) {
             renderer.set_grid(shown);
         }
+        self.unseen = frame.take_input();
         self.ui = frame.take_ui();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ui(self.ui.draw());

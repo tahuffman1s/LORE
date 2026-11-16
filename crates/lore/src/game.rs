@@ -40,6 +40,11 @@ const NO_WINDOW: [u32; 2] = [1920, 1080];
 #[derive(Debug)]
 pub struct Frame {
     alpha: f32,
+    /// Seconds since the last tick.
+    since_tick: f32,
+    /// What the player has done that no tick has seen yet. Without a
+    /// window it holds nothing, and every action reads as idle.
+    input: InputFrame,
     screen: [u32; 2],
     ui: DrawBuffer,
     title: Option<String>,
@@ -110,6 +115,8 @@ impl Frame {
     pub(crate) fn new(alpha: f32) -> Self {
         Self {
             alpha,
+            since_tick: 0.0,
+            input: InputFrame::default(),
             screen: NO_WINDOW,
             ui: DrawBuffer::default(),
             title: None,
@@ -176,6 +183,99 @@ impl Frame {
     #[must_use]
     pub fn alpha(&self) -> f32 {
         self.alpha
+    }
+
+    /// What the player has done since the last tick, which no tick has seen
+    /// yet: what the next tick would be given if it ran now.
+    ///
+    /// This is what lets the view follow the mouse and the stick on every
+    /// drawn frame, however few ticks there are to a second. Turn the view
+    /// each tick as usual, and draw each frame from those angles plus the
+    /// turn that is still on its way:
+    ///
+    /// ```
+    /// use lore::{ActionId, Frame, Game, InputFrame};
+    ///
+    /// /// Radians per count of mouse movement, and per second on the stick.
+    /// const MOUSE: f32 = 0.002;
+    /// const STICK: f32 = 3.5;
+    ///
+    /// struct Looking {
+    ///     look: ActionId,
+    ///     /// Which way the player faces as of the last tick.
+    ///     yaw: f32,
+    /// }
+    ///
+    /// impl Looking {
+    ///     /// `yaw` after what `input` holds, with the stick held `seconds`.
+    ///     fn turned(&self, input: &InputFrame, seconds: f32) -> f32 {
+    ///         let (mouse, stick) = (input.delta(self.look), input.axis2d(self.look));
+    ///         // Mouse counts are a distance: never multiply them by a time.
+    ///         self.yaw - mouse[0] * MOUSE - stick[0] * STICK * seconds
+    ///     }
+    /// }
+    ///
+    /// impl Game for Looking {
+    ///     fn tick(&mut self, input: &InputFrame, step: f32) {
+    ///         self.yaw = self.turned(input, step);
+    ///     }
+    ///
+    ///     fn frame(&mut self, frame: &mut Frame) {
+    ///         let yaw = self.turned(frame.input(), frame.since_tick());
+    ///         frame.look_from([0.0, 1.7, 0.0], yaw, 0.0);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The next tick is given the same mouse movement, so nothing is turned
+    /// twice and the picture does not jump when the tick runs.
+    ///
+    /// It is for the picture only: the game's rules read the input their
+    /// tick is given and nothing else, or they would depend on the frame
+    /// rate. A game on a server has no player at the keyboard, and every
+    /// action here reads as idle.
+    #[must_use]
+    pub fn input(&self) -> &InputFrame {
+        &self.input
+    }
+
+    /// Seconds since the last tick: how long a stick read through
+    /// [`input`](Self::input) has been held without a tick seeing it. It
+    /// is [`alpha`](Self::alpha) of a tick's length.
+    #[must_use]
+    pub fn since_tick(&self) -> f32 {
+        self.since_tick
+    }
+
+    /// Gives the frame what no tick has seen yet (`input`, from
+    /// [`Input::peek`](lore_input::Input::peek)) and the length of a tick
+    /// in seconds.
+    #[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
+    pub(crate) fn with_input(mut self, input: InputFrame, step: f32) -> Self {
+        self.input = input;
+        self.since_tick = if self.alpha.is_finite() && step.is_finite() {
+            self.alpha.clamp(0.0, 1.0) * step.max(0.0)
+        } else {
+            0.0
+        };
+        self
+    }
+
+    /// The input the frame was given, to be filled again for the next
+    /// frame without asking for memory.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn take_input(&mut self) -> InputFrame {
+        std::mem::take(&mut self.input)
+    }
+
+    /// A frame drawn `alpha` of the way from the last tick to the next one
+    /// of `step` seconds, as the window makes it: with what `input` holds
+    /// that no tick has seen.
+    #[cfg(test)]
+    pub(crate) fn between_ticks(input: &lore_input::Input, alpha: f32, step: f32) -> Self {
+        let mut unseen = InputFrame::default();
+        input.peek(&mut unseen);
+        Self::new(alpha).with_input(unseen, step)
     }
 
     /// The size of the window in pixels, `[width, height]`: what a

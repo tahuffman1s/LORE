@@ -5,7 +5,7 @@ use std::fmt;
 use crate::binding::{ActionKind, Binding, Button};
 use crate::devices::{GamepadButton, Key, Stick, StickAxis};
 use crate::frame::{ActionState, InputFrame};
-use crate::map::{ActionId, ActionMap, ActionSetId, Conflict};
+use crate::map::{Action, ActionId, ActionMap, ActionSetId, Conflict};
 use crate::shaping::{PRESS_AT, RELEASE_AT, clamp_length, length, sanitize};
 
 /// The live state of every device, resolved through an [`ActionMap`].
@@ -441,80 +441,125 @@ impl Input {
         }
         let mouse = std::mem::take(&mut self.mouse);
 
-        let (actions, bindings) = self.map.parts();
-        let deadzone = self.map.deadzone();
-        for (action, state) in actions.iter().zip(&mut self.frame.actions) {
-            if action.set != self.active {
-                *state = ActionState {
-                    just_released: state.pressed,
-                    ..ActionState::default()
-                };
-                continue;
-            }
-            // A button held since before the set changed belongs to the old set.
-            let fresh = action.kind != ActionKind::Button;
-            let bindings = bindings.get(action.bindings.clone()).unwrap_or_default();
-            let mut axis = [0.0_f32; 2];
-            let mut delta = [0.0_f32; 2];
-            let mut repressed = false;
-            let amount = |button: Button| button_amount(&self.reported, &self.amount, button);
-
-            for binding in bindings {
-                let candidate = match *binding {
-                    Binding::Button(button) => {
-                        if fresh || !self.stale[button.index()] {
-                            repressed |= self.repressed[button.index()];
-                            [amount(button), 0.0]
-                        } else {
-                            [0.0, 0.0]
-                        }
-                    }
-                    Binding::Axis { negative, positive } => {
-                        [amount(positive) - amount(negative), 0.0]
-                    }
-                    Binding::StickAxis(stick, stick_axis) => {
-                        let shaped = deadzone.apply(self.sticks[stick.index()], action.stick_curve);
-                        match stick_axis {
-                            StickAxis::X => [shaped[0], 0.0],
-                            StickAxis::Y => [shaped[1], 0.0],
-                        }
-                    }
-                    Binding::Directions {
-                        up,
-                        down,
-                        left,
-                        right,
-                    } => clamp_length([amount(right) - amount(left), amount(up) - amount(down)]),
-                    Binding::Stick(stick) => {
-                        deadzone.apply(self.sticks[stick.index()], action.stick_curve)
-                    }
-                    Binding::MouseMotion => {
-                        delta = mouse;
-                        [0.0, 0.0]
-                    }
-                };
-                // When several bindings are active the strongest wins. Adding
-                // them would make keyboard plus stick faster than either alone.
-                if length(candidate) > length(axis) {
-                    axis = candidate;
-                }
-            }
-            if action.kind != ActionKind::Axis2D {
-                axis[1] = 0.0;
-            }
-
-            let pressed = axis != [0.0, 0.0];
-            *state = ActionState {
-                pressed,
-                just_pressed: pressed && (!state.pressed || repressed),
-                just_released: !pressed && state.pressed,
-                axis,
-                delta,
-            };
+        // Taken out while it is filled, so the rest of `self` can be read.
+        let mut states = std::mem::take(&mut self.frame.actions);
+        let (actions, _) = self.map.parts();
+        for (action, state) in actions.iter().zip(&mut states) {
+            *state = self.state_of(action, *state, &self.reported, &self.repressed, mouse);
         }
+        self.frame.actions = states;
 
         self.frame.tick += 1;
         &self.frame
+    }
+
+    /// Fills `frame` with what [`tick`](Self::tick) would report if it ran
+    /// now, and uses nothing up: the next tick still sees every press and
+    /// all of the mouse movement.
+    ///
+    /// This is for drawing, between ticks: the mouse movement and stick
+    /// position no tick has seen yet are what turn the view on every drawn
+    /// frame. The game's rules must read ticks only. `frame.tick` is the
+    /// number of the last tick that ran.
+    ///
+    /// Filling the same frame every time does not allocate.
+    pub fn peek(&self, frame: &mut InputFrame) {
+        let mut reported = [false; Button::COUNT];
+        let mut repressed = [false; Button::COUNT];
+        for index in 0..Button::COUNT {
+            reported[index] = self.held[index] || self.latched[index];
+            repressed[index] = self.latched[index] && self.reported[index];
+        }
+        let (actions, _) = self.map.parts();
+        frame.tick = self.frame.tick;
+        frame.actions.clear();
+        frame.actions.extend(
+            actions
+                .iter()
+                .zip(&self.frame.actions)
+                .map(|(action, last)| {
+                    self.state_of(action, *last, &reported, &repressed, self.mouse)
+                }),
+        );
+    }
+
+    /// What `action` is doing, given what it did on the tick before
+    /// (`last`), which buttons count as down (`reported`) or as pressed
+    /// again (`repressed`), and how far the mouse moved.
+    fn state_of(
+        &self,
+        action: &Action,
+        last: ActionState,
+        reported: &[bool; Button::COUNT],
+        repressed: &[bool; Button::COUNT],
+        mouse: [f32; 2],
+    ) -> ActionState {
+        if action.set != self.active {
+            return ActionState {
+                just_released: last.pressed,
+                ..ActionState::default()
+            };
+        }
+        let (_, bindings) = self.map.parts();
+        let deadzone = self.map.deadzone();
+        // A button held since before the set changed belongs to the old set.
+        let fresh = action.kind != ActionKind::Button;
+        let bindings = bindings.get(action.bindings.clone()).unwrap_or_default();
+        let mut axis = [0.0_f32; 2];
+        let mut delta = [0.0_f32; 2];
+        let mut pressed_again = false;
+        let amount = |button: Button| button_amount(reported, &self.amount, button);
+
+        for binding in bindings {
+            let candidate = match *binding {
+                Binding::Button(button) => {
+                    if fresh || !self.stale[button.index()] {
+                        pressed_again |= repressed[button.index()];
+                        [amount(button), 0.0]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                }
+                Binding::Axis { negative, positive } => [amount(positive) - amount(negative), 0.0],
+                Binding::StickAxis(stick, stick_axis) => {
+                    let shaped = deadzone.apply(self.sticks[stick.index()], action.stick_curve);
+                    match stick_axis {
+                        StickAxis::X => [shaped[0], 0.0],
+                        StickAxis::Y => [shaped[1], 0.0],
+                    }
+                }
+                Binding::Directions {
+                    up,
+                    down,
+                    left,
+                    right,
+                } => clamp_length([amount(right) - amount(left), amount(up) - amount(down)]),
+                Binding::Stick(stick) => {
+                    deadzone.apply(self.sticks[stick.index()], action.stick_curve)
+                }
+                Binding::MouseMotion => {
+                    delta = mouse;
+                    [0.0, 0.0]
+                }
+            };
+            // When several bindings are active the strongest wins. Adding
+            // them would make keyboard plus stick faster than either alone.
+            if length(candidate) > length(axis) {
+                axis = candidate;
+            }
+        }
+        if action.kind != ActionKind::Axis2D {
+            axis[1] = 0.0;
+        }
+
+        let pressed = axis != [0.0, 0.0];
+        ActionState {
+            pressed,
+            just_pressed: pressed && (!last.pressed || pressed_again),
+            just_released: !pressed && last.pressed,
+            axis,
+            delta,
+        }
     }
 }
 
@@ -752,6 +797,59 @@ mod tests {
         assert_eq!(frame.delta(r.look), [5.0, -0.5]);
         assert!(close(frame.axis2d(r.look)[0], -1.0));
         assert_eq!(frame.delta(r.movement), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_peek_shows_what_no_tick_has_seen_and_uses_nothing_up() {
+        let mut r = rig();
+        let mut seen = InputFrame::default();
+        r.input.peek(&mut seen);
+        assert_eq!(seen.delta(r.look), [0.0, 0.0]);
+        assert_eq!(seen.tick, 0);
+
+        r.input.move_mouse(3.0, -1.0);
+        r.input.set_stick(Stick::RightStick, StickAxis::X, -1.0);
+        r.input.press(Key::Space);
+        r.input.peek(&mut seen);
+        assert_eq!(seen.delta(r.look), [3.0, -1.0]);
+        assert!(close(seen.axis2d(r.look)[0], -1.0));
+        assert!(seen.just_pressed(r.jump));
+
+        // More movement adds up, and looking twice changes nothing.
+        r.input.move_mouse(2.0, 0.5);
+        r.input.peek(&mut seen);
+        r.input.peek(&mut seen);
+        assert_eq!(seen.delta(r.look), [5.0, -0.5]);
+
+        // The tick reports exactly what the peek showed, and then the
+        // movement is spent while the stick is still held.
+        let ticked = r.input.tick().clone();
+        assert_eq!(ticked.actions, seen.actions);
+        assert_eq!(ticked.tick, 1);
+        r.input.peek(&mut seen);
+        assert_eq!(seen.tick, 1);
+        assert_eq!(seen.delta(r.look), [0.0, 0.0]);
+        assert!(close(seen.axis2d(r.look)[0], -1.0));
+        assert!(seen.pressed(r.jump) && !seen.just_pressed(r.jump));
+        let again = r.input.tick().clone();
+        assert_eq!(again.actions, seen.actions);
+    }
+
+    #[test]
+    fn a_peek_hears_only_the_live_set() {
+        let mut s = sets();
+        // Held when the menu opens: the click was for the game, not the menu.
+        s.input.press(MouseButton::MouseLeft);
+        s.input.tick();
+        s.input.set_active_set(s.menu);
+        s.input.press(Key::W);
+        let mut seen = InputFrame::default();
+        s.input.peek(&mut seen);
+        assert!(!seen.pressed(s.fire) && !seen.pressed(s.confirm));
+        assert!(!seen.pressed(s.movement) && seen.pressed(s.navigate));
+        s.input.peek(&mut seen);
+        let ticked = s.input.tick().clone();
+        assert_eq!(ticked.actions, seen.actions);
     }
 
     #[test]

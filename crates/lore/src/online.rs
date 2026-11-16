@@ -40,7 +40,7 @@
 //! }
 //! ```
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::TAU;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -60,6 +60,7 @@ use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
 use crate::blend;
 use crate::game::{Frame, Game};
+use crate::look;
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
 use crate::script_game::ScriptGame;
@@ -67,12 +68,6 @@ use crate::shooting::{Names, Shooting};
 
 /// The UDP port a server opens and a player joins when none is named.
 pub const DEFAULT_PORT: u16 = 24680;
-
-/// Radians turned per count of mouse movement.
-pub(crate) const MOUSE_TURN: f32 = 0.002;
-
-/// Radians turned per second with the look stick pushed all the way.
-pub(crate) const STICK_TURN: f32 = 3.5;
 
 /// Half the width of the floor players stand on until a game has a level.
 const FLOOR_REACH: f32 = 500.0;
@@ -986,7 +981,7 @@ const MOST_SHOWN: usize = 600;
 /// Falling at terminal speed at 20 ticks a second is under 3 m a tick.
 const CUT_METRES: f32 = 5.0;
 
-/// Where a player's eyes are and which way they face, on one tick.
+/// Where a player's eyes are and which way they face.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Seen {
     eye: [f32; 3],
@@ -994,24 +989,11 @@ struct Seen {
     pitch: f32,
 }
 
-impl Seen {
-    /// The view `alpha` of the way from `before` to this one.
-    fn blended(&self, before: &Self, alpha: f32) -> Self {
-        Self {
-            eye: blend::position(before.eye, self.eye, alpha),
-            yaw: blend::angle(before.yaw, self.yaw, alpha),
-            pitch: blend::number(before.pitch, self.pitch, alpha),
-        }
-    }
-
-    /// Whether the eyes went further from `before` than anyone walks or
-    /// falls in one tick. A distance that is not a number counts as far.
-    fn cut_from(&self, before: &Self) -> bool {
-        let moved: f32 = (0..3)
-            .map(|axis| (self.eye[axis] - before.eye[axis]).powi(2))
-            .sum();
-        moved.is_nan() || moved > CUT_METRES * CUT_METRES
-    }
+/// Whether eyes went further from `before` to `now` than anyone walks or
+/// falls in one tick. A distance that is not a number counts as far.
+fn cut(before: [f32; 3], now: [f32; 3]) -> bool {
+    let moved: f32 = (0..3).map(|axis| (now[axis] - before[axis]).powi(2)).sum();
+    moved.is_nan() || moved > CUT_METRES * CUT_METRES
 }
 
 /// `text`, which quotes a file a server sent, made safe to show in a
@@ -1058,10 +1040,11 @@ pub struct JoinedGame {
     arrivals: Arrivals,
     /// The level the server sent, until it is taken to be drawn.
     level: Option<Scene>,
-    /// The view on the tick before the newest, to draw frames between the
-    /// two from. `None` when the newest tick is to be drawn as it is:
-    /// before the first tick, and when the view was put somewhere new.
-    before: Option<Seen>,
+    /// Where the eyes were on the tick before the newest, to draw frames
+    /// between the two from. `None` when the newest tick is to be drawn as
+    /// it is: before the first tick, and when the eyes were put somewhere
+    /// new.
+    before: Option<[f32; 3]>,
 }
 
 impl JoinedGame {
@@ -1257,13 +1240,29 @@ impl JoinedGame {
     }
 
     /// The view to draw a frame from that is `alpha` of the way from the
-    /// tick before to the newest tick.
-    fn seen_at(&self, alpha: f32) -> Seen {
+    /// tick before to the newest tick, and has turned by `turn` (to the
+    /// right, then upwards) since the newest.
+    ///
+    /// The eyes are between where the two ticks had them. The angles are
+    /// not blended: they are the newest tick's plus the turn no tick has
+    /// seen yet, so the view is never behind the hand.
+    fn seen_at(&self, alpha: f32, turn: [f32; 2]) -> Seen {
         let now = self.seen();
-        match &self.before {
-            Some(before) => now.blended(before, alpha),
-            None => now,
+        let (yaw, pitch) = look::turned(now.yaw, now.pitch, turn);
+        Seen {
+            eye: match self.before {
+                Some(before) => blend::position(before, now.eye, alpha),
+                None => now.eye,
+            },
+            yaw,
+            pitch,
         }
+    }
+
+    /// Whether this player is in the game and is moved by what is pressed:
+    /// the server has given them a place and said where they start.
+    fn playing(&self) -> bool {
+        self.closed.is_none() && self.link.id().is_some() && self.faced
     }
 
     /// The other players as the server last told of them.
@@ -1327,14 +1326,11 @@ impl JoinedGame {
         let controls = self.controls;
         let [right, forward] = controls.walk.map_or([0.0; 2], |walk| input.axis2d(walk));
         if let Some(look) = controls.look {
-            let (mouse, stick) = (input.delta(look), input.axis2d(look));
-            // Yaw grows turning left; the mouse and stick report right.
-            let turn = mouse[0] * MOUSE_TURN + stick[0] * STICK_TURN * step;
-            let tilt = mouse[1] * MOUSE_TURN + stick[1] * STICK_TURN * step;
-            if turn.is_finite() && tilt.is_finite() {
-                self.yaw = (self.yaw - turn).rem_euclid(TAU);
-                self.pitch = (self.pitch + tilt).clamp(-FRAC_PI_2, FRAC_PI_2);
-            }
+            // Everything the frames since the last tick showed being turned
+            // by, so what is asked for here (a step, a shot) goes where the
+            // player was looking on the screen.
+            let turn = look::asked(input, look, step);
+            (self.yaw, self.pitch) = look::turned(self.yaw, self.pitch, turn);
         }
         PlayerInput {
             movement: MoveInput {
@@ -1355,14 +1351,14 @@ impl JoinedGame {
 
 impl Game for JoinedGame {
     fn tick(&mut self, input: &InputFrame, step: f32) {
-        let before = self.seen();
+        let before = self.eye_position();
         // Until the server has said where this player starts, what is seen
         // is a guess, and the first real view is not glided to from it.
         let placed = self.faced;
         self.listen();
         // Nothing moves until the server has said where this player starts:
         // a step taken from a guessed place would be taken back.
-        if self.closed.is_none() && self.link.id().is_some() && self.faced {
+        if self.playing() {
             let asked = self.read(input, step);
             self.client.predict(
                 &self.world.level,
@@ -1372,18 +1368,24 @@ impl Game for JoinedGame {
             );
             self.link.send(&self.packet);
         }
-        self.before = (placed && !self.seen().cut_from(&before)).then_some(before);
+        self.before = (placed && !cut(before, self.eye_position())).then_some(before);
     }
 
     /// Looks from the player's eyes. A frame drawn between two ticks sees
     /// from between where the eyes were on the one and on the other, so
-    /// walking is smooth however many frames are drawn to a tick.
+    /// walking is smooth however many frames are drawn to a tick. Which
+    /// way the eyes face is as of this very frame: the newest tick's
+    /// angles and what the mouse and the stick have done since.
     fn frame(&mut self, frame: &mut Frame) {
         if self.closed.is_some() {
             frame.close();
             return;
         }
-        let seen = self.seen_at(frame.alpha());
+        let turn = match self.controls.look {
+            Some(look) if self.playing() => look::asked(frame.input(), look, frame.since_tick()),
+            _ => [0.0; 2],
+        };
+        let seen = self.seen_at(frame.alpha(), turn);
         frame.look_from(seen.eye, seen.yaw, seen.pitch);
     }
 }
@@ -1470,8 +1472,7 @@ impl LocalGame {
             let joined = &mut local.joined;
             let player = Player::at(feet, &world.rules);
             joined.client = Client::new(player, world.step, ClientSettings::default());
-            joined.yaw = yaw.rem_euclid(TAU);
-            joined.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+            (joined.yaw, joined.pitch) = look::turned(yaw, pitch, [0.0; 2]);
             joined.start_looking = Some([joined.yaw, joined.pitch]);
         }
         Ok((local, feet.is_some()))
@@ -1575,6 +1576,8 @@ pub fn with_port(address: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_PI_2;
+
     use super::*;
 
     #[test]
@@ -1643,6 +1646,10 @@ mod tests {
             game.tick(input.tick(), 1.0 / 60.0);
             std::thread::sleep(Duration::from_millis(1));
             let after = game.joined.seen();
+            assert_eq!(
+                game.joined.before.is_some(),
+                game.joined.before == Some(before.eye)
+            );
             let moved = (after.eye[2] - before.eye[2]).abs();
             if game.joined.before.is_some() && moved > 0.01 {
                 walked = Some((before, after));
@@ -1673,33 +1680,147 @@ mod tests {
     }
 
     #[test]
-    fn a_view_turns_the_short_way_and_is_not_glided_to_a_new_place() {
-        let before = Seen {
-            eye: [0.0, 1.6, 0.0],
-            yaw: TAU - 0.1,
-            pitch: 0.2,
-        };
-        let after = Seen {
-            eye: [0.0, 1.6, -0.1],
-            yaw: 0.1,
-            pitch: 0.4,
-        };
-        let halfway = after.blended(&before, 0.5);
-        assert!(halfway.yaw.abs() < 1e-5, "{halfway:?}");
-        assert!((halfway.pitch - 0.3).abs() < 1e-5, "{halfway:?}");
-        assert!(!after.cut_from(&before));
-
+    fn eyes_put_somewhere_new_are_not_glided_there() {
+        assert!(!cut([0.0, 1.6, 0.0], [0.0, 1.6, -0.1]));
         // A respawn across the level, and a place that is not a number.
-        let respawned = Seen {
-            eye: [0.0, 1.6, -28.0],
-            ..after
-        };
-        assert!(respawned.cut_from(&before));
-        let nowhere = Seen {
-            eye: [f32::NAN, 1.6, 0.0],
-            ..after
-        };
-        assert!(nowhere.cut_from(&before));
+        assert!(cut([0.0, 1.6, 0.0], [0.0, 1.6, -28.0]));
+        assert!(cut([0.0, 1.6, 0.0], [f32::NAN, 1.6, 0.0]));
+    }
+
+    /// A game played alone, ticked until the player has been given a place
+    /// and is moved by what is pressed.
+    fn playing_alone() -> (LocalGame, lore_input::Input) {
+        let actions = ActionMap::default_fps();
+        let script = ScriptGame::from_source("", &actions);
+        let mut game = LocalGame::start(script, None, &actions, 60).unwrap();
+        let mut input = lore_input::Input::new(actions);
+        for _ in 0..300 {
+            if game.joined.playing() {
+                break;
+            }
+            game.tick(input.tick(), STEP);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(game.joined.playing(), "the player joins their own game");
+        (game, input)
+    }
+
+    const STEP: f32 = 1.0 / 60.0;
+
+    /// The view of a frame drawn `alpha` of the way to the next tick, with
+    /// what `input` holds that no tick has seen.
+    fn drawn(game: &mut LocalGame, input: &lore_input::Input, alpha: f32) -> crate::game::View {
+        let mut frame = Frame::between_ticks(input, alpha, STEP);
+        game.frame(&mut frame);
+        frame.view().unwrap()
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn the_view_follows_the_mouse_on_every_frame_without_waiting_for_a_tick() {
+        let (mut game, mut input) = playing_alone();
+        let (yaw, pitch) = (game.joined.yaw(), game.joined.pitch());
+
+        // Three frames with no tick between them: each has turned further.
+        let mut turned = 0.0;
+        for alpha in [0.2, 0.5, 0.8] {
+            input.move_mouse(40.0, 10.0);
+            turned += 40.0;
+            let view = drawn(&mut game, &input, alpha);
+            assert!(near(
+                view.yaw,
+                (yaw - turned * look::MOUSE_TURN).rem_euclid(TAU)
+            ));
+            assert!(near(view.pitch, pitch + turned / 4.0 * look::MOUSE_TURN));
+        }
+        // Drawing changed nothing the game's rules know.
+        assert_eq!((game.joined.yaw(), game.joined.pitch()), (yaw, pitch));
+
+        // The tick takes in the same movement: the picture does not jump,
+        // and nothing is turned twice.
+        let before = drawn(&mut game, &input, 1.0);
+        game.tick(input.tick(), STEP);
+        let after = drawn(&mut game, &input, 0.0);
+        assert!(near(after.yaw, before.yaw) && near(after.pitch, before.pitch));
+        assert_eq!(
+            (after.yaw, after.pitch),
+            (game.joined.yaw(), game.joined.pitch())
+        );
+    }
+
+    #[test]
+    fn the_view_follows_the_stick_by_how_long_it_was_held() {
+        use lore_input::{Stick, StickAxis};
+
+        let (mut game, mut input) = playing_alone();
+        let yaw = game.joined.yaw();
+        input.set_stick(Stick::RightStick, StickAxis::X, -1.0);
+
+        // Held hard left: a quarter of a tick on, a quarter of a tick's
+        // turn, and so on. The frame rate is not in it.
+        for alpha in [0.25, 0.5, 1.0] {
+            let view = drawn(&mut game, &input, alpha);
+            let expected = yaw + look::STICK_TURN * STEP * alpha;
+            assert!(near(view.yaw, expected.rem_euclid(TAU)), "{alpha}");
+        }
+        let before = drawn(&mut game, &input, 1.0);
+        game.tick(input.tick(), STEP);
+        let after = drawn(&mut game, &input, 0.0);
+        assert!(near(after.yaw, before.yaw));
+    }
+
+    #[test]
+    fn a_shot_goes_where_the_screen_centre_was_when_the_trigger_was_pressed() {
+        use lore_input::MouseButton;
+
+        let (mut game, mut input) = playing_alone();
+        // A flick and a click inside one tick.
+        input.move_mouse(-250.0, 120.0);
+        input.press(MouseButton::MouseLeft);
+        let on_screen = drawn(&mut game, &input, 0.9);
+
+        // The tick that sees the click asks the server for a shot along
+        // the view that was on the screen, not one from a tick earlier.
+        game.tick(input.tick(), STEP);
+        assert!(near(game.joined.yaw(), on_screen.yaw));
+        assert!(near(game.joined.pitch(), on_screen.pitch));
+
+        // And that is the direction the server fires along.
+        let id = game.joined.id().unwrap();
+        let mut fired = None;
+        for _ in 0..300 {
+            std::thread::sleep(Duration::from_millis(1));
+            game.tick(input.tick(), STEP);
+            let asked = game.hosted.server.input(id).unwrap_or_default();
+            if asked.fire {
+                fired = Some(asked);
+                break;
+            }
+        }
+        let fired = fired.expect("the server hears of the click");
+        // As closely as a packet carries an angle.
+        assert!(
+            (fired.movement.yaw - on_screen.yaw).abs() < 1e-3,
+            "{fired:?}"
+        );
+        assert!((fired.pitch - on_screen.pitch).abs() < 1e-3, "{fired:?}");
+    }
+
+    #[test]
+    fn nobody_looks_around_before_they_are_in_the_game() {
+        let actions = ActionMap::default_fps();
+        let script = ScriptGame::from_source("", &actions);
+        let mut game = LocalGame::start(script, None, &actions, 60).unwrap();
+        let mut input = lore_input::Input::new(actions);
+        assert!(!game.joined.playing());
+
+        // A tick would not turn the view yet, so a frame does not either.
+        let still = drawn(&mut game, &input, 0.5);
+        input.move_mouse(300.0, 0.0);
+        assert_eq!(drawn(&mut game, &input, 0.5), still);
     }
 
     /// A marker called `name` at `position`, turned `yaw` radians to the left.
