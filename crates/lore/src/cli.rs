@@ -5,10 +5,12 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
-use lore_input::ActionMap;
+use lore_input::{ActionMap, Input};
 use lore_script::{ENTRY_SCRIPT, OpenError};
 
+use crate::game::Game;
 use crate::online::{DEFAULT_PORT, FoundServer, HostedGame};
+use crate::press;
 use crate::script_game::ScriptGame;
 use crate::server::{ServerConfig, StopSignal, serve};
 
@@ -51,6 +53,118 @@ pub fn open_game(folder: &Path, actions: &ActionMap, command: &str) -> Result<Sc
         OpenError::Missing { .. } => no_game_in(folder, command),
         other @ OpenError::Unreadable { .. } => other.to_string(),
     })
+}
+
+/// What [`paced`] found by playing a game again with pictures drawn at
+/// other paces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Paced {
+    /// The game's rules did the same on every tick, however often a
+    /// picture was drawn in between.
+    Same,
+    /// The rules did something else once the pace of the pictures changed,
+    /// first on this tick, counted from 1.
+    Differs {
+        /// The first tick that differs.
+        tick: usize,
+    },
+    /// The script made a mistake that the caller's own run of it did not
+    /// reach, such as one in the seventh picture drawn after a tick. This
+    /// is the error, as it would have been logged.
+    Mistake(String),
+    /// The rules did something else when the game was played twice in
+    /// exactly the same way, so the pace could not be judged.
+    NotRepeatable {
+        /// The first tick that differs.
+        tick: usize,
+    },
+}
+
+/// How many pictures are drawn after each tick in turn when a game is
+/// played at an uneven pace: as a slow computer draws them (none between
+/// two ticks) and as a fast one does (several).
+const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
+
+/// Plays the start of a game four times with no window and says whether
+/// its rules depend on how often a picture is drawn: with one picture
+/// after every tick, the same again, with pictures at an uneven pace, and
+/// once more as at first. `open` opens the game afresh each time, and
+/// `None` from it gives `None`.
+///
+/// Each time the game runs a second with nothing pressed, and then every
+/// action in `actions` is pressed in turn ([`press::every_action`]). What
+/// the rules did is compared tick by tick
+/// ([`ScriptHost::rules_fingerprint`](lore_script::ScriptHost::rules_fingerprint)):
+/// the lines they printed and the calls that change the game. Nothing is
+/// logged meanwhile: the game's own lines were already printed by the run
+/// that looked for mistakes.
+///
+/// The uneven run is blamed only when the three even ones agree, the one
+/// after it included. Dice (`math.random`) are seeded from the computer's
+/// clock, and two runs started close together can be dealt the same ones.
+pub fn paced(mut open: impl FnMut() -> Option<ScriptGame>, actions: &ActionMap) -> Option<Paced> {
+    /// Makes the log as loud again as it was, however this ends.
+    struct Quiet(log::LevelFilter);
+    impl Drop for Quiet {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let quiet = Quiet(log::max_level());
+    log::set_max_level(log::LevelFilter::Off);
+    let mut runs = Vec::with_capacity(4);
+    for pictures in [&[1][..], &[1], &UNEVEN_PICTURES, &[1]] {
+        let mut game = open()?;
+        runs.push(rules_by_tick(&mut game, actions, pictures));
+        // Its line in the log was kept quiet with everything else.
+        if let Some(error) = game.host().last_error() {
+            return Some(Paced::Mistake(error.to_string()));
+        }
+    }
+    drop(quiet);
+    let [once, again, uneven, last] = <[Vec<u64>; 4]>::try_from(runs).ok()?;
+    let differs = |other: &[u64]| {
+        once.iter()
+            .zip(other)
+            .position(|(a, b)| a != b)
+            .map(|tick| tick + 1)
+    };
+    Some(
+        if let Some(tick) = differs(&again).or_else(|| differs(&last)) {
+            Paced::NotRepeatable { tick }
+        } else if let Some(tick) = differs(&uneven) {
+            Paced::Differs { tick }
+        } else {
+            Paced::Same
+        },
+    )
+}
+
+/// What the rules of `game` had done after each tick of its first second
+/// and of every action being pressed, with as many pictures drawn after
+/// each tick as `pictures` says, taken round and round.
+fn rules_by_tick(game: &mut ScriptGame, actions: &ActionMap, pictures: &[u32]) -> Vec<u64> {
+    /// One second of game time.
+    const TICKS: u16 = 60;
+    let step = 1.0 / f32::from(TICKS);
+    let mut input = Input::new(actions.clone());
+    let mut done = Vec::new();
+    let mut tick = |game: &mut ScriptGame, frame: &lore_input::InputFrame| {
+        game.tick(frame, step);
+        let drawn = pictures.get(done.len() % pictures.len().max(1));
+        let drawn = drawn.copied().unwrap_or(0);
+        for picture in 1..=drawn {
+            // Spread between the two ticks, as frames are.
+            #[allow(clippy::cast_precision_loss)]
+            game.host_mut().draw(picture as f32 / (drawn + 1) as f32);
+        }
+        done.push(game.host().rules_fingerprint());
+    };
+    for _ in 0..TICKS {
+        tick(game, input.tick());
+    }
+    press::every_action(&mut input, |_, frame| tick(game, frame));
+    done
 }
 
 /// Checks that the game in `folder` is there, without running its script,
@@ -660,6 +774,107 @@ fn long_time(time: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What [`paced`] says of a game with this script.
+    fn paced_with(script: &str) -> Paced {
+        let actions = ActionMap::default_fps();
+        let found = paced(
+            || {
+                let game = ScriptGame::from_source(script, &actions);
+                assert!(game.host().last_error().is_none());
+                Some(game)
+            },
+            &actions,
+        );
+        found.unwrap()
+    }
+
+    #[test]
+    fn rules_that_only_ticks_reach_are_the_same_at_any_pace() {
+        let script = r#"
+            local frames, ticks = 0, 0
+            local shown = game.tween(0, 1, 0.5)
+            game.every(0.1, function() print("beat", game.time()) end)
+            game.onTick(function()
+                ticks += 1
+                if game.input.justPressed("jump") then print("jump on", ticks) end
+            end)
+            game.onDraw(function()
+                frames += 1
+                print("picture", frames, shown.value, game.time())
+                game.input.rumble(0.1, 0.1, 0.1)
+            end)
+        "#;
+        assert_eq!(paced_with(script), Paced::Same);
+        assert_eq!(paced_with(""), Paced::Same);
+    }
+
+    #[test]
+    fn a_rule_that_reads_what_a_picture_set_is_found_with_its_tick() {
+        // A beat prints how many pictures there have been.
+        let script = r#"
+            local frames = 0
+            game.onDraw(function() frames += 1 end)
+            game.every(0.05, function() print("pictures so far", frames) end)
+        "#;
+        // The first beat is on the fourth tick, after three ticks: three
+        // pictures at one a tick, four at the uneven pace.
+        assert_eq!(paced_with(script), Paced::Differs { tick: 4 });
+
+        // A rule may wait for something only a picture counts.
+        let script = r#"
+            local frames = 0
+            game.onDraw(function() frames += 1 end)
+            game.onTick(function()
+                if frames == 40 then game.after(1, function() end) end
+            end)
+        "#;
+        assert!(matches!(paced_with(script), Paced::Differs { .. }));
+    }
+
+    #[test]
+    fn rules_that_differ_from_one_run_to_the_next_are_not_blamed_on_the_pace() {
+        // A game that is not the same game every time it is opened, as one
+        // that rolls dice is: here the run named differs from the others.
+        let judged = |odd_one_out: usize| {
+            let actions = ActionMap::default_fps();
+            let mut opened = 0;
+            let open = || {
+                opened += 1;
+                let dice = if opened == odd_one_out { 2 } else { 5 };
+                let script = format!("game.every(0.1, function() print({dice}) end)");
+                Some(ScriptGame::from_source(script, &actions))
+            };
+            paced(open, &actions).unwrap()
+        };
+        assert_eq!(judged(0), Paced::Same);
+        assert_eq!(judged(2), Paced::NotRepeatable { tick: 7 });
+        // The run after the uneven one is what tells the two apart.
+        assert_eq!(judged(4), Paced::NotRepeatable { tick: 7 });
+        assert_eq!(judged(3), Paced::Differs { tick: 7 });
+    }
+
+    #[test]
+    fn a_mistake_that_only_more_pictures_reach_is_handed_back_and_not_called_a_pace() {
+        let script = r#"
+            local frames = 0
+            game.onDraw(function()
+                frames += 1
+                if frames > 150 then local nothing = nil; nothing.x = 1 end
+            end)
+        "#;
+        let actions = ActionMap::default_fps();
+        let open = || Some(ScriptGame::from_source(script, &actions));
+        let Some(Paced::Mistake(error)) = paced(open, &actions) else {
+            panic!("the mistake is found");
+        };
+        assert!(error.contains("line 5"), "{error}");
+    }
+
+    #[test]
+    fn a_game_that_cannot_be_opened_again_is_not_judged() {
+        assert_eq!(paced(|| None, &ActionMap::default_fps()), None);
+    }
 
     #[test]
     fn long_times_leave_out_leading_zero_parts() {

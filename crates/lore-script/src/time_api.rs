@@ -50,9 +50,55 @@ pub(crate) struct Clock {
     /// While `game.onDraw` functions run: how far the picture is from the
     /// tick before last (0) to the last one (1).
     drawing: Cell<Option<f64>>,
+    /// Everything the script's rules have done so far, boiled down to one
+    /// number: see [`note`](Self::note).
+    done: Cell<u64>,
 }
 
+/// What [`Clock::note`] multiplies by: the FNV-1a hash's prime.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 impl Clock {
+    /// Notes that the script's rules did `what` (printed a line, called a
+    /// function that changes the game) on this tick. What is done while a
+    /// picture is drawn is not noted: it is shown, and is no rule.
+    ///
+    /// Two runs of a game that are given the same input have the same
+    /// [`done`](Self::done) after every tick, unless its rules depend on
+    /// something they should not, such as how often a picture is drawn.
+    pub fn note(&self, what: &str) {
+        if self.is_drawing() {
+            return;
+        }
+        let mut hash = self.done.get();
+        let mut mix = |byte: u8| hash = (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME);
+        self.ticks
+            .get()
+            .to_le_bytes()
+            .into_iter()
+            .for_each(&mut mix);
+        // Where a table or a function is in memory ("table: 0x55d0c8a1")
+        // is not the game's doing and differs from run to run, so the
+        // digits of an address are left out.
+        let (mut before, mut in_address) = (0, false);
+        for &byte in what.as_bytes() {
+            if in_address && byte.is_ascii_hexdigit() {
+                continue;
+            }
+            in_address = before == b'0' && byte == b'x';
+            before = byte;
+            mix(byte);
+        }
+        // Keeps "ab" then "c" apart from "a" then "bc".
+        mix(0xff);
+        self.done.set(hash);
+    }
+
+    /// One number for everything [`note`](Self::note) was told, in order.
+    pub fn done(&self) -> u64 {
+        self.done.get()
+    }
+
     /// The tick being run, counted from 0, or about to be.
     pub fn tick(&self) -> u64 {
         self.ticks.get()
@@ -181,6 +227,7 @@ impl Timer {
 /// so a rule run from there would make the game differ between them.
 pub(crate) fn rules_only(lua: &Lua, shared: &Shared, function: &str) -> mlua::Result<()> {
     if !shared.clock.is_drawing() {
+        shared.clock.note(function);
         return Ok(());
     }
     Err(fail(
@@ -549,6 +596,40 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_rules_did_is_one_number_that_leaves_out_pictures_and_addresses() {
+        let done = |notes: &[&str]| {
+            let clock = clock_at(3, 1.0 / 60.0);
+            notes.iter().for_each(|note| clock.note(note));
+            clock.done()
+        };
+        assert_eq!(done(&[]), 0);
+        assert_ne!(done(&["game.after"]), 0);
+        assert_eq!(done(&["a", "b"]), done(&["a", "b"]));
+        assert_ne!(done(&["a", "b"]), done(&["b", "a"]));
+        assert_ne!(done(&["ab", "c"]), done(&["a", "bc"]));
+        // The same thing done on another tick is not the same game.
+        let later = clock_at(4, 1.0 / 60.0);
+        later.note("a");
+        assert_ne!(later.done(), done(&["a"]));
+
+        // A table printed twice is in two places in memory.
+        assert_eq!(
+            done(&["it is table: 0x000055d0c8a1f3b0 now"]),
+            done(&["it is table: 0x00007f11aa now"])
+        );
+        assert_ne!(done(&["table: 0x55d0"]), done(&["function: 0x55d0"]));
+        assert_ne!(done(&["10 x 20"]), done(&["10 x 30"]));
+
+        // What is done while a picture is drawn is not a rule.
+        let clock = clock_at(3, 1.0 / 60.0);
+        clock.note("a");
+        clock.set_drawing(Some(0.5));
+        clock.note("b");
+        clock.set_drawing(None);
+        assert_eq!(clock.done(), done(&["a"]));
+    }
 
     fn clock_at(ticks: u64, step: f32) -> Clock {
         let clock = Clock::default();

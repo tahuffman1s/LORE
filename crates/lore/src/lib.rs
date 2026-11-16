@@ -48,6 +48,8 @@ pub mod online;
 mod pace;
 #[cfg(feature = "cli")]
 pub mod package;
+#[cfg(test)]
+mod playback;
 pub mod player;
 pub mod press;
 pub mod scaffold;

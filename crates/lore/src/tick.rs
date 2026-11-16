@@ -2,6 +2,10 @@
 
 use std::time::{Duration, Instant};
 
+use lore_input::Input;
+
+use crate::game::Game;
+
 /// The longest stretch of real time one frame may account for.
 ///
 /// After a stall (a breakpoint, a window drag on Windows, a suspended laptop)
@@ -97,6 +101,34 @@ impl TickClock {
     pub fn until_next_tick(&self) -> Duration {
         self.step.saturating_sub(self.banked)
     }
+}
+
+/// Runs the ticks of `game` that are due once `elapsed` more real time has
+/// passed, each with what `input` has gathered since the tick before it.
+///
+/// The window's loop ticks its game through this, and so do the tests that
+/// play a game with no window at other frame rates, so what they prove is
+/// true of the window. Real time only decides how many ticks run: each is told the same
+/// fixed step, so no frame time reaches the game's rules.
+///
+/// `after_tick` is called once each tick has run. The window has nothing
+/// to do there, because what a player does arrives between frames; a
+/// recording played back hands over the next tick's input.
+#[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
+pub(crate) fn run_due(
+    clock: &mut TickClock,
+    elapsed: Duration,
+    input: &mut Input,
+    game: &mut impl Game,
+    mut after_tick: impl FnMut(&mut Input),
+) -> Due {
+    let step = clock.step().as_secs_f32();
+    let due = clock.advance_counting(elapsed);
+    for _ in 0..due.ticks {
+        game.tick(input.tick(), step);
+        after_tick(input);
+    }
+    due
 }
 
 /// Says in the log that ticks were skipped: once for a hitch, and not again

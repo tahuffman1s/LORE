@@ -30,7 +30,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command. Mostly built.
 
 One player, offline, in first or third person: move, look, use things, fight, hear and pause.
 
-- Test: the same inputs give the same match at 30, 60, 144 and 1000 frames a second (#12)
 - Menus in a running game: menu actions, a built-in pause and settings menu (#13)
 - Scripts build the HUD and menus (#14)
 - Menus longer than the screen scroll, and settings show which button does what (#15)
@@ -72,6 +71,7 @@ One player, offline, in first or third person: move, look, use things, fight, he
 - Carry more than one weapon and switch between them (#233)
 - Weapons: recoil patterns a player can learn (a per-shot table) (#50) — shooter
 - Weapons: hit zones from the character's skeleton, and bullets through thin cover (#51) — shooter
+- Dice in scripts are the game's own: `math.random` is the same in a replay and carries on through a save (#240)
 
 ## M2 — People and creatures
 

@@ -557,6 +557,61 @@ fn the_rules_play_out_the_same_however_many_pictures_are_drawn() {
     }
 }
 
+/// What the rules of `script` had done after each of 90 ticks, with as
+/// many pictures drawn after each as `pictures` says, taken in turn.
+fn fingerprints(script: &str, pictures: &[u32]) -> Vec<u64> {
+    let mut host = game(script);
+    let mut seen = Vec::new();
+    for tick in 0..90 {
+        run(&mut host, 1, 60);
+        for _ in 0..pictures[tick % pictures.len()] {
+            host.draw(0.5);
+        }
+        seen.push(host.rules_fingerprint());
+    }
+    printed();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    seen
+}
+
+#[test]
+fn what_the_rules_did_has_one_number_that_pictures_do_not_change() {
+    let script = r#"
+        local drawn = 0
+        local bar = game.tween(0, 10, 1)
+        game.onDraw(function()
+            drawn += 1
+            print("picture", drawn, bar.value)
+            game.input.rumble(0.1, 0.1, 0.1)
+        end)
+        game.every(0.5, function() print("beat", game.time(), {}) end)
+        game.onTick(function()
+            if game.time() == 1 then bar:to(0, 0.5) end
+        end)
+    "#;
+    let alone = fingerprints(script, &[0]);
+    // It moves when the rules do something and not otherwise: a beat is
+    // printed on the ticks after half a second and after a second.
+    assert_eq!(alone[0], alone[29]);
+    assert_ne!(alone[29], alone[30]);
+    assert_eq!(alone[30], alone[59]);
+    assert_ne!(alone[59], alone[60]);
+    assert_eq!(alone[60], alone[89]);
+    // Pictures change nothing, and neither does a new run, in which the
+    // printed table is somewhere else in memory.
+    assert_eq!(fingerprints(script, &[1]), alone);
+    assert_eq!(fingerprints(script, &[0, 5, 2, 0, 1]), alone);
+
+    // A rule that reads what a picture set is told apart.
+    let script = r#"
+        local drawn = 0
+        game.onDraw(function() drawn += 1 end)
+        game.every(0.5, function() print("pictures so far", drawn) end)
+    "#;
+    assert_eq!(fingerprints(script, &[1]), fingerprints(script, &[1]));
+    assert_ne!(fingerprints(script, &[1]), fingerprints(script, &[2]));
+}
+
 #[test]
 fn the_example_in_the_docs_does_what_they_say() {
     // The script under "Time" in site/docs/index.html.

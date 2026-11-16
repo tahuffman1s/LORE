@@ -311,7 +311,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
-    globals.set("print", lua.create_function(print)?)?;
+    let clock = Rc::clone(&shared.clock);
+    globals.set(
+        "print",
+        lua.create_function(move |_, values: Variadic<Value>| {
+            let line = printed(&values)?;
+            clock.note(&line);
+            log::info!(target: "script", "{line}");
+            Ok(())
+        })?,
+    )?;
     modules::install(lua, shared)?;
     Ok(())
 }
@@ -503,8 +512,8 @@ pub(crate) fn strict(
     Ok(())
 }
 
-/// `print(...)`: writes to the engine's log, like a console line.
-fn print(_: &Lua, values: Variadic<Value>) -> mlua::Result<()> {
+/// The line `print(...)` writes to the engine's log, like a console line.
+fn printed(values: &Variadic<Value>) -> mlua::Result<String> {
     let mut line = String::new();
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
@@ -512,8 +521,7 @@ fn print(_: &Lua, values: Variadic<Value>) -> mlua::Result<()> {
         }
         line.push_str(&value.to_string()?);
     }
-    log::info!(target: "script", "{line}");
-    Ok(())
+    Ok(line)
 }
 
 #[cfg(test)]

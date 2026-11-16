@@ -441,6 +441,50 @@ fn check_draws_a_picture_and_says_which_timers_it_did_not_wait_for() {
 }
 
 #[test]
+fn check_plays_the_game_at_other_paces_and_fails_rules_that_depend_on_the_frame_rate() {
+    let folder = scratch("check-paces");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    let script = folder.join("game").join("main.luau");
+
+    // A new game's rules are the same however often a picture is drawn,
+    // and what it prints is printed once, not once for each time played.
+    std::fs::write(
+        &script,
+        "game.onStart(function() print(\"Started once\") end)\n\
+         game.onDraw(function() end)\n",
+    )
+    .unwrap();
+    let output = lore(&folder, &["check", "game"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("nothing they did there depends on the frame rate"),
+        "{said}"
+    );
+    assert_eq!(stderr(&output).matches("Started once").count(), 1);
+
+    // A rule that reads what a picture set.
+    std::fs::write(
+        &script,
+        "local frames = 0\n\
+         game.onDraw(function() frames += 1 end)\n\
+         game.onTick(function()\n    \
+             if frames > 30 then game.after(1, function() end) end\n\
+         end)\n",
+    )
+    .unwrap();
+    let output = lore(&folder, &["check", "game"]);
+    assert_eq!(output.status.code(), Some(1));
+    let said = stderr(&output);
+    assert!(
+        said.contains("The rules in main.luau depend on how often a picture is drawn"),
+        "{said}"
+    );
+    assert!(said.contains("into game.onTick"), "{said}");
+    assert!(said.contains("run `lore check` again"), "{said}");
+}
+
+#[test]
 fn check_presses_every_action_of_a_new_game_and_says_so() {
     let folder = scratch("check-press");
     assert!(lore(&folder, &["new", "game"]).status.success());
