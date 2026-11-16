@@ -169,6 +169,9 @@ declare extern type Tween with
     function to(self, target: number, seconds: number): ()
 end
 
+--- Where on the screen a piece of the HUD is pinned.
+type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
+
 --- Text on the HUD: what `game.hud.text` gives. Keep it to change it later.
 --- Example: local ammo = game.hud.text("30 / 90", { at = "bottom right" })
 declare extern type HudText with
@@ -189,6 +192,13 @@ declare extern type HudText with
     --- Example: ammo.visible = player.weapon ~= nil
     visible: boolean
 
+    --- How far it sits right of and below where it is pinned, in pixels on
+    --- a screen 1080 high (below 0 is left or up). Set them to move it; in
+    --- `game.onDraw` a tween moves it smoothly.
+    --- Example: ammo.down = slide.value
+    right: number
+    down: number
+
     --- Takes it off the HUD for good. To hide it for a while, set
     --- `visible` instead.
     --- Example: ammo:remove()
@@ -199,7 +209,8 @@ end
 --- Example: local health = game.hud.bar(1, { at = "bottom left", color = "red" })
 declare extern type HudBar with
     --- How full the bar is, from 0 (empty) to 1 (full). A number outside
-    --- that is brought into it.
+    --- that is brought into it, so 70 is a full bar: for 70 health out of
+    --- 100, write 70 / 100.
     --- Example: health.value = 70 / 100
     value: number
 
@@ -210,6 +221,13 @@ declare extern type HudBar with
     --- False hides it until it is set to true again.
     --- Example: health.visible = false
     visible: boolean
+
+    --- How far it sits right of and below where it is pinned, in pixels on
+    --- a screen 1080 high (below 0 is left or up). Set them to move it; in
+    --- `game.onDraw` a tween moves it smoothly.
+    --- Example: health.down = slide.value
+    right: number
+    down: number
 
     --- Takes it off the HUD for good.
     --- Example: health:remove()
@@ -227,6 +245,13 @@ declare extern type HudBox with
     --- False hides it until it is set to true again.
     --- Example: dot.visible = false
     visible: boolean
+
+    --- How far it sits right of and below where it is pinned, in pixels on
+    --- a screen 1080 high (below 0 is left or up). Set them to move it; in
+    --- `game.onDraw` a tween moves it smoothly.
+    --- Example: dot.down = slide.value
+    right: number
+    down: number
 
     --- Takes it off the HUD for good.
     --- Example: dot:remove()
@@ -610,7 +635,9 @@ declare game: {
     ---     local score = game.hud.text("0", { at = "top" })
     ---     game.onTick(function() score.text = points end)
     --- Pieces made at the top of the file are made again when the script is
-    --- saved, so the HUD follows the file as you edit it.
+    --- saved, so the HUD follows the file as you edit it. For a list that
+    --- grows and shrinks, make as many pieces as it can have and hide the
+    --- ones not in use; a HUD holds up to 256 pieces.
     ---
     --- Every piece takes these options, all of which can be left out:
     ---   at: where on the screen it is pinned: "top left" (the default),
@@ -619,7 +646,8 @@ declare game: {
     ---     stays in that corner on every screen.
     ---   right, down: how far to move it from there, in pixels on a screen
     ---     1080 high (below 0 moves it left or up). On a bigger or smaller
-    ---     screen everything is scaled to match.
+    ---     screen everything is scaled to match. These two can be changed
+    ---     later: `ammo.down = -40`.
     ---   color: a name ("white", the default, "black", "gray", "red",
     ---     "orange", "yellow", "green", "blue", "purple", "pink") or a hex
     ---     code such as "#ff8800" ("#ff880080" is half see-through).
@@ -636,20 +664,20 @@ declare game: {
         ---     28 if left out; never drawn smaller than 24, so it can be read.
         --- Example: local ammo = game.hud.text("30 / 90", { at = "bottom right" })
         --- Example: local title = game.hud.text("Welcome", { at = "top", down = 40, size = 64, color = "yellow" })
-        text: (text: string | number, options: { at: string?, right: number?, down: number?, size: number?, color: string? }?) -> HudText,
+        text: (text: string | number, options: { at: HudPlace?, right: number?, down: number?, size: number?, color: string? }?) -> HudText,
 
         --- Puts a bar on the HUD that is `value` full, from 0 (empty) to 1
         --- (full). Its own options:
         ---   width, height: its size when full, in pixels on a screen 1080
         ---     high. 300 by 24 if left out.
         --- Example: local health = game.hud.bar(1, { at = "bottom left", color = "red" })
-        bar: (value: number, options: { at: string?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBar,
+        bar: (value: number, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBar,
 
         --- Puts a plain box on the HUD. Its own options:
         ---   width, height: its size in pixels on a screen 1080 high. 100
         ---     by 100 if left out.
         --- Example: local dot = game.hud.box({ at = "center", width = 6, height = 6 })
-        box: (options: { at: string?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBox,
+        box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBox,
     },
 
     --- What the player is doing right now, by action name. An action works

@@ -556,7 +556,9 @@ mod tests {
         let mut inside: Vec<&str> = Vec::new();
         let mut names = Vec::new();
         for line in crate::TYPE_DEFINITIONS.lines().map(str::trim) {
-            if line.is_empty() || line.starts_with("--") {
+            // A name for a type (`type HudPlace = ...`) is not part of
+            // the API a script calls.
+            if line.is_empty() || line.starts_with("--") || line.starts_with("type ") {
                 continue;
             }
             if line == "end" || line.starts_with('}') {

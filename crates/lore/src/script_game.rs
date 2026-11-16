@@ -370,7 +370,10 @@ mod tests {
                 end
                 if ticks == 5 then ammo:remove() end
             end)
-            game.onDraw(function() health.value = 0.25 end)
+            game.onDraw(function()
+                health.value = 0.25
+                health.right = 100
+            end)
         "#;
         let mut game = ScriptGame::from_source(script, &ActionMap::default());
         // Before the first tick the HUD is as the file made it.
@@ -386,7 +389,9 @@ mod tests {
         let step = 1.0 / 60.0;
         game.tick(&InputFrame::default(), step);
         // What `game.onDraw` changes is in the frame it ran for.
-        assert_eq!(boxes(&mut game)[1].1, [100.0, 20.0]);
+        let moved = boxes(&mut game)[1];
+        assert_eq!(moved.1, [100.0, 20.0]);
+        assert_eq!(moved.0, [196.0, 1080.0 - 54.0 - 20.0]);
         assert_eq!(words(&mut game), ["29 / 90"]);
         game.tick(&InputFrame::default(), step);
         assert_eq!(words(&mut game), ["28 / 90"]);

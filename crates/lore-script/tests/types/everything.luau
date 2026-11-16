@@ -241,6 +241,10 @@ game.onDraw(function()
     ammo.visible = not ammo.visible
     dot.visible = health.visible
     dot.color = "green"
+    dot.right = shown.value
+    dot.down = dot.right + health.down - ammo.right
+    health.right = 0
+    ammo.down = 0
     print(words)
 end)
 

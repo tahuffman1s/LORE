@@ -250,6 +250,18 @@ fn a_hidden_hud_piece_is_not_drawn_and_comes_back_as_it_was() {
     // Only HUD pieces are hidden this way.
     let (mut menu, ids) = buttons(&["Resume"]);
     assert!(menu.set_shown(ids[0], false).is_err());
+    assert!(menu.set_offset(ids[0], [1.0, 1.0]).is_err());
+}
+
+#[test]
+fn a_hud_piece_can_be_moved_after_it_is_made() {
+    let mut ui = Ui::default();
+    let dot = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [10.0, 10.0], Color::WHITE);
+    idle(&mut ui);
+    let before = rects(&ui)[0].0;
+    ui.set_offset(dot, [30.0, -5.0]).unwrap();
+    idle(&mut ui);
+    assert_eq!(rects(&ui)[0].0, [before[0] + 30.0, before[1] - 5.0]);
 }
 
 // ---- Moving between widgets ------------------------------------------------

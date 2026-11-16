@@ -86,8 +86,8 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> WidgetId {
     widget
 }
 
-/// Makes `widget` show what `piece` now holds. Where a piece is and how
-/// big it is never change, so only its values are copied.
+/// Makes `widget` show what `piece` now holds. Where a piece is pinned
+/// and how big it is never change, so only the rest is copied.
 fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
     // `widget` was made from this piece by `add`, so it is of the kind
     // each of these takes and none of them can fail.
@@ -97,5 +97,6 @@ fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
         HudShape::Box { .. } => Ok(()),
     };
     let _ = ui.set_color(widget, piece.color);
+    let _ = ui.set_offset(widget, piece.offset);
     let _ = ui.set_shown(widget, piece.visible);
 }

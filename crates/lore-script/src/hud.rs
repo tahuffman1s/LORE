@@ -27,9 +27,9 @@ pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box"];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
-pub(crate) const TEXT_FIELDS: &[&str] = &["text", "color", "visible"];
-pub(crate) const BAR_FIELDS: &[&str] = &["value", "color", "visible"];
-pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible"];
+pub(crate) const TEXT_FIELDS: &[&str] = &["text", "color", "visible", "right", "down"];
+pub(crate) const BAR_FIELDS: &[&str] = &["value", "color", "visible", "right", "down"];
+pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down"];
 #[cfg(test)]
 pub(crate) const PIECE_METHODS: &[&str] = &["remove"];
 
@@ -347,11 +347,12 @@ fn no_such_field(lua: &Lua, kind: Kind, key: &str) -> mlua::Error {
                 (Kind::Text | Kind::Box, "value") => message.push_str(
                     " Only a bar has a value: game.hud.bar(0.5, { at = \"bottom left\" })",
                 ),
-                (_, "at" | "right" | "down" | "size" | "width" | "height") => {
+                (_, "at" | "size" | "width" | "height") => {
                     let _ = write!(
                         message,
-                        " Where a piece is and how big it is are chosen when it is made: \
-                         remove this one and make another. {}",
+                        " Where a piece is pinned and how big it is are chosen when it \
+                         is made: remove this one and make another, or move it with \
+                         `right` and `down`. {}",
                         kind.example()
                     );
                 }
@@ -411,6 +412,8 @@ impl UserData for PieceRef {
                         }
                         ("color", _) => lua.create_string(&entry.color).map(Value::String),
                         ("visible", _) => Ok(Value::Boolean(entry.piece.visible)),
+                        ("right", _) => Ok(Value::Number(f64::from(entry.piece.offset[0]))),
+                        ("down", _) => Ok(Value::Number(f64::from(entry.piece.offset[1]))),
                         _ => Ok(Value::Nil),
                     };
                     (value, false)
@@ -486,6 +489,15 @@ impl UserData for PieceRef {
                             ((), changed)
                         })
                     }
+                    "right" | "down" => {
+                        let new = distance(lua, kind, &key, &value)?;
+                        let axis = usize::from(key == "down");
+                        shared.hud.with(id, |entry| {
+                            let changed = entry.piece.offset[axis] != new;
+                            entry.piece.offset[axis] = new;
+                            ((), changed)
+                        })
+                    }
                     _ => return Err(no_such_field(lua, kind, &key)),
                 };
                 set.ok_or_else(|| removed(lua, kind))
@@ -529,6 +541,34 @@ fn text_of(lua: &Lua, what: &str, value: &Value, example: &str) -> mlua::Result<
             ),
         )),
     }
+}
+
+/// How far a piece is moved right or down from where it is pinned, for
+/// setting `right` or `down` on a piece that is already made.
+fn distance(lua: &Lua, kind: Kind, key: &str, value: &Value) -> mlua::Result<f32> {
+    // A place on the screen needs no more precision than an f32 holds.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let number = match value {
+        Value::Number(number) => *number as f32,
+        Value::Integer(number) => *number as f32,
+        _ => f32::NAN,
+    };
+    if number.is_finite() {
+        return Ok(number.clamp(-FURTHEST, FURTHEST));
+    }
+    Err(fail(
+        lua,
+        format!(
+            "{}'s `{key}` needs a number, in pixels on a screen 1080 high, but it was \
+             given {}. Write it like this: {}.{key} = -40",
+            capitalised(kind.name()),
+            match value {
+                Value::Number(_) => "a number that is infinite or not a number",
+                other => describe(other),
+            },
+            kind.word()
+        ),
+    ))
 }
 
 /// How full a bar is, brought into 0 to 1.

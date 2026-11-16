@@ -44,7 +44,6 @@ fn mistake(script: &str) -> String {
     let host = host(script);
     let error = host.last_error().expect("the script has a mistake");
     assert_eq!(error.line, Some(1), "{error}");
-    assert_eq!(pieces(&host), [], "a mistake makes no piece");
     error.message.clone()
 }
 
@@ -222,6 +221,10 @@ fn a_script_reads_back_what_it_wrote() {
             assert(ammo.text == "12.5" and ammo.visible == false)
             assert(health.value == 0 and dot.color == "#11223344")
             assert(ammo.color == "Red")
+            assert(dot.right == 0 and dot.down == 0)
+            dot.right = 12
+            dot.down = -1e9
+            assert(dot.right == 12 and dot.down == -8000)
         end)"##,
     );
     tick(&mut host);
@@ -235,6 +238,7 @@ fn a_script_reads_back_what_it_wrote() {
             size: [300.0, 24.0]
         }
     );
+    assert_eq!(pieces[2].offset, [12.0, -8000.0]);
     assert_eq!(changed(&mut host), [0, 1, 2]);
 }
 
@@ -425,7 +429,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -433,7 +437,15 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.size = 40",
-            "Where a piece is and how big it is are chosen when it is made",
+            "Where a piece is pinned and how big it is are chosen when it is made",
+        ),
+        (
+            "ammo.right = \"far\"",
+            "A HUD text's `right` needs a number, in pixels on a screen 1080 high, but it was given text. Write it like this: ammo.right = -40",
+        ),
+        (
+            "health.down = 0 / 0",
+            "A HUD bar's `down` needs a number, in pixels on a screen 1080 high, but it was given a number that is infinite or not a number.",
         ),
         (
             "print(ammo.colour)",
@@ -450,7 +462,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",

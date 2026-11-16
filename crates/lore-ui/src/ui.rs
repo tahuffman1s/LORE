@@ -402,6 +402,28 @@ impl Ui {
         }
     }
 
+    /// Moves a HUD text, bar or rectangle: `offset` is how far it sits
+    /// from where it is pinned, `[right, down]` in pixels on a screen
+    /// 1080 high.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD piece.
+    pub fn set_offset(&mut self, widget: WidgetId, new: [f32; 2]) -> Result<(), UiError> {
+        match &mut self.node(widget)?.kind {
+            Kind::HudText { offset, .. }
+            | Kind::HudBar { offset, .. }
+            | Kind::HudRect { offset, .. } => {
+                *offset = new;
+                Ok(())
+            }
+            other => Err(UiError::WrongKind {
+                expected: "HUD piece",
+                found: other.name(),
+            }),
+        }
+    }
+
     /// Shows a HUD text, bar or rectangle, or hides it: a hidden piece
     /// keeps its place and its values and is not drawn.
     ///
