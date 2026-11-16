@@ -311,36 +311,63 @@ fn a_misspelled_command_suggests_the_right_one() {
 }
 
 #[test]
-fn check_plays_a_pretend_match_through_the_team_deathmatch_example() {
-    let folder = scratch("check-mode");
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/team-deathmatch");
+fn check_brings_in_a_pretend_player_who_shoots_dies_and_leaves() {
+    let folder = scratch("check-player");
+    let script = [
+        "game.onPlayerJoin(function(player) print(player.name .. \" joined.\") end)",
+        "game.onSpawn(function(player) print(player.name .. \" is at a spawn point.\") end)",
+        "game.onWeaponFire(function(player) print(player.name .. \" fired.\") end)",
+        "game.onWeaponHit(function(hit)",
+        "    print(hit.weapon .. \" hit \" .. (hit.victim and hit.victim.name or \"a wall\") .. \".\")",
+        "end)",
+        "game.onWeaponReload(function(player) print(player.name .. \" reloads.\") end)",
+        "game.onPlayerLeave(function(player) print(player.name .. \" left.\") end)",
+    ];
+    fs::write(folder.join("main.luau"), script.join("\n")).unwrap();
 
-    let output = lore(&folder, &["check", &example.display().to_string()]);
+    let output = lore(&folder, &["check"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(
-        stdout(&output).contains("a pretend match was played"),
-        "{}",
-        stdout(&output)
-    );
-    // The mode's own functions really ran.
-    for line in [
-        "Check Bot 1 joined Red.",
-        "Check Bot 1 killed Check Bot 2.",
-        "Red wins the round!",
-        "Check Bot 2 left.",
+    let said = stdout(&output);
+    for words in [
+        "a pretend player came into the game",
+        "fired a shot that hit the target and one that hit a wall",
+        "died and was put back at a spawn point",
+        "Each game.on... function in the script was called at least once",
     ] {
-        assert!(stderr(&output).contains(line), "{}", stderr(&output));
+        assert!(said.contains(words), "no {words:?} in: {said}");
+    }
+    // The script's own functions really ran, in this order: the player is
+    // put at a spawn point twice, on coming in and on dying.
+    let heard = stderr(&output);
+    let mut from = 0;
+    for line in [
+        "Check Player joined.",
+        "Check Player is at a spawn point.",
+        "Check Target joined.",
+        "Check Player fired.",
+        "rifle hit Check Target.",
+        "Check Player fired.",
+        "rifle hit a wall.",
+        "Check Player reloads.",
+        "Check Player is at a spawn point.",
+        "Check Target left.",
+        "Check Player left.",
+    ] {
+        let at = heard[from..]
+            .find(line)
+            .unwrap_or_else(|| panic!("no {line:?} after the lines before it in: {heard}"));
+        from += at + line.len();
     }
 }
 
 #[test]
-fn check_reports_a_mistake_that_only_a_match_reaches() {
-    let folder = scratch("check-mode-mistake");
+fn check_reports_a_mistake_that_only_a_shot_reaches() {
+    let folder = scratch("check-shot-mistake");
     assert!(lore(&folder, &["new", "game"]).status.success());
     std::fs::write(
         folder.join("game").join("main.luau"),
-        "game.onKill(function(killer, victim) print(victim.nmae) end)",
+        "game.onWeaponHit(function(hit) if not hit.victim then print(hit.shooter.nmae) end end)",
     )
     .unwrap();
 
@@ -352,6 +379,30 @@ fn check_reports_a_mistake_that_only_a_match_reaches() {
         "{}",
         stderr(&output)
     );
+}
+
+#[test]
+fn check_tells_a_script_that_asks_for_a_mode_that_lore_has_none_and_names_the_line() {
+    let folder = scratch("check-no-modes");
+    let script = [
+        "local points = 0",
+        "game.mode { teams = { \"Red\", \"Blue\" }, scoreToWin = 50 }",
+        "game.onRoundStart(function() points = 0 end)",
+    ];
+    fs::write(folder.join("main.luau"), script.join("\n")).unwrap();
+
+    let output = lore(&folder, &["check"]);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    let said = stderr(&output);
+    for words in [
+        "Script error in main.luau, line 2",
+        "game.mode does not exist. LORE has no game modes, teams or rounds: it makes \
+         single-player games.",
+        "game.onTick(function(step) ... end)",
+    ] {
+        assert!(said.contains(words), "no {words:?} in: {said}");
+    }
 }
 
 #[test]

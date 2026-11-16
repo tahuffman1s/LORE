@@ -61,6 +61,13 @@ const NOTHING_PLACED: &str = "The game runs with nothing placed in its level. Fi
 const KEEPS_MAP: &str = "The game keeps the map it had. Fix this and save the file: the \
                          game picks it up by itself.";
 
+/// Logs what `map`, just read from its file, says that LORE does not act on.
+fn said_of(map: &Map) {
+    for note in map.notes() {
+        log::warn!("{note}");
+    }
+}
+
 impl ScriptGame {
     /// A game running `host` with no files behind it: it has the starter
     /// sounds, and nothing placed in its level.
@@ -149,7 +156,10 @@ impl ScriptGame {
         let host = ScriptHost::open(folder, actions.clone())?;
         let (map_file, read) = MapFile::open(folder);
         let (map, map_error) = match read {
-            Ok(map) => (map, None),
+            Ok(map) => {
+                said_of(&map);
+                (map, None)
+            }
             Err(error) => {
                 log::error!("{error}\n{NOTHING_PLACED}");
                 (Map::default(), Some(error))
@@ -222,6 +232,7 @@ impl ScriptGame {
         match change {
             Ok(map) => {
                 log::info!("Loaded {} again: {}.", crate::map::MAP_FILE, map.summary());
+                said_of(&map);
                 self.map = map;
                 self.map_error = None;
             }

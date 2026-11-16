@@ -10,27 +10,11 @@
 -- takes anything.
 local saved = game.keep("saved", { best = 0 })
 saved.best += 1
-local kills = game.keep("streaks")
-kills.total = 1
-
--- Every setting, and none of them.
-game.mode {
-    name = "Team Deathmatch",
-    teams = { "Red", "Blue" },
-    scoreToWin = 50,
-    killPoints = 1,
-    timeLimit = 600,
-    respawnDelay = 3,
-    warmup = 5,
-    intermission = 10,
-}
-game.mode {}
-
-local red = game.team("Red")
-red:addScore(5)
+local visits = game.keep("visits")
+visits.total = 1
 
 -- A player can be a key in a table.
-local streak: { [Player]: number } = {}
+local jumps: { [Player]: number } = {}
 local timeLeft = 10
 
 game.onStart(function()
@@ -65,64 +49,24 @@ game.onReload(function()
 end)
 
 game.onPlayerJoin(function(player)
-    streak[player] = 0
-    kills[player] = 0
+    jumps[player] = 0
+    visits[player] = 0
     print(player.name .. " joined")
 end)
 
 game.onPlayerLeave(function(player)
-    streak[player] = nil
-end)
-
-game.onKill(function(killer, victim)
-    print(victim.name .. " died")
-    if killer then
-        killer:addScore(1)
-        if killer.team == victim.team then
-            print("Team kill!")
-        end
-        if killer.team then
-            killer.team:addScore(5)
-        end
-    end
+    jumps[player] = nil
 end)
 
 game.onSpawn(function(player)
-    print(player.name .. " is in", player.alive, player.score, player.kills, player.deaths)
-end)
-
-game.onRoundStart(function()
-    print("Go!")
-end)
-
-game.onRoundEnd(function(winner)
-    if winner then
-        print(winner.name .. " wins!", winner.score)
-    end
-    game.audio.stopAll()
+    print(player.name .. " is in")
 end)
 
 for _, player in game.players() do
-    print(player.name, player.kills)
+    print(player.name, player.weapon)
 end
 
-for _, team in game.teams() do
-    print(team.name, team.score)
-    for _, player in team:players() do
-        print(player.name)
-    end
-end
-
-if game.round.phase() == "playing" then
-    print("The round is on")
-end
-if game.round.timeLeft() < 60 then
-    print("Last minute!")
-end
-game.round.finish(game.team("Red"))
-game.round.finish(game.players()[1])
-game.round.finish()
-
+game.audio.stopAll()
 game.audio.play("gunshot")
 local music = game.audio.play("music", { volume = 0.4, pitch = 1, loop = true })
 music:stop()

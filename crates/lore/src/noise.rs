@@ -8,9 +8,7 @@
 //! list, and anything else in the game that listens can read the same one.
 
 use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Place, Play, Range};
-use lore_script::ScriptHost;
 
-use crate::shooting::alive;
 use crate::sounds::Sounds;
 use crate::world::{Bodies, MAX_PLAYERS, PlayerId};
 
@@ -106,25 +104,13 @@ impl Walking {
 
     /// Adds to `noises` the steps and landings of the tick numbered `tick`,
     /// which has just moved `bodies`: call it every tick, after everyone
-    /// has moved. `step` is the length of a tick in seconds. The dead make
-    /// no noise.
-    pub(crate) fn tick(
-        &mut self,
-        bodies: &Bodies,
-        tick: u32,
-        host: &ScriptHost,
-        step: f32,
-        noises: &mut Vec<Noise>,
-    ) {
+    /// has moved. `step` is the length of a tick in seconds.
+    pub(crate) fn tick(&mut self, bodies: &Bodies, tick: u32, step: f32, noises: &mut Vec<Noise>) {
         for (id, body) in bodies.iter() {
             let player = &body.player;
             let Some(walked) = self.feet.get_mut(usize::from(id)) else {
                 continue;
             };
-            if !alive(host, body.name) {
-                *walked = Footsteps::default();
-                continue;
-            }
             let [x, y, z] = player.velocity;
             let feet = Feet {
                 speed: (x * x + z * z).sqrt(),

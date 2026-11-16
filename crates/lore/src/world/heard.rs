@@ -129,7 +129,7 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 #[test]
 fn a_player_walking_alone_is_heard_step_by_step_with_no_script() {
-    // No rules at all: no teams, no rounds, no weapons.
+    // No script at all: nothing but walking.
     let mut played = Played::script("");
     let me = played.game.id();
     let start = played.feet();

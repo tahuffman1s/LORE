@@ -7,7 +7,6 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use lore_input::{ActionKind, ActionMap, ActionState, InputFrame, Rumble};
-use lore_mode::Rules;
 use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
@@ -15,8 +14,8 @@ use crate::error::{TookTooLong, closest};
 use crate::hud::{self, HUD_FUNCTIONS, HudState};
 use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
-use crate::mode_api::{self, Handles, ModeState};
 use crate::modules::{self, Modules};
+use crate::player_api::{self, Handles, Players};
 use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
 
@@ -32,16 +31,10 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "every",
     "tween",
     "keep",
-    "mode",
     "onPlayerJoin",
     "onPlayerLeave",
-    "onKill",
     "onSpawn",
-    "onRoundStart",
-    "onRoundEnd",
     "players",
-    "teams",
-    "team",
     "weapon",
     "onWeaponFire",
     "onWeaponHit",
@@ -72,10 +65,7 @@ pub(crate) struct Handlers {
     pub reload: Vec<Function>,
     pub join: Vec<Function>,
     pub leave: Vec<Function>,
-    pub kill: Vec<Function>,
     pub spawn: Vec<Function>,
-    pub round_start: Vec<Function>,
-    pub round_end: Vec<Function>,
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
@@ -95,15 +85,12 @@ pub(crate) struct Shared {
     pub checks: Cell<u32>,
     /// What stops the script once time is up: see [`crate::limit`].
     pub raise: Cell<Option<Interrupt>>,
-    /// The match being played. It outlives this version of the script.
-    pub mode: Rc<ModeState>,
-    /// The values this version of the script holds for players and teams.
+    /// Who is in the game. It outlives this version of the script.
+    pub players: Rc<Players>,
+    /// The values this version of the script holds for players.
     pub handles: Handles,
     /// True while the file itself is running, before any handler is called.
     pub loading: Cell<bool>,
-    /// The rules this version asked for with `game.mode`, and the line it
-    /// did so on.
-    pub rules: RefCell<Option<(Rules, Option<usize>)>>,
     /// The rumble the script asked for and the engine has not yet taken.
     pub rumble: Cell<Option<Rumble>>,
     /// The sounds the game has and the ones asked for. It outlives this
@@ -219,7 +206,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 9] = [
+    let events: [(&'static str, &'static str, List); 6] = [
         (
             "onPlayerJoin",
             "game.onPlayerJoin(function(player) ... end)",
@@ -230,24 +217,9 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "game.onPlayerLeave(function(player) ... end)",
             |h| &mut h.leave,
         ),
-        (
-            "onKill",
-            "game.onKill(function(killer, victim) ... end)",
-            |h| &mut h.kill,
-        ),
         ("onSpawn", "game.onSpawn(function(player) ... end)", |h| {
             &mut h.spawn
         }),
-        (
-            "onRoundStart",
-            "game.onRoundStart(function() ... end)",
-            |h| &mut h.round_start,
-        ),
-        (
-            "onRoundEnd",
-            "game.onRoundEnd(function(winner) ... end)",
-            |h| &mut h.round_end,
-        ),
         (
             "onWeaponFire",
             "game.onWeaponFire(function(player) ... end)",
@@ -268,7 +240,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         game.set(name, on_event(lua, shared, name, example, list)?)?;
     }
     game.set("keep", keep::function(lua, shared)?)?;
-    mode_api::install(lua, shared, &game)?;
+    player_api::install(lua, &game)?;
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
 
@@ -315,7 +287,6 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("hud");
     members.push("input");
-    members.push("round");
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
@@ -499,6 +470,52 @@ fn rumble(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     })
 }
 
+/// What to tell a script that reaches for something LORE does not have
+/// because it makes single-player adventures: the match rules of the
+/// multiplayer shooters whose scripts look much like its own. `path` is
+/// `game` or `player`.
+///
+/// Without this the answer would be the nearest name that does exist, and
+/// `game.team` would be told "Did you mean game.time?".
+pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
+    const NO_TEAMS: &str = "LORE has no teams: it makes single-player games. Take it out. \
+         To sort characters into sides of your own, write local side = {} at the top of the \
+         file and then side[player] = \"red\".";
+    const NO_SCORE: &str = "LORE keeps no score: it has no matches to win. Take it out. To \
+         keep one of your own, write local score = 0 at the top of the file, add to it where \
+         points are won (score += 1 in game.onWeaponHit or game.onTick), and show it with \
+         game.hud.text.";
+    const NO_ROUNDS: &str = "LORE has no rounds. Take it out. To do something when the game \
+         begins, write game.onStart(function() ... end); to do it later, \
+         game.after(60, function() ... end).";
+    const NO_KILLS: &str = "LORE does not count kills or deaths: nothing has health yet, so \
+         no shot kills anybody. Take it out. To count the shots that land on someone, write \
+         local hits = 0 at the top of the file and \
+         game.onWeaponHit(function(hit) if hit.victim then hits += 1 end end).";
+    Some(match (path, key) {
+        ("game", "mode") => {
+            "LORE has no game modes, teams or rounds: it makes single-player games. Take \
+             the whole game.mode call out. Rules of your own go in \
+             game.onTick(function(step) ... end), and waits in game.after and game.every."
+        }
+        ("game", "team" | "teams") | ("player", "team") => NO_TEAMS,
+        ("game", "round") => {
+            "LORE has no rounds. Take it out. To count down, write \
+             game.after(60, function() ... end); game.time() gives the seconds the game \
+             has run."
+        }
+        ("game", "onRoundStart" | "onRoundEnd") => NO_ROUNDS,
+        ("game", "onKill") | ("player", "kills" | "deaths") => NO_KILLS,
+        ("player", "score" | "addScore") => NO_SCORE,
+        ("player", "alive") => {
+            "LORE has no dead players: nothing has health yet, so everyone in \
+             game.players() is in the world. Take it out. To do something when a player is \
+             put back at a spawn point, write game.onSpawn(function(player) ... end)."
+        }
+        _ => return None,
+    })
+}
+
 /// Makes reading a missing member of `table` an error that names the closest
 /// real one, and stops scripts from changing the table.
 pub(crate) fn strict(
@@ -517,11 +534,17 @@ pub(crate) fn strict(
                 other => other.to_string()?,
             };
             let mut message = format!("{path}.{key} does not exist.");
-            match closest(&key, members.iter().copied()) {
-                Some(near) => {
+            match (
+                taken_out(path, &key),
+                closest(&key, members.iter().copied()),
+            ) {
+                (Some(instead), _) => {
+                    let _ = write!(message, " {instead}");
+                }
+                (None, Some(near)) => {
                     let _ = write!(message, " Did you mean {path}.{near}?");
                 }
-                None => {
+                (None, None) => {
                     let _ = write!(message, " {path} has: {}.", members.join(", "));
                 }
             }
@@ -551,7 +574,7 @@ mod tests {
     use super::*;
 
     /// Every name the type definitions declare, as a path such as
-    /// `game.round.phase`, `game.mode.teams` or `Player:addScore`.
+    /// `game.hud.text`, `game.weapon.damage` or `Player:giveWeapon`.
     fn declared() -> Vec<String> {
         let mut inside: Vec<&str> = Vec::new();
         let mut names = Vec::new();
@@ -590,12 +613,9 @@ mod tests {
 
     #[test]
     fn type_definitions_describe_exactly_the_real_api() {
-        use crate::mode_api::{
-            MODE_SETTINGS, PLAYER_FIELDS, PLAYER_METHODS, ROUND_FUNCTIONS, TEAM_FIELDS,
-            TEAM_METHODS,
-        };
+        use crate::player_api::{PLAYER_FIELDS, PLAYER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 23] = [
+        let groups: [(&str, &[&str]); 19] = [
             ("game.", GAME_FUNCTIONS),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),
@@ -607,12 +627,8 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
-            ("game.round.", ROUND_FUNCTIONS),
-            ("game.mode.", MODE_SETTINGS),
             ("Player.", PLAYER_FIELDS),
             ("Player:", PLAYER_METHODS),
-            ("Team.", TEAM_FIELDS),
-            ("Team:", TEAM_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),

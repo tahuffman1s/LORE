@@ -1338,7 +1338,7 @@ mod tests {
                 [0.0, 0.0, 1.0, 0.0],
                 [3.0, 0.0, 5.0, 1.0],
             ],
-            extras: Some(r#"{"team":"red"}"#.to_owned()),
+            extras: Some(r#"{"region":"north"}"#.to_owned()),
         });
         level.lights.push(Light {
             name: Some("Sun".to_owned()),
@@ -1525,7 +1525,7 @@ mod tests {
         let (_, output) = panel_frame(&mut editor, &context, 3.2, Vec::new());
         let shown = words(&output);
         assert!(shown.contains("3.00, 0.00, 5.00 m"), "{shown}");
-        assert!(shown.contains(r#"{"team":"red"}"#), "{shown}");
+        assert!(shown.contains(r#"{"region":"north"}"#), "{shown}");
         assert!(shown.contains("0° to the left"), "{shown}");
 
         // The sun has no place, only a direction and a brightness.
@@ -1774,7 +1774,7 @@ mod tests {
         let folder = scratch("outside");
         let file = folder.join(crate::map::MAP_FILE);
         let written = "version = 1\n[[entity]]\nid = \"flag\"\ntype = \"objective\"\n\
-                       name = \"The flag\"\nposition = [2, 0, 3]\n[entity.properties]\nteam = \"red\"\n";
+                       name = \"The flag\"\nposition = [2, 0, 3]\n[entity.properties]\nregion = \"north\"\n";
         std::fs::write(&file, written).unwrap();
         let (mut editor, mut input) = editor_in(&folder);
         let context = panel_context();
@@ -1788,7 +1788,7 @@ mod tests {
         for expected in [
             "The flag",
             "objective",
-            "team = \"red\"",
+            "region = \"north\"",
             "Place a objective here",
         ] {
             assert!(shown.contains(expected), "no {expected:?} in:\n{shown}");

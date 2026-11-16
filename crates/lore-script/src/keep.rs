@@ -10,11 +10,10 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use lore_mode::PlayerId;
 use mlua::{Function, Lua, Table, Value};
 
 use crate::api::{Shared, describe, fail};
-use crate::mode_api;
+use crate::player_api::{self, PlayerId};
 
 /// How many tables one version of a script can keep. Far more than a game
 /// needs: reaching it means `game.keep` is being called with made-up names.
@@ -50,7 +49,7 @@ pub(crate) enum Plain {
     /// Luau text is bytes, and need not be UTF-8.
     Text(Box<[u8]>),
     Vector(mlua::Vector),
-    /// A player, who is given back if they are still in the match.
+    /// A player, who is given back if they are still in the game.
     Player(PlayerId),
     /// The keys and values, in the order the table gave them.
     Table(Vec<(Plain, Plain)>),
@@ -148,7 +147,7 @@ impl Copier {
                 self.bytes_left -= bytes.len();
                 Plain::Text(Box::from(&*bytes))
             }
-            Value::UserData(handle) if let Some(id) = mode_api::player_id(handle) => {
+            Value::UserData(handle) if let Some(id) = player_api::player_id(handle) => {
                 Plain::Player(id)
             }
             Value::Table(_) if is_key => {
@@ -164,12 +163,7 @@ impl Copier {
             }
             Value::Table(table) => Plain::Table(self.table(table, depth + 1)),
             other => {
-                let what = match other {
-                    Value::UserData(handle) if mode_api::is_team(handle) => {
-                        "a team. Keep the team's name instead: team.name"
-                    }
-                    other => describe(other),
-                };
+                let what = describe(other);
                 if is_key {
                     self.problem(format_args!("its key is {what}"));
                 } else {
@@ -202,7 +196,7 @@ impl Copier {
             Value::Integer(number) => write!(path, "[{number}]"),
             Value::Number(number) => write!(path, "[{number}]"),
             Value::Boolean(value) => write!(path, "[{value}]"),
-            Value::UserData(handle) if mode_api::player_id(handle).is_some() => {
+            Value::UserData(handle) if player_api::player_id(handle).is_some() => {
                 write!(path, "[a player]")
             }
             _ => write!(path, "[...]"),
@@ -247,7 +241,7 @@ impl Copier {
 }
 
 /// Builds a kept value in this VM. Gives nothing for a player who has left
-/// the match since.
+/// the game since.
 fn restore(lua: &Lua, shared: &Shared, plain: &Plain) -> mlua::Result<Option<Value>> {
     Ok(Some(match plain {
         Plain::Bool(value) => Value::Boolean(*value),
@@ -256,7 +250,7 @@ fn restore(lua: &Lua, shared: &Shared, plain: &Plain) -> mlua::Result<Option<Val
         Plain::Vector(value) => Value::Vector(*value),
         Plain::Text(bytes) => Value::String(lua.create_string(bytes)?),
         Plain::Player(id) => {
-            if shared.mode.game.borrow().player(*id).is_none() {
+            if !shared.players.has(*id) {
                 return Ok(None);
             }
             Value::UserData(shared.handles.player(lua, *id)?)

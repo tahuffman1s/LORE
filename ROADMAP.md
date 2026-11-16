@@ -1,6 +1,6 @@
 # Roadmap
 
-An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, built earliest milestone first and, within a milestone, lowest number first. LORE is single-player only: multiplayer is not on this list because it is being taken out.
+An overview only. Progress is tracked in [GitHub issues](https://github.com/tahuffman1s/LORE/issues?q=label%3Aroadmap) labelled `roadmap`, built earliest milestone first and, within a milestone, lowest number first. LORE is single-player only: multiplayer is not on this list because it has been taken out; what is left is the list of players a script sees (#280).
 
 ## Already built
 
@@ -18,7 +18,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the game lists with a place and a loudness (#16)
 - Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
 - One world, stepped on the fixed tick with the player's input and giving the same result from the same input at any frame rate, with no network layer under it (#278)
-- Game modes from scripts: teams, rounds, scoring (FOSSPS#13)
+- No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead, and `lore check` tries a script with a pretend player and a pretend shot (#279)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
 
 
@@ -27,7 +27,6 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 Window, input, Vulkan, Luau scripts and the `lore` command, and removing the multiplayer LORE inherited.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
-- Cut multiplayer, part 3: no teams, rounds or match rules (#279)
 - There is one player: `game.player` replaces players, joins and leaves (#280)
 - Fold the `window` Cargo feature: no program without a window is shipped any more (#310)
 
@@ -74,6 +73,8 @@ One player in first or third person: move, look, use things, fight, hear and pau
 - The starter game and the tutorial show what happens on the HUD, not only in the terminal (#246)
 - A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
 - A weapon says what it sounds like, and a game can quieten or turn off the engine's own footsteps and weapon sounds (#258)
+- The standard controls are an adventure's: no `scoreboard` action, and names that fit (#313)
+- The starter level is a place to explore, not a two-ended arena (#314)
 
 ## M2 — People and creatures
 

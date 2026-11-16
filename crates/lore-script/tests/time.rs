@@ -448,13 +448,11 @@ fn drawing_cannot_change_the_game() {
         ("game.tween(0, 1, 1)", "game.tween"),
         ("shown:to(1, 1)", "tween:to"),
         ("timer:cancel()", "timer:cancel"),
-        ("game.players()[1]:addScore(1)", "player:addScore"),
         (
             "game.players()[1]:giveWeapon(\"rifle\")",
             "player:giveWeapon",
         ),
         ("game.players()[1]:takeWeapon()", "player:takeWeapon"),
-        ("game.round.finish()", "game.round.finish"),
         ("game.onTick(function() end)", "game.onTick"),
         ("game.onDraw(function() end)", "game.onDraw"),
     ] {
@@ -481,28 +479,13 @@ fn drawing_cannot_change_the_game() {
         assert_eq!(error.line, Some(4), "`{line}`: {error}");
     }
 
-    // A team needs a mode that has teams.
-    let mut host = game(
-        "game.mode { teams = { \"Red\", \"Blue\" } }\n\
-         game.onDraw(function()\n\
-         game.team(\"Red\"):addScore(1)\n\
-         end)",
-    );
-    run(&mut host, 1, 60);
-    host.draw(0.5);
-    assert!(
-        mistake(&host).starts_with("team:addScore changes the game"),
-        "{}",
-        mistake(&host)
-    );
-
     // And the same lines are fine in the game's rules straight afterwards.
     let mut host = game(
         r#"
         game.onDraw(function() end)
         game.onTick(function()
             game.after(1, function() end):cancel()
-            game.players()[1]:addScore(1)
+            game.players()[1]:takeWeapon()
         end)
         "#,
     );

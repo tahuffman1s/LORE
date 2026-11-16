@@ -342,7 +342,7 @@ fn objects_are_placed_through_their_parents() {
             {"name":"Building","translation":[1,2,3],"children":[1,2,3]},
             {"name":"Door","mesh":0,"translation":[0,0,-5],"scale":[-1,1,1]},
             {"name":"Window","mesh":0,"extras":{"breakable":true}},
-            {"name":"spawn_red","rotation":[0,1,0,0],"extras":{"team":"red"}},
+            {"name":"spawn_red","rotation":[0,1,0,0],"extras":{"region":"north"}},
             {"name":"Lamp","translation":[0,4,0],"rotation":[-0.70710678,0,0,0.70710678],
              "extensions":{"KHR_lights_punctual":{"light":0}}}
         ],
@@ -382,7 +382,7 @@ fn objects_are_placed_through_their_parents() {
         .collect();
     assert_eq!(names, ["Building", "spawn_red"]);
     let spawn = &scene.markers[1];
-    assert_eq!(spawn.extras.as_deref(), Some(r#"{"team":"red"}"#));
+    assert_eq!(spawn.extras.as_deref(), Some(r#"{"region":"north"}"#));
     assert_eq!(spawn.transform[3], [1.0, 2.0, 3.0, 1.0]);
     assert!((crate::math::forward(&spawn.transform)[2] - 1.0).abs() < 1e-6);
 

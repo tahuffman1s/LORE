@@ -1,7 +1,6 @@
-//! A game whose script never calls `game.mode` has no match rules at all
-//! (#259): no warm-up, no rounds, no teams and no score. A player comes
-//! into the world once, when they join, and nothing the script did not ask
-//! for moves them, kills them, scores them or starts them again.
+//! A player is put at a spawn point when they come into the world and
+//! when they die, and at no other time: nothing is counted down, started
+//! again or moved behind the script's back.
 //!
 //! Time is counted in ticks, so every run plays the same.
 
@@ -13,7 +12,6 @@ use lore::input::{ActionMap, Input, Key};
 use lore::map::Map;
 use lore::world::{Playing, World};
 use lore::{Game, ScriptGame};
-use lore_mode::Phase;
 
 const TICK_RATE: u32 = 60;
 const STEP: f32 = 1.0 / 60.0;
@@ -50,19 +48,12 @@ fn printed() -> Vec<String> {
     PRINTED.with_borrow_mut(std::mem::take)
 }
 
-/// Says everything the match does to a player, and names no mode.
+/// Says everything the engine does to a player, and hands each a pistol
+/// as they join.
 const TELLS_ALL: &str = r#"
-game.onPlayerJoin(function(player) print("join " .. player.name) end)
+game.onPlayerJoin(function(player) print("join " .. player.name) player:giveWeapon("pistol") end)
 game.onPlayerLeave(function(player) print("leave " .. player.name) end)
-game.onSpawn(function(player) print("spawn " .. player.name) end)
-game.onKill(function(killer, victim) print("kill " .. victim.name) end)
-"#;
-
-/// The same game with the one line that asks for rounds.
-const WITH_A_MODE: &str = r#"
-game.mode {}
-game.onSpawn(function(player) print("spawn " .. player.name) end)
-game.onRoundStart(function() print("round") end)
+game.onSpawn(function(player) print("spawn " .. player.name .. " " .. tostring(player.weapon)) end)
 "#;
 
 /// Two places to start, 10 m apart on the flat floor.
@@ -119,8 +110,7 @@ fn walk_about(game: &mut Playing, input: &mut Input, ticks: u32) -> Walk {
         off_level: 0.0,
     };
     for tick in 0..ticks {
-        // Seven seconds each way: forward right through the fifth second,
-        // when the round used to start.
+        // Seven seconds each way.
         let (hold, release) = if (tick / (7 * SECOND)).is_multiple_of(2) {
             (Key::W, Key::S)
         } else {
@@ -138,7 +128,7 @@ fn walk_about(game: &mut Playing, input: &mut Input, ticks: u32) -> Walk {
 }
 
 #[test]
-fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
+fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
     let actions = ActionMap::default_fps();
     let mut game = Playing::start(game(TELLS_ALL), None, &actions, TICK_RATE).unwrap();
     let mut input = Input::new(actions);
@@ -148,9 +138,10 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
         game.tick(input.tick(), STEP);
     }
     let start = feet(&game);
-    assert_eq!(printed(), ["join Player 1", "spawn Player 1"]);
+    assert_eq!(printed(), ["join Player 1", "spawn Player 1 pistol"]);
 
-    // What the issue saw: forward for five seconds, then ten ticks more.
+    // Forward for five seconds, then ten ticks more: a game with rounds
+    // used to start one here and put everyone back (#259).
     input.press(Key::W);
     for _ in 0..5 * SECOND - 30 {
         game.tick(input.tick(), STEP);
@@ -171,8 +162,7 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
     assert!(distance(start, just_after) > distance(start, at_five_seconds));
     input.release(Key::W);
 
-    // Eleven minutes: past the warm-up, the ten-minute round and the
-    // intermission a deathmatch would have had.
+    // Eleven minutes, which is longer than anything was ever counted down.
     let Walk {
         furthest,
         off_level,
@@ -202,21 +192,12 @@ fn a_player_alone_in_a_game_with_no_mode_is_spawned_once_and_left_alone() {
     assert_eq!(printed(), Vec::<String>::new());
     let host = game.world().game().host();
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    let mode = host.mode();
-    assert_eq!(mode.phase(), Phase::Playing);
-    assert_eq!(mode.time_left(), None);
-    assert_eq!(mode.round(), 0);
-    assert!(mode.teams().is_empty());
-    let [player] = mode.players() else {
-        panic!("one player: {:?}", mode.players());
-    };
-    assert!(player.alive);
-    assert_eq!(player.team, None);
-    assert_eq!((player.score, player.kills, player.deaths), (0, 0, 0));
+    assert_eq!(host.players().len(), 1);
+    assert_eq!(game.world().players().count(), 1);
 }
 
 #[test]
-fn someone_joining_a_game_with_no_mode_moves_nobody_else() {
+fn someone_joining_moves_nobody_else() {
     let mut world = World::new(game(TELLS_ALL), TICK_RATE);
     let nothing = Input::new(ActionMap::default_fps());
     let play = |world: &mut World, ticks: u32| {
@@ -227,40 +208,60 @@ fn someone_joining_a_game_with_no_mode_moves_nobody_else() {
     let ann = world.add_player().unwrap();
     play(&mut world, MINUTE);
     let before = world.player(ann).unwrap().position;
-    assert_eq!(printed(), ["join Player 1", "spawn Player 1"]);
+    assert_eq!(printed(), ["join Player 1", "spawn Player 1 pistol"]);
 
     // A second player arrives a minute in: only they are spawned.
     world.add_player().unwrap();
     play(&mut world, 3 * MINUTE);
 
-    assert_eq!(printed(), ["join Player 2", "spawn Player 2"]);
+    assert_eq!(printed(), ["join Player 2", "spawn Player 2 pistol"]);
     assert!(distance(before, world.player(ann).unwrap().position) < 0.001);
-    let mode = world.game().host().mode();
-    assert_eq!(mode.phase(), Phase::Playing);
-    for player in mode.players() {
-        assert!(player.alive);
-        assert_eq!(player.team, None);
-        assert_eq!((player.score, player.kills, player.deaths), (0, 0, 0));
-    }
+    assert_eq!(world.game().host().players().len(), 2);
 }
 
 #[test]
-fn a_game_that_asks_for_a_mode_still_starts_its_round_after_the_warm_up() {
-    let actions = ActionMap::default_fps();
-    let mut game = Playing::start(game(WITH_A_MODE), None, &actions, TICK_RATE).unwrap();
-    let mut input = Input::new(actions);
-    for _ in 0..30 {
-        game.tick(input.tick(), STEP);
-    }
-    assert_eq!(printed(), ["spawn Player 1"]);
-    assert_eq!(game.world().game().host().mode().phase(), Phase::Warmup);
+fn a_player_who_dies_is_put_back_at_a_spawn_point_with_what_they_held() {
+    let mut world = World::new(game(TELLS_ALL), TICK_RATE);
+    let nothing = Input::new(ActionMap::default_fps());
+    let play = |world: &mut World, ticks: u32| {
+        for _ in 0..ticks {
+            world.tick(nothing.frame(), STEP);
+        }
+    };
+    let ann = world.add_player().unwrap();
+    play(&mut world, 30);
+    let start = world.player(ann).unwrap().position;
+    printed();
 
-    // The round starts five seconds in and everyone starts it from a spawn
-    // point, as before.
-    let furthest = walk_about(&mut game, &mut input, 6 * SECOND).furthest;
-    assert!(furthest > 5.0, "put back at a spawn point: {furthest}");
-    assert_eq!(printed(), ["round", "spawn Player 1"]);
-    let mode = game.world().game().host().mode();
-    assert_eq!(mode.phase(), Phase::Playing);
-    assert!(mode.time_left().is_some());
+    // Three seconds' walk to the side: metres from both spawn points.
+    let mut asked = world.asked(ann).unwrap();
+    asked.movement.right = 1.0;
+    world.ask(ann, asked);
+    play(&mut world, 3 * SECOND);
+    asked.movement.right = 0.0;
+    world.ask(ann, asked);
+    let spawns = [[0.0, 0.0, 0.0], [0.0, 0.0, -10.0]];
+    let nearest = |here: [f32; 3]| {
+        let to = spawns.map(|spawn| distance(spawn, here));
+        to[0].min(to[1])
+    };
+    let away = world.player(ann).unwrap().position;
+    assert!(nearest(away) > 3.0, "walked from {start:?} to {away:?}");
+    assert_eq!(printed(), Vec::<String>::new());
+
+    // Nothing has health yet, so dying is the engine being told so.
+    let name = world.game().host().players()[0];
+    world.game_mut().host_mut().player_died(name);
+    assert_eq!(printed(), ["spawn Player 1 pistol"]);
+    play(&mut world, 1);
+    let back = world.player(ann).unwrap().position;
+    assert!(nearest(back) < 0.01, "put at a spawn point: {back:?}");
+
+    // Once: they are left alone again, still holding the pistol.
+    play(&mut world, MINUTE);
+    assert!(distance(back, world.player(ann).unwrap().position) < 0.01);
+    assert_eq!(printed(), Vec::<String>::new());
+    let host = world.game().host();
+    assert_eq!(&*host.held_weapon(name).unwrap().name, "pistol");
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }

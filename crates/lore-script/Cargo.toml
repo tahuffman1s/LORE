@@ -8,7 +8,6 @@ publish.workspace = true
 
 [dependencies]
 lore-input = { path = "../lore-input" }
-lore-mode = { path = "../lore-mode" }
 # Where a HUD piece is pinned and its colour, for `game.hud`.
 lore-ui = { path = "../lore-ui" }
 # What a weapon is made of, for `game.weapon`, and the state of each one held.

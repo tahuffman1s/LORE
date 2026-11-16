@@ -141,17 +141,18 @@ fn nobody_holds_a_weapon_until_the_script_hands_one_out() {
 fn giving_again_is_a_new_full_weapon_and_taking_empties_the_hands() {
     let (mut host, ann, _) = with_two(
         r#"game.onPlayerJoin(function(player) player:giveWeapon("pistol") end)
-        game.onKill(function(killer, victim)
-            victim:takeWeapon()
-            victim:takeWeapon()
-            if killer then killer:giveWeapon(killer.weapon) end
-        end)"#,
+        game.onWeaponReload(function(player)
+            player:takeWeapon()
+            player:takeWeapon()
+        end)
+        game.onWeaponFire(function(player) player:giveWeapon(player.weapon) end)"#,
     );
-    let bo = host.mode().players()[1].id;
+    let bo = host.players()[1];
     let mut state = host.held_weapon(bo).unwrap().state;
     state.magazine = 1;
     host.set_weapon_state(bo, state);
-    host.player_killed(Some(bo), ann);
+    host.weapon_reloading(ann);
+    host.weapon_fired(bo);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     assert!(host.held_weapon(ann).is_none());
     assert_eq!(host.held_weapon(bo).unwrap().state.magazine, 12);
@@ -240,15 +241,14 @@ fn the_engines_own_weapons_can_be_changed_and_keep_the_rest_of_their_numbers() {
 #[test]
 fn the_script_hears_shots_hits_and_reloads() {
     let (mut host, ann, bo) = with_two(
-        r#"game.mode { warmup = 0, scoreToWin = 0 }
-        game.onPlayerJoin(function(player) player:giveWeapon("rifle") end)
+        r#"game.onPlayerJoin(function(player) player:giveWeapon("rifle") end)
         game.onWeaponFire(function(player) print("fire", player.name, player.weapon) end)
         game.onWeaponReload(function(player) print("reload", player.name) end)
         game.onWeaponHit(function(hit)
             print("hit", hit.shooter, hit.victim, hit.weapon, hit.damage, hit.part,
                 hit.position, hit.distance, hit.explosion)
             -- A hit is the script's to give a meaning.
-            if hit.victim then hit.shooter:addScore(1) end
+            if hit.victim then hit.victim:takeWeapon() end
         end)
         game.onWeaponHit(function(hit)
             local changed = pcall(function() hit.damage = 1000 end)
@@ -290,7 +290,8 @@ fn the_script_hears_shots_hits_and_reloads() {
             "second 0 false",
         ]
     );
-    assert_eq!(host.mode().player(ann).unwrap().score, 1);
+    assert!(host.held_weapon(ann).is_some());
+    assert!(host.held_weapon(bo).is_none(), "the hit took Bo's rifle");
 }
 
 #[test]

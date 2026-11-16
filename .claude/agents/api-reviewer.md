@@ -9,13 +9,13 @@ You review the LORE scripting surface as a newcomer who has played first- and th
 
 Check each item and report only failures:
 
-- **Guessable names** — full words, vocabulary a player already knows (`player`, `npc`, `quest`, `weapon`, `team`), verbs for actions, no abbreviations or engine jargon.
+- **Guessable names** — full words, vocabulary a player already knows (`player`, `npc`, `quest`, `weapon`, `item`), verbs for actions, no abbreviations or engine jargon.
 - **One obvious way** — no two functions that do the same thing; sensible defaults so the short call is the correct call.
 - **Small first step** — the simplest useful script for this feature fits in about ten lines with no boilerplate.
 - **Consistency** — naming, argument order, units (seconds, meters, degrees) and event style match the existing API.
 - **Errors** — every error a script can trigger names the script line, says what was wrong in plain words, and suggests the fix.
 - **Both views** — nothing assumes first person or third person unless its name says so.
-- **Server/client clarity** — a beginner can tell where the code runs and cannot easily write something exploitable.
+- **Tick, frame and save** — a beginner can tell what runs every tick (the rules), what runs every drawn frame (only showing), and what is kept when the game is saved or the script reloads; nothing lets a rule depend on the frame rate.
 - **Typed and documented** — Luau type definitions and a one-line doc comment with an example exist for every public item.
 
 Reply with a list of `file:line — problem — suggested change`, most important first, at most ten items. If nothing fails, say so in one line. Do not edit files.

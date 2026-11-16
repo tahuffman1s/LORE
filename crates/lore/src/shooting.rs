@@ -66,11 +66,6 @@ fn target(id: PlayerId, body: &Body, rules: &MoveSettings) -> Target {
     }
 }
 
-/// Whether the player the script knows as `name` is in the world.
-pub(crate) fn alive(host: &ScriptHost, name: lore_script::PlayerId) -> bool {
-    host.mode().player(name).is_some_and(|player| player.alive)
-}
-
 /// What a player is doing with the weapon they hold this tick.
 fn weapon_input(body: &Body, rules: &MoveSettings) -> WeaponInput {
     let Body { player, asked, .. } = body;
@@ -97,7 +92,7 @@ impl Shooting {
     /// the length of a tick in seconds.
     ///
     /// Bullets, rockets and grenades are all judged against where everyone
-    /// is now. A player who is dead neither fires nor is hit.
+    /// is now.
     ///
     /// What the weapons were heard to do (each shot, the click of an empty
     /// magazine, a reload beginning) is added to `noises`.
@@ -116,7 +111,7 @@ impl Shooting {
         for (id, body) in bodies.iter() {
             self.fire(bodies, tick, id, body, level, rules, step, host, noises);
         }
-        self.fly(bodies, level, rules, step, host);
+        self.fly(bodies, level, rules, step);
         // Told last, and in the order it happened: a function of the
         // script's may hand out or take away weapons, which must not change
         // what this tick's shots were.
@@ -144,9 +139,6 @@ impl Shooting {
         noises: &mut Vec<Noise>,
     ) {
         let Body { player, name, .. } = *body;
-        if !alive(host, name) {
-            return;
-        }
         let Some(mut held) = host.held_weapon(name) else {
             return;
         };
@@ -181,7 +173,7 @@ impl Shooting {
             noises.push(heard(NoiseKind::DryFire, 0.0));
         }
         if !self.shots.is_empty() {
-            self.land(bodies, id, body, level, rules, host, &held);
+            self.land(bodies, id, body, level, rules, &held);
         }
         // An empty magazine starts its reload after the shot that emptied it.
         if events.reload_started {
@@ -192,7 +184,6 @@ impl Shooting {
 
     /// Judges the shots a weapon has just fired: bullets land at once, and
     /// anything slower is launched.
-    #[allow(clippy::too_many_arguments)]
     fn land(
         &mut self,
         bodies: &Bodies,
@@ -200,7 +191,6 @@ impl Shooting {
         body: &Body,
         level: &Level,
         rules: &MoveSettings,
-        host: &ScriptHost,
         held: &HeldWeapon,
     ) {
         let Body {
@@ -216,7 +206,7 @@ impl Shooting {
                 self.targets.extend(
                     bodies
                         .iter()
-                        .filter(|(other, body)| *other != id && alive(host, body.name))
+                        .filter(|(other, _)| *other != id)
                         .map(|(other, body)| target(other, body, rules)),
                 );
                 for shot in &self.shots {
@@ -265,24 +255,13 @@ impl Shooting {
     }
 
     /// Flies everything launched by one tick, through where everyone is now.
-    fn fly(
-        &mut self,
-        bodies: &Bodies,
-        level: &Level,
-        rules: &MoveSettings,
-        step: f32,
-        host: &ScriptHost,
-    ) {
+    fn fly(&mut self, bodies: &Bodies, level: &Level, rules: &MoveSettings, step: f32) {
         if self.in_flight.is_empty() {
             return;
         }
         self.targets.clear();
-        self.targets.extend(
-            bodies
-                .iter()
-                .filter(|(_, body)| alive(host, body.name))
-                .map(|(id, body)| target(id, body, rules)),
-        );
+        self.targets
+            .extend(bodies.iter().map(|(id, body)| target(id, body, rules)));
         let (targets, told) = (&self.targets, &mut self.told);
         self.in_flight.retain_mut(|flying| {
             // Whoever launched it has left: there is nobody to credit.

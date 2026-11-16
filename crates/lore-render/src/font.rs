@@ -216,7 +216,7 @@ mod tests {
         let double = font.width("30 / 90", 56.0);
         assert!((double - 2.0 * font.width("30 / 90", 28.0)).abs() < 0.01);
         // A line of text is roughly half as wide as it is high per letter.
-        let per_letter = font.width("Resume the match", 28.0) / 16.0;
+        let per_letter = font.width("Back to the game", 28.0) / 16.0;
         assert!((8.0..22.0).contains(&per_letter), "{per_letter}");
     }
 

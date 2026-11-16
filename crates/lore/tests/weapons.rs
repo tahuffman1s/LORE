@@ -157,14 +157,14 @@ fn a_player_fires_the_rifle_they_were_given_and_the_script_hears_it_land() {
     ask(&mut world, shooter, |asked| asked.reload = false);
     assert_eq!(printed(), [format!("reload Player 1 {left}+120")]);
     play(&mut world, 130);
-    let name = world.game().host().mode().players()[0].id;
+    let name = world.game().host().players()[0];
     let held = world.game().host().held_weapon(name).unwrap();
     assert_eq!((&*held.name, held.state.magazine), ("rifle", 30));
     assert_eq!(held.state.reserve as usize, 120 - fired.len());
 }
 
 #[test]
-fn nobody_fires_without_a_weapon_and_the_dead_are_not_hit() {
+fn nobody_fires_without_a_weapon() {
     let script = TELLS_ALL.replace(
         "player:giveWeapon(\"rifle\")",
         "if player.name == \"Player 1\" then player:giveWeapon(\"pistol\") end",
@@ -182,26 +182,6 @@ fn nobody_fires_without_a_weapon_and_the_dead_are_not_hit() {
     assert_eq!(said[0], "fire Player 1 pistol 11");
     assert!(
         said[1].starts_with("hit Player 1>Player 2 pistol"),
-        "{said:#?}"
-    );
-
-    // The other player dies: the next shot goes through where they stood.
-    let victim = world.game().host().mode().players()[1].id;
-    world.game_mut().host_mut().player_killed(None, victim);
-    ask(&mut world, armed, |asked| asked.fire = false);
-    play(&mut world, 5);
-    ask(&mut world, armed, |asked| asked.fire = true);
-    play(&mut world, 20);
-    let said = printed();
-    assert_eq!(said[0], "fire Player 1 pistol 10");
-    // Where in its spread the shot goes is settled by the tick it leaves
-    // on: level, and it flies on for good; a touch low, and it lands on
-    // the floor far behind where the dead player stood. Nobody is hit.
-    assert!(said.len() <= 2, "{said:#?}");
-    assert!(
-        said[1..]
-            .iter()
-            .all(|line| line.starts_with("hit Player 1>level pistol none 0 ")),
         "{said:#?}"
     );
 }
