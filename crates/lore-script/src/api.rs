@@ -16,6 +16,7 @@ use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::mode_api::{self, Handles, ModeState};
 use crate::modules::{self, Modules};
+use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
 
 /// Every function directly on `game`. The type definitions shipped for editors
@@ -23,7 +24,12 @@ use crate::weapon_api::{self, Kind, WeaponState};
 pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onStart",
     "onTick",
+    "onDraw",
     "onReload",
+    "time",
+    "after",
+    "every",
+    "tween",
     "keep",
     "mode",
     "onPlayerJoin",
@@ -61,6 +67,7 @@ const MAX_HANDLERS: usize = 1024;
 pub(crate) struct Handlers {
     pub start: Vec<Function>,
     pub tick: Vec<Function>,
+    pub draw: Vec<Function>,
     pub reload: Vec<Function>,
     pub join: Vec<Function>,
     pub leave: Vec<Function>,
@@ -112,6 +119,13 @@ pub(crate) struct Shared {
     pub weapons: Rc<WeaponState>,
     /// The kinds of weapon this version made with `game.weapon`.
     pub kinds: RefCell<Vec<Kind>>,
+    /// The game's time. It outlives this version of the script.
+    pub clock: Rc<Clock>,
+    /// The functions this version is waiting to call, from `game.after` and
+    /// `game.every`, oldest first.
+    pub timers: RefCell<Vec<Timer>>,
+    /// The number the next timer is known by.
+    pub next_timer: Cell<u64>,
 }
 
 /// How far up the stack to look for the script line that made a call.
@@ -181,6 +195,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         )?,
     )?;
     game.set(
+        "onDraw",
+        on_event(
+            lua,
+            shared,
+            "onDraw",
+            "game.onDraw(function() ... end)",
+            |h| &mut h.draw,
+        )?,
+    )?;
+    game.set(
         "onReload",
         on_event(
             lua,
@@ -243,6 +267,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set("keep", keep::function(lua, shared)?)?;
     mode_api::install(lua, shared, &game)?;
     weapon_api::install(lua, shared, &game)?;
+    time_api::install(lua, shared, &game)?;
 
     let input = lua.create_table()?;
     let any = Reads::Any;
@@ -302,6 +327,9 @@ fn on_event(
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, value: Value| match value {
         Value::Function(handler) => {
+            // A function added while a picture is drawn would be added more
+            // often on a faster computer.
+            time_api::rules_only(lua, &shared, &format!("game.{name}"))?;
             let mut handlers = shared.handlers.borrow_mut();
             let list = list(&mut handlers);
             if list.len() >= MAX_HANDLERS {
@@ -535,7 +563,7 @@ mod tests {
             TEAM_METHODS,
         };
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 13] = [
+        let groups: [(&str, &[&str]); 16] = [
             ("game.", GAME_FUNCTIONS),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),
@@ -549,6 +577,9 @@ mod tests {
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),
+            ("Timer:", crate::time_api::TIMER_METHODS),
+            ("Tween.", crate::time_api::TWEEN_FIELDS),
+            ("Tween:", crate::time_api::TWEEN_METHODS),
         ];
         let mut real: Vec<String> = groups
             .iter()

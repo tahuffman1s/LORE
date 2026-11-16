@@ -303,6 +303,7 @@ pub(crate) fn rounds(shared: &Shared, player: PlayerId) -> (u32, u32) {
 /// player's hands, in place of what they held.
 pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()> {
     let shared = crate::mode_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "player:giveWeapon")?;
     let Value::String(name) = name else {
         return Err(fail(
             lua,

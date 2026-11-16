@@ -51,3 +51,7 @@ end)
 game.onSpawn(function(player)
     player.giveWeapon("rifle") -- wrong: needs a colon, player:giveWeapon("rifle")
 end)
+
+game.after(function() end, 3) -- wrong: the seconds come first
+local shown = game.tween(0, 100, 1)
+shown:to("far", 1) -- wrong: a target is a number

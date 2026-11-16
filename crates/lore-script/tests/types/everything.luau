@@ -41,6 +41,25 @@ game.onTick(function(step)
     timeLeft -= step
 end)
 
+-- Time: waits, repeats and numbers that move, with nothing counted by hand.
+local began = game.time()
+local countdown = game.after(3, function()
+    print("Go!", game.time() - began)
+end)
+countdown:cancel()
+local beat = game.every(0.5, function()
+    print("tick tock")
+end)
+beat:cancel()
+local shown = game.tween(0, 100, 1)
+shown:to(50, 0.3)
+
+game.onDraw(function()
+    if not shown.done then
+        print(shown.value)
+    end
+end)
+
 game.onReload(function()
     print("New version loaded")
 end)

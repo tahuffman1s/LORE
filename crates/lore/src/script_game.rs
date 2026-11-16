@@ -231,6 +231,8 @@ impl Game for ScriptGame {
     }
 
     fn frame(&mut self, frame: &mut Frame) {
+        // First, so what the script asks for while drawing is in this frame.
+        self.host.draw(frame.alpha());
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
@@ -319,6 +321,27 @@ mod tests {
         let shown = words(&mut game);
         assert_eq!(shown[0], "Script error in main.luau, line 1", "{shown:?}");
         let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_frame_calls_the_scripts_draw_functions_between_the_last_two_ticks() {
+        let script = "local shown = game.tween(0, 60, 1)\n\
+                      game.onDraw(function()\n\
+                      if shown.value ~= 1.25 then error(\"drawn at \" .. shown.value) end\n\
+                      game.input.rumble(1, 1, 1)\n\
+                      end)";
+        let mut game = ScriptGame::from_source(script, &ActionMap::default());
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.25);
+        game.frame(&mut frame);
+        assert!(
+            game.host().last_error().is_none(),
+            "{:?}",
+            game.host().last_error()
+        );
+        // What the script asked for while drawing is in the same frame.
+        assert!(frame.rumble_requested().is_some());
     }
 
     /// The script error is drawn for real, with no window, and the picture

@@ -17,6 +17,7 @@ use mlua::{
 
 use crate::api::{Shared, describe, fail, strict};
 use crate::error::closest;
+use crate::time_api::rules_only;
 use crate::weapon_api;
 
 /// Every setting `game.mode` takes.
@@ -229,13 +230,11 @@ impl UserData for PlayerRef {
         methods.add_function("addScore", |lua, (this, points): (Value, Value)| {
             let this = receiver::<Self>(lua, &this, "player", "addScore", "(1)")?;
             let points = whole_points(lua, &points, "player")?;
+            let shared = shared_of(lua)?;
+            rules_only(lua, &shared, "player:addScore")?;
             // Does nothing for a player who has left, like every score
             // outside a round.
-            shared_of(lua)?
-                .mode
-                .game
-                .borrow_mut()
-                .add_score(this.0, points);
+            shared.mode.game.borrow_mut().add_score(this.0, points);
             Ok(())
         });
         methods.add_function("giveWeapon", |lua, (this, name): (Value, Value)| {
@@ -244,7 +243,9 @@ impl UserData for PlayerRef {
         });
         methods.add_function("takeWeapon", |lua, this: Value| {
             let this = receiver::<Self>(lua, &this, "player", "takeWeapon", "()")?;
-            shared_of(lua)?.weapons.take(this.0);
+            let shared = shared_of(lua)?;
+            rules_only(lua, &shared, "player:takeWeapon")?;
+            shared.weapons.take(this.0);
             Ok(())
         });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
@@ -302,6 +303,7 @@ impl UserData for TeamRef {
             let this = receiver::<Self>(lua, &this, "team", "addScore", "(1)")?;
             let points = whole_points(lua, &points, "team")?;
             let shared = shared_of(lua)?;
+            rules_only(lua, &shared, "team:addScore")?;
             // Like every score outside a round, it does nothing for a team
             // the match does not have yet.
             if planned_teams(&shared).is_none() {
@@ -376,8 +378,15 @@ fn whole_points(lua: &Lua, value: &Value, what: &str) -> mlua::Result<i32> {
     Ok(points as i32)
 }
 
-/// The error for reading something a player or team does not have.
-fn missing(lua: &Lua, what: &str, key: &Value, fields: &[&str], methods: &[&str]) -> mlua::Error {
+/// The error for reading something a player, team, timer or tween does not
+/// have.
+pub(crate) fn missing(
+    lua: &Lua,
+    what: &str,
+    key: &Value,
+    fields: &[&str],
+    methods: &[&str],
+) -> mlua::Error {
     let key = match key {
         Value::String(key) => key.to_string_lossy(),
         other => other.to_string().unwrap_or_default(),
@@ -569,6 +578,7 @@ fn team_by_name(lua: &Lua, name: Value) -> mlua::Result<AnyUserData> {
 /// `game.round.finish(winner)`.
 fn finish(lua: &Lua, winner: Value) -> mlua::Result<()> {
     let shared = shared_of(lua)?;
+    rules_only(lua, &shared, "game.round.finish")?;
     let planned = planned_teams(&shared);
     let has_teams = planned.as_ref().map_or_else(
         || !shared.mode.game.borrow().teams().is_empty(),
