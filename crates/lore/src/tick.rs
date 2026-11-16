@@ -114,7 +114,6 @@ impl TickClock {
 /// `after_tick` is called once each tick has run. The window has nothing
 /// to do there, because what a player does arrives between frames; a
 /// recording played back hands over the next tick's input.
-#[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
 pub(crate) fn run_due(
     clock: &mut TickClock,
     elapsed: Duration,
@@ -133,7 +132,6 @@ pub(crate) fn run_due(
 
 /// Says in the log that ticks were skipped: once for a hitch, and not again
 /// for a while however many more are skipped.
-#[cfg_attr(not(feature = "window"), allow(dead_code))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Hitches {
     /// When something was last said.
@@ -142,7 +140,6 @@ pub(crate) struct Hitches {
     unsaid: u64,
 }
 
-#[cfg_attr(not(feature = "window"), allow(dead_code))]
 impl Hitches {
     /// Notes that `skipped` ticks of `step` each were given up at `now`, and
     /// gives the line to log about it, if one is due.

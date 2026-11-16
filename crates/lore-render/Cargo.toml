@@ -13,9 +13,9 @@ ash = { version = "0.38", default-features = false, features = ["loaded", "std",
 ash-window = "0.13"
 raw-window-handle = { version = "0.6", features = ["std"] }
 log = "0.4"
-# The scenes the renderer draws. Without its image decoders: whoever reads a
-# file decodes its pictures, and the renderer is handed the pixels.
-lore-assets = { path = "../lore-assets", default-features = false }
+# The scenes the renderer draws. Whoever reads a file decodes its pictures,
+# and the renderer is handed the pixels.
+lore-assets = { path = "../lore-assets" }
 # The list of boxes and text the HUD and menus ask for, and the trait text is measured through.
 lore-ui = { path = "../lore-ui" }
 # Turns the font's outlines into pixels for HUD and menu text. Pure Rust.

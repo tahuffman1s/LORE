@@ -6,15 +6,9 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[features]
-default = ["textures"]
-# Decodes the PNG and JPEG images a file uses. A build that only needs
-# the shapes goes without this and links no image decoders.
-textures = ["dep:image"]
-
 [dependencies]
-# Without `import`, so reading a file's buffers and images is ours to do and a
-# build without `textures` has no image decoder in it.
+# Without `import`, so reading a file's buffers and images is ours to do: a
+# level may only read files in or below its own folder.
 gltf = { version = "1.4", default-features = false, features = [
     "utils",
     "names",
@@ -24,7 +18,8 @@ gltf = { version = "1.4", default-features = false, features = [
     "KHR_materials_emissive_strength",
     "KHR_lights_punctual",
 ] }
-image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+# Decodes the PNG and JPEG pictures a file uses.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Tangents for normal-mapped meshes that were exported without them.
 bevy_mikktspace = "1.0"
 # Files that carry their data inside themselves (`data:` addresses).

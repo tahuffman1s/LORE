@@ -7,20 +7,14 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = ["window", "cli", "editor"]
-# Opens a window, draws into it and reads keyboard, mouse and gamepads. A
-# build without it links no windowing, graphics or gamepad libraries.
-window = [
-    "dep:winit",
-    "dep:gilrs",
-    "dep:lore-render",
-    "lore-audio/device",
-    # The pictures a level's materials use are decoded only where they are drawn.
-    "lore-assets/textures",
-]
+# There is no build without a window: the windowing, graphics, gamepad and
+# sound libraries are always linked (#310). `lore check` and the tests still
+# run on a machine with no display and no graphics card, because they never
+# open a window; that is decided when the program runs, not when it is built.
+default = ["cli", "editor"]
 # Edit mode, `lore edit`: a game's level with a fly camera and a ground
 # grid, in the same program. A build for players only can leave it out.
-editor = ["window", "lore-render/panels", "dep:egui", "dep:egui-winit"]
+editor = ["lore-render/panels", "dep:egui", "dep:egui-winit"]
 # The `lore` command (`lore new`, `lore run`, `lore package`). Off when
 # the crate is used as a library, so a game written in Rust does not build a
 # command-line parser or an archive writer.
@@ -33,16 +27,14 @@ lore-pack = { path = "../lore-pack" }
 lore-physics = { path = "../lore-physics" }
 # The weapons players hold: firing, what a shot hits, rockets and grenades.
 lore-weapons = { path = "../lore-weapons" }
-# Reads a game's sound files and mixes them. Its `device` feature, which
-# plays through the speakers and links a sound library, comes with `window`.
-lore-audio = { path = "../lore-audio", default-features = false }
+# Reads a game's sound files, mixes them and plays them through the speakers.
+lore-audio = { path = "../lore-audio" }
 # The HUD and menus a game hands over each frame. No dependencies of its own.
 lore-ui = { path = "../lore-ui" }
-lore-render = { path = "../lore-render", optional = true }
-# Reads a game's `level.glb`: players collide with its shapes. Its
-# `textures` feature, which decodes the pictures in it, is switched on by
-# `window`, so a build with no window links no image decoders.
-lore-assets = { path = "../lore-assets", default-features = false }
+lore-render = { path = "../lore-render" }
+# Reads a game's `level.glb`: the player collides with its shapes, and the
+# pictures its materials use are decoded to be drawn.
+lore-assets = { path = "../lore-assets" }
 log = "0.4"
 # Reads a game's `map.toml`. The same reader the bindings file uses.
 toml = { version = "1.2", default-features = false, features = ["parse", "std"] }
@@ -51,8 +43,8 @@ toml = { version = "1.2", default-features = false, features = ["parse", "std"] 
 # archive should say nothing about the computer that made it.
 tar = { version = "0.4", optional = true, default-features = false }
 flate2 = { version = "1", optional = true }
-winit = { version = "0.30", optional = true }
-gilrs = { version = "0.11", optional = true }
+winit = "0.30"
+gilrs = "0.11"
 clap = { version = "4.5", optional = true, default-features = false, features = [
     "std",
     "derive",
@@ -71,7 +63,7 @@ egui-winit = { version = "0.36.2", default-features = false, optional = true }
 
 [[bin]]
 name = "lore"
-required-features = ["window", "cli"]
+required-features = ["cli"]
 
 [lints]
 workspace = true

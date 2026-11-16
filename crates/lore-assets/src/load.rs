@@ -125,7 +125,7 @@ impl Scene {
         check_ranges(name, &document, &buffers)?;
 
         let mut scene = Self::default();
-        let textures = options.textures && cfg!(feature = "textures");
+        let textures = options.textures;
         if textures {
             read_images(&origin, &document, &buffers, &mut scene)?;
             scene.textures = document.textures().map(|t| texture(&t)).collect();
@@ -332,7 +332,6 @@ fn fits(offset: usize, count: usize, stride: usize, size: usize, available: usiz
 }
 
 /// Decodes every picture in the file.
-#[cfg(feature = "textures")]
 fn read_images(
     origin: &Origin<'_>,
     document: &gltf::Document,
@@ -371,18 +370,6 @@ fn read_images(
             })?;
         scene.images.push(decoded);
     }
-    Ok(())
-}
-
-/// Without the `textures` feature there is nothing to decode with.
-#[cfg(not(feature = "textures"))]
-#[allow(clippy::unnecessary_wraps)]
-fn read_images(
-    _origin: &Origin<'_>,
-    _document: &gltf::Document,
-    _buffers: &[Vec<u8>],
-    _scene: &mut Scene,
-) -> Result<(), AssetError> {
     Ok(())
 }
 
