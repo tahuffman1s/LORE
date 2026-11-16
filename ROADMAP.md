@@ -78,7 +78,7 @@ One player, offline, in first or third person: move, look, use things, fight, he
 
 ## M2 — People and creatures
 
-NPCs. They stand in the world, find their way with nothing placed by hand, see and hear, follow a readable list of rules, and can say why they did what they did.
+NPCs. They stand in the world, find their way with nothing placed by hand, see and hear, follow a readable list of rules, and can say why they did what they did. Then the ones a game is built around: enemies described as kinds, bosses with phases, enemies that fly, and companions who take orders and get back up.
 
 - An NPC is one call: someone stands in the world, breathes, and looks at you (#52)
 - NPCs know where they can walk: worked out from the level, with nothing to place (#53)
@@ -100,6 +100,16 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - A hundred NPCs at a steady cost: those far away think less often (#69)
 - `lore check` lives a day in seconds and says which NPC got stuck (#70)
 - A bot can take a player's place: an NPC that plays with the player's buttons (#71)
+- Enemies are kinds you describe once: health, speed, senses, weapon and how they fight (#264)
+- Enemies show what they are about to do: wind-ups the player can read, and hits that land (#265)
+- Enemies fight as a group: a few attack at once, the others close in, circle and wait (#266)
+- Enemy health on screen: bars over heads, hit numbers and a hit marker, each one switch (#267)
+- Bosses: phases written as a list, a named health bar, and an arena that closes (#268)
+- Boss attacks are patterns: moves in an order the player can learn, weak points, and big bodies (#269)
+- Flying enemies: they hover, swoop, strafe and perch, outdoors and under a ceiling (#270)
+- Companions take orders: wait, follow, go there, attack that — one button and a look (#271)
+- Companions fight beside you, go down instead of dying, and can be helped back up (#272)
+- Companions notice things: remarks about places, fights and what you did, and they point the way (#273)
 
 ## M3 — Stories
 
