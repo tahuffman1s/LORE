@@ -1264,16 +1264,23 @@ fn wav() -> Vec<u8> {
     bytes
 }
 
+/// Eleven seconds of Ogg Vorbis made from sine waves (see `lore-audio`'s
+/// tests): long enough that a game decodes it as it plays.
+const SONG: &[u8] = include_bytes!("../../lore-audio/tests/data/song.ogg");
+
 #[test]
 fn check_loads_the_games_sounds_and_says_so() {
     let folder = scratch("check-sounds");
     fs::create_dir_all(folder.join("sounds/ui")).unwrap();
     fs::write(folder.join("sounds/ui/click.wav"), wav()).unwrap();
     fs::write(folder.join("sounds/gunshot.wav"), wav()).unwrap();
+    fs::create_dir_all(folder.join("sounds/music")).unwrap();
+    fs::write(folder.join("sounds/music/theme.ogg"), SONG).unwrap();
     fs::write(folder.join("sounds/LICENCE.txt"), "CC0").unwrap();
     fs::write(
         folder.join("main.luau"),
-        "game.onTick(function()\n    if game.input.justPressed(\"fire\") then\n        \
+        "game.onStart(function()\n    game.audio.play(\"music/theme\", { loop = true })\nend)\n\
+         game.onTick(function()\n    if game.input.justPressed(\"fire\") then\n        \
          game.audio.play(\"ui/click\", { volume = 0.5 })\n        \
          game.audio.playAt(\"gunshot\", vector.create(0, 1, -5), { range = 80 })\n    \
          end\nend)\n",
@@ -1284,7 +1291,7 @@ fn check_loads_the_games_sounds_and_says_so() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("The 2 sound files in the sounds folder are fine"),
+        stdout(&output).contains("The 3 sound files in the sounds folder are fine"),
         "{}",
         stdout(&output)
     );
@@ -1320,6 +1327,9 @@ fn check_fails_on_a_sound_file_that_cannot_be_played_and_says_what_to_do() {
     fs::create_dir_all(folder.join("sounds")).unwrap();
     fs::write(folder.join("sounds/door.wav"), "not a sound").unwrap();
     fs::write(folder.join("sounds/music.mp3"), "ID3").unwrap();
+    // Music whose last bytes are missing: it starts, so only playing it
+    // through finds the damage, and the check does.
+    fs::write(folder.join("sounds/theme.ogg"), &SONG[..SONG.len() - 300]).unwrap();
     fs::write(folder.join("main.luau"), "game.onStart(function() end)\n").unwrap();
 
     let output = lore(&folder, &["check"]);
@@ -1328,11 +1338,17 @@ fn check_fails_on_a_sound_file_that_cannot_be_played_and_says_what_to_do() {
     let said = stderr(&output);
     assert!(said.contains("sounds/door.wav was not loaded."), "{said}");
     assert!(
-        said.contains("sounds/music.mp3 was not loaded: only WAV files can be played"),
+        said.contains(
+            "sounds/music.mp3 was not loaded: only WAV and Ogg Vorbis files can be played"
+        ),
         "{said}"
     );
     assert!(
-        said.contains("2 of the files in the game's sounds folder cannot be played"),
+        said.contains("sounds/theme.ogg stops part way through."),
+        "{said}"
+    );
+    assert!(
+        said.contains("3 of the files in the game's sounds folder cannot be played"),
         "{said}"
     );
     assert!(said.contains("run `lore check` again"), "{said}");

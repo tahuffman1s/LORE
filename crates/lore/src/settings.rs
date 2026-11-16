@@ -1,4 +1,5 @@
-//! The player's own settings: how loud, how fast the view turns, which way
+//! The player's own settings: how loud (everything, and music and effects
+//! each), how fast the view turns, which way
 //! up, and how big the HUD and menus are. One file on their computer that
 //! every game played with LORE reads when it starts, and that the pause
 //! menu's settings screen writes.
@@ -54,6 +55,11 @@ impl Range {
 pub struct Settings {
     /// How loud everything is, from 0 (silent) to 100 (full).
     pub volume: f32,
+    /// How loud music is, from 0 (off) to 100 (full), within `volume`.
+    pub music_volume: f32,
+    /// How loud everything that is not music is, from 0 (off) to 100
+    /// (full), within `volume`.
+    pub effects_volume: f32,
     /// How fast the view turns with the mouse and the stick: 1 is the
     /// game's own speed, 2 is twice as fast. From 0.1 to 3.
     pub sensitivity: f32,
@@ -69,6 +75,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: 100.0,
+            music_volume: 100.0,
+            effects_volume: 100.0,
             sensitivity: 1.0,
             invert_look: false,
             ui_size: 100.0,
@@ -77,7 +85,8 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// What [`volume`](Self::volume) can be.
+    /// What [`volume`](Self::volume), [`music_volume`](Self::music_volume)
+    /// and [`effects_volume`](Self::effects_volume) can be.
     pub const VOLUME: Range = Range {
         lowest: 0.0,
         highest: 100.0,
@@ -103,8 +112,21 @@ impl Settings {
     /// would sound only a little quieter.
     #[must_use]
     pub fn gain(&self) -> f32 {
-        let share = (self.volume / 100.0).clamp(0.0, 1.0);
-        share * share
+        gain(self.volume)
+    }
+
+    /// What music is multiplied by on top of [`gain`](Self::gain), from 0
+    /// to 1, squared in the same way.
+    #[must_use]
+    pub fn music_gain(&self) -> f32 {
+        gain(self.music_volume)
+    }
+
+    /// What every sound that is not music is multiplied by on top of
+    /// [`gain`](Self::gain), from 0 to 1, squared in the same way.
+    #[must_use]
+    pub fn effects_gain(&self) -> f32 {
+        gain(self.effects_volume)
     }
 
     /// What the `look` action is multiplied by, sideways and then up and
@@ -152,6 +174,8 @@ impl Settings {
             let value = value.get_ref();
             let said = match name {
                 "volume" => number(name, value, Self::VOLUME, &mut settings.volume),
+                "music_volume" => number(name, value, Self::VOLUME, &mut settings.music_volume),
+                "effects_volume" => number(name, value, Self::VOLUME, &mut settings.effects_volume),
                 "sensitivity" => number(name, value, Self::SENSITIVITY, &mut settings.sensitivity),
                 "ui_size" => number(name, value, Self::UI_SIZE, &mut settings.ui_size),
                 "invert_look" => match value {
@@ -165,7 +189,8 @@ impl Settings {
                 },
                 _ => Some(format!(
                     "`{name}` is not a setting, so the line was skipped. The settings are \
-                     `volume`, `sensitivity`, `invert_look` and `ui_size`."
+                     `volume`, `music_volume`, `effects_volume`, `sensitivity`, \
+                     `invert_look` and `ui_size`."
                 )),
             };
             if let Some(said) = said {
@@ -194,6 +219,14 @@ impl Settings {
             text,
             "# How loud everything is, from 0 (silent) to 100.\nvolume = {}\n",
             self.volume.round()
+        );
+        let _ = writeln!(
+            text,
+            "# How loud music is, and how loud everything else is, from 0 (off) to 100.\n\
+             # Both are turned down by `volume` as well.\n\
+             music_volume = {}\neffects_volume = {}\n",
+            self.music_volume.round(),
+            self.effects_volume.round()
         );
         let _ = writeln!(
             text,
@@ -293,6 +326,12 @@ fn number(name: &str, value: &DeValue<'_>, range: Range, into: &mut f32) -> Opti
     })
 }
 
+/// What sound is multiplied by for a volume setting from 0 to 100.
+fn gain(volume: f32) -> f32 {
+    let share = (volume / 100.0).clamp(0.0, 1.0);
+    share * share
+}
+
 /// The line, counted from 1, of the byte at `offset`.
 fn line_of(text: &str, offset: usize) -> usize {
     text.get(..offset).unwrap_or(text).matches('\n').count() + 1
@@ -315,6 +354,8 @@ mod tests {
     fn what_is_written_is_read_back_the_same() {
         let chosen = Settings {
             volume: 35.0,
+            music_volume: 0.0,
+            effects_volume: 80.0,
             sensitivity: 1.7,
             invert_look: true,
             ui_size: 125.0,
@@ -338,6 +379,10 @@ mod tests {
             ..chosen
         };
         assert_eq!(half.gain(), 0.25);
+        // Music and effects are squared the same way, each by itself.
+        assert_eq!(half.music_gain(), 0.0);
+        assert!((half.effects_gain() - 0.64).abs() < 1e-6);
+        assert_eq!(Settings::default().music_gain(), 1.0);
     }
 
     #[test]
@@ -359,7 +404,8 @@ mod tests {
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
                 "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `volume`, `sensitivity`, `invert_look` and `ui_size`.",
+                 `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look` \
+                 and `ui_size`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
             ]
         );

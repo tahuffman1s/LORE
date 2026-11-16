@@ -3,7 +3,8 @@
 use std::f32::consts::TAU;
 
 use crate::play::{Heard, hear};
-use crate::{Importance, Listener, Place, Play, Range, Sound};
+use crate::stream::{self, Reader, Streamer, Taken};
+use crate::{Group, Importance, Listener, Place, Play, Range, Sound};
 
 /// How long a sound takes to fade when it is stopped or changes volume.
 /// Short enough not to be noticed, long enough not to click.
@@ -31,7 +32,10 @@ pub struct Playing(pub(crate) u64);
 /// [`Speakers`](crate::Speakers) sends that to the sound card. That makes
 /// it easy to test and to run where there is no sound card at all.
 ///
-/// After it is made, a mixer never asks for memory.
+/// After it is made, a mixer never asks for memory, with one exception:
+/// [`play`](Self::play) of a [streamed](Sound::streamed) sound sets up its
+/// decoding, which is done by another thread. [`mix`](Self::mix) never
+/// asks, waits or reads a file, whatever is playing.
 ///
 /// ```
 /// use lore_audio::{Listener, Mixer, Play, Sound};
@@ -58,6 +62,10 @@ pub struct Mixer {
     listener: Listener,
     volume: f32,
     volume_now: f32,
+    /// How loud each [`Group`] is, effects and then music.
+    groups: [f32; 2],
+    /// Keeps streamed sounds decoded ahead of where they are playing.
+    streamer: Streamer,
     /// How much a gain may change from one sample to the next.
     slew: f32,
     /// How quickly the dulling filter follows the sound.
@@ -69,8 +77,16 @@ pub struct Mixer {
     next_id: u64,
     started: u64,
     /// Finished sounds, kept for another thread to let go of.
-    retired: Vec<Sound>,
+    retired: Vec<Retired>,
     keep_retired: bool,
+}
+
+/// What a voice held when its sound ended. Letting go of it may give
+/// memory back, so the thread that mixes hands it to another to do.
+#[derive(Debug)]
+pub(crate) struct Retired {
+    _sound: Sound,
+    _stream: Option<Reader>,
 }
 
 impl Mixer {
@@ -99,6 +115,8 @@ impl Mixer {
             listener: Listener::default(),
             volume: 1.0,
             volume_now: 1.0,
+            groups: [1.0; 2],
+            streamer: Streamer::default(),
             slew: 1.0 / fade_frames,
             dulling: 1.0 - (-TAU * BEHIND_CUTOFF / rate as f32).exp(),
             tail: vec![0.0; tail_frames * 2].into_boxed_slice(),
@@ -121,11 +139,30 @@ impl Mixer {
     /// A sound too far away to hear is not started, and when every voice
     /// is busy with something more important the new sound is skipped.
     /// Either way the answer can be kept and used as normal.
+    ///
+    /// A [streamed](Sound::streamed) sound starts a moment late, once its
+    /// first stretch is decoded.
     pub fn play(&mut self, play: Play) -> Playing {
         let id = self.next_id;
         self.next_id += 1;
-        self.play_as(Playing(id), play);
+        let reader = play.sound.is_streamed().then(|| {
+            let (reader, feeder) = stream::open(&play.sound, play.looping);
+            self.streamer.feed(feeder);
+            reader
+        });
+        self.play_as(Playing(id), play, reader);
         Playing(id)
+    }
+
+    /// Starts a streamed sound whose decoding the caller does by hand, so
+    /// that a test hears the same thing every time.
+    #[cfg(test)]
+    pub(crate) fn play_fed_by_hand(&mut self, play: Play) -> (Playing, stream::Feeder) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let (reader, feeder) = stream::open(&play.sound, play.looping);
+        self.play_as(Playing(id), play, Some(reader));
+        (Playing(id), feeder)
     }
 
     /// Fades a sound out and ends it.
@@ -181,11 +218,25 @@ impl Mixer {
         };
     }
 
+    /// Sets the volume of one group of sounds, from 0 (silent) to 1
+    /// (full): [`Group::Music`] for what was played as
+    /// [music](Play::music), [`Group::Effects`] for everything else. It is
+    /// on top of [`set_volume`](Self::set_volume), which turns both down.
+    pub fn set_group_volume(&mut self, group: Group, volume: f32) {
+        self.groups[group as usize] = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
     /// Fills `out` with the next stretch of sound: left sample, right
     /// sample, left, right, each between -1 and 1.
     ///
     /// The result does not depend on how the stream is cut into buffers:
     /// one call for 1024 samples gives the same numbers as four for 256.
+    /// (A streamed sound that is not decoded in time is silent meanwhile,
+    /// which no buffer size makes happen or prevents.)
     pub fn mix(&mut self, out: &mut [f32]) {
         out.fill(0.0);
         let whole = out.len() - out.len() % 2;
@@ -206,10 +257,9 @@ impl Mixer {
             }
             let heard = hear(&self.listener, voice.place, voice.range);
             voice.loudness = heard.loudest() * voice.volume;
-            if voice.render(out, heard, self.slew, self.dulling)
-                && let Some(sound) = voice.sound.take()
-            {
-                retire(&mut self.retired, self.keep_retired, sound);
+            let level = self.groups[voice.group as usize];
+            if voice.render(out, heard, level, self.slew, self.dulling) {
+                voice.retire(&mut self.retired, self.keep_retired);
             }
         }
 
@@ -220,8 +270,10 @@ impl Mixer {
         }
     }
 
-    /// Starts a sound under a handle chosen by the caller.
-    pub(crate) fn play_as(&mut self, playing: Playing, play: Play) {
+    /// Starts a sound under a handle chosen by the caller. `reader` is the
+    /// decoded sound of a streamed one, set up by the caller: nothing here
+    /// asks for memory.
+    pub(crate) fn play_as(&mut self, playing: Playing, play: Play, reader: Option<Reader>) {
         let volume = if play.volume.is_finite() {
             play.volume.clamp(0.0, LOUDEST)
         } else {
@@ -239,21 +291,26 @@ impl Mixer {
         };
         let loudness = hear(&self.listener, play.place, play.range).loudest() * volume;
         let out_of_earshot = loudness <= 0.0 && !play.looping && play.place != Place::Everywhere;
-        let Some(slot) = (!out_of_earshot)
+        // A streamed sound with nothing decoding it would never be heard.
+        let playable = !out_of_earshot && play.sound.is_streamed() == reader.is_some();
+        let Some(slot) = playable
             .then(|| self.make_room(play.importance, loudness))
             .flatten()
         else {
-            retire(&mut self.retired, self.keep_retired, play.sound);
+            retire(&mut self.retired, self.keep_retired, play.sound, reader);
             return;
         };
 
         self.started += 1;
         let step = f64::from(play.sound.rate()) / f64::from(self.rate) * f64::from(pitch);
         let voice = &mut self.voices[slot];
-        let before = voice.sound.take();
+        voice.retire(&mut self.retired, self.keep_retired);
         *voice = Voice {
             id: playing.0,
             sound: Some(play.sound),
+            stream: reader,
+            tap: Tap::default(),
+            group: play.group,
             cursor: 0.0,
             step,
             wait: (delay * self.rate as f32) as u32,
@@ -270,9 +327,6 @@ impl Mixer {
             loudness,
             order: self.started,
         };
-        if let Some(sound) = before {
-            retire(&mut self.retired, self.keep_retired, sound);
-        }
     }
 
     /// Finds a voice for a new sound, cutting one off if that is fair.
@@ -302,11 +356,9 @@ impl Mixer {
         // Fade the old sound out into the tail, so cutting it does not click.
         let voice = &mut self.voices[slot];
         voice.stopping = true;
-        voice.render(&mut self.tail, Heard::SILENT, self.slew, self.dulling);
+        voice.render(&mut self.tail, Heard::SILENT, 1.0, self.slew, self.dulling);
         self.tail_frames = self.tail.len() / 2;
-        if let Some(sound) = voice.sound.take() {
-            retire(&mut self.retired, self.keep_retired, sound);
-        }
+        voice.retire(&mut self.retired, self.keep_retired);
         Some(slot)
     }
 
@@ -325,10 +377,13 @@ impl Mixer {
 
     /// Hands over finished sounds until `take` gives one back.
     #[cfg(feature = "device")]
-    pub(crate) fn hand_over_retired(&mut self, mut take: impl FnMut(Sound) -> Result<(), Sound>) {
-        while let Some(sound) = self.retired.pop() {
-            if let Err(sound) = take(sound) {
-                self.retired.push(sound);
+    pub(crate) fn hand_over_retired(
+        &mut self,
+        mut take: impl FnMut(Retired) -> Result<(), Retired>,
+    ) {
+        while let Some(done) = self.retired.pop() {
+            if let Err(done) = take(done) {
+                self.retired.push(done);
                 break;
             }
         }
@@ -336,9 +391,94 @@ impl Mixer {
 }
 
 /// Lets go of a finished sound, or keeps it for another thread to.
-fn retire(retired: &mut Vec<Sound>, keep: bool, sound: Sound) {
+fn retire(retired: &mut Vec<Retired>, keep: bool, sound: Sound, stream: Option<Reader>) {
     if keep && retired.len() < retired.capacity() {
-        retired.push(sound);
+        retired.push(Retired {
+            _sound: sound,
+            _stream: stream,
+        });
+    }
+}
+
+/// Where a voice is in a streamed sound: the two decoded moments it is
+/// between. A stream cannot be gone back into, so they are kept here.
+#[derive(Debug, Clone, Copy, Default)]
+struct Tap {
+    from: [f32; 2],
+    to: [f32; 2],
+    /// How far through the sound the voice is, in the sound's own
+    /// samples, counted as a sound in memory counts it.
+    cursor: f64,
+    /// Which sample `from` is.
+    index: u64,
+    /// How many of `from` and `to` are in hand.
+    held: u8,
+    /// `from` is the sound's last moment.
+    last: bool,
+    /// The sound has begun and is now silent, waiting for decoding.
+    starved: bool,
+}
+
+impl Tap {
+    /// How many samples go by before the count starts again.
+    const RECOUNT: u64 = 1 << 32;
+
+    /// The next moment of output, `step` further on than the one before.
+    fn next(&mut self, reader: &mut Reader, step: f64) -> Taken {
+        // A looped stream goes on for as long as it likes: counting starts
+        // again now and then, so that the count stays exact.
+        if self.index >= Self::RECOUNT {
+            self.cursor -= self.index as f64;
+            self.index = 0;
+        }
+        while self.held < 2 || self.cursor as u64 > self.index {
+            match reader.take() {
+                Taken::Frame(frame) => match self.held {
+                    0 => {
+                        self.from = frame;
+                        self.held = 1;
+                    }
+                    1 => {
+                        self.to = frame;
+                        self.held = 2;
+                    }
+                    _ => {
+                        self.from = self.to;
+                        self.to = frame;
+                        self.index += 1;
+                    }
+                },
+                Taken::Waiting => {
+                    if self.held > 0 && !self.starved {
+                        self.starved = true;
+                        reader.note_gap();
+                    }
+                    return Taken::Waiting;
+                }
+                Taken::Over => {
+                    if self.held == 0 || self.last {
+                        return Taken::Over;
+                    }
+                    // The last moment is held to its end, as a sound in
+                    // memory holds its last sample.
+                    self.last = true;
+                    if self.held == 1 {
+                        self.held = 2;
+                    } else {
+                        self.from = self.to;
+                        self.index += 1;
+                    }
+                    self.to = self.from;
+                }
+            }
+        }
+        self.starved = false;
+        let between = (self.cursor - self.index as f64) as f32;
+        self.cursor += step;
+        Taken::Frame([
+            self.from[0] + (self.to[0] - self.from[0]) * between,
+            self.from[1] + (self.to[1] - self.from[1]) * between,
+        ])
     }
 }
 
@@ -348,6 +488,10 @@ struct Voice {
     id: u64,
     /// `None` when the voice is free.
     sound: Option<Sound>,
+    /// The decoded sound of a streamed one.
+    stream: Option<Reader>,
+    tap: Tap,
+    group: Group,
     /// How far through the sound it is, in the sound's own samples.
     cursor: f64,
     /// How far the cursor moves for each sample of output.
@@ -378,6 +522,9 @@ impl Default for Voice {
         Self {
             id: 0,
             sound: None,
+            stream: None,
+            tap: Tap::default(),
+            group: Group::Effects,
             cursor: 0.0,
             step: 1.0,
             wait: 0,
@@ -398,15 +545,32 @@ impl Default for Voice {
 }
 
 impl Voice {
-    /// Adds this voice to `out`. True when the sound is over.
-    fn render(&mut self, out: &mut [f32], heard: Heard, slew: f32, dulling: f32) -> bool {
+    /// Frees the voice, handing on what it held.
+    fn retire(&mut self, retired: &mut Vec<Retired>, keep: bool) {
+        let stream = self.stream.take();
+        if let Some(sound) = self.sound.take() {
+            retire(retired, keep, sound, stream);
+        }
+    }
+
+    /// Adds this voice to `out`, with its group `level` loud. True when
+    /// the sound is over.
+    fn render(
+        &mut self,
+        out: &mut [f32],
+        heard: Heard,
+        level: f32,
+        slew: f32,
+        dulling: f32,
+    ) -> bool {
         let Some(sound) = &self.sound else {
             return true;
         };
         let target = if self.stopping {
             [0.0; 2]
         } else {
-            [heard.left * self.volume, heard.right * self.volume]
+            let volume = self.volume * level;
+            [heard.left * volume, heard.right * volume]
         };
         if self.fresh {
             if self.stopping {
@@ -431,46 +595,71 @@ impl Voice {
                 continue;
             }
             self.fresh = false;
-            if self.cursor >= length {
-                if !self.looping {
-                    return true;
+            // The sound at this moment: in each ear, or folded into one
+            // when it comes from a place.
+            let (left, right) = if let Some(reader) = &mut self.stream {
+                // A looped stream never ends: its decoder starts again.
+                match self.tap.next(reader, self.step) {
+                    Taken::Frame([left, right]) if placed => {
+                        let both = (left + right) * 0.5;
+                        (both, both)
+                    }
+                    Taken::Frame([left, right]) => (left, right),
+                    Taken::Waiting if self.stopping => return true,
+                    Taken::Waiting => continue,
+                    Taken::Over => return true,
                 }
-                self.cursor %= length;
-            }
-            let index = self.cursor as usize;
-            let next = if index + 1 < frames {
-                index + 1
-            } else if self.looping {
-                0
             } else {
-                index
+                if self.cursor >= length {
+                    if !self.looping {
+                        return true;
+                    }
+                    self.cursor %= length;
+                }
+                let index = self.cursor as usize;
+                let next = if index + 1 < frames {
+                    index + 1
+                } else if self.looping {
+                    0
+                } else {
+                    index
+                };
+                let between = (self.cursor - index as f64) as f32;
+                self.cursor += self.step;
+                if stereo && !placed {
+                    let left = data[index * 2];
+                    let right = data[index * 2 + 1];
+                    (
+                        left + (data[next * 2] - left) * between,
+                        right + (data[next * 2 + 1] - right) * between,
+                    )
+                } else {
+                    let (from, to) = if stereo {
+                        (
+                            (data[index * 2] + data[index * 2 + 1]) * 0.5,
+                            (data[next * 2] + data[next * 2 + 1]) * 0.5,
+                        )
+                    } else {
+                        (data[index], data[next])
+                    };
+                    let both = from + (to - from) * between;
+                    (both, both)
+                }
             };
-            let between = (self.cursor - index as f64) as f32;
-            self.cursor += self.step;
 
             self.gain[0] = approach(self.gain[0], target[0], slew);
             self.gain[1] = approach(self.gain[1], target[1], slew);
             self.muffle = approach(self.muffle, heard.muffle, slew);
 
-            if stereo && !placed {
-                let left = data[index * 2];
-                let right = data[index * 2 + 1];
-                frame[0] += (left + (data[next * 2] - left) * between) * self.gain[0];
-                frame[1] += (right + (data[next * 2 + 1] - right) * between) * self.gain[1];
-            } else {
-                let (from, to) = if stereo {
-                    (
-                        (data[index * 2] + data[index * 2 + 1]) * 0.5,
-                        (data[next * 2] + data[next * 2 + 1]) * 0.5,
-                    )
-                } else {
-                    (data[index], data[next])
-                };
-                let clear = from + (to - from) * between;
+            if placed {
+                let clear = left;
                 self.low += (clear - self.low) * dulling;
                 let sample = clear + (self.low - clear) * self.muffle;
                 frame[0] += sample * self.gain[0];
                 frame[1] += sample * self.gain[1];
+            } else {
+                frame[0] += left * self.gain[0];
+                frame[1] += right * self.gain[1];
             }
 
             if self.stopping && self.gain == [0.0; 2] {

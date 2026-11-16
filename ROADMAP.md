@@ -34,7 +34,6 @@ One player, offline, in first or third person: move, look, use things, fight, he
 
 - Scripts build menus: screens of buttons and settings, and hear of presses and changes (#244)
 - A text box in menus, typed into from a keyboard or with a gamepad (on-screen keyboard) (#250)
-- Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
 - Read the bindings file again while the game runs, and keep a file per game once scripts declare actions (#18)
 - Scripts switch action sets and declare their own (a vehicle, a buy menu) (#19)
 - A setting for the player to turn gamepad rumble down or off (#20)
@@ -94,6 +93,7 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - Who likes whom: one table of sides, and NPCs that remember what you did (#64)
 - A companion who follows, keeps up, and never blocks the door (#65)
 - NPCs say what they are doing: short spoken lines, with subtitles (#66)
+- A speech volume: spoken lines follow a slider of their own (#275)
 - Creatures: other shapes and sizes walk, squeeze through, and fly (#67)
 - Enemies arrive: waves and spawners that never appear before the player's eyes (#68)
 - A hundred NPCs at a steady cost: those far away think less often (#69)

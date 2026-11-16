@@ -744,3 +744,314 @@ fn starter_takes_differ_from_each_other() {
     let second = gunfire.everywhere(0).sound;
     assert_ne!(first.data(), second.data());
 }
+
+// ---- Ogg Vorbis and streamed sounds ----
+
+// The two files were made with ffmpeg from sine waves, so they are nobody's
+// music:
+//   tone.ogg: a quarter of a second, mono, 48 kHz, 440 Hz at half volume.
+//     ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=0.25"
+//       -af volume=4 -ac 1 -c:a libvorbis -q:a 0 -map_metadata -1 -bitexact tone.ogg
+//   song.ogg: eleven seconds, stereo, 8 kHz, 220 Hz at half volume on the
+//   left and 330 Hz at a quarter on the right.
+//     ffmpeg -f lavfi -i "sine=frequency=220:sample_rate=8000:duration=11"
+//       -f lavfi -i "sine=frequency=330:sample_rate=8000:duration=11"
+//       -filter_complex "[0:a]volume=4[l];[1:a]volume=2[r];[l][r]amerge=inputs=2"
+//       -c:a libvorbis -q:a 0 -map_metadata -1 -bitexact song.ogg
+const TONE: &[u8] = include_bytes!("../tests/data/tone.ogg");
+const SONG: &[u8] = include_bytes!("../tests/data/song.ogg");
+
+/// The loudest sample in one ear (0 left, 1 right) of a mixed buffer.
+fn loudest(out: &[f32], ear: usize) -> f32 {
+    out.iter()
+        .skip(ear)
+        .step_by(2)
+        .fold(0.0, |loudest, sample| loudest.max(sample.abs()))
+}
+
+/// Mixes `frames` moments a hundredth of a second at a time, decoding
+/// before each as the decoding thread would have.
+fn mix_fed(mixer: &mut Mixer, feeder: &mut stream::Feeder, frames: usize) -> Vec<f32> {
+    let mut out = vec![9.0; frames * 2];
+    for part in out.chunks_mut(960) {
+        feeder.fill();
+        mixer.mix(part);
+    }
+    out
+}
+
+#[test]
+fn an_ogg_vorbis_file_loads_as_a_sound() {
+    let tone = Sound::from_ogg(TONE).unwrap();
+    assert_eq!((tone.rate(), tone.channels()), (RATE, 1));
+    // To the sample: the padding an encoder adds at the end is cut off.
+    assert_eq!(tone.frames(), 12_000);
+    assert!(!tone.is_streamed());
+    let peak = tone
+        .data()
+        .iter()
+        .fold(0.0_f32, |peak, s| peak.max(s.abs()));
+    assert!((peak - 0.5).abs() < 0.05, "{peak}");
+
+    // The same file whatever it is asked as, since it is short.
+    let found = Sound::from_bytes(TONE).unwrap();
+    assert!(!found.is_streamed());
+    assert_eq!(found.data(), tone.data());
+}
+
+#[test]
+fn a_long_ogg_vorbis_file_is_streamed_and_a_short_one_or_a_wav_is_not() {
+    let song = Sound::from_bytes(SONG).unwrap();
+    assert!(song.is_streamed());
+    assert_eq!((song.rate(), song.channels()), (8_000, 2));
+    assert!(close(song.seconds(), 11.0));
+    // It holds the file, not the 700 KB of sound in it.
+    assert!(song.data().is_empty());
+    assert_eq!(song.packed().len(), SONG.len());
+
+    // Decoded whole, it is as long as it said it would be.
+    assert_eq!(Sound::from_ogg(SONG).unwrap().frames(), song.frames());
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let bytes = wav(spec, |writer| {
+        for _ in 0..RATE * 11 {
+            writer.write_sample(8_000_i16).unwrap();
+        }
+    });
+    assert!(!Sound::from_bytes(bytes.clone()).unwrap().is_streamed());
+    assert!(!Sound::streamed(bytes).unwrap().is_streamed());
+}
+
+#[test]
+fn files_that_are_not_sounds_are_refused_with_advice() {
+    assert_eq!(
+        Sound::from_bytes(&b"ID3 an MP3, perhaps"[..]).unwrap_err(),
+        AudioError::UnknownFormat
+    );
+    assert!(AudioError::UnknownFormat.to_string().contains("Ogg Vorbis"));
+
+    // An Ogg page that starts an Opus stream.
+    let mut opus = b"OggS".to_vec();
+    opus.extend_from_slice(&[0; 22]);
+    opus.extend_from_slice(&[1, 19]);
+    opus.extend_from_slice(b"OpusHead\x01\x02\0\0\x80\xbb\0\0\0\0\0");
+    for read in [
+        Sound::from_bytes(opus.clone()),
+        Sound::streamed(opus.clone()),
+    ] {
+        let error = read.unwrap_err().to_string();
+        assert!(error.contains("it holds Opus sound, not Vorbis"), "{error}");
+        assert!(error.contains("Export the sound as Ogg Vorbis"), "{error}");
+    }
+    assert!(matches!(
+        Sound::from_ogg(&opus).unwrap_err(),
+        AudioError::NotOgg { .. }
+    ));
+
+    // Cut off inside its headers.
+    for read in [
+        Sound::from_bytes(&SONG[..600]),
+        Sound::from_ogg(&SONG[..600]),
+    ] {
+        assert!(matches!(read.unwrap_err(), AudioError::NotOgg { .. }));
+    }
+    assert!(matches!(
+        Sound::from_ogg(b"RIFF....WAVE").unwrap_err(),
+        AudioError::NotOgg { .. }
+    ));
+}
+
+#[test]
+fn a_streamed_sound_sounds_the_same_as_the_sound_in_memory() {
+    let mut whole = Mixer::new(RATE);
+    whole.play(Play::everywhere(Sound::from_ogg(SONG).unwrap()));
+    let mut streamed = Mixer::new(RATE);
+    let song = Sound::streamed(SONG).unwrap();
+    let (_, mut feeder) = streamed.play_fed_by_hand(Play::everywhere(song));
+
+    // Twelve seconds: past the second that is decoded ahead, through the
+    // change of rate from 8 kHz, and past the end.
+    let frames = RATE as usize * 12;
+    let expected = mix(&mut whole, frames);
+    let heard = mix_fed(&mut streamed, &mut feeder, frames);
+    let apart = expected
+        .iter()
+        .zip(&heard)
+        .fold(0.0_f32, |apart, (a, b)| apart.max((a - b).abs()));
+    let at = expected
+        .iter()
+        .zip(&heard)
+        .position(|(a, b)| (a - b).abs() > 1.0e-4);
+    assert!(apart < 1.0e-4, "{apart} {at:?}");
+    // Half volume on the left, a quarter on the right.
+    assert!((loudest(&heard, 0) - 0.5).abs() < 0.05);
+    assert!((loudest(&heard, 1) - 0.25).abs() < 0.05);
+    assert_eq!((whole.playing(), streamed.playing()), (0, 0));
+    assert_eq!(heard[heard.len() - 2..], [0.0, 0.0]);
+    assert_eq!(feeder.fill(), stream::Fed::Done);
+}
+
+#[test]
+fn a_streamed_sound_loops_until_it_is_stopped() {
+    let tone = Sound::streamed(TONE).unwrap();
+    assert!(tone.is_streamed());
+    let mut mixer = Mixer::new(RATE);
+    let (once, mut feeder) = mixer.play_fed_by_hand(Play::everywhere(tone.clone()));
+    let out = mix_fed(&mut mixer, &mut feeder, RATE as usize);
+    assert!(loudest(&out[..24_000], 0) > 0.4);
+    assert_eq!(
+        loudest(&out[24_002..], 0),
+        0.0,
+        "it is a quarter second long"
+    );
+    assert!(!mixer.is_playing(once));
+
+    let (looped, mut feeder) = mixer.play_fed_by_hand(Play::everywhere(tone).looping());
+    let out = mix_fed(&mut mixer, &mut feeder, RATE as usize * 3);
+    for part in out.chunks(RATE as usize / 2) {
+        assert!(loudest(part, 0) > 0.4, "still going");
+    }
+    // Where it goes round, nothing is left out or put in: it is the same
+    // as the sound in memory going round.
+    let mut whole = Mixer::new(RATE);
+    whole.play(Play::everywhere(Sound::from_ogg(TONE).unwrap()).looping());
+    let expected = mix(&mut whole, RATE as usize * 3);
+    let apart = expected
+        .iter()
+        .zip(&out)
+        .fold(0.0_f32, |apart, (a, b)| apart.max((a - b).abs()));
+    assert!(apart < 1.0e-4, "{apart}");
+
+    mixer.stop(looped);
+    let out = mix_fed(&mut mixer, &mut feeder, 4_800);
+    assert_eq!(out[out.len() - 2..], [0.0, 0.0]);
+    assert_eq!(mixer.playing(), 0);
+    // Its voice has let go of the stream, so the decoding stops.
+    assert_eq!(feeder.fill(), stream::Fed::Done);
+}
+
+#[test]
+fn a_streamed_sound_waits_for_its_decoding_and_never_holds_up_the_mix() {
+    let mut mixer = Mixer::new(RATE);
+    let song = Sound::streamed(SONG).unwrap();
+    let (playing, mut feeder) = mixer.play_fed_by_hand(Play::everywhere(song.clone()));
+    // Nothing decoded yet: silence, and the sound is still to come.
+    assert_eq!(loudest(&mix(&mut mixer, 4_800), 0), 0.0);
+    assert!(mixer.is_playing(playing));
+
+    // One second is decoded ahead, and then no more: the voice plays that
+    // and falls silent until there is more.
+    assert_eq!(feeder.fill(), stream::Fed::Some);
+    assert_eq!(feeder.fill(), stream::Fed::Full);
+    let out = mix(&mut mixer, RATE as usize * 2);
+    assert!(loudest(&out[..RATE as usize * 2], 0) > 0.4);
+    assert_eq!(loudest(&out[RATE as usize * 2..], 0), 0.0);
+    assert!(mixer.is_playing(playing));
+    feeder.fill();
+    assert!(loudest(&mix(&mut mixer, 4_800), 0) > 0.4);
+
+    // A sound stopped while it waits ends at once.
+    let (waiting, _unfed) = mixer.play_fed_by_hand(Play::everywhere(song));
+    mix(&mut mixer, 480);
+    mixer.stop(waiting);
+    mixer.stop(playing);
+    mix(&mut mixer, 480);
+    assert_eq!(mixer.playing(), 0);
+}
+
+#[test]
+fn a_streamed_file_that_is_cut_short_ends_early_and_quietly() {
+    let cut = Sound::streamed(&SONG[..SONG.len() / 2]).unwrap();
+    let mut mixer = Mixer::new(RATE);
+    let (_, mut feeder) = mixer.play_fed_by_hand(Play::everywhere(cut).looping());
+    let out = mix_fed(&mut mixer, &mut feeder, RATE as usize * 12);
+    assert!(loudest(&out[..RATE as usize], 0) > 0.4);
+    assert_eq!(mixer.playing(), 0);
+    assert_eq!(out[out.len() - 2..], [0.0, 0.0]);
+}
+
+#[test]
+fn a_streamed_stereo_sound_at_a_place_is_folded_to_mono_and_placed() {
+    let mut mixer = Mixer::new(RATE);
+    mixer.set_listener(listener());
+    let song = Sound::streamed(SONG).unwrap();
+    let (_, mut feeder) = mixer.play_fed_by_hand(Play::at(song, [3.0, 1.6, 0.0]));
+    let out = mix_fed(&mut mixer, &mut feeder, RATE as usize);
+    let (left, right) = (loudest(&out, 0), loudest(&out, 1));
+    assert!(right > left * 3.0, "{left} {right}");
+    assert!(left > 0.0);
+}
+
+#[test]
+fn music_has_a_volume_of_its_own() {
+    let mut mixer = Mixer::new(RATE);
+    // Music in the left ear only and an effect in the right only, so each
+    // can be told from the other.
+    let left = Sound::from_samples(RATE, 2, [0.5, 0.0].repeat(RATE as usize)).unwrap();
+    let right = Sound::from_samples(RATE, 2, [0.0, 0.5].repeat(RATE as usize)).unwrap();
+    mixer.play(Play::everywhere(left).music().looping());
+    mixer.play(Play::everywhere(right).looping());
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(loudest(&out, 0), 0.5) && close(loudest(&out, 1), 0.5));
+
+    mixer.set_group_volume(Group::Music, 0.5);
+    let out = mix(&mut mixer, 4_800);
+    // No click: the music slides to its new volume.
+    assert!(biggest_jump(&out) < 0.01, "{}", biggest_jump(&out));
+    assert!(close(out[out.len() - 2], 0.25) && close(out[out.len() - 1], 0.5));
+
+    mixer.set_group_volume(Group::Music, 0.0);
+    mixer.set_group_volume(Group::Effects, 0.5);
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(out[out.len() - 2], 0.0) && close(out[out.len() - 1], 0.25));
+
+    // The volume of everything is on top of both.
+    mixer.set_group_volume(Group::Music, 1.0);
+    mixer.set_volume(0.5);
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(out[out.len() - 2], 0.25) && close(out[out.len() - 1], 0.125));
+    // A sound started now is at its group's volume from its first sample.
+    mixer.stop_all();
+    mix(&mut mixer, 4_800);
+    mixer.set_volume(1.0);
+    mix(&mut mixer, 4_800);
+    let quiet = Sound::from_samples(RATE, 1, vec![0.5; 480]).unwrap();
+    mixer.play(Play::everywhere(quiet));
+    assert!(close(mix(&mut mixer, 8)[0], 0.25));
+}
+
+#[test]
+fn a_streamed_sound_is_decoded_by_a_thread_of_its_own() {
+    use std::time::{Duration, Instant};
+
+    let mut mixer = Mixer::new(RATE);
+    let song = Sound::from_bytes(SONG).unwrap();
+    let playing = mixer.play(Play::everywhere(song).music().looping());
+    // Nothing here decodes: the sound arrives when the thread has made it.
+    let give_up = Instant::now() + Duration::from_secs(30);
+    let mut heard = 0.0;
+    while heard == 0.0 {
+        assert!(Instant::now() < give_up, "the stream never started");
+        std::thread::sleep(Duration::from_millis(2));
+        heard = loudest(&mix(&mut mixer, 480), 0);
+    }
+    assert!(mixer.is_playing(playing));
+    // It keeps coming: three seconds of it, which is three times what is
+    // decoded ahead, however long a busy computer takes to make them.
+    let mut heard = 0;
+    while heard < 150 {
+        assert!(Instant::now() < give_up, "the stream stopped coming");
+        std::thread::sleep(Duration::from_millis(1));
+        if loudest(&mix(&mut mixer, 960), 0) > 0.3 {
+            heard += 1;
+        }
+    }
+    mixer.stop(playing);
+    mix(&mut mixer, 960);
+    assert_eq!(mixer.playing(), 0);
+}

@@ -31,7 +31,7 @@ pub(crate) enum SoundAsk {
 mod output {
     use std::collections::{HashMap, VecDeque};
 
-    use lore_audio::{Listener, Mixer, Play, Playing};
+    use lore_audio::{Group, Listener, Mixer, Play, Playing};
     use lore_script::SoundId;
 
     use super::SoundAsk;
@@ -53,6 +53,8 @@ mod output {
         fn set_listener(&mut self, listener: Listener);
         /// Sets how loud everything is, from 0 (silent) to 1 (full).
         fn set_volume(&mut self, volume: f32);
+        /// Sets how loud music or everything else is, from 0 to 1.
+        fn set_group_volume(&mut self, group: Group, volume: f32);
     }
 
     impl Voices for Mixer {
@@ -70,6 +72,10 @@ mod output {
 
         fn set_volume(&mut self, volume: f32) {
             Mixer::set_volume(self, volume);
+        }
+
+        fn set_group_volume(&mut self, group: Group, volume: f32) {
+            Mixer::set_group_volume(self, group, volume);
         }
     }
 
@@ -101,11 +107,12 @@ mod output {
             self.voices.set_listener(Listener { position, yaw });
         }
 
-        /// Sets how loud everything is, from 0 (silent) to 1 (full): the
-        /// player's own volume setting.
-        #[cfg_attr(not(feature = "window"), allow(dead_code))]
-        pub(crate) fn set_volume(&mut self, volume: f32) {
-            self.voices.set_volume(volume);
+        /// Sets how loud everything, music and effects are: the player's
+        /// own volume settings.
+        pub(crate) fn set_volumes(&mut self, settings: &crate::settings::Settings) {
+            self.voices.set_volume(settings.gain());
+            (self.voices).set_group_volume(Group::Music, settings.music_gain());
+            (self.voices).set_group_volume(Group::Effects, settings.effects_gain());
         }
 
         /// Does what a frame asked for, in the order it was asked.
@@ -174,9 +181,9 @@ pub(crate) struct LazySpeakers {
     speakers: Option<lore_audio::Speakers>,
     /// Where the ears are, to tell the speakers once they are open.
     listener: lore_audio::Listener,
-    /// How loud the player wants everything, to tell the speakers once
-    /// they are open. `None` until a volume is set: full.
-    volume: Option<f32>,
+    /// How loud the player wants everything, effects and music, to tell
+    /// the speakers once they are open.
+    volumes: Volumes,
     /// When to next try a device that is not working.
     retry_at: Option<std::time::Instant>,
 }
@@ -191,16 +198,14 @@ impl LazySpeakers {
     /// device went away and it is time to try.
     fn ready(&mut self) -> &mut lore_audio::Speakers {
         let listener = self.listener;
-        let volume = self.volume;
+        let volumes = self.volumes;
         let now = std::time::Instant::now();
         let retry_at = &mut self.retry_at;
         let speakers = self.speakers.get_or_insert_with(|| {
             // Says why in the log when there is nothing to play through.
             let mut speakers = lore_audio::Speakers::open_or_silent();
             speakers.set_listener(listener);
-            if let Some(volume) = volume {
-                speakers.set_volume(volume);
-            }
+            volumes.tell(&mut speakers);
             *retry_at = Some(now + Self::RETRY_EVERY);
             speakers
         });
@@ -209,9 +214,7 @@ impl LazySpeakers {
             if speakers.reconnect().is_ok() {
                 log::info!("Sound is playing again.");
                 speakers.set_listener(listener);
-                if let Some(volume) = volume {
-                    speakers.set_volume(volume);
-                }
+                volumes.tell(speakers);
             }
         }
         speakers
@@ -238,10 +241,49 @@ impl Voices for LazySpeakers {
     }
 
     fn set_volume(&mut self, volume: f32) {
-        self.volume = Some(volume);
+        self.volumes.all = volume;
         if let Some(speakers) = &mut self.speakers {
             speakers.set_volume(volume);
         }
+    }
+
+    fn set_group_volume(&mut self, group: lore_audio::Group, volume: f32) {
+        match group {
+            lore_audio::Group::Effects => self.volumes.effects = volume,
+            lore_audio::Group::Music => self.volumes.music = volume,
+        }
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_group_volume(group, volume);
+        }
+    }
+}
+
+/// How loud the player wants things, from 0 to 1.
+#[cfg(feature = "window")]
+#[derive(Debug, Clone, Copy)]
+struct Volumes {
+    all: f32,
+    effects: f32,
+    music: f32,
+}
+
+#[cfg(feature = "window")]
+impl Default for Volumes {
+    fn default() -> Self {
+        Self {
+            all: 1.0,
+            effects: 1.0,
+            music: 1.0,
+        }
+    }
+}
+
+#[cfg(feature = "window")]
+impl Volumes {
+    fn tell(self, speakers: &mut lore_audio::Speakers) {
+        speakers.set_volume(self.all);
+        speakers.set_group_volume(lore_audio::Group::Effects, self.effects);
+        speakers.set_group_volume(lore_audio::Group::Music, self.music);
     }
 }
 
@@ -395,6 +437,89 @@ mod tests {
         assert!((right[1] - left[0]).abs() < 1e-4, "{right:?} {left:?}");
         assert!(far[1] > 0.0 && far[1] < right[1] / 5.0, "{far:?}");
         assert_eq!(out_of_earshot, [0.0, 0.0]);
+        assert_eq!(played.error(), None);
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn music_plays_from_an_ogg_file_and_follows_the_players_music_volume() {
+        use crate::settings::Settings;
+
+        let folder = game(
+            "music",
+            r#"game.onStart(function()
+                game.audio.play("music/theme", { loop = true })
+            end)
+            game.onTick(function()
+                if game.input.justPressed("fire") then
+                    game.audio.play("tone", { volume = 0.2, loop = true })
+                end
+            end)"#,
+        );
+        // Eleven seconds of Ogg Vorbis, half volume on the left and a
+        // quarter on the right: long enough to be decoded as it plays.
+        fs::create_dir_all(folder.join("sounds/music")).unwrap();
+        fs::write(
+            folder.join("sounds/music/theme.ogg"),
+            include_bytes!("../../lore-audio/tests/data/song.ogg"),
+        )
+        .unwrap();
+        let mut played = Played::open(&folder);
+        // It starts when its first second has been decoded, which another
+        // thread does: soon, but not by a set tick.
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while played.step() == [0.0, 0.0] {
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the music never started"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // Time for the rest of that second to be decoded. What follows
+        // plays less than a second of it, so that it passes or fails by
+        // what is heard and not by how busy the computer is.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let step = Played::step;
+        for _ in 0..20 {
+            step(&mut played);
+        }
+        let [left, right] = step(&mut played);
+        assert!(
+            left > 0.3 && right > 0.1 && left > right * 1.5,
+            "{left} {right}"
+        );
+
+        // Music off: the music goes and an effect is as loud as ever.
+        let settings = Settings {
+            music_volume: 0.0,
+            ..Settings::default()
+        };
+        played.output.set_volumes(&settings);
+        played.input.press(GamepadButton::RightTrigger);
+        for _ in 0..5 {
+            step(&mut played);
+        }
+        let [left, right] = step(&mut played);
+        assert!(
+            (left - 0.1).abs() < 0.01 && (right - 0.1).abs() < 0.01,
+            "{left} {right}"
+        );
+
+        // Effects off and music back: the other way round.
+        let settings = Settings {
+            effects_volume: 0.0,
+            music_volume: 50.0,
+            ..Settings::default()
+        };
+        played.output.set_volumes(&settings);
+        for _ in 0..5 {
+            step(&mut played);
+        }
+        let [left, right] = step(&mut played);
+        assert!(
+            left > 0.08 && left < 0.14 && left > right * 1.5,
+            "{left} {right}"
+        );
         assert_eq!(played.error(), None);
         let _ = fs::remove_dir_all(folder);
     }

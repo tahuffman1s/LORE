@@ -126,16 +126,17 @@ fn a_name_that_is_not_a_sound_is_a_mistake_that_names_the_nearest() {
     assert_eq!(
         mistake(r#"game.audio.play("victory")"#),
         "There is no sound called \"victory\". The sounds are: door, explosion, gunshot, \
-         music, ui/click. To add one, put victory.wav in a folder called sounds inside the \
-         game's folder."
+         music, ui/click. To add one, put victory.wav or victory.ogg in a folder called \
+         sounds inside the game's folder."
     );
     // The file's name and its path are slips of their own.
-    for written in ["door.wav", "sounds/door", "sounds/door.WAV"] {
+    for written in ["door.wav", "sounds/door", "sounds/door.WAV", "door.ogg"] {
         assert_eq!(
             mistake(&format!(r#"game.audio.play("{written}")"#)),
             format!(
                 "There is no sound called \"{written}\". A sound is named by its file in \
-                 the sounds folder, without the folder and without .wav: write \"door\"."
+                 the sounds folder, without the folder and without .wav or .ogg: write \
+                 \"door\"."
             )
         );
     }

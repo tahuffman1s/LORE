@@ -77,6 +77,16 @@ pub enum Importance {
     High,
 }
 
+/// Which of the player's volume settings a sound follows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Group {
+    /// Everything that is not music: footsteps, gunfire, doors, menus.
+    #[default]
+    Effects,
+    /// Music, which many players turn down or off and keep the rest.
+    Music,
+}
+
 /// A request to play a sound: what, where and how.
 ///
 /// ```
@@ -110,6 +120,8 @@ pub struct Play {
     pub importance: Importance,
     /// How long to wait before it starts, in seconds.
     pub delay: f32,
+    /// Which volume setting it follows.
+    pub group: Group,
 }
 
 impl Play {
@@ -125,6 +137,7 @@ impl Play {
             looping: false,
             importance: Importance::Normal,
             delay: 0.0,
+            group: Group::Effects,
         }
     }
 
@@ -162,6 +175,15 @@ impl Play {
     #[must_use]
     pub fn looping(mut self) -> Self {
         self.looping = true;
+        self
+    }
+
+    /// Makes it music: it follows the music volume
+    /// ([`Mixer::set_group_volume`](crate::Mixer::set_group_volume)), not
+    /// the volume of effects.
+    #[must_use]
+    pub fn music(mut self) -> Self {
+        self.group = Group::Music;
         self
     }
 

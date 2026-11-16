@@ -296,6 +296,10 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             "Settings",
             "Volume",
             "100",
+            "Music volume",
+            "100",
+            "Effects volume",
+            "100",
             "Look sensitivity",
             "1.0",
             "Invert look",
@@ -316,6 +320,13 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     // Volume: two steps down with the d-pad.
     played.tap(GamepadButton::DpadLeft);
     played.tap(GamepadButton::DpadLeft);
+    // Music: off, by holding nothing: twenty steps of five. Effects: one down.
+    played.tap(GamepadButton::DpadDown);
+    for _ in 0..20 {
+        played.tap(GamepadButton::DpadLeft);
+    }
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::DpadLeft);
     // Sensitivity: up with the stick, which counts once pushed over half way.
     played.tap(GamepadButton::DpadDown);
     for value in [1.0, 0.0, 1.0, 0.0] {
@@ -333,6 +344,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
 
     let chosen = played.menu().settings;
     assert_eq!(chosen.volume, 90.0);
+    assert_eq!((chosen.music_volume, chosen.effects_volume), (0.0, 95.0));
     assert!((chosen.sensitivity - 1.2).abs() < 1e-4, "{chosen:?}");
     assert!(chosen.invert_look);
     assert_eq!(chosen.ui_size, 105.0);
@@ -782,13 +794,13 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
     played.tap(GamepadButton::GamepadStart);
     played.tap(GamepadButton::DpadDown);
     played.tap(GamepadButton::GamepadSouth);
-    // Every row of the screen is on show, title to last button, and the
-    // hints are under them, inside the part of the screen a television
-    // does not cut off.
-    for words in ["Settings", "Volume", "Reset to defaults", "Change"] {
+    // At this size the screen is taller than its room and scrolls: the
+    // rows that are on show start at the title, and the hints are under
+    // them, inside the part of the screen a television does not cut off.
+    for words in ["Settings", "Volume", "HUD and menu size", "Change"] {
         played.place_of(words);
     }
-    let last_row = played.place_of("Reset to defaults")[1];
+    let last_row = played.place_of("HUD and menu size")[1];
     let back = played
         .drawn
         .draw()
@@ -811,4 +823,12 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
         "the hints are under the last row"
     );
     assert!(back[1] <= height * 0.95, "and inside the safe area");
+
+    // The rows below come into sight as the player moves down to them.
+    for _ in 0..7 {
+        played.tap(GamepadButton::DpadDown);
+    }
+    for words in ["Reset to defaults", "Back", "Select"] {
+        played.place_of(words);
+    }
 }
