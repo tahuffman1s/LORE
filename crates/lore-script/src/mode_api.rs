@@ -17,6 +17,7 @@ use mlua::{
 
 use crate::api::{Shared, describe, fail, strict};
 use crate::error::closest;
+use crate::weapon_api;
 
 /// Every setting `game.mode` takes.
 pub(crate) const MODE_SETTINGS: &[&str] = &[
@@ -34,10 +35,12 @@ pub(crate) const MODE_SETTINGS: &[&str] = &[
 pub(crate) const ROUND_FUNCTIONS: &[&str] = &["phase", "timeLeft", "finish"];
 
 /// What can be read from a player.
-pub(crate) const PLAYER_FIELDS: &[&str] = &["name", "team", "score", "kills", "deaths", "alive"];
+pub(crate) const PLAYER_FIELDS: &[&str] = &[
+    "name", "team", "score", "kills", "deaths", "alive", "weapon", "ammo", "reserve",
+];
 
 /// What a player can be told to do.
-pub(crate) const PLAYER_METHODS: &[&str] = &["addScore"];
+pub(crate) const PLAYER_METHODS: &[&str] = &["addScore", "giveWeapon", "takeWeapon"];
 
 /// What can be read from a team.
 pub(crate) const TEAM_FIELDS: &[&str] = &["name", "score"];
@@ -130,7 +133,7 @@ pub(crate) fn is_team(value: &AnyUserData) -> bool {
     value.is::<TeamRef>()
 }
 
-fn shared_of(lua: &Lua) -> mlua::Result<Rc<Shared>> {
+pub(crate) fn shared_of(lua: &Lua) -> mlua::Result<Rc<Shared>> {
     lua.app_data_ref::<Rc<Shared>>()
         .map(|shared| Rc::clone(&shared))
         .ok_or_else(|| mlua::Error::runtime("the game is not ready yet"))
@@ -208,6 +211,18 @@ impl UserData for PlayerRef {
         fields.add_field_method_get("alive", |lua, this| {
             this.read(lua, "alive", |player| player.alive)
         });
+        fields.add_field_method_get("weapon", |lua, this| {
+            this.read(lua, "weapon", |_| ())?;
+            Ok(weapon_api::weapon_name(&*shared_of(lua)?, this.0))
+        });
+        fields.add_field_method_get("ammo", |lua, this| {
+            this.read(lua, "ammo", |_| ())?;
+            Ok(weapon_api::rounds(&*shared_of(lua)?, this.0).0)
+        });
+        fields.add_field_method_get("reserve", |lua, this| {
+            this.read(lua, "reserve", |_| ())?;
+            Ok(weapon_api::rounds(&*shared_of(lua)?, this.0).1)
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -221,6 +236,15 @@ impl UserData for PlayerRef {
                 .game
                 .borrow_mut()
                 .add_score(this.0, points);
+            Ok(())
+        });
+        methods.add_function("giveWeapon", |lua, (this, name): (Value, Value)| {
+            let this = receiver::<Self>(lua, &this, "player", "giveWeapon", "(\"rifle\")")?;
+            weapon_api::give(lua, this.0, &name)
+        });
+        methods.add_function("takeWeapon", |lua, this: Value| {
+            let this = receiver::<Self>(lua, &this, "player", "takeWeapon", "()")?;
+            shared_of(lua)?.weapons.take(this.0);
             Ok(())
         });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
@@ -390,6 +414,15 @@ fn read_only(lua: &Lua, what: &str, key: &Value) -> mlua::Error {
     };
     let advice = if key == "score" {
         format!("To change a score, write: {what}:addScore(1)")
+    } else if what == "player" && key == "weapon" {
+        "To hand a player a weapon, write: player:giveWeapon(\"rifle\"). To empty their \
+         hands, write: player:takeWeapon()"
+            .to_owned()
+    } else if what == "player" && (key == "ammo" || key == "reserve") {
+        "A weapon's rounds are set where it is made: game.weapon(\"smg\", { magazineSize \
+         = 25, reserve = 100 }). Giving the weapon again fills it: \
+         player:giveWeapon(player.weapon)"
+            .to_owned()
     } else {
         format!(
             "The engine keeps a {what}'s details; to remember something of your own about \

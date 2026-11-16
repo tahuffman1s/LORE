@@ -12,6 +12,7 @@ mod demo;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use lore::Upscaling;
@@ -26,7 +27,9 @@ use lore::player;
 use lore::press::{self, Pressed};
 use lore::scaffold::{self, NewGame};
 use lore::script::ENTRY_SCRIPT;
+use lore::script::WeaponHit;
 use lore::script::mode::Phase;
+use lore::script::weapons::Zone;
 use lore::sounds::SOUNDS_FOLDER;
 use lore::{Config, Game, ScriptGame};
 
@@ -480,6 +483,24 @@ fn check(folder: &Path) -> Result<(), String> {
                 );
             }
         });
+        // A pretend shot, so the functions that wait for one run too: with
+        // what the script handed the first player, or else a rifle.
+        let weapon = game
+            .host()
+            .held_weapon(first)
+            .map_or_else(|| Rc::from("rifle"), |held| held.name);
+        game.host_mut().weapon_fired(first);
+        game.host_mut().weapon_hit(&WeaponHit {
+            shooter: first,
+            victim: Some(second),
+            weapon,
+            damage: 30.0,
+            part: Some(Zone::Body),
+            position: [0.0, 1.2, -10.0],
+            distance: 10.0,
+            explosion: false,
+        });
+        game.host_mut().weapon_reloading(first);
         game.host_mut().player_killed(Some(first), second);
         game.host_mut().player_killed(None, first);
         game.tick(input.tick(), step);
@@ -526,7 +547,8 @@ fn check(folder: &Path) -> Result<(), String> {
     if played {
         println!(
             "Then a pretend match was played: two players joined, the round started, one \
-             killed the other, one died alone, the round ended and both left. Each \
+             fired a shot that hit the other and reloaded, one killed the other, one died \
+             alone, the round ended and both left. Each \
              game.on... function in the script was called at least once, with no errors. \
              Code the pretend match does not reach, such as what happens on a team kill, \
              was not run."

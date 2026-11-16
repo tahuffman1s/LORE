@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use lore_input::{ActionMap, InputFrame, Rumble};
 use lore_mode::{Event, Match, PlayerId};
+use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
 use crate::api::{self, Handlers, Shared};
@@ -23,6 +24,7 @@ use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::mode_api::{Handles, ModeState};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
+use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 
 /// The file every game starts from, inside the game's folder.
 pub const ENTRY_SCRIPT: &str = "main.luau";
@@ -160,6 +162,9 @@ pub struct ScriptHost {
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
+    /// The kinds of weapon in effect and who holds which. Kept here so a
+    /// save empties nobody's hands.
+    weapons: Rc<WeaponState>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -260,6 +265,7 @@ impl ScriptHost {
             kept: Rc::default(),
             spawns: Vec::new(),
             audio: Rc::default(),
+            weapons: Rc::new(WeaponState::new()),
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -369,6 +375,86 @@ impl ScriptHost {
     /// they were not in it.
     pub fn player_left(&mut self, player: PlayerId) {
         self.mode.game.borrow_mut().leave(player);
+        self.tell_script();
+        self.weapons.take(player);
+    }
+
+    /// The weapon `player` holds, if the script has handed them one with
+    /// `player:giveWeapon`: step its `state` with its `settings` once a
+    /// tick, hand the state back with
+    /// [`set_weapon_state`](Self::set_weapon_state), and tell the script
+    /// what came of it ([`weapon_fired`](Self::weapon_fired),
+    /// [`weapon_hit`](Self::weapon_hit),
+    /// [`weapon_reloading`](Self::weapon_reloading)).
+    ///
+    /// ```
+    /// use lore_input::{ActionMap, InputFrame};
+    /// use lore_script::ScriptHost;
+    /// use lore_script::weapons::{WeaponInput, shot_seed};
+    ///
+    /// let script = "game.onPlayerJoin(function(player) player:giveWeapon(\"pistol\") end)";
+    /// let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    /// let player = host.player_joined("Ada");
+    ///
+    /// let mut held = host.held_weapon(player).expect("the script gave a pistol");
+    /// let input = WeaponInput { trigger: true, ..WeaponInput::default() };
+    /// let mut shots = Vec::new();
+    /// // Half a second: the pistol is raised, then fires once.
+    /// for tick in 0..30 {
+    ///     let seed = shot_seed(0, tick);
+    ///     let events = held.state.step(&held.settings, &input, seed, 1.0 / 60.0, &mut shots);
+    ///     for _ in 0..events.shots {
+    ///         host.weapon_fired(player);
+    ///     }
+    /// }
+    /// host.set_weapon_state(player, held.state);
+    /// assert_eq!(shots.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn held_weapon(&self, player: PlayerId) -> Option<HeldWeapon> {
+        let (kind, state) = self.weapons.held(player)?;
+        Some(HeldWeapon {
+            name: kind.name,
+            settings: kind.settings,
+            state,
+        })
+    }
+
+    /// Hands back the state of the weapon `player` holds after stepping it.
+    /// Does nothing if they hold none.
+    pub fn set_weapon_state(&mut self, player: PlayerId, state: Weapon) {
+        self.weapons.set_state(player, state);
+    }
+
+    /// Tells the script that `player` fired a shot: its `game.onWeaponFire`
+    /// functions. A shotgun blast is one shot.
+    pub fn weapon_fired(&mut self, player: PlayerId) {
+        if let Some(player) = self.player(player) {
+            self.call_all(|handlers| &handlers.weapon_fire, player);
+            self.tell_script();
+        }
+    }
+
+    /// Tells the script that `player` began to reload: its
+    /// `game.onWeaponReload` functions.
+    pub fn weapon_reloading(&mut self, player: PlayerId) {
+        if let Some(player) = self.player(player) {
+            self.call_all(|handlers| &handlers.weapon_reload, player);
+            self.tell_script();
+        }
+    }
+
+    /// Tells the script where a shot landed: its `game.onWeaponHit`
+    /// functions. A hit on the level has no victim.
+    pub fn weapon_hit(&mut self, hit: &WeaponHit) {
+        let Some(version) = &self.running else { return };
+        if version.shared.handlers.borrow().weapon_hit.is_empty() {
+            return;
+        }
+        let Ok(table) = weapon_api::hit_table(&version.vm, &version.shared, hit) else {
+            return;
+        };
+        self.call_all(|handlers| &handlers.weapon_hit, table);
         self.tell_script();
     }
 
@@ -491,6 +577,14 @@ impl ScriptHost {
                 if let Err(problem) = self.mode.game.borrow_mut().set_rules(rules) {
                     log::error!("The rules from game.mode were not used: {problem}");
                 }
+                let kinds = std::mem::take(&mut *version.shared.kinds.borrow_mut());
+                for gone in self.weapons.define(kinds) {
+                    log::warn!(
+                        "The script no longer makes the weapon \"{gone}\", so the players \
+                         holding one now hold nothing. Hand them another: \
+                         player:giveWeapon(\"rifle\")"
+                    );
+                }
                 self.running = Some(version);
                 self.paused = false;
                 self.last_error = None;
@@ -551,6 +645,8 @@ impl ScriptHost {
             modules: Modules::new(Rc::clone(&self.files)),
             kept: Kept::default(),
             store: Rc::clone(&self.kept),
+            weapons: Rc::clone(&self.weapons),
+            kinds: RefCell::new(Vec::new()),
         });
         let built = self.run(&shared);
         (shared.modules.take_touched(), built)

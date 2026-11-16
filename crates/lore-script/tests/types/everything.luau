@@ -127,3 +127,83 @@ local lookX, lookY = game.input.mouse("look")
 print(squeeze + moveX + moveY + lookX + lookY)
 game.input.rumble(0.2, 0.6, 0.1)
 game.input.rumble(0, 0)
+
+-- Weapons: every setting, and none of them.
+game.weapon("smg", {
+    from = "rifle",
+    fireMode = "burst",
+    burstSize = 3,
+    reach = 300,
+    roundsPerMinute = 900,
+    burstPause = 0.15,
+    raiseTime = 0.3,
+    pellets = 1,
+    magazineSize = 25,
+    reserve = 100,
+    reloadTime = 1.8,
+    emptyReloadTime = 2.2,
+    reloadAmmoAt = 0.75,
+    oneAtATime = false,
+    keepsChamberedRound = true,
+    autoReload = true,
+    damage = 22,
+    falloffStart = 15,
+    falloffEnd = 40,
+    farDamage = 14,
+    headMultiplier = 2,
+    legMultiplier = 0.8,
+    spread = 1.5,
+    aimingSpread = 0.3,
+    spreadPerShot = 0.1,
+    mostAddedSpread = 2.5,
+    spreadRecoveryDelay = 0.1,
+    spreadRecovery = 6,
+    movingSpread = 1.5,
+    airborneSpread = 4,
+    crouchedSpread = 0.7,
+    kickUp = 0.35,
+    kickSideways = 0.2,
+    mostKick = 6,
+    kickRecoveryDelay = 0.1,
+    kickRecovery = 12,
+})
+game.weapon("launcher", {
+    from = "rocket launcher",
+    projectile = {
+        speed = 40,
+        gravity = 5,
+        drag = 0,
+        bounciness = 0,
+        fuse = math.huge,
+        explodesOnTouch = true,
+        blastRadius = 6,
+        blastEdgeDamage = 10,
+    },
+})
+game.weapon("rifle", {})
+
+game.onSpawn(function(player)
+    player:giveWeapon("smg")
+    local held: string? = player.weapon
+    local rounds: number = player.ammo + player.reserve
+    print(held, rounds)
+    player:takeWeapon()
+end)
+
+game.onWeaponFire(function(player)
+    print(player.name .. " fired")
+end)
+
+game.onWeaponHit(function(hit)
+    local where: vector = hit.position
+    local headshot = hit.part == "head"
+    if hit.victim then
+        print(hit.shooter.name, hit.victim.name, hit.weapon, hit.damage, hit.distance, headshot)
+    elseif hit.explosion then
+        print("Boom at", where)
+    end
+end)
+
+game.onWeaponReload(function(player)
+    print(player.name .. " is reloading")
+end)

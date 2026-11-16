@@ -16,6 +16,7 @@ use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::mode_api::{self, Handles, ModeState};
 use crate::modules::{self, Modules};
+use crate::weapon_api::{self, Kind, WeaponState};
 
 /// Every function directly on `game`. The type definitions shipped for editors
 /// are tested against this list.
@@ -34,6 +35,10 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "players",
     "teams",
     "team",
+    "weapon",
+    "onWeaponFire",
+    "onWeaponHit",
+    "onWeaponReload",
 ];
 
 /// Every function on `game.input`.
@@ -63,6 +68,9 @@ pub(crate) struct Handlers {
     pub spawn: Vec<Function>,
     pub round_start: Vec<Function>,
     pub round_end: Vec<Function>,
+    pub weapon_fire: Vec<Function>,
+    pub weapon_hit: Vec<Function>,
+    pub weapon_reload: Vec<Function>,
 }
 
 /// State the engine and one script VM both reach.
@@ -99,6 +107,11 @@ pub(crate) struct Shared {
     pub kept: Kept,
     /// What the version before this one kept. It outlives this version.
     pub store: Rc<RefCell<Store>>,
+    /// The kinds of weapon in effect and who holds which. It outlives this
+    /// version of the script.
+    pub weapons: Rc<WeaponState>,
+    /// The kinds of weapon this version made with `game.weapon`.
+    pub kinds: RefCell<Vec<Kind>>,
 }
 
 /// How far up the stack to look for the script line that made a call.
@@ -179,7 +192,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 6] = [
+    let events: [(&'static str, &'static str, List); 9] = [
         (
             "onPlayerJoin",
             "game.onPlayerJoin(function(player) ... end)",
@@ -208,12 +221,28 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "game.onRoundEnd(function(winner) ... end)",
             |h| &mut h.round_end,
         ),
+        (
+            "onWeaponFire",
+            "game.onWeaponFire(function(player) ... end)",
+            |h| &mut h.weapon_fire,
+        ),
+        (
+            "onWeaponHit",
+            "game.onWeaponHit(function(hit) ... end)",
+            |h| &mut h.weapon_hit,
+        ),
+        (
+            "onWeaponReload",
+            "game.onWeaponReload(function(player) ... end)",
+            |h| &mut h.weapon_reload,
+        ),
     ];
     for (name, example, list) in events {
         game.set(name, on_event(lua, shared, name, example, list)?)?;
     }
     game.set("keep", keep::function(lua, shared)?)?;
     mode_api::install(lua, shared, &game)?;
+    weapon_api::install(lua, shared, &game)?;
 
     let input = lua.create_table()?;
     let any = Reads::Any;
@@ -505,7 +534,8 @@ mod tests {
             MODE_SETTINGS, PLAYER_FIELDS, PLAYER_METHODS, ROUND_FUNCTIONS, TEAM_FIELDS,
             TEAM_METHODS,
         };
-        let groups: [(&str, &[&str]); 10] = [
+        use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
+        let groups: [(&str, &[&str]); 13] = [
             ("game.", GAME_FUNCTIONS),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),
@@ -516,6 +546,9 @@ mod tests {
             ("Player:", PLAYER_METHODS),
             ("Team.", TEAM_FIELDS),
             ("Team:", TEAM_METHODS),
+            ("game.weapon.", WEAPON_SETTINGS),
+            ("game.weapon.projectile.", PROJECTILE_SETTINGS),
+            ("WeaponHit.", HIT_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

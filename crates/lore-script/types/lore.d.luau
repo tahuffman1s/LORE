@@ -59,10 +59,76 @@ declare extern type Player with
     --- respawn.
     alive: boolean
 
+    --- The name of the weapon in the player's hands, or nil when they hold
+    --- none. Nobody holds a weapon until the script hands one out. The name
+    --- is spelt as it was made: "smg" for `game.weapon("smg", ...)` however
+    --- `giveWeapon` wrote it, and the engine's own are in small letters.
+    --- Example: if player.weapon == "shotgun" then print("Careful!") end
+    weapon: string?
+
+    --- The rounds in the magazine of the player's weapon, ready to fire.
+    --- 0 when they hold no weapon.
+    --- Example: if player.ammo == 0 then print(player.name .. " is empty") end
+    ammo: number
+
+    --- The spare rounds the player carries for their weapon, which
+    --- reloading moves into the magazine. 0 when they hold no weapon.
+    --- Example: if player.ammo + player.reserve == 0 then player:giveWeapon("pistol") end
+    reserve: number
+
     --- Adds points to the player's own score. A negative number takes points
     --- away. Only counts while a round is being played.
     --- Example: player:addScore(1)
     function addScore(self, points: number): ()
+
+    --- Puts a new, full weapon in the player's hands, in place of what they
+    --- held. The name is one of the engine's weapons ("rifle", "pistol",
+    --- "shotgun", "rocket launcher", "grenade") or one made with
+    --- `game.weapon`. The player fires it with the "fire" action, aims with
+    --- "aim" and reloads with "reload". Capital letters do not matter.
+    --- Example: game.onSpawn(function(player) player:giveWeapon("rifle") end)
+    function giveWeapon(self, name: string): ()
+
+    --- Empties the player's hands. Does nothing if they hold no weapon.
+    --- Example: player:takeWeapon()
+    function takeWeapon(self): ()
+end
+
+--- Where a shot landed: what a `game.onWeaponHit` function is handed.
+--- Example: game.onWeaponHit(function(hit) if hit.victim and hit.part == "head" then print("Headshot!") end end)
+declare extern type WeaponHit with
+    --- The player who fired.
+    shooter: Player
+
+    --- The player who was hit, or nil when the shot hit the level (a wall,
+    --- the floor). A player caught in their own explosion is their own
+    --- victim.
+    victim: Player?
+
+    --- The name of the weapon that fired, such as "rifle".
+    weapon: string
+
+    --- What the hit is worth: the weapon's damage at that distance on that
+    --- part of the body. 0 when the level was hit, and for an explosion
+    --- itself, so adding up `hit.damage` counts nobody twice.
+    damage: number
+
+    --- Where on the victim's body the shot landed: "head", "body" or
+    --- "legs". nil when the level was hit, and for the blast of an explosion.
+    part: ("head" | "body" | "legs")?
+
+    --- Where the shot landed, in metres, with y up. For an explosion, its
+    --- centre.
+    position: vector
+
+    --- How far the shot travelled to get there, in metres.
+    distance: number
+
+    --- True when this is an explosion: first the explosion itself, with no
+    --- victim and no damage, then one hit for each player caught in its
+    --- blast, with what the blast is worth where they stood.
+    --- Example: if hit.explosion and not hit.victim then game.audio.playAt("gunshot", hit.position) end
+    explosion: boolean
 end
 
 --- A sound that was started with `game.audio.play` or `game.audio.playAt`.
@@ -203,6 +269,149 @@ declare game: {
     --- team can be kept in a local: local red = game.team("Red")
     --- Example: game.team("Red"):addScore(5)
     team: (name: string) -> Team,
+
+    --- Makes a kind of weapon, or changes one of the engine's, for
+    --- `player:giveWeapon` to hand out. Call it near the top of the file.
+    --- Every setting can be left out, and so can the whole table
+    --- (`game.weapon("carbine")` is another rifle): the weapon starts as a copy of the
+    --- weapon `from` names and changes only what is written. Saving the file
+    --- with new numbers changes the weapons already in players' hands.
+    --- Times are in seconds, distances in metres and angles in degrees.
+    ---
+    --- The engine's weapons are "rifle" (automatic, 30 rounds), "pistol",
+    --- "shotgun" (8 pellets a shot, loaded a shell at a time), "rocket
+    --- launcher" and "grenade" (thrown, bounces, goes off after 3 seconds).
+    --- Example: game.weapon("smg", { from = "rifle", damage = 22, roundsPerMinute = 900 })
+    --- Example: game.weapon("rifle", { magazineSize = 20 })
+    weapon: (name: string, settings: {
+        --- The weapon to start from. If left out: the weapon that already
+        --- has this name, so one of the engine's can be changed, and
+        --- otherwise "rifle".
+        from: string?,
+        --- What pulling the trigger does: "automatic" fires for as long as
+        --- it is held, "single" fires one shot a pull, "burst" a few.
+        fireMode: ("automatic" | "single" | "burst")?,
+        --- How many shots one pull of a "burst" weapon fires. 3 if left out.
+        burstSize: number?,
+        --- How far a shot carries, in metres, for a weapon whose shots land
+        --- at once, like bullets. Leave it out for one with a `projectile`.
+        reach: number?,
+        --- How fast it fires, in shots a minute.
+        roundsPerMinute: number?,
+        --- The wait after a burst before the next one.
+        burstPause: number?,
+        --- How long after the weapon is handed over before it can fire.
+        raiseTime: number?,
+        --- How many things leave the barrel per shot. A shotgun has several;
+        --- each does `damage` on its own, and one shot uses one round.
+        pellets: number?,
+        --- Rounds in a full magazine.
+        magazineSize: number?,
+        --- Spare rounds carried when the weapon is new.
+        reserve: number?,
+        --- How long a reload takes with rounds still in the magazine. For a
+        --- weapon loaded `oneAtATime`, how long each round takes.
+        reloadTime: number?,
+        --- How long a reload takes from an empty magazine.
+        emptyReloadTime: number?,
+        --- How far through the reload the rounds arrive, from 0 to 1. A
+        --- reload cut short before this gives nothing.
+        reloadAmmoAt: number?,
+        --- True when rounds go in singly, like shells into a shotgun.
+        --- Pulling the trigger stops loading to fire what is in.
+        oneAtATime: boolean?,
+        --- True when reloading before the magazine is empty leaves a round
+        --- in the chamber, so the weapon holds one more than `magazineSize`.
+        keepsChamberedRound: boolean?,
+        --- True when pulling the trigger on an empty magazine starts a
+        --- reload.
+        autoReload: boolean?,
+        --- What one hit to the body is worth at close range.
+        damage: number?,
+        --- Up to this distance a hit does full `damage`.
+        falloffStart: number?,
+        --- From this distance on a hit does `farDamage`; in between it eases
+        --- from one to the other.
+        falloffEnd: number?,
+        --- What one hit to the body is worth at `falloffEnd` and beyond.
+        farDamage: number?,
+        --- What a hit to the head is multiplied by.
+        headMultiplier: number?,
+        --- What a hit to the legs is multiplied by.
+        legMultiplier: number?,
+        --- How far off the aim a shot can land when not aiming, standing
+        --- still: half the width of the cone, in degrees.
+        spread: number?,
+        --- The same while aiming.
+        aimingSpread: number?,
+        --- Degrees added to the spread by every shot fired.
+        spreadPerShot: number?,
+        --- The most that firing can add to the spread.
+        mostAddedSpread: number?,
+        --- How long after a shot the added spread starts to shrink.
+        spreadRecoveryDelay: number?,
+        --- How fast the added spread shrinks, in degrees a second.
+        spreadRecovery: number?,
+        --- What the spread is multiplied by at walking speed or faster.
+        movingSpread: number?,
+        --- What the spread is multiplied by in the air.
+        airborneSpread: number?,
+        --- What the spread is multiplied by when crouched.
+        crouchedSpread: number?,
+        --- How far each shot throws the aim upwards, in degrees.
+        kickUp: number?,
+        --- The most each shot throws the aim left or right, in degrees.
+        kickSideways: number?,
+        --- The furthest the aim is thrown from where it was, each way.
+        mostKick: number?,
+        --- How long after a shot the aim starts to settle back.
+        kickRecoveryDelay: number?,
+        --- How fast the aim settles back, in degrees a second.
+        kickRecovery: number?,
+        --- For a weapon that launches something that takes time to arrive:
+        --- a rocket, a grenade, an arrow. Leave it out for one with a
+        --- `reach`. What touching something does is decided in this order:
+        --- it explodes if `explodesOnTouch`; otherwise it bounces if
+        --- `bounciness` is above 0; otherwise it stops and hurts what it hit.
+        --- Example: game.weapon("bow", { from = "pistol", projectile = { speed = 50, gravity = 10, blastRadius = 0 } })
+        projectile: {
+            --- How fast it leaves the weapon, in metres a second.
+            speed: number?,
+            --- How fast it speeds up downwards. 0 flies dead straight.
+            gravity: number?,
+            --- How quickly the air slows it. 0 is no slowing.
+            drag: number?,
+            --- How much of its speed a bounce gives back, from 0 (it does
+            --- not bounce) to 1 (all of it).
+            bounciness: number?,
+            --- Seconds until it goes off by itself. `math.huge` is no fuse.
+            fuse: number?,
+            --- True when touching the level or a player sets it off at once.
+            explodesOnTouch: boolean?,
+            --- How far from the explosion players are hurt. 0 is no explosion.
+            blastRadius: number?,
+            --- The damage done at the very edge of the blast. At the centre
+            --- it is the weapon's `damage`.
+            blastEdgeDamage: number?,
+        }?,
+    }?) -> (),
+
+    --- Calls `handler` each time a player fires a shot. A shotgun blast is
+    --- one shot. `player.weapon` is what they fired.
+    --- Example: game.onWeaponFire(function(player) game.audio.play("gunshot") end)
+    onWeaponFire: (handler: (player: Player) -> ()) -> (),
+
+    --- Calls `handler` each time a shot lands, on a player or on the level.
+    --- Each pellet of a shotgun lands by itself. Nothing is hurt yet: players
+    --- have no health until a later version, so this is where your game
+    --- decides what a hit means.
+    --- Example: game.onWeaponHit(function(hit) if hit.victim then print(hit.shooter.name .. " hit " .. hit.victim.name .. " for " .. hit.damage) end end)
+    onWeaponHit: (handler: (hit: WeaponHit) -> ()) -> (),
+
+    --- Calls `handler` when a player starts to reload. This is not
+    --- `game.onReload`, which is about the script file being saved.
+    --- Example: game.onWeaponReload(function(player) game.audio.play("reload") end)
+    onWeaponReload: (handler: (player: Player) -> ()) -> (),
 
     --- The round being played. A match is one round after another: a short
     --- warm-up, the round itself, then the final score for a while.
