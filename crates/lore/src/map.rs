@@ -44,7 +44,7 @@ pub const MAP_FILE: &str = "map.toml";
 /// The format this version of the engine writes, and the newest it reads.
 pub const VERSION: i64 = 1;
 
-/// The type of an entity where players come into the world.
+/// The type of an entity where the player comes into the world.
 pub const SPAWN: &str = "spawn";
 
 /// What a save is written to before it takes the map file's place. Hidden,
@@ -479,7 +479,7 @@ impl Map {
         self.index_of(id).map(|index| self.entities.remove(index))
     }
 
-    /// Where players come into the world: every entity of type `spawn`.
+    /// Where the player comes into the world: every entity of type `spawn`.
     pub fn spawns(&self) -> impl Iterator<Item = &Entity> + '_ {
         self.entities.iter().filter(|entity| entity.kind == SPAWN)
     }

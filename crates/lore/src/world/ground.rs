@@ -1,4 +1,4 @@
-//! What players walk on and where they start: the level's solid shapes,
+//! What the player walks on and where they start: the level's solid shapes,
 //! its spawn points and the rules of movement.
 
 use std::f32::consts::TAU;
@@ -7,15 +7,14 @@ use std::sync::Arc;
 use lore_assets::{Marker, Scene};
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
-use super::bodies::MAX_PLAYERS;
 use super::spawn;
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
 
-/// Half the width of the floor players stand on until a game has a level.
+/// Half the width of the floor the player stands on until a game has a level.
 const FLOOR_REACH: f32 = 500.0;
 
-/// What a marker in a level is called to be a place players start: `spawn`,
+/// What a marker in a level is called to be a place the player starts: `spawn`,
 /// or anything that begins with it, such as `spawn.001` or `Spawn Red`.
 const SPAWN_NAME: &str = "spawn";
 
@@ -32,14 +31,14 @@ const STEP_CLEAR: f32 = 0.01;
 /// in metres across the ground, if that is where they started.
 const AT_SPAWN: f32 = 0.5;
 
-/// The ground of a world: its solid shapes, where players start on it and
+/// The ground of a world: its solid shapes, where the player starts on it and
 /// how they move over it.
 ///
 /// Cheap to copy: the level's shapes are shared, not copied.
 #[derive(Debug, Clone)]
 pub(crate) struct Ground {
     pub(super) level: Arc<Level>,
-    /// Where players may start. Never empty.
+    /// Where the player may start. Never empty.
     spawns: Arc<[[f32; 3]]>,
     /// Which way a player starting at each of `spawns` faces.
     facing: Arc<[f32]>,
@@ -51,8 +50,8 @@ pub(crate) struct Ground {
 }
 
 impl Ground {
-    /// A flat floor, 1 km on a side, at height zero, with players starting
-    /// at its middle.
+    /// A flat floor, 1 km on a side, at height zero, with the player
+    /// starting at its middle.
     pub(super) fn flat(tick_rate: u32) -> Self {
         let r = FLOOR_REACH;
         let corners = [[-r, 0.0, -r], [r, 0.0, -r], [r, 0.0, r], [-r, 0.0, r]];
@@ -64,8 +63,8 @@ impl Ground {
         )
     }
 
-    /// The ground of a game's level: every shape in it is solid, and players
-    /// start at its spawn markers, or at its middle if it has none.
+    /// The ground of a game's level: every shape in it is solid, and the
+    /// player starts at its spawn markers, or at its middle if it has none.
     fn from_level(level: &Scene, tick_rate: u32) -> Self {
         let spawns: Vec<&Marker> = spawn_markers(level).collect();
         Self::new(Level::from_scene(level), &spawns, tick_rate)
@@ -102,31 +101,26 @@ impl Ground {
         ground
     }
 
-    /// A player about to come into the world. Where players start is one
+    /// The player, about to be put in the world. Where they start is one
     /// rule everywhere: at the spawn points in `map` if it has any, else
     /// at the level's spawn markers, else in the middle of the level. Of
-    /// those the one furthest from `others` is taken, or one nearly as
-    /// good; `seed` settles the choice and should differ from one call to
-    /// the next.
-    pub(super) fn spawn_in<'a>(
+    /// those the one furthest from `others`, the feet of whoever else
+    /// stands in the world, is taken, or one nearly as good; `seed`
+    /// settles the choice and should differ from one call to the next.
+    pub(super) fn spawn_in(
         &self,
         map: &Map,
-        others: impl Iterator<Item = &'a Player>,
+        others: impl Iterator<Item = [f32; 3]>,
         seed: u32,
     ) -> Player {
-        let mut standing = [[0.0; 3]; MAX_PLAYERS];
-        let mut count = 0;
-        for (place, other) in standing.iter_mut().zip(others) {
-            *place = other.position;
-            count += 1;
-        }
+        let standing: Vec<[f32; 3]> = others.collect();
         let placed: Vec<[f32; 3]> = map.spawns().map(|spawn| spawn.position).collect();
         let points: &[[f32; 3]] = if placed.is_empty() {
             &self.spawns
         } else {
             &placed
         };
-        let chosen = spawn::choose(points, &standing[..count], seed)
+        let chosen = spawn::choose(points, &standing, seed)
             .and_then(|point| points.get(point))
             .map_or([0.0; 3], |point| *point);
         Player::at(chosen, &self.rules)
@@ -180,18 +174,18 @@ impl Ground {
     fn problems(&self, level: &Scene, map: &Map) -> Vec<String> {
         if self.level.triangle_count() == 0 {
             return vec![format!(
-                "{LEVEL_FILE} has no shapes in it, so there is nothing to stand on and players \
-                 fall for ever. Add a floor in your 3D tool and export the level again."
+                "{LEVEL_FILE} has no shapes in it, so there is nothing to stand on and the player \
+                 falls for ever. Add a floor in your 3D tool and export the level again."
             )];
         }
         let mut problems = Vec::new();
         let starts = starts(level, map);
         if starts.is_empty() {
             problems.push(format!(
-                "This game has no spawn points, so players start at the level's middle \
+                "This game has no spawn points, so the player starts at the level's middle \
                  (0, 0, 0). To choose where they start, run `lore edit` and use \"Place a \
                  spawn here\", which writes {MAP_FILE}; or add an empty object named `spawn` \
-                 to the level in your 3D tool, turned the way players should look, and \
+                 to the level in your 3D tool, turned the way the player should look, and \
                  export it again."
             ));
         }
@@ -225,7 +219,7 @@ impl Ground {
     }
 }
 
-/// Where players start in a game with `level` and `map`, each with what to
+/// Where the player starts in a game with `level` and `map`, each with what to
 /// call it: the spawn points in the map if it has any, else the level's
 /// spawn markers. Empty when the game has neither.
 fn starts(level: &Scene, map: &Map) -> Vec<(String, [f32; 3])> {
@@ -259,7 +253,7 @@ fn starts(level: &Scene, map: &Map) -> Vec<(String, [f32; 3])> {
         .collect()
 }
 
-/// The markers in `level` that are places for players to start.
+/// The markers in `level` that are places for the player to start.
 fn spawn_markers(level: &Scene) -> impl Iterator<Item = &Marker> {
     level.markers.iter().filter(|marker| {
         marker.name.as_deref().is_some_and(|name| {
@@ -292,7 +286,7 @@ fn yaw_of(marker: &Marker) -> f32 {
 /// What trying a level out for walking found: see [`try_walking`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkCheck {
-    /// How many places for players to start the game has: the `spawn`
+    /// How many places for the player to start the game has: the `spawn`
     /// entities in its map file or, when that has none, the level's
     /// markers whose names begin with `spawn`.
     pub spawn_points: usize,
@@ -403,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_player_is_put_at_a_spawn_point_away_from_the_others() {
+    fn the_player_is_put_at_a_spawn_point_away_from_whoever_stands_on_one() {
         let level = floor_with(vec![
             marker("spawn", [-9.0, 0.0, 0.0], 0.0),
             marker("spawn.001", [9.0, 0.0, 0.0], 0.0),
@@ -412,13 +406,11 @@ mod tests {
         for seed in 0..20 {
             let first = ground.spawn_in(&Map::default(), std::iter::empty(), seed);
             assert_eq!(first.position[0].abs(), 9.0);
-            let second = ground.spawn_in(&Map::default(), std::iter::once(&first), seed);
+            let taken = || std::iter::once(first.position);
+            let second = ground.spawn_in(&Map::default(), taken(), seed);
             assert_eq!(second.position[0], -first.position[0], "seed {seed}");
             // The same question has the same answer.
-            assert_eq!(
-                ground.spawn_in(&Map::default(), std::iter::once(&first), seed),
-                second
-            );
+            assert_eq!(ground.spawn_in(&Map::default(), taken(), seed), second);
         }
     }
 
@@ -439,7 +431,7 @@ mod tests {
         let said = &walked.problems[0];
         assert!(
             said.starts_with(
-                "This game has no spawn points, so players start at the level's middle"
+                "This game has no spawn points, so the player starts at the level's middle"
             ),
             "{said}"
         );
@@ -479,7 +471,7 @@ mod tests {
         )
         .unwrap();
 
-        // With an empty map the level's marker is where players start.
+        // With an empty map the level's marker is where the player starts.
         let empty = Map::default();
         assert_eq!(
             ground.spawn_in(&empty, std::iter::empty(), 3).position,

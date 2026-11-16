@@ -10,12 +10,12 @@ use lore_input::{ActionKind, ActionMap, ActionState, InputFrame, Rumble};
 use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
+use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{TookTooLong, closest};
 use crate::hud::{self, HUD_FUNCTIONS, HudState};
 use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
-use crate::player_api::{self, Handles, Players};
 use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
 
@@ -31,15 +31,15 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "every",
     "tween",
     "keep",
-    "onPlayerJoin",
-    "onPlayerLeave",
     "onSpawn",
-    "players",
     "weapon",
     "onWeaponFire",
     "onWeaponHit",
     "onWeaponReload",
 ];
+
+/// What `game` holds that is neither a function nor a table of them.
+pub(crate) const GAME_VALUES: &[&str] = &["player"];
 
 /// Every function on `game.input`.
 pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
@@ -63,8 +63,6 @@ pub(crate) struct Handlers {
     pub tick: Vec<Function>,
     pub draw: Vec<Function>,
     pub reload: Vec<Function>,
-    pub join: Vec<Function>,
-    pub leave: Vec<Function>,
     pub spawn: Vec<Function>,
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
@@ -85,9 +83,9 @@ pub(crate) struct Shared {
     pub checks: Cell<u32>,
     /// What stops the script once time is up: see [`crate::limit`].
     pub raise: Cell<Option<Interrupt>>,
-    /// Who is in the game. It outlives this version of the script.
-    pub players: Rc<Players>,
-    /// The values this version of the script holds for players.
+    /// Who is in the world. It outlives this version of the script.
+    pub characters: Rc<Characters>,
+    /// The values this version of the script holds for characters.
     pub handles: Handles,
     /// True while the file itself is running, before any handler is called.
     pub loading: Cell<bool>,
@@ -119,7 +117,7 @@ pub(crate) struct Shared {
 }
 
 /// How far up the stack to look for the script line that made a call.
-/// Reading something from a player goes through a few of the VM's own frames.
+/// Reading something from a character goes through a few of the VM's own frames.
 const MAX_FRAMES: usize = 8;
 
 /// The script file and line that called into the engine: the nearest frame
@@ -161,6 +159,10 @@ pub(crate) fn describe(value: &Value) -> &'static str {
 /// Puts `game`, `print` and `require` into the VM's globals.
 pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     lua.set_app_data(Rc::clone(shared));
+    // What is read through `game` is looked up each time it is read. Left
+    // alone, Luau works out `game.player.ammo` once, as the script loads,
+    // and hands every later line that first answer.
+    lua.set_compiler(mlua::chunk::Compiler::new().set_mutable_globals(["game"]));
     let globals = lua.globals();
 
     let game = lua.create_table()?;
@@ -206,23 +208,13 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 6] = [
-        (
-            "onPlayerJoin",
-            "game.onPlayerJoin(function(player) ... end)",
-            |h| &mut h.join,
-        ),
-        (
-            "onPlayerLeave",
-            "game.onPlayerLeave(function(player) ... end)",
-            |h| &mut h.leave,
-        ),
-        ("onSpawn", "game.onSpawn(function(player) ... end)", |h| {
+    let events: [(&'static str, &'static str, List); 4] = [
+        ("onSpawn", "game.onSpawn(function() ... end)", |h| {
             &mut h.spawn
         }),
         (
             "onWeaponFire",
-            "game.onWeaponFire(function(player) ... end)",
+            "game.onWeaponFire(function(shooter) ... end)",
             |h| &mut h.weapon_fire,
         ),
         (
@@ -232,7 +224,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         ),
         (
             "onWeaponReload",
-            "game.onWeaponReload(function(player) ... end)",
+            "game.onWeaponReload(function(shooter) ... end)",
             |h| &mut h.weapon_reload,
         ),
     ];
@@ -240,7 +232,11 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         game.set(name, on_event(lua, shared, name, example, list)?)?;
     }
     game.set("keep", keep::function(lua, shared)?)?;
-    player_api::install(lua, &game)?;
+    // The player is there before the first line of the script runs.
+    game.set(
+        "player",
+        shared.handles.character(lua, CharacterId::PLAYER)?,
+    )?;
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
 
@@ -284,6 +280,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set("hud", pieces)?;
 
     let mut members = GAME_FUNCTIONS.to_vec();
+    members.extend_from_slice(GAME_VALUES);
     members.push("audio");
     members.push("hud");
     members.push("input");
@@ -318,6 +315,14 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     Ok(())
 }
 
+/// What a script written for many players is told about its
+/// `game.onSpawn(function(player) ... end)`: the function is handed
+/// nothing, and `player` would be nil on the first line that used it.
+const SPAWN_TAKES_NOTHING: &str = "game.onSpawn's function is not handed a player. LORE has \
+     one player, and it is game.player. Write function() with nothing between the brackets, \
+     and game.player where the function used the name that was there: \
+     game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)";
+
 /// `game.onTick` and friends: remember a function to call later.
 fn on_event(
     lua: &Lua,
@@ -329,6 +334,9 @@ fn on_event(
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, value: Value| match value {
         Value::Function(handler) => {
+            if name == "onSpawn" && handler.info().num_params > 0 {
+                return Err(fail(lua, SPAWN_TAKES_NOTHING));
+            }
             // A function added while a picture is drawn would be added more
             // often on a faster computer.
             time_api::rules_only(lua, &shared, &format!("game.{name}"))?;
@@ -471,16 +479,17 @@ fn rumble(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
 }
 
 /// What to tell a script that reaches for something LORE does not have
-/// because it makes single-player adventures: the match rules of the
-/// multiplayer shooters whose scripts look much like its own. `path` is
-/// `game` or `player`.
+/// because it makes single-player adventures: the many players and the
+/// match rules of the multiplayer shooters whose scripts look much like its
+/// own. `path` is `game`, or what a character is called in a message
+/// (`game.player`, `character`).
 ///
 /// Without this the answer would be the nearest name that does exist, and
 /// `game.team` would be told "Did you mean game.time?".
 pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
     const NO_TEAMS: &str = "LORE has no teams: it makes single-player games. Take it out. \
          To sort characters into sides of your own, write local side = {} at the top of the \
-         file and then side[player] = \"red\".";
+         file and then side[hit.victim] = \"red\" in game.onWeaponHit.";
     const NO_SCORE: &str = "LORE keeps no score: it has no matches to win. Take it out. To \
          keep one of your own, write local score = 0 at the top of the file, add to it where \
          points are won (score += 1 in game.onWeaponHit or game.onTick), and show it with \
@@ -492,25 +501,44 @@ pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
          no shot kills anybody. Take it out. To count the shots that land on someone, write \
          local hits = 0 at the top of the file and \
          game.onWeaponHit(function(hit) if hit.victim then hits += 1 end end).";
+    let path = match path {
+        "game.player" | "character" => "character",
+        other => other,
+    };
     Some(match (path, key) {
+        ("game", "players") => {
+            "LORE has one player, so there is no list of them: the player is game.player. \
+             Take the loop out and write game.player where the loop said player: \
+             game.player:giveWeapon(\"rifle\")."
+        }
+        ("game", "onPlayerJoin") => {
+            "LORE has one player, who is in the game from the start: nobody joins. Take it \
+             out. To do something when the player is put in the world, write \
+             game.onSpawn(function() game.player:giveWeapon(\"rifle\") end); to do \
+             something once when the game begins, game.onStart(function() ... end)."
+        }
+        ("game", "onPlayerLeave") => {
+            "LORE has one player, who is in the game until it is closed: nobody leaves. \
+             Take it out, along with the tidying up inside it."
+        }
         ("game", "mode") => {
             "LORE has no game modes, teams or rounds: it makes single-player games. Take \
              the whole game.mode call out. Rules of your own go in \
              game.onTick(function(step) ... end), and waits in game.after and game.every."
         }
-        ("game", "team" | "teams") | ("player", "team") => NO_TEAMS,
+        ("game", "team" | "teams") | ("character", "team") => NO_TEAMS,
         ("game", "round") => {
             "LORE has no rounds. Take it out. To count down, write \
              game.after(60, function() ... end); game.time() gives the seconds the game \
              has run."
         }
         ("game", "onRoundStart" | "onRoundEnd") => NO_ROUNDS,
-        ("game", "onKill") | ("player", "kills" | "deaths") => NO_KILLS,
-        ("player", "score" | "addScore") => NO_SCORE,
-        ("player", "alive") => {
-            "LORE has no dead players: nothing has health yet, so everyone in \
-             game.players() is in the world. Take it out. To do something when a player is \
-             put back at a spawn point, write game.onSpawn(function(player) ... end)."
+        ("game", "onKill") | ("character", "kills" | "deaths") => NO_KILLS,
+        ("character", "score" | "addScore") => NO_SCORE,
+        ("character", "alive") => {
+            "LORE has no dead player: nothing has health yet, so game.player is always in \
+             the world. Take it out. To do something when the player is put back at a spawn \
+             point, write game.onSpawn(function() ... end)."
         }
         _ => return None,
     })
@@ -574,7 +602,7 @@ mod tests {
     use super::*;
 
     /// Every name the type definitions declare, as a path such as
-    /// `game.hud.text`, `game.weapon.damage` or `Player:giveWeapon`.
+    /// `game.hud.text`, `game.weapon.damage` or `Character:giveWeapon`.
     fn declared() -> Vec<String> {
         let mut inside: Vec<&str> = Vec::new();
         let mut names = Vec::new();
@@ -613,10 +641,11 @@ mod tests {
 
     #[test]
     fn type_definitions_describe_exactly_the_real_api() {
-        use crate::player_api::{PLAYER_FIELDS, PLAYER_METHODS};
+        use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 19] = [
+        let groups: [(&str, &[&str]); 20] = [
             ("game.", GAME_FUNCTIONS),
+            ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),
             ("game.hud.", HUD_FUNCTIONS),
@@ -627,8 +656,8 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
-            ("Player.", PLAYER_FIELDS),
-            ("Player:", PLAYER_METHODS),
+            ("Character.", CHARACTER_FIELDS),
+            ("Character:", CHARACTER_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),

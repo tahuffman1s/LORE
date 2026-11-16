@@ -1,16 +1,11 @@
-//! The players in a world: where each one is, what each is asking for,
-//! and who each is to the game's script.
+//! Who is in a world: the player, and the training dummies that stand in
+//! it to be shot at. The people of a game will be kept here too, beside
+//! the player rather than as more players.
 
 use lore_physics::{MoveInput, Player};
+use lore_script::CharacterId;
 
-/// The most players a world holds.
-pub const MAX_PLAYERS: usize = 64;
-
-/// A player's number in a world, from 0 to one less than [`MAX_PLAYERS`].
-/// The script's "Player 1" is number 0.
-pub type PlayerId = u8;
-
-/// Everything a player is asking for during one tick.
+/// Everything the player is asking for during one tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PlayerInput {
     /// Walking, jumping, crouching, sprinting and which way the player
@@ -27,76 +22,28 @@ pub struct PlayerInput {
     pub reload: bool,
 }
 
-/// One player in a world.
+/// The player in a world.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Body {
     /// Where they are and how they are moving.
     pub(crate) player: Player,
     /// What they are asking for: the next tick moves them by it.
     pub(crate) asked: PlayerInput,
-    /// Who they are to the game's script.
-    pub(crate) name: lore_script::PlayerId,
 }
 
-/// Everyone in a world, each at the place their number names.
-#[derive(Debug, Clone)]
-pub(crate) struct Bodies([Option<Body>; MAX_PLAYERS]);
+/// The number a training dummy is known by for as long as it stands in a
+/// world ([`World::add_dummy`](super::World::add_dummy)). It is never
+/// given to another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DummyId(pub(crate) u32);
 
-impl Default for Bodies {
-    fn default() -> Self {
-        Self([None; MAX_PLAYERS])
-    }
-}
-
-impl Bodies {
-    /// The lowest number nobody has, if the world has room for one more.
-    pub(crate) fn free(&self) -> Option<PlayerId> {
-        let free = self.0.iter().position(Option::is_none)?;
-        PlayerId::try_from(free).ok()
-    }
-
-    /// Gives `body` the number `id`, in place of whoever had it.
-    pub(crate) fn put(&mut self, id: PlayerId, body: Body) {
-        if let Some(place) = self.0.get_mut(usize::from(id)) {
-            *place = Some(body);
-        }
-    }
-
-    /// Takes out whoever has the number `id`.
-    pub(crate) fn take(&mut self, id: PlayerId) -> Option<Body> {
-        self.0.get_mut(usize::from(id))?.take()
-    }
-
-    pub(crate) fn get(&self, id: PlayerId) -> Option<&Body> {
-        self.0.get(usize::from(id))?.as_ref()
-    }
-
-    pub(crate) fn get_mut(&mut self, id: PlayerId) -> Option<&mut Body> {
-        self.0.get_mut(usize::from(id))?.as_mut()
-    }
-
-    /// Everyone, lowest number first.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (PlayerId, &Body)> + '_ {
-        (0..)
-            .zip(&self.0)
-            .filter_map(|(id, body)| Some((id, body.as_ref()?)))
-    }
-
-    /// Everyone, lowest number first, to move them.
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Body> + '_ {
-        self.0.iter_mut().flatten()
-    }
-
-    /// Who the target numbered `target` is to the script.
-    pub(crate) fn name_of(&self, target: u32) -> Option<lore_script::PlayerId> {
-        let id = PlayerId::try_from(target).ok()?;
-        self.get(id).map(|body| body.name)
-    }
-
-    /// The number of the player the script knows as `name`.
-    pub(crate) fn named(&self, name: lore_script::PlayerId) -> Option<PlayerId> {
-        self.iter()
-            .find(|(_, body)| body.name == name)
-            .map(|(id, _)| id)
-    }
+/// A training dummy: something the size of a standing person that stays
+/// where it is put and can be shot. It does nothing by itself.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Dummy {
+    pub(crate) id: DummyId,
+    /// Where its feet are, in metres.
+    pub(crate) feet: [f32; 3],
+    /// Who it is to the game's script.
+    pub(crate) name: CharacterId,
 }

@@ -24,8 +24,8 @@ use lore::player;
 use lore::press::{self, Pressed};
 use lore::scaffold::{self, NewGame};
 use lore::script::ENTRY_SCRIPT;
-use lore::script::WeaponHit;
 use lore::script::weapons::Zone;
+use lore::script::{CharacterId, WeaponHit};
 use lore::sounds::SOUNDS_FOLDER;
 use lore::world::Playing;
 use lore::{Config, Game, ScriptGame};
@@ -108,9 +108,11 @@ enum Command {
     },
     /// Test a game's script and level without opening a window
     #[command(
-        after_help = "Loads main.luau, starts the game, runs one second of it, brings in a pretend\nplayer who \
-                      fires a pretend shot, dies and leaves, and presses every action in \
-                      turn\nso code that reads input is run too.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+        after_help = "Loads main.luau, starts the game with its player in it and runs one second of \
+                      it.\nPresses every action in turn, so code that reads input is run \
+                      too. Then stands a\npretend training dummy in front of the player and \
+                      tells the script of a pretend shot\nthat hits it, one that hits a wall, \
+                      a reload and the player dying.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -362,16 +364,20 @@ fn open(folder: &Path, config: &Config, verb: &str) -> Result<ScriptGame, String
     cli::open_game(folder, &config.actions, &format!("lore {verb}"))
 }
 
-/// `lore check`: runs a second of the game with no window, brings in a
-/// pretend player who fires a pretend shot, dies and leaves, has the script
-/// draw a picture of each, presses every action in turn, and loads the
-/// game's level and its sounds. Then plays the start of the game again with
+/// `lore check`: runs a second of the game with no window, presses every
+/// action in turn, tells the script of pretend shots at a pretend training
+/// dummy and at a wall, of a reload and of the player dying, has the script
+/// draw a picture before and after, and loads the game's level and its
+/// sounds. Then plays the start of the game again with
 /// pictures drawn at other paces. Fails if the script has a mistake, its
 /// rules depend on how often a picture is drawn, or the level or a sound
 /// cannot be loaded.
 fn check(folder: &Path) -> Result<(), String> {
     /// One second of game time.
     const TICKS: u32 = 60;
+    /// Where the pretend training dummy's feet are: ten metres in front
+    /// of a player who has not moved from the middle of a flat floor.
+    const DUMMY_AT: [f32; 3] = [0.0, 0.0, -10.0];
 
     let config = Config::default();
     let mut game = open(folder, &config, "check")?;
@@ -391,14 +397,7 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         // A picture, so the game.onDraw functions run too.
         game.host_mut().draw(0.5);
-        // A pretend player and something for them to shoot at, so the
-        // functions that wait for a player run too.
-        let player = game.host_mut().player_joined("Check Player");
-        let target = game.host_mut().player_joined("Check Target");
-        game.tick(input.tick(), step);
-        // Every action in turn, so code that only runs on input runs too:
-        // with a player in the game, when a press is most likely to do
-        // something.
+        // Every action in turn, so code that only runs on input runs too.
         let mut seen = game.host().mistakes_logged();
         pressed = press::every_action(&mut input, |action, frame| {
             game.tick(frame, step);
@@ -419,13 +418,19 @@ fn check(folder: &Path) -> Result<(), String> {
         });
         // Pretend shots, so the functions that wait for one run too, with
         // what the script handed the player, or else a rifle: one that hits
-        // the target and one that hits a wall, since a script has to tell
-        // the two apart (`hit.victim` is nil for the wall).
+        // a training dummy and one that hits a wall, since a script has to
+        // tell the two apart (`hit.victim` is nil for the wall). Nothing is
+        // fired and nothing flies: the script is told, as the world tells
+        // it when a real shot lands, so the handlers run whatever weapon
+        // the game has and wherever its level puts the player.
+        let player = CharacterId::PLAYER;
+        let dummy = game.host_mut().add_character("Training dummy");
+        game.host_mut().set_position(dummy, DUMMY_AT);
         let weapon = game
             .host()
             .held_weapon(player)
             .map_or_else(|| Rc::from("rifle"), |held| held.name);
-        for (victim, part, damage) in [(Some(target), Some(Zone::Body), 30.0), (None, None, 0.0)] {
+        for (victim, part, damage) in [(Some(dummy), Some(Zone::Body), 30.0), (None, None, 0.0)] {
             game.host_mut().weapon_fired(player);
             game.host_mut().weapon_hit(&WeaponHit {
                 shooter: player,
@@ -433,7 +438,7 @@ fn check(folder: &Path) -> Result<(), String> {
                 weapon: Rc::clone(&weapon),
                 damage,
                 part,
-                position: [0.0, 1.2, -10.0],
+                position: [DUMMY_AT[0], 1.2, DUMMY_AT[2]],
                 distance: 10.0,
                 explosion: false,
             });
@@ -441,10 +446,9 @@ fn check(folder: &Path) -> Result<(), String> {
         game.host_mut().weapon_reloading(player);
         game.tick(input.tick(), step);
         // Dying is being put back at a spawn point: game.onSpawn again.
-        game.host_mut().player_died(player);
+        game.host_mut().player_died();
         game.tick(input.tick(), step);
-        game.host_mut().player_left(target);
-        game.host_mut().player_left(player);
+        game.host_mut().remove_character(dummy);
         game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
@@ -511,15 +515,16 @@ fn check(folder: &Path) -> Result<(), String> {
     }
     println!(
         "{ENTRY_SCRIPT} is fine: it loaded and ran for {TICKS} ticks (1 second of game time) \
-         with no errors."
+         with its player in it and no errors."
     );
     println!(
-        "Then a pretend player came into the game, with a pretend target ten metres in \
-         front of them. The player fired a shot that hit the target and one that hit a \
-         wall, reloaded, died and was put back at a spawn point, and then both left. Each \
-         game.on... function in the script was called at least once, with no errors. \
-         What those functions do with a shot the check did not fire, such as one to the \
-         head or an explosion, was not run."
+        "Then the script was told of things that did not happen, to see what it does with \
+         them: a training dummy stood ten metres in front of the player, who fired one shot \
+         that hit its body and one that hit a wall, reloaded, died and was put back at a \
+         spawn point. No level was walked and nothing was aimed. Each game.on... function \
+         in the script was called at least once, with no errors. What those functions do \
+         with a shot the check did not make up, such as one to the head or an explosion, \
+         was not run."
     );
     match paced {
         Some(Paced::Same) => println!(
@@ -527,7 +532,7 @@ fn check(folder: &Path) -> Result<(), String> {
              picture drawn after every tick, and once with them drawn unevenly, from none \
              to seven between two ticks. Its rules did the same on every tick each time: \
              nothing they did there depends on the frame rate. That covers the first \
-             second and the presses below, not the pretend player and their shots."
+             second and the presses below, not the pretend shots and the dying."
         ),
         Some(Paced::NotRepeatable { tick }) => println!(
             "The check also tried to find out whether the game's rules depend on how often \
@@ -582,7 +587,7 @@ fn check(folder: &Path) -> Result<(), String> {
     }
     if !game.map().is_empty() {
         println!(
-            "{MAP_FILE} is fine: {}. Players come into the world at its spawn points.",
+            "{MAP_FILE} is fine: {}. The player starts at one of its spawn points.",
             game.map().summary()
         );
     }
@@ -671,8 +676,7 @@ fn not_started(error: &str, verb: &str) -> String {
 fn start(config: Config, game: ScriptGame) -> Result<(), String> {
     // The level that is drawn is the level that is walked.
     let level = config.level.as_ref();
-    let game = Playing::start(game, level, &config.actions, config.tick_rate)
-        .map_err(|error| format!("The game could not start: {error}"))?;
+    let game = Playing::start(game, level, &config.actions, config.tick_rate);
     play(config, game)
 }
 

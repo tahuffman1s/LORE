@@ -1,5 +1,5 @@
-//! A game's world and the players in it: walking, the level's walls,
-//! where players start and which way they face.
+//! A game's world and the player in it: walking, the level's walls,
+//! where the player starts and which way they face.
 //!
 //! Time is counted in ticks, so every run goes the same way.
 
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use lore::input::{ActionMap, Input, Key};
-use lore::world::{PlayerId, Playing, World};
+use lore::world::{Playing, World};
 use lore::{Game, ScriptGame, scaffold};
 
 const TICK_RATE: u32 = 60;
@@ -23,7 +23,7 @@ fn new_game(test: &str) -> ScriptGame {
     ScriptGame::open(&folder, &ActionMap::default_fps()).unwrap()
 }
 
-/// Runs `ticks` ticks of a world, each player doing what was last asked of
+/// Runs `ticks` ticks of a world, the player doing what was last asked of
 /// them.
 fn run(world: &mut World, ticks: u32) {
     let nothing = Input::new(ActionMap::default_fps());
@@ -39,9 +39,9 @@ fn play(game: &mut Playing, input: &mut Input, ticks: u32) {
     }
 }
 
-/// Where the feet of the player numbered `id` are.
-fn feet(world: &World, id: PlayerId) -> [f32; 3] {
-    world.player(id).unwrap().position
+/// Where the player's feet are.
+fn feet(world: &World) -> [f32; 3] {
+    world.player().position
 }
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -51,17 +51,16 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[test]
 fn a_player_walks_in_the_tick_the_key_goes_down() {
     let actions = ActionMap::default_fps();
-    let mut game = Playing::start(new_game("walk"), None, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(new_game("walk"), None, &actions, TICK_RATE);
     let mut input = Input::new(actions);
-    assert_eq!(game.world().game().host().players().len(), 1);
 
     // Settle onto the floor, then hold W.
     play(&mut game, &mut input, 30);
-    let before = feet(game.world(), game.id());
+    let before = feet(game.world());
     input.press(Key::W);
     play(&mut game, &mut input, 1);
     assert!(
-        feet(game.world(), game.id())[2] < before[2],
+        feet(game.world())[2] < before[2],
         "the player moves in the tick the key goes down"
     );
 
@@ -69,10 +68,9 @@ fn a_player_walks_in_the_tick_the_key_goes_down() {
     input.release(Key::W);
     play(&mut game, &mut input, 60);
 
-    let here = feet(game.world(), game.id());
+    let here = feet(game.world());
     assert!(here[2] < -2.0, "walked forward, along -Z: {here:?}");
     assert!(here[1].abs() < 0.01, "on the floor: {here:?}");
-    assert_eq!(game.world().players().count(), 1);
     // The picture is drawn from the player's eyes, right over their feet.
     let eye = game.eye_position();
     assert_eq!([eye[0], eye[2]], [here[0], here[2]]);
@@ -80,27 +78,25 @@ fn a_player_walks_in_the_tick_the_key_goes_down() {
 }
 
 #[test]
-fn the_script_hears_players_come_and_go() {
-    let mut world = World::new(new_game("two"), TICK_RATE);
-    let first = world.add_player().unwrap();
-    let second = world.add_player().unwrap();
-    assert_ne!(first, second);
-    assert_eq!(world.game().host().players().len(), 2);
+fn a_dummy_stands_where_it_is_put_while_the_player_walks() {
+    let mut world = World::new(new_game("dummy"), TICK_RATE);
+    let started = feet(&world);
+    let stood = [started[0] + 5.0, started[1], started[2]];
+    let dummy = world.add_dummy(stood);
 
-    // The second walks off to their right while the first stands.
-    let mut asked = world.asked(second).unwrap();
+    // The player walks off to their right; the dummy does nothing.
+    let mut asked = world.asked();
     asked.movement.right = 1.0;
-    world.ask(second, asked);
-    let (stood, started) = (feet(&world, first), feet(&world, second));
+    world.ask(asked);
     run(&mut world, 90);
-    assert!(distance(stood, feet(&world, first)) < 0.02);
-    assert!(distance(started, feet(&world, second)) > 1.0);
+    assert!(distance(started, feet(&world)) > 1.0);
+    assert_eq!(world.dummy(dummy), Some(stood));
 
-    world.remove_player(second);
+    world.remove_dummy(dummy);
     run(&mut world, 10);
-    assert_eq!(world.players().count(), 1);
-    assert_eq!(world.player(second), None);
-    assert_eq!(world.game().host().players().len(), 1);
+    assert_eq!(world.dummy(dummy), None);
+    let host = world.game().host();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }
 
 /// The level `lore new` writes: a 32 m floor with a wall around it at
@@ -113,12 +109,12 @@ fn starter_level() -> lore::assets::Scene {
 fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
     let actions = ActionMap::default_fps();
     let level = starter_level();
-    let mut game = Playing::start(new_game("level"), Some(&level), &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(new_game("level"), Some(&level), &actions, TICK_RATE);
     let mut input = Input::new(actions);
 
     // Settled at one of the six spawn points, looking at the other end.
     play(&mut game, &mut input, 30);
-    let start = feet(game.world(), game.id());
+    let start = feet(game.world());
     assert!(start[1].abs() < 0.02, "on the floor: {start:?}");
     assert!((start[2].abs() - 14.0).abs() < 0.01, "{start:?}");
     assert!([0.0, 6.0].contains(&start[0].abs().round()), "{start:?}");
@@ -140,7 +136,7 @@ fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
     input.release(Key::S);
     play(&mut game, &mut input, 60);
 
-    let here = feet(game.world(), game.id());
+    let here = feet(game.world());
     let out = here[2].abs();
     assert!(out > 15.5 && out < 15.7, "stopped by the wall: {here:?}");
     assert!((here[0] - start[0]).abs() < 0.01, "{here:?}");
@@ -148,17 +144,22 @@ fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
 }
 
 #[test]
-fn players_in_a_level_start_apart() {
+fn a_player_who_dies_is_put_at_the_end_nobody_is_standing_at() {
     let level = starter_level();
     let mut world = World::new(new_game("apart"), TICK_RATE).with_level(&level);
-    let first = world.add_player().unwrap();
-    let second = world.add_player().unwrap();
     run(&mut world, 30);
+    let first = feet(&world);
+    assert!((first[2].abs() - 14.0).abs() < 0.01, "{first:?}");
 
-    // The second player is put at the other end from the first.
-    let (a, b) = (feet(&world, first), feet(&world, second));
-    assert!((a[2].abs() - 14.0).abs() < 0.01, "{a:?}");
-    assert!((b[2] + a[2]).abs() < 0.01, "{a:?} and {b:?}");
+    // A dummy is stood right where the player started, and the player
+    // dies: they come back at the other end, not inside it.
+    world.add_dummy(first);
+    for _ in 0..20 {
+        world.game_mut().host_mut().player_died();
+        run(&mut world, 30);
+        let back = feet(&world);
+        assert!((back[2] + first[2]).abs() < 0.01, "{first:?} and {back:?}");
+    }
 }
 
 /// A map file with one spawn point at `position`.
@@ -171,7 +172,7 @@ fn map_with_spawn(position: [f32; 3]) -> String {
 }
 
 #[test]
-fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
+fn the_player_starts_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("world-map");
     let _ = std::fs::remove_dir_all(&folder);
     scaffold::new_game(&folder).unwrap();
@@ -184,12 +185,11 @@ fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
     let mut world = World::new(game, TICK_RATE);
 
     // The player is put at the spawn point.
-    let one = world.add_player().unwrap();
     run(&mut world, 30);
-    assert!(distance(feet(&world, one), first) < 0.01);
+    assert!(distance(feet(&world), first) < 0.01);
 
     // The map is saved with the spawn point somewhere else while the game
-    // runs. The game notices, and the next player comes in there.
+    // runs. The game notices, and the player is next put there.
     let second = [-20.0, 0.0, 8.0];
     std::fs::write(&map_file, map_with_spawn(second)).unwrap();
     let moved = |world: &World| {
@@ -207,11 +207,12 @@ fn players_start_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(moved(&world), "the saved map was never picked up");
-    let two = world.add_player().unwrap();
+    // Until they die, the player stays where they are.
     run(&mut world, 30);
-    assert!(distance(feet(&world, two), second) < 0.01);
-    // Whoever was already playing stays where they are.
-    assert!(distance(feet(&world, one), first) < 0.01);
+    assert!(distance(feet(&world), first) < 0.01);
+    world.game_mut().host_mut().player_died();
+    run(&mut world, 30);
+    assert!(distance(feet(&world), second) < 0.01);
 
     // A save with a mistake in it changes nothing: the map that worked stays.
     std::fs::write(&map_file, "version = 1\n[[entity]]\nid = 3\n").unwrap();
@@ -240,14 +241,14 @@ fn a_player_faces_the_way_the_maps_spawn_point_does() {
     assert_eq!(game.map().spawns().count(), 1);
 
     // Facing that way from the first frame, before any tick.
-    let mut game = Playing::start(game, None, &actions, TICK_RATE).unwrap();
+    let mut game = Playing::start(game, None, &actions, TICK_RATE);
     let west = std::f32::consts::FRAC_PI_2;
     assert!((game.yaw() - west).abs() < 0.001, "facing {}", game.yaw());
 
     let mut still = Input::new(actions);
     play(&mut game, &mut still, 30);
-    let here = feet(game.world(), game.id());
-    // Started with their feet on the floor, a player is lifted the
+    let here = feet(game.world());
+    // Started with their feet on the floor, the player is lifted the
     // centimetre they keep clear of it and moved no other way.
     assert!(distance(here, [at[0], 0.01, at[2]]) < 0.0001, "{here:?}");
     assert!((game.yaw() - west).abs() < 0.001, "facing {}", game.yaw());

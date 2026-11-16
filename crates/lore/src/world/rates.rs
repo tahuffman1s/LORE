@@ -35,7 +35,7 @@ impl Walker {
     fn new() -> Self {
         let actions = ActionMap::default_fps();
         let script = ScriptGame::from_source("", &actions);
-        let mut game = Playing::start(script, None, &actions, TICK_RATE).unwrap();
+        let mut game = Playing::start(script, None, &actions, TICK_RATE);
         game.yaw = START_YAW;
         Self {
             game,
@@ -44,7 +44,7 @@ impl Walker {
     }
 
     fn player(&self) -> &lore_physics::Player {
-        self.game.world.player(self.game.id).unwrap()
+        self.game.world.player()
     }
 }
 

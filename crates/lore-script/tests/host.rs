@@ -1120,43 +1120,57 @@ fn a_kept_table_can_be_asked_for_with_no_start_and_from_two_files() {
 }
 
 #[test]
-fn players_are_kept_as_keys_and_values_while_they_are_in_the_match() {
+fn characters_are_kept_as_keys_and_values_while_they_are_in_the_world() {
+    use lore_script::{CharacterId, WeaponHit};
+
     let game = GameFolder::new(
         r#"
-        local streaks = game.keep("streaks")
+        local hits = game.keep("hits")
         local saved = game.keep("saved", { last = false })
-        game.onPlayerJoin(function(player)
-            streaks[player] = #player.name
-            saved.last = player
+        game.onStart(function() hits[game.player] = 0 end)
+        game.onWeaponHit(function(hit)
+            hits[hit.victim] = (hits[hit.victim] or 0) + 1
+            saved.last = hit.victim
         end)
         game.onReload(function()
             local names = {}
-            for player, streak in streaks do
-                table.insert(names, player.name .. "=" .. streak)
+            for character, count in hits do
+                table.insert(names, character.name .. "=" .. count)
             end
             table.sort(names)
-            print(table.concat(names, " "), saved.last and saved.last.name)
-            for _, player in game.players() do
-                print(player.name, streaks[player])
-            end
+            print(table.concat(names, " "), saved.last and saved.last.name, hits[game.player])
         end)
         "#,
     );
     let mut host = game.open();
     host.tick(&idle(), STEP);
-    let ann = host.player_joined("Ann");
-    host.player_joined("Bob");
+    let dummy = host.add_character("Dummy");
+    let hit = |victim| WeaponHit {
+        shooter: CharacterId::PLAYER,
+        victim: Some(victim),
+        weapon: "rifle".into(),
+        damage: 30.0,
+        part: None,
+        position: [0.0; 3],
+        distance: 1.0,
+        explosion: false,
+    };
+    host.weapon_hit(&hit(dummy));
+    host.weapon_hit(&hit(dummy));
     host.reload().unwrap();
-    assert_eq!(printed(), ["Ann=3 Bob=3 Bob", "Ann 3", "Bob 3"]);
+    assert_eq!(printed(), ["Dummy=2 Player=0 Dummy 0"]);
 
-    // A player who left is not handed back as a key that cannot be read.
-    let cy = host.player_joined("Cyril");
-    host.player_left(ann);
+    // The player is the same key to the next version of the script.
+    host.weapon_hit(&hit(CharacterId::PLAYER));
     host.reload().unwrap();
-    assert_eq!(printed(), ["Bob=3 Cyril=5 Cyril", "Bob 3", "Cyril 5"]);
-    host.player_left(cy);
+    assert_eq!(printed(), ["Dummy=2 Player=1 Player 1"]);
+
+    // A character who is gone is not handed back as a key or a value that
+    // cannot be read.
+    host.weapon_hit(&hit(dummy));
+    host.remove_character(dummy);
     host.reload().unwrap();
-    assert_eq!(printed(), ["Bob=3 false", "Bob 3"]);
+    assert_eq!(printed(), ["Player=1 false 1"]);
     assert_eq!(errors(), [] as [&str; 0]);
 }
 
@@ -1185,7 +1199,7 @@ fn what_cannot_be_kept_is_left_out_and_named() {
     assert!(
         all.contains(
             "`inner.call` in game.keep(\"saved\") was not kept across the reload: it is a \
-             function. A kept table can hold numbers, text, true and false, players, and \
+             function. A kept table can hold numbers, text, true and false, game.player, and \
              tables of those. Take this out of the table, or keep a name or a number in \
              its place."
         ),

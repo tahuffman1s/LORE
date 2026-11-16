@@ -1,16 +1,15 @@
-//! The noises players make by walking and by using what they hold.
+//! The noises the player makes by walking and by using what they hold.
 //!
 //! A noise is something that happened in the game, not something the
-//! speakers were told: the world works out each tick whose foot came down
-//! and whose weapon fired, and keeps the list
+//! speakers were told: the world works out each tick whether a foot came
+//! down and what the weapon did, and keeps the list
 //! ([`World::noises`](crate::world::World::noises)) with where each was
 //! made and how loud. The player hears them because their game reads that
 //! list, and anything else in the game that listens can read the same one.
 
-use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Place, Play, Range};
+use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Play, Range};
 
 use crate::sounds::Sounds;
-use crate::world::{Bodies, MAX_PLAYERS, PlayerId};
 
 /// What made a noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,8 +61,6 @@ impl NoiseKind {
 pub struct Noise {
     /// What made it.
     pub kind: NoiseKind,
-    /// The player who made it.
-    pub by: PlayerId,
     /// Where it was made, in metres: the feet for a step or a landing,
     /// the eyes for what a weapon does.
     pub position: [f32; 3],
@@ -77,79 +74,56 @@ pub struct Noise {
     pub tick: u32,
 }
 
-/// Works out when each player's feet come down.
-#[derive(Debug)]
+/// Works out when the player's feet come down. A new one has walked
+/// nowhere yet: start again with one when the player is put somewhere new,
+/// so the next step is counted from there.
+#[derive(Debug, Default)]
 pub(crate) struct Walking {
-    feet: [Footsteps; MAX_PLAYERS],
+    feet: Footsteps,
     settings: FootstepSettings,
 }
 
-impl Default for Walking {
-    fn default() -> Self {
-        Self {
-            feet: [Footsteps::default(); MAX_PLAYERS],
-            settings: FootstepSettings::default(),
-        }
-    }
-}
-
 impl Walking {
-    /// Forgets how far `id` has walked: for a player who has come, gone
-    /// or been put somewhere new, so the next step is counted from there.
-    pub(crate) fn forget(&mut self, id: PlayerId) {
-        if let Some(feet) = self.feet.get_mut(usize::from(id)) {
-            *feet = Footsteps::default();
-        }
-    }
-
-    /// Adds to `noises` the steps and landings of the tick numbered `tick`,
-    /// which has just moved `bodies`: call it every tick, after everyone
-    /// has moved. `step` is the length of a tick in seconds.
-    pub(crate) fn tick(&mut self, bodies: &Bodies, tick: u32, step: f32, noises: &mut Vec<Noise>) {
-        for (id, body) in bodies.iter() {
-            let player = &body.player;
-            let Some(walked) = self.feet.get_mut(usize::from(id)) else {
-                continue;
-            };
-            let [x, y, z] = player.velocity;
-            let feet = Feet {
-                speed: (x * x + z * z).sqrt(),
-                falling: -y,
-                grounded: player.grounded,
-                crouched: player.crouched,
-                sprinting: player.sprinting,
-            };
-            let (kind, loudness) = match walked.step(&self.settings, &feet, step) {
-                Some(Footfall::Step { volume, .. }) => (NoiseKind::Footstep, volume),
-                Some(Footfall::Landing { volume }) => (NoiseKind::Landing, volume),
-                None => continue,
-            };
-            noises.push(Noise {
-                kind,
-                by: id,
-                position: player.position,
-                loudness,
-                delay: 0.0,
-                tick,
-            });
-        }
+    /// Adds to `noises` the step or landing of the tick numbered `tick`,
+    /// which has just moved `player`: call it every tick, after they have
+    /// moved. `step` is the length of a tick in seconds.
+    pub(crate) fn tick(
+        &mut self,
+        player: &lore_physics::Player,
+        tick: u32,
+        step: f32,
+        noises: &mut Vec<Noise>,
+    ) {
+        let [x, y, z] = player.velocity;
+        let feet = Feet {
+            speed: (x * x + z * z).sqrt(),
+            falling: -y,
+            grounded: player.grounded,
+            crouched: player.crouched,
+            sprinting: player.sprinting,
+        };
+        let (kind, loudness) = match self.feet.step(&self.settings, &feet, step) {
+            Some(Footfall::Step { volume, .. }) => (NoiseKind::Footstep, volume),
+            Some(Footfall::Landing { volume }) => (NoiseKind::Landing, volume),
+            None => return,
+        };
+        noises.push(Noise {
+            kind,
+            position: player.position,
+            loudness,
+            delay: 0.0,
+            tick,
+        });
     }
 }
 
-/// What to hand the speakers so that the player hears `noise`: equally in
-/// both ears when it is their `own`, and from where it was made otherwise. `nth` is its place among the noises of its tick, so
-/// two at once do not play the same take. `None` when the game has no
-/// sound of that name ready.
-pub(crate) fn play(noise: &Noise, own: bool, nth: u32, sounds: &mut Sounds) -> Option<Play> {
-    let seed = noise
-        .tick
-        .wrapping_mul(31)
-        .wrapping_add(u32::from(noise.by).wrapping_mul(7919))
-        .wrapping_add(nth);
+/// What to hand the speakers so that the player hears `noise`, which they
+/// made themself: equally in both ears. `nth` is its place among the
+/// noises of its tick, so two at once do not play the same take. `None`
+/// when the game has no sound of that name ready.
+pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play> {
+    let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
     let mut play = sounds.take(noise.kind.sound(), seed)?;
-    if !own {
-        play.place = Place::At(noise.position);
-    }
     play.volume *= noise.loudness;
     play.range = noise.kind.range();
     Some(play.after(noise.delay))

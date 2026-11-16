@@ -249,8 +249,8 @@ impl ScriptGame {
         &self.host
     }
 
-    /// The script host, to tell it what players do: who joined, who left and
-    /// who killed whom.
+    /// The script host, to tell it what happens in the world: where the player is,
+    /// what was hit and that the player died.
     pub fn host_mut(&mut self) -> &mut ScriptHost {
         &mut self.host
     }

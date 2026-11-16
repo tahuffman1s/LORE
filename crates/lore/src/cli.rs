@@ -205,7 +205,7 @@ pub fn load_level(folder: &Path) -> Result<Option<lore_assets::Scene>, String> {
     Ok(level)
 }
 
-/// What `lore check` says after trying a level out for walking: that a
+/// What `lore check` says after trying a level out for walking: that the
 /// player can start at every spawn point, or what to change, a line each.
 #[must_use]
 pub fn walked(check: &crate::world::WalkCheck) -> String {
@@ -215,7 +215,7 @@ pub fn walked(check: &crate::world::WalkCheck) -> String {
             many => format!("each of its {many} spawn points"),
         };
         return format!(
-            "Players can walk it: one was started at {places} and landed on the floor every \
+            "The player can walk it: started at {places}, they landed on the floor every \
              time. They stood still there, so walk it yourself with `lore run`.\n"
         );
     }

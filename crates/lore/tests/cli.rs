@@ -311,17 +311,18 @@ fn a_misspelled_command_suggests_the_right_one() {
 }
 
 #[test]
-fn check_brings_in_a_pretend_player_who_shoots_dies_and_leaves() {
+fn check_tells_the_script_of_pretend_shots_at_a_training_dummy_and_of_the_player_dying() {
     let folder = scratch("check-player");
     let script = [
-        "game.onPlayerJoin(function(player) print(player.name .. \" joined.\") end)",
-        "game.onSpawn(function(player) print(player.name .. \" is at a spawn point.\") end)",
-        "game.onWeaponFire(function(player) print(player.name .. \" fired.\") end)",
+        "game.onStart(function() print(game.player.name .. \" starts.\") end)",
+        "game.onSpawn(function() print(game.player.name .. \" is at a spawn point.\") end)",
+        "game.onWeaponFire(function(shooter) print(shooter.name .. \" fired.\") end)",
         "game.onWeaponHit(function(hit)",
-        "    print(hit.weapon .. \" hit \" .. (hit.victim and hit.victim.name or \"a wall\") .. \".\")",
+        "    local who = hit.victim and hit.victim.name or \"a wall\"",
+        "    print(hit.weapon .. \" hit \" .. who .. \", \" .. hit.distance .. \" m away.\")",
+        "    if hit.victim then print(\"It stands at z \" .. hit.victim.position.z .. \".\") end",
         "end)",
-        "game.onWeaponReload(function(player) print(player.name .. \" reloads.\") end)",
-        "game.onPlayerLeave(function(player) print(player.name .. \" left.\") end)",
+        "game.onWeaponReload(function(shooter) print(shooter.name .. \" reloads.\") end)",
     ];
     fs::write(folder.join("main.luau"), script.join("\n")).unwrap();
 
@@ -330,34 +331,85 @@ fn check_brings_in_a_pretend_player_who_shoots_dies_and_leaves() {
     assert!(output.status.success(), "{}", stderr(&output));
     let said = stdout(&output);
     for words in [
-        "a pretend player came into the game",
-        "fired a shot that hit the target and one that hit a wall",
+        "with its player in it and no errors",
+        "the script was told of things that did not happen",
+        "a training dummy stood ten metres in front of the player",
+        "fired one shot that hit its body and one that hit a wall",
         "died and was put back at a spawn point",
+        "No level was walked and nothing was aimed",
         "Each game.on... function in the script was called at least once",
     ] {
         assert!(said.contains(words), "no {words:?} in: {said}");
     }
     // The script's own functions really ran, in this order: the player is
-    // put at a spawn point twice, on coming in and on dying.
+    // put at a spawn point twice, as the game starts and on dying.
     let heard = stderr(&output);
     let mut from = 0;
     for line in [
-        "Check Player joined.",
-        "Check Player is at a spawn point.",
-        "Check Target joined.",
-        "Check Player fired.",
-        "rifle hit Check Target.",
-        "Check Player fired.",
-        "rifle hit a wall.",
-        "Check Player reloads.",
-        "Check Player is at a spawn point.",
-        "Check Target left.",
-        "Check Player left.",
+        "Player starts.",
+        "Player is at a spawn point.",
+        "Player fired.",
+        "rifle hit Training dummy, 10 m away.",
+        "It stands at z -10.",
+        "Player fired.",
+        "rifle hit a wall, 10 m away.",
+        "Player reloads.",
+        "Player is at a spawn point.",
     ] {
         let at = heard[from..]
             .find(line)
             .unwrap_or_else(|| panic!("no {line:?} after the lines before it in: {heard}"));
         from += at + line.len();
+    }
+    assert_eq!(heard.matches("is at a spawn point.").count(), 2, "{heard}");
+}
+
+/// A script written when LORE had many players is told, by `lore check`,
+/// on the line that asks, that there is one and what to write instead.
+#[test]
+fn check_tells_a_script_written_for_many_players_what_to_write_instead() {
+    for (name, line, told) in [
+        (
+            "players",
+            "for _, player in game.players() do player:giveWeapon(\"rifle\") end",
+            "game.players does not exist. LORE has one player, so there is no list of them: \
+             the player is game.player. Take the loop out and write game.player where the loop \
+             said player: game.player:giveWeapon(\"rifle\").",
+        ),
+        (
+            "join",
+            "game.onPlayerJoin(function(player) player:giveWeapon(\"rifle\") end)",
+            "game.onPlayerJoin does not exist. LORE has one player, who is in the game from \
+             the start: nobody joins. Take it out. To do something when the player is put in \
+             the world, write game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)",
+        ),
+        (
+            "leave",
+            "game.onPlayerLeave(function(player) print(player.name) end)",
+            "game.onPlayerLeave does not exist. LORE has one player, who is in the game until \
+             it is closed: nobody leaves. Take it out",
+        ),
+        (
+            "spawn",
+            "game.onSpawn(function(player) player:giveWeapon(\"rifle\") end)",
+            "game.onSpawn's function is not handed a player. LORE has one player, and it is \
+             game.player.",
+        ),
+    ] {
+        let folder = scratch(&format!("check-many-{name}"));
+        let script = format!("local points = 0\n{line}\nprint(points)\n");
+        fs::write(folder.join("main.luau"), script).unwrap();
+
+        let output = lore(&folder, &["check"]);
+
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        let said = stderr(&output);
+        // Wrapped to the terminal's width, so compared word by word.
+        let said: Vec<&str> = said.split_whitespace().collect();
+        let said = said.join(" ");
+        for words in ["Script error in main.luau, line 2", line, told] {
+            assert!(said.contains(words), "no {words:?} in: {said}");
+        }
     }
 }
 
@@ -375,7 +427,7 @@ fn check_reports_a_mistake_that_only_a_shot_reaches() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains("player.nmae does not exist. Did you mean player.name?"),
+        stderr(&output).contains("game.player.nmae does not exist. Did you mean game.player.name?"),
         "{}",
         stderr(&output)
     );
@@ -552,7 +604,7 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
     assert!(!stderr(&output).contains("Jump number 3"));
     let said = stdout(&output);
     assert!(
-        said.contains("Each of the 21 actions was also pressed, held and let go"),
+        said.contains("Each of the 20 actions was also pressed, held and let go"),
         "{said}"
     );
     assert!(!said.contains("Nothing was pressed"), "{said}");
@@ -586,9 +638,8 @@ fn check_passes_a_new_game_without_a_window() {
     );
     // And a player was stood at each place the level has to start from.
     assert!(
-        stdout(&output).contains(
-            "Players can walk it: one was started at each of its 6 spawn points and landed"
-        ),
+        stdout(&output)
+            .contains("The player can walk it: started at each of its 6 spawn points, they landed"),
         "{}",
         stdout(&output)
     );
@@ -613,7 +664,7 @@ fn check_warns_about_a_level_with_nothing_to_stand_on_and_still_passes() {
         said.contains("Warning: level.glb has no shapes in it, so there is nothing to stand on"),
         "{said}"
     );
-    assert!(!said.contains("Players can walk it"), "{said}");
+    assert!(!said.contains("The player can walk it"), "{said}");
 }
 
 /// A new game whose level was replaced by something that is not one.
@@ -695,8 +746,8 @@ fn check_reads_the_map_file_and_says_what_is_placed() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         stdout(&output).contains(
-            "map.toml is fine: 3 placed: 2 spawn, 1 zone. Players come into the world at \
-             its spawn points."
+            "map.toml is fine: 3 placed: 2 spawn, 1 zone. The player starts at one of its \
+             spawn points."
         ),
         "{}",
         stdout(&output)

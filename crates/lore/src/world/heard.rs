@@ -1,6 +1,6 @@
-//! A game is heard with no script code: the noises players make by
+//! A game is heard with no script code: the noises the player makes by
 //! walking and by firing are in the world's list, and the player hears
-//! them, their own in both ears and anyone else's from where they are.
+//! them, the same in both ears.
 //!
 //! The sound goes to a mixer whose output is read, not to speakers, so
 //! every run plays the same ticks.
@@ -10,9 +10,8 @@ use std::fs;
 use lore_audio::Mixer;
 use lore_input::{ActionMap, GamepadButton, Input, Key};
 
-use super::{MOST_HEARD, PlayerId, PlayerInput, Playing, World};
+use super::{MOST_HEARD, Playing, World};
 use crate::game::{Frame, Game};
-use crate::map::Map;
 use crate::noise::{Noise, NoiseKind};
 use crate::script_game::ScriptGame;
 use crate::sound_output::{SoundAsk, SoundOutput};
@@ -36,7 +35,7 @@ impl Played {
     fn of(script: ScriptGame) -> Self {
         assert_eq!(script.host().last_error(), None);
         let actions = ActionMap::default_fps();
-        let game = Playing::start(script, None, &actions, 60).unwrap();
+        let game = Playing::start(script, None, &actions, 60);
         let mut played = Self {
             game,
             input: Input::new(actions),
@@ -105,18 +104,7 @@ impl Played {
     }
 
     fn feet(&self) -> [f32; 3] {
-        self.feet_of(self.game.id)
-    }
-
-    fn feet_of(&self, id: PlayerId) -> [f32; 3] {
-        self.game.world.player(id).unwrap().position
-    }
-
-    /// Changes what the player numbered `id` is asking for.
-    fn ask(&mut self, id: PlayerId, change: impl FnOnce(&mut PlayerInput)) {
-        let mut asked = self.game.world.asked(id).unwrap();
-        change(&mut asked);
-        self.game.world.ask(id, asked);
+        self.game.world.player().position
     }
 }
 
@@ -131,7 +119,6 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 fn a_player_walking_alone_is_heard_step_by_step_with_no_script() {
     // No script at all: nothing but walking.
     let mut played = Played::script("");
-    let me = played.game.id();
     let start = played.feet();
 
     played.input.press(Key::W);
@@ -145,7 +132,6 @@ fn a_player_walking_alone_is_heard_step_by_step_with_no_script() {
     assert!((steps as f32 - expected).abs() <= 1.0, "{steps} {walked}");
     for noise in &played.noises {
         assert_eq!(noise.kind, NoiseKind::Footstep);
-        assert_eq!(noise.by, me);
         assert!((noise.loudness - 0.6).abs() < 1e-6, "{noise:?}");
         // Made where the feet were: on the floor, along the way walked.
         assert!(noise.position[1].abs() < 0.01, "{noise:?}");
@@ -195,7 +181,7 @@ fn a_jump_is_heard_when_it_lands() {
 /// A rifle with three rounds in it and three to spare, 600 a minute.
 const SMALL_RIFLE: &str = r#"
 game.weapon("rifle", { magazineSize = 3, reserve = 3, roundsPerMinute = 600 })
-game.onSpawn(function(player) player:giveWeapon("rifle") end)
+game.onSpawn(function() game.player:giveWeapon("rifle") end)
 "#;
 
 #[test]
@@ -203,7 +189,6 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
     use NoiseKind::{DryFire, Gunshot, Reload};
 
     let mut played = Played::script(SMALL_RIFLE);
-    let me = played.game.id();
     let eyes = played.game.eye_position();
 
     // The trigger held until both magazines are gone and after.
@@ -219,7 +204,6 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
         ]
     );
     for noise in &played.noises {
-        assert_eq!(noise.by, me);
         assert!(noise.loudness == 1.0);
         assert!(distance(noise.position, eyes) < 0.05, "{noise:?}");
         assert!((0.0..=STEP).contains(&noise.delay), "{noise:?}");
@@ -244,7 +228,7 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
 #[test]
 fn a_shotgun_blast_is_heard_once_however_many_pellets_it_throws() {
     let mut played =
-        Played::script(r#"game.onSpawn(function(player) player:giveWeapon("shotgun") end)"#);
+        Played::script(r#"game.onSpawn(function() game.player:giveWeapon("shotgun") end)"#);
     played.input.press(GamepadButton::RightTrigger);
     played.run(3);
     played.input.release(GamepadButton::RightTrigger);
@@ -252,62 +236,23 @@ fn a_shotgun_blast_is_heard_once_however_many_pellets_it_throws() {
     assert_eq!(played.kinds(), [NoiseKind::Gunshot]);
 }
 
-/// Two places to start on the flat floor, both facing -Z, the second six
-/// metres to the right of the first.
-const SIDE_BY_SIDE: &str = "version = 1\n\n\
-    [[entity]]\nid = \"left\"\ntype = \"spawn\"\nposition = [0.0, 0.0, 0.0]\nfacing = 0.0\n\n\
-    [[entity]]\nid = \"right\"\ntype = \"spawn\"\nposition = [6.0, 0.0, 0.0]\nfacing = 0.0\n";
-
 #[test]
-fn another_player_is_heard_from_where_they_are() {
-    let actions = ActionMap::default_fps();
-    let map = Map::parse("map.toml", SIDE_BY_SIDE).unwrap();
-    let script = ScriptGame::from_source(
-        r#"game.onSpawn(function(player) player:giveWeapon("rifle") end)"#,
-        &actions,
-    )
-    .with_map(map);
-    let mut played = Played::of(script);
-    let me = played.game.id();
-
-    // Someone else comes into the same world.
-    let them = played.game.world.add_player().unwrap();
+fn a_dummy_standing_by_makes_no_noise_and_the_player_is_heard_the_same() {
+    let mut played = Played::script(SMALL_RIFLE);
+    // Six metres to the player's right: +X, for a player facing -Z.
+    let [x, y, z] = played.feet();
+    played.game.world.add_dummy([x + 6.0, y, z]);
     played.run(60);
-    assert_ne!(me, them);
     assert_eq!(played.noises, []);
-    let (here, there) = (played.feet(), played.feet_of(them));
-    assert!(
-        (distance(here, there) - 6.0).abs() < 0.1,
-        "{here:?} {there:?}"
-    );
-    // Which ear they are nearer to: +X is to the right of a player
-    // facing -Z.
-    let (near, far) = if there[0] > here[0] { (1, 0) } else { (0, 1) };
+    assert_eq!(played.loudest, [0.0; 2]);
 
-    // They walk two steps or so, away along -Z, while this player stands.
-    played.ask(them, |asked| asked.movement.forward = 1.0);
-    played.run(40);
-    played.ask(them, |asked| asked.movement.forward = 0.0);
-    assert!(!played.noises.is_empty());
-    for noise in &played.noises {
-        assert_eq!((noise.kind, noise.by), (NoiseKind::Footstep, them));
-        assert!(distance(noise.position, there) < 4.0, "{noise:?}");
-    }
-    let steps = played.loudest;
-    assert!(steps[near] > 0.0, "{steps:?}");
-    assert!(steps[near] > steps[far] * 1.2, "{steps:?}");
-
-    // Their rifle is louder than their feet, and on the same side.
-    played.noises.clear();
-    played.loudest = [0.0; 2];
-    played.ask(them, |asked| asked.fire = true);
+    // The player's own rifle is still the same in both ears.
+    played.input.press(GamepadButton::RightTrigger);
     played.run(12);
-    played.ask(them, |asked| asked.fire = false);
     assert!(played.kinds().contains(&NoiseKind::Gunshot));
-    assert!(played.noises.iter().all(|noise| noise.by == them));
-    let shots = played.loudest;
-    assert!(shots[near] > steps[near], "{shots:?} {steps:?}");
-    assert!(shots[near] > shots[far] * 1.2, "{shots:?}");
+    let [left, right] = played.loudest;
+    assert!(left > 0.05, "{left}");
+    assert!((left - right).abs() < 1e-6, "{left} {right}");
 }
 
 #[test]
@@ -371,11 +316,10 @@ fn a_world_with_nobody_listening_still_lists_what_was_heard() {
     let actions = ActionMap::default_fps();
     let script = ScriptGame::from_source("", &actions);
     let mut world = World::new(script, 60);
-    let walker = world.add_player().unwrap();
     let nothing = Input::new(actions);
-    let mut asked = world.asked(walker).unwrap();
+    let mut asked = world.asked();
     asked.movement.forward = 1.0;
-    world.ask(walker, asked);
+    world.ask(asked);
     let mut heard = Vec::new();
     for _ in 0..180 {
         world.tick(nothing.frame(), STEP);

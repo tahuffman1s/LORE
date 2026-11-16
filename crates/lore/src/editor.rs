@@ -279,7 +279,7 @@ struct Controls {
 
 /// What switches between editing and playing: one key and one gamepad
 /// button. F5 is "play" in most editors; Select (View, Back) is the one
-/// button left over once a game has Start for its pause menu.
+/// button the standard controls leave free.
 const PLAY_KEYS: [&str; 2] = ["F5", "GamepadSelect"];
 
 /// The editor's own actions and what they are bound to, added to `game`,
@@ -1011,8 +1011,8 @@ mod tests {
         assert_eq!(map.bindings(controls.play).len(), 2);
 
         // Added to a game's actions, they leave the game's as they were
-        // and bring no gap: only Select now does two things while playing,
-        // since the usual controls show the scoreboard with it.
+        // and bring no gap. The usual controls leave Select alone, so
+        // nothing else answers to it while playing.
         let game = ActionMap::default_fps();
         let (map, controls) = super::controls(game.clone()).unwrap();
         assert_eq!(map.parity_gaps(), Vec::new());
@@ -1022,7 +1022,7 @@ mod tests {
             assert_eq!(map.set_of(action), game.set_of(action));
         }
         assert_eq!(map.set_of(controls.back), Some(ActionMap::GAMEPLAY));
-        assert_eq!(map.conflicts().len(), 1, "{:?}", map.conflicts());
+        assert_eq!(map.conflicts(), Vec::new());
 
         // A game that already has an action by one of these names is not
         // edited over: the editor says it cannot start.

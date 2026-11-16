@@ -39,22 +39,22 @@
 
 mod api;
 mod audio;
+mod character_api;
 mod error;
 mod host;
 mod hud;
 mod keep;
 mod limit;
 mod modules;
-mod player_api;
 mod time_api;
 mod weapon_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
+pub use character_api::CharacterId;
 pub use error::{OpenError, ScriptError};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lore_weapons as weapons;
-pub use player_api::PlayerId;
 pub use weapon_api::{HeldWeapon, WeaponHit};
 
 /// Type definitions for the script API, in the format the Luau language

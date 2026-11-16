@@ -1,18 +1,17 @@
 //! The world of a game and the player in it.
 //!
-//! [`World`] is everything the game's rules know: the level, who is where,
-//! what they hold and the game's script. It is stepped on the fixed tick,
-//! and the same input always gives the same world.
+//! [`World`] is everything the game's rules know: the level, where the
+//! player is, what they hold and the game's script. It is stepped on the
+//! fixed tick, and the same input always gives the same world.
 //!
-//! [`Playing`] is a world with the player at this computer in it. Each tick
-//! it reads the controls and steps the world; each frame it looks from the
-//! player's eyes. It is what `lore run` plays.
-
-use std::fmt;
+//! [`Playing`] is a world with the controls of this computer in the
+//! player's hands. Each tick it reads the controls and steps the world;
+//! each frame it looks from the player's eyes. It is what `lore run` plays.
 
 use lore_assets::Scene;
 use lore_input::{ActionId, ActionMap, InputFrame};
 use lore_physics::{MoveInput, Player};
+use lore_script::CharacterId;
 
 use crate::blend;
 use crate::game::{Frame, Game};
@@ -26,91 +25,108 @@ mod bodies;
 mod ground;
 mod spawn;
 
-pub(crate) use bodies::{Bodies, Body};
-pub use bodies::{MAX_PLAYERS, PlayerId, PlayerInput};
+pub(crate) use bodies::{Body, Dummy};
+pub use bodies::{DummyId, PlayerInput};
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
 
-/// A world has as many players as it holds ([`MAX_PLAYERS`]), so one more
-/// cannot come into it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Full;
+/// What a training dummy is called to the game's script.
+const DUMMY_NAME: &str = "Training dummy";
 
-impl fmt::Display for Full {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "The world already has {MAX_PLAYERS} players in it, which is as many as it holds."
-        )
-    }
-}
-
-impl std::error::Error for Full {}
-
-/// A game's world: its script, its level and the players in it.
+/// A game's world: its script, its level and the player in it.
 ///
-/// Each tick ([`Game::tick`]) it moves every player by what they are asking
-/// for ([`ask`](Self::ask)), fires the weapons the script has handed them
-/// and then runs the script's tick. Nothing in it reads a clock or rolls a
-/// die of its own, so a world given the same input tick after tick goes
-/// the same way every time.
+/// There is one player, from the moment the world is made. Each tick
+/// ([`Game::tick`]) it moves them by what they are asking for
+/// ([`ask`](Self::ask)), fires the weapon the script has handed them and
+/// then runs the script's tick. Nothing in it reads a clock or rolls a die
+/// of its own, so a world given the same input tick after tick goes the
+/// same way every time.
+///
+/// Besides the player a world can hold training dummies
+/// ([`add_dummy`](Self::add_dummy)), which stand still to be shot at. The
+/// people of a game will stand beside them, as characters of their own
+/// and not as more players.
 #[derive(Debug)]
 pub struct World {
     game: ScriptGame,
     ground: Ground,
-    bodies: Bodies,
+    player: Body,
+    /// The training dummies, in the order they were put in.
+    dummies: Vec<Dummy>,
+    /// The number the next dummy is known by. The player is 0 to a weapon.
+    next_dummy: u32,
     /// How many ticks have been run.
     tick: u32,
-    /// The weapons players hold, and what they have launched.
+    /// The weapon the player holds, and what they have launched.
     shooting: Shooting,
-    /// When each player's feet come down.
+    /// When the player's feet come down.
     walking: Walking,
-    /// The noises players made in the newest tick.
+    /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
-    /// How many times a player has been put at a spawn point.
+    /// How many times the player has been put at a spawn point.
     spawned: u32,
 }
 
 impl World {
-    /// The world of `game` with nobody in it yet, on a flat floor at
+    /// The world of `game` with its player in it, on a flat floor at
     /// height zero until it is given a level
     /// ([`with_level`](Self::with_level)).
     ///
     /// `tick_rate` must be the rate the world is then ticked at.
     #[must_use]
     pub fn new(game: ScriptGame, tick_rate: u32) -> Self {
-        Self::on(game, Ground::flat(tick_rate))
+        Self::on(game, Ground::flat(tick_rate), None)
     }
 
-    fn on(game: ScriptGame, ground: Ground) -> Self {
+    /// The world of `game` on `ground`, with the player's feet at `here`
+    /// or, with `None`, at a spawn point, facing the way it does.
+    fn on(mut game: ScriptGame, ground: Ground, here: Option<[f32; 3]>) -> Self {
+        let spawned = 1;
+        let player = match here {
+            Some(here) => Player::at(here, &ground.rules),
+            None => ground.spawn_in(game.map(), std::iter::empty(), spawned),
+        };
+        let mut asked = PlayerInput::default();
+        asked.movement.yaw = ground.facing_at(game.map(), player.position).unwrap_or(0.0);
+        game.host_mut()
+            .set_position(CharacterId::PLAYER, player.position);
         Self {
             game,
             ground,
-            bodies: Bodies::default(),
+            player: Body { player, asked },
+            dummies: Vec::new(),
+            next_dummy: 1,
             tick: 0,
             shooting: Shooting::default(),
             walking: Walking::default(),
             noises: Vec::new(),
-            spawned: 0,
+            spawned,
         }
     }
 
     /// Plays the game in `level`, usually the game's `level.glb` as
-    /// [`level::load`](crate::level::load) reads it: its shapes are solid.
-    /// Without this, players walk a flat floor at height zero.
+    /// [`level::load`](crate::level::load) reads it: its shapes are solid,
+    /// and the player is put at one of its spawn points.
+    /// Without this, the player walks a flat floor at height zero.
     ///
-    /// Players start at the `spawn` entities of the game's map file
+    /// The player starts at the `spawn` entities of the game's map file
     /// ([`ScriptGame::map`]). When it has none they start at the level's
     /// markers whose names begin with `spawn` (`spawn`, `spawn.001`,
     /// `Spawn Red`), and with none of those either, at the level's middle.
     ///
-    /// Call it before anyone is in the world. What is wrong with the level
-    /// for walking, such as a spawn point with no floor under it, is
-    /// logged as a warning ([`try_walking`] gives the same list).
+    /// Call it first, before the world is ticked or anything is put in
+    /// it. What is wrong with the level for walking, such as a spawn point
+    /// with no floor under it, is logged as a warning ([`try_walking`]
+    /// gives the same list).
     #[must_use]
     pub fn with_level(mut self, level: &Scene) -> Self {
-        self.ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
-        self
+        // Whatever was put in the world before it had its level is not in
+        // the new one.
+        for dummy in self.dummies.drain(..) {
+            self.game.host_mut().remove_character(dummy.name);
+        }
+        let ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
+        Self::on(self.game, ground, None)
     }
 
     /// The game being played.
@@ -130,138 +146,105 @@ impl World {
         self.tick
     }
 
-    /// Everyone in the world: their number and where they are.
-    pub fn players(&self) -> impl Iterator<Item = (PlayerId, &Player)> + '_ {
-        self.bodies.iter().map(|(id, body)| (id, &body.player))
-    }
-
-    /// The player numbered `id`, if there is one.
+    /// The player: where they are and how they are moving.
     #[must_use]
-    pub fn player(&self, id: PlayerId) -> Option<&Player> {
-        self.bodies.get(id).map(|body| &body.player)
+    pub fn player(&self) -> &Player {
+        &self.player.player
     }
 
-    /// What the player numbered `id` is asking for, if there is one: what
-    /// [`ask`](Self::ask) last said, or, for a player nothing has been
-    /// asked of yet, standing still and facing the way their spawn point
-    /// does.
+    /// What the player is asking for: what [`ask`](Self::ask) last said,
+    /// or, before anything was asked, standing still and facing the way
+    /// their spawn point does.
     #[must_use]
-    pub fn asked(&self, id: PlayerId) -> Option<PlayerInput> {
-        self.bodies.get(id).map(|body| body.asked)
+    pub fn asked(&self) -> PlayerInput {
+        self.player.asked
     }
 
-    /// Says what the player numbered `id` is asking for. Every tick from
-    /// the next on moves them by it, and works their weapon by it, until
-    /// something else is asked.
-    pub fn ask(&mut self, id: PlayerId, asked: PlayerInput) {
-        if let Some(body) = self.bodies.get_mut(id) {
-            body.asked = asked;
-        }
+    /// Says what the player is asking for. Every tick from the next on
+    /// moves them by it, and works their weapon by it, until something
+    /// else is asked.
+    pub fn ask(&mut self, asked: PlayerInput) {
+        self.player.asked = asked;
     }
 
-    /// The noises players made in the newest tick, in the order they were
-    /// made: every footstep and landing, every shot, the click of an empty
-    /// weapon and each reload, with where it was made and how loud. The
-    /// player hears what is in this list ([`Playing`]), and so can anything
-    /// else that listens.
+    /// The noises the player made in the newest tick, in the order they
+    /// were made: every footstep and landing, every shot, the click of an
+    /// empty weapon and each reload, with where it was made and how loud.
+    /// The player hears what is in this list ([`Playing`]), and so can
+    /// anything else that listens.
     #[must_use]
     pub fn noises(&self) -> &[Noise] {
         &self.noises
     }
 
-    /// Brings one more player into the world, at a spawn point away from
-    /// everyone already in it and facing the way it does, and tells the
-    /// game's script that they have come.
+    /// Stands a training dummy with its feet at `feet`: something the
+    /// size of a standing person that stays where it is put and can be
+    /// shot. It does nothing by itself, and the script meets it only as
+    /// the `hit.victim` of a shot that lands on it, called
+    /// "Training dummy".
     ///
-    /// # Errors
-    ///
-    /// [`Full`] when the world has no room.
-    pub fn add_player(&mut self) -> Result<PlayerId, Full> {
-        self.add(None)
+    /// It is here so that shooting can be tried and tested before a game
+    /// has people in it.
+    pub fn add_dummy(&mut self, feet: [f32; 3]) -> DummyId {
+        let id = DummyId(self.next_dummy);
+        self.next_dummy = self.next_dummy.saturating_add(1);
+        let host = self.game.host_mut();
+        let name = host.add_character(DUMMY_NAME);
+        host.set_position(name, feet);
+        self.dummies.push(Dummy { id, feet, name });
+        id
     }
 
-    /// Brings one more player in. With `here`, their feet start there, in
-    /// place of a spawn point.
-    fn add(&mut self, here: Option<[f32; 3]>) -> Result<PlayerId, Full> {
-        let id = self.bodies.free().ok_or(Full)?;
+    /// Where the feet of the dummy numbered `id` are, if it is still in
+    /// the world.
+    #[must_use]
+    pub fn dummy(&self, id: DummyId) -> Option<[f32; 3]> {
+        let dummy = self.dummies.iter().find(|dummy| dummy.id == id)?;
+        Some(dummy.feet)
+    }
+
+    /// Puts the feet of the dummy numbered `id` at `feet`. A shot is
+    /// judged against where it then stands.
+    pub fn move_dummy(&mut self, id: DummyId, feet: [f32; 3]) {
+        if let Some(dummy) = self.dummies.iter_mut().find(|dummy| dummy.id == id) {
+            dummy.feet = feet;
+            self.game.host_mut().set_position(dummy.name, feet);
+        }
+    }
+
+    /// Takes the dummy numbered `id` out of the world.
+    pub fn remove_dummy(&mut self, id: DummyId) {
+        if let Some(index) = self.dummies.iter().position(|dummy| dummy.id == id) {
+            let dummy = self.dummies.remove(index);
+            self.game.host_mut().remove_character(dummy.name);
+        }
+    }
+
+    /// Puts the player back at one of the map's spawn points, away from
+    /// any dummy standing on one, if they have died since the last tick.
+    fn respawn(&mut self) {
+        if !self.game.host_mut().take_respawn() {
+            return;
+        }
         self.spawned = self.spawned.wrapping_add(1);
-        let player = match here {
-            Some(here) => Player::at(here, &self.ground.rules),
-            None => {
-                let standing = self.bodies.iter().map(|(_, body)| &body.player);
-                self.ground
-                    .spawn_in(self.game.map(), standing, self.spawned)
-            }
-        };
-        self.walking.forget(id);
-        let name = format!("Player {}", u32::from(id) + 1);
-        let name = self.game.host_mut().player_joined(&name);
-        self.bodies.put(
-            id,
-            Body {
-                player,
-                asked: PlayerInput::default(),
-                name,
-            },
-        );
-        // Joining asks for a spawn point; this settles where they start.
-        self.place_spawned(here.map(|here| (name, here)));
-        if let Some(body) = self.bodies.get_mut(id) {
-            let facing = self.ground.facing_at(self.game.map(), body.player.position);
-            body.asked.movement.yaw = facing.unwrap_or(0.0);
-        }
-        Ok(id)
-    }
-
-    /// Takes the player numbered `id` out of the world and tells the game's
-    /// script that they have gone.
-    pub fn remove_player(&mut self, id: PlayerId) {
-        if let Some(body) = self.bodies.take(id) {
-            self.walking.forget(id);
-            self.game.host_mut().player_left(body.name);
-        }
-    }
-
-    /// Puts everyone waiting for one, by having joined or died, at one of
-    /// the map's spawn points. With `here`, the player of that name is put at that place instead.
-    fn place_spawned(&mut self, here: Option<(lore_script::PlayerId, [f32; 3])>) {
-        // Taken out first: placing reads the map, which the game also holds.
-        let waiting: Vec<lore_script::PlayerId> = self.game.host_mut().take_spawns().collect();
-        for name in waiting {
-            let Some(id) = self.bodies.named(name) else {
-                continue;
-            };
-            self.spawned = self.spawned.wrapping_add(1);
-            let placed = match here {
-                Some((whom, here)) if whom == name => Player::at(here, &self.ground.rules),
-                _ => {
-                    // Everyone but the one being placed is to be kept away from.
-                    let standing = self
-                        .bodies
-                        .iter()
-                        .filter(|(other, _)| *other != id)
-                        .map(|(_, body)| &body.player);
-                    self.ground
-                        .spawn_in(self.game.map(), standing, self.spawned)
-                }
-            };
-            if let Some(body) = self.bodies.get_mut(id) {
-                body.player = placed;
-                // Being put somewhere is not a step taken or a fall ended.
-                self.walking.forget(id);
-            }
-        }
+        let standing = self.dummies.iter().map(|dummy| dummy.feet);
+        self.player.player = self
+            .ground
+            .spawn_in(self.game.map(), standing, self.spawned);
+        // The script is told this tick, and reads where they now are.
+        // Being put somewhere is not a step taken or a fall ended.
+        self.walking = Walking::default();
     }
 }
 
 impl Game for World {
     /// Steps the world by one tick. `input` is what the game's script reads
-    /// (`game.input`); the players move by what was asked of each
+    /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
     fn tick(&mut self, input: &InputFrame, step: f32) {
         // A player who died since the last tick is back at a spawn point
-        // before anyone moves.
-        self.place_spawned(None);
+        // before they move.
+        self.respawn();
         self.tick = self.tick.saturating_add(1);
         let Ground {
             level,
@@ -269,18 +252,23 @@ impl Game for World {
             step: tick,
             ..
         } = &self.ground;
-        for body in self.bodies.iter_mut() {
-            body.player.step(level, rules, &body.asked.movement, *tick);
-        }
-        // What was heard of the tick just run: whose feet came down, and
-        // below, whose weapon did what.
+        let Body { player, asked } = &mut self.player;
+        player.step(level, rules, &asked.movement, *tick);
+        // The script reads where the player is as of this tick, in what it
+        // is told of below and in its own tick.
+        self.game
+            .host_mut()
+            .set_position(CharacterId::PLAYER, player.position);
+        // What was heard of the tick just run: when a foot came down, and
+        // below, what the weapon did.
         self.noises.clear();
         self.walking
-            .tick(&self.bodies, self.tick, *tick, &mut self.noises);
-        // The weapons players hold, by what each is pressing. The script
-        // hears of every shot, hit and reload here.
+            .tick(player, self.tick, *tick, &mut self.noises);
+        // The weapon the player holds, by what they are pressing. The
+        // script hears of every shot, hit and reload here.
         self.shooting.tick(
-            &self.bodies,
+            &self.player,
+            &self.dummies,
             self.tick,
             level,
             rules,
@@ -326,7 +314,7 @@ impl Controls {
         }
     }
 
-    /// What `input` asks of a player for one tick of `step` seconds. The
+    /// What `input` asks of the player for one tick of `step` seconds. The
     /// view, `yaw` and `pitch`, is turned first.
     fn asked(self, input: &InputFrame, step: f32, yaw: &mut f32, pitch: &mut f32) -> PlayerInput {
         let held = |action: Option<ActionId>| action.is_some_and(|action| input.pressed(action));
@@ -360,7 +348,7 @@ impl Controls {
 /// Falling at terminal speed at 20 ticks a second is under 3 m a tick.
 const CUT_METRES: f32 = 5.0;
 
-/// Where a player's eyes are and which way they face.
+/// Where the player's eyes are and which way they face.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Seen {
     eye: [f32; 3],
@@ -375,7 +363,7 @@ fn cut(before: [f32; 3], now: [f32; 3]) -> bool {
     moved.is_nan() || moved > CUT_METRES * CUT_METRES
 }
 
-/// A world and the player at this computer in it.
+/// A world with the controls of this computer in its player's hands.
 ///
 /// Each tick it turns the view by what the mouse and the stick did, asks
 /// the world for what is pressed and steps the world. Each frame it looks
@@ -383,8 +371,6 @@ fn cut(before: [f32; 3], now: [f32; 3]) -> bool {
 #[derive(Debug)]
 pub struct Playing {
     world: World,
-    /// The player's number in the world.
-    id: PlayerId,
     controls: Controls,
     yaw: f32,
     pitch: f32,
@@ -426,18 +412,15 @@ impl Playing {
     /// `look`, `jump`, `crouch`, `sprint`, `fire`, `aim` and `reload`.
     /// `actions` and `tick_rate` must be the ones the game is then run
     /// with.
-    ///
-    /// # Errors
-    ///
-    /// [`Full`] is not expected: a new world has room for its player.
+    #[must_use]
     pub fn start(
         game: ScriptGame,
         level: Option<&Scene>,
         actions: &ActionMap,
         tick_rate: u32,
-    ) -> Result<Self, Full> {
+    ) -> Self {
         let ground = Ground::of(level, game.map(), tick_rate);
-        Self::enter(World::on(game, ground), actions, None)
+        Self::enter(World::on(game, ground, None), actions)
     }
 
     /// Starts `game` on `ground` with its player in the world, as the
@@ -448,10 +431,6 @@ impl Playing {
     ///
     /// With nothing under `eye` to land on, the player starts as in any
     /// game, at a spawn point, and `false` is given with the game.
-    ///
-    /// # Errors
-    ///
-    /// As [`start`](Self::start).
     #[cfg(feature = "editor")]
     pub(crate) fn start_from(
         game: ScriptGame,
@@ -459,45 +438,36 @@ impl Playing {
         actions: &ActionMap,
         eye: [f32; 3],
         [yaw, pitch]: [f32; 2],
-    ) -> Result<(Self, bool), Full> {
+    ) -> (Self, bool) {
         let feet = ground
             .feet_under(eye)
             .filter(|_| yaw.is_finite() && pitch.is_finite());
-        let mut playing = Self::enter(World::on(game, ground.clone()), actions, feet)?;
+        let mut playing = Self::enter(World::on(game, ground.clone(), feet), actions);
         if feet.is_some() {
             (playing.yaw, playing.pitch) = look::turned(yaw, pitch, [0.0; 2]);
         }
-        Ok((playing, feet.is_some()))
+        (playing, feet.is_some())
     }
 
-    /// Brings the player into `world`: at `here` if that is given, else at
-    /// a spawn point.
-    fn enter(mut world: World, actions: &ActionMap, here: Option<[f32; 3]>) -> Result<Self, Full> {
-        let id = world.add(here)?;
-        let yaw = world.asked(id).map_or(0.0, |asked| asked.movement.yaw);
-        let eye = world.player(id).map_or([0.0; 3], Player::eye_position);
-        Ok(Self {
+    /// Takes the controls of `world`'s player.
+    fn enter(world: World, actions: &ActionMap) -> Self {
+        let yaw = world.asked().movement.yaw;
+        let eye = world.player().eye_position();
+        Self {
             world,
-            id,
             controls: Controls::new(actions),
             yaw,
             pitch: 0.0,
             eye,
             before: None,
             heard: Vec::with_capacity(MOST_HEARD),
-        })
+        }
     }
 
     /// The world being played in.
     #[must_use]
     pub fn world(&self) -> &World {
         &self.world
-    }
-
-    /// The player's number in the world.
-    #[must_use]
-    pub fn id(&self) -> PlayerId {
-        self.id
     }
 
     /// Where the player's eyes were after the newest tick. A frame is drawn
@@ -556,11 +526,9 @@ impl Game for Playing {
         let asked = self
             .controls
             .asked(input, step, &mut self.yaw, &mut self.pitch);
-        self.world.ask(self.id, asked);
+        self.world.ask(asked);
         self.world.tick(input, step);
-        if let Some(player) = self.world.player(self.id) {
-            self.eye = player.eye_position();
-        }
+        self.eye = self.world.player().eye_position();
         self.before = (!cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises
         // always have room.
@@ -573,8 +541,7 @@ impl Game for Playing {
     }
 
     /// Looks from the player's eyes and plays what was heard since the
-    /// last frame: the player's own feet and weapon equally in both ears,
-    /// anyone else's from where they are.
+    /// last frame: the player's own feet and weapon, equally in both ears.
     ///
     /// A frame drawn between two ticks sees from between where the eyes
     /// were on the one and on the other, so walking is smooth however many
@@ -589,9 +556,8 @@ impl Game for Playing {
             if !fresh(&noise, now, tick_rate) {
                 continue;
             }
-            let own = noise.by == self.id;
             let sounds = self.world.game.sounds_mut();
-            if let Some(play) = noise::play(&noise, own, nth, sounds) {
+            if let Some(play) = noise::play(&noise, nth, sounds) {
                 frame.sound(SoundAsk::Once(play));
             }
         }
@@ -625,7 +591,7 @@ mod tests {
             end)"#,
             &actions,
         );
-        let mut game = Playing::start(script, None, &actions, 60).unwrap();
+        let mut game = Playing::start(script, None, &actions, 60);
         let mut input = Input::new(actions);
         let asked = |game: &mut Playing, input: &mut Input| {
             game.tick(input.tick(), 1.0 / 60.0);
@@ -649,7 +615,7 @@ mod tests {
 
         let actions = ActionMap::default_fps();
         let script = ScriptGame::from_source("", &actions);
-        let mut game = Playing::start(script, None, &actions, 60).unwrap();
+        let mut game = Playing::start(script, None, &actions, 60);
         let mut input = Input::new(actions);
         let view = |game: &mut Playing, alpha: f32| {
             let mut frame = Frame::new(alpha);
@@ -709,7 +675,7 @@ mod tests {
     fn playing_alone() -> (Playing, lore_input::Input) {
         let actions = ActionMap::default_fps();
         let script = ScriptGame::from_source("", &actions);
-        let game = Playing::start(script, None, &actions, 60).unwrap();
+        let game = Playing::start(script, None, &actions, 60);
         (game, lore_input::Input::new(actions))
     }
 
@@ -793,7 +759,7 @@ mod tests {
         game.tick(input.tick(), STEP);
         assert!(near(game.yaw(), on_screen.yaw));
         assert!(near(game.pitch(), on_screen.pitch));
-        let fired = game.world.asked(game.id()).unwrap();
+        let fired = game.world.asked();
         assert!(fired.fire, "{fired:?}");
         assert_eq!(
             (fired.movement.yaw, fired.pitch),

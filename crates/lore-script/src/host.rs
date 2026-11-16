@@ -18,12 +18,12 @@ use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
 use crate::api::{self, Handlers, Shared};
 use crate::audio::{AudioCommand, AudioState};
+use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
 use crate::hud::{HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
-use crate::player_api::{Handles, PlayerId, Players};
 use crate::time_api::Clock;
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 
@@ -39,10 +39,6 @@ const POLL_EVERY: Duration = Duration::from_millis(100);
 /// How many different runtime errors are printed before the rest are dropped,
 /// so a script failing in new ways every tick cannot flood the log.
 const MAX_REPORTED: usize = 32;
-
-/// How many spawns wait for the engine to place them before the oldest are
-/// dropped. An engine that takes them every tick never comes near it.
-const MAX_WAITING_SPAWNS: usize = 1024;
 
 const KEEPS_RUNNING: &str =
     "The game keeps running. Fix this and save the file: it reloads by itself.";
@@ -147,14 +143,17 @@ pub struct ScriptHost {
     /// version that failed to load did. A save of any of them is a reload.
     watched: Vec<Watched>,
     next_poll: Instant,
-    /// Who is in the game. Kept here, outside the script's VM, so that
-    /// saving the script loses nobody.
-    players: Rc<Players>,
+    /// Who is in the world: the player, and whatever else the engine has
+    /// put there. Kept here, outside the script's VM, so that saving the
+    /// script loses nobody.
+    characters: Rc<Characters>,
     /// What the script asked to keep with `game.keep`, as it was at the
     /// last reload, for the next version to pick up.
     kept: Rc<RefCell<Store>>,
-    /// Players who are to be put at a spawn point and have not been yet.
-    spawns: Vec<PlayerId>,
+    /// The player died and has not been put back at a spawn point yet.
+    respawn: bool,
+    /// The player died and the script has not been told yet.
+    spawn_due: bool,
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
@@ -261,9 +260,10 @@ impl ScriptHost {
             reported: HashSet::new(),
             watched: Vec::new(),
             next_poll: Instant::now() + POLL_EVERY,
-            players: Rc::default(),
+            characters: Rc::default(),
             kept: Rc::default(),
-            spawns: Vec::new(),
+            respawn: false,
+            spawn_due: false,
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
@@ -291,8 +291,11 @@ impl ScriptHost {
 
     /// Runs one simulation tick of `step` seconds with this tick's `input`.
     ///
-    /// The first tick calls the script's `game.onStart` functions first.
-    /// Every tick then calls the `game.after` and `game.every` functions
+    /// The first tick calls the script's `game.onStart` functions first,
+    /// and then its `game.onSpawn` ones: the player comes into the world as
+    /// the game starts. A tick after the player died
+    /// ([`player_died`](Self::player_died)) calls the `game.onSpawn`
+    /// functions again. Every tick then calls the `game.after` and `game.every` functions
     /// whose time has come, then the `game.onTick` ones. A function that
     /// fails is reported once and the others still run.
     ///
@@ -304,6 +307,9 @@ impl ScriptHost {
         }
         self.clock.begin_tick(step);
         self.start();
+        if std::mem::take(&mut self.spawn_due) {
+            self.call_all(|handlers| &handlers.spawn, ());
+        }
         self.run_timers();
         self.call_all(|handlers| &handlers.tick, step);
         self.clock.end_tick();
@@ -472,72 +478,56 @@ impl ScriptHost {
         self.audio.take()
     }
 
-    /// Everyone in the game, in the order they came into it.
-    #[must_use]
-    pub fn players(&self) -> Vec<PlayerId> {
-        self.players.ids()
+    /// Puts something other than the player in the world for the script
+    /// to meet: it has a name and a place, can hold a weapon and can be
+    /// hit (`hit.victim`). `lore check`'s training dummy is one, and the
+    /// people of a game will be. The player needs no adding: they are
+    /// [`CharacterId::PLAYER`] from the start.
+    pub fn add_character(&mut self, name: &str) -> CharacterId {
+        self.characters.add(name)
     }
 
-    /// Adds a player to the game and tells the script: its
-    /// `game.onPlayerJoin` functions, then its `game.onSpawn` ones. The
-    /// player is then waiting for a spawn point
-    /// ([`take_spawns`](Self::take_spawns)).
-    pub fn player_joined(&mut self, name: &str) -> PlayerId {
-        let id = self.players.add(name);
-        self.start();
-        if let Some(player) = self.player(id) {
-            self.call_all(|handlers| &handlers.join, player);
-        }
-        self.spawn(id);
-        id
-    }
-
-    /// Takes a player out of the game and tells the script, which can still
-    /// read who they were while it is told. Does nothing if they were not
-    /// in it.
-    pub fn player_left(&mut self, player: PlayerId) {
-        if !self.players.remove(player) {
+    /// Takes a character out of the world. A script that kept it is told
+    /// it is gone when it next reads it. Does nothing for one that is not
+    /// there, and for the player, who is never taken out.
+    pub fn remove_character(&mut self, character: CharacterId) {
+        if !self.characters.remove(character) {
             return;
         }
-        self.start();
-        if let Some(handle) = self.player(player) {
-            self.call_all(|handlers| &handlers.leave, handle);
-        }
-        self.players.forget();
         if let Some(version) = &self.running {
-            version.shared.handles.forget(player);
+            version.shared.handles.forget(character);
         }
-        self.spawns.retain(|waiting| *waiting != player);
-        self.weapons.take(player);
+        self.weapons.take(character);
     }
 
-    /// Records that `player` died. Nothing has health yet, so dying is only
-    /// this: the script's `game.onSpawn` functions are called and the
-    /// player waits for a spawn point ([`take_spawns`](Self::take_spawns)),
-    /// keeping what they hold. Does nothing if they are not in the game.
-    pub fn player_died(&mut self, player: PlayerId) {
-        if self.players.has(player) {
-            self.start();
-            self.spawn(player);
-        }
+    /// Says where a character's feet are, in metres, for the script to
+    /// read as `position`. Call it when they have moved: for the player,
+    /// every tick.
+    pub fn set_position(&mut self, character: CharacterId, position: [f32; 3]) {
+        self.characters.set_position(character, position);
     }
 
-    /// Tells the script that a player comes into the world, and notes that
-    /// they need a spawn point.
-    fn spawn(&mut self, id: PlayerId) {
-        if let Some(player) = self.player(id) {
-            self.call_all(|handlers| &handlers.spawn, player);
-        }
-        if !self.spawns.contains(&id) {
-            if self.spawns.len() >= MAX_WAITING_SPAWNS {
-                self.spawns.remove(0);
-            }
-            self.spawns.push(id);
-        }
+    /// Records that the player died. Nothing has health yet, so dying is
+    /// only this: the player waits to be put back at a spawn point
+    /// ([`take_respawn`](Self::take_respawn)), keeping what they hold, and
+    /// the next [`tick`](Self::tick) calls the script's `game.onSpawn`
+    /// functions. Dying again before that tick is the same one death.
+    pub fn player_died(&mut self) {
+        self.respawn = true;
+        self.spawn_due = true;
     }
 
-    /// The weapon `player` holds, if the script has handed them one with
-    /// `player:giveWeapon`: step its `state` with its `settings` once a
+    /// Whether the player has died since this was last called, and so is
+    /// to be put back at a spawn point. Call it every tick, before
+    /// [`tick`](Self::tick), and say where the player now is
+    /// ([`set_position`](Self::set_position)): the script's `game.onSpawn`
+    /// functions then read the spawn point, not where the player died.
+    pub fn take_respawn(&mut self) -> bool {
+        std::mem::take(&mut self.respawn)
+    }
+
+    /// The weapon `character` holds, if the script has handed them one
+    /// with `giveWeapon`: step its `state` with its `settings` once a
     /// tick, hand the state back with
     /// [`set_weapon_state`](Self::set_weapon_state), and tell the script
     /// what came of it ([`weapon_fired`](Self::weapon_fired),
@@ -549,9 +539,13 @@ impl ScriptHost {
     /// use lore_script::ScriptHost;
     /// use lore_script::weapons::{WeaponInput, shot_seed};
     ///
-    /// let script = "game.onPlayerJoin(function(player) player:giveWeapon(\"pistol\") end)";
+    /// use lore_script::CharacterId;
+    ///
+    /// let script = "game.onSpawn(function() game.player:giveWeapon(\"pistol\") end)";
     /// let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
-    /// let player = host.player_joined("Ada");
+    /// // The first tick starts the game and puts the player in the world.
+    /// host.tick(&InputFrame::default(), 1.0 / 60.0);
+    /// let player = CharacterId::PLAYER;
     ///
     /// let mut held = host.held_weapon(player).expect("the script gave a pistol");
     /// let input = WeaponInput { trigger: true, ..WeaponInput::default() };
@@ -568,8 +562,8 @@ impl ScriptHost {
     /// assert_eq!(shots.len(), 1);
     /// ```
     #[must_use]
-    pub fn held_weapon(&self, player: PlayerId) -> Option<HeldWeapon> {
-        let (kind, state) = self.weapons.held(player)?;
+    pub fn held_weapon(&self, character: CharacterId) -> Option<HeldWeapon> {
+        let (kind, state) = self.weapons.held(character)?;
         Some(HeldWeapon {
             name: kind.name,
             settings: kind.settings,
@@ -577,25 +571,25 @@ impl ScriptHost {
         })
     }
 
-    /// Hands back the state of the weapon `player` holds after stepping it.
-    /// Does nothing if they hold none.
-    pub fn set_weapon_state(&mut self, player: PlayerId, state: Weapon) {
-        self.weapons.set_state(player, state);
+    /// Hands back the state of the weapon `character` holds after stepping
+    /// it. Does nothing if they hold none.
+    pub fn set_weapon_state(&mut self, character: CharacterId, state: Weapon) {
+        self.weapons.set_state(character, state);
     }
 
-    /// Tells the script that `player` fired a shot: its `game.onWeaponFire`
-    /// functions. A shotgun blast is one shot.
-    pub fn weapon_fired(&mut self, player: PlayerId) {
-        if let Some(player) = self.player(player) {
-            self.call_all(|handlers| &handlers.weapon_fire, player);
+    /// Tells the script that `shooter` fired a shot: its
+    /// `game.onWeaponFire` functions. A shotgun blast is one shot.
+    pub fn weapon_fired(&mut self, shooter: CharacterId) {
+        if let Some(shooter) = self.character(shooter) {
+            self.call_all(|handlers| &handlers.weapon_fire, shooter);
         }
     }
 
-    /// Tells the script that `player` began to reload: its
+    /// Tells the script that `shooter` began to reload: its
     /// `game.onWeaponReload` functions.
-    pub fn weapon_reloading(&mut self, player: PlayerId) {
-        if let Some(player) = self.player(player) {
-            self.call_all(|handlers| &handlers.weapon_reload, player);
+    pub fn weapon_reloading(&mut self, shooter: CharacterId) {
+        if let Some(shooter) = self.character(shooter) {
+            self.call_all(|handlers| &handlers.weapon_reload, shooter);
         }
     }
 
@@ -610,13 +604,6 @@ impl ScriptHost {
             return;
         };
         self.call_all(|handlers| &handlers.weapon_hit, table);
-    }
-
-    /// The players who have come into the world since this was last called,
-    /// by joining or by dying, oldest first: each needs putting at a spawn
-    /// point. Call it every tick.
-    pub fn take_spawns(&mut self) -> std::vec::Drain<'_, PlayerId> {
-        self.spawns.drain(..)
     }
 
     /// Reloads the script if `main.luau` or a script it required was saved
@@ -708,9 +695,9 @@ impl ScriptHost {
                 let kinds = std::mem::take(&mut *version.shared.kinds.borrow_mut());
                 for gone in self.weapons.define(kinds) {
                     log::warn!(
-                        "The script no longer makes the weapon \"{gone}\", so the players \
-                         holding one now hold nothing. Hand them another: \
-                         player:giveWeapon(\"rifle\")"
+                        "The script no longer makes the weapon \"{gone}\", so whoever held \
+                         one now holds nothing. Hand out another: \
+                         game.player:giveWeapon(\"rifle\")"
                     );
                 }
                 if let Some(old) = &self.running {
@@ -781,7 +768,7 @@ impl ScriptHost {
             stopped: RefCell::new(None),
             checks: Cell::new(0),
             raise: Cell::new(None),
-            players: Rc::clone(&self.players),
+            characters: Rc::clone(&self.characters),
             handles: Handles::default(),
             loading: Cell::new(true),
             rumble: Cell::new(None),
@@ -830,18 +817,24 @@ impl ScriptHost {
         }
     }
 
-    /// Calls the `game.onStart` functions if they have not been called yet.
+    /// Starts the game if it has not started yet: the `game.onStart`
+    /// functions, and then the `game.onSpawn` ones, for the player comes
+    /// into the world as the game starts.
     fn start(&mut self) {
         if !self.started && self.running.is_some() && !self.paused {
             self.started = true;
             self.call_all(|handlers| &handlers.start, ());
+            self.call_all(|handlers| &handlers.spawn, ());
         }
     }
 
-    /// The running script's value for a player.
-    fn player(&self, id: PlayerId) -> Option<AnyUserData> {
+    /// The running script's value for a character still in the world.
+    fn character(&self, id: CharacterId) -> Option<AnyUserData> {
+        if !self.characters.has(id) {
+            return None;
+        }
         let version = self.running.as_ref()?;
-        version.shared.handles.player(&version.vm, id).ok()
+        version.shared.handles.character(&version.vm, id).ok()
     }
 
     /// Calls every function in one handler list, reporting the ones that fail.

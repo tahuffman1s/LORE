@@ -1,4 +1,4 @@
-//! The weapon part of `game`: `game.weapon`, what a player holds, and the
+//! The weapon part of `game`: `game.weapon`, what a character holds, and the
 //! functions called when a weapon fires, hits and reloads.
 //!
 //! Who holds what is kept by the host, outside the script's VM, so saving
@@ -15,8 +15,8 @@ use lore_weapons::{Delivery, FireMode, ProjectileSettings, Weapon, WeaponSetting
 use mlua::{Function, Lua, Table, Value};
 
 use crate::api::{Shared, describe, fail};
+use crate::character_api::CharacterId;
 use crate::error::closest;
-use crate::player_api::PlayerId;
 
 /// The weapons every game has, by name.
 pub(crate) const BUILT_IN: &[&str] = &["rifle", "pistol", "shotgun", "rocket launcher", "grenade"];
@@ -116,7 +116,7 @@ pub(crate) struct Kind {
     line: Option<usize>,
 }
 
-/// The weapon in a player's hands.
+/// The weapon in a character's hands.
 #[derive(Debug, Clone)]
 struct Held {
     kind: Rc<str>,
@@ -129,7 +129,7 @@ pub(crate) struct WeaponState {
     /// The built-in kinds, then the script's own. A script's kind with a
     /// built-in's name takes its place.
     kinds: RefCell<Vec<Kind>>,
-    held: RefCell<HashMap<PlayerId, Held>>,
+    held: RefCell<HashMap<CharacterId, Held>>,
 }
 
 /// The kinds every game starts with.
@@ -198,32 +198,32 @@ impl WeaponState {
         dropped
     }
 
-    /// The weapon `player` holds: its kind as it is now defined, and the
+    /// The weapon `holder` holds: its kind as it is now defined, and the
     /// state of the one in their hands.
-    pub fn held(&self, player: PlayerId) -> Option<(Kind, Weapon)> {
+    pub fn held(&self, holder: CharacterId) -> Option<(Kind, Weapon)> {
         let held = self.held.borrow();
-        let held = held.get(&player)?;
+        let held = held.get(&holder)?;
         let kind = find(&self.kinds.borrow(), &held.kind)?.clone();
         Some((kind, held.state))
     }
 
-    /// Replaces the state of the weapon `player` holds, if they hold one.
-    pub fn set_state(&self, player: PlayerId, state: Weapon) {
-        if let Some(held) = self.held.borrow_mut().get_mut(&player) {
+    /// Replaces the state of the weapon `holder` holds, if they hold one.
+    pub fn set_state(&self, holder: CharacterId, state: Weapon) {
+        if let Some(held) = self.held.borrow_mut().get_mut(&holder) {
             held.state = state;
         }
     }
 
-    /// Empties `player`'s hands.
-    pub fn take(&self, player: PlayerId) {
-        self.held.borrow_mut().remove(&player);
+    /// Empties `holder`'s hands.
+    pub fn take(&self, holder: CharacterId) {
+        self.held.borrow_mut().remove(&holder);
     }
 
-    /// The name of the kind of weapon `player` holds.
-    fn name_held(&self, player: PlayerId) -> Option<Rc<str>> {
+    /// The name of the kind of weapon `holder` holds.
+    fn name_held(&self, holder: CharacterId) -> Option<Rc<str>> {
         self.held
             .borrow()
-            .get(&player)
+            .get(&holder)
             .map(|held| Rc::clone(&held.kind))
     }
 }
@@ -280,36 +280,36 @@ fn no_such_weapon(lua: &Lua, shared: &Shared, name: &str) -> mlua::Error {
     fail(lua, message)
 }
 
-/// `player.weapon`: the name of what the player holds.
-pub(crate) fn weapon_name(shared: &Shared, player: PlayerId) -> Option<String> {
+/// `character.weapon`: the name of what they hold.
+pub(crate) fn weapon_name(shared: &Shared, holder: CharacterId) -> Option<String> {
     shared
         .weapons
-        .name_held(player)
+        .name_held(holder)
         .map(|name| name.to_string())
 }
 
-/// `player.ammo` and `player.reserve`: the rounds in the magazine and the
+/// `character.ammo` and `character.reserve`: the rounds in the magazine and the
 /// spare ones. Both are 0 with empty hands.
-pub(crate) fn rounds(shared: &Shared, player: PlayerId) -> (u32, u32) {
+pub(crate) fn rounds(shared: &Shared, holder: CharacterId) -> (u32, u32) {
     shared
         .weapons
         .held
         .borrow()
-        .get(&player)
+        .get(&holder)
         .map_or((0, 0), |held| (held.state.magazine, held.state.reserve))
 }
 
-/// `player:giveWeapon("rifle")`: a new, full weapon of that kind in the
-/// player's hands, in place of what they held.
-pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()> {
-    let shared = crate::player_api::shared_of(lua)?;
-    crate::time_api::rules_only(lua, &shared, "player:giveWeapon")?;
+/// `character:giveWeapon("rifle")`: a new, full weapon of that kind in the
+/// character's hands, in place of what they held.
+pub(crate) fn give(lua: &Lua, holder: CharacterId, name: &Value) -> mlua::Result<()> {
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:giveWeapon")?;
     let Value::String(name) = name else {
         return Err(fail(
             lua,
             format!(
-                "player:giveWeapon needs a weapon's name in quotes, but it was given {}. \
-                 Write it like this: player:giveWeapon(\"rifle\")",
+                "giveWeapon needs a weapon's name in quotes, but it was given {}. \
+                 Write it like this: game.player:giveWeapon(\"rifle\")",
                 describe(name)
             ),
         ));
@@ -318,10 +318,10 @@ pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()
     let Some(kind) = kind_named(&shared, &name) else {
         return Err(no_such_weapon(lua, &shared, &name));
     };
-    // Does nothing for a player who has left.
-    if shared.players.has(player) {
+    // Does nothing for a character who is gone.
+    if shared.characters.has(holder) {
         shared.weapons.held.borrow_mut().insert(
-            player,
+            holder,
             Held {
                 kind: kind.name,
                 state: Weapon::new(&kind.settings),
@@ -335,9 +335,10 @@ pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeaponHit {
     /// Who fired.
-    pub shooter: PlayerId,
-    /// The player who was hit; `None` when it was the level.
-    pub victim: Option<PlayerId>,
+    pub shooter: CharacterId,
+    /// Who was hit, the shooter themself when their own explosion caught
+    /// them; `None` when it was the level.
+    pub victim: Option<CharacterId>,
     /// The name of the kind of weapon that fired.
     pub weapon: Rc<str>,
     /// The damage the hit is worth: nothing against the level.
@@ -354,7 +355,7 @@ pub struct WeaponHit {
     pub explosion: bool,
 }
 
-/// The weapon a player holds, as the engine reads it to step it.
+/// The weapon a character holds, as the engine reads it to step it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldWeapon {
     /// The name of its kind, as the script wrote it.
@@ -368,9 +369,11 @@ pub struct HeldWeapon {
 /// The table a `game.onWeaponHit` function is handed.
 pub(crate) fn hit_table(lua: &Lua, shared: &Shared, hit: &WeaponHit) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    table.raw_set("shooter", shared.handles.player(lua, hit.shooter)?)?;
-    if let Some(victim) = hit.victim {
-        table.raw_set("victim", shared.handles.player(lua, victim)?)?;
+    table.raw_set("shooter", shared.handles.character(lua, hit.shooter)?)?;
+    if let Some(victim) = hit.victim
+        && shared.characters.has(victim)
+    {
+        table.raw_set("victim", shared.handles.character(lua, victim)?)?;
     }
     table.raw_set("weapon", &*hit.weapon)?;
     table.raw_set("damage", hit.damage)?;
@@ -411,7 +414,7 @@ fn weapon_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 "game.weapon makes a kind of weapon for the whole game, so it cannot be \
                  called inside a function that runs later, such as game.onSpawn. Call it \
                  near the top of the file, then hand the weapon out where you need it: \
-                 player:giveWeapon(\"smg\")",
+                 game.player:giveWeapon(\"smg\")",
             ));
         }
         let Value::String(name) = &name else {

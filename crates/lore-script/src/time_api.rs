@@ -15,7 +15,7 @@ use mlua::{
 };
 
 use crate::api::{Shared, describe, fail};
-use crate::player_api::{missing, shared_of};
+use crate::character_api::{missing, shared_of};
 
 /// Every function on a timer. The type definitions are tested against it.
 #[cfg(test)]
@@ -236,7 +236,7 @@ pub(crate) fn rules_only(lua: &Lua, shared: &Shared, function: &str) -> mlua::Re
             "{function} changes the game, and game.onDraw is only for showing it: it runs \
              once for every picture drawn, so more often on a faster computer. Move this line into game.onTick(function() ... end), or another \
              game.on... function. Reading is fine here: game.time(), tween.value, \
-             player.ammo."
+             game.player.ammo."
         ),
     ))
 }

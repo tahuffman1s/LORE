@@ -57,8 +57,7 @@ impl Play {
         };
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
-        let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing)
-            .map_err(|error| format!("Could not play: {error}"))?;
+        let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing);
         Ok(Self { game, from_here })
     }
 
