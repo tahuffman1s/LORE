@@ -316,7 +316,21 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         "print",
         lua.create_function(move |_, values: Variadic<Value>| {
             let line = printed(&values)?;
-            clock.note(&line);
+            for value in values.iter() {
+                match value {
+                    // A table or a function prints as where it is in
+                    // memory, which is not the game's doing: only what
+                    // kind of thing it is counts as what the rules did.
+                    Value::Table(_)
+                    | Value::Function(_)
+                    | Value::Thread(_)
+                    | Value::UserData(_)
+                    | Value::LightUserData(_)
+                    | Value::Other(_) => clock.note(value.type_name()),
+                    plain => clock.note(&plain.to_string()?),
+                }
+            }
+            clock.note("print");
             log::info!(target: "script", "{line}");
             Ok(())
         })?,

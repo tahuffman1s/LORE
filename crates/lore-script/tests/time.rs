@@ -569,7 +569,8 @@ fn fingerprints(script: &str, pictures: &[u32]) -> Vec<u64> {
         }
         seen.push(host.rules_fingerprint());
     }
-    printed();
+    // Shown only if the test fails.
+    eprintln!("{pictures:?}: {:?}", printed());
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     seen
 }
@@ -584,7 +585,9 @@ fn what_the_rules_did_has_one_number_that_pictures_do_not_change() {
             print("picture", drawn, bar.value)
             game.input.rumble(0.1, 0.1, 0.1)
         end)
-        game.every(0.5, function() print("beat", game.time(), {}) end)
+        game.every(0.5, function()
+            print("beat", game.time(), {}, print, "at " .. tostring({}))
+        end)
         game.onTick(function()
             if game.time() == 1 then bar:to(0, 0.5) end
         end)
