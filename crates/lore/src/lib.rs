@@ -56,6 +56,7 @@ pub mod player;
 pub mod press;
 pub mod scaffold;
 mod script_game;
+mod script_hud;
 pub mod server;
 pub mod settings;
 mod shooting;

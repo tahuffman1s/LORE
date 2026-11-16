@@ -219,6 +219,51 @@ fn hud_values_show_up_in_the_draw_list() {
     assert_eq!(rects(&ui).len(), 1, "an empty bar draws only its track");
 }
 
+#[test]
+fn a_hidden_hud_piece_is_not_drawn_and_comes_back_as_it_was() {
+    let mut ui = Ui::default();
+    let ammo = ui.hud_text(Anchor::BottomRight, [0.0, 0.0], 32.0, "30 / 90");
+    let health = ui.hud_bar(
+        Anchor::BottomLeft,
+        [0.0, 0.0],
+        [300.0, 20.0],
+        Color::rgb(1.0, 0.0, 0.0),
+        0.5,
+    );
+    idle(&mut ui);
+    let (boxes, words) = (rects(&ui), texts(&ui));
+    assert_eq!((boxes.len(), words.len()), (2, 1));
+
+    ui.set_shown(ammo, false).unwrap();
+    ui.set_shown(health, false).unwrap();
+    // A hidden piece still takes new values.
+    ui.set_text(ammo, "29 / 90").unwrap();
+    idle(&mut ui);
+    assert_eq!((rects(&ui).len(), texts(&ui).len()), (0, 0));
+
+    ui.set_shown(ammo, true).unwrap();
+    ui.set_shown(health, true).unwrap();
+    idle(&mut ui);
+    assert_eq!(rects(&ui), boxes);
+    assert_eq!(texts(&ui), ["29 / 90"]);
+
+    // Only HUD pieces are hidden this way.
+    let (mut menu, ids) = buttons(&["Resume"]);
+    assert!(menu.set_shown(ids[0], false).is_err());
+    assert!(menu.set_offset(ids[0], [1.0, 1.0]).is_err());
+}
+
+#[test]
+fn a_hud_piece_can_be_moved_after_it_is_made() {
+    let mut ui = Ui::default();
+    let dot = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [10.0, 10.0], Color::WHITE);
+    idle(&mut ui);
+    let before = rects(&ui)[0].0;
+    ui.set_offset(dot, [30.0, -5.0]).unwrap();
+    idle(&mut ui);
+    assert_eq!(rects(&ui)[0].0, [before[0] + 30.0, before[1] - 5.0]);
+}
+
 // ---- Moving between widgets ------------------------------------------------
 
 #[test]

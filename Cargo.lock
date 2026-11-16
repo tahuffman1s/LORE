@@ -1590,6 +1590,7 @@ dependencies = [
  "log",
  "lore-input",
  "lore-mode",
+ "lore-ui",
  "lore-weapons",
  "mlua",
 ]

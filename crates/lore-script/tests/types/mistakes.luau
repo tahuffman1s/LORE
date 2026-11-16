@@ -55,3 +55,9 @@ end)
 game.after(function() end, 3) -- wrong: the seconds come first
 local shown = game.tween(0, 100, 1)
 shown:to("far", 1) -- wrong: a target is a number
+
+local health = game.hud.bar(1)
+health.text = "Health" -- wrong: a bar has no text
+health.value = "full" -- wrong: how full a bar is, is a number
+health.remove() -- wrong: needs a colon, health:remove()
+game.hud.text({ at = "top" }) -- wrong: the words come first
