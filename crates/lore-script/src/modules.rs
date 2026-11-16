@@ -576,7 +576,7 @@ mod tests {
             ("main.luau", "./weapons/rifle", "weapons/rifle.luau"),
             ("main.luau", ".//weapons/./rifle", "weapons/rifle.luau"),
             ("weapons/rifle.luau", "./ammo", "weapons/ammo.luau"),
-            ("weapons/rifle.luau", "../teams", "teams.luau"),
+            ("weapons/rifle.luau", "../quests", "quests.luau"),
             ("weapons/rifle.luau", "../ui/hud", "ui/hud.luau"),
             ("a/b/c.luau", "../../d", "d.luau"),
             ("main.luau", "./a/../b", "b.luau"),
@@ -633,7 +633,7 @@ mod tests {
             Err(ReadProblem::WrongCase { on_disk }) if on_disk == "Weapons.luau"
         ));
         assert!(matches!(
-            files.read("teams.luau"),
+            files.read("quests.luau"),
             Err(ReadProblem::Missing)
         ));
         // A name that `resolve` would never make is not looked for at all.

@@ -53,7 +53,7 @@ fn a_player_walks_in_the_tick_the_key_goes_down() {
     let actions = ActionMap::default_fps();
     let mut game = Playing::start(new_game("walk"), None, &actions, TICK_RATE).unwrap();
     let mut input = Input::new(actions);
-    assert_eq!(game.world().game().host().mode().players().len(), 1);
+    assert_eq!(game.world().game().host().players().len(), 1);
 
     // Settle onto the floor, then hold W.
     play(&mut game, &mut input, 30);
@@ -85,7 +85,7 @@ fn the_script_hears_players_come_and_go() {
     let first = world.add_player().unwrap();
     let second = world.add_player().unwrap();
     assert_ne!(first, second);
-    assert_eq!(world.game().host().mode().players().len(), 2);
+    assert_eq!(world.game().host().players().len(), 2);
 
     // The second walks off to their right while the first stands.
     let mut asked = world.asked(second).unwrap();
@@ -100,7 +100,7 @@ fn the_script_hears_players_come_and_go() {
     run(&mut world, 10);
     assert_eq!(world.players().count(), 1);
     assert_eq!(world.player(second), None);
-    assert_eq!(world.game().host().mode().players().len(), 1);
+    assert_eq!(world.game().host().players().len(), 1);
 }
 
 /// The level `lore new` writes: a 32 m floor with a wall around it at

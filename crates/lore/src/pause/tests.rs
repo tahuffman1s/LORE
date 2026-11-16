@@ -241,7 +241,7 @@ fn escape_opens_the_menu_over_a_game_that_keeps_running_but_hears_nothing() {
     assert!(played.is_open());
     played.input.release(Key::Escape);
 
-    // The match goes on, and the player's fire button and mouse do not reach it.
+    // The game goes on, and the player's fire button and mouse do not reach it.
     let before = played.game.game.ticks;
     played.input.press(MouseButton::MouseLeft);
     played.input.move_mouse(40.0, 10.0);

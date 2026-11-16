@@ -5,7 +5,7 @@
 // a script fails to load, never on the tick path, so its size does not matter.
 #![allow(clippy::result_large_err)]
 
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use lore_input::{ActionMap, InputFrame, Rumble};
-use lore_mode::{Event, Match, PlayerId, Rules};
 use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
@@ -23,8 +22,8 @@ use crate::error::{OpenError, ScriptError, is_time_limit};
 use crate::hud::{HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
-use crate::mode_api::{Handles, ModeState};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
+use crate::player_api::{Handles, PlayerId, Players};
 use crate::time_api::Clock;
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 
@@ -40,11 +39,6 @@ const POLL_EVERY: Duration = Duration::from_millis(100);
 /// How many different runtime errors are printed before the rest are dropped,
 /// so a script failing in new ways every tick cannot flood the log.
 const MAX_REPORTED: usize = 32;
-
-/// How many match events are handled in one go. A kill is one event and a
-/// round starting with 64 players is 65, so reaching this means handlers keep
-/// setting each other off.
-const MAX_EVENTS_AT_ONCE: usize = 10_000;
 
 /// How many spawns wait for the engine to place them before the oldest are
 /// dropped. An engine that takes them every tick never comes near it.
@@ -153,13 +147,13 @@ pub struct ScriptHost {
     /// version that failed to load did. A save of any of them is a reload.
     watched: Vec<Watched>,
     next_poll: Instant,
-    /// The match. Kept here, outside the script's VM, so that saving the
-    /// script does not reset the score.
-    mode: Rc<ModeState>,
+    /// Who is in the game. Kept here, outside the script's VM, so that
+    /// saving the script loses nobody.
+    players: Rc<Players>,
     /// What the script asked to keep with `game.keep`, as it was at the
     /// last reload, for the next version to pick up.
     kept: Rc<RefCell<Store>>,
-    /// Players who have come into the world and not yet been given a place.
+    /// Players who are to be put at a spawn point and have not been yet.
     spawns: Vec<PlayerId>,
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
@@ -267,7 +261,7 @@ impl ScriptHost {
             reported: HashSet::new(),
             watched: Vec::new(),
             next_poll: Instant::now() + POLL_EVERY,
-            mode: Rc::new(ModeState::new()),
+            players: Rc::default(),
             kept: Rc::default(),
             spawns: Vec::new(),
             audio: Rc::default(),
@@ -299,9 +293,8 @@ impl ScriptHost {
     ///
     /// The first tick calls the script's `game.onStart` functions first.
     /// Every tick then calls the `game.after` and `game.every` functions
-    /// whose time has come, then the `game.onTick` ones. Then the match
-    /// moves on by one tick, and the script is told what happened in it. A
-    /// function that fails is reported once and the others still run.
+    /// whose time has come, then the `game.onTick` ones. A function that
+    /// fails is reported once and the others still run.
     ///
     /// `step` must be the same on every tick: it is what the script's
     /// seconds are counted in.
@@ -313,8 +306,6 @@ impl ScriptHost {
         self.start();
         self.run_timers();
         self.call_all(|handlers| &handlers.tick, step);
-        self.mode.game.borrow_mut().tick(step);
-        self.tell_script();
         self.clock.end_tick();
     }
 
@@ -404,9 +395,9 @@ impl ScriptHost {
     }
 
     /// One number for what the script's rules have done so far: every line
-    /// they printed and every call that changes the game (a score, a
-    /// weapon handed out, a timer started, the round ended), with the tick
-    /// each happened on. What `game.onDraw` functions do is left out.
+    /// they printed and every call that changes the game (a weapon handed
+    /// out, a timer started, a handler added), with the tick each happened
+    /// on. What `game.onDraw` functions do is left out.
     ///
     /// Two runs of the same game that are given the same input have the
     /// same number after every tick. If they do not, the game's rules
@@ -481,37 +472,68 @@ impl ScriptHost {
         self.audio.take()
     }
 
-    /// The match being played: the rules the script set with `game.mode`,
-    /// who is in it, the score and where the round is.
-    ///
-    /// ```no_run
-    /// # use lore_input::ActionMap;
-    /// # use lore_script::ScriptHost;
-    /// # let host = ScriptHost::open("my-game", ActionMap::default_fps())?;
-    /// for team in host.mode().teams() {
-    ///     println!("{}: {}", team.name, team.score);
-    /// }
-    /// # Ok::<(), lore_script::OpenError>(())
-    /// ```
+    /// Everyone in the game, in the order they came into it.
     #[must_use]
-    pub fn mode(&self) -> Ref<'_, Match> {
-        self.mode.game.borrow()
+    pub fn players(&self) -> Vec<PlayerId> {
+        self.players.ids()
     }
 
-    /// Adds a player to the match and tells the script. With teams, the
-    /// player is put on the smallest one.
+    /// Adds a player to the game and tells the script: its
+    /// `game.onPlayerJoin` functions, then its `game.onSpawn` ones. The
+    /// player is then waiting for a spawn point
+    /// ([`take_spawns`](Self::take_spawns)).
     pub fn player_joined(&mut self, name: &str) -> PlayerId {
-        let id = self.mode.game.borrow_mut().join(name);
-        self.tell_script();
+        let id = self.players.add(name);
+        self.start();
+        if let Some(player) = self.player(id) {
+            self.call_all(|handlers| &handlers.join, player);
+        }
+        self.spawn(id);
         id
     }
 
-    /// Takes a player out of the match and tells the script. Does nothing if
-    /// they were not in it.
+    /// Takes a player out of the game and tells the script, which can still
+    /// read who they were while it is told. Does nothing if they were not
+    /// in it.
     pub fn player_left(&mut self, player: PlayerId) {
-        self.mode.game.borrow_mut().leave(player);
-        self.tell_script();
+        if !self.players.remove(player) {
+            return;
+        }
+        self.start();
+        if let Some(handle) = self.player(player) {
+            self.call_all(|handlers| &handlers.leave, handle);
+        }
+        self.players.forget();
+        if let Some(version) = &self.running {
+            version.shared.handles.forget(player);
+        }
+        self.spawns.retain(|waiting| *waiting != player);
         self.weapons.take(player);
+    }
+
+    /// Records that `player` died. Nothing has health yet, so dying is only
+    /// this: the script's `game.onSpawn` functions are called and the
+    /// player waits for a spawn point ([`take_spawns`](Self::take_spawns)),
+    /// keeping what they hold. Does nothing if they are not in the game.
+    pub fn player_died(&mut self, player: PlayerId) {
+        if self.players.has(player) {
+            self.start();
+            self.spawn(player);
+        }
+    }
+
+    /// Tells the script that a player comes into the world, and notes that
+    /// they need a spawn point.
+    fn spawn(&mut self, id: PlayerId) {
+        if let Some(player) = self.player(id) {
+            self.call_all(|handlers| &handlers.spawn, player);
+        }
+        if !self.spawns.contains(&id) {
+            if self.spawns.len() >= MAX_WAITING_SPAWNS {
+                self.spawns.remove(0);
+            }
+            self.spawns.push(id);
+        }
     }
 
     /// The weapon `player` holds, if the script has handed them one with
@@ -566,7 +588,6 @@ impl ScriptHost {
     pub fn weapon_fired(&mut self, player: PlayerId) {
         if let Some(player) = self.player(player) {
             self.call_all(|handlers| &handlers.weapon_fire, player);
-            self.tell_script();
         }
     }
 
@@ -575,7 +596,6 @@ impl ScriptHost {
     pub fn weapon_reloading(&mut self, player: PlayerId) {
         if let Some(player) = self.player(player) {
             self.call_all(|handlers| &handlers.weapon_reload, player);
-            self.tell_script();
         }
     }
 
@@ -590,30 +610,11 @@ impl ScriptHost {
             return;
         };
         self.call_all(|handlers| &handlers.weapon_hit, table);
-        self.tell_script();
-    }
-
-    /// Records that `victim` died, by `killer`'s hand if there was one, and
-    /// tells the script. Does nothing if the victim is not alive.
-    pub fn player_killed(&mut self, killer: Option<PlayerId>, victim: PlayerId) {
-        self.mode.game.borrow_mut().kill(killer, victim);
-        self.tell_script();
-    }
-
-    /// Ends the round now, as if time had run out: the highest score wins.
-    /// Does nothing unless a round is being played.
-    pub fn end_round(&mut self) {
-        {
-            let mut game = self.mode.game.borrow_mut();
-            let leader = game.leader();
-            game.finish(leader);
-        }
-        self.tell_script();
     }
 
     /// The players who have come into the world since this was last called,
-    /// oldest first: each needs putting at a spawn point (see
-    /// [`lore_mode::choose_spawn`]). Call it every tick.
+    /// by joining or by dying, oldest first: each needs putting at a spawn
+    /// point. Call it every tick.
     pub fn take_spawns(&mut self) -> std::vec::Drain<'_, PlayerId> {
         self.spawns.drain(..)
     }
@@ -693,7 +694,6 @@ impl ScriptHost {
         if self.started {
             self.call_all(|handlers| &handlers.reload, ());
         }
-        self.tell_script();
         Ok(())
     }
 
@@ -705,29 +705,6 @@ impl ScriptHost {
         self.watch(touched, built.is_ok());
         match built {
             Ok(version) => {
-                // A script with no `game.mode` has no mode: no rounds, no teams.
-                let rules = version.shared.rules.borrow_mut().take();
-                let rules = rules.map_or_else(Rules::none, |(rules, _)| rules);
-                if !rules.rounds {
-                    let handlers = version.shared.handlers.borrow();
-                    for (function, waiting) in [
-                        ("game.onRoundStart", &handlers.round_start),
-                        ("game.onRoundEnd", &handlers.round_end),
-                    ] {
-                        if !waiting.is_empty() {
-                            log::warn!(
-                                "The script uses {function}, but it never calls game.mode, \
-                                 so the game has no rounds and that function is never \
-                                 called. To play in rounds, add a line near the top of the \
-                                 file: game.mode {{ timeLimit = 300 }}"
-                            );
-                        }
-                    }
-                }
-                // `game.mode` only keeps rules that can be played.
-                if let Err(problem) = self.mode.game.borrow_mut().set_rules(rules) {
-                    log::error!("The rules from game.mode were not used: {problem}");
-                }
                 let kinds = std::mem::take(&mut *version.shared.kinds.borrow_mut());
                 for gone in self.weapons.define(kinds) {
                     log::warn!(
@@ -804,10 +781,9 @@ impl ScriptHost {
             stopped: RefCell::new(None),
             checks: Cell::new(0),
             raise: Cell::new(None),
-            mode: Rc::clone(&self.mode),
+            players: Rc::clone(&self.players),
             handles: Handles::default(),
             loading: Cell::new(true),
-            rules: RefCell::new(None),
             rumble: Cell::new(None),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
@@ -859,80 +835,6 @@ impl ScriptHost {
         if !self.started && self.running.is_some() && !self.paused {
             self.started = true;
             self.call_all(|handlers| &handlers.start, ());
-        }
-    }
-
-    /// Tells the script everything that has happened in the match and has
-    /// not been told yet, in order, and notes who needs a spawn point.
-    ///
-    /// What a handler does to the match (a score that ends the round, say)
-    /// is only queued while the handler runs, and told here afterwards, so
-    /// handlers never run inside one another.
-    fn tell_script(&mut self) {
-        let mut told = 0;
-        loop {
-            let event = self.mode.game.borrow_mut().next_event();
-            let Some(event) = event else { break };
-            told += 1;
-            if told == MAX_EVENTS_AT_ONCE {
-                log::error!(
-                    "The script's game.on... functions keep setting each other off \
-                     ({MAX_EVENTS_AT_ONCE} events in one tick), so the rest of this tick's \
-                     events were skipped. Look for a function that causes the event it \
-                     listens to."
-                );
-            }
-            let quiet = told >= MAX_EVENTS_AT_ONCE;
-            if !quiet {
-                self.start();
-            }
-            match event {
-                Event::Joined(id) if !quiet => {
-                    if let Some(player) = self.player(id) {
-                        self.call_all(|handlers| &handlers.join, player);
-                    }
-                }
-                Event::Left(player) => {
-                    let id = player.id;
-                    self.mode.gone.borrow_mut().push(player);
-                    if !quiet && let Some(player) = self.player(id) {
-                        self.call_all(|handlers| &handlers.leave, player);
-                    }
-                }
-                Event::Killed { killer, victim } if !quiet => {
-                    let killer = killer.and_then(|killer| self.player(killer));
-                    if let Some(victim) = self.player(victim) {
-                        self.call_all(|handlers| &handlers.kill, (killer, victim));
-                    }
-                }
-                Event::Spawned(id) => {
-                    if !quiet && let Some(player) = self.player(id) {
-                        self.call_all(|handlers| &handlers.spawn, player);
-                    }
-                    if self.spawns.len() >= MAX_WAITING_SPAWNS {
-                        self.spawns.remove(0);
-                    }
-                    self.spawns.push(id);
-                }
-                Event::RoundStarted if !quiet => {
-                    self.call_all(|handlers| &handlers.round_start, ());
-                }
-                Event::RoundEnded { winner } if !quiet => {
-                    let winner = self.running.as_ref().and_then(|version| {
-                        version.shared.handles.winner(&version.vm, winner).ok()
-                    });
-                    if let Some(winner) = winner {
-                        self.call_all(|handlers| &handlers.round_end, winner);
-                    }
-                }
-                _ => {}
-            }
-        }
-        // Everyone has been told, so those who left can be forgotten.
-        for player in self.mode.gone.borrow_mut().drain(..) {
-            if let Some(version) = &self.running {
-                version.shared.handles.forget(player.id);
-            }
         }
     }
 

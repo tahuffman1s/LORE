@@ -241,13 +241,13 @@ pub(crate) fn scene() -> Scene {
         } else {
             format!(".{number:03}")
         };
-        for (team, [x, z], turned) in [
+        for (colour, [x, z], turned) in [
             ("red", [x, -SPAWN_OUT], true),
             // Adding zero keeps the middle one from being written as "-0".
             ("blue", [-x + 0.0, SPAWN_OUT], false),
         ] {
             scene.markers.push(Marker {
-                name: Some(format!("spawn.{team}{copy}")),
+                name: Some(format!("spawn.{colour}{copy}")),
                 transform: stand([x, z], [1.0; 3], turned),
                 extras: None,
             });

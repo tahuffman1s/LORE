@@ -5,10 +5,10 @@ use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use lore_assets::{Marker, Scene};
-use lore_mode::{SpawnPoint, Stander, choose_spawn};
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
 use super::bodies::MAX_PLAYERS;
+use super::spawn;
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
 
@@ -40,7 +40,7 @@ const AT_SPAWN: f32 = 0.5;
 pub(crate) struct Ground {
     pub(super) level: Arc<Level>,
     /// Where players may start. Never empty.
-    spawns: Arc<[SpawnPoint]>,
+    spawns: Arc<[[f32; 3]]>,
     /// Which way a player starting at each of `spawns` faces.
     facing: Arc<[f32]>,
     pub(super) rules: MoveSettings,
@@ -72,19 +72,10 @@ impl Ground {
     }
 
     fn new(level: Level, markers: &[&Marker], tick_rate: u32) -> Self {
-        let mut spawns: Vec<SpawnPoint> = markers
-            .iter()
-            .map(|marker| SpawnPoint {
-                position: position_of(marker),
-                team: None,
-            })
-            .collect();
+        let mut spawns: Vec<[f32; 3]> = markers.iter().map(|marker| position_of(marker)).collect();
         let mut facing: Vec<f32> = markers.iter().map(|marker| yaw_of(marker)).collect();
         if spawns.is_empty() {
-            spawns.push(SpawnPoint {
-                position: [0.0; 3],
-                team: None,
-            });
+            spawns.push([0.0; 3]);
             facing.push(0.0);
         }
         Self {
@@ -117,39 +108,27 @@ impl Ground {
     /// those the one furthest from `others` is taken, or one nearly as
     /// good; `seed` settles the choice and should differ from one call to
     /// the next.
-    ///
-    /// Every spawn point is for anyone, and everyone else counts as an
-    /// enemy to keep away from, until teams reach the running game (#206).
     pub(super) fn spawn_in<'a>(
         &self,
         map: &Map,
         others: impl Iterator<Item = &'a Player>,
         seed: u32,
     ) -> Player {
-        let mut standers = [Stander {
-            position: [0.0; 3],
-            enemy: true,
-        }; MAX_PLAYERS];
+        let mut standing = [[0.0; 3]; MAX_PLAYERS];
         let mut count = 0;
-        for (stander, other) in standers.iter_mut().zip(others) {
-            stander.position = other.position;
+        for (place, other) in standing.iter_mut().zip(others) {
+            *place = other.position;
             count += 1;
         }
-        let placed: Vec<SpawnPoint> = map
-            .spawns()
-            .map(|spawn| SpawnPoint {
-                position: spawn.position,
-                team: None,
-            })
-            .collect();
-        let points: &[SpawnPoint] = if placed.is_empty() {
+        let placed: Vec<[f32; 3]> = map.spawns().map(|spawn| spawn.position).collect();
+        let points: &[[f32; 3]] = if placed.is_empty() {
             &self.spawns
         } else {
             &placed
         };
-        let chosen = choose_spawn(points, None, &standers[..count], seed)
+        let chosen = spawn::choose(points, &standing[..count], seed)
             .and_then(|point| points.get(point))
-            .map_or([0.0; 3], |point| point.position);
+            .map_or([0.0; 3], |point| *point);
         Player::at(chosen, &self.rules)
     }
 
@@ -190,7 +169,7 @@ impl Ground {
         self.spawns
             .iter()
             .zip(self.facing.iter())
-            .find(|(point, _)| near(point.position))
+            .find(|(point, _)| near(**point))
             .map(|(_, yaw)| *yaw)
     }
 
@@ -401,7 +380,7 @@ mod tests {
         ]);
         let ground = Ground::from_level(&level, 60);
 
-        let places: Vec<_> = ground.spawns.iter().map(|point| point.position).collect();
+        let places: Vec<_> = ground.spawns.to_vec();
         assert_eq!(
             places,
             [[2.0, 0.0, 3.0], [-4.0, 0.5, 0.0], [0.0, 0.0, -6.0]]

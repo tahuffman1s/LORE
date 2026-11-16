@@ -24,6 +24,7 @@ use crate::sound_output::SoundAsk;
 
 mod bodies;
 mod ground;
+mod spawn;
 
 pub(crate) use bodies::{Bodies, Body};
 pub use bodies::{MAX_PLAYERS, PlayerId, PlayerInput};
@@ -203,8 +204,7 @@ impl World {
                 name,
             },
         );
-        // The match may bring them into the world there and then, which
-        // settles where they start.
+        // Joining asks for a spawn point; this settles where they start.
         self.place_spawned(here.map(|here| (name, here)));
         if let Some(body) = self.bodies.get_mut(id) {
             let facing = self.ground.facing_at(self.game.map(), body.player.position);
@@ -222,9 +222,8 @@ impl World {
         }
     }
 
-    /// Puts everyone the match has just brought into the world, at the
-    /// start of a round or after a death, at one of the map's spawn points.
-    /// With `here`, the player of that name is put at that place instead.
+    /// Puts everyone waiting for one, by having joined or died, at one of
+    /// the map's spawn points. With `here`, the player of that name is put at that place instead.
     fn place_spawned(&mut self, here: Option<(lore_script::PlayerId, [f32; 3])>) {
         // Taken out first: placing reads the map, which the game also holds.
         let waiting: Vec<lore_script::PlayerId> = self.game.host_mut().take_spawns().collect();
@@ -260,8 +259,8 @@ impl Game for World {
     /// (`game.input`); the players move by what was asked of each
     /// ([`World::ask`]).
     fn tick(&mut self, input: &InputFrame, step: f32) {
-        // A player the match brought into the world in the script's last
-        // tick is at their spawn point before anyone moves.
+        // A player who died since the last tick is back at a spawn point
+        // before anyone moves.
         self.place_spawned(None);
         self.tick = self.tick.saturating_add(1);
         let Ground {
@@ -276,13 +275,8 @@ impl Game for World {
         // What was heard of the tick just run: whose feet came down, and
         // below, whose weapon did what.
         self.noises.clear();
-        self.walking.tick(
-            &self.bodies,
-            self.tick,
-            self.game.host(),
-            *tick,
-            &mut self.noises,
-        );
+        self.walking
+            .tick(&self.bodies, self.tick, *tick, &mut self.noises);
         // The weapons players hold, by what each is pressing. The script
         // hears of every shot, hit and reload here.
         self.shooting.tick(

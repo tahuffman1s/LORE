@@ -15,49 +15,11 @@
 -- `game.on...` functions. Only scripts inside the game's folder can be
 -- required, and scripts cannot require each other in a circle.
 
---- A team in the match. Get one from `player.team`, `game.team("Red")` or
---- `game.teams()`.
-declare extern type Team with
-    --- The team's name, as written in `game.mode`.
-    name: string
-
-    --- The team's score in this round. It goes back to 0 when a round starts.
-    score: number
-
-    --- The players on this team right now.
-    --- Example: for _, player in team:players() do print(player.name) end
-    function players(self): { Player }
-
-    --- Adds points to the team's score. A negative number takes points away.
-    --- Reaching `scoreToWin` wins the round. Only counts while a round is
-    --- being played: during the warm-up and after the round it does nothing.
-    --- Example: player.team:addScore(5)
-    function addScore(self, points: number): ()
-end
-
---- A player in the match. The same player is always the same value, so a
---- player can be a key in a table of your own: `streak[player] = 3`.
+--- A player in the game. The same player is always the same value, so a
+--- player can be a key in a table of your own: `jumps[player] = 3`.
 declare extern type Player with
     --- The name the player goes by.
     name: string
-
-    --- The player's team, or nil when the mode has no teams.
-    --- Example: if killer.team == victim.team then print("Team kill!") end
-    team: Team?
-
-    --- The player's own score in this round. With no teams, the first
-    --- player to reach `scoreToWin` wins.
-    score: number
-
-    --- How many players this player has killed in this round.
-    kills: number
-
-    --- How many times this player has died in this round.
-    deaths: number
-
-    --- True while the player is in the world; false while they wait to
-    --- respawn.
-    alive: boolean
 
     --- The name of the weapon in the player's hands, or nil when they hold
     --- none. Nobody holds a weapon until the script hands one out. The name
@@ -75,11 +37,6 @@ declare extern type Player with
     --- reloading moves into the magazine. 0 when they hold no weapon.
     --- Example: if player.ammo + player.reserve == 0 then player:giveWeapon("pistol") end
     reserve: number
-
-    --- Adds points to the player's own score. A negative number takes points
-    --- away. Only counts while a round is being played.
-    --- Example: player:addScore(1)
-    function addScore(self, points: number): ()
 
     --- Puts a new, full weapon in the player's hands, in place of what they
     --- held. The name is one of the engine's weapons ("rifle", "pistol",
@@ -165,7 +122,7 @@ declare extern type Tween with
 
     --- Sends the number on to `target` over `seconds`, from wherever it has
     --- got to, so it never jumps. With 0 seconds it is there at once.
-    --- Example: shown:to(player.score, 0.3)
+    --- Example: shown:to(player.ammo, 0.3)
     function to(self, target: number, seconds: number): ()
 end
 
@@ -274,14 +231,14 @@ declare game: {
 
     --- Calls `handler` once for every picture drawn, which is more often on
     --- a faster computer. It is for showing the game,
-    --- not for its rules: changing the game from here (a score, a weapon, a
-    --- timer) is an error. Reading is fine, and `game.time()` and
+    --- not for its rules: changing the game from here (a weapon, a timer) is
+    --- an error. Reading is fine, and `game.time()` and
     --- `tween.value` give where the picture is, between two ticks.
     --- Example: game.onDraw(function() print(shown.value) end)
     onDraw: (handler: () -> ()) -> (),
 
     --- The seconds the game has been running. It counts ticks, not the
-    --- computer's clock, so it is the same for everyone, does not jump when
+    --- computer's clock, so it is the same on every computer, does not jump when
     --- the computer stutters, and carries on when the script is saved.
     --- Example: local began = game.time()
     time: () -> number,
@@ -323,8 +280,7 @@ declare game: {
     ---
     --- A kept table can hold numbers, text, true and false, players, and
     --- tables of those. A player can be a key: `streaks[player] = 3`.
-    --- Players who left are taken out. Functions and teams are not kept
-    --- (keep `team.name`).
+    --- Players who left are taken out. Functions are not kept.
     ---
     --- What `start` has and the kept table lacks is added on the next save,
     --- also something you set to nil; what it already holds is not changed.
@@ -334,99 +290,27 @@ declare game: {
     --- Example: local saved = game.keep("saved", { best = 0 })
     keep: (<T>(name: string, start: T) -> T) & ((name: string) -> { [any]: any }),
 
-    --- Sets up the match: its teams and its numbers. Call it once, near the
-    --- top of the file. Every setting can be left out. Saving the file with
-    --- new numbers changes the running match and keeps the score; changing
-    --- the teams starts the match again.
-    ---
-    --- With this alone the game is a complete deathmatch: players are put on
-    --- the smallest team, a kill scores, the dead respawn, and rounds start
-    --- and end by themselves. The `game.on...` functions below are for
-    --- adding rules of your own.
-    ---
-    --- A game that never calls `game.mode` has no mode: no teams, no rounds,
-    --- no warm-up, no time limit and no score for a kill. A player comes into
-    --- the world when they join and is left alone from then on. That is what
-    --- a game played alone usually wants.
-    --- Example: game.mode { teams = { "Red", "Blue" }, scoreToWin = 50 }
-    mode: (settings: {
-        --- What the mode is called. "Team Deathmatch" if left out and there
-        --- are teams, "Deathmatch" if there are none.
-        name: string?,
-        --- The teams' names. Leave it out and it is every player for
-        --- themselves.
-        teams: { string }?,
-        --- The score that wins the round: a team's score, or a player's when
-        --- there are no teams. 50 if left out. 0 means no score ends the round.
-        scoreToWin: number?,
-        --- What killing an enemy is worth, to the killer and to their team.
-        --- 1 if left out. Use 0 if your mode scores something else.
-        killPoints: number?,
-        --- How long a round lasts, in seconds. When it runs out the highest
-        --- score wins. 600 (ten minutes) if left out. 0 means no time limit.
-        timeLimit: number?,
-        --- How long a player waits to come back after dying, in seconds.
-        --- 3 if left out.
-        respawnDelay: number?,
-        --- How long players can run around before the round starts counting,
-        --- in seconds. 5 if left out.
-        warmup: number?,
-        --- How long the final score stays up before the next round, in
-        --- seconds. 10 if left out.
-        intermission: number?,
-    }) -> (),
-
-    --- Calls `handler` when a player joins the match. Players who were
+    --- Calls `handler` when a player joins the game. Players who were
     --- already here when the file was saved and reloaded do not join again:
     --- use `game.players()` for them.
     --- Example: game.onPlayerJoin(function(player) print(player.name .. " joined") end)
     onPlayerJoin: (handler: (player: Player) -> ()) -> (),
 
-    --- Calls `handler` when a player leaves the match. `player` can still be
+    --- Calls `handler` when a player leaves the game. `player` can still be
     --- read inside the handler, and not after it.
-    --- Example: game.onPlayerLeave(function(player) streak[player] = nil end)
+    --- Example: game.onPlayerLeave(function(player) jumps[player] = nil end)
     onPlayerLeave: (handler: (player: Player) -> ()) -> (),
 
-    --- Calls `handler` when a player dies. `killer` is nil when nobody else
-    --- did it, such as a fall. The kill has already been counted and scored
-    --- (see `killPoints`), so add only what is special about your mode.
-    --- Example: game.onKill(function(killer, victim) print(victim.name .. " died") end)
-    onKill: (handler: (killer: Player?, victim: Player) -> ()) -> (),
-
-    --- Calls `handler` each time a player comes into the world: when they
-    --- join, when they respawn, and, in a game with a `game.mode`, when a
-    --- round starts.
+    --- Calls `handler` each time a player is put at a spawn point: when they
+    --- join, and again whenever they are sent back to one, keeping the
+    --- weapon they held. Dying sends a player back, though nothing has
+    --- health yet, so no shot kills anybody.
     --- Example: game.onSpawn(function(player) print(player.name .. " is in") end)
     onSpawn: (handler: (player: Player) -> ()) -> (),
 
-    --- Calls `handler` when the warm-up ends and the round starts counting.
-    --- Every score is back to 0. Never called in a game with no `game.mode`,
-    --- which has no rounds.
-    --- Example: game.onRoundStart(function() print("Go!") end)
-    onRoundStart: (handler: () -> ()) -> (),
-
-    --- Calls `handler` when the round ends. `winner` is the winning team (or
-    --- the winning player when there are no teams), or nil for a draw. Both
-    --- have a `name` and a `score`. Never called in a game with no
-    --- `game.mode`, which has no rounds.
-    --- Example: game.onRoundEnd(function(winner) if winner then print(winner.name .. " wins!") end end)
-    onRoundEnd: (handler: (winner: Team | Player | nil) -> ()) -> (),
-
-    --- Everyone in the match right now, in the order they joined.
-    --- Example: for _, player in game.players() do print(player.name, player.kills) end
+    --- Everyone in the game right now, in the order they joined.
+    --- Example: for _, player in game.players() do print(player.name, player.weapon) end
     players: () -> { Player },
-
-    --- All the teams, in the order `game.mode` lists them. Empty when the
-    --- mode has no teams. For one team, use `game.team("Red")`.
-    --- Example: for _, team in game.teams() do print(team.name, team.score) end
-    teams: () -> { Team },
-
-    --- The one team with this name. Capital letters do not matter. For all
-    --- of them, use `game.teams()`.
-    --- At the top of the file it works on any line below `game.mode`, so a
-    --- team can be kept in a local: local red = game.team("Red")
-    --- Example: game.team("Red"):addScore(5)
-    team: (name: string) -> Team,
 
     --- Makes a kind of weapon, or changes one of the engine's, for
     --- `player:giveWeapon` to hand out. Call it near the top of the file.
@@ -571,32 +455,6 @@ declare game: {
     --- Example: game.onWeaponReload(function(player) game.audio.play("reload") end)
     onWeaponReload: (handler: (player: Player) -> ()) -> (),
 
-    --- The round being played. A match is one round after another: a short
-    --- warm-up, the round itself, then the final score for a while. A game
-    --- with no `game.mode` has no rounds: it is "playing" for as long as
-    --- anyone is here, with no time limit.
-    round: {
-        --- Where the round is: "waiting" (nobody is here), "warmup",
-        --- "playing" or "over". It is a function, so write the brackets:
-        --- `game.round.phase()`.
-        --- Example: if game.round.phase() == "playing" then print("The round is on") end
-        phase: () -> "waiting" | "warmup" | "playing" | "over",
-
-        --- Seconds until the current phase ends by itself. It is `math.huge`
-        --- while waiting for players, in a round with no time limit and in
-        --- a game with no `game.mode`. It is a function, so write the
-        --- brackets.
-        --- Example: if game.round.timeLeft() < 60 then print("Last minute!") end
-        timeLeft: () -> number,
-
-        --- Ends the round now. Give it the winning team (or player, when
-        --- there are no teams), or nothing for a draw. Does nothing unless a
-        --- round is being played. In a game with no `game.mode` there is no
-        --- round to end, and calling this is an error that says so.
-        --- Example: game.round.finish(game.team("Red"))
-        finish: (winner: Team | Player | nil) -> (),
-    },
-
     --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
     --- inside the game's folder, named without the folder and without `.wav`
     --- or `.ogg`: `sounds/door.wav` is "door" and `sounds/ui/click.ogg` is
@@ -640,11 +498,11 @@ declare game: {
         --- Example: game.audio.playAt("alarm", vector.create(0, 3, 0), { range = 80, loop = true })
         playAt: (name: string, position: vector, options: { volume: number?, pitch: number?, loop: boolean?, range: number? }?) -> Sound,
 
-        --- Stops every sound the script has played, such as when a round
-        --- ends. Sounds keep playing when the script is saved and loaded
+        --- Stops every sound the script has played, such as when the player
+        --- leaves a place. Sounds keep playing when the script is saved and loaded
         --- again, and the new version no longer holds the old one's sounds:
         --- this is how it stops a looped sound it has lost.
-        --- Example: game.onRoundEnd(function() game.audio.stopAll() end)
+        --- Example: game.after(60, function() game.audio.stopAll() end)
         stopAll: () -> (),
     },
 

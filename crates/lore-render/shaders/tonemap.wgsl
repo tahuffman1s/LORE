@@ -4,7 +4,7 @@
 // The curve is the Khronos PBR Neutral tone mapper, written from its
 // published description (https://github.com/KhronosGroup/ToneMapping). Colours
 // below 0.76 keep their hue and saturation; only brighter ones are squeezed
-// towards white, so team colours stay the colours the map maker picked.
+// towards white, so strong colours stay the colours the map maker picked.
 
 struct Settings {
     // What the scene's light is multiplied by before the curve.

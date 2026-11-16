@@ -25,7 +25,6 @@ use lore::press::{self, Pressed};
 use lore::scaffold::{self, NewGame};
 use lore::script::ENTRY_SCRIPT;
 use lore::script::WeaponHit;
-use lore::script::mode::Phase;
 use lore::script::weapons::Zone;
 use lore::sounds::SOUNDS_FOLDER;
 use lore::world::Playing;
@@ -109,9 +108,9 @@ enum Command {
     },
     /// Test a game's script and level without opening a window
     #[command(
-        after_help = "Loads main.luau, starts the game, runs one second of it and a pretend \
-                      match,\nand presses every action in turn so code that reads input is \
-                      run too.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+        after_help = "Loads main.luau, starts the game, runs one second of it, brings in a pretend\nplayer who \
+                      fires a pretend shot, dies and leaves, and presses every action in \
+                      turn\nso code that reads input is run too.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -363,16 +362,16 @@ fn open(folder: &Path, config: &Config, verb: &str) -> Result<ScriptGame, String
     cli::open_game(folder, &config.actions, &format!("lore {verb}"))
 }
 
-/// `lore check`: runs a second of the game and a pretend match with no
-/// window, has the script draw a picture of each, presses every action in turn, and loads the game's level and its
-/// sounds. Then plays the start of the game again with pictures drawn at
-/// other paces. Fails if the script has a mistake, its rules depend on how
-/// often a picture is drawn, or the level or a sound cannot be loaded.
+/// `lore check`: runs a second of the game with no window, brings in a
+/// pretend player who fires a pretend shot, dies and leaves, has the script
+/// draw a picture of each, presses every action in turn, and loads the
+/// game's level and its sounds. Then plays the start of the game again with
+/// pictures drawn at other paces. Fails if the script has a mistake, its
+/// rules depend on how often a picture is drawn, or the level or a sound
+/// cannot be loaded.
 fn check(folder: &Path) -> Result<(), String> {
     /// One second of game time.
     const TICKS: u32 = 60;
-    /// The longest warm-up the pretend match sits through: ten minutes.
-    const LONGEST_WARMUP: u32 = 600 * TICKS;
 
     let config = Config::default();
     let mut game = open(folder, &config, "check")?;
@@ -384,9 +383,6 @@ fn check(folder: &Path) -> Result<(), String> {
     game.check_sounds();
     let mut input = lore::input::Input::new(config.actions.clone());
     let step = 1.0 / TICKS as f32;
-    let mut played = false;
-    // Whether the game has rounds: it has none unless it calls game.mode.
-    let mut rounds = true;
     let mut pressed = Pressed::default();
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
@@ -395,18 +391,14 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         // A picture, so the game.onDraw functions run too.
         game.host_mut().draw(0.5);
-        // A pretend match, so the functions that wait for players run too.
-        let first = game.host_mut().player_joined("Check Bot 1");
-        let second = game.host_mut().player_joined("Check Bot 2");
-        let mut waited = 0;
-        while game.host().mode().phase() != Phase::Playing && waited < LONGEST_WARMUP {
-            game.tick(input.tick(), step);
-            waited += 1;
-        }
-        played = game.host().mode().phase() == Phase::Playing;
-        rounds = game.host().mode().rules().rounds;
+        // A pretend player and something for them to shoot at, so the
+        // functions that wait for a player run too.
+        let player = game.host_mut().player_joined("Check Player");
+        let target = game.host_mut().player_joined("Check Target");
+        game.tick(input.tick(), step);
         // Every action in turn, so code that only runs on input runs too:
-        // while the round is on, when a press is most likely to do something.
+        // with a player in the game, when a press is most likely to do
+        // something.
         let mut seen = game.host().mistakes_logged();
         pressed = press::every_action(&mut input, |action, frame| {
             game.tick(frame, step);
@@ -425,33 +417,36 @@ fn check(folder: &Path) -> Result<(), String> {
                 );
             }
         });
-        // A pretend shot, so the functions that wait for one run too: with
-        // what the script handed the first player, or else a rifle.
+        // Pretend shots, so the functions that wait for one run too, with
+        // what the script handed the player, or else a rifle: one that hits
+        // the target and one that hits a wall, since a script has to tell
+        // the two apart (`hit.victim` is nil for the wall).
         let weapon = game
             .host()
-            .held_weapon(first)
+            .held_weapon(player)
             .map_or_else(|| Rc::from("rifle"), |held| held.name);
-        game.host_mut().weapon_fired(first);
-        game.host_mut().weapon_hit(&WeaponHit {
-            shooter: first,
-            victim: Some(second),
-            weapon,
-            damage: 30.0,
-            part: Some(Zone::Body),
-            position: [0.0, 1.2, -10.0],
-            distance: 10.0,
-            explosion: false,
-        });
-        game.host_mut().weapon_reloading(first);
-        game.host_mut().player_killed(Some(first), second);
-        game.host_mut().player_killed(None, first);
+        for (victim, part, damage) in [(Some(target), Some(Zone::Body), 30.0), (None, None, 0.0)] {
+            game.host_mut().weapon_fired(player);
+            game.host_mut().weapon_hit(&WeaponHit {
+                shooter: player,
+                victim,
+                weapon: Rc::clone(&weapon),
+                damage,
+                part,
+                position: [0.0, 1.2, -10.0],
+                distance: 10.0,
+                explosion: false,
+            });
+        }
+        game.host_mut().weapon_reloading(player);
         game.tick(input.tick(), step);
-        game.host_mut().end_round();
+        // Dying is being put back at a spawn point: game.onSpawn again.
+        game.host_mut().player_died(player);
         game.tick(input.tick(), step);
-        game.host_mut().player_left(second);
-        game.host_mut().player_left(first);
+        game.host_mut().player_left(target);
+        game.host_mut().player_left(player);
         game.tick(input.tick(), step);
-        // And one of the match, for what is only drawn while it is played.
+        // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
 
@@ -518,37 +513,21 @@ fn check(folder: &Path) -> Result<(), String> {
         "{ENTRY_SCRIPT} is fine: it loaded and ran for {TICKS} ticks (1 second of game time) \
          with no errors."
     );
-    if played && !rounds {
-        println!(
-            "Then two pretend players joined: one fired a shot that hit the other and \
-             reloaded, one killed the other, one died alone, and both left. Each \
-             game.on... function in the script was called at least once, with no errors. \
-             The game has no rounds, because it does not call game.mode, so \
-             game.onRoundStart and game.onRoundEnd functions were not run."
-        );
-    } else if played {
-        println!(
-            "Then a pretend match was played: two players joined, the round started, one \
-             fired a shot that hit the other and reloaded, one killed the other, one died \
-             alone, the round ended and both left. Each \
-             game.on... function in the script was called at least once, with no errors. \
-             Code the pretend match does not reach, such as what happens on a team kill, \
-             was not run."
-        );
-    } else {
-        println!(
-            "A pretend match was started with two players, but its warm-up is longer than \
-             ten minutes, so the round itself was not played. To have it played, set a \
-             shorter warm-up in game.mode, such as warmup = 5."
-        );
-    }
+    println!(
+        "Then a pretend player came into the game, with a pretend target ten metres in \
+         front of them. The player fired a shot that hit the target and one that hit a \
+         wall, reloaded, died and was put back at a spawn point, and then both left. Each \
+         game.on... function in the script was called at least once, with no errors. \
+         What those functions do with a shot the check did not fire, such as one to the \
+         head or an explosion, was not run."
+    );
     match paced {
         Some(Paced::Same) => println!(
             "The game was then played four more times from the start: three times with one \
              picture drawn after every tick, and once with them drawn unevenly, from none \
              to seven between two ticks. Its rules did the same on every tick each time: \
              nothing they did there depends on the frame rate. That covers the first \
-             second and the presses below, not the pretend match."
+             second and the presses below, not the pretend player and their shots."
         ),
         Some(Paced::NotRepeatable { tick }) => println!(
             "The check also tried to find out whether the game's rules depend on how often \

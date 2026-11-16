@@ -282,7 +282,7 @@ fn a_runtime_error_shows_the_line_and_is_reported_once() {
     let game = GameFolder::new(
         "local player = nil\n\
          game.onTick(function()\n\
-         \x20   player.addScore(1)\n\
+         \x20   player.giveWeapon(1)\n\
          end)\n\
          game.onTick(function() print(\"still running\") end)\n",
     );
@@ -292,7 +292,7 @@ fn a_runtime_error_shows_the_line_and_is_reported_once() {
 
     let error = host.last_error().expect("the tick failed");
     assert_eq!(error.line, Some(3));
-    assert_eq!(error.source_line.as_deref(), Some("player.addScore(1)"));
+    assert_eq!(error.source_line.as_deref(), Some("player.giveWeapon(1)"));
     assert!(error.message.contains("attempt to index nil"), "{error}");
     assert!(error.hint.is_some(), "{error}");
     // The other handler is not taken down with it.
@@ -1164,11 +1164,9 @@ fn players_are_kept_as_keys_and_values_while_they_are_in_the_match() {
 fn what_cannot_be_kept_is_left_out_and_named() {
     let game = GameFolder::new(
         r#"
-        game.mode { teams = { "Red", "Blue" } }
         local saved = game.keep("saved", { best = 4 })
         game.onStart(function()
             saved.inner = { call = function() end, fine = 1 }
-            saved.team = game.team("Red")
             saved["odd key"] = print
             saved[{}] = 2
             saved.loop = {}
@@ -1183,7 +1181,7 @@ fn what_cannot_be_kept_is_left_out_and_named() {
     let mut problems = errors();
     problems.sort();
     let all = problems.join("\n");
-    assert_eq!(problems.len(), 5, "{all}");
+    assert_eq!(problems.len(), 4, "{all}");
     assert!(
         all.contains(
             "`inner.call` in game.keep(\"saved\") was not kept across the reload: it is a \
@@ -1191,10 +1189,6 @@ fn what_cannot_be_kept_is_left_out_and_named() {
              tables of those. Take this out of the table, or keep a name or a number in \
              its place."
         ),
-        "{all}"
-    );
-    assert!(
-        all.contains("`team` in game.keep(\"saved\") was not kept across the reload: it is a team. Keep the team's name instead: team.name."),
         "{all}"
     );
     assert!(all.contains("`[\"odd key\"]` in game.keep"), "{all}");
@@ -1406,7 +1400,7 @@ fn many_caught_engine_errors_in_one_tick_do_not_use_up_the_time_limit() {
     let game = GameFolder::new(
         r#"
         game.onTick(function()
-            for n = 1, 20000 do pcall(game.team, "nobody") end
+            for n = 1, 20000 do pcall(game.input.pressed, "nobody") end
             print("done")
         end)
         "#,

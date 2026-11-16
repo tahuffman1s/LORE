@@ -11,12 +11,12 @@
 //! [[entity]]
 //! id = "k7f3q2xa"
 //! type = "spawn"
-//! name = "Red spawn"
+//! name = "By the gate"
 //! position = [4.0, 0.0, -12.5]
 //! facing = 180.0
 //!
 //! [entity.properties]
-//! team = "red"
+//! region = "north"
 //! ```
 //!
 //! Each entity keeps its `id` for good, so scripts and other files can refer
@@ -86,7 +86,7 @@ const HEADER: &str = "\
 /// What an entity's property holds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Words, such as a team's name.
+    /// Words, such as a region's name.
     Text(String),
     /// A number.
     Number(f64),
@@ -484,6 +484,35 @@ impl Map {
         self.entities.iter().filter(|entity| entity.kind == SPAWN)
     }
 
+    /// What the map says that LORE no longer acts on, a sentence each for
+    /// the person who made it. The map is used all the same.
+    ///
+    /// A spawn point with a `team` property comes from a map made for a
+    /// game with teams. LORE has none, so it is a spawn point like any
+    /// other.
+    #[must_use]
+    pub fn notes(&self) -> Vec<String> {
+        self.spawns()
+            .filter_map(|spawn| {
+                let team = spawn.properties.get("team")?;
+                let name = if spawn.name.is_empty() {
+                    &spawn.id
+                } else {
+                    &spawn.name
+                };
+                let side = match team {
+                    Value::Text(side) => side.clone(),
+                    other => other.to_string(),
+                };
+                Some(format!(
+                    "The spawn point \"{name}\" in {MAP_FILE} has a team ({side}). LORE has \
+                     no teams, so the player can start there as at any other spawn point. \
+                     To stop seeing this, delete the line `team = {team}` under it."
+                ))
+            })
+            .collect()
+    }
+
     /// A line about the map for the person who made it: how many of each
     /// type are placed, such as "3 placed: 2 spawn, 1 zone".
     #[must_use]
@@ -641,7 +670,7 @@ fn read_entity(table: &DeTable<'_>, start: usize) -> Result<(Entity, usize), (us
                     return Err((
                         at,
                         "Properties go under a line saying [entity.properties], one to a \
-                         line, like team = \"red\"."
+                         line, like region = \"north\"."
                             .to_owned(),
                     ));
                 };
@@ -661,7 +690,9 @@ fn read_entity(table: &DeTable<'_>, start: usize) -> Result<(Entity, usize), (us
                     check_word(name).map_err(|why| {
                         (
                             at,
-                            format!("This property's name {why}. Give it a short name, like team."),
+                            format!(
+                                "This property's name {why}. Give it a short name, like region."
+                            ),
                         )
                     })?;
                     let value = match value.get_ref() {
@@ -967,7 +998,7 @@ position = [4, 0.0, -12.5]
 facing = 180
 
 [entity.properties]
-team = \"red\"
+region = \"north\"
 weight = 2
 \"needs key\" = true
 ratio = 0.25
@@ -1018,7 +1049,7 @@ position = [0.1, 0.0004, 1e2]
             [
                 ("needs key", &Value::Flag(true)),
                 ("ratio", &Value::Number(0.25)),
-                ("team", &Value::Text("red".to_owned())),
+                ("region", &Value::Text("north".to_owned())),
                 ("weight", &Value::Number(2.0)),
             ]
         );
@@ -1031,6 +1062,29 @@ position = [0.1, 0.0004, 1e2]
         let empty = Map::parse("map.toml", "version = 1\n").unwrap();
         assert!(empty.is_empty());
         assert_eq!(empty.summary(), "0 placed");
+    }
+
+    #[test]
+    fn a_spawn_point_with_a_team_still_loads_and_the_map_says_teams_are_gone() {
+        let old = "version = 1\n[[entity]]\nid = \"a\"\ntype = \"spawn\"\nname = \"Red base\"\nposition = [0, 0, 0]\n\
+                   [entity.properties]\nteam = \"red\"\n\
+                   [[entity]]\nid = \"b\"\ntype = \"spawn\"\nposition = [5, 0, 0]\n\
+                   [[entity]]\nid = \"c\"\ntype = \"zone\"\nposition = [9, 0, 0]\n[entity.properties]\nteam = \"red\"\n";
+        let map = Map::parse("map.toml", old).unwrap();
+        assert_eq!(map.spawns().count(), 2, "both are places to start");
+        let notes = map.notes();
+        let [note] = &notes[..] else {
+            panic!("one note, for the one spawn point with a team: {notes:?}");
+        };
+        for expected in [
+            "The spawn point \"Red base\" in map.toml has a team (red)",
+            "LORE has no teams",
+            "delete the line `team = \"red\"`",
+        ] {
+            assert!(note.contains(expected), "no {expected:?} in: {note}");
+        }
+        // A map with no such property has nothing to say.
+        assert!(Map::parse("map.toml", TWO).unwrap().notes().is_empty());
     }
 
     #[test]
@@ -1056,7 +1110,7 @@ facing = 180.0
 [entity.properties]
 \"needs key\" = true
 ratio = 0.25
-team = \"red\"
+region = \"north\"
 weight = 2
 ";
         assert_eq!(text, format!("{HEADER}\n{expected}"));
@@ -1199,9 +1253,9 @@ weight = 2
             ("id = \"a\"\nfacing = inf\n", 4, "in degrees"),
             ("id = \"a\"\nproperties = 3\n", 4, "[entity.properties]"),
             (
-                "id = \"a\"\n[entity.properties]\nteam = [1]\n",
+                "id = \"a\"\n[entity.properties]\nregion = [1]\n",
                 5,
-                "\"team\" has to be text in quotes, a number, or true or false",
+                "\"region\" has to be text in quotes, a number, or true or false",
             ),
             (
                 "id = \"a\"\n[entity.properties]\nwhen = 1979-05-27\n",

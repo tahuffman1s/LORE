@@ -463,7 +463,7 @@ impl Ui {
     }
 
     /// Whether a menu is open. While one is, the game should stop
-    /// sending the player's input to the match.
+    /// sending the player's input to the world.
     #[must_use]
     pub fn is_menu_open(&self) -> bool {
         !self.stack.is_empty()

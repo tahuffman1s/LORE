@@ -7,33 +7,28 @@
 -- shows the check can fail: a checker that had not read lore.d.luau would
 -- pass everything.
 --
--- A misspelt setting or option, such as `game.mode { teems = ... }` or
--- `{ volum = 1 }`, is not here: Luau lets a table hold more than a type asks
--- for, so the type checker says nothing. The engine catches those when the
--- script runs ("game.mode has no setting called teems. Did you mean teams?").
+-- A misspelt setting or option, such as `game.weapon("smg", { damge = 22 })`
+-- or `{ volum = 1 }`, is not here: Luau lets a table hold more than a type
+-- asks for, so the type checker says nothing. The engine catches those when
+-- the script runs ("game.weapon has no setting called damge. Did you mean
+-- damage?").
 
 game.onStrat(function() end) -- wrong: no such function
 game.input.pressed(5) -- wrong: an action is text
-game.mode { scoreToWin = "fifty" } -- wrong: a score is a number
 
-local red = game.team("Red")
-red.addScore(5) -- wrong: needs a colon, red:addScore(5)
-print(red.nmae) -- wrong: no such field
-
-game.onKill(function(killer, victim)
-    print(killer.name) -- wrong: killer can be nil
-    print(victim.name)
-end)
+-- LORE makes single-player games: it has no game modes, teams or rounds.
+game.mode { scoreToWin = 50 } -- wrong: there are no game modes
+print(game.team("Red")) -- wrong: there are no teams
+print(game.round.phase()) -- wrong: there are no rounds
+game.onKill(function() end) -- wrong: nobody dies yet
 
 game.onPlayerJoin(function(player)
-    print(player.team.name) -- wrong: a player has no team when the mode has none
+    print(player.nmae) -- wrong: no such field
+    print(player.team) -- wrong: there are no teams
+    player:addScore(1) -- wrong: there is no score
 end)
 
 game.audio.playAt("gunshot", 1, 2, 3) -- wrong: a place is vector.create(1, 2, 3)
-
-if game.round.phase() == "playng" then -- wrong: no such phase
-    print("never")
-end
 
 local held: string = game.input.value("fire") -- wrong: a value is a number
 print(held)

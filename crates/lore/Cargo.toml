@@ -46,8 +46,6 @@ lore-assets = { path = "../lore-assets", default-features = false }
 log = "0.4"
 # Reads a game's `map.toml`. The same reader the bindings file uses.
 toml = { version = "1.2", default-features = false, features = ["parse", "std"] }
-# Chooses which of a map's spawn points a player gets.
-lore-mode = { path = "../lore-mode" }
 # `lore package` writes the Linux `.tar.gz` itself, so packaging needs no
 # `tar` program (Windows has none to rely on). No extended attributes: an
 # archive should say nothing about the computer that made it.

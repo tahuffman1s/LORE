@@ -74,5 +74,5 @@ Before designing anything a user touches (script API, CLI, editor, error text, d
 - Clippy clean with `-D warnings`; workspace lints are in the root `Cargo.toml`.
 - No `unwrap`/`expect`/panics on engine runtime paths; return errors with actionable messages.
 - `unsafe` only at FFI and GPU boundaries, each block with a `// SAFETY:` comment.
-- Simulation and netcode are deterministic and unit-tested. No per-frame heap allocation in hot loops.
+- The simulation is deterministic and unit-tested: the same input gives the same world, tick for tick. No per-frame heap allocation in hot loops.
 - A performance claim needs a benchmark or a frame capture.

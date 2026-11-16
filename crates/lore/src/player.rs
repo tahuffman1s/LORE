@@ -281,7 +281,7 @@ mod tests {
             &folder,
             &[(
                 "main.luau",
-                "game.mode { warmup = 0 }\ngame.onTick(function() end)",
+                "local ticks = 0\ngame.onTick(function() ticks += 1 end)",
             )],
         );
         let actions = ActionMap::default_fps();

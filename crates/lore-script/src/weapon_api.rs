@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use lore_mode::PlayerId;
 use lore_weapons::{Delivery, FireMode, ProjectileSettings, Weapon, WeaponSettings, Zone};
 use mlua::{Function, Lua, Table, Value};
 
 use crate::api::{Shared, describe, fail};
 use crate::error::closest;
+use crate::player_api::PlayerId;
 
 /// The weapons every game has, by name.
 pub(crate) const BUILT_IN: &[&str] = &["rifle", "pistol", "shotgun", "rocket launcher", "grenade"];
@@ -302,7 +302,7 @@ pub(crate) fn rounds(shared: &Shared, player: PlayerId) -> (u32, u32) {
 /// `player:giveWeapon("rifle")`: a new, full weapon of that kind in the
 /// player's hands, in place of what they held.
 pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()> {
-    let shared = crate::mode_api::shared_of(lua)?;
+    let shared = crate::player_api::shared_of(lua)?;
     crate::time_api::rules_only(lua, &shared, "player:giveWeapon")?;
     let Value::String(name) = name else {
         return Err(fail(
@@ -318,8 +318,8 @@ pub(crate) fn give(lua: &Lua, player: PlayerId, name: &Value) -> mlua::Result<()
     let Some(kind) = kind_named(&shared, &name) else {
         return Err(no_such_weapon(lua, &shared, &name));
     };
-    // Does nothing for a player who has left, like a score.
-    if shared.mode.game.borrow().player(player).is_some() {
+    // Does nothing for a player who has left.
+    if shared.players.has(player) {
         shared.weapons.held.borrow_mut().insert(
             player,
             Held {

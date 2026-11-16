@@ -109,7 +109,7 @@ impl<'a> IntoIterator for DrawList<'a> {
 /// Draw lists gathered for one frame, in the order they were added.
 ///
 /// A game may have more than one [`Ui`](crate::Ui): a HUD, a menu, a
-/// scoreboard. Each gives its own [`DrawList`]; a buffer holds copies of
+/// map. Each gives its own [`DrawList`]; a buffer holds copies of
 /// them one after the other, so the later ones are drawn on top.
 ///
 /// ```
