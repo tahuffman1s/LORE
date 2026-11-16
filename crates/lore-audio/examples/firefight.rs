@@ -137,7 +137,6 @@ fn into_file(path: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(feature = "device")]
 fn through_speakers() -> Result<(), Box<dyn Error>> {
     use std::time::{Duration, Instant};
 
@@ -160,9 +159,4 @@ fn through_speakers() -> Result<(), Box<dyn Error>> {
         println!("The sound device stopped partway through.");
     }
     Ok(())
-}
-
-#[cfg(not(feature = "device"))]
-fn through_speakers() -> Result<(), Box<dyn Error>> {
-    Err("Built without the `device` feature: give a file name to write a WAV instead.".into())
 }

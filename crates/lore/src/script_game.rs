@@ -498,7 +498,6 @@ mod tests {
     /// is read back: a dark panel with a red line along its top and light
     /// letters in it, in the top-left corner, and the game untouched
     /// everywhere else.
-    #[cfg(feature = "window")]
     #[test]
     fn the_error_is_drawn_as_a_dark_panel_with_light_text_in_the_corner() {
         use lore_render::{Camera, Headless, RenderError, Upscaling};
@@ -590,7 +589,6 @@ mod tests {
     /// is read back: a box in the middle in the colour asked for, a bar a
     /// quarter full in the bottom-left corner, light letters at the top,
     /// and the game untouched where the HUD is not.
-    #[cfg(feature = "window")]
     #[test]
     fn the_scripts_hud_is_drawn_where_and_in_the_colours_it_asked_for() {
         use lore_render::{Camera, Headless, RenderError, Upscaling};

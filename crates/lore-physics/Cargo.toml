@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-lore-assets = { path = "../lore-assets", default-features = false }
+lore-assets = { path = "../lore-assets" }
 # Only the questions "what does this capsule hit" against the level's
 # triangles. `enhanced-determinism` swaps the platform's math functions for
 # software ones, so a move works out the same on every machine. The

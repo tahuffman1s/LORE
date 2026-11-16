@@ -370,13 +370,11 @@ impl Mixer {
 
     /// Keeps finished sounds instead of letting go of them, so the thread
     /// that mixes never gives memory back to the system.
-    #[cfg(feature = "device")]
     pub(crate) fn keep_retired(&mut self) {
         self.keep_retired = true;
     }
 
     /// Hands over finished sounds until `take` gives one back.
-    #[cfg(feature = "device")]
     pub(crate) fn hand_over_retired(
         &mut self,
         mut take: impl FnMut(Retired) -> Result<(), Retired>,

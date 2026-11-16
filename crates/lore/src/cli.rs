@@ -356,7 +356,6 @@ pub fn game_name(folder: &Path) -> String {
 /// # Errors
 ///
 /// Fails with what to type instead.
-#[cfg(feature = "window")]
 pub fn picture_size(text: &str) -> Result<(u32, u32), String> {
     /// The largest picture every Vulkan 1.3 graphics card can draw.
     const LARGEST: u32 = 4096;
@@ -382,7 +381,6 @@ pub fn picture_size(text: &str) -> Result<(u32, u32), String> {
 /// # Errors
 ///
 /// Fails with the names there are.
-#[cfg(feature = "window")]
 pub fn upscaling(text: &str) -> Result<lore_render::Upscaling, String> {
     use lore_render::Upscaling;
     const ALL: [Upscaling; 6] = [
@@ -407,7 +405,6 @@ pub fn upscaling(text: &str) -> Result<lore_render::Upscaling, String> {
 /// # Errors
 ///
 /// Fails with what to type instead.
-#[cfg(feature = "window")]
 pub fn budget(text: &str) -> Result<f64, String> {
     text.trim()
         .parse()
@@ -428,7 +425,6 @@ pub fn budget(text: &str) -> Result<f64, String> {
 /// Fails with a message for the person if the frames could not be drawn,
 /// the file could not be written, or a slow frame took longer than
 /// `budget` milliseconds.
-#[cfg(feature = "window")]
 pub fn bench(
     bench: &crate::bench::Bench,
     budget: Option<f64>,

@@ -29,7 +29,6 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 Window, input, Vulkan, Luau scripts and the `lore` command, and removing the multiplayer LORE inherited.
 
 - Verify live keyboard, mouse and gamepad input by hand on each platform (#2) — blocked
-- Fold the `window` Cargo feature: no program without a window is shipped any more (#310)
 
 ## M1 — Walk the world
 

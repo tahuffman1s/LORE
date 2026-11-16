@@ -10,7 +10,7 @@
 //! open a window are not run here: what the editor writes is stood in for
 //! by the `map.toml` the page shows.
 
-#![cfg(all(feature = "window", feature = "cli"))]
+#![cfg(feature = "cli")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;

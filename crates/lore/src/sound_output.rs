@@ -4,14 +4,10 @@
 use lore_audio::Play;
 use lore_script::SoundId;
 
-#[cfg(any(feature = "window", test))]
 pub(crate) use output::SoundOutput;
-#[cfg(feature = "window")]
 pub(crate) use output::Voices;
 
 /// One thing a game asks of the sound in a frame.
-// A build with no window gathers these and plays none of them.
-#[cfg_attr(not(any(feature = "window", test)), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) enum SoundAsk {
     /// Start a sound, to be known by this id from now on.
@@ -25,9 +21,7 @@ pub(crate) enum SoundAsk {
     StopAll,
 }
 
-/// Playing what was asked for. A build with no window has nothing to play
-/// through, so it is built without this.
-#[cfg(any(feature = "window", test))]
+/// Playing what was asked for.
 mod output {
     use std::collections::{HashMap, VecDeque};
 
@@ -175,7 +169,6 @@ mod output {
 
 /// The computer's speakers, opened the first time a sound is played, so a
 /// game that makes no sound asks the system for nothing.
-#[cfg(feature = "window")]
 #[derive(Debug, Default)]
 pub(crate) struct LazySpeakers {
     speakers: Option<lore_audio::Speakers>,
@@ -188,7 +181,6 @@ pub(crate) struct LazySpeakers {
     retry_at: Option<std::time::Instant>,
 }
 
-#[cfg(feature = "window")]
 impl LazySpeakers {
     /// How long to wait before trying again to reach a sound device, such
     /// as headphones that were unplugged.
@@ -221,7 +213,6 @@ impl LazySpeakers {
     }
 }
 
-#[cfg(feature = "window")]
 impl Voices for LazySpeakers {
     fn play(&mut self, play: Play) -> lore_audio::Playing {
         self.ready().play(play)
@@ -259,7 +250,6 @@ impl Voices for LazySpeakers {
 }
 
 /// How loud the player wants things, from 0 to 1.
-#[cfg(feature = "window")]
 #[derive(Debug, Clone, Copy)]
 struct Volumes {
     all: f32,
@@ -267,7 +257,6 @@ struct Volumes {
     music: f32,
 }
 
-#[cfg(feature = "window")]
 impl Default for Volumes {
     fn default() -> Self {
         Self {
@@ -278,7 +267,6 @@ impl Default for Volumes {
     }
 }
 
-#[cfg(feature = "window")]
 impl Volumes {
     fn tell(self, speakers: &mut lore_audio::Speakers) {
         speakers.set_volume(self.all);
