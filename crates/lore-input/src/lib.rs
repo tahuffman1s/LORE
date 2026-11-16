@@ -40,6 +40,7 @@ mod devices;
 mod file;
 mod frame;
 mod input;
+mod labels;
 mod map;
 mod names;
 mod rumble;
@@ -50,6 +51,7 @@ pub use devices::{GamepadButton, Key, MouseButton, MouseWheel, Stick, StickAxis}
 pub use file::{BindingsError, BindingsProblem, ProblemKind};
 pub use frame::{ActionState, InputFrame};
 pub use input::{Input, RebindError, Rebound};
+pub use labels::GamepadStyle;
 pub use map::{ActionId, ActionMap, ActionSetId, Conflict, Device, MapError, MouseMode, ParityGap};
 pub use names::UnknownName;
 pub use rumble::Rumble;

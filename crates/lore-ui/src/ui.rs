@@ -14,6 +14,75 @@ use crate::theme::{Color, EstimatedText, TextMeasure, Theme, UI_SCALE_RANGE};
 const REFERENCE_HEIGHT: f32 = 1080.0;
 /// The most events one frame can produce, with room to spare.
 const MOST_EVENTS: usize = 16;
+/// How far the pointer is pulled with the button held before a press
+/// becomes a drag of the screen, so a click with an unsteady hand is
+/// still a click.
+const DRAG_AFTER: f32 = 8.0;
+/// How many rows of a long screen one notch of the mouse wheel moves.
+const ROWS_PER_NOTCH: f32 = 1.5;
+
+/// What is printed on the buttons that work a menu, for the hints along
+/// the bottom of a screen: "A Select", "B Back".
+///
+/// The window layer knows which device the player last used and what
+/// the menu's actions are bound to, and hands the names over with
+/// [`Ui::show_button_hints`]. A name left empty has no hint.
+///
+/// ```
+/// use lore_ui::ButtonNames;
+///
+/// let xbox = ButtonNames {
+///     confirm: "A",
+///     back: "B",
+///     previous_tab: "LB",
+///     next_tab: "RB",
+///     round: true,
+/// };
+/// let keyboard = ButtonNames {
+///     confirm: "Enter",
+///     back: "Esc",
+///     previous_tab: "Q",
+///     next_tab: "E",
+///     round: false,
+/// };
+/// # let _ = (xbox, keyboard);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ButtonNames<'a> {
+    /// The button that chooses the widget the player is on.
+    pub confirm: &'a str,
+    /// The button that goes back one screen.
+    pub back: &'a str,
+    /// The button that opens the tab to the left.
+    pub previous_tab: &'a str,
+    /// The button that opens the tab to the right.
+    pub next_tab: &'a str,
+    /// Whether the names are drawn in round shapes, as a gamepad's
+    /// buttons are, and not in the squarer shape of a key.
+    pub round: bool,
+}
+
+/// The button names being shown, kept so drawing them asks for no memory.
+#[derive(Debug, Default)]
+pub(crate) struct Names {
+    pub shown: bool,
+    pub confirm: String,
+    pub back: String,
+    pub previous_tab: String,
+    pub next_tab: String,
+    pub round: bool,
+}
+
+/// A press of the mouse button on a screen that scrolls.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    /// Where the pointer was when the button went down, top to bottom.
+    from: f32,
+    /// How far the screen had been scrolled then.
+    scroll: f32,
+    /// Whether the pointer has been pulled far enough to move the screen.
+    moving: bool,
+}
 
 /// Something the player did in a menu this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +131,16 @@ pub struct Ui {
     pressed: u32,
     /// The mouse button went down on a slider's track and is still held.
     dragging: bool,
+    /// The mouse button went down on a screen that scrolls and is still held.
+    drag: Option<Drag>,
+    /// The part of the window the open screen's widgets may use.
+    room: Rect,
+    /// How much of the open screen does not fit in `room`: how far it
+    /// can be scrolled. Zero for a screen that fits.
+    overflow: f32,
+    /// Whether to scroll the widget the player is on into view.
+    reveal: bool,
+    names: Names,
     repeater: Repeater,
     previous: UiInput,
     events: Vec<UiEvent>,
@@ -95,6 +174,11 @@ impl Ui {
             hovered: NONE,
             pressed: NONE,
             dragging: false,
+            drag: None,
+            room: Rect::default(),
+            overflow: 0.0,
+            reveal: false,
+            names: Names::default(),
             repeater: Repeater::default(),
             previous: UiInput::default(),
             events: Vec::with_capacity(MOST_EVENTS),
@@ -114,6 +198,55 @@ impl Ui {
         } else {
             1.0
         };
+    }
+
+    /// Says along the bottom of every menu screen what the buttons do:
+    /// "A Select", "B Back", and "LB RB Switch tab" on a screen with
+    /// tabs. `names` is what is printed on each button of the device the
+    /// player is using; call this again when they pick up another.
+    ///
+    /// The hints follow the widget the player is on: a button is
+    /// selected, a toggle changed, and a slider or choice changed with
+    /// left and right. Names no longer than the ones before are copied
+    /// in place.
+    ///
+    /// ```
+    /// use lore_ui::{ButtonNames, Ui};
+    ///
+    /// let mut ui = Ui::default();
+    /// ui.show_button_hints(&ButtonNames {
+    ///     confirm: "A",
+    ///     back: "B",
+    ///     previous_tab: "LB",
+    ///     next_tab: "RB",
+    ///     round: true,
+    /// });
+    /// ```
+    pub fn show_button_hints(&mut self, names: &ButtonNames<'_>) {
+        let kept = &mut self.names;
+        kept.shown = true;
+        kept.round = names.round;
+        let mut grew = false;
+        for (kept, new) in [
+            (&mut kept.confirm, names.confirm),
+            (&mut kept.back, names.back),
+            (&mut kept.previous_tab, names.previous_tab),
+            (&mut kept.next_tab, names.next_tab),
+        ] {
+            if kept != new {
+                grew |= new.len() > kept.capacity();
+                kept.clear();
+                kept.push_str(new);
+            }
+        }
+        if grew {
+            self.reserve();
+        }
+    }
+
+    /// Stops showing what the buttons do.
+    pub fn hide_button_hints(&mut self) {
+        self.names.shown = false;
     }
 
     /// Uses real text widths, once the renderer has a font to measure with.
@@ -179,6 +312,7 @@ impl Ui {
             start,
             wrap,
             stays_open,
+            scroll: 0.0,
         });
         self.stack.reserve(self.screens.len());
         self.reserve();
@@ -265,7 +399,14 @@ impl Ui {
 
     /// Makes sure a frame's drawing never has to ask for more memory.
     fn reserve(&mut self) {
-        let (mut commands, mut text) = (2, 0);
+        // The backdrop and panel, the scroll bar, and the hints with the
+        // names on them.
+        let names = &self.names;
+        let named = names.confirm.len()
+            + names.back.len()
+            + names.previous_tab.len()
+            + names.next_tab.len();
+        let (mut commands, mut text) = (4 + paint::MOST_HINT_DRAWS, named + 64);
         for node in &self.nodes {
             let (boxes, letters) = match &node.kind {
                 Kind::Tabs { names, .. } => (3 * names.len(), names.iter().map(String::len).sum()),
@@ -297,6 +438,7 @@ impl Ui {
             Some(place) => self.stack.truncate(place + 1),
             None => self.stack.push(screen.0),
         }
+        self.reveal = true;
         self.pointer_left();
         Ok(())
     }
@@ -603,29 +745,41 @@ impl Ui {
         }
 
         let Some(&top) = self.stack.last() else {
+            self.overflow = 0.0;
             return;
         };
-        let screen = &mut self.screens[top as usize];
-        let (first, end) = (screen.root as usize, screen.end as usize);
+        // The panel around the widgets is inside the safe area too, and
+        // the hints have a line of their own under it.
+        let pad = self.theme.padding * 2.0;
+        let hints = if self.names.shown {
+            paint::hint_height(&self.theme) + self.theme.gap
+        } else {
+            0.0
+        };
+        let room = Rect {
+            x: safe.x + pad,
+            y: safe.y + pad,
+            w: safe.w - 2.0 * pad,
+            h: (safe.h - 2.0 * pad - hints).max(self.theme.row_height),
+        };
+        if std::mem::replace(&mut self.room, room) != room && self.mode == InputMode::Focus {
+            // The window or the player's size setting changed: what was
+            // in view may not be any more.
+            self.reveal = true;
+        }
+        let Screen { root, end, .. } = self.screens[top as usize];
         measure_screen(
             &mut self.nodes,
-            first,
-            end,
+            root as usize,
+            end as usize,
             &self.theme,
             self.measure.as_ref(),
         );
-        let root = &mut self.nodes[first];
-        let [w, h] = root.size;
-        root.rect = Rect {
-            x: (width - w) / 2.0,
-            y: (height - h) / 2.0,
-            w,
-            h,
-        };
-        root.visible = true;
-        place_screen(&mut self.nodes, first, end, &self.theme);
+        self.overflow = (self.nodes[root as usize].size[1] - self.room.h).max(0.0);
+        self.place(top);
 
         // The player is always on something they can see.
+        let screen = &mut self.screens[top as usize];
         let can_land = |widget: u32| widget != NONE && self.nodes[widget as usize].focusable();
         if !can_land(screen.focus) {
             screen.focus = if can_land(screen.start) {
@@ -635,7 +789,88 @@ impl Ui {
                     .find(|&widget| can_land(widget))
                     .unwrap_or(NONE)
             };
+            self.reveal = true;
         }
+        if std::mem::take(&mut self.reveal) && self.overflow > 0.0 {
+            let before = self.screens[top as usize].scroll;
+            let wanted = self.scroll_to_show(top);
+            if wanted.to_bits() != before.to_bits() {
+                self.screens[top as usize].scroll = wanted;
+                self.place(top);
+            }
+        }
+    }
+
+    /// The part of the window a screen too long for it is shown through.
+    fn clip(&self) -> Option<Rect> {
+        (self.overflow > 0.0).then_some(self.room)
+    }
+
+    /// Puts the widgets of the open screen where its scroll says. A
+    /// screen that fits sits in the middle of the window.
+    fn place(&mut self, top: u32) {
+        let screen = &mut self.screens[top as usize];
+        screen.scroll = if screen.scroll.is_finite() {
+            screen.scroll.clamp(0.0, self.overflow)
+        } else {
+            0.0
+        };
+        let (first, end) = (screen.root as usize, screen.end as usize);
+        let [width, height] = self.size;
+        let root = &mut self.nodes[first];
+        let [w, h] = root.size;
+        let y = if self.overflow > 0.0 {
+            self.room.y - screen.scroll
+        } else {
+            // Moved up only when the hints need the room underneath.
+            ((height - h) / 2.0).min(self.room.bottom() - h)
+        };
+        root.rect = Rect {
+            x: (width - w) / 2.0,
+            y,
+            w,
+            h,
+        };
+        root.visible = true;
+        place_screen(&mut self.nodes, first, end, &self.theme);
+    }
+
+    /// How far the open screen should be scrolled for the widget the
+    /// player is on to be seen: as little further as will do, with a row
+    /// to spare so the next widget shows too. On the first widget the
+    /// screen goes back to its top, title and all, and on the last to
+    /// its end.
+    fn scroll_to_show(&self, top: u32) -> f32 {
+        let screen = &self.screens[top as usize];
+        let Some(on) = self.nodes.get(screen.focus as usize) else {
+            return screen.scroll;
+        };
+        let content = self.nodes[screen.root as usize].rect;
+        let (start, finish) = (on.rect.y - content.y, on.rect.bottom() - content.y);
+        let others = || {
+            (screen.root..screen.end)
+                .map(|widget| &self.nodes[widget as usize])
+                .filter(|node| node.focusable())
+        };
+        let spare = (self.theme.row_height + self.theme.gap)
+            .min((self.room.h - on.rect.h) / 2.0)
+            .max(0.0);
+        let highest = if others().any(|node| node.rect.y < on.rect.y - 0.5) {
+            start - spare
+        } else {
+            0.0
+        };
+        let lowest = if others().any(|node| node.rect.bottom() > on.rect.bottom() + 0.5) {
+            finish + spare
+        } else {
+            content.h
+        };
+        // When both cannot be had, seeing the widget's top matters more.
+        screen
+            .scroll
+            .max(lowest - self.room.h)
+            .min(highest.max(finish - self.room.h).min(start))
+            .clamp(0.0, self.overflow)
     }
 
     fn handle(&mut self, input: &UiInput, dt: f32) {
@@ -659,35 +894,42 @@ impl Ui {
             _ => false,
         };
         let pointer = input.pointer.map(|[x, y]| [x / self.scale, y / self.scale]);
-        if (moved || clicked) && pointer.is_some() {
+        let rolled = input.wheel.is_finite() && input.wheel != 0.0 && self.overflow > 0.0;
+        if (moved || clicked || rolled) && pointer.is_some() {
             self.mode = InputMode::Pointer;
         }
         if self.mode == InputMode::Pointer
             && let Some(pointer) = pointer
         {
-            self.hovered = (root..end)
-                .rev()
-                .find(|&widget| {
-                    let node = &self.nodes[widget as usize];
-                    node.focusable() && node.rect.contains(pointer)
-                })
-                .unwrap_or(NONE);
-            if self.hovered != NONE {
-                self.screens[top as usize].focus = self.hovered;
-            }
+            self.hover(top, pointer);
             if clicked {
                 self.pressed = self.hovered;
                 self.dragging = self.on_slider_track(self.hovered, pointer);
-                if self.hovered == NONE {
+                if self.hovered == NONE && self.in_view(pointer) {
                     self.click_tab(root, end, pointer);
+                }
+                if self.overflow > 0.0 && !self.dragging {
+                    self.drag = Some(Drag {
+                        from: pointer[1],
+                        scroll: self.screens[top as usize].scroll,
+                        moving: false,
+                    });
                 }
             }
             if input.pointer_down && self.dragging {
                 self.drag_slider(self.pressed, pointer[0]);
             }
+            if self.scroll_by_mouse(top, input, pointer) {
+                // The widgets have moved under the pointer.
+                self.layout();
+                self.hover(top, pointer);
+            }
         } else {
             // The pointer has left the window, or is not in use.
             self.hovered = NONE;
+        }
+        if !input.pointer_down {
+            self.drag = None;
         }
         if let_go {
             let pressed = std::mem::replace(&mut self.pressed, NONE);
@@ -702,10 +944,12 @@ impl Ui {
             // The first press only brings the outline back, so the player
             // sees where they are before anything moves or is chosen.
             self.mode = InputMode::Focus;
+            self.reveal = true;
             self.pointer_left();
         } else {
             if let Some(direction) = step {
                 self.go(top, direction);
+                self.reveal = true;
             }
             if confirm {
                 self.activate(self.screens[top as usize].focus);
@@ -720,6 +964,7 @@ impl Ui {
             })
         {
             self.nudge(tabs, tab_step);
+            self.reveal = true;
             // Whatever the mouse was holding may now be on a hidden page.
             self.pointer_left();
         }
@@ -737,6 +982,68 @@ impl Ui {
         self.hovered = NONE;
         self.pressed = NONE;
         self.dragging = false;
+        self.drag = None;
+    }
+
+    /// Whether `pointer` is where the open screen's widgets are shown. On
+    /// a screen that scrolls, a widget that has gone past the edge of
+    /// the panel is not there to be clicked.
+    fn in_view(&self, pointer: [f32; 2]) -> bool {
+        self.clip().is_none_or(|clip| clip.contains(pointer))
+    }
+
+    /// Finds the widget under the pointer, and puts the player on it.
+    fn hover(&mut self, top: u32, pointer: [f32; 2]) {
+        let Screen { root, end, .. } = self.screens[top as usize];
+        self.hovered = if self.in_view(pointer) {
+            (root..end)
+                .rev()
+                .find(|&widget| {
+                    let node = &self.nodes[widget as usize];
+                    node.focusable() && node.rect.contains(pointer)
+                })
+                .unwrap_or(NONE)
+        } else {
+            NONE
+        };
+        if self.hovered != NONE {
+            self.screens[top as usize].focus = self.hovered;
+        }
+    }
+
+    /// Scrolls a screen longer than the window by the wheel, or by a
+    /// drag with the button held. Returns whether it moved.
+    fn scroll_by_mouse(&mut self, top: u32, input: &UiInput, pointer: [f32; 2]) -> bool {
+        if self.overflow <= 0.0 {
+            return false;
+        }
+        let before = self.screens[top as usize].scroll;
+        let mut scroll = before;
+        if let Some(drag) = &mut self.drag
+            && input.pointer_down
+        {
+            let pulled = pointer[1] - drag.from;
+            if !drag.moving && pulled.abs() > DRAG_AFTER {
+                drag.moving = true;
+                // Whatever the button went down on is not being clicked.
+                self.pressed = NONE;
+            }
+            if drag.moving {
+                // The screen follows the pointer, as under a finger.
+                scroll = drag.scroll - pulled;
+            }
+        }
+        if input.wheel.is_finite() && input.wheel != 0.0 {
+            let rolled = input.wheel * ROWS_PER_NOTCH * (self.theme.row_height + self.theme.gap);
+            scroll -= rolled;
+            // A drag that is under way carries on from where the wheel put it.
+            if let Some(drag) = &mut self.drag {
+                drag.scroll -= rolled;
+            }
+        }
+        let scroll = scroll.clamp(0.0, self.overflow);
+        self.screens[top as usize].scroll = scroll;
+        scroll.to_bits() != before.to_bits()
     }
 
     /// Whether `pointer` is on the part of a slider that can be dragged:
@@ -919,10 +1226,12 @@ impl Ui {
     fn paint(&mut self) {
         self.commands.clear();
         self.draw_text.clear();
+        let clip = self.clip();
         let mut painter = Painter {
             commands: &mut self.commands,
             text: &mut self.draw_text,
             scale: self.scale,
+            clip: None,
         };
         for &piece in &self.hud {
             let node = &self.nodes[piece as usize];
@@ -949,10 +1258,21 @@ impl Ui {
             self.theme.backdrop,
             0.0,
         );
-        let panel = self.nodes[screen.root as usize]
-            .rect
-            .grown(self.theme.padding * 2.0);
+        // A screen that scrolls is seen through a panel as tall as its room.
+        let content = self.nodes[screen.root as usize].rect;
+        let shown = clip.map_or(content, |clip| Rect {
+            y: clip.y,
+            h: clip.h,
+            ..content
+        });
+        let panel = shown.grown(self.theme.padding * 2.0);
         painter.rect(panel, self.theme.panel, self.theme.corner * 2.0);
+        // The outline reaches a little past the widget it is around.
+        painter.clip = clip.map(|clip| Rect {
+            x: 0.0,
+            w: width,
+            ..clip.grown(self.theme.outline)
+        });
         for widget in screen.root..screen.end {
             let node = &self.nodes[widget as usize];
             if !node.visible {
@@ -969,7 +1289,52 @@ impl Ui {
                     outlined: false,
                 },
             };
-            paint::widget(node, look, &self.theme, self.measure.as_ref(), &mut painter);
+            let cut = clip.is_some_and(|clip| {
+                node.rect.y < clip.y - 0.5 || node.rect.bottom() > clip.bottom() + 0.5
+            });
+            paint::widget(
+                node,
+                look,
+                cut,
+                &self.theme,
+                self.measure.as_ref(),
+                &mut painter,
+            );
+        }
+        painter.clip = None;
+        if let Some(clip) = clip {
+            paint::scroll_bar(
+                clip,
+                content.right() + self.theme.padding,
+                screen.scroll,
+                content.h,
+                &self.theme,
+                &mut painter,
+            );
+        }
+        if self.names.shown {
+            let on = match self.mode {
+                InputMode::Focus => self.nodes.get(screen.focus as usize),
+                // The mouse chooses by clicking, which needs no hint.
+                InputMode::Pointer => None,
+            };
+            let tabs = (screen.root..screen.end).any(|widget| {
+                let node = &self.nodes[widget as usize];
+                node.visible && matches!(node.kind, Kind::Tabs { .. })
+            });
+            let hints = paint::Hints {
+                names: &self.names,
+                on: on.map(|node| &node.kind),
+                tabs,
+            };
+            let middle = width / 2.0;
+            let top = self.room.bottom() + self.theme.padding * 2.0 + self.theme.gap;
+            hints.paint(
+                [middle, top],
+                &self.theme,
+                self.measure.as_ref(),
+                &mut painter,
+            );
         }
     }
 }

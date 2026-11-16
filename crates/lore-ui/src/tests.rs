@@ -13,6 +13,7 @@ const NOTHING: UiInput = UiInput {
     next_tab: false,
     pointer: None,
     pointer_down: false,
+    wheel: 0.0,
 };
 const DOWN: UiInput = UiInput {
     direction: [0.0, -1.0],
@@ -1209,4 +1210,582 @@ fn a_buffer_holds_several_lists_in_order_with_their_own_words() {
     assert!(buffer.draw().is_empty());
     buffer.add(menu.draw());
     assert_eq!(buffer.draw().len(), menu.draw().len());
+}
+
+// ---- Screens longer than the window ------------------------------------------
+
+/// The top and bottom of the room a long screen is seen through on an HD
+/// window with no hints: the safe area less the panel's edge.
+const ROOM: [f32; 2] = [94.0, 986.0];
+
+/// A screen of twenty buttons, "Item 1" to "Item 20", which is taller
+/// than an HD window.
+fn long() -> (Ui, Vec<WidgetId>) {
+    let names: Vec<String> = (1..=20).map(|number| format!("Item {number}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    buttons(&names)
+}
+
+fn is_drawn(ui: &Ui, wanted: &str) -> bool {
+    texts(ui).iter().any(|text| text == wanted)
+}
+
+/// A pointer beside the menu, over no widget, rolling the wheel.
+fn roll(notches: f32) -> UiInput {
+    UiInput {
+        pointer: Some([200.0, 540.0]),
+        wheel: notches,
+        ..NOTHING
+    }
+}
+
+/// Checks that no widget is drawn outside the room.
+fn assert_inside_the_room(ui: &Ui) {
+    let theme = Theme::default();
+    for (position, size, color) in rects(ui) {
+        if color == theme.backdrop || color == theme.panel {
+            continue;
+        }
+        let allowed = theme.outline + 0.01;
+        assert!(
+            position[1] >= ROOM[0] - allowed && position[1] + size[1] <= ROOM[1] + allowed,
+            "a box from {} to {} is outside the room",
+            position[1],
+            position[1] + size[1]
+        );
+    }
+    for draw in ui.draw() {
+        if let Draw::Text {
+            position,
+            size,
+            text,
+            ..
+        } = draw
+        {
+            assert!(
+                position[1] >= ROOM[0] - 4.51 && position[1] + size <= ROOM[1] + 4.51,
+                "\"{text}\" is drawn outside the room"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_screen_longer_than_the_window_stays_inside_the_safe_area() {
+    let (ui, ids) = long();
+    assert_eq!(ui.focused(), Some(ids[0]));
+    // It starts at its top: the title and the first buttons, not the last.
+    assert!(is_drawn(&ui, "Menu") && is_drawn(&ui, "Item 1"));
+    assert!(!is_drawn(&ui, "Item 20"));
+    assert_inside_the_room(&ui);
+
+    // The panel is as tall as the room and no taller.
+    let theme = Theme::default();
+    let (position, size, _) = rects(&ui)
+        .into_iter()
+        .find(|&(_, _, color)| color == theme.panel)
+        .unwrap();
+    assert_eq!(
+        [position[1], position[1] + size[1]],
+        [ROOM[0] - 40.0, ROOM[1] + 40.0]
+    );
+}
+
+#[test]
+fn a_long_screen_follows_the_widget_the_player_is_on() {
+    let (mut ui, ids) = long();
+    for (place, id) in ids.iter().enumerate().skip(1) {
+        tap(&mut ui, DOWN);
+        assert_eq!(ui.focused(), Some(*id));
+        let name = format!("Item {}", place + 1);
+        assert!(is_drawn(&ui, &name), "{name} is not on show");
+        assert!(has_outline(&ui));
+        // The next one shows too, so the player sees where down leads.
+        if place + 1 < ids.len() {
+            let next = format!("Item {}", place + 2);
+            assert!(is_drawn(&ui, &next), "{next} is not on show");
+        }
+        assert_inside_the_room(&ui);
+    }
+    // At the last widget the screen is at its end, and no further.
+    let [_, y] = find(&ui, "Item 20");
+    assert!((y + 14.0 + 28.0 - ROOM[1]).abs() < 0.01, "{y}");
+    assert!(!is_drawn(&ui, "Menu"));
+
+    // Down wraps to the first, and the title is back with it.
+    tap(&mut ui, DOWN);
+    assert_eq!(ui.focused(), Some(ids[0]));
+    assert!(is_drawn(&ui, "Menu") && is_drawn(&ui, "Item 1"));
+
+    // Going up shows the widget before the one the player is on.
+    tap(&mut ui, UP);
+    assert_eq!(ui.focused(), Some(ids[19]));
+    for place in (10..19).rev() {
+        tap(&mut ui, UP);
+        assert!(is_drawn(&ui, &format!("Item {place}")));
+    }
+    assert_inside_the_room(&ui);
+}
+
+#[test]
+fn a_long_screen_moves_no_further_than_it_must() {
+    let (mut ui, _) = long();
+    let before = find(&ui, "Item 2");
+    // The first few widgets are already on show: nothing moves.
+    tap(&mut ui, DOWN);
+    tap(&mut ui, DOWN);
+    assert_eq!(find(&ui, "Item 2"), before);
+}
+
+#[test]
+fn the_wheel_scrolls_a_long_screen_and_stops_at_its_ends() {
+    let (mut ui, _) = long();
+    let start = find(&ui, "Item 5")[1];
+    // Towards the player shows what is further down: a row and a half.
+    ui.update(&roll(-1.0), 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 5")[1], start - 102.0);
+    assert_eq!(ui.mode(), InputMode::Pointer);
+    ui.update(&roll(1.0), 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 5")[1], start);
+    // It cannot be rolled past the top or the end.
+    ui.update(&roll(50.0), 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 5")[1], start);
+    ui.update(&roll(-500.0), 1.0 / 60.0, HD);
+    assert!(is_drawn(&ui, "Item 20") && !is_drawn(&ui, "Item 1"));
+    let end = find(&ui, "Item 20");
+    ui.update(&roll(-1.0), 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 20"), end);
+    ui.update(&roll(f32::NAN), 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 20"), end);
+    assert_inside_the_room(&ui);
+}
+
+#[test]
+fn the_wheel_does_nothing_to_a_screen_that_fits() {
+    let (mut ui, _) = buttons(&["Resume", "Quit"]);
+    let before: Vec<_> = ui.draw().iter().collect();
+    let before = format!("{before:?}");
+    ui.update(&roll(-3.0), 1.0 / 60.0, HD);
+    let after: Vec<_> = ui.draw().iter().collect();
+    assert_eq!(format!("{after:?}"), before);
+    assert_eq!(ui.mode(), InputMode::Focus);
+    // And it has no scroll bar: nothing is drawn in the track's colour.
+    let track = Theme::default().track;
+    assert!(rects(&ui).iter().all(|&(_, _, color)| color != track));
+}
+
+#[test]
+fn a_long_screen_shows_how_far_down_it_is() {
+    let (mut ui, _) = long();
+    let theme = Theme::default();
+    let bar = |ui: &Ui| {
+        let all = rects(ui);
+        let track = *all.iter().find(|draw| draw.2 == theme.track).unwrap();
+        // The thumb is the box drawn straight after its track.
+        let place = all.iter().position(|draw| *draw == track).unwrap();
+        (track, all[place + 1])
+    };
+    let (track, thumb) = bar(&ui);
+    assert_eq!([track.0[1], track.0[1] + track.1[1]], ROOM);
+    assert_eq!(thumb.0[1], ROOM[0], "at the top to begin with");
+    assert!(thumb.1[1] < track.1[1] && thumb.1[1] > 100.0);
+
+    ui.update(&roll(-500.0), 1.0 / 60.0, HD);
+    let (_, thumb) = bar(&ui);
+    assert!((thumb.0[1] + thumb.1[1] - ROOM[1]).abs() < 0.01);
+}
+
+#[test]
+fn dragging_a_long_screen_moves_it_and_presses_nothing() {
+    let (mut ui, _) = long();
+    let start = find(&ui, "Item 6")[1];
+    let mut at = point_at(&ui, "Item 6");
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.pointer_down = true;
+    ui.update(&at, 1.0 / 60.0, HD);
+    // The screen follows the pointer.
+    let from = at.pointer.unwrap();
+    at.pointer = Some([from[0], from[1] - 200.0]);
+    assert!(ui.update(&at, 1.0 / 60.0, HD).is_empty());
+    assert_eq!(find(&ui, "Item 6")[1], start - 200.0);
+    at.pointer = Some([from[0], from[1] - 150.0]);
+    ui.update(&at, 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 6")[1], start - 150.0);
+    // Letting go over a button presses nothing: it was a drag.
+    at.pointer_down = false;
+    assert!(ui.update(&at, 1.0 / 60.0, HD).is_empty());
+    assert_eq!(find(&ui, "Item 6")[1], start - 150.0);
+    assert_inside_the_room(&ui);
+}
+
+#[test]
+fn an_unsteady_click_on_a_long_screen_is_still_a_click() {
+    let (mut ui, ids) = long();
+    let start = find(&ui, "Item 6");
+    let mut at = point_at(&ui, "Item 6");
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.pointer_down = true;
+    ui.update(&at, 1.0 / 60.0, HD);
+    let from = at.pointer.unwrap();
+    at.pointer = Some([from[0] + 3.0, from[1] + 5.0]);
+    ui.update(&at, 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 6"), start, "five pixels is not a drag");
+    at.pointer_down = false;
+    assert_eq!(ui.update(&at, 1.0 / 60.0, HD), [UiEvent::Pressed(ids[5])]);
+}
+
+#[test]
+fn a_widget_scrolled_out_of_sight_cannot_be_clicked() {
+    let (mut ui, _) = long();
+    ui.update(&roll(-500.0), 1.0 / 60.0, HD);
+    // In the panel's edge above the room, where a button that was
+    // rolled past the top would be.
+    let mut at = UiInput {
+        pointer: Some([960.0, ROOM[0] - 20.0]),
+        ..NOTHING
+    };
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.pointer_down = true;
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.pointer_down = false;
+    assert!(ui.update(&at, 1.0 / 60.0, HD).is_empty());
+    // Nor is anything highlighted there.
+    let selected = Theme::default().widget_selected;
+    assert!(rects(&ui).iter().all(|&(_, _, color)| color != selected));
+}
+
+#[test]
+fn confirm_does_not_choose_a_widget_that_was_rolled_out_of_sight() {
+    let (mut ui, ids) = long();
+    ui.update(&roll(-500.0), 1.0 / 60.0, HD);
+    assert!(!is_drawn(&ui, "Item 1"));
+    // The first press brings the outline back, and the widget with it.
+    assert!(tap(&mut ui, CONFIRM).is_empty());
+    assert_eq!(ui.mode(), InputMode::Focus);
+    assert!(is_drawn(&ui, "Item 1") && has_outline(&ui));
+    assert_eq!(tap(&mut ui, CONFIRM), [UiEvent::Pressed(ids[0])]);
+}
+
+#[test]
+fn each_screen_remembers_how_far_it_was_scrolled() {
+    let (mut ui, ids) = long();
+    let other = ui.add_screen("Other", |screen| {
+        screen.button("One");
+    });
+    for _ in 0..12 {
+        tap(&mut ui, DOWN);
+    }
+    let before = find(&ui, "Item 13");
+    ui.open(other.unwrap()).unwrap();
+    idle(&mut ui);
+    assert!(is_drawn(&ui, "One") && !is_drawn(&ui, "Item 13"));
+    tap(&mut ui, BACK);
+    assert_eq!(ui.focused(), Some(ids[12]));
+    assert_eq!(find(&ui, "Item 13"), before);
+}
+
+#[test]
+fn a_window_made_taller_or_shorter_keeps_the_player_in_view() {
+    let (mut ui, ids) = long();
+    for _ in 0..19 {
+        tap(&mut ui, DOWN);
+    }
+    // Twice as tall in real pixels is the same picture, twice the size.
+    ui.update(&NOTHING, 1.0 / 60.0, [3840, 2160]);
+    assert!(is_drawn(&ui, "Item 20"));
+    // A window so wide and short that everything is scaled down still
+    // shows the widget the player is on.
+    ui.set_ui_scale(1.5);
+    ui.update(&NOTHING, 1.0 / 60.0, [1280, 360]);
+    assert_eq!(ui.focused(), Some(ids[19]));
+    assert!(is_drawn(&ui, "Item 20"));
+    ui.set_ui_scale(0.75);
+    ui.update(&NOTHING, 1.0 / 60.0, HD);
+    assert!(is_drawn(&ui, "Item 20"));
+}
+
+#[test]
+fn a_long_page_of_tabs_goes_back_to_the_top_on_a_shorter_one() {
+    let mut ui = Ui::default();
+    let screen = ui
+        .add_screen("Settings", |screen| {
+            screen.tabs(&["Long", "Short"], |screen, tab| {
+                let count = if tab == 0 { 20 } else { 2 };
+                for number in 1..=count {
+                    screen.toggle(&format!("{} {number}", ["Long", "Short"][tab]), false);
+                }
+            });
+        })
+        .unwrap();
+    ui.open(screen).unwrap();
+    idle(&mut ui);
+    for _ in 0..19 {
+        tap(&mut ui, DOWN);
+    }
+    assert!(is_drawn(&ui, "Long 20") && !is_drawn(&ui, "Settings"));
+    // The other page is short, but the screen is as tall as its longest.
+    tap(&mut ui, NEXT_TAB);
+    assert!(is_drawn(&ui, "Short 1") && is_drawn(&ui, "Settings"));
+    assert_inside_the_room(&ui);
+}
+
+// ---- Button hints --------------------------------------------------------------
+
+const XBOX: crate::ButtonNames<'static> = crate::ButtonNames {
+    confirm: "A",
+    back: "B",
+    previous_tab: "LB",
+    next_tab: "RB",
+    round: true,
+};
+const KEYBOARD: crate::ButtonNames<'static> = crate::ButtonNames {
+    confirm: "Enter",
+    back: "Esc",
+    previous_tab: "Q",
+    next_tab: "E",
+    round: false,
+};
+
+/// The words of the hints, which are drawn last: everything after
+/// `last`, the last words of the last widget.
+fn hints(ui: &Ui, last: &str) -> String {
+    let all = texts(ui);
+    let from = all.iter().rposition(|text| text == last).unwrap();
+    all[from + 1..].join(" ")
+}
+
+#[test]
+fn a_menu_says_what_the_buttons_do_once_it_knows_their_names() {
+    let (mut ui, _) = buttons(&["Resume", "Quit"]);
+    assert!(!is_drawn(&ui, "Back"), "no names, no hints");
+    ui.show_button_hints(&XBOX);
+    idle(&mut ui);
+    assert_eq!(hints(&ui, "Quit"), "A Select B Back");
+
+    // Another device, other names, at once.
+    ui.show_button_hints(&KEYBOARD);
+    idle(&mut ui);
+    assert_eq!(hints(&ui, "Quit"), "Enter Select Esc Back");
+
+    ui.hide_button_hints();
+    idle(&mut ui);
+    assert!(!is_drawn(&ui, "Back") && !is_drawn(&ui, "Select"));
+}
+
+#[test]
+fn hints_follow_the_widget_the_player_is_on() {
+    let mut ui = settings().ui;
+    ui.show_button_hints(&XBOX);
+    idle(&mut ui);
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(hints(&ui, "Medium"));
+        tap(&mut ui, DOWN);
+    }
+    assert_eq!(
+        seen,
+        ["A Change B Back", "< > Change B Back", "< > Change B Back"],
+        "a toggle, a slider and a choice"
+    );
+}
+
+#[test]
+fn a_screen_with_tabs_says_which_buttons_switch_them() {
+    let (mut ui, _, _) = tabbed();
+    ui.show_button_hints(&XBOX);
+    idle(&mut ui);
+    assert_eq!(hints(&ui, "On"), "A Change B Back LB RB Switch tab");
+    // The hint is for the device in the hand, whatever opened the tab.
+    ui.show_button_hints(&KEYBOARD);
+    tap(&mut ui, NEXT_TAB);
+    assert_eq!(hints(&ui, "0.50"), "< > Change Esc Back Q E Switch tab");
+}
+
+#[test]
+fn a_button_with_no_name_has_no_hint() {
+    let (mut ui, _, _) = tabbed();
+    ui.show_button_hints(&crate::ButtonNames {
+        confirm: "",
+        previous_tab: "",
+        ..XBOX
+    });
+    idle(&mut ui);
+    assert!(!is_drawn(&ui, "Select") && !is_drawn(&ui, "Change"));
+    assert_eq!(hints(&ui, "On"), "B Back RB Switch tab");
+    ui.show_button_hints(&crate::ButtonNames::default());
+    idle(&mut ui);
+    assert_eq!(hints(&ui, "On"), "");
+}
+
+#[test]
+fn the_mouse_needs_no_hint_to_choose() {
+    let (mut ui, _) = buttons(&["Resume", "Quit"]);
+    ui.show_button_hints(&KEYBOARD);
+    let at = point_at(&ui, "Quit");
+    ui.update(&at, 1.0 / 60.0, HD);
+    let mut moved = at;
+    moved.pointer = Some([at.pointer.unwrap()[0] + 5.0, at.pointer.unwrap()[1]]);
+    ui.update(&moved, 1.0 / 60.0, HD);
+    assert_eq!(ui.mode(), InputMode::Pointer);
+    assert_eq!(hints(&ui, "Quit"), "Esc Back");
+    assert!(!is_drawn(&ui, "Select"));
+}
+
+/// The boxes the hints' button names are drawn in: everything in the
+/// selected colour that is drawn after the last widget.
+fn caps(ui: &Ui) -> Vec<([f32; 2], [f32; 2], f32)> {
+    let selected = Theme::default().widget_selected;
+    let all: Vec<Draw<'_>> = ui.draw().iter().collect();
+    let last_widget = all
+        .iter()
+        .rposition(|draw| matches!(draw, Draw::Text { text: "Quit", .. }))
+        .unwrap();
+    all[last_widget..]
+        .iter()
+        .filter_map(|draw| match *draw {
+            Draw::Rect {
+                position,
+                size,
+                color,
+                corner,
+            } if color == selected => Some((position, size, corner)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn hints_sit_in_a_line_at_the_bottom_of_the_safe_area() {
+    let (mut ui, _) = buttons(&["Resume", "Quit"]);
+    ui.show_button_hints(&XBOX);
+    idle(&mut ui);
+    let drawn = caps(&ui);
+    assert_eq!(drawn.len(), 2);
+    for (position, size, corner) in &drawn {
+        // The bottom of the safe area on an HD window is 1026.
+        assert_eq!(position[1] + size[1], 1026.0);
+        // One letter is in a circle, as on the gamepad.
+        assert_eq!(size[0], size[1]);
+        assert_eq!(*corner, size[1] / 2.0);
+    }
+    // The line is centred: as far from the left as from the right.
+    let left = drawn[0].0[0];
+    let [x, _] = find(&ui, "Back");
+    let right = x + 4.0 * 28.0 * 0.55;
+    assert!((left - (1920.0 - right)).abs() < 0.01, "{left} {right}");
+
+    // A key is a squarer shape, wide enough for its name.
+    ui.show_button_hints(&KEYBOARD);
+    idle(&mut ui);
+    let drawn = caps(&ui);
+    assert!(drawn[0].1[0] > drawn[0].1[1]);
+    assert_eq!(drawn[0].2, Theme::default().corner);
+
+    // Text in a hint is never smaller than the smallest text, and grows
+    // with the player's size setting.
+    ui.set_ui_scale(1.5);
+    idle(&mut ui);
+    for draw in ui.draw() {
+        if let Draw::Text {
+            size, text: "Back", ..
+        } = draw
+        {
+            assert_eq!(size, 42.0);
+        }
+    }
+}
+
+#[test]
+fn hints_are_under_the_menu_and_never_over_it() {
+    // Eleven buttons fit an HD window, but not with a line of hints
+    // under them unless the menu moves up.
+    let names: Vec<String> = (1..=11).map(|number| format!("Item {number}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (mut ui, _) = buttons(&names);
+    let before = find(&ui, "Item 11")[1];
+    ui.show_button_hints(&XBOX);
+    idle(&mut ui);
+    let theme = Theme::default();
+    let all = rects(&ui);
+    let panel = all.iter().find(|draw| draw.2 == theme.panel).unwrap();
+    let hint_top = find(&ui, "Back")[1] - 6.0;
+    assert!(
+        panel.0[1] + panel.1[1] <= hint_top,
+        "the panel covers the hints"
+    );
+    assert!(find(&ui, "Item 11")[1] < before);
+    assert!(is_drawn(&ui, "Menu") && is_drawn(&ui, "Item 1"));
+    // A short menu stays in the middle of the window, where it was.
+    let (mut short, _) = buttons(&["Resume", "Quit"]);
+    let before = find(&short, "Resume");
+    short.show_button_hints(&XBOX);
+    idle(&mut short);
+    assert_eq!(find(&short, "Resume"), before);
+}
+
+#[test]
+fn a_long_screen_makes_room_for_its_hints() {
+    let (mut ui, _) = long();
+    ui.show_button_hints(&XBOX);
+    for _ in 0..19 {
+        tap(&mut ui, DOWN);
+    }
+    assert!(is_drawn(&ui, "Item 20"));
+    let hint_top = find(&ui, "Back")[1] - 6.0;
+    let theme = Theme::default();
+    for (position, size, color) in rects(&ui) {
+        if color == theme.widget || color == theme.panel {
+            assert!(position[1] + size[1] <= hint_top);
+        }
+    }
+    assert_eq!(hints(&ui, "Item 20"), "A Select B Back");
+}
+
+#[test]
+fn a_widget_cut_by_the_edge_of_a_long_screen_is_only_its_box() {
+    let mut ui = Ui::default();
+    let screen = ui
+        .add_screen("Settings", |screen| {
+            for number in 1..=20 {
+                screen.slider(&format!("Setting {number}"), 0.0, 10.0, 1.0, 5.0);
+            }
+        })
+        .unwrap();
+    ui.open(screen).unwrap();
+    idle(&mut ui);
+    // A third of a notch leaves a row half over each edge.
+    ui.update(&roll(-2.3), 1.0 / 60.0, HD);
+    let theme = Theme::default();
+    let all = rects(&ui);
+    let rows = all.iter().filter(|draw| draw.2 == theme.widget).count();
+    // Each whole slider has one filled part, in the accent colour, and
+    // its number; a cut one has neither.
+    let filled = all.iter().filter(|draw| draw.2 == theme.accent).count();
+    let numbers = texts(&ui).iter().filter(|text| *text == "5").count();
+    assert_eq!(filled, numbers);
+    assert_eq!(
+        rows,
+        filled + 2,
+        "one row is cut at the top and one at the bottom"
+    );
+    assert_inside_the_room(&ui);
+}
+
+#[test]
+fn the_wheel_and_a_drag_add_up() {
+    let (mut ui, _) = long();
+    let start = find(&ui, "Item 9")[1];
+    let mut at = point_at(&ui, "Item 9");
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.pointer_down = true;
+    ui.update(&at, 1.0 / 60.0, HD);
+    let from = at.pointer.unwrap();
+    at.pointer = Some([from[0], from[1] - 100.0]);
+    ui.update(&at, 1.0 / 60.0, HD);
+    // A notch while the button is held is kept on the frames after it.
+    at.wheel = -1.0;
+    ui.update(&at, 1.0 / 60.0, HD);
+    at.wheel = 0.0;
+    ui.update(&at, 1.0 / 60.0, HD);
+    assert_eq!(find(&ui, "Item 9")[1], start - 100.0 - 102.0);
 }

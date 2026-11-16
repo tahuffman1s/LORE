@@ -224,10 +224,15 @@ pub(crate) struct Painter<'a> {
     pub commands: &'a mut Vec<Command>,
     pub text: &'a mut String,
     pub scale: f32,
+    /// When set, only what is inside this box is drawn: a box is cut
+    /// down to it and a line of text that crosses its top or bottom is
+    /// left out. In reference pixels, like everything a painter is given.
+    pub clip: Option<Rect>,
 }
 
 impl Painter<'_> {
     pub(crate) fn rect(&mut self, rect: Rect, color: Color, corner: f32) {
+        let rect = self.clip.map_or(rect, |clip| rect.inside(clip));
         if rect.w <= 0.0 || rect.h <= 0.0 {
             return;
         }
@@ -252,6 +257,11 @@ impl Painter<'_> {
         color: Color,
         words: fmt::Arguments<'_>,
     ) {
+        if let Some(clip) = self.clip
+            && (position[1] < clip.y - 0.5 || position[1] + size > clip.bottom() + 0.5)
+        {
+            return;
+        }
         let start = self.text.len();
         // Writing to a String cannot fail.
         let _ = self.text.write_fmt(words);

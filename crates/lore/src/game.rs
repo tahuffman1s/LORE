@@ -1,6 +1,6 @@
 //! The interface a game implements to be driven by the engine.
 
-use lore_input::{ActionSetId, InputFrame, Rumble};
+use lore_input::{ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -53,6 +53,11 @@ pub struct Frame {
     pointer: Option<[f32; 2]>,
     /// Whether the main mouse button is held.
     pointer_down: bool,
+    /// How far the wheel was rolled over the free pointer, in notches.
+    wheel: f32,
+    /// What the player last used, and whose gamepad it is.
+    device: Device,
+    gamepad_style: GamepadStyle,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
     /// The player's settings to put into effect, when they have changed.
@@ -132,6 +137,9 @@ impl Frame {
             screen: NO_WINDOW,
             pointer: None,
             pointer_down: false,
+            wheel: 0.0,
+            device: Device::KeyboardAndMouse,
+            gamepad_style: GamepadStyle::Xbox,
             ui_scale: 1.0,
             settings: None,
             ui: DrawBuffer::default(),
@@ -325,6 +333,58 @@ impl Frame {
     #[must_use]
     pub fn pointer_down(&self) -> bool {
         self.pointer_down
+    }
+
+    /// How far the mouse wheel was rolled since the last frame, in
+    /// notches: what a menu's [`UiInput`](lore_ui::UiInput) takes as its
+    /// `wheel`, to scroll a screen longer than the window. Above zero is
+    /// away from the player. A touchpad gives parts of a notch.
+    ///
+    /// Like a click, this is not an action: only a mouse has a wheel,
+    /// and a gamepad scrolls a menu by moving through it. Zero while the
+    /// mouse is captured, where the wheel is a button an action can be
+    /// bound to (`MouseWheelUp`).
+    #[must_use]
+    pub fn wheel(&self) -> f32 {
+        self.wheel
+    }
+
+    /// What the player last used on purpose: the keyboard and mouse, or
+    /// a gamepad. Show the names of that device's buttons in hints and
+    /// tutorials, and they change the moment the player picks up the
+    /// other one.
+    ///
+    /// A stick that drifts or a mouse on a bumped desk does not count;
+    /// see [`Input::last_device`](lore_input::Input::last_device). On a
+    /// server it is always the keyboard and mouse.
+    #[must_use]
+    pub fn device(&self) -> Device {
+        self.device
+    }
+
+    /// Whose letters are on the gamepad the player is using, so a hint
+    /// can say "A", "Cross" or "B" for the same button:
+    /// [`GamepadButton::label`](lore_input::GamepadButton::label) takes
+    /// it. A gamepad that is not known to be a PlayStation or Nintendo
+    /// one is taken to be lettered like an Xbox one, as most are.
+    #[must_use]
+    pub fn gamepad_style(&self) -> GamepadStyle {
+        self.gamepad_style
+    }
+
+    /// Says what the player last used and whose gamepad it is.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn with_device(mut self, device: Device, style: GamepadStyle) -> Self {
+        self.device = device;
+        self.gamepad_style = style;
+        self
+    }
+
+    /// Says how far the wheel was rolled over the free pointer.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn with_wheel(mut self, notches: f32) -> Self {
+        self.wheel = notches;
+        self
     }
 
     /// The size the player chose for the HUD and menus in the settings

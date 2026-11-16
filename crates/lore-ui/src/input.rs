@@ -30,8 +30,13 @@ pub struct UiInput {
     /// Where the mouse pointer is, in pixels from the top-left corner of
     /// the screen, or `None` when there is no pointer.
     pub pointer: Option<[f32; 2]>,
-    /// The main mouse button.
+    /// The main mouse button. Holding it and pulling up or down drags a
+    /// screen that is longer than the window.
     pub pointer_down: bool,
+    /// How far the mouse wheel was rolled since the last frame, in
+    /// notches. Above zero is away from the player, which shows what is
+    /// further up a screen that is longer than the window.
+    pub wheel: f32,
 }
 
 /// A direction the player can move between widgets.

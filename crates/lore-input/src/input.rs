@@ -5,8 +5,12 @@ use std::fmt;
 use crate::binding::{ActionKind, Binding, Button};
 use crate::devices::{GamepadButton, Key, Stick, StickAxis};
 use crate::frame::{ActionState, InputFrame};
-use crate::map::{Action, ActionId, ActionMap, ActionSetId, Conflict};
+use crate::map::{Action, ActionId, ActionMap, ActionSetId, Conflict, Device};
 use crate::shaping::{PRESS_AT, RELEASE_AT, clamp_length, length, sanitize};
+
+/// How far the mouse must move, in counts or pixels, to count as picked
+/// up again after a gamepad was used. A bumped desk moves it less.
+const MOUSE_TAKES_OVER_AT: f32 = 8.0;
 
 /// The live state of every device, resolved through an [`ActionMap`].
 ///
@@ -47,6 +51,10 @@ pub struct Input {
     /// Buttons that were down when the set last changed. Until each comes
     /// back up it presses no button action: it was pressed for the old set.
     stale: [bool; Button::COUNT],
+    /// What the player last used on purpose.
+    device: Device,
+    /// How far the mouse has gone since a gamepad was last used, in counts.
+    mouse_travel: f32,
 }
 
 /// A finished rebind: what [`Input::start_rebind`] heard and did.
@@ -118,7 +126,53 @@ impl Input {
             swallowed: [false; Button::COUNT],
             active: ActionMap::GAMEPLAY,
             stale: [false; Button::COUNT],
+            device: Device::KeyboardAndMouse,
+            mouse_travel: 0.0,
         }
+    }
+
+    /// What the player last used on purpose: the keyboard and mouse, or a
+    /// gamepad. Menus show the names of that device's buttons.
+    ///
+    /// A key, a mouse button, a wheel notch or a gamepad button changes it
+    /// at once. A stick or trigger must be pushed half way and the mouse
+    /// moved a little, so a stick that drifts or a desk that is bumped
+    /// changes nothing. It starts as the keyboard and mouse.
+    ///
+    /// ```
+    /// use lore_input::{ActionMap, Device, GamepadButton, Input, Key};
+    ///
+    /// let mut input = Input::new(ActionMap::default_fps());
+    /// assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+    /// input.press(GamepadButton::GamepadSouth);
+    /// assert_eq!(input.last_device(), Device::Gamepad);
+    /// input.press(Key::Enter);
+    /// assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+    /// ```
+    #[must_use]
+    pub fn last_device(&self) -> Device {
+        self.device
+    }
+
+    /// Reports that the mouse pointer moved `distance` pixels over the
+    /// window, for [`last_device`](Self::last_device). Movement that turns
+    /// the view goes to [`move_mouse`](Self::move_mouse), which counts it
+    /// by itself.
+    pub fn pointer_moved(&mut self, distance: f32) {
+        if !distance.is_finite() {
+            return;
+        }
+        self.mouse_travel += distance.abs();
+        if self.mouse_travel >= MOUSE_TAKES_OVER_AT {
+            self.device = Device::KeyboardAndMouse;
+            self.mouse_travel = 0.0;
+        }
+    }
+
+    /// Notes that a gamepad was used on purpose.
+    fn gamepad_used(&mut self) {
+        self.device = Device::Gamepad;
+        self.mouse_travel = 0.0;
     }
 
     /// The action set whose actions are live. It starts as
@@ -334,6 +388,11 @@ impl Input {
     pub fn press(&mut self, button: impl Into<Button>) {
         let button = button.into();
         let index = button.index();
+        if button.is_gamepad() {
+            self.gamepad_used();
+        } else {
+            self.device = Device::KeyboardAndMouse;
+        }
         if self.intercept(button) {
             return;
         }
@@ -370,6 +429,9 @@ impl Input {
     pub fn set_button_amount(&mut self, button: GamepadButton, amount: f32) {
         let amount = sanitize(amount).max(0.0);
         let index = Button::Gamepad(button).index();
+        if amount >= PRESS_AT {
+            self.gamepad_used();
+        }
         if self.swallowed[index] {
             if amount < RELEASE_AT {
                 self.swallowed[index] = false;
@@ -397,7 +459,11 @@ impl Input {
             StickAxis::X => 0,
             StickAxis::Y => 1,
         };
-        self.sticks[stick.index()][slot] = sanitize(value);
+        let value = sanitize(value);
+        if value.abs() >= PRESS_AT {
+            self.gamepad_used();
+        }
+        self.sticks[stick.index()][slot] = value;
     }
 
     /// Reports raw mouse movement in counts. Right and up are positive.
@@ -405,6 +471,7 @@ impl Input {
         if right.is_finite() && up.is_finite() {
             self.mouse[0] += right;
             self.mouse[1] += up;
+            self.pointer_moved(right.abs() + up.abs());
         }
     }
 
@@ -435,6 +502,15 @@ impl Input {
         }
         self.amount = [0.0; GamepadButton::COUNT];
         self.sticks = [[0.0; 2]; Stick::COUNT];
+    }
+
+    /// Reports that the gamepad in use was unplugged: its controls are let
+    /// go, and the keyboard and mouse are what the player has left, so
+    /// [`last_device`](Self::last_device) says so.
+    pub fn gamepad_disconnected(&mut self) {
+        self.release_gamepad();
+        self.device = Device::KeyboardAndMouse;
+        self.mouse_travel = 0.0;
     }
 
     /// Advances one simulation tick and returns the state of every action.
@@ -1352,5 +1428,55 @@ mod tests {
         // A map with only the one set.
         s.input.set_map(ActionMap::new());
         assert_eq!(s.input.active_set(), ActionMap::GAMEPLAY);
+    }
+
+    #[test]
+    fn the_last_device_is_the_one_used_on_purpose() {
+        let mut input = Input::new(ActionMap::default_fps());
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+
+        // A stick that drifts and a trigger that rests off zero are not use.
+        input.set_stick(Stick::LeftStick, StickAxis::X, 0.2);
+        input.set_button_amount(GamepadButton::RightTrigger, 0.3);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+
+        input.set_stick(Stick::LeftStick, StickAxis::Y, -0.9);
+        assert_eq!(input.last_device(), Device::Gamepad);
+
+        // Nor is a mouse on a desk that was bumped.
+        input.move_mouse(1.0, -2.0);
+        input.pointer_moved(3.0);
+        assert_eq!(input.last_device(), Device::Gamepad);
+        input.pointer_moved(f32::NAN);
+        assert_eq!(input.last_device(), Device::Gamepad);
+        // What it moved before the gamepad was used again does not add up.
+        input.press(GamepadButton::GamepadSouth);
+        input.pointer_moved(5.0);
+        assert_eq!(input.last_device(), Device::Gamepad);
+        input.pointer_moved(5.0);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+
+        input.set_button_amount(GamepadButton::LeftTrigger, 0.8);
+        assert_eq!(input.last_device(), Device::Gamepad);
+        input.move_mouse(30.0, 0.0);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+
+        input.press(GamepadButton::DpadDown);
+        assert_eq!(input.last_device(), Device::Gamepad);
+        input.press(MouseWheel::MouseWheelUp);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+        input.press(GamepadButton::GamepadEast);
+        input.press(Key::Escape);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+        // Letting go is not use.
+        input.release(GamepadButton::GamepadEast);
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+
+        // A gamepad that is unplugged leaves the keyboard and mouse.
+        input.press(GamepadButton::GamepadSouth);
+        input.gamepad_disconnected();
+        assert_eq!(input.last_device(), Device::KeyboardAndMouse);
+        let jump = input.map().action("jump").unwrap();
+        assert!(!input.tick().pressed(jump));
     }
 }

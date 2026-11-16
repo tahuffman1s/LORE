@@ -2,7 +2,7 @@
 
 use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
 use gilrs::{Axis, EventType, GamepadId, Gilrs, GilrsBuilder};
-use lore_input::{GamepadButton, Input, Rumble, Stick, StickAxis};
+use lore_input::{GamepadButton, GamepadStyle, Input, Rumble, Stick, StickAxis};
 
 use crate::translate;
 
@@ -106,7 +106,7 @@ impl Gamepads {
                     log::info!("Gamepad disconnected: {}", gilrs.gamepad(event.id).name());
                     if self.active == Some(event.id) {
                         self.active = None;
-                        input.release_gamepad();
+                        input.gamepad_disconnected();
                     }
                 }
                 // Every button change arrives as `ButtonChanged`, including the
@@ -133,6 +133,19 @@ impl Gamepads {
         if self.active != held {
             self.rumble = None;
         }
+    }
+
+    /// Whose letters are on the gamepad being played with, for hints. With
+    /// no gamepad in use, an Xbox one's.
+    pub(crate) fn style(&self) -> GamepadStyle {
+        let (Some(gilrs), Some(id)) = (&self.gilrs, self.active) else {
+            return GamepadStyle::Xbox;
+        };
+        gilrs
+            .connected_gamepad(id)
+            .map_or(GamepadStyle::Xbox, |gamepad| {
+                style_of(gamepad.vendor_id(), gamepad.name())
+            })
     }
 
     /// Shakes the gamepad being played with, in place of the rumble before.
@@ -226,7 +239,7 @@ impl Gamepads {
         while gilrs.next_event().is_some() {}
         let Some(gamepad) = gilrs.connected_gamepad(id) else {
             self.active = None;
-            input.release_gamepad();
+            input.gamepad_disconnected();
             return;
         };
         for axis in AXES {
@@ -240,6 +253,29 @@ impl Gamepads {
                 input.set_button_amount(name, data.value());
             }
         }
+    }
+}
+
+/// The USB vendor number of Sony's gamepads.
+const SONY: u16 = 0x054C;
+/// The USB vendor number of Nintendo's gamepads.
+const NINTENDO: u16 = 0x057E;
+
+/// Whose letters are on a gamepad, from who made it and what it calls
+/// itself. One made by somebody else for a console says so in its name
+/// more often than not; anything unrecognised is lettered like an Xbox
+/// gamepad, as nearly every gamepad sold for computers is.
+fn style_of(vendor: Option<u16>, name: &str) -> GamepadStyle {
+    let name = name.to_ascii_lowercase();
+    let named = |words: &[&str]| words.iter().any(|word| name.contains(word));
+    if vendor == Some(SONY)
+        || named(&["playstation", "dualsense", "dualshock", "ps3", "ps4", "ps5"])
+    {
+        GamepadStyle::PlayStation
+    } else if vendor == Some(NINTENDO) || named(&["nintendo", "switch", "joy-con", "joycon"]) {
+        GamepadStyle::Nintendo
+    } else {
+        GamepadStyle::Xbox
     }
 }
 
@@ -346,6 +382,30 @@ mod tests {
         gamepads.rumble(Rumble::new(1.0, 1.0, 0.1));
         assert!(gamepads.rumble.is_none());
         gamepads.stop_rumble();
+    }
+
+    #[test]
+    fn a_gamepad_is_lettered_by_who_made_it_or_what_it_is_called() {
+        use GamepadStyle::{Nintendo, PlayStation, Xbox};
+        for (vendor, name, style) in [
+            (Some(0x054C), "Wireless Controller", PlayStation),
+            (Some(0x054C), "DualSense Wireless Controller", PlayStation),
+            (None, "Sony PLAYSTATION(R)3 Controller", PlayStation),
+            (Some(0x0F0D), "HORI PS4 Fighting Commander", PlayStation),
+            (Some(0x057E), "Pro Controller", Nintendo),
+            (None, "Nintendo Switch Pro Controller", Nintendo),
+            (Some(0x045E), "Xbox Wireless Controller", Xbox),
+            (Some(0x28DE), "Steam Deck", Xbox),
+            (Some(0x046D), "Logitech Gamepad F310", Xbox),
+            (None, "", Xbox),
+        ] {
+            assert_eq!(style_of(vendor, name), style, "{vendor:?} {name}");
+        }
+    }
+
+    #[test]
+    fn with_no_gamepad_in_use_hints_are_lettered_like_an_xbox_one() {
+        assert_eq!(Gamepads::new().style(), GamepadStyle::Xbox);
     }
 
     #[test]

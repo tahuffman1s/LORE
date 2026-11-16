@@ -13,6 +13,12 @@
 //! and each screen remembers where the player was. Moving the mouse
 //! swaps the outline for a highlight under the pointer.
 //!
+//! A screen with more on it than fits the window scrolls: it follows
+//! the widget the player is on, and the mouse wheel or a drag moves it.
+//! Given the [names of the buttons](Ui::show_button_hints) the player
+//! has in their hand, a menu says along the bottom what each one does:
+//! "A Select", "B Back".
+//!
 //! ```
 //! use lore_ui::{Anchor, Ui, UiEvent, UiInput};
 //!
@@ -81,4 +87,4 @@ pub use error::UiError;
 pub use input::{Direction, InputMode, UiInput};
 pub use node::{Anchor, ScreenId, WidgetId};
 pub use theme::{Color, EstimatedText, SMALLEST_TEXT, TextMeasure, Theme};
-pub use ui::{Ui, UiEvent, Value};
+pub use ui::{ButtonNames, Ui, UiEvent, Value};

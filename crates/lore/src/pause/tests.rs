@@ -4,7 +4,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use lore_input::{GamepadButton, Input, Key, MouseButton, MouseMode, Stick, StickAxis};
+use lore_input::{
+    GamepadButton, GamepadStyle, Input, Key, MouseButton, MouseMode, Stick, StickAxis,
+};
 use lore_ui::{Draw, DrawBuffer};
 
 use super::*;
@@ -59,6 +61,8 @@ struct Played {
     input: Input,
     pointer: Option<[f32; 2]>,
     pointer_down: bool,
+    /// Whose letters are on the gamepad that is not there.
+    style: GamepadStyle,
     /// What the last frame drew.
     drawn: DrawBuffer,
     /// Whether a frame asked for the window to close.
@@ -85,6 +89,7 @@ impl Played {
             input: Input::new(actions),
             pointer: None,
             pointer_down: false,
+            style: GamepadStyle::Xbox,
             drawn: DrawBuffer::default(),
             closed: false,
             applied: Vec::new(),
@@ -100,7 +105,8 @@ impl Played {
     fn frame(&mut self) {
         let mut frame = Frame::new(0.0)
             .for_window(Some(SCREEN), std::mem::take(&mut self.drawn))
-            .with_pointer(FRAME, self.pointer, self.pointer_down);
+            .with_pointer(FRAME, self.pointer, self.pointer_down)
+            .with_device(self.input.last_device(), self.style);
         self.game.frame(&mut frame);
         self.drawn = frame.take_ui();
         self.closed |= frame.closing();
@@ -151,6 +157,14 @@ impl Played {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("\"{words}\" is not on screen: {:?}", self.words()))
+    }
+
+    /// The hints under the menu in the last frame: every piece of text
+    /// drawn after `last`, the last words of the last widget.
+    fn hints(&self, last: &str) -> String {
+        let words = self.words();
+        let from = words.iter().rposition(|text| text == last);
+        from.map_or_else(String::new, |from| words[from + 1..].join(" "))
     }
 
     /// Every piece of text the last frame drew, in order.
@@ -208,7 +222,13 @@ fn escape_opens_the_menu_over_a_game_that_keeps_running_but_hears_nothing() {
 
     played.input.press(Key::Escape);
     played.step();
-    assert_eq!(played.words(), ["Menu", "Resume", "Settings", "Quit"]);
+    assert_eq!(
+        played.words(),
+        [
+            "Menu", "Resume", "Settings", "Quit", "Enter", "Select", "Esc", "Back"
+        ],
+        "the menu, and under it what the keys do"
+    );
     assert_eq!(played.live_set(), "menu");
     assert_eq!(
         played.input.map().mouse_mode(played.input.active_set()),
@@ -283,6 +303,12 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             "HUD and menu size",
             "100",
             "Reset to defaults",
+            "Back",
+            // What the gamepad's buttons do on a slider.
+            "<",
+            ">",
+            "Change",
+            "B",
             "Back"
         ]
     );
@@ -383,7 +409,18 @@ fn quitting_asks_first_and_starts_on_the_safe_answer() {
     played.tap(Key::ArrowUp);
     assert_eq!(played.menu().ui.focused(), Some(played.menu().widgets.quit));
     played.tap(Key::Enter);
-    assert_eq!(played.words(), ["Quit the game?", "Keep playing", "Quit"]);
+    assert_eq!(
+        played.words(),
+        [
+            "Quit the game?",
+            "Keep playing",
+            "Quit",
+            "Enter",
+            "Select",
+            "Esc",
+            "Back"
+        ]
+    );
     assert_eq!(played.menu().ui.focused(), Some(played.menu().widgets.stay));
 
     // A second Enter, the easy mistake, keeps the game open.
@@ -663,4 +700,115 @@ fn the_menu_is_drawn_as_a_panel_in_the_middle_of_a_dimmed_game() {
 fn played_place(played: &mut Played, words: &str) -> [f32; 2] {
     played.tap(GamepadButton::GamepadStart);
     played.place_of(words)
+}
+
+#[test]
+fn the_menu_names_the_buttons_of_whatever_the_player_last_touched() {
+    let mut played = Played::new();
+    played.tap(Key::Escape);
+    assert_eq!(played.hints("Quit"), "Enter Select Esc Back");
+
+    // A gamepad is picked up: its names at once, in the same frame.
+    played.tap(GamepadButton::DpadDown);
+    assert_eq!(played.hints("Quit"), "A Select B Back");
+    // A stick does it too, but not one that only drifts.
+    played.input.press(Key::ArrowUp);
+    played.input.release(Key::ArrowUp);
+    played.input.set_stick(Stick::LeftStick, StickAxis::X, 0.2);
+    played.step();
+    assert_eq!(played.hints("Quit"), "Enter Select Esc Back");
+    played.input.set_stick(Stick::RightStick, StickAxis::X, 0.9);
+    played.step();
+    assert_eq!(played.hints("Quit"), "A Select B Back");
+    played.input.set_stick(Stick::RightStick, StickAxis::X, 0.0);
+
+    // The same buttons have other names on other gamepads.
+    played.style = GamepadStyle::PlayStation;
+    played.step();
+    assert_eq!(played.hints("Quit"), "Cross Select Circle Back");
+    played.style = GamepadStyle::Nintendo;
+    played.step();
+    assert_eq!(played.hints("Quit"), "B Select A Back");
+
+    // The mouse is moved: the keyboard's names, and no word about
+    // choosing, which the mouse does by clicking.
+    played.pointer = Some([10.0, 10.0]);
+    played.step();
+    played.pointer = Some([40.0, 30.0]);
+    played.input.pointer_moved(50.0);
+    played.step();
+    assert_eq!(played.hints("Quit"), "Esc Back");
+
+    // Nothing is said once the menu is closed.
+    played.tap(Key::Escape);
+    assert!(played.words().is_empty());
+}
+
+#[test]
+fn hints_name_what_the_menu_is_bound_to_not_what_it_usually_is() {
+    let mut actions = ActionMap::default_fps();
+    let confirm = actions.action("menu_confirm").unwrap();
+    let back = actions.action("menu_back").unwrap();
+    actions
+        .set_bindings(
+            confirm,
+            ["F", "MouseRight", "GamepadWest"].map(|name| name.parse().unwrap()),
+        )
+        .unwrap();
+    // Back cannot be done from this game's gamepad at all.
+    actions
+        .set_bindings(back, ["Backspace".parse().unwrap()])
+        .unwrap();
+    let mut played = Played::with(actions, Settings::default(), None);
+
+    played.tap(Key::Escape);
+    assert_eq!(played.hints("Quit"), "F Select Backspace Back");
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::DpadUp);
+    assert_eq!(
+        played.hints("Quit"),
+        "X Select",
+        "no hint for a button that is not there"
+    );
+}
+
+#[test]
+fn hints_fit_under_the_settings_at_the_largest_size() {
+    let settings = Settings {
+        ui_size: Settings::UI_SIZE.highest,
+        ..Settings::default()
+    };
+    let mut played = Played::with(ActionMap::default_fps(), settings, None);
+    played.tap(GamepadButton::GamepadStart);
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::GamepadSouth);
+    // Every row of the screen is on show, title to last button, and the
+    // hints are under them, inside the part of the screen a television
+    // does not cut off.
+    for words in ["Settings", "Volume", "Reset to defaults", "Change"] {
+        played.place_of(words);
+    }
+    let last_row = played.place_of("Reset to defaults")[1];
+    let back = played
+        .drawn
+        .draw()
+        .iter()
+        .filter_map(|draw| match draw {
+            Draw::Text {
+                position,
+                size,
+                text: "Back",
+                ..
+            } => Some([position[1], position[1] + size]),
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    #[allow(clippy::cast_precision_loss)]
+    let height = SCREEN[1] as f32;
+    assert!(
+        back[0] > last_row + 40.0,
+        "the hints are under the last row"
+    );
+    assert!(back[1] <= height * 0.95, "and inside the safe area");
 }
