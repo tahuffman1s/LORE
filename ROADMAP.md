@@ -36,7 +36,6 @@ Window, input, Vulkan, Luau scripts and the `lore` command, and removing the mul
 
 One player in first or third person: move, look, use things, fight, hear and pause.
 
-- Load Ogg Vorbis sound files, and play music without holding it all in memory (#17)
 - Read the bindings file again while the game runs, and keep a file per game once scripts declare actions (#18)
 - Scripts switch action sets and declare their own (a vehicle, a buy menu) (#19)
 - A setting for the player to turn gamepad rumble down or off (#20)

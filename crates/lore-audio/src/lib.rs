@@ -41,14 +41,20 @@
 //! Directions and sizes are the engine's: +Y is up, -Z is forward, +X is
 //! right, and one unit is one metre.
 //!
+//! Sounds are WAV or Ogg Vorbis files. A short one is held in memory; a
+//! long Ogg Vorbis file, which is to say music, is decoded as it plays by
+//! a thread of its own ([`Sound::streamed`]), and played like any other.
+//! Music has its own volume ([`Play::music`], [`Group`]).
+//!
 //! Everything but [`Speakers`] is plain arithmetic. The mixer fills a
-//! buffer and can be tested, or run on a server, with no sound card; once
-//! made it never asks for memory. [`Footsteps`] and [`SoundSet`] read no
+//! buffer and can be tested, or run on a server, with no sound card; while
+//! mixing it never asks for memory, waits or reads a file. [`Footsteps`] and [`SoundSet`] read no
 //! clock and keep no random number generator, so the same movement and
 //! the same seeds always give the same sounds.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod decode;
 mod error;
 mod footsteps;
 mod mixer;
@@ -57,6 +63,7 @@ mod sound;
 #[cfg(feature = "device")]
 mod speakers;
 pub mod starter;
+mod stream;
 #[cfg(test)]
 mod tests;
 mod vary;
@@ -64,7 +71,7 @@ mod vary;
 pub use error::AudioError;
 pub use footsteps::{Feet, Footfall, FootstepSettings, Footsteps};
 pub use mixer::{Mixer, Playing};
-pub use play::{Importance, Listener, Place, Play, Range};
+pub use play::{Group, Importance, Listener, Place, Play, Range};
 pub use sound::Sound;
 #[cfg(feature = "device")]
 pub use speakers::Speakers;

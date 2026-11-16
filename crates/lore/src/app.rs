@@ -280,7 +280,7 @@ fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError>
         input.set_sensitivity(look, config.settings.look());
     }
     let mut sound = SoundOutput::new(LazySpeakers::default());
-    sound.set_volume(config.settings.gain());
+    sound.set_volumes(&config.settings);
     let mut app = App {
         clock: TickClock::new(config.tick_rate),
         hitches: Hitches::default(),
@@ -653,7 +653,7 @@ impl<G: Game> App<G> {
             self.sound.listen_from(view.position, view.yaw);
         }
         if let Some(settings) = frame.take_settings() {
-            self.sound.set_volume(settings.gain());
+            self.sound.set_volumes(&settings);
             if let Some(look) = self.look {
                 self.input.set_sensitivity(look, settings.look());
             }

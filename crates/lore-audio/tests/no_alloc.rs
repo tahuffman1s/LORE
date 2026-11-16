@@ -1,6 +1,8 @@
 //! Once made, a mixer must not touch the heap: not to start sounds, not to
 //! cut them off, and not to mix. Footsteps and sound sets must not either.
 
+#![allow(clippy::unwrap_used, reason = "tests")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -96,5 +98,40 @@ fn playing_and_mixing_never_allocate() {
     let allocations = ALLOCATIONS.get() - before;
 
     assert!(heard > 0.0, "the test should have mixed something");
+    assert_eq!(allocations, 0);
+}
+
+/// A streamed sound is decoded by another thread, so mixing it asks for
+/// nothing either: only starting it does, and that is not done by the
+/// thread that mixes when the speakers are playing.
+#[test]
+fn mixing_a_streamed_sound_never_allocates() {
+    use std::time::{Duration, Instant};
+
+    let song = lore_audio::Sound::streamed(&include_bytes!("data/song.ogg")[..]).unwrap();
+    let mut mixer = Mixer::with_voices(48_000, 8);
+    mixer.play(Play::everywhere(song).music().looping());
+    let mut buffer = vec![0.0_f32; 480 * 2];
+    let give_up = Instant::now() + Duration::from_secs(30);
+
+    let before = counted();
+    let mut heard = 0.0_f32;
+    let mut mixes = 0;
+    // Until it has started and then for two seconds of sound more, which
+    // is further than was decoded ahead.
+    while mixes < 200 {
+        mixer.mix(&mut buffer);
+        heard = heard.max(buffer[0].abs());
+        if heard > 0.0 {
+            mixes += 1;
+        }
+        assert!(Instant::now() < give_up, "the stream never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    mixer.set_group_volume(lore_audio::Group::Music, 0.5);
+    mixer.stop_all();
+    mixer.mix(&mut buffer);
+    let allocations = ALLOCATIONS.get() - before;
+
     assert_eq!(allocations, 0);
 }

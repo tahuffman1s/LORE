@@ -117,6 +117,19 @@ impl ScriptGame {
         }
     }
 
+    /// [`load_sounds`](Self::load_sounds), and then decodes from beginning
+    /// to end the sounds that a game decodes as they play (music, above
+    /// all), logging the ones that are damaged part way through. For
+    /// `lore check`: a game that is being played never waits for this.
+    pub fn check_sounds(&mut self) {
+        self.load_sounds();
+        let known = self.sounds.problems().len();
+        self.sounds.check_streamed();
+        for problem in &self.sounds.problems()[known..] {
+            log::warn!("{problem}");
+        }
+    }
+
     /// Opens the game in `folder`. The script reads input through `actions`,
     /// which should be the same actions the engine is started with.
     ///

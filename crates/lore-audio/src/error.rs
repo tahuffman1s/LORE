@@ -20,6 +20,13 @@ pub enum AudioError {
         /// What was wrong with it.
         reason: String,
     },
+    /// The data is not an Ogg Vorbis file this crate can read.
+    NotOgg {
+        /// What was wrong with it.
+        reason: String,
+    },
+    /// The data is not a sound file of any kind this crate reads.
+    UnknownFormat,
     /// A sound with more than two channels.
     TooManyChannels {
         /// How many channels the sound has.
@@ -56,6 +63,16 @@ impl fmt::Display for AudioError {
                 f,
                 "This is not a WAV file the engine can read: {reason}. Export the sound as a \
                  16-bit WAV and try again."
+            ),
+            Self::NotOgg { reason } => write!(
+                f,
+                "This is not an Ogg Vorbis file the engine can read: {reason}. Export the \
+                 sound as Ogg Vorbis (best for music) or as a 16-bit WAV and try again."
+            ),
+            Self::UnknownFormat => f.write_str(
+                "This is not really a WAV or an Ogg Vorbis file, even if its name ends in .wav \
+                 or .ogg. Export the sound again as Ogg Vorbis (best for music) or as a \
+                 16-bit WAV.",
             ),
             Self::TooManyChannels { found } => write!(
                 f,

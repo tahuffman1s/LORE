@@ -10,15 +10,17 @@ publish.workspace = true
 default = ["device"]
 # Plays through the computer's speakers. Without it the crate only mixes
 # into a buffer, and links no sound library: tests and tools build this way.
-device = ["dep:cpal", "dep:rtrb"]
+device = ["dep:cpal"]
 
 [dependencies]
 # Reads WAV files.
 hound = "3.5"
+# Reads Ogg Vorbis files. Pure Rust, MIT OR Apache-2.0.
+lewton = "0.10"
 log = "0.4"
 cpal = { version = "0.18", optional = true }
 # Hands commands to the sound thread without locking or asking for memory.
-rtrb = { version = "0.4", optional = true }
+rtrb = "0.4"
 
 [[example]]
 name = "firefight"
