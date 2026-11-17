@@ -25,6 +25,7 @@ import pickle
 import struct
 import sys
 import time
+import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,18 +37,35 @@ AGENT = {"User-Agent": "lore-example-level/1.0"}
 
 
 def fetch(url, path):
-    """Downloads `url` to `path` unless it is there already."""
+    """Downloads `url` to `path` unless it is there already. A download
+    that breaks off is carried on from where it stopped."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
     print("  fetching", url.rsplit("/", 1)[-1], file=sys.stderr)
-    request = urllib.request.Request(url, headers=AGENT)
-    with urllib.request.urlopen(request, timeout=120) as reply:
-        data = reply.read()
-    with open(path + ".part", "wb") as out:
-        out.write(data)
-    os.replace(path + ".part", path)
-    return path
+    part = path + ".part"
+    for attempt in range(8):
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        headers = dict(AGENT)
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=120) as reply:
+                # A server that starts again from the beginning is believed.
+                mode = "ab" if have and reply.status == 206 else "wb"
+                with open(part, mode) as out:
+                    while True:
+                        block = reply.read(1 << 20)
+                        if not block:
+                            break
+                        out.write(block)
+            os.replace(part, path)
+            return path
+        except (OSError, urllib.error.URLError) as problem:
+            print(f"  ({problem}; trying again)", file=sys.stderr)
+            time.sleep(2 + 3 * attempt)
+    raise SystemExit(f"Could not download {url}. Check the connection and run this again.")
 
 
 def files_of(name):
@@ -94,10 +112,10 @@ class Part:
         return len(self.indices) // 3
 
 
-def model(name):
+def model(name, size=SIZE):
     """The parts of a Poly Haven model, grouped by the node they hang from:
     a list of (node name, [parts]), and its materials."""
-    files = files_of(name)["gltf"][SIZE]["gltf"]
+    files = files_of(name)["gltf"][size]["gltf"]
     folder = os.path.join(CACHE, name)
     main = fetch(files["url"], os.path.join(folder, files["url"].rsplit("/", 1)[-1]))
     for inside, about in files["include"].items():
@@ -147,13 +165,13 @@ def model(name):
     return pieces
 
 
-def texture_set(name):
+def texture_set(name, size=SIZE):
     """A ground texture as a material."""
     files = files_of(name)
     folder = os.path.join(CACHE, name)
 
     def image(kind):
-        url = files[kind][SIZE]["jpg"]["url"]
+        url = files[kind][size]["jpg"]["url"]
         return fetch(url, os.path.join(folder, url.rsplit("/", 1)[-1]))
 
     return {
@@ -179,8 +197,8 @@ def thinned(part, most):
     low = (min(xs), min(ys), min(zs))
     span = max(max(xs) - low[0], max(ys) - low[1], max(zs) - low[2])
     best = None
-    boxes = 24
-    for _ in range(7):
+    boxes = max(24, int((most / 6.0) ** 0.5))
+    for _ in range(9):
         made = clustered(part, low, span / boxes)
         if best is None or made.triangles() <= most:
             best = made
@@ -508,13 +526,13 @@ def sounds():
         time.sleep(2)
 
 
-WIDE = 260.0
-STEP = 2.0
+WIDE = 200.0
+STEP = 0.8
 WATER = 0.0
-LAKE = (22.0, -58.0)
-START = (-10.0, 66.0)
+LAKE = (18.0, -50.0)
+START = (-8.0, 52.0)
 # The creek, from its spring to the lake.
-CREEK = [(-78, 100), (-52, 78), (-24, 58), (2, 46), (10, 24), (-2, 4), (10, -16), (16, -32), (20, -44)]
+CREEK = [(-62, 80), (-42, 62), (-19, 46), (2, 37), (8, 19), (-2, 3), (8, -13), (13, -26), (16, -36)]
 
 
 # ----------------------------------------------------------------- creek
@@ -568,17 +586,17 @@ def to_creek(x, z):
 
 def rolling_ground(x, z):
     """The ground before the creek cuts into it."""
-    hills = rolling(x / 70.0, z / 70.0, seed=11) * 11.0
-    lumps = rolling(x / 17.0, z / 17.0, seed=23, octaves=3) * 0.8
+    hills = rolling(x / 60.0, z / 60.0, seed=11) * 8.0
+    lumps = rolling(x / 13.0, z / 13.0, seed=23, octaves=3) * 0.7
     ground = 5.5 + hills + lumps + z * 0.035
     away = math.hypot(x - LAKE[0], (z - LAKE[1]) * 1.15)
-    bowl = math.exp(-((away / 30.0) ** 2))
+    bowl = math.exp(-((away / 24.0) ** 2))
     ground = ground * (1.0 - bowl) + (-3.6) * bowl
     near = math.exp(-((math.hypot(x - START[0], z - START[1]) / 9.0) ** 2))
     ground = ground * (1.0 - near) + (rolling_start()) * near
     edge = max(abs(x), abs(z)) / (WIDE / 2)
     if edge > 0.8:
-        ground += ((edge - 0.8) / 0.2) ** 2 * 22.0
+        ground += ((edge - 0.8) / 0.2) ** 2 * 9.0
     return ground
 
 
@@ -608,12 +626,13 @@ for number in range(len(BED)):
 def height(x, z):
     ground = rolling_ground(x, z)
     far, which = to_creek(x, z)
-    if far < 7.5:
+    if far < 8.0:
         bed = BED[which]
-        # A bed a stride across, banks that rise from it, and the land
-        # beyond brought down to meet them.
-        bank = bed + max(far - 0.6, 0.0) ** 1.3 * 0.42
-        blend = min(max((far - 1.5) / 6.0, 0.0), 1.0)
+        # A bed two strides across, banks that rise steeply from it and
+        # then ease off, and the land beyond brought down to meet them.
+        out = max(far - 1.1, 0.0)
+        bank = bed + min(out * 0.9, 0.55) + out ** 1.2 * 0.16
+        blend = min(max((far - 2.5) / 5.5, 0.0), 1.0)
         blend = blend * blend * (3 - 2 * blend)
         ground = min(ground, bank) * (1.0 - blend) + ground * blend
     return ground
@@ -644,14 +663,14 @@ def ground(material):
             y = heights[row][column]
             # Darker and lighter patches of leaf litter, and dark wet earth
             # by the water.
-            shade = 0.5 + 0.35 * smooth_noise(x / 9.0, z / 9.0, 31)
+            shade = 0.72 + 0.3 * smooth_noise(x / 7.0, z / 7.0, 31)
             far, which = to_creek(x, z)
             wet = max(0.0, 1.0 - far / 3.5) * 0.45 + max(0.0, 1.0 - abs(y - WATER) / 1.2) * 0.4
             shade *= 1.0 - min(wet, 0.55)
             positions.extend((x, y, z))
             normals.extend((nx / length, ny / length, nz / length))
-            uvs.extend((x / 3.5, z / 3.5))
-            colours.extend((shade * 0.86, shade, shade * 0.8, 1.0))
+            uvs.extend((x / 2.6, z / 2.6))
+            colours.extend((shade * 0.92, shade, shade * 0.86, 1.0))
     for row in range(across - 1):
         for column in range(across - 1):
             a = row * across + column
@@ -676,7 +695,7 @@ def lake():
     for ring in range(1, rings + 1):
         for step in range(round_):
             angle = step / round_ * math.tau
-            far = 46.0 * ring / rings
+            far = 38.0 * ring / rings
             positions.extend((LAKE[0] + math.cos(angle) * far, WATER, LAKE[1] + math.sin(angle) * far / 1.15))
     count = len(positions) // 3
     normals.extend((0.0, 1.0, 0.0) * count)
@@ -707,8 +726,8 @@ def creek():
         # Faster where the bed is steeper.
         fall = BED[max(number - 3, 0)] - BED[min(number + 3, len(BED) - 1)]
         speed = 0.7 + min(max(fall, 0.0) * 1.6, 1.8)
-        surface = max(BED[number] + 0.28, WATER)
-        half = 1.5 + 1.2 * (number / len(COURSE)) ** 3
+        surface = max(BED[number] + 0.3, WATER)
+        half = 1.9 + 1.0 * (number / len(COURSE)) ** 3
         for side in (-1.0, -0.5, 0.0, 0.5, 1.0):
             positions.extend((x - tz * half * side, surface, z + tx * half * side))
             normals.extend((0.0, 1.0, 0.0))
@@ -784,27 +803,28 @@ def fewer_leaves(part, keep, grow):
     return Part(positions, normals, uvs, out, part.material)
 
 
-def tree(name, leaves=56000, branches=8000, trunk=3500):
-    """A tree as (trunk, branches, leaves), each light enough to place by
-    the dozen. Kept from one run to the next: thinning takes a minute."""
-    kept = os.path.join(CACHE, f"{name}-light-{leaves}-{branches}-{trunk}.pickle")
+def tree(name, keep, grow, branches, trunk):
+    """A tree as (trunk, branches, leaves): `keep` of its leaves, each
+    `grow` times the size, and its wood thinned to about `branches` and
+    `trunk` triangles. Kept from one run to the next: it takes a while."""
+    kept = os.path.join(CACHE, f"{name}-light-{keep}-{grow}-{branches}-{trunk}.pickle")
     if os.path.exists(kept):
         with open(kept, "rb") as data:
             return pickle.load(data)
     print(f"{name}: thinning...", file=sys.stderr)
-    parts = [part for _, parts in model(name) for part in parts]
+    parts = [part for _, parts in model(name, "2k") for part in parts]
     out = {}
     for part in parts:
         if part.material["cut"]:
-            keep = min(leaves / max(part.triangles(), 1), 1.0)
-            out["leaves"] = fewer_leaves(part, keep, min(0.85 / math.sqrt(keep), 3.2))
-        elif part.triangles() > 100000 or "branch" in part.material["name"]:
-            out["branches"] = thinned(part, branches)
-        else:
+            out["leaves"] = fewer_leaves(part, keep, grow)
+        elif "trunk" in part.material["name"] or part.triangles() < 100000:
             out["trunk"] = thinned(part, trunk)
+        else:
+            out["branches"] = thinned(part, branches)
     made = [out[key] for key in ("trunk", "branches", "leaves") if key in out]
-    with open(kept, "wb") as data:
+    with open(kept + ".part", "wb") as data:
         pickle.dump(made, data)
+    os.replace(kept + ".part", kept)
     return made
 
 
@@ -857,7 +877,7 @@ def main():
     sounds()
     level = Jungle()
     print("The ground...", file=sys.stderr)
-    level.put("ground", level.mesh("ground", [ground(texture_set("brown_mud_leaves_01"))]), (0, 0, 0))
+    level.put("ground", level.mesh("ground", [ground(texture_set("brown_mud_leaves_01", "2k"))]), (0, 0, 0))
     level.put("lake", level.mesh("lake", [lake()]), (0, 0, 0), water=True)
     level.put("creek", level.mesh("creek", [creek()]), (0, 0, 0), water=True)
 
@@ -900,11 +920,31 @@ def main():
                 made += 1
                 yield x, z
 
+    def spread(apart, **wanted):
+        """Places about `apart` metres from one another all over the world:
+        one to each square of a grid, moved about inside it, so that they
+        are even without being in rows."""
+        half = WIDE / 2
+        count = int(WIDE / apart)
+        spots = []
+        for row in range(count):
+            for column in range(count):
+                x = -half + (column + 0.5 + random.uniform(-0.42, 0.42)) * apart
+                z = -half + (row + 0.5 + random.uniform(-0.42, 0.42)) * apart
+                if free(x, z, **wanted):
+                    spots.append((x, z))
+        random.shuffle(spots)
+        return spots
+
     # ---- the trees
-    # Each tree twice: as it is for trees of its own size, and with more
-    # and smaller leaves for the giants, whose leaves would else be huge.
-    kinds = [tree("island_tree_02"), tree("island_tree_01"),
-             tree("island_tree_02", leaves=120000), tree("island_tree_01", leaves=120000)]
+    # Every tree is as tall as the tree that was scanned: a jacaranda
+    # nineteen metres high for the canopy, and small spreading trees
+    # under it. Nothing is made bigger than it is.
+    kinds = [
+        tree("jacaranda_tree", 0.10, 2.0, 90000, 45000),
+        tree("island_tree_02", 0.10, 2.2, 60000, 30000),
+        tree("island_tree_01", 0.09, 2.2, 60000, 30000),
+    ]
     tree_meshes = [[level.mesh(f"tree{number}.{part}", [piece]) for part, piece in zip("tbl", parts)] for number, parts in enumerate(kinds)]
     crowns = []
     for parts in kinds:
@@ -912,51 +952,43 @@ def main():
         xs = [x for part in parts for x in part.positions[0::3]]
         crowns.append((max(ys), (max(xs) - min(xs)) / 2))
     bark = [parts[1].material if len(parts) > 2 else parts[0].material for parts in kinds]
-    stands = []
-    middle = ((START[0] + LAKE[0]) / 2, (START[1] + LAKE[1]) / 2)
-    for x, z in scatter(6000, 0, 128, centre=middle, creek_gap=3.0, water_gap=0.9):
-        if math.hypot(x - START[0], z - START[1]) < 5.5:
+    middle = (0.0, 0.0)
+    reach = WIDE / 2 - 4
+    # Giants twenty metres apart, whose crowns meet overhead, and small
+    # trees between and under them.
+    stands = [(x, z, 0, random.uniform(0.85, 1.15)) for x, z in spread(20.0, creek_gap=3.0, water_gap=1.0)]
+    for x, z in spread(13.0, creek_gap=2.6, water_gap=0.8):
+        if math.hypot(x - START[0], z - START[1]) < 4.0:
             continue
-        # Giants that close the sky, well apart; trees between them; and
-        # small ones under both.
-        size = len(stands) % 4
-        if size == 0:
-            gap, scale, kind = 9.0, random.uniform(6.0, 8.2), 2 + random.randrange(2)
-        elif size == 3:
-            gap, scale, kind = 3.2, random.uniform(1.5, 2.6), random.randrange(2)
-        else:
-            gap, scale, kind = 5.4, random.uniform(3.4, 5.0), random.randrange(2)
-        if any(math.hypot(x - ox, z - oz) < min(gap, 3.2 + other * 0.6) for ox, oz, _, other in stands):
+        if any(math.hypot(x - ox, z - oz) < 3.5 for ox, oz, _, _ in stands):
             continue
-        stands.append((x, z, kind, scale))
-        if len(stands) >= 330:
-            break
+        stands.append((x, z, 1 + random.randrange(2), random.uniform(1.0, 1.7)))
     for number, (x, z, kind, scale) in enumerate(stands):
-        foot = (x, height(x, z) - 0.15, z)
+        foot = (x, height(x, z) - 0.12, z)
         turn = random.uniform(0, math.tau)
+        sway = 0.1 if kind == 0 else 0.3
         for part, mesh in zip(("trunk", "branches", "leaves"), tree_meshes[kind]):
             level.put(
                 f"tree.{number:03}.{part}", mesh, foot, turn, scale,
-                solid=part == "trunk", wind=0.28 if scale < 5.5 else 0.12,
+                solid=part == "trunk", wind=sway,
             )
-        # Lianas: from high in the crown to the ground near by, or across
-        # to the next tree.
+        # Lianas: from high in the crown to the ground near by, or hanging
+        # free. The giants carry most of them.
         tall, wide = crowns[kind][0] * scale, crowns[kind][1] * scale
-        for rope in range(random.choice((1, 2, 2, 3, 4))):
+        for rope in range(random.choice((3, 4, 5, 6)) if kind == 0 else random.choice((0, 0, 1, 2))):
             angle = random.uniform(0, math.tau)
-            out = random.uniform(0.25, 0.7) * wide
-            top = (x + math.cos(angle) * out, foot[1] + tall * random.uniform(0.55, 0.85), z + math.sin(angle) * out)
-            reach = random.uniform(0.5, 3.5)
-            down_x, down_z = top[0] + math.cos(angle) * reach, top[2] + math.sin(angle) * reach
-            if random.random() < 0.6:
+            out = random.uniform(0.15, 0.6) * wide
+            top = (x + math.cos(angle) * out, foot[1] + tall * random.uniform(0.5, 0.8), z + math.sin(angle) * out)
+            far = random.uniform(0.4, 3.0)
+            down_x, down_z = top[0] + math.cos(angle) * far, top[2] + math.sin(angle) * far
+            if random.random() < 0.55:
                 end = (down_x, height(down_x, down_z) - 0.1, down_z)
-                sag = random.uniform(0.2, 1.4)
+                sag = random.uniform(0.2, 1.6)
             else:
-                # Hangs free, ending above head height.
-                end = (down_x, foot[1] + random.uniform(2.2, 5.0), down_z)
+                end = (down_x, foot[1] + random.uniform(2.0, 0.45 * tall + 2.0), down_z)
                 sag = random.uniform(0.0, 0.5)
-            mesh = level.mesh("liana", [liana(top, end, sag, random.uniform(0.018, 0.05), bark[kind], foot)])
-            level.put(f"liana.{number:03}.{rope}", mesh, foot, solid=False, wind=0.28 if scale < 5.5 else 0.12)
+            mesh = level.mesh("liana", [liana(top, end, sag, random.uniform(0.015, 0.04), bark[kind], foot)])
+            level.put(f"liana.{number:03}.{rope}", mesh, foot, solid=False, wind=sway)
 
     # ---- under the trees: thickets. Each is thirty plants in one mesh,
     # so that a jungle floor of twenty thousand plants is a few hundred
@@ -972,17 +1004,18 @@ def main():
         return out
 
     print("Thickets...", file=sys.stderr)
-    low = [piece for name in ("fern_02", "grass_medium_02", "shrub_sorrel_01", "shrub_03", "calathea_orbifolia_01", "weed_plant_02") for piece in loose(name)]
+    low = [piece for name in ("fern_02", "grass_medium_02", "shrub_03", "calathea_orbifolia_01") for piece in loose(name)]
     weights = [4 if "fern" in parts[0].material["name"] or "grass" in parts[0].material["name"] else 2 for parts, _ in low]
     thickets = []
-    for number in range(8):
+    for number in range(10):
         merged = {}
-        for _ in range(30):
+        for _ in range(26):
             parts, middle_of = random.choices(low, weights)[0]
-            # The scans are of small plants; a jungle's are knee to waist high.
-            tiny = "grass" in parts[0].material["name"] or "sorrel" in parts[0].material["name"]
-            turn, scale = random.uniform(0, math.tau), random.uniform(4.0, 7.0) if tiny else random.uniform(2.4, 4.6)
-            far, angle = 3.0 * math.sqrt(random.random()), random.uniform(0, math.tau)
+            # The scans are of plants from cooler places, a hand or two
+            # high. Their kind grows two or three times that in a jungle,
+            # and no more than that is asked of them here.
+            turn, scale = random.uniform(0, math.tau), random.uniform(1.8, 3.2)
+            far, angle = 3.3 * math.sqrt(random.random()), random.uniform(0, math.tau)
             ox, oz = math.cos(angle) * far, math.sin(angle) * far
             c, sn = math.cos(turn) * scale, math.sin(turn) * scale
             for part in parts:
@@ -998,11 +1031,11 @@ def main():
                 into.indices.extend(index + first for index in part.indices)
         thickets.append(level.mesh(f"thicket.{number}", list(merged.values())))
     placed_thickets = 0
-    for x, z in scatter(1000, 0, 100, centre=middle, creek_gap=2.2, water_gap=0.4):
+    for x, z in spread(6.4, creek_gap=2.6, water_gap=0.3):
         # Laid along the slope it stands on.
         lean_x = math.atan((height(x, z + 1.5) - height(x, z - 1.5)) / 3.0)
         lean_z = -math.atan((height(x + 1.5, z) - height(x - 1.5, z)) / 3.0)
-        if abs(lean_x) > 0.6 or abs(lean_z) > 0.6:
+        if abs(lean_x) > 0.75 or abs(lean_z) > 0.75:
             continue
         level.put(
             f"thicket.{placed_thickets:03}", random.choice(thickets), (x, height(x, z), z),
@@ -1021,14 +1054,13 @@ def main():
                 solid=False, wind=wind,
             )
 
-    # And single plants where thickets do not fit: the creek's banks, the
-    # shore, and here and there.
-    cover(["fern_02"], 600, 0, 105, (2.6, 5.0), creek_gap=1.2, water_gap=0.15)
-    cover(["shrub_03", "shrub_02"], 300, 0, 110, (2.4, 4.6))
-    cover(["calathea_orbifolia_01"], 260, 0, 100, (2.6, 5.0), creek_gap=1.4, water_gap=0.2)
-    cover(["nettle_plant", "periwinkle_plant"], 120, 0, 95, (2.0, 3.6))
-    cover(["anthurium_botany_01"], 120, 0, 90, (3.0, 5.5))
-    cover(["grass_medium_02"], 400, 0, 105, (4.0, 7.0), creek_gap=1.1, water_gap=0.1)
+    # Shrubs as tall as a person between the trees, and single plants
+    # where thickets do not fit: the creek's banks and the shore.
+    cover(["shrub_02"], 560, 0, reach * 1.35, (0.9, 1.6))
+    cover(["fern_02"], 700, 0, reach * 1.3, (1.8, 3.2), creek_gap=1.9, water_gap=0.1)
+    cover(["calathea_orbifolia_01"], 300, 0, reach * 1.3, (1.8, 3.0), creek_gap=1.9, water_gap=0.15)
+    cover(["anthurium_botany_01"], 120, 0, reach * 1.2, (1.8, 3.0), creek_gap=2.0)
+    cover(["grass_medium_02"], 500, 0, reach * 1.3, (1.5, 2.6), creek_gap=1.9, water_gap=0.1)
 
     # ---- what lies on the ground: solid
     def litter(names, count, most, sizes, sink, inner=4, outer=120, **wanted):
@@ -1042,22 +1074,32 @@ def main():
                 tilt=(random.uniform(-0.15, 0.15), random.uniform(-0.15, 0.15)),
             )
 
-    litter(["rock_moss_set_01", "rock_moss_set_02"], 90, 9000, (0.8, 2.6), 0.08, creek_gap=0.0, water_gap=-1.5)
-    litter(["boulder_01", "rock_07", "rock_09", "stone_01"], 34, 5000, (0.7, 2.2), 0.14, creek_gap=0.4, water_gap=-1.0)
+    litter(["rock_moss_set_01", "rock_moss_set_02"], 90, 30000, (0.8, 1.6), 0.08, creek_gap=0.0, water_gap=-1.5)
+    litter(["boulder_01", "rock_07", "rock_09", "stone_01"], 30, 14000, (0.7, 1.4), 0.14, creek_gap=0.4, water_gap=-1.0)
     # Stones in and beside the creek, for the water to run round.
-    stones = [piece for name in ("rock_moss_set_01", "rock_moss_set_02") for piece in pieces(name, 9000)]
+    stones = [piece for name in ("rock_moss_set_01", "rock_moss_set_02") for piece in pieces(name, 30000)]
     for number in range(0, len(COURSE) - 6, 3):
         x, z = COURSE[number]
         x, z = x + random.uniform(-1.6, 1.6), z + random.uniform(-1.6, 1.6)
         mesh, wide = random.choice(stones)
-        scale = random.uniform(0.6, 1.6)
+        scale = random.uniform(0.6, 1.3)
         level.put(
             f"creekstone.{number:03}", mesh, (x, height(x, z) - 0.1 * wide * scale, z),
             random.uniform(0, math.tau), scale,
         )
-    litter(["root_cluster_01", "single_root"], 40, 7000, (0.9, 1.8), 0.05)
-    litter(["dead_tree_trunk_02", "dead_tree_trunk"], 16, 6000, (0.9, 1.6), 0.06)
-    litter(["tree_stump_01", "tree_stump_02"], 14, 4000, (0.9, 1.5), 0.03)
+    litter(["root_cluster_01", "single_root"], 36, 26000, (0.9, 1.3), 0.05)
+    litter(["dead_tree_trunk_02", "dead_tree_trunk"], 16, 26000, (0.9, 1.3), 0.06)
+    litter(["tree_stump_01", "tree_stump_02"], 14, 20000, (0.9, 1.3), 0.03)
+
+    # Where the creek is heard from, for main.luau: a place every
+    # twenty-five metres or so along it.
+    heard = [
+        f"    vector.create({COURSE[at][0]:.1f}, {max(BED[at] + 0.3, WATER):.1f}, {COURSE[at][1]:.1f}),"
+        for at in range(8, len(COURSE), 26)
+    ]
+    with open(os.path.join(HERE, "creek.luau"), "w", encoding="utf-8") as out:
+        out.write("-- Written by build.py: places along the creek, from its spring to the lake.\n")
+        out.write("return {\n" + "\n".join(heard) + "\n}\n")
 
     # A sun high enough to reach the forest floor through the gaps.
     out = os.path.join(HERE, "level.glb")
@@ -1066,7 +1108,7 @@ def main():
         (-0.36, 0.83, 0.42),
         (1.0, 0.95, 0.84, 3.6),
         (START[0], height(*START) + 0.2, START[1]),
-        -0.35,
+        -0.45,
     )
     print(
         f"Wrote {out}: {os.path.getsize(out) / 1e6:.0f} MB, {len(level.nodes) - 2} things placed, "
