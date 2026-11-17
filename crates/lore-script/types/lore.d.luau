@@ -608,7 +608,8 @@ declare game: {
         --- at most 5. Numbers outside those ranges are brought into them. A
         --- new rumble replaces the one playing, so `rumble(0, 0)` stops it.
         --- It is felt on a gamepad, on Linux and Windows, when the game is
-        --- played (`lore run`).
+        --- played (`lore run`). The player can turn rumble down or off in
+        --- the menu's settings, so never make it the only sign of something.
         --- Example: if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
         rumble: (strong: number, weak: number, seconds: number?) -> (),
 

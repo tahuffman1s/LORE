@@ -308,6 +308,8 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             "1.0",
             "Invert look",
             "Off",
+            "Rumble",
+            "100",
             "HUD and menu size",
             "100",
             "Reset to defaults",
@@ -342,6 +344,16 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     // Invert look: A flips it.
     played.tap(GamepadButton::DpadDown);
     played.tap(GamepadButton::GamepadSouth);
+    // Rumble: down to half, and each step is felt at once.
+    played.tap(GamepadButton::DpadDown);
+    for _ in 0..9 {
+        played.tap(GamepadButton::DpadLeft);
+    }
+    played.input.press(GamepadButton::DpadLeft);
+    played.step();
+    assert!(played.rumble.is_some_and(|sample| !sample.is_still()));
+    played.input.release(GamepadButton::DpadLeft);
+    played.step();
     // Size: one step up.
     played.tap(GamepadButton::DpadDown);
     played.tap(GamepadButton::DpadRight);
@@ -351,6 +363,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     assert_eq!((chosen.music_volume, chosen.effects_volume), (0.0, 95.0));
     assert!((chosen.sensitivity - 1.2).abs() < 1e-4, "{chosen:?}");
     assert!(chosen.invert_look);
+    assert_eq!(chosen.rumble, 50.0);
     assert_eq!(chosen.ui_size, 105.0);
     assert_eq!(played.applied.last(), Some(&chosen));
     assert_eq!(played.game.game.ui_scale, 1.05);
@@ -823,10 +836,10 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
     // At this size the screen is taller than its room and scrolls: the
     // rows that are on show start at the title, and the hints are under
     // them, inside the part of the screen a television does not cut off.
-    for words in ["Settings", "Volume", "HUD and menu size", "Change"] {
+    for words in ["Settings", "Volume", "Rumble", "Change"] {
         played.place_of(words);
     }
-    let last_row = played.place_of("HUD and menu size")[1];
+    let last_row = played.place_of("Rumble")[1];
     let back = played
         .drawn
         .draw()
@@ -851,7 +864,7 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
     assert!(back[1] <= height * 0.95, "and inside the safe area");
 
     // The rows below come into sight as the player moves down to them.
-    for _ in 0..7 {
+    for _ in 0..8 {
         played.tap(GamepadButton::DpadDown);
     }
     for words in ["Reset to defaults", "Back", "Select"] {
