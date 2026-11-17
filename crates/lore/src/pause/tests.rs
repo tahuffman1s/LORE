@@ -312,6 +312,8 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             "100",
             "HUD and menu size",
             "100",
+            "Show frame rate",
+            "Off",
             "Reset to defaults",
             "Back",
             // What the gamepad's buttons do on a slider.
@@ -364,6 +366,19 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     assert!((chosen.sensitivity - 1.2).abs() < 1e-4, "{chosen:?}");
     assert!(chosen.invert_look);
     assert_eq!(chosen.rumble, 50.0);
+    // The frame meter: A switches it on.
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.menu().settings.frame_meter);
+    assert!(
+        played.words()[0].contains("fps"),
+        "the meter is drawn at once: {:?}",
+        played.words()
+    );
+    // And off again, to leave the rest of the screen as it was.
+    played.tap(GamepadButton::GamepadSouth);
+    let chosen = played.menu().settings;
+    assert!(!chosen.frame_meter);
     assert_eq!(chosen.ui_size, 105.0);
     assert_eq!(played.applied.last(), Some(&chosen));
     assert_eq!(played.game.game.ui_scale, 1.05);
@@ -863,7 +878,7 @@ fn hints_fit_under_the_settings_at_the_largest_size() {
     assert!(back[1] <= height * 0.95, "and inside the safe area");
 
     // The rows below come into sight as the player moves down to them.
-    for _ in 0..8 {
+    for _ in 0..9 {
         played.tap(GamepadButton::DpadDown);
     }
     for words in ["Reset to defaults", "Back", "Select"] {
