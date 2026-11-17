@@ -66,6 +66,7 @@ local music = game.audio.play("music", { volume = 0.4, pitch = 1, loop = true })
 music:stop()
 game.audio.playAt("gunshot", vector.create(10, 1, -4))
 local alarm = game.audio.playAt("alarm", vector.create(0, 3, 0), { volume = 1, pitch = 2, range = 80, loop = true })
+alarm:moveTo(game.player.position)
 alarm:stop()
 
 local speed = 5

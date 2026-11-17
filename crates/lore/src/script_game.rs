@@ -287,6 +287,7 @@ impl Game for ScriptGame {
                 },
                 AudioCommand::Stop(id) => frame.sound(SoundAsk::Stop(id)),
                 AudioCommand::StopAll => frame.sound(SoundAsk::StopAll),
+                AudioCommand::Move(id, place) => frame.sound(SoundAsk::Move(id, place)),
             }
         }
         // After the script has drawn, so what it changed is in this frame.

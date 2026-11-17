@@ -108,6 +108,14 @@ declare extern type Sound with
     --- Stopping a sound that has already ended does nothing.
     --- Example: music:stop()
     function stop(self): ()
+
+    --- Moves a sound that was started with `game.audio.playAt` to another
+    --- place, in metres: for something that makes a noise as it goes, or
+    --- for a creek, which is heard all along it if its sound is kept at
+    --- the place on it nearest the player. Moving a sound that has ended,
+    --- or one started with `game.audio.play`, does nothing.
+    --- Example: game.onTick(function() hum:moveTo(game.player.position) end)
+    function moveTo(self, position: vector): ()
 end
 
 --- A wait started with `game.after` or `game.every`. Keep it only to stop

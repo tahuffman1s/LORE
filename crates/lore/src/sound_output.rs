@@ -19,6 +19,8 @@ pub(crate) enum SoundAsk {
     Stop(SoundId),
     /// Stop every sound started with an id.
     StopAll,
+    /// Move the sound started with this id to another place in the world.
+    Move(SoundId, [f32; 3]),
 }
 
 /// Playing what was asked for.
@@ -44,6 +46,9 @@ mod output {
     pub(crate) trait Voices {
         fn play(&mut self, play: Play) -> Playing;
         fn stop(&mut self, playing: Playing);
+        /// Moves a sound that is playing in the world; one that is not, or
+        /// has ended, is left alone.
+        fn move_to(&mut self, playing: Playing, position: [f32; 3]);
         fn set_listener(&mut self, listener: Listener);
         /// Sets how loud everything is, from 0 (silent) to 1 (full).
         fn set_volume(&mut self, volume: f32);
@@ -58,6 +63,10 @@ mod output {
 
         fn stop(&mut self, playing: Playing) {
             Mixer::stop(self, playing);
+        }
+
+        fn move_to(&mut self, playing: Playing, position: [f32; 3]) {
+            Mixer::move_to(self, playing, position);
         }
 
         fn set_listener(&mut self, listener: Listener) {
@@ -148,6 +157,11 @@ mod output {
                             }
                         }
                     }
+                    SoundAsk::Move(id, place) => {
+                        if let Some(playing) = self.playing.get(&id).copied() {
+                            self.voices.move_to(playing, place);
+                        }
+                    }
                     SoundAsk::StopAll => {
                         for (_, playing) in self.playing.drain() {
                             self.voices.stop(playing);
@@ -221,6 +235,12 @@ impl Voices for LazySpeakers {
     fn stop(&mut self, playing: lore_audio::Playing) {
         if let Some(speakers) = &mut self.speakers {
             speakers.stop(playing);
+        }
+    }
+
+    fn move_to(&mut self, playing: lore_audio::Playing, position: [f32; 3]) {
+        if let Some(speakers) = &mut self.speakers {
+            speakers.move_to(playing, position);
         }
     }
 

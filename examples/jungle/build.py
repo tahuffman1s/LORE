@@ -489,6 +489,12 @@ COMMONS = "https://upload.wikimedia.org/wikipedia/commons/"
 SOUNDS = {
     # CC0, Felix Blume: toucans singing in the Amazonian rainforest.
     "jungle": "8/87/404114_felix-blume_toucans-singing-in-the-amazonian-rainforest-brazil.ogg",
+    # CC0, Joseph Sardin: birds waking.
+    "birds": "3/33/R%C3%A9veil_des_oiseaux.ogg",
+    # CC0, Shyamal: a cicada.
+    "cicada": "3/3d/Cicada_20200619.wav",
+    # CC0, Dawn VanDeman: a chorus of frogs.
+    "frogs": "b/b3/Pseudacris_triseriata_chorus.wav",
     # Public domain, "stephan" (pdsounds.org): two small streams.
     "creek": "2/21/Shallow_small_river_with_stony_riverbed.ogg",
     "rivulet": "a/a4/Welling_rivulet_in_the_woods.ogg",
@@ -518,9 +524,12 @@ def sounds():
     os.makedirs(folder, exist_ok=True)
     for name, where in SOUNDS.items():
         kept = fetch(COMMONS + where, os.path.join(CACHE, "sounds", where.rsplit("/", 1)[-1]))
+        kind = where.rsplit(".", 1)[-1]
         with open(kept, "rb") as data:
-            sound = plain_vorbis(data.read())
-        with open(os.path.join(folder, name + ".ogg"), "wb") as out:
+            sound = data.read()
+        if kind == "ogg":
+            sound = plain_vorbis(sound)
+        with open(os.path.join(folder, f"{name}.{kind}"), "wb") as out:
             out.write(sound)
         # Wikimedia asks that files are not fetched in a hurry.
         time.sleep(2)
@@ -1171,15 +1180,23 @@ def main():
     litter(["dead_tree_trunk_02", "dead_tree_trunk"], 16, 26000, (0.9, 1.3), 0.06)
     litter(["tree_stump_01", "tree_stump_02"], 14, 20000, (0.9, 1.3), 0.03)
 
-    # Where the creek is heard from, for main.luau: a place every
-    # twenty-five metres or so along it.
+    # Where the water is, for main.luau: places along the creek, three
+    # metres or so apart, and the lake's middle and how far out it reaches.
     heard = [
-        f"    vector.create({COURSE[at][0]:.1f}, {max(BED[at] + 0.3, WATER):.1f}, {COURSE[at][1]:.1f}),"
-        for at in range(8, len(COURSE), 26)
+        f"        vector.create({COURSE[at][0]:.1f}, {max(BED[at] + 0.3, WATER):.1f}, {COURSE[at][1]:.1f}),"
+        for at in range(0, len(COURSE), 3)
     ]
+    shore = max(
+        (math.hypot(x - LAKE[0], z - LAKE[1]) for x, z in ((LAKE[0] + dx * 0.5, LAKE[1] + dz * 0.5) for dx in range(-80, 81) for dz in range(-80, 81)) if height(x, z) < WATER),
+        default=20.0,
+    )
     with open(os.path.join(HERE, "creek.luau"), "w", encoding="utf-8") as out:
-        out.write("-- Written by build.py: places along the creek, from its spring to the lake.\n")
-        out.write("return {\n" + "\n".join(heard) + "\n}\n")
+        out.write("-- Written by build.py: where the water is.\n")
+        out.write("return {\n    -- Places along the creek, from its spring to the lake.\n    creek = {\n")
+        out.write("\n".join(heard))
+        out.write("\n    },\n    -- The middle of the lake, and how far from it the shore is.\n")
+        out.write(f"    lake = vector.create({LAKE[0]:.1f}, {WATER:.1f}, {LAKE[1]:.1f}),\n")
+        out.write(f"    lakeReach = {shore:.1f},\n}}\n")
 
     # A sun high enough to reach the forest floor through the gaps.
     out = os.path.join(HERE, "level.glb")

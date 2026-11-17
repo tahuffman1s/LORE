@@ -20,7 +20,7 @@ pub(crate) const AUDIO_FUNCTIONS: &[&str] = &["play", "playAt", "stopAll"];
 
 /// Every function on a sound. The type definitions are tested against it.
 #[cfg(test)]
-pub(crate) const SOUND_METHODS: &[&str] = &["stop"];
+pub(crate) const SOUND_METHODS: &[&str] = &["stop", "moveTo"];
 
 /// How many requests wait for the engine before the oldest are dropped. An
 /// engine that takes them every frame never comes near it; a game run with
@@ -68,6 +68,9 @@ pub enum AudioCommand {
     Stop(SoundId),
     /// Stop every sound the script has played.
     StopAll,
+    /// Move a sound that is playing somewhere in the world to another
+    /// place, in metres.
+    Move(SoundId, [f32; 3]),
 }
 
 /// The sound a game has and what its script has asked for. It outlives a
@@ -131,13 +134,50 @@ impl UserData for SoundRef {
             audio_of(lua)?.push(AudioCommand::Stop(id));
             Ok(())
         });
+        methods.add_function("moveTo", |lua, (this, place): (Value, Value)| {
+            let moved = match &this {
+                Value::UserData(this) => this.borrow::<Self>().ok().map(|this| this.0),
+                _ => None,
+            };
+            let Some(id) = moved else {
+                return Err(fail(
+                    lua,
+                    "sound.moveTo needs a colon, not a dot, because it acts on one sound. \
+                     Write it like this: sound:moveTo(vector.create(0, 1, -5))",
+                ));
+            };
+            let Value::Vector(place) = place else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "sound:moveTo needs the place to move the sound to, as \
+                         vector.create(x, y, z) in metres, but it was given {}. Write it \
+                         like this: sound:moveTo(vector.create(0, 1, -5))",
+                        describe(&place)
+                    ),
+                ));
+            };
+            let place = [place.x(), place.y(), place.z()];
+            if !place.iter().all(|part| part.is_finite()) {
+                return Err(fail(
+                    lua,
+                    "sound:moveTo was given a place that is not a real point: one of its \
+                     numbers is infinite or not a number (often from dividing by zero). \
+                     Check how the place is worked out.",
+                ));
+            }
+            // Moving a sound that has ended, or one that plays everywhere,
+            // does nothing: a script need not ask which it is.
+            audio_of(lua)?.push(AudioCommand::Move(id, place));
+            Ok(())
+        });
         methods.add_meta_function(MetaMethod::ToString, |_, _: AnyUserData| Ok("a sound"));
         methods.add_meta_function(MetaMethod::Index, |lua, (_, key): (Value, Value)| {
             Err::<(), _>(fail(
                 lua,
                 format!(
-                    "sound.{} does not exist. A sound has one function, which stops it: \
-                     sound:stop()",
+                    "sound.{} does not exist. A sound has two functions: sound:stop() \
+                     stops it, and sound:moveTo(place) moves it.",
                     key_text(&key)
                 ),
             ))
