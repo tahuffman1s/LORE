@@ -36,7 +36,8 @@ pub struct RayHit {
 
 /// The solid shapes of a level, ready for the player to collide with.
 ///
-/// Every triangle of every placed mesh is solid, from both sides. Build it
+/// Every triangle of every placed mesh is solid, from both sides, unless the
+/// placement says it is not ([`Instance::is_solid`](lore_assets::Instance::is_solid)). Build it
 /// once when the level loads; it does not change afterwards.
 #[derive(Clone)]
 pub struct Level {
@@ -54,14 +55,19 @@ impl std::fmt::Debug for Level {
 }
 
 impl Level {
-    /// The collision shapes of a loaded scene: every mesh, where it stands.
+    /// The collision shapes of a loaded scene: every mesh, where it stands,
+    /// but for those marked as not solid.
     ///
     /// A scene with no meshes gives an empty level, in which a player falls
     /// forever; check [`Level::triangle_count`] to warn about that.
     #[must_use]
     pub fn from_scene(scene: &Scene) -> Self {
         let mut triangles = Vec::new();
-        for instance in &scene.instances {
+        for instance in scene
+            .instances
+            .iter()
+            .filter(|instance| instance.is_solid())
+        {
             let Some(mesh) = scene.meshes.get(instance.mesh as usize) else {
                 continue;
             };
