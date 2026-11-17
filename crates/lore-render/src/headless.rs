@@ -132,7 +132,9 @@ impl Headless {
             width: width.max(1),
             height: height.max(1),
         };
-        let view = SceneView::new(&gpu, extent, upscaling)?;
+        let mut view = SceneView::new(&gpu, extent, upscaling)?;
+        // The same camera gives the same picture, whenever it is drawn.
+        view.still = true;
         let mesh = MeshPipeline::new(&gpu, 1)?;
         let tonemap = TonemapPipeline::new(&gpu, FORMAT)?;
         let ui = UiPass::new(&gpu, FORMAT, 1)?;
@@ -262,6 +264,7 @@ impl Headless {
                 &self.mesh,
                 Contents {
                     meshes: self.meshes.as_ref(),
+                    sky: true,
                     grid: self.grid,
                 },
                 camera,
@@ -541,13 +544,15 @@ mod tests {
             let at = (y * SIZE[0] + x) * 4;
             [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
         };
-        // The brightest of the pixels around the place, since a line is a
-        // pixel or two wide.
+        // The most coloured of the pixels around the place, since a line
+        // is a pixel or two wide and what is behind it is grey.
         let near = |x: usize, y: usize| {
+            let coloured =
+                |[red, green, blue]: [i32; 3]| red.max(green).max(blue) - red.min(green).min(blue);
             let mut best = [0; 3];
             for (x, y) in (y - 2..=y + 2).flat_map(|y| (x - 2..=x + 2).map(move |x| (x, y))) {
                 let found = pixel(&with_grid, x, y);
-                if found.iter().sum::<i32>() > best.iter().sum::<i32>() {
+                if coloured(found) > coloured(best) {
                     best = found;
                 }
             }
@@ -555,12 +560,12 @@ mod tests {
         };
         let [red, green, blue] = near(SIZE[0] / 4 + 5, SIZE[1] / 2);
         assert!(
-            red > 2 * green && red > 2 * blue,
+            red > green + 40 && red > blue + 40,
             "X axis: {red} {green} {blue}"
         );
         let [red, green, blue] = near(SIZE[0] / 2, SIZE[1] * 3 / 4 + 3);
         assert!(
-            blue > 2 * red && blue > green,
+            blue > red + 40 && blue > green,
             "Z axis: {red} {green} {blue}"
         );
         // Lines a metre apart, lighter than the background between them.
@@ -573,6 +578,40 @@ mod tests {
         assert_eq!(pixel(&with_grid, 128, 4), pixel(&plain, 128, 4));
         headless.set_grid(false);
         assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn the_sky_is_blue_above_and_brightest_at_the_sun_and_dark_below() {
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let middle = |headless: &mut Headless, yaw: f32, pitch: f32| {
+            let camera = Camera {
+                yaw,
+                pitch,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        // Away from the usual sun, which stands to the right and behind:
+        // well up, the sky or a cloud; either way no redder than blue.
+        let [red, green, blue] = middle(&mut headless, 0.9, 1.0);
+        assert!(blue >= red && blue > 90, "above: {red} {green} {blue}");
+        // Straight at the sun: as bright as the picture goes, unless a
+        // cloud is in the way, and then still bright.
+        let towards = [0.399_44_f32, 0.768_92, 0.499_3];
+        let yaw = (-towards[0]).atan2(-towards[2]);
+        let [red, green, blue] = middle(&mut headless, yaw, towards[1].asin());
+        assert!(red + green + blue > 500, "the sun: {red} {green} {blue}");
+        // Under the horizon there is ground, not more sky.
+        let [red, green, blue] = middle(&mut headless, 0.9, -0.8);
+        assert!(red + green + blue < 150, "below: {red} {green} {blue}");
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

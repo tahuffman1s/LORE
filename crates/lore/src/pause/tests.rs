@@ -711,10 +711,9 @@ fn the_menu_is_drawn_as_a_panel_in_the_middle_of_a_dimmed_game() {
         "the outline of the button the player is on"
     );
     let dark = column.iter().filter(|&&p| brightness(p) < 110).count();
-    assert!(
-        dark > 150,
-        "the panel and its buttons are dark: {dark} rows"
-    );
+    // The sky above the level is bright even when dimmed, so only the
+    // panel itself counts.
+    assert!(dark > 90, "the panel and its buttons are dark: {dark} rows");
     // Light text is somewhere on the first button's row.
     let resume = played_place(&mut Played::new(), "Resume");
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

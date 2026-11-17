@@ -228,6 +228,7 @@ pub(crate) fn frames(
                     &mesh,
                     Contents {
                         meshes: Some(&meshes),
+                        sky: false,
                         grid: false,
                     },
                     camera,

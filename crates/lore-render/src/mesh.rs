@@ -12,12 +12,14 @@ use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene};
 
 use crate::buffer::Buffer;
 use crate::camera::{Mat4, multiply, normal_matrix};
+use crate::clouds::CloudVolume;
 use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, CASCADES, Cascade, ShadowMap};
+use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
@@ -39,7 +41,12 @@ const DRAW_BYTES: usize = 128;
 /// The size in bytes of the shader's `View`: three 4 by 4 matrices and five
 /// rows of four numbers, then for the shadows one row, a row for each
 /// shadow picture and a 4 by 4 matrix for each.
-const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64);
+const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64) + SKY_BYTES;
+
+/// The part of it that is the sky: three rows for the lines of sight, one
+/// for the clouds, and a row for each height of the air's light and of the
+/// haze's.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -59,6 +66,13 @@ pub(crate) struct View {
     /// How many sizes larger than usual textures are read (a negative mip
     /// bias, given as a positive number), for a picture that is upscaled.
     pub(crate) sharper: f32,
+    /// The way the eye looks, then how far a line of sight leans to the
+    /// right and up between the middle of the picture and its edge
+    /// ([`Camera::rays`](crate::Camera)); the fourth numbers of the last
+    /// two are the upscaler's shift across and up.
+    pub(crate) rays: [[f32; 4]; 3],
+    /// How long the scene has been drawn for, in seconds.
+    pub(crate) time: f32,
     /// A number that differs from frame to frame when the frames are mixed
     /// by the upscaler, which then smooths what is drawn with a pattern
     /// turned by it; 0 when each frame is shown as it is.
@@ -66,11 +80,13 @@ pub(crate) struct View {
 }
 
 impl View {
-    /// The shader's `View`. With no `shadows`, everything is in the sun.
+    /// The shader's `View`. With no `shadows`, everything is in the sun;
+    /// with no `sky`, none is drawn and no cloud shades the ground.
     fn bytes(
         &self,
         lighting: &Lighting,
         shadows: Option<&[Cascade; CASCADES]>,
+        sky: Option<&Sky>,
     ) -> [u8; VIEW_BYTES] {
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
         // The picture is far smaller than where f32 stops being exact.
@@ -95,6 +111,20 @@ impl View {
             reach[number] = [cascade.texel, cascade.depth, 0.0, 0.0];
             from_world[number] = cascade.clip;
         }
+        let clouds = [
+            if sky.is_some() { sky::CLOUD_COVER } else { 0.0 },
+            self.time,
+            sky::CLOUD_HEIGHT,
+            if sky.is_some() { 1.0 } else { 0.0 },
+        ];
+        let mut scattered = [[0.0; 4]; 2 * sky::HEIGHTS];
+        if let Some(sky) = sky {
+            for (row, [red, green, blue]) in
+                scattered.iter_mut().zip(sky.air.iter().chain(&sky.haze))
+            {
+                *row = [*red, *green, *blue, 0.0];
+            }
+        }
         let numbers = [self.clip, self.steady, self.before];
         let mut bytes = [0_u8; VIEW_BYTES];
         for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(
@@ -104,7 +134,10 @@ impl View {
                 .flatten()
                 .chain(rows.iter().flatten())
                 .chain(reach.iter().flatten())
-                .chain(from_world.iter().flatten().flatten()),
+                .chain(from_world.iter().flatten().flatten())
+                .chain(self.rays.iter().flatten())
+                .chain(&clouds)
+                .chain(scattered.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -189,6 +222,8 @@ impl Lighting {
 pub(crate) struct Contents<'a> {
     /// The level's meshes, if a level has been set.
     pub(crate) meshes: Option<&'a Meshes>,
+    /// Whether the sky is drawn behind them, and its clouds shade them.
+    pub(crate) sky: bool,
     /// Whether the editor's ground grid is drawn over them.
     pub(crate) grid: bool,
 }
@@ -257,6 +292,8 @@ pub(crate) struct Meshes {
     see_through_from: usize,
     materials: Materials,
     lighting: Lighting,
+    /// The sky under that light.
+    sky: Sky,
     /// A number no other scene's meshes have, by which the shadows drawn
     /// for these are told from another level's.
     id: u64,
@@ -384,6 +421,7 @@ impl Meshes {
             see_through_from,
             materials: Materials::new(gpu, scene)?,
             lighting: Lighting::of(scene),
+            sky: Sky::of(&Lighting::of(scene)),
             id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
             bounds,
         })
@@ -517,6 +555,13 @@ pub(crate) struct MeshPipeline {
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
     shadows: Option<ShadowMap>,
+    /// What the clouds are shaped from: `None` only while the pipeline is
+    /// being built.
+    clouds: Option<CloudVolume>,
+    /// Draws the sky behind everything.
+    sky: vk::Pipeline,
+    /// The sky of a scene that sets no light of its own.
+    usual_sky: Sky,
     /// Draws the editor's ground grid, with the same layout and view.
     grid: vk::Pipeline,
     pool: vk::DescriptorPool,
@@ -542,6 +587,9 @@ impl MeshPipeline {
             pipelines: [vk::Pipeline::null(); 3],
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
+            clouds: None,
+            sky: vk::Pipeline::null(),
+            usual_sky: Sky::of(&Lighting::default()),
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
@@ -560,7 +608,11 @@ impl MeshPipeline {
         let shadows = ShadowMap::new(gpu)?;
         let (shadow_view, shadow_sampler) = (shadows.view, shadows.sampler);
         mesh.shadows = Some(shadows);
-        // The view, then the shadow pictures and what reads them.
+        let clouds = CloudVolume::new(gpu)?;
+        let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
+        mesh.clouds = Some(clouds);
+        // The view, then the shadow pictures and what reads them, then the
+        // block the clouds are shaped from and what reads that.
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -577,6 +629,16 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(4)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -584,9 +646,15 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
+            // Each frame's set has one view, and two pictures with a reader each.
+            let each = if kind == vk::DescriptorType::UNIFORM_BUFFER {
+                1
+            } else {
+                2
+            };
             vk::DescriptorPoolSize::default()
                 .ty(kind)
-                .descriptor_count(count)
+                .descriptor_count(count * each)
         });
         let ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -644,6 +712,10 @@ impl MeshPipeline {
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
                 let samplers = [vk::DescriptorImageInfo::default().sampler(shadow_sampler)];
+                let volumes = [vk::DescriptorImageInfo::default()
+                    .image_view(cloud_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let volume_samplers = [vk::DescriptorImageInfo::default().sampler(cloud_sampler)];
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
@@ -660,6 +732,16 @@ impl MeshPipeline {
                         .dst_binding(2)
                         .descriptor_type(vk::DescriptorType::SAMPLER)
                         .image_info(&samplers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(3)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&volumes),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(4)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&volume_samplers),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 mesh.views.push((buffer, set));
@@ -854,6 +936,59 @@ impl MeshPipeline {
                 }
             }
         }
+        // The sky: one triangle with no points of its own, drawn only where
+        // nothing else was (where the depth is still the farthest), and
+        // hiding nothing.
+        if failed.is_none() {
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_sky"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_sky"),
+            ];
+            let no_points = vk::PipelineVertexInputStateCreateInfo::default();
+            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::EQUAL);
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA); 2];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                .color_attachment_formats(&formats)
+                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&no_points)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&depth)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.sky = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
         // SAFETY: the module is only needed while pipelines are being created.
         unsafe { device.destroy_shader_module(module, None) };
         if let Some(code) = failed {
@@ -888,9 +1023,11 @@ impl MeshPipeline {
         frame: usize,
         target: &SceneTarget,
         view: &View,
-        meshes: Option<&Meshes>,
-        grid: Option<[f32; 3]>,
+        contents: Contents<'_>,
     ) -> Result<(), RenderError> {
+        let Contents { meshes, sky, grid } = contents;
+        // The grid is laid out round the eye.
+        let grid = grid.then_some(view.eye);
         let device = self.gpu.device();
         let Some((view_buffer, view_set)) = self.views.get(frame % self.views.len().max(1)) else {
             return Ok(());
@@ -906,9 +1043,10 @@ impl MeshPipeline {
             // which are this pipeline's own.
             unsafe { self.record_shadows(commands, meshes, cascades) };
         }
+        let sky = sky.then(|| meshes.map_or(&self.usual_sky, |meshes| &meshes.sky));
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
-        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref())) }?;
+        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky)) }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {
@@ -1040,22 +1178,31 @@ impl MeshPipeline {
                 &[*view_set],
                 &[],
             );
-            if let Some(
-                meshes @ Meshes {
-                    buffers: Some((vertices, indices)),
-                    draws,
-                    ..
-                },
-            ) = meshes
-            {
+            let drawn = meshes.and_then(|meshes| Some((meshes, meshes.buffers.as_ref()?)));
+            if let Some((meshes, (vertices, indices))) = drawn {
                 device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
-                let (solid, see_through) = draws.split_at(meshes.see_through_from.min(draws.len()));
+                let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
                 let mut last = None;
                 for draw in solid {
                     self.draw(commands, meshes, draw, last);
                     last = Some(draw);
                 }
+            }
+            // The sky fills what the solid parts left open, before anything
+            // see-through is mixed over it.
+            if sky.is_some() {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, self.sky);
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_draw(commands, 3, 1, 0, 0);
+            }
+            if let Some((meshes, _)) = drawn {
+                let draws = &meshes.draws;
+                let see_through = &draws[meshes.see_through_from.min(draws.len())..];
+                // The sky changed what is bound, so the first of these sets
+                // everything again.
+                let mut last = None;
                 // Farthest first, so that each is mixed over what is behind it.
                 if let Ok(mut order) = self.order.try_borrow_mut() {
                     order.clear();
@@ -1283,6 +1430,7 @@ impl Drop for MeshPipeline {
             for pipeline in self.pipelines.into_iter().chain(self.shadow_pipelines) {
                 device.destroy_pipeline(pipeline, None);
             }
+            device.destroy_pipeline(self.sky, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
@@ -1466,6 +1614,12 @@ mod tests {
             before: matrix,
             eye: [1.0, 2.0, 3.0],
             sharper: 1.5,
+            rays: [
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [9.0, 10.0, 11.0, 12.0],
+            ],
+            time: 13.0,
             noise: 9.0,
         };
         let lighting = Lighting {
@@ -1474,7 +1628,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting, None);
+        let bytes = view.bytes(&lighting, None, None);
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -1494,7 +1648,7 @@ mod tests {
         // matrix for each.
         assert_eq!(number(&bytes, 68), 0.0, "no shadows");
         let cascades = shadow::cascades([0.0; 3], [0.0, 1.0, 0.0], [[-1.0; 3], [1.0; 3]]);
-        let bytes = view.bytes(&lighting, Some(&cascades));
+        let bytes = view.bytes(&lighting, Some(&cascades), None);
         assert_eq!(number(&bytes, 68), 1.0, "shadows");
         assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
         assert_eq!(number(&bytes, 72), cascades[0].texel);
@@ -1506,7 +1660,24 @@ mod tests {
             1.0,
             "the last number of the last matrix"
         );
-        assert_eq!(bytes.len(), 152 * 4);
+        assert_eq!(bytes.len(), 152 * 4 + SKY_BYTES);
+
+        // Then the sky: the lines of sight, the clouds, and the light the
+        // air and the haze scatter, a row for each height.
+        assert_eq!(number(&bytes, 152), 1.0);
+        assert_eq!(number(&bytes, 163), 12.0);
+        assert_eq!(number(&bytes, 164), 0.0, "no clouds without a sky");
+        assert_eq!(number(&bytes, 165), 13.0, "the time");
+        assert_eq!(number(&bytes, 166), sky::CLOUD_HEIGHT);
+        assert_eq!(number(&bytes, 167), 0.0, "no sky");
+        let above = Sky::of(&lighting);
+        let bytes = view.bytes(&lighting, None, Some(&above));
+        assert_eq!(number(&bytes, 164), sky::CLOUD_COVER);
+        assert_eq!(number(&bytes, 167), 1.0, "a sky");
+        assert_eq!(number(&bytes, 168), above.air[0][0]);
+        assert_eq!(number(&bytes, 260), above.air[23][0]);
+        assert_eq!(number(&bytes, 264), above.haze[0][0]);
+        assert_eq!(number(&bytes, 358), above.haze[23][2]);
     }
 
     #[test]

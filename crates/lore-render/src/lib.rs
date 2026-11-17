@@ -14,6 +14,7 @@
 
 mod buffer;
 mod camera;
+mod clouds;
 mod error;
 mod font;
 mod gpu;
@@ -31,6 +32,7 @@ mod scene;
 #[cfg(test)]
 mod shading;
 mod shadow;
+mod sky;
 mod swapchain;
 mod texture;
 mod tonemap;

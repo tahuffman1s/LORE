@@ -265,8 +265,9 @@ impl Renderer {
     /// file gives, and by the sky. A scene with no sun gets one of the
     /// engine's own, under which a matte surface facing up shows exactly
     /// its material's colour. Everything but a see-through surface casts
-    /// a shadow from the sun, out to 216 metres from the eye. Lamps are
-    /// not drawn yet.
+    /// a shadow from the sun, out to 216 metres from the eye. Behind it
+    /// all is the sky that sun makes, with clouds that drift and shade the
+    /// ground. Lamps are not drawn yet.
     ///
     /// A picture the graphics card cannot take (one that is too large, or
     /// whose size does not match its bytes) is left out with a warning that
@@ -595,6 +596,7 @@ impl Renderer {
                 mesh,
                 Contents {
                     meshes: self.meshes.as_ref(),
+                    sky: true,
                     grid: self.grid,
                 },
                 &self.camera,
