@@ -9,6 +9,7 @@ use lore_assets::Scene;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::bolt::Lightning;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
@@ -350,6 +351,15 @@ impl Renderer {
         self.effects.splash(splash);
     }
 
+    /// Lets a stroke of lightning go from one place to another: a crooked,
+    /// forked bolt made by rule from its `seed`, which comes down, lights
+    /// up, flickers and is gone in two thirds of a second, and lights the
+    /// clouds and the land round it while it lasts. Storms in the sky send
+    /// their own. See [`Lightning`].
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.effects.strike(lightning);
+    }
+
     /// Says that something is in the water during the next frame drawn: a
     /// leg wading, a body swimming. Rings run out from it, and it trails
     /// a wake as it moves. Call it every frame for as long as it is there.
@@ -574,6 +584,7 @@ impl Renderer {
             (now - last).as_secs_f32().min(LONGEST_FRAME_SECONDS)
         });
         self.last_frame = Some(now);
+        self.effects.storms(view.seconds(), self.camera.position);
         // What flies moves on by as long as the last frame took.
         self.effects.step(
             seconds,
@@ -634,6 +645,7 @@ impl Renderer {
                     grid: self.grid,
                     stirs: self.effects.stirs(),
                     bits: self.effects.bytes(),
+                    flashes: self.effects.flashes(),
                 },
                 &self.camera,
                 seconds,

@@ -1,5 +1,5 @@
 // What flies when water is disturbed: drops, spray and bubbles
-// (`effects.rs`). Each is a small square that faces the eye, shaded as
+// (`effects.rs`); and lightning, a stretch at a time (`bolt.rs`). Each is a small square that faces the eye, shaded as
 // what it is. Part of `mesh.wgsl`, which includes it.
 
 struct Bit {
@@ -39,6 +39,28 @@ fn vertex_bit(
     // than a pixel and a bit; it is drawn fainter instead.
     let size = vec2<f32>(textureDimensions(behind_colour));
     let pixel = away * 2.0 * length(view.sky_rays[2].xyz) / size.y;
+    if kind > 2.5 {
+        // A stretch of lightning: `place` is one end of it and `moving`
+        // reaches to the other. It is drawn as a strip along it that
+        // faces the eye, many times wider than the channel, for the glow
+        // round it; and the channel is never thinner than can be seen.
+        let middle = place.xyz + moving.xyz * 0.5;
+        let long = length(moving.xyz);
+        let along = moving.xyz / max(long, 0.0001);
+        let beside = normalize(cross(along, middle - view.eye.xyz) + vec3<f32>(0.000001));
+        let there = max(dot(middle - view.eye.xyz, forward), 0.01);
+        let core = max(place.w * 0.5, there * 2.0 * length(view.sky_rays[2].xyz) / size.y * 0.6);
+        var strip: Bit;
+        strip.position = view.clip_from_world * vec4<f32>(
+            middle + beside * (corner.x * core * 7.0) + along * (corner.y * (long * 0.5 + core)), 1.0,
+        );
+        strip.across = corner;
+        strip.world = middle;
+        strip.about = vec3<f32>(kind, left, 1.0 / 7.0);
+        strip.right = beside;
+        strip.up = along;
+        return strip;
+    }
     var half = vec2<f32>(place.w * 0.5);
     if kind < 0.5 {
         // A drop is seen as the streak it makes while the eye takes it
@@ -71,6 +93,24 @@ fn vertex_bit(
 fn fragment_bit(bit: Bit) -> Mixed {
     let kind = bit.about.x;
     let left = bit.about.y;
+    if kind > 2.5 {
+        // Lightning: a white-hot channel with a glow round it, blue-white
+        // as anything so hot is, that the air between dims.
+        let from_middle = abs(bit.across.x) / bit.about.z;
+        let glow = pow(max(1.0 - abs(bit.across.x), 0.0), 3.0) * 0.22;
+        // The air between scatters its blue away, as it does the low
+        // sun's: far lightning is yellow, and orange at the horizon.
+        let far = length(bit.world - view.eye.xyz);
+        let tint = exp(-vec3<f32>(0.0, 0.0000078, 0.0000273) * far);
+        var strip: Mixed;
+        strip.colour = vec4<f32>(
+            flash_light() * tint * 40.0 * (0.25 + 0.75 * left),
+            clamp((exp(-from_middle * from_middle) + glow) * min(left * 5.0, 1.0), 0.0, 1.0)
+                * exp(-far / 60000.0),
+        );
+        strip.motion = vec4<f32>(0.0);
+        return strip;
+    }
     let out = length(bit.across);
     if out >= 1.0 {
         discard;

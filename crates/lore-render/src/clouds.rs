@@ -130,6 +130,42 @@ pub(crate) fn noise() -> &'static [u8] {
     })
 }
 
+/// What the shader reads from the block at a place in it, each part of
+/// which runs from 0 to 1 and then starts again: the two numbers there,
+/// smoothed between the nearest points.
+pub(crate) fn read(at: [f32; 3]) -> [f32; 2] {
+    let bytes = noise();
+    let mut corner = [0_usize; 3];
+    let mut share = [0.0_f32; 3];
+    for axis in 0..3 {
+        #[allow(clippy::cast_precision_loss)]
+        let place = (at[axis] - at[axis].floor()) * SIDE as f32 - 0.5;
+        share[axis] = place - place.floor();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let low = (place.floor() as i64).rem_euclid(SIDE as i64) as usize;
+        corner[axis] = low;
+    }
+    let mut read = [0.0; 2];
+    for along in 0..8_usize {
+        let mut weight = 1.0;
+        let mut point = [0_usize; 3];
+        for axis in 0..3 {
+            let far = along >> axis & 1;
+            point[axis] = (corner[axis] + far) % SIDE;
+            weight *= if far == 1 {
+                share[axis]
+            } else {
+                1.0 - share[axis]
+            };
+        }
+        let at = ((point[2] * SIDE + point[1]) * SIDE + point[0]) * 2;
+        for (part, byte) in read.iter_mut().zip(&bytes[at..at + 2]) {
+            *part += weight * f32::from(*byte) / 255.0;
+        }
+    }
+    read
+}
+
 /// The block on the graphics card, and what reads it.
 pub(crate) struct CloudVolume {
     gpu: Arc<Gpu>,

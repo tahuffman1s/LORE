@@ -53,6 +53,9 @@ const HAZE_STOPS: f64 = 4.4e-6;
 pub(crate) const HAZE_ONWARDS: f32 = 0.8;
 /// Where the eye is taken to be: a little above the sea.
 const EYE: f64 = GROUND + 200.0;
+/// How far round a point, in metres, the light scattered there once is
+/// gathered from to be scattered again.
+const AGAIN_WITHIN: f64 = 12_000.0;
 const STEPS: usize = 40;
 const SUN_STEPS: usize = 8;
 
@@ -161,14 +164,19 @@ impl Sky {
                     let reaches = (-(depth[colour] + lost[colour] * step * 0.5)).exp();
                     air[colour] += reaches * lit[colour] * AIR[colour] * thick[0] * step;
                     haze[colour] += reaches * lit[colour] * HAZE * thick[1] * step;
+                    // Light that was scattered more than once comes from
+                    // all round, and there is more of it the more the air
+                    // here scatters: so more of it is blue, and it is what
+                    // keeps the horizon from turning green. It is counted
+                    // with the air's, which is the nearer to even-handed
+                    // of the two. (Each further bounce is the same share
+                    // again, after Hillaire, "A Scalable and Production
+                    // Ready Sky and Atmosphere Rendering Technique", 2020.)
+                    let scatters = AIR[colour] * thick[0] + HAZE * thick[1];
+                    let again = (scatters * AGAIN_WITHIN).min(0.6);
+                    air[colour] += reaches * lit[colour] * scatters * step * again / (1.0 - again);
                     depth[colour] += lost[colour] * step;
                 }
-            }
-            // Light that was scattered more than once comes from all
-            // round and adds about a quarter; it is counted with the air's,
-            // which is the nearer to even-handed of the two.
-            for colour in 0..3 {
-                air[colour] += 0.25 * (air[colour] + haze[colour]);
             }
             #[allow(clippy::cast_possible_truncation)]
             {

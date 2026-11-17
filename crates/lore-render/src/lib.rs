@@ -12,6 +12,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod bolt;
 mod buffer;
 mod camera;
 mod clouds;
@@ -43,6 +44,7 @@ mod view;
 mod water;
 mod waves;
 
+pub use bolt::Lightning;
 pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};

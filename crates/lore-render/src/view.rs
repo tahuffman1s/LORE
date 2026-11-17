@@ -52,6 +52,11 @@ fn sharper(render: u32, output: u32) -> f32 {
 }
 
 impl SceneView {
+    /// How long this view has been drawn for, in seconds: the clouds' clock.
+    pub(crate) fn seconds(&self) -> f64 {
+        self.seconds
+    }
+
     /// Makes a view whose finished picture is `output` pixels.
     ///
     /// If `upscaling` cannot be had on this graphics card, the reason is

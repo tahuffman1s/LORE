@@ -13,6 +13,8 @@
 //! None of this is part of the game's own reckoning: like sound, it is how
 //! what happened is shown, worked out afresh on each computer.
 
+use crate::bolt::{Bolt, Lightning};
+use crate::{clouds, sky};
 use lore_assets::Water;
 
 use crate::water::{MOST_STIRS, Stir};
@@ -102,6 +104,11 @@ pub(crate) struct Effects {
     bytes: Vec<u8>,
     /// Where the dice are.
     dice: u32,
+    /// The strokes of lightning there can be at once.
+    bolts: [Bolt; 2],
+    /// When, by the clouds' clock, the sky is next looked over for a
+    /// storm to strike from.
+    looks_next: f64,
 }
 
 impl Default for Effects {
@@ -121,6 +128,8 @@ impl Effects {
             asked: Vec::with_capacity(MOST_STIRS),
             bytes: Vec::with_capacity(MOST_BITS * BIT_BYTES),
             dice: 0x2545_F491,
+            bolts: [Bolt::new(), Bolt::new()],
+            looks_next: 1.0,
         }
     }
 
@@ -132,6 +141,9 @@ impl Effects {
         self.stirs.clear();
         self.asked.clear();
         self.bytes.clear();
+        for bolt in &mut self.bolts {
+            bolt.spend();
+        }
     }
 
     /// A number from 0 to 1, different each time.
@@ -348,6 +360,9 @@ impl Effects {
         self.stirs.append(&mut self.asked);
         if seconds.is_finite() && seconds > 0.0 {
             self.moved_on(seconds.min(0.05), water);
+            for bolt in &mut self.bolts {
+                bolt.step(seconds.min(0.05));
+            }
         }
         self.pack();
     }
@@ -457,6 +472,102 @@ impl Effects {
         }
     }
 
+    /// The flash of lightning to make the next one of: the older of the
+    /// two there can be, if both are still to be seen.
+    fn free_bolt(&mut self) -> &mut Bolt {
+        let [one, other] = &mut self.bolts;
+        if !one.live() || (other.live() && one.age() >= other.age()) {
+            one
+        } else {
+            other
+        }
+    }
+
+    /// Lets a flash of lightning go.
+    pub(crate) fn strike(&mut self, lightning: Lightning) {
+        self.free_bolt().strike(lightning);
+    }
+
+    /// Where the light of each stroke comes from, and how bright it is
+    /// now, from 0 to 1.
+    pub(crate) fn flashes(&self) -> [[f32; 4]; 2] {
+        [self.bolts[0].flash(), self.bolts[1].flash()]
+    }
+
+    /// Lets lightning strike where the sky has a storm: every second or
+    /// so a few places within thirty kilometres of `eye` are looked at,
+    /// and the first with a thunder cloud over it is struck. `time` is how
+    /// long the clouds have been drifting, in seconds. Most flashes stay
+    /// in the cloud; one in four comes to the ground, and now and then one
+    /// runs along under the cloud.
+    pub(crate) fn storms(&mut self, time: f64, eye: [f32; 3]) {
+        if time < self.looks_next {
+            // The clock was put back: a new level.
+            if time + 5.0 < self.looks_next {
+                self.looks_next = time + 1.0;
+            }
+            return;
+        }
+        self.looks_next = time + f64::from(self.between(0.4, 1.2));
+        let [along_x, along_z, speed] = sky::WIND;
+        // As the shader carries the clouds: f32 holds all of it they need.
+        #[allow(clippy::cast_possible_truncation)]
+        let carried = speed * 2.4 * time as f32;
+        for _ in 0..4 {
+            let off = [
+                self.between(-30_000.0, 30_000.0),
+                self.between(-30_000.0, 30_000.0),
+            ];
+            if off[0] * off[0] + off[1] * off[1] < 300.0 * 300.0 {
+                continue;
+            }
+            let spot = [eye[0] + off[0], eye[2] + off[1]];
+            // The weather there, as `weather_over` in the shader reads it.
+            let [place, kind] = clouds::read([
+                (spot[0] - along_x * carried) / 53_000.0,
+                (spot[1] - along_z * carried) / 53_000.0,
+                0.37,
+            ]);
+            let step = |low: f32, high: f32, value: f32| {
+                let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+                share * share * (3.0 - 2.0 * share)
+            };
+            if step(0.55, 0.69, place) * step(0.38, 0.6, kind) <= 0.5 {
+                continue;
+            }
+            let base = sky::CLOUD_HEIGHT;
+            let seed = self.dice;
+            // Three flashes in four stay inside the cloud, and only light
+            // it up.
+            let kind = self.dealt();
+            if kind < 0.7 {
+                let place = [spot[0], base + self.between(1200.0, 3500.0), spot[1]];
+                self.free_bolt().glimmer(place, seed);
+                return;
+            }
+            let from = [spot[0], base + 100.0, spot[1]];
+            let to = if kind < 0.95 {
+                // A little under where levels are built, so that it meets
+                // the ground wherever the ground is.
+                [
+                    spot[0] + self.between(-0.35, 0.35) * base,
+                    -20.0,
+                    spot[1] + self.between(-0.35, 0.35) * base,
+                ]
+            } else {
+                let turn = self.between(0.0, std::f32::consts::TAU);
+                let long = self.between(2000.0, 6000.0);
+                [
+                    spot[0] + turn.cos() * long,
+                    base + self.between(-150.0, 80.0),
+                    spot[1] + turn.sin() * long,
+                ]
+            };
+            self.strike(Lightning { from, to, seed });
+            return;
+        }
+    }
+
     /// What stirs the water in the frame being drawn.
     pub(crate) fn stirs(&self) -> &[Stir] {
         &self.stirs
@@ -500,6 +611,9 @@ impl Effects {
             ];
             self.bytes
                 .extend(numbers.iter().flat_map(|number| number.to_ne_bytes()));
+        }
+        for bolt in &self.bolts {
+            bolt.pack(&mut self.bytes, MOST_BITS * BIT_BYTES);
         }
     }
 }

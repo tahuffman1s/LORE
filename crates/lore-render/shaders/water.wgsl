@@ -572,7 +572,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
             let upward = normalize(vec3<f32>(through.x, max(through.y, 0.02), through.z));
             out = sky_colour(upward);
             if view.clouds.x > 0.0 {
-                let height = view.clouds.z + CLOUD_DEPTH * 0.35;
+                let height = view.clouds.z + CLOUD_MIDDLE;
                 let over = corner.world + upward * ((height - corner.world.y) / max(upward.y, 0.06));
                 let white = view.sun.rgb / PI * 0.9 + view.sky.rgb;
                 out = mix(out, white, smoothstep(0.0, 0.5, cloud(over, false)) * 0.7);
@@ -608,7 +608,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     bounced = normalize(bounced);
     var mirrored = sky_colour(bounced);
     if view.clouds.x > 0.0 {
-        let height = view.clouds.z + CLOUD_DEPTH * 0.35;
+        let height = view.clouds.z + CLOUD_MIDDLE;
         let over = corner.world + bounced * ((height - corner.world.y) / max(bounced.y, 0.06));
         let white = view.sun.rgb / PI * 0.9 + view.sky.rgb;
         mirrored = mix(mirrored, white, smoothstep(0.0, 0.5, cloud(over, false)) * 0.7);

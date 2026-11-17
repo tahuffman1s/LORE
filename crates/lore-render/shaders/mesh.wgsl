@@ -82,6 +82,9 @@ struct View {
     ripples: vec4<f32>,
     // The eye's own: how near to it the nearest thing drawn can be.
     lens: vec4<f32>,
+    // Lightning: where the light of each stroke there can be comes from,
+    // and how bright it is now, from 0 to 1 (`bolt.rs`).
+    flashes: array<vec4<f32>, 2>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -353,7 +356,7 @@ fn mirrored_share(mirror: vec3<f32>, roughness: f32, facing: f32) -> vec3<f32> {
 
 const SKY_HEIGHTS: f32 = 24.0;
 // How many steps a line of sight takes through the clouds.
-const CLOUD_STEPS: i32 = 22;
+const CLOUD_STEPS: i32 = 64;
 // How strongly haze sends light onwards, as in `sky.rs`.
 const HAZE_ONWARDS: f32 = 0.8;
 
@@ -410,46 +413,162 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     }
     let hidden = 1.0 - exp(-max(crossed, 0.0));
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
-    return mix(colour, sky_colour(low), hidden);
+    return struck(mix(colour, sky_colour(low), hidden), world);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
-// height in `view.clouds.z`.
-const CLOUD_DEPTH: f32 = 1300.0;
+// height in `view.clouds.z`: fair-weather clouds fill the bottom of it and
+// only a storm reaches the top.
+const CLOUD_DEPTH: f32 = 6000.0;
+// How far above their base every kind of cloud is at its fullest: where
+// to ask whether there is a cloud over a place.
+const CLOUD_MIDDLE: f32 = 350.0;
+// How much of the light crossing it a metre of full cloud stops.
+const CLOUD_STOPS: f32 = 0.018;
+// How far off clouds are still drawn, in metres: beyond, the air between
+// has hidden them.
+const CLOUD_REACH: f32 = 80000.0;
+// How far above the top of that layer the high streaks of ice are
+// (cirrus), and how deep their own layer is.
+const HIGH_CLOUD: vec2<f32> = vec2<f32>(2000.0, 500.0);
 
-// How thick the cloud is at a place in the world, from 0 for clear air.
-// `fine` adds the small shapes that eat into a cloud's edges: left out
-// where they would not be seen, as when working out a cloud's own shade.
-fn cloud(place: vec3<f32>, fine: bool) -> f32 {
+// How much of the light that drops of water or haze scatter goes off at an
+// angle whose cosine is `to_sun` from the way it came, against what would
+// if it went evenly every way. `onwards` runs from -1, all of it straight
+// back, to 1, all of it straight on (Henyey and Greenstein's shape).
+fn sent_towards(onwards: f32, to_sun: f32) -> f32 {
+    return (1.0 - onwards * onwards)
+        / pow(1.0 + onwards * onwards - 2.0 * onwards * to_sun, 1.5);
+}
+
+// The weather over a place (given as where it was before the wind carried
+// it): how much of the sky is cloud there, how far up the layer its clouds
+// reach, and how much of a storm it is, each from 0 to 1.
+//
+// The block the clouds are shaped from is read as a very large flat map,
+// so that weather comes in banks tens of kilometres across. Where the map
+// is low the cloud is a flat sheet (stratus), in the middle it is heaps
+// (cumulus), and where both its numbers are high it is a thunderstorm
+// (cumulonimbus).
+fn weather_over(carried: vec2<f32>) -> vec3<f32> {
+    let map = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(carried / 53000.0, 0.37), 0.0,
+    ).rg;
+    let storm = smoothstep(0.55, 0.69, map.r) * smoothstep(0.38, 0.6, map.g);
+    let sheet = 1.0 - smoothstep(0.2, 0.38, map.g);
+    let cover = view.clouds.x * (clamp(1.0 + (map.r - 0.45) * 2.4, 0.0, 2.0) + 0.5 * sheet);
+    let heaped = 0.2 + 0.25 * smoothstep(0.38, 0.7, map.g);
+    return vec3<f32>(
+        mix(min(cover, 1.0), 1.0, storm * 0.85),
+        mix(mix(heaped, 0.12, sheet), 1.0, storm),
+        storm,
+    );
+}
+
+// How thick the cloud is at a place in the world, from 0 for clear air,
+// and how much of a storm it is part of. `fine` adds the small shapes that
+// eat into a cloud's edges: left out where they would not be seen, as when
+// working out a cloud's own shade.
+//
+// The way of the big studios' cloud systems (Schneider, "The Real-time
+// Volumetric Cloudscapes of Horizon Zero Dawn", 2015 and 2017): a map of
+// the weather says how much cloud each part of the sky has, of what kind
+// and how tall, a soft heaped noise is cut off at that much, flat
+// underneath and rounded on top, and finer noise eats the edges into wisps
+// and billows.
+fn cloud_kind(place: vec3<f32>, fine: bool) -> vec2<f32> {
     let up = (place.y - view.clouds.z) / CLOUD_DEPTH;
     if up <= 0.0 || up >= 1.0 {
-        return 0.0;
+        return vec2<f32>(0.0);
     }
-    // The wind carries the clouds along, in metres a second.
     let seconds = view.clouds.y;
-    // The wind aloft is the same wind, and stronger.
     let aloft = vec3<f32>(view.wind.x, 0.0, view.wind.y) * view.wind.z * 2.4;
     let carried = place - aloft * seconds;
-    let shape = textureSampleLevel(
-        cloud_volume, cloud_sampler, carried / vec3<f32>(9000.0, 3200.0, 9000.0), 0.0,
-    ).r;
+    let weather = weather_over(carried.xz);
     // Flat underneath, heaped on top: the higher up, the less of the sky
     // is cloud.
-    let room = view.clouds.x * smoothstep(0.0, 0.1, up) * (1.0 - smoothstep(0.25, 1.0, up) * 0.9);
-    var thick = clamp((shape - (1.0 - room)) / max(room, 0.001), 0.0, 1.0);
+    let heap = 1.0 - smoothstep(0.3 * weather.y, weather.y, up) * 0.95;
+    // A storm is a tower as wide at the top as at the bottom, where it
+    // meets air it cannot rise through and spreads out into an anvil.
+    let tower = (0.72 + 0.28 * smoothstep(0.7, 0.86, up)) * (1.0 - smoothstep(0.93, 1.0, up));
+    let room = weather.x * smoothstep(0.0, 0.03, up) * mix(heap, tower, weather.z);
+    if room <= 0.01 {
+        return vec2<f32>(0.0);
+    }
+    let shape = textureSampleLevel(
+        cloud_volume, cloud_sampler, carried / vec3<f32>(8000.0, 5000.0, 8000.0), 0.0,
+    ).r;
+    var thick = clamp((shape - (1.0 - room)) / room, 0.0, 1.0);
     if fine && thick > 0.0 {
         // The small shapes drift faster and sink, so that clouds change
         // as they go.
-        let small = textureSampleLevel(
-            cloud_volume,
-            cloud_sampler,
-            (carried - (aloft * 0.5 + vec3<f32>(0.0, 2.0, 0.0)) * seconds) / 1700.0,
-            0.0,
-        ).g;
-        let eaten = (1.0 - small) * 0.42;
+        let drifted = carried - (aloft * 0.5 + vec3<f32>(0.0, 2.0, 0.0)) * seconds;
+        let small = textureSampleLevel(cloud_volume, cloud_sampler, drifted / 1900.0, 0.0).g * 0.65
+            + textureSampleLevel(cloud_volume, cloud_sampler, drifted / 590.0 + 0.31, 0.0).g * 0.35;
+        // At a cloud's base they tear it into wisps; higher up they round
+        // it into billows.
+        let eaten = mix(small, 1.0 - small, smoothstep(0.0, 0.1, up)) * 0.45;
         thick = clamp((thick - eaten) / (1.0 - eaten), 0.0, 1.0);
     }
-    return thick;
+    return vec2<f32>(thick, weather.z);
+}
+
+// How thick the cloud is at a place in the world, of whatever kind.
+fn cloud(place: vec3<f32>, fine: bool) -> f32 {
+    return cloud_kind(place, fine).x;
+}
+
+// How thick the high cloud is at a place in its own layer: ice drawn out
+// along the wind into streaks and fibres, in patches a long way across.
+fn high_cloud(place: vec3<f32>) -> f32 {
+    let wind = vec2<f32>(view.wind.x, view.wind.y);
+    let carried = place.xz - wind * view.wind.z * 4.0 * view.clouds.y;
+    let along = dot(carried, wind);
+    let across = dot(carried, vec2<f32>(-wind.y, wind.x));
+    let up = (place.y - view.clouds.z - CLOUD_DEPTH - HIGH_CLOUD.x) / HIGH_CLOUD.y;
+    let patches = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(carried / 97000.0, 0.81), 0.0,
+    ).r;
+    let cover = min(view.clouds.x * 2.0, 1.0) * smoothstep(0.46, 0.7, patches);
+    if cover <= 0.0 {
+        return 0.0;
+    }
+    let streak = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(along / 42000.0, up * 0.2, across / 9000.0), 0.0,
+    ).r;
+    let fibre = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(along / 6000.0, 0.5 + up * 0.3, across / 2100.0), 0.0,
+    ).g;
+    let thick = clamp((streak * 0.55 + fibre * 0.45 - (1.0 - 0.72 * cover)) * 3.0, 0.0, 1.0);
+    // Thickest in the middle of its layer.
+    return thick * (1.0 - abs(2.0 * up - 1.0));
+}
+
+// The colour of lightning's light, and how bright it is beside the day's.
+fn flash_light() -> vec3<f32> {
+    return vec3<f32>(0.72, 0.8, 1.0)
+        * max(dot(view.sun.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)) * 3.0, 1.0);
+}
+
+// `colour`, a surface at `world`, as lightning lights it: for kilometres
+// round a stroke the land is lit as by a lamp in the cloud. The bolts
+// themselves are drawn as what they are (`bolt.rs`, `particles.wgsl`).
+fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    var seen = colour;
+    for (var which = 0; which < 2; which++) {
+        let flash = view.flashes[which];
+        let off = world - flash.xyz;
+        seen += colour * vec3<f32>(0.8, 0.86, 1.0) * flash.w * 1.2
+            / (1.0 + dot(off, off) / 4000000.0);
+    }
+    return seen;
+}
+
+// How much water there is where `cloud` says the cloud is so thick: a
+// cloud is as full a little way in from its edge as it is in its middle,
+// which is what gives it an edge to see.
+fn cloud_water(thick: f32) -> f32 {
+    return min(thick * 4.0, 1.0);
 }
 
 // How much of the sun gets through the clouds to a point of the world.
@@ -460,7 +579,7 @@ fn under_clouds(world: vec3<f32>) -> f32 {
     let sun = view.towards_sun.xyz;
     // Where the line from the point to the sun passes through the middle
     // of the clouds.
-    let height = view.clouds.z + CLOUD_DEPTH * 0.3;
+    let height = view.clouds.z + CLOUD_MIDDLE;
     let over = world + sun * ((height - world.y) / max(sun.y, 0.08));
     return mix(1.0, 0.25, smoothstep(0.0, 0.45, cloud(over, false)));
 }
@@ -874,82 +993,153 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     }
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
-    // The sun itself: a small bright disc with a soft rim.
-    let disc = smoothstep(0.99994, 0.99998, to_sun);
+    // The sun itself, as wide as it is seen from the Earth (just over half
+    // a degree): dimmer and redder towards its rim, where the light leaves
+    // its surface aslant, and dimmed and reddened by the air its light has
+    // come through, which is many times as much when it stands low (Kasten
+    // and Young's count of it).
+    var disc = vec3<f32>(0.0);
+    let beside = cross(direction, sun);
+    let out = dot(beside, beside) / (0.00465 * 0.00465);
+    if to_sun > 0.0 && out < 1.0 {
+        let rise = max(direction.y, 0.0);
+        let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
+        disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
+            * exp(-vec3<f32>(0.066, 0.139, 0.285) * (air - 1.0));
+    }
 
     // The clouds: the line of sight is walked through the layer they form
     // in, and at each step the light the cloud there sends to the eye is
     // added, dimmed by the cloud already passed.
     var clear = 1.0;
+    // How much gets through the high cloud above them.
+    var veil = 1.0;
     // An eye that is in the clouds, or over them, starts where it is; from
     // above, looking down on them is not drawn yet.
     let eye_height = view.eye.y;
-    let enters = max(to_clouds(direction.y, view.clouds.z - eye_height), 0.0);
-    let leaves = to_clouds(direction.y, view.clouds.z + CLOUD_DEPTH - eye_height);
-    if view.clouds.x > 0.0 && direction.y > 0.004 && leaves > enters {
-        let stride = (leaves - enters) / f32(CLOUD_STEPS);
+    if view.clouds.x > 0.0 && direction.y > 0.004 {
         // Each pixel starts a different part of a step in, and a different
         // one each frame; the upscaler makes smooth cloud of it.
         let start = scattered(beyond.position.xy + view.shadows.w * vec2<f32>(2.71828, 7.38906));
-        // Haze sends most light onwards, and a little back.
-        let g = 0.75;
-        let onwards = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * to_sun, 1.5);
-        let back = (1.0 - 0.09) / pow(1.0 + 0.09 + 0.6 * to_sun, 1.5);
-        let sent = mix(back, onwards, 0.55) * 0.5;
+        // A cloud's drops send most of the sun's light onwards and a little
+        // back. Light that has bounced among them many times is what makes
+        // a cloud white: each further bounce is worked out as the same
+        // light again, half as strong, less one-way, and getting further
+        // through the cloud (Wrenninge's way, as Hillaire used it for
+        // Frostbite's skies in 2016).
+        let both = vec2<f32>(-0.3, 0.8);
+        let sent = vec4<f32>(
+            mix(sent_towards(both.x, to_sun), sent_towards(both.y, to_sun), 0.5),
+            mix(sent_towards(both.x * 0.5, to_sun), sent_towards(both.y * 0.5, to_sun), 0.5) * 0.5,
+            mix(sent_towards(both.x * 0.25, to_sun), sent_towards(both.y * 0.25, to_sun), 0.5) * 0.25,
+            0.125,
+        );
+        let gets_through = vec4<f32>(1.0, 0.35, 0.12, 0.04);
+        // What lights a cloud from all round: the light the level says the
+        // sky gives, in the blue of the sky overhead as much as in its own
+        // colour.
+        let overhead = sky_colour(vec3<f32>(0.0, 1.0, 0.0));
+        let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let around = mix(
+            view.sky.rgb, overhead * dot(view.sky.rgb, grey) / max(dot(overhead, grey), 0.00001), 0.5,
+        );
+        // Far clouds fade into the air in front of them.
+        let haze = sky_colour(vec3<f32>(direction.x, 0.02, direction.z));
+        let earth = 6360000.0 + eye_height;
+
+        // The high cloud first, since it is behind the rest: thin enough
+        // that three looks through it are enough, and that it does not
+        // shade itself.
+        let under = view.clouds.z + CLOUD_DEPTH + HIGH_CLOUD.x - eye_height;
+        let first = max(to_clouds(direction.y, under), 0.0);
+        let last = min(to_clouds(direction.y, under + HIGH_CLOUD.y), CLOUD_REACH * 1.5);
+        if last > first {
+            let stride = (last - first) / 3.0;
+            var crossed = 0.0;
+            for (var number = 0; number < 3; number++) {
+                let away = first + (f32(number) + start) * stride;
+                let height = sqrt(earth * earth + away * away + 2.0 * earth * away * direction.y)
+                    - 6360000.0;
+                crossed += high_cloud(
+                    vec3<f32>(view.eye.x + direction.x * away, height, view.eye.z + direction.z * away),
+                ) * stride;
+            }
+            veil = exp(-crossed * 0.0016 * (1.0 - smoothstep(0.6, 1.0, first / (CLOUD_REACH * 1.5))));
+            let lit = view.sun.rgb / PI * (0.45 + 0.35 * sent.x) + around;
+            colour = colour * veil
+                + mix(lit, haze, 1.0 - exp(-first / 45000.0)) * (1.0 - veil);
+        }
+
+        let enters = max(to_clouds(direction.y, view.clouds.z - eye_height), 0.0);
+        let leaves = min(to_clouds(direction.y, view.clouds.z + CLOUD_DEPTH - eye_height), CLOUD_REACH);
+        let stride = (leaves - enters) / f32(CLOUD_STEPS);
         var light = vec3<f32>(0.0);
         var distance = 0.0;
         var weight = 0.0;
-        for (var number = 0; number < CLOUD_STEPS; number++) {
+        for (var number = 0; number < CLOUD_STEPS && leaves > enters; number++) {
             let away = enters + (f32(number) + start) * stride;
             // How high this point of the line is over a round Earth.
-            let earth = 6360000.0 + eye_height;
             let height = sqrt(earth * earth + away * away + 2.0 * earth * away * direction.y)
                 - 6360000.0;
             let place = vec3<f32>(view.eye.x + direction.x * away, height, view.eye.z + direction.z * away);
-            let thick = cloud(place, true);
+            let found = cloud_kind(place, true);
+            // The furthest clouds thin away instead of ending at a line.
+            let thick = cloud_water(found.x)
+                * (1.0 - smoothstep(0.75 * CLOUD_REACH, CLOUD_REACH, away));
             if thick <= 0.0 {
                 continue;
             }
             // How much cloud the sun's light crossed to get here: a few
             // longer and longer steps towards the sun.
             var crossed = 0.0;
-            var reach = 70.0;
+            var reach = 60.0;
             var along = 0.0;
-            for (var look = 0; look < 4; look++) {
+            for (var look = 0; look < 5; look++) {
+                crossed += cloud(place + sun * (along + reach * 0.5), false) * reach;
                 along += reach;
-                crossed += cloud(place + sun * along, false) * reach;
-                reach *= 1.9;
+                reach *= 2.1;
             }
+            let depth = crossed * CLOUD_STOPS;
             let up = clamp((height - view.clouds.z) / CLOUD_DEPTH, 0.0, 1.0);
-            // Light is lost on the way in, and a cloud's thin edge has
-            // little to light it up from inside.
-            let reaching = exp(-0.011 * crossed);
-            let within = 1.0 - exp(-thick * 6.0);
-            let from_sun = view.sun.rgb / PI * reaching * (0.35 + 2.6 * sent) * within;
-            // The sky lights it from all round, the base least.
-            let from_sky = view.sky.rgb * (0.45 + 0.75 * up);
-            let stopped = thick * 0.0105;
-            let passes = exp(-stopped * stride);
+            let lit = dot(sent, exp(-depth * gets_through));
+            // A cloud's thin sunward edge has little to light it up from
+            // inside, which is seen from the sun's side and not against it
+            // (Schneider's "powder" look).
+            let hollow = 1.0 - 0.6 * exp(-2.0 * depth - 3.0 * thick) * (0.5 - 0.5 * to_sun);
+            let from_sun = view.sun.rgb / PI * 0.8 * lit * hollow;
+            // The sky lights it from all round, the base least, and the
+            // base of a storm hardly at all.
+            let from_sky = around * (0.35 + 0.75 * min(up * 2.5, 1.0))
+                * (1.0 - 0.85 * found.y * (1.0 - up));
+            var from_flash = vec3<f32>(0.0);
+            if found.y > 0.0 {
+                // Lightning lights the cloud round it from inside.
+                for (var which = 0; which < 2; which++) {
+                    let off = place - view.flashes[which].xyz;
+                    from_flash += flash_light() * view.flashes[which].w * 0.3
+                        / (1.0 + dot(off, off) / 1000000.0);
+                }
+            }
+            // A storm is thicker cloud than fair weather's.
+            let passes = exp(-thick * (1.0 + found.y) * CLOUD_STOPS * stride);
             // What this step adds, given that it dims itself as it goes.
-            light += clear * (from_sun + from_sky) * (1.0 - passes);
+            light += clear * (from_sun + from_sky + from_flash) * (1.0 - passes);
             distance += away * clear * (1.0 - passes);
             weight += clear * (1.0 - passes);
             clear *= passes;
             if clear < 0.02 {
+                clear = 0.0;
                 break;
             }
         }
         if weight > 0.0 {
-            // Far clouds fade into the air in front of them.
-            let faded = 1.0 - exp(-(distance / weight) / 45000.0);
-            let haze = sky_colour(vec3<f32>(direction.x, 0.02, direction.z));
+            let faded = 1.0 - exp(-(distance / weight) / 30000.0);
             light = mix(light, haze * (1.0 - clear), faded);
             colour = colour * clear + light;
         }
     }
-    let covered = 1.0 - clear;
     // The sun shows through thin cloud and not through thick.
-    colour += view.sun.rgb * 24.0 * disc * (1.0 - covered) * smoothstep(-0.01, 0.0, direction.y);
+    colour += view.sun.rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
 
     var pixel: Pixel;
     pixel.colour = vec4<f32>(colour, 1.0);

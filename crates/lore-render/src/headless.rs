@@ -7,6 +7,7 @@ use ash::vk;
 use lore_assets::Scene;
 use lore_ui::DrawList;
 
+use crate::bolt::Lightning;
 use crate::buffer::Buffer;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
@@ -237,6 +238,15 @@ impl Headless {
         self.effects.splash(splash);
     }
 
+    /// Lets a stroke of lightning go from one place to another: a crooked,
+    /// forked bolt made by rule from its `seed`, which comes down, lights
+    /// up, flickers and is gone in two thirds of a second, and lights the
+    /// clouds and the land round it while it lasts. Storms in the sky send
+    /// their own. See [`Lightning`].
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.effects.strike(lightning);
+    }
+
     /// Says that something is in the water during the next frame drawn: a
     /// leg wading, a body swimming. Rings run out from it, and it trails
     /// a wake as it moves. Call it every frame for as long as it is there.
@@ -283,6 +293,7 @@ impl Headless {
         let start = Instant::now();
         // What flies moves on by a frame, unless time is held still.
         let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
+        self.effects.storms(self.view.seconds(), camera.position);
         self.effects
             .step(passed, self.meshes.as_ref().map_or(&[][..], Meshes::waters));
         // SAFETY: every handle belongs to `self.gpu`'s device and is alive;
@@ -309,6 +320,7 @@ impl Headless {
                     grid: self.grid,
                     stirs: self.effects.stirs(),
                     bits: self.effects.bytes(),
+                    flashes: self.effects.flashes(),
                 },
                 camera,
                 FRAME_SECONDS,
