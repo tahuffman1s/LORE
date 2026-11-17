@@ -46,8 +46,8 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
-/// haze's, one for the fog and one for the wind.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1);
+/// haze's, one for the fog, one for the wind and one for whoever walks.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -76,6 +76,9 @@ pub(crate) struct View {
     pub(crate) time: f32,
     /// How many seconds of that have passed since the frame before.
     pub(crate) elapsed: f32,
+    /// How much whoever walks is stirring what they walk through: 0
+    /// standing still, 1 at a run.
+    pub(crate) stir: f32,
     /// A number that differs from frame to frame when the frames are mixed
     /// by the upscaler, which then smooths what is drawn with a pattern
     /// turned by it; 0 when each frame is shown as it is.
@@ -149,7 +152,8 @@ impl View {
                 .chain(&clouds)
                 .chain(scattered.iter().flatten())
                 .chain(&fog)
-                .chain(&wind),
+                .chain(&wind)
+                .chain(&[self.stir, 0.0, 0.0, 0.0]),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -1856,6 +1860,7 @@ mod tests {
             ],
             time: 13.0,
             elapsed: 0.25,
+            stir: 0.5,
             noise: 9.0,
         };
         let lighting = Lighting {
@@ -1924,7 +1929,8 @@ mod tests {
         assert_eq!(number(&bytes, 384), sky::WIND[0], "the wind");
         assert_eq!(number(&bytes, 386), sky::WIND[2]);
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
-        assert_eq!(bytes.len(), 388 * 4);
+        assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
+        assert_eq!(bytes.len(), 392 * 4);
     }
 
     #[test]

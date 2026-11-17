@@ -30,6 +30,10 @@ pub(crate) struct SceneView {
     /// gives the same picture every time: for pictures drawn with no
     /// window, which tests compare.
     pub(crate) still: bool,
+    /// Where the eye was in the last frame, and how much its walking is
+    /// stirring what it walks through, from 0 to 1.
+    eye: Option<[f32; 3]>,
+    stir: f32,
     /// How many sizes larger than usual textures are read; see [`sharper`].
     sharper: f32,
 }
@@ -71,6 +75,8 @@ impl SceneView {
             frame: 0,
             seconds: 0.0,
             still: false,
+            eye: None,
+            stir: 0.0,
         })
     }
 
@@ -139,6 +145,21 @@ impl SceneView {
         let (width, height) = (size.width as f32, size.height as f32);
         let [forward, right, up] = camera.rays(size.width, size.height);
         let (across, upwards) = (2.0 * jitter.0 / width, -2.0 * jitter.1 / height);
+        // How fast the eye is moving over the ground, eased so that rings
+        // die away after it stops and do not jump when it starts.
+        if let Some(was) = self.eye
+            && seconds.is_finite()
+            && seconds > 0.0001
+        {
+            let moved = (camera.position[0] - was[0]).hypot(camera.position[2] - was[2]);
+            // A run is about five metres a second; a cut to somewhere new
+            // is not walking.
+            let speed = if moved < 2.0 { moved / seconds } else { 0.0 };
+            let wanted = (speed / 5.0).clamp(0.0, 1.0);
+            let ease = (seconds * 2.5).clamp(0.0, 1.0);
+            self.stir += (wanted - self.stir) * ease;
+        }
+        self.eye = Some(camera.position);
         let mut elapsed = 0.0;
         if !self.still && seconds.is_finite() {
             elapsed = seconds.clamp(0.0, 1.0);
@@ -162,6 +183,7 @@ impl SceneView {
             #[allow(clippy::cast_possible_truncation)]
             time: self.seconds as f32,
             elapsed,
+            stir: self.stir,
             // Only an upscaler mixes frames; without one a pattern that
             // moved every frame would be seen to crawl.
             #[allow(clippy::cast_precision_loss)]

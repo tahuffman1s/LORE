@@ -642,42 +642,83 @@ def slope_at(x, z):
     return math.hypot(height(x + 1, z) - height(x - 1, z), height(x, z + 1) - height(x, z - 1)) / 2.0
 
 
-def ground(material):
+def ground(kinds):
+    """The ground, as one part for each kind of ground in `kinds`: two
+    kinds of leaf litter in patches, pebbles in the creek's bed, and mossy
+    rock where it is steep. Wet ground by the water is the same ground,
+    darker.
+
+    Each small square of ground is one kind. Where two kinds meet, the
+    squares along the edge are dealt out between them, so the edge is
+    ragged and not a line."""
     across = int(WIDE / STEP) + 1
     half = WIDE / 2
     heights = [
         [height(-half + column * STEP, -half + row * STEP) for column in range(across)]
         for row in range(across)
     ]
-    positions, normals, uvs, colours = (array.array("f") for _ in range(4))
-    indices = array.array("I")
-    for row in range(across):
-        for column in range(across):
-            x, z = -half + column * STEP, -half + row * STEP
-            left = heights[row][max(column - 1, 0)]
-            right = heights[row][min(column + 1, across - 1)]
-            back = heights[max(row - 1, 0)][column]
-            front = heights[min(row + 1, across - 1)][column]
-            nx, ny, nz = left - right, 2.0 * STEP, back - front
-            length = math.sqrt(nx * nx + ny * ny + nz * nz)
-            y = heights[row][column]
-            # Darker and lighter patches of leaf litter, and dark wet earth
-            # by the water.
-            shade = 0.72 + 0.3 * smooth_noise(x / 7.0, z / 7.0, 31)
-            far, which = to_creek(x, z)
-            wet = max(0.0, 1.0 - far / 3.5) * 0.45 + max(0.0, 1.0 - abs(y - WATER) / 1.2) * 0.4
-            shade *= 1.0 - min(wet, 0.55)
-            positions.extend((x, y, z))
-            normals.extend((nx / length, ny / length, nz / length))
-            uvs.extend((x / 2.6, z / 2.6))
-            colours.extend((shade * 0.92, shade, shade * 0.86, 1.0))
-    for row in range(across - 1):
-        for column in range(across - 1):
-            a = row * across + column
-            indices.extend((a, a + across, a + 1, a + 1, a + across, a + across + 1))
-    part = Part(positions, normals, uvs, indices, material)
-    part.colours = colours
-    return part
+
+    def corner(row, column):
+        x, z = -half + column * STEP, -half + row * STEP
+        left = heights[row][max(column - 1, 0)]
+        right = heights[row][min(column + 1, across - 1)]
+        back = heights[max(row - 1, 0)][column]
+        front = heights[min(row + 1, across - 1)][column]
+        nx, ny, nz = left - right, 2.0 * STEP, back - front
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        y = heights[row][column]
+        # Darker and lighter patches, and dark wet earth by the water.
+        shade = 0.74 + 0.3 * smooth_noise(x / 7.0, z / 7.0, 31)
+        far, _ = to_creek(x, z)
+        wet = max(0.0, 1.0 - far / 3.0) * 0.35 + max(0.0, 1.0 - abs(y - WATER) / 1.0) * 0.35
+        shade *= 1.0 - min(wet, 0.5)
+        return (x, y, z), (nx / length, ny / length, nz / length), shade
+
+    def kind_of(row, column):
+        x, z = -half + (column + 0.5) * STEP, -half + (row + 0.5) * STEP
+        around = [heights[row + r][column + c] for r in (0, 1) for c in (0, 1)]
+        # Dealt out along an edge: each square has its own nudge.
+        nudge = hashed(row, column, 77) - 0.5
+        far, _ = to_creek(x, z)
+        if far + nudge * 0.9 < 1.5:
+            return "pebbles"
+        if (max(around) - min(around)) / STEP + nudge * 0.25 > 0.95:
+            return "rock"
+        # Two kinds of leaf litter, in wide patches. They are close enough
+        # in colour that where they meet does not show as an edge: the
+        # engine cannot yet fade one kind of ground into another.
+        patch = rolling(x / 31.0, z / 31.0, seed=51, octaves=3) + nudge * 0.1
+        return "leaves" if patch > 0.0 else "litter"
+
+    parts = []
+    for name, (material, tile) in kinds.items():
+        positions, normals, uvs, colours = (array.array("f") for _ in range(4))
+        indices = array.array("I")
+        numbers = {}
+
+        def number(row, column):
+            at = numbers.get((row, column))
+            if at is None:
+                at = numbers[(row, column)] = len(positions) // 3
+                (x, y, z), normal, shade = corner(row, column)
+                positions.extend((x, y, z))
+                normals.extend(normal)
+                uvs.extend((x / tile, z / tile))
+                colours.extend((shade * 0.94, shade, shade * 0.88, 1.0))
+            return at
+
+        for row in range(across - 1):
+            for column in range(across - 1):
+                if kind_of(row, column) != name:
+                    continue
+                a, b = number(row, column), number(row, column + 1)
+                c, d = number(row + 1, column), number(row + 1, column + 1)
+                indices.extend((a, c, b, b, c, d))
+        if indices:
+            part = Part(positions, normals, uvs, indices, material)
+            part.colours = colours
+            parts.append(part)
+    return parts
 
 
 WATER_LOOK = {
@@ -808,7 +849,7 @@ def fewer_leaves(part, keep, grow):
     return Part(positions, normals, uvs, out, part.material)
 
 
-def tree(name, keep, grow, branches, trunk):
+def tree(name, keep, grow, branches, trunk, size="2k"):
     """A tree as (trunk, branches, leaves): `keep` of its leaves, each
     `grow` times the size, and its wood thinned to about `branches` and
     `trunk` triangles. Kept from one run to the next: it takes a while."""
@@ -817,7 +858,7 @@ def tree(name, keep, grow, branches, trunk):
         with open(kept, "rb") as data:
             return pickle.load(data)
     print(f"{name}: thinning...", file=sys.stderr)
-    parts = [part for _, parts in model(name, "2k") for part in parts]
+    parts = [part for _, parts in model(name, size) for part in parts]
     out = {}
     for part in parts:
         if part.material["cut"]:
@@ -882,18 +923,41 @@ def main():
     sounds()
     level = Jungle()
     print("The ground...", file=sys.stderr)
-    level.put("ground", level.mesh("ground", [ground(texture_set("brown_mud_leaves_01", "2k"))]), (0, 0, 0))
+    # Each kind of ground, and how many metres one copy of its picture covers.
+    level.put("ground", level.mesh("ground", ground({
+        "litter": (texture_set("brown_mud_leaves_01", "2k"), 2.6),
+        "leaves": (texture_set("leaves_forest_ground", "2k"), 2.4),
+        "pebbles": (texture_set("ganges_river_pebbles"), 1.6),
+        "rock": (texture_set("mossy_rock"), 3.0),
+    })), (0, 0, 0))
     level.put("lake", level.mesh("lake", [lake()]), (0, 0, 0), water=True)
     level.put("creek", level.mesh("creek", [creek()]), (0, 0, 0), water=True)
 
-    def pieces(name, most=None):
-        """Each piece of a model as a mesh standing on its own spot."""
+    def pieces(name, most=None, keep=None, without=()):
+        """Each piece of a model as a mesh standing on its own spot: its
+        wood thinned to about `most` triangles, `keep` of its leaves kept
+        (and made larger to fill in), and parts whose material's name ends
+        in one of `without` left out, such as the pot of a pot plant."""
         made = []
         print(f"{name}...", file=sys.stderr)
         for piece, parts in model(name):
+            parts = [part for part in parts if not part.material["name"].endswith(tuple(without) or ("\0",))]
+            if not parts:
+                continue
+            if keep:
+                parts = [
+                    fewer_leaves(part, keep, min(0.9 / math.sqrt(keep), 2.2)) if part.material["cut"] else part
+                    for part in parts
+                ]
             if most:
                 total = max(sum(part.triangles() for part in parts), 1)
-                parts = [thinned(part, max(most * part.triangles() // total, 200)) for part in parts]
+                parts = [
+                    part if part.material["cut"] else thinned(part, max(most * part.triangles() // total, 200))
+                    for part in parts
+                ]
+            parts = [part for part in parts if part.triangles()]
+            if not parts:
+                continue
             xs = [x for part in parts for x in part.positions[0::3]]
             ys = [y for part in parts for y in part.positions[1::3]]
             zs = [z for part in parts for z in part.positions[2::3]]
@@ -947,8 +1011,9 @@ def main():
     # under it. Nothing is made bigger than it is.
     kinds = [
         tree("jacaranda_tree", 0.10, 2.0, 90000, 45000),
-        tree("island_tree_02", 0.10, 2.2, 60000, 30000),
-        tree("island_tree_01", 0.09, 2.2, 60000, 30000),
+        tree("island_tree_02", 0.085, 2.3, 60000, 30000),
+        tree("island_tree_01", 0.08, 2.3, 60000, 30000),
+        tree("tree_small_02", 0.06, 2.6, 50000, 20000, "1k"),
     ]
     tree_meshes = [[level.mesh(f"tree{number}.{part}", [piece]) for part, piece in zip("tbl", parts)] for number, parts in enumerate(kinds)]
     crowns = []
@@ -967,7 +1032,7 @@ def main():
             continue
         if any(math.hypot(x - ox, z - oz) < 3.5 for ox, oz, _, _ in stands):
             continue
-        stands.append((x, z, 1 + random.randrange(2), random.uniform(1.0, 1.7)))
+        stands.append((x, z, 1 + random.randrange(3), random.uniform(1.0, 1.7)))
     for number, (x, z, kind, scale) in enumerate(stands):
         foot = (x, height(x, z) - 0.12, z)
         turn = random.uniform(0, math.tau)
@@ -1014,7 +1079,7 @@ def main():
     thickets = []
     for number in range(10):
         merged = {}
-        for _ in range(26):
+        for _ in range(22):
             parts, middle_of = random.choices(low, weights)[0]
             # The scans are of plants from cooler places, a hand or two
             # high. Their kind grows two or three times that in a jungle,
@@ -1040,16 +1105,16 @@ def main():
         # Laid along the slope it stands on.
         lean_x = math.atan((height(x, z + 1.5) - height(x, z - 1.5)) / 3.0)
         lean_z = -math.atan((height(x + 1.5, z) - height(x - 1.5, z)) / 3.0)
-        if abs(lean_x) > 0.75 or abs(lean_z) > 0.75:
-            continue
+        # On a slope too steep to stand on they still grow.
+        lean_x, lean_z = max(min(lean_x, 1.0), -1.0), max(min(lean_z, 1.0), -1.0)
         level.put(
             f"thicket.{placed_thickets:03}", random.choice(thickets), (x, height(x, z), z),
             0.0, 1.0, tilt=(lean_x, lean_z), solid=False, wind=1.0,
         )
         placed_thickets += 1
 
-    def cover(names, count, inner, outer, sizes, wind=1.0, centre=middle, tilt=0.0, most=None, **wanted):
-        kinds = [piece for name in names for piece in pieces(name, most)]
+    def cover(names, count, inner, outer, sizes, wind=1.0, centre=middle, tilt=0.0, most=None, keep=None, without=(), **wanted):
+        kinds = [piece for name in names for piece in pieces(name, most, keep, without)]
         for number, (x, z) in enumerate(scatter(count, inner, outer, centre=centre, **wanted)):
             mesh, _ = random.choice(kinds)
             level.put(
@@ -1061,7 +1126,17 @@ def main():
 
     # Shrubs as tall as a person between the trees, and single plants
     # where thickets do not fit: the creek's banks and the shore.
-    cover(["shrub_02"], 560, 0, reach * 1.35, (0.9, 1.6))
+    cover(["shrub_02"], 420, 0, reach * 1.35, (0.9, 1.6))
+    # Bushes taller than a person, of three kinds, as they were scanned.
+    cover(["searsia_lucida"], 150, 0, reach * 1.35, (0.9, 1.4), wind=0.7, keep=0.5, most=9000)
+    cover(["othonna_cerarioides"], 220, 0, reach * 1.35, (0.9, 1.5), wind=0.8)
+    cover(["searsia_burchellii"], 46, 0, reach * 1.3, (0.9, 1.3), wind=0.5, keep=0.3, most=14000)
+    # Broad-leaved plants without their pots.
+    cover(["potted_plant_01", "potted_plant_02"], 200, 0, reach * 1.3, (1.0, 1.9), keep=0.45, without=("_pot",))
+    # Low, wide ground cover, and flowers for colour where light gets in.
+    cover(["shrub_01"], 60, 0, reach * 1.3, (0.9, 1.4), keep=0.3)
+    cover(["flower_ursinia", "dandelion_01"], 420, 0, reach * 1.3, (1.2, 2.2), creek_gap=1.8, water_gap=0.2)
+    cover(["flower_heliophila"], 40, 0, reach * 1.2, (0.9, 1.4), keep=0.4)
     cover(["fern_02"], 700, 0, reach * 1.3, (1.8, 3.2), creek_gap=1.9, water_gap=0.1)
     cover(["calathea_orbifolia_01"], 300, 0, reach * 1.3, (1.8, 3.0), creek_gap=1.9, water_gap=0.15)
     cover(["anthurium_botany_01"], 120, 0, reach * 1.2, (1.8, 3.0), creek_gap=2.0)

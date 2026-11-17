@@ -60,6 +60,9 @@ struct View {
     // The wind: the way it blows along x and z, how fast in metres a
     // second, and how many seconds ago the last frame was drawn.
     wind: vec4<f32>,
+    // Whoever walks: in the first number, how much they are stirring what
+    // they walk through, from 0 standing still to 1 at a run.
+    walker: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -751,8 +754,9 @@ fn ripples(place: vec2<f32>) -> f32 {
 // The third number is how high the surface stands there, in metres.
 // `far` is how far away the place is: waves too small to see from there
 // are left out, which would otherwise only glitter. `strength` scales
-// them all: little in a lull, more under a gust. `wind` is the way they
-// run: the wind's, or downstream on water that flows.
+// them all: little in a lull, more under a gust; and the wind's speed sets
+// how long and how steep they are. `wind` is the way they run: the wind's,
+// or downstream on water that flows.
 fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec3<f32> {
     let seconds = view.clouds.y;
     // Real crests are not ruled lines: the surface they cross is pushed
@@ -770,7 +774,13 @@ fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec3<f32
     var slope = vec2<f32>(0.0);
     // How far the surface stands above or below its rest, in metres.
     var lifted = 0.0;
-    var long = 6.1;
+    // The harder it blows, the longer and the steeper the waves: none in
+    // still air, ripples in a light breeze, and the full set at ten
+    // metres a second and over. (A wave cannot run faster than the wind
+    // that raises it, and its length goes as the square of its speed.)
+    let blows = clamp(view.wind.z / 10.0, 0.0, 1.5);
+    let raised = strength * smoothstep(0.0, 0.25, blows) * (0.35 + 1.3 * blows);
+    var long = 1.2 + 9.8 * blows * blows;
     for (var number = 0; number < 11; number++) {
         // Each train runs its own way, most of them near the wind's and a
         // few well off it, with no two alike.
@@ -788,7 +798,7 @@ fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec3<f32
         // Crests are sharper than troughs, and the short waves are the
         // steeper.
         let lean = cos(along) * (1.0 + 0.45 * sin(along));
-        let steep = (0.03 + 0.004 * f32(number)) * strength * seen;
+        let steep = (0.03 + 0.004 * f32(number)) * raised * seen;
         slope += way * (lean * steep);
         lifted += sin(along) * steep / turns;
         // Lengths that share no common measure, so the pattern never
@@ -897,7 +907,9 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
         // they began; two sets half a cycle apart are faded into each
         // other, so the starting again is never seen.
         let down = flow / fast;
-        let rough = 0.45 + 0.5 * fast;
+        // Its roughness is its own, whatever the wind: made up for here.
+        let blows = clamp(view.wind.z / 10.0, 0.0, 1.5);
+        let rough = (0.45 + 0.5 * fast) / max(smoothstep(0.0, 0.25, blows) * (0.35 + 1.3 * blows), 0.2);
         let turn = view.clouds.y / 1.5;
         let first = fract(turn);
         let second = fract(turn + 0.5);
@@ -915,6 +927,17 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
         running(place + vec2<f32>(0.0, reach), flow) - here,
     ) / reach;
     slope += uneven * 0.05 / (1.0 + far / 40.0);
+    // Whoever is wading sends rings out: where the eye's feet are under
+    // this water, rings spread from them, stronger the faster they move
+    // and fading within a few metres.
+    let from_walker = place - view.eye.xz;
+    let out = length(from_walker);
+    let wading = step(view.eye.y - 1.75, corner.world.y) * step(corner.world.y, view.eye.y);
+    if wading > 0.5 && out < 7.0 {
+        let stir = view.walker.x;
+        let ring = sin(out * 9.0 - view.clouds.y * 11.0) * exp(-out * 0.75) * stir;
+        slope += from_walker / max(out, 0.05) * ring * 0.55;
+    }
     let normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
 
     // What the surface mirrors: the sky in the direction the line of
@@ -985,8 +1008,10 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     // with the ripples, and a little where it runs fast.
     let shore = 1.0 - smoothstep(0.01, 0.09, deep);
     let broken = running(place * 2.3 + view.clouds.y * 0.07, flow * 2.3);
-    let foam = clamp(shore * 0.45 + 0.05 * fast, 0.0, 1.0)
-        * smoothstep(0.55, 0.78, broken + shore * 0.1) * 0.6;
+    // Fast water breaking on a stone or a shelf is white; still water at a
+    // shore has only a thin, broken edge. Rings from a wader froth a little.
+    let foam = clamp(shore * (0.4 + 0.5 * fast) + 0.05 * fast, 0.0, 1.0)
+        * smoothstep(0.55 - 0.12 * fast, 0.78, broken + shore * 0.1) * (0.6 + 0.15 * fast);
     let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
     colour = mix(colour, white * 0.9, foam);
     // The very edge fades out, so that the water does not end in a line.
