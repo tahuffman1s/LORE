@@ -186,7 +186,25 @@ fn blown(world: vec3<f32>, foot: vec3<f32>, seconds: f32) -> vec3<f32> {
     let out = min(length(world.xz - foot.xz) + 0.25 * up, 3.0);
     let own = dot(world, vec3<f32>(1.7, 2.3, 1.3));
     let shiver = sin(seconds * 5.3 + own) * cos(seconds * 3.1 + own * 1.7);
-    return moved + vec3<f32>(along.x, 0.5, along.z) * (shiver * 0.014 * out * strength);
+    moved += vec3<f32>(along.x, 0.5, along.z) * (shiver * 0.014 * out * strength);
+
+    // Whoever is walking through pushes it aside: what is within a stride
+    // of the eye's feet, and no higher than the eye, leans away and is
+    // pressed down, the more the nearer. Trees, which sway little, give
+    // way little.
+    let from_walker = moved.xz - view.eye.xz;
+    let near = length(from_walker);
+    let reach = 1.15;
+    if near < reach && moved.y < view.eye.y {
+        let give = min(draw.sway, 1.5);
+        let push = (1.0 - near / reach);
+        // What is rooted cannot move at its root.
+        let free = clamp(up / 0.35, 0.0, 1.0);
+        let aside = from_walker / max(near, 0.05);
+        moved += vec3<f32>(aside.x, 0.0, aside.y) * (push * push * 0.55 * free * give);
+        moved.y -= push * push * 0.3 * free * give * min(up, 1.0);
+    }
+    return moved;
 }
 
 @vertex
@@ -727,13 +745,24 @@ fn ripples(place: vec2<f32>) -> f32 {
 // run: the wind's, or downstream on water that flows.
 fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32> {
     let seconds = view.clouds.y;
+    // Real crests are not ruled lines: the surface they cross is pushed
+    // about by eddies and gusts, so each place is read a little to one
+    // side of where it is, by an amount that drifts.
+    let wander = vec2<f32>(
+        textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(place / 23.0, seconds * 0.011), 0.0,
+        ).r,
+        textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(place.yx / 19.0 + 0.37, seconds * 0.013), 0.0,
+        ).r,
+    ) - 0.5;
+    let bent = place + wander * 3.4;
     var slope = vec2<f32>(0.0);
-    // Each is 0.62 as long as the one before, from 5.5 metres down.
-    var long = 5.5;
-    var turned = 0.37;
-    for (var number = 0; number < 8; number++) {
-        // To one side of the wind and then the other, the short ones more.
-        let aside = turned * (0.35 + 0.09 * f32(number));
+    var long = 6.1;
+    for (var number = 0; number < 11; number++) {
+        // Each train runs its own way, most of them near the wind's and a
+        // few well off it, with no two alike.
+        let aside = sin(f32(number) * 2.39996 + 0.7) * (0.45 + 0.06 * f32(number));
         let way = vec2<f32>(
             wind.x * cos(aside) - wind.y * sin(aside),
             wind.x * sin(aside) + wind.y * cos(aside),
@@ -741,15 +770,16 @@ fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32
         let turns = 6.2831853 / long;
         // Deep water: the speed is the square root of g over the turns.
         let speed = sqrt(9.81 / turns);
-        let along = dot(way, place) * turns - speed * turns * seconds + f32(number) * 1.9;
-        // How steep each wave is at most; what is too small to see is
-        // faded out.
+        let along = dot(way, bent) * turns - speed * turns * seconds + f32(number) * 4.1;
+        // What is too small to see from here is faded out.
         let seen = smoothstep(0.6, 2.2, long / (far * 0.006 + 0.02));
-        // Crests are sharper than troughs.
+        // Crests are sharper than troughs, and the short waves are the
+        // steeper.
         let lean = cos(along) * (1.0 + 0.45 * sin(along));
-        slope += way * (lean * 0.055 * strength * seen);
-        long *= 0.62;
-        turned = -turned * 1.17;
+        slope += way * (lean * (0.03 + 0.004 * f32(number)) * strength * seen);
+        // Lengths that share no common measure, so the pattern never
+        // comes round again.
+        long *= 0.66 + 0.07 * fract(f32(number) * 0.618);
     }
     return slope;
 }
@@ -839,6 +869,11 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
         let white = view.sun.rgb / PI * 0.9 + view.sky.rgb;
         mirrored = mix(mirrored, white, smoothstep(0.0, 0.5, cloud(over, false)) * 0.7);
     }
+    // Under trees the sky is not what is overhead: the water mirrors the
+    // dark underside of the leaves instead, and is dark itself.
+    let open = open_sky(corner.world, corner.position.xy);
+    let overhead = view.sky.rgb * vec3<f32>(0.1, 0.16, 0.07);
+    mirrored = mix(overhead, mirrored, smoothstep(0.25, 0.95, open));
     // The sun itself, broken into glitter by the ripples; none in shadow.
     let sunlit = sunlight(corner.world, vec3<f32>(0.0, 1.0, 0.0), corner.position.xy)
         * under_clouds(corner.world);
@@ -877,7 +912,7 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     // water's own colour, more of it the more water there is to do it.
     let passes = exp(-through * WATER_TAKES / max(material.base_colour.a, 0.05));
     let body = material.base_colour.rgb * corner.colour.rgb
-        * (view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
+        * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
     let seen = textureLoad(behind_colour, seen_at, 0).rgb * passes + body * (1.0 - passes);
 
     var colour = mix(seen, mirrored, mirror);
@@ -886,8 +921,8 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     // with the ripples, and a little where it runs fast.
     let shore = 1.0 - smoothstep(0.01, 0.09, deep);
     let broken = running(place * 2.3 + view.clouds.y * 0.07, flow * 2.3);
-    let foam = clamp(shore * 0.7 + 0.06 * fast, 0.0, 1.0)
-        * smoothstep(0.5, 0.74, broken + shore * 0.15) * 0.75;
+    let foam = clamp(shore * 0.45 + 0.05 * fast, 0.0, 1.0)
+        * smoothstep(0.55, 0.78, broken + shore * 0.1) * 0.6;
     let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
     colour = mix(colour, white * 0.9, foam);
     // The very edge fades out, so that the water does not end in a line.
