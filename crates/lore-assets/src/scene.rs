@@ -157,10 +157,10 @@ impl Instance {
     /// as water, with waves and the sky mirrored in it, casts no shadow
     /// and is not solid.
     ///
-    /// The colour of its material is the colour of deep water. Where its
-    /// points have a colour of their own, the alpha says how deep the
-    /// water is there, from 0 at the shore, where it is clear and edged
-    /// with foam, to 1 where the bottom cannot be seen.
+    /// The colour of its material is the colour of the water itself, and
+    /// that colour's alpha how clear it is (1 is clear water). Its first
+    /// UV map says how fast the water runs along x and z, in metres a
+    /// second: nothing for a lake, and downstream for a creek.
     ///
     /// ```
     /// use lore_assets::Instance;

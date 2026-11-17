@@ -306,6 +306,9 @@ pub(crate) struct Meshes {
     draws: Vec<Draw>,
     /// How many of `draws` come before the first see-through one.
     see_through_from: usize,
+    /// Whether any of them is water, which looks through a copy of the
+    /// picture behind it.
+    has_water: bool,
     materials: Materials,
     lighting: Lighting,
     /// The sky under that light.
@@ -438,6 +441,7 @@ impl Meshes {
         }
         Ok(Self {
             buffers,
+            has_water: draws.iter().any(|draw| draw.surface == Surface::Water),
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
@@ -589,6 +593,9 @@ pub(crate) struct MeshPipeline {
     /// The [`View`] of each frame that can be in progress at once, with the
     /// set that points the shader at it.
     views: Vec<(Buffer, vk::DescriptorSet)>,
+    /// The copy of the picture each of those sets was last pointed at:
+    /// a window that changes size gets a new one.
+    behind: RefCell<Vec<vk::ImageView>>,
     /// The see-through parts of the frame being recorded, farthest first:
     /// how far each is from the eye, squared, and which it is. Kept between
     /// frames so that putting them in order needs no new memory.
@@ -614,6 +621,7 @@ impl MeshPipeline {
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
+            behind: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
             order: RefCell::new(Vec::new()),
         };
         // Dropping `mesh` cleans up whatever was created; destroying a null handle is allowed.
@@ -661,6 +669,18 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            // What water looks through: the picture and its depth as they
+            // were before it was drawn.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(5)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(6)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -668,11 +688,11 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, and two pictures with a reader each.
-            let each = if kind == vk::DescriptorType::UNIFORM_BUFFER {
-                1
-            } else {
-                2
+            // Each frame's set has one view, four pictures and two readers.
+            let each = match kind {
+                vk::DescriptorType::UNIFORM_BUFFER => 1,
+                vk::DescriptorType::SAMPLED_IMAGE => 4,
+                _ => 2,
             };
             vk::DescriptorPoolSize::default()
                 .ty(kind)
@@ -1055,6 +1075,28 @@ impl MeshPipeline {
         let Some((view_buffer, view_set)) = self.views.get(frame % self.views.len().max(1)) else {
             return Ok(());
         };
+        // Water looks through this target's own copy of the picture.
+        if let Ok(mut behind) = self.behind.try_borrow_mut()
+            && let Some(bound) = behind.get_mut(frame % self.views.len().max(1))
+            && *bound != target.behind.view
+        {
+            let pictures = [target.behind.view, target.behind_depth.view].map(|view| {
+                [vk::DescriptorImageInfo::default()
+                    .image_view(view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
+            });
+            let writes = [0_usize, 1].map(|picture| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*view_set)
+                    .dst_binding(5 + picture as u32)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&pictures[picture])
+            });
+            // SAFETY: the caller guarantees the commands last recorded with
+            // this frame's set have finished, so it is not in use.
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            *bound = target.behind.view;
+        }
         let lighting = meshes.map_or_else(Lighting::default, |meshes| meshes.lighting);
         // The sun's shadows of a level that has anything in it, drawn
         // before the picture that reads them.
@@ -1220,7 +1262,35 @@ impl MeshPipeline {
                 device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
                 device.cmd_draw(commands, 3, 1, 0, 0);
             }
-            if let Some((meshes, _)) = drawn {
+            // Water sees what is under it: the picture so far is copied
+            // aside for it to read, and drawing carries on over the same
+            // picture.
+            if drawn.is_some_and(|(meshes, _)| meshes.has_water) {
+                device.cmd_end_rendering(commands);
+                Self::keep_behind(device, commands, target);
+                let kept =
+                    attachments.map(|attachment| attachment.load_op(vk::AttachmentLoadOp::LOAD));
+                let kept_depth = depth.load_op(vk::AttachmentLoadOp::LOAD);
+                let again = vk::RenderingInfo::default()
+                    .render_area(area)
+                    .layer_count(1)
+                    .color_attachments(&kept)
+                    .depth_attachment(&kept_depth);
+                device.cmd_begin_rendering(commands, &again);
+                device.cmd_set_viewport(commands, 0, &[viewport]);
+                device.cmd_set_scissor(commands, 0, &[area]);
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    0,
+                    &[*view_set],
+                    &[],
+                );
+            }
+            if let Some((meshes, (vertices, indices))) = drawn {
+                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
                 let draws = &meshes.draws;
                 let see_through = &draws[meshes.see_through_from.min(draws.len())..];
                 // The sky changed what is bound, so the first of these sets
@@ -1266,6 +1336,135 @@ impl MeshPipeline {
 }
 
 impl MeshPipeline {
+    /// Records copying the colour and depth drawn so far into the target's
+    /// `behind` pictures, between two halves of the mesh pass.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), outside a render pass, with the
+    /// target's colour and depth in the states the mesh pass draws in; they
+    /// are left in those states.
+    unsafe fn keep_behind(device: &ash::Device, commands: vk::CommandBuffer, target: &SceneTarget) {
+        let depth_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+        let barrier = |image: vk::Image, range: vk::ImageSubresourceRange| {
+            vk::ImageMemoryBarrier2::default()
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(range)
+        };
+        let copying = vk::PipelineStageFlags2::ALL_TRANSFER;
+        let to_copy = [
+            barrier(target.colour.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            barrier(target.depth.image, DEPTH)
+                .src_stage_mask(depth_stages)
+                .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            // What the copies held is thrown away; the last frame's water
+            // may still be reading them.
+            barrier(target.behind.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+            barrier(target.behind_depth.image, DEPTH)
+                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+        ];
+        let to_carry_on = [
+            barrier(target.colour.image, COLOUR)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            barrier(target.depth.image, DEPTH)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .dst_stage_mask(depth_stages)
+                .dst_access_mask(
+                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL),
+            barrier(target.behind.image, COLOUR)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            barrier(target.behind_depth.image, DEPTH)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+        ];
+        let whole = |aspect: vk::ImageAspectFlags| {
+            let layers = vk::ImageSubresourceLayers {
+                aspect_mask: aspect,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            [vk::ImageCopy::default()
+                .src_subresource(layers)
+                .dst_subresource(layers)
+                .extent(target.extent.into())]
+        };
+        // SAFETY: the caller guarantees the command buffer is recording
+        // outside a render pass and that the target is this device's; each
+        // image is copied in the state the barrier before left it in, and
+        // each copy is the size and format of what it is copied from.
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                commands,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
+            );
+            device.cmd_copy_image(
+                commands,
+                target.colour.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                target.behind.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &whole(vk::ImageAspectFlags::COLOR),
+            );
+            device.cmd_copy_image(
+                commands,
+                target.depth.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                target.behind_depth.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &whole(vk::ImageAspectFlags::DEPTH),
+            );
+            device.cmd_pipeline_barrier2(
+                commands,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_carry_on),
+            );
+        }
+    }
+
     /// Records drawing what the sun sees of `meshes` into each of
     /// `cascades` that does not hold it already.
     ///

@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn water_shows_the_bottom_where_it_is_shallow_and_the_sky_when_looked_along() {
+    fn water_shows_the_bottom_less_the_deeper_it_is_and_the_sky_when_looked_along() {
         use lore_assets::{Instance, Material, Mesh, MeshPart};
 
         const SIZE: [usize; 2] = [96, 64];
@@ -699,16 +699,15 @@ mod tests {
             return;
         };
         headless.gpu().require_validation();
-        // A white floor, and a sheet of dark water a metre over it: how
-        // deep the water says it is is set below.
-        let square = |wide: f32, height: f32, material: u32, colour: Option<[f32; 4]>| Mesh {
+        // A white floor, and a sheet of dark water over it: how far over
+        // is set below.
+        let square = |wide: f32, height: f32, material: u32| Mesh {
             name: None,
             parts: vec![MeshPart {
                 positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
                     .map(|[x, z]| [x * wide, height, z * wide])
                     .to_vec(),
                 normals: vec![[0.0, 1.0, 0.0]; 4],
-                colors: colour.map(|colour| vec![colour; 4]),
                 indices: vec![0, 1, 2, 0, 2, 3],
                 material,
                 ..MeshPart::default()
@@ -727,10 +726,8 @@ mod tests {
         };
         let scene = |deep: f32| {
             let mut scene = Scene::default();
-            scene.meshes.push(square(500.0, 0.0, 0, None));
-            scene
-                .meshes
-                .push(square(500.0, 1.0, 1, Some([1.0, 1.0, 1.0, deep])));
+            scene.meshes.push(square(500.0, 0.0, 0));
+            scene.meshes.push(square(500.0, deep, 1));
             scene.materials.push(Material::default());
             scene.materials.push(Material {
                 base_color: [0.02, 0.07, 0.08, 1.0],
@@ -740,9 +737,9 @@ mod tests {
             scene.instances.push(placed(1, Some(r#"{"water": true}"#)));
             scene
         };
-        let middle = |headless: &mut Headless, pitch: f32| {
+        let middle = |headless: &mut Headless, height: f32, pitch: f32| {
             let camera = Camera {
-                position: [0.0, 3.0, 0.0],
+                position: [0.0, height, 0.0],
                 pitch,
                 ..Camera::default()
             };
@@ -752,18 +749,29 @@ mod tests {
         };
         let light = |[red, green, blue]: [i32; 3]| red + green + blue;
 
-        // Straight down into shallow water: the white floor, nearly as it is.
-        headless.set_scene(&scene(0.0)).unwrap();
-        let shallow = middle(&mut headless, -1.5);
-        // Into deep water: its own dark colour.
-        headless.set_scene(&scene(1.0)).unwrap();
-        let deep = middle(&mut headless, -1.5);
+        // Straight down into water a hand deep: the white floor, nearly
+        // as it is.
+        headless.set_scene(&scene(0.1)).unwrap();
+        let shallow = middle(&mut headless, 3.0, -1.5);
+        // Into water ten metres deep: its own dark colour, and the red
+        // gone first.
+        headless.set_scene(&scene(10.0)).unwrap();
+        let deep = middle(&mut headless, 13.0, -1.5);
         assert!(
             light(shallow) > light(deep) + 250,
             "shallow {shallow:?}, deep {deep:?}"
         );
+        assert!(deep[0] < deep[2], "deep water is not red: {deep:?}");
+        // Two metres down the floor still shows, bluer than it is.
+        headless.set_scene(&scene(2.0)).unwrap();
+        let between = middle(&mut headless, 5.0, -1.5);
+        assert!(
+            light(between) > light(deep) + 60 && between[2] > between[0] + 25,
+            "two metres down {between:?}, deep {deep:?}"
+        );
         // Along deep water: the sky, far brighter than the water itself.
-        let along = middle(&mut headless, -0.05);
+        headless.set_scene(&scene(10.0)).unwrap();
+        let along = middle(&mut headless, 13.0, -0.05);
         assert!(
             light(along) > light(deep) + 200 && along[2] >= along[0],
             "along {along:?}, down {deep:?}"

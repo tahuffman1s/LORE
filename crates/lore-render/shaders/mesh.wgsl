@@ -70,6 +70,10 @@ struct View {
 // clouds; the second eats into their edges.
 @group(0) @binding(3) var cloud_volume: texture_3d<f32>;
 @group(0) @binding(4) var cloud_sampler: sampler;
+// The picture, and how far away each of its pixels is, as they were before
+// anything see-through was drawn: what water looks through.
+@group(0) @binding(5) var behind_colour: texture_2d<f32>;
+@group(0) @binding(6) var behind_depth: texture_depth_2d;
 
 // How one texture is laid over a mesh.
 struct Placing {
@@ -652,10 +656,34 @@ fn ripples(place: vec2<f32>) -> f32 {
     return wide * 0.62 + small * 0.38;
 }
 
-// The surface of water. What is under it shows through where it is shallow
-// and looked down into; looked along, it mirrors the sky. The mesh's own
-// colour says how deep it is: alpha 0 at the shore, 1 where the bottom is
-// out of sight.
+// The same for water that runs: `flow` is how fast it moves along x and z
+// at this place, in metres a second. The ripples are carried along for a
+// second and a half and then start again where they began; two sets half a
+// cycle apart are faded into each other, so that the starting again is
+// never seen and the ripples are not smeared where the flow turns.
+fn running(place: vec2<f32>, flow: vec2<f32>) -> f32 {
+    if dot(flow, flow) < 0.0001 {
+        return ripples(place);
+    }
+    let turn = view.clouds.y / 1.5;
+    let first = fract(turn);
+    let second = fract(turn + 0.5);
+    let one = ripples(place - flow * (first - 0.5) * 1.5);
+    let other = ripples(place - flow * (second - 0.5) * 1.5 + vec2<f32>(3.7, 1.9));
+    return mix(one, other, abs(2.0 * first - 1.0));
+}
+
+// How much red, green and blue light a metre of clear water takes away:
+// red goes first, which is why deep water is blue-green.
+const WATER_TAKES: vec3<f32> = vec3<f32>(0.42, 0.09, 0.065);
+
+// The surface of water, and the water under it.
+//
+// What is under the surface is seen through it, bent by the ripples, and
+// the farther the light has come through the water the more of it is gone
+// and the more of the water's own colour is in its place: clear in the
+// shallows, dark in the deep. Looked along, the surface mirrors the sky.
+// The mesh's first UV map says how fast the water runs along x and z.
 @fragment
 fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let line = view.eye.xyz - corner.world;
@@ -667,14 +695,17 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     // off they are smaller than a pixel and would only glitter, so they
     // are flattened with distance.
     let place = corner.world.xz;
+    let flow = corner.uv.xy;
     let reach = 0.12;
-    let here = ripples(place);
+    let here = running(place, flow);
     let slope = vec2<f32>(
-        ripples(place + vec2<f32>(reach, 0.0)) - here,
-        ripples(place + vec2<f32>(0.0, reach)) - here,
+        running(place + vec2<f32>(reach, 0.0), flow) - here,
+        running(place + vec2<f32>(0.0, reach), flow) - here,
     ) / reach;
-    // A gust roughens the water it is passing over.
-    let rough = (0.2 + 0.18 * gust(place, view.clouds.y)) / (1.0 + far / 60.0);
+    // A gust roughens the water it is passing over, and running water is
+    // rougher than still.
+    let rough = (0.2 + 0.18 * gust(place, view.clouds.y) + 0.12 * min(length(flow), 2.0))
+        / (1.0 + far / 60.0);
     let normal = normalize(vec3<f32>(-slope.x * rough, 1.0, -slope.y * rough));
 
     // What the surface mirrors: the sky in the direction the line of
@@ -700,28 +731,51 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let facing = max(dot(normal, to_eye), 0.0);
     let mirror = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
 
-    // The water itself: its own colour, lit by the sky and, a little, by
-    // the sun that gets into it.
-    let depth = clamp(corner.colour.a, 0.0, 1.0);
-    let body = material.base_colour.rgb * corner.colour.rgb
-        * (view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.5);
-    // Shallow water hides little of what is under it.
-    let hides = clamp(depth * 1.2, 0.0, 0.97);
+    // How far in front of the eye the surface is, and what is behind it:
+    // depth is the nearest distance drawn divided by the distance.
+    let size = vec2<i32>(textureDimensions(behind_colour));
+    let pixel_at = vec2<i32>(corner.position.xy);
+    let surface = 1.0 / corner.position.w;
+    let nearest = corner.position.z * surface;
+    // What is under the surface is seen where the ripples bend the line of
+    // sight to: a little to one side, more where the water is deeper.
+    let straight = nearest / max(textureLoad(behind_depth, pixel_at, 0), 0.0000001) - surface;
+    let bend = normal.xz * f32(size.y) * 0.07 * clamp(straight, 0.0, 1.0) / (1.0 + far * 0.03);
+    var seen_at = clamp(pixel_at + vec2<i32>(bend), vec2<i32>(0), size - vec2<i32>(1));
+    var under = nearest / max(textureLoad(behind_depth, seen_at, 0), 0.0000001) - surface;
+    // Bent onto something in front of the water, it is not bent at all.
+    if under <= 0.0 {
+        seen_at = pixel_at;
+        under = straight;
+    }
+    under = max(under, 0.0);
+    // How far the light came through the water to the eye, along the line
+    // of sight, and how deep that is straight down.
+    let through = under * far / max(surface, 0.001);
+    let deep = through * abs(to_eye.y);
 
-    var cover = mirror + (1.0 - mirror) * hides;
-    var colour = (mirror * mirrored + (1.0 - mirror) * hides * body) / max(cover, 0.001);
+    // The water itself: light from above is scattered back up in the
+    // water's own colour, more of it the more water there is to do it.
+    let passes = exp(-through * WATER_TAKES / max(material.base_colour.a, 0.05));
+    let body = material.base_colour.rgb * corner.colour.rgb
+        * (view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
+    let seen = textureLoad(behind_colour, seen_at, 0).rgb * passes + body * (1.0 - passes);
+
+    var colour = mix(seen, mirrored, mirror);
 
     // Foam where the water meets the shore, in broken patches that move
-    // with the ripples.
-    let shore = 1.0 - smoothstep(0.0, 0.07, depth);
-    let broken = ripples(place * 2.3 + view.clouds.y * 0.07);
-    let foam = shore * smoothstep(0.46, 0.66, broken + shore * 0.2) * 0.85;
+    // with the ripples, and a little where it runs fast.
+    let shore = 1.0 - smoothstep(0.015, 0.16, deep);
+    let broken = running(place * 2.3 + view.clouds.y * 0.07, flow * 2.3);
+    let foam = clamp(shore + 0.12 * min(length(flow), 2.5), 0.0, 1.0)
+        * smoothstep(0.5, 0.72, broken + shore * 0.2) * 0.85;
     let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
     colour = mix(colour, white * 0.9, foam);
-    cover = mix(cover, 0.9, foam);
+    // The very edge fades out, so that the water does not end in a line.
+    let edge = smoothstep(0.0, 0.03, deep);
 
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(colour, corner.world), cover);
+    pixel.colour = vec4<f32>(through_fog(colour, corner.world), edge);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }
