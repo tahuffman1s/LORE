@@ -339,9 +339,11 @@ impl Day {
         let sunlight = [0, 1, 2]
             .map(|colour| usual.sun[colour] * (-stopped[colour] * more).exp().min(1.0) * up);
         // Moonlight is the sun's, a great deal fainter, and looks blue to
-        // an eye in the dark.
+        // an eye in the dark. It is far brighter here than it is, as a
+        // night on film is: the picture has one exposure, and the true
+        // figure, a four-hundred-thousandth, would show nothing.
         let moonlight =
-            [0.6, 0.75, 1.0].map(|part: f32| part * grey(usual.sun) * 0.06 * lit * moon_up);
+            [0.6, 0.75, 1.0].map(|part: f32| part * grey(usual.sun) * 0.25 * lit * moon_up);
         let by_sun = grey(sunlight) >= grey(moonlight);
         let (towards, light) = if by_sun {
             (sun, sunlight)
@@ -358,14 +360,27 @@ impl Day {
         // is twelve degrees down; the night has a little of its own.
         let day = eased(-0.21, 0.3, sun[1]).powf(1.5);
         let night = 1.0 - eased(-0.2, -0.02, sun[1]);
-        let dark = grey(usual.sky) * (0.6 + 0.9 * lit * moon_up);
+        // A night with no moon is black but for the stars; the moon is
+        // what lights one, by how much of its face is lit.
+        let dark = grey(usual.sky) * (0.12 + 0.9 * lit * moon_up);
         let from_day = usual.sky.map(|part| part * day);
         let lighting = Lighting {
             towards_sun: towards,
             sun: light,
             sky: [0, 1, 2]
-                .map(|colour| from_day[colour] + [0.55, 0.7, 1.0][colour] * dark * 0.04 * night),
+                .map(|colour| from_day[colour] + [0.55, 0.7, 1.0][colour] * dark * 0.035 * night),
             ground: usual.ground,
+        };
+        // The ground throws back only the light that falls on it: none, on
+        // a night with no moon.
+        let falls = |light: &Lighting| {
+            grey(light.sun) * light.towards_sun[1].max(0.0) / std::f32::consts::PI + grey(light.sky)
+        };
+        let lighting = Lighting {
+            ground: usual
+                .ground
+                .map(|part| part * (falls(&lighting) / falls(&usual)).min(1.0)),
+            ..lighting
         };
         // The sky is the real sun's, wherever the light on the land is from.
         let sky = Sky::of(&Lighting {
@@ -382,10 +397,11 @@ impl Day {
                 [pole[0], pole[1], pole[2], 0.0],
                 [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
                 [
-                    0.45 * dark * 0.03 * night,
-                    0.6 * dark * 0.03 * night,
-                    dark * 0.03 * night,
-                    grey(usual.sky) * 1.2,
+                    0.45 * dark * 0.012 * night,
+                    0.6 * dark * 0.012 * night,
+                    dark * 0.012 * night,
+                    // A bright moon drowns the faint stars.
+                    grey(usual.sky) * 1.6 * (1.0 - 0.45 * lit * moon_up),
                 ],
             ],
         }
@@ -508,11 +524,13 @@ mod tests {
         assert!(midnight.heavens[1][1] > 0.3, "the moon is up");
         let moonlit = grey(midnight.lighting.sun);
         assert!(
-            moonlit > 0.0 && moonlit < 0.1 * grey(usual.sun),
+            moonlit > 0.0 && moonlit < 0.3 * grey(usual.sun),
             "{moonlit}"
         );
         assert!(midnight.lighting.towards_sun[1] > 0.3);
         assert!(grey(midnight.lighting.sky) < 0.1 * grey(usual.sky));
+        assert!(grey(midnight.lighting.ground) < 0.2 * grey(usual.ground));
+        assert!((grey(noon.lighting.ground) - grey(usual.ground)).abs() < 1e-3);
         assert!(midnight.sky.air.iter().flatten().all(|part| *part == 0.0));
         // Half a month on the moon is new, and the night is darker.
         let moonless = Day::at(24.0 + 24.0 * 15.0);

@@ -70,10 +70,12 @@ end)
 -- The weather, and a panel to try it with. "interact" (E, or Y on a
 -- gamepad) opens the panel. In it the menu's own controls work: up and down
 -- pick a line, holding left or right slides the storminess or the hour of
--- the day, Enter or A does what the line says, and Escape or B closes it.
+-- the day, left and right on the moon's line move it a day round its
+-- month, Enter or A does what the line says, and Escape or B closes it.
 local lines = {
     "Storminess",
     "Time of day",
+    "Moon",
     "Time passes",
     "Lightning ahead",
     "Lightning close by",
@@ -98,7 +100,7 @@ local panel = {
     moved = 0,
 }
 
-local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 540, height = 480, color = "#000000b0" })
+local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 600, height = 520, color = "#000000b0" })
 local title = game.hud.text("Weather", { at = "top left", right = 50, down = 44, size = 40, color = "white" })
 -- Two sliders: how stormy the sky is, and the hour of the day from
 -- midnight on the left round to midnight on the right. Each is a bar with
@@ -149,6 +151,28 @@ local function show()
                 words = "Time  --:--"
             end
         elseif number == 3 then
+            -- The moon goes round its month in twenty-nine and a half
+            -- days, starting nearly full.
+            local days = (game.sky.hour() or 12) / 24
+            local month = (days / 29.53 + 0.47) % 1
+            local name = "waning crescent"
+            if month < 0.03 or month > 0.97 then
+                name = "new"
+            elseif month < 0.22 then
+                name = "waxing crescent"
+            elseif month < 0.28 then
+                name = "first quarter"
+            elseif month < 0.47 then
+                name = "waxing gibbous"
+            elseif month < 0.53 then
+                name = "full"
+            elseif month < 0.72 then
+                name = "waning gibbous"
+            elseif month < 0.78 then
+                name = "last quarter"
+            end
+            words = string.format("Moon  %s (day %d)", name, math.floor(days) + 1)
+        elseif number == 4 then
             words = "Time passes  " .. (if panel.passing then "yes" else "no")
         end
         local chosen = number == panel.line
@@ -182,19 +206,19 @@ local function strike(near: number, far: number)
 end
 
 local function choose()
-    if panel.line == 3 then
+    if panel.line == 4 then
         panel.passing = not panel.passing
-    elseif panel.line == 4 then
-        strike(150, 400)
     elseif panel.line == 5 then
-        strike(30, 80)
+        strike(150, 400)
     elseif panel.line == 6 then
-        strike(1500, 4000)
+        strike(30, 80)
     elseif panel.line == 7 then
-        game.weather.setStorminess(1)
+        strike(1500, 4000)
     elseif panel.line == 8 then
-        game.weather.setStorminess(0)
+        game.weather.setStorminess(1)
     elseif panel.line == 9 then
+        game.weather.setStorminess(0)
+    elseif panel.line == 10 then
         open(false)
     end
 end
@@ -234,6 +258,10 @@ game.onTick(function()
             panel.line = (panel.line - 2) % #lines + 1
         elseif y < -0.5 then
             panel.line = panel.line % #lines + 1
+        elseif panel.line == 3 then
+            -- A day on or a day back at a push: the same hour, and the
+            -- moon a day further round or a day less.
+            game.sky.setHour(math.max((game.sky.hour() or 12) + (if x > 0 then 24 else -24), 0))
         end
     end
     panel.held = pushed
@@ -244,7 +272,9 @@ game.onTick(function()
         if panel.line == 1 then
             game.weather.setStorminess(game.weather.storminess() + slid / 2)
         elseif panel.line == 2 then
-            game.sky.setHour(((game.sky.hour() or 12) + slid * 24 / 6) % 24)
+            -- The hour slides round the same day, so the moon stays as it is.
+            local hour = game.sky.hour() or 12
+            game.sky.setHour(hour - hour % 24 + (hour % 24 + slid * 24 / 6) % 24)
         end
     end
     if game.input.justPressed("menu_confirm") then

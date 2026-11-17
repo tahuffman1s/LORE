@@ -594,16 +594,19 @@ fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 }
 
 // `colour`, the clear sky towards `direction`, with the stars and the moon
-// in it: none of either unless the game has said what hour it is.
+// in it: none of either unless the game has said what hour it is. `pixel`
+// is how much of the sky one pixel covers, in radians.
 //
-// The stars are one to a square of a grid laid on the sky, most of them
-// too faint to see and a few bright, each its own colour from orange to
-// blue-white; they turn about the pole as the hours pass and twinkle,
-// most near the horizon. The Milky Way is a faint band among them. The
-// moon is a ball lit by the sun, wherever the sun is: its phase comes of
-// that, and its seas are dark. It is drawn nearly twice its real size,
-// which is how large it looks to an eye.
-fn night_sky(colour: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+// The stars are one to a square of a grid laid on the sky, in three
+// grids: a few bright ones, many fainter and a dust of faint ones, thickest
+// along the Milky Way. Each is a point as fine as the picture can draw,
+// its own colour from orange to blue-white; they turn about the pole as
+// the hours pass and twinkle, most near the horizon. The moon is a ball
+// lit by the sun, wherever the sun is: its phase comes of that, its seas
+// are dark, and the air round it glows. It is drawn five times its real
+// size: at its real size it is a dozen pixels in a wide view, too few to
+// show a phase.
+fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     if view.heavens[3].w < 0.5 || direction.y < -0.03 {
         return colour;
     }
@@ -612,25 +615,38 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     var behind = 1.0;
 
     let towards = view.heavens[1].xyz;
-    let wide = 0.0081;
+    let sun = view.heavens[0].xyz;
+    let up = smoothstep(-0.03, 0.02, direction.y);
+    // How much of its face is lit, as seen from here.
+    let full = (1.0 - dot(sun, towards)) * 0.5;
+    let near = dot(direction, towards);
+    // The glow of the air round it.
+    seen += vec3<f32>(0.7, 0.8, 1.0) * view.heavens[4].w * full * night * up
+        * (0.05 * pow(max(near, 0.0), 300.0) + 0.012 * pow(max(near, 0.0), 24.0));
+    let wide = 0.0226;
     let across = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), towards) + vec3<f32>(0.00001, 0.0, 0.0));
     let upwards = cross(towards, across);
     let on = vec2<f32>(dot(direction, across), dot(direction, upwards)) / wide;
     let out = dot(on, on);
-    if dot(direction, towards) > 0.0 && out < 1.0 {
+    if near > 0.0 && out < 1.0 {
         // The way its ground faces at this point of its face.
         let facing = across * on.x + upwards * on.y - towards * sqrt(1.0 - out);
         // Its dust sends light back the way it came, so it does not
         // darken towards its rim as a smooth ball would.
-        let sunlit = sqrt(clamp(dot(facing, view.heavens[0].xyz), 0.0, 1.0));
+        let sunlit = sqrt(clamp(dot(facing, sun) * 1.5, 0.0, 1.0));
+        // Dark seas, and on them and the highlands smaller marks.
         let seas = textureSampleLevel(
             cloud_volume, cloud_sampler, vec3<f32>(on * 0.19 + vec2<f32>(0.31, 0.62), 0.47), 0.0,
         ).r;
-        let ground = mix(0.5, 1.0, smoothstep(0.38, 0.55, seas));
-        let rim = smoothstep(1.0, 0.9, out);
+        let marks = textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(on * 0.83 + vec2<f32>(0.11, 0.4), 0.21), 0.0,
+        ).rg;
+        let ground = mix(0.42, 1.0, smoothstep(0.36, 0.56, seas + (marks.r - 0.5) * 0.18))
+            * (0.86 + 0.28 * marks.g);
+        let rim = smoothstep(1.0, 1.0 - 2.5 * pixel / wide, out);
         // The dark of the moon is lit a little by the Earth.
-        seen += vec3<f32>(1.0, 0.97, 0.9) * view.heavens[4].w * 1.6 * ground
-            * (sunlit + 0.012) * rim * smoothstep(-0.03, 0.02, direction.y);
+        seen += vec3<f32>(1.0, 0.97, 0.9) * view.heavens[4].w * 1.8 * ground
+            * (sunlit + 0.01) * rim * up / max(1.0 - 0.45 * full, 0.3);
         behind = 1.0 - rim;
     }
     if night <= 0.01 {
@@ -642,6 +658,11 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     let turn = view.heavens[1].w;
     let fixed = direction * cos(turn) - cross(pole, direction) * sin(turn)
         + pole * dot(pole, direction) * (1.0 - cos(turn));
+    // The Milky Way: a band right round the sky, cloudy and uneven.
+    let band = exp(-pow(dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2, 2.0));
+    let dust = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 1.7 + 0.2, 0.0).rg;
+    let fine = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 6.1 + 0.6, 0.0).g;
+    var light = vec3<f32>(0.75, 0.82, 1.0) * band * (0.2 + dust.r) * dust.g * (0.5 + fine) * 0.03;
     // Which face of a box round the eye the line of sight goes through,
     // and where on it.
     let big = abs(fixed);
@@ -654,27 +675,33 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         face = fixed.xz / fixed.y;
         which = sign(fixed.y) * 2.0;
     }
-    var light = vec3<f32>(0.0);
-    for (var layer = 0; layer < 2; layer++) {
-        let squares = 30.0 + 55.0 * f32(layer);
+    // A star is a point: drawn no wider than a pixel and a bit, however
+    // sharp the picture is.
+    let size = max(pixel * 0.4, 0.00012);
+    var squares = 24.0;
+    for (var layer = 0; layer < 3; layer++) {
         let grid = face * squares;
         let square = floor(grid);
         let dice = fract(
             sin(dot(square, vec2<f32>(127.1, 311.7)) + which * 37.3 + f32(layer) * 91.7)
                 * vec3<f32>(43758.5453, 22578.1459, 19642.349),
         );
-        let off = (grid - (square + 0.2 + 0.6 * dice.xy)) / squares * 0.785;
-        // A few are bright and most are faint.
-        let bright = pow(dice.z, 7.0 - 3.0 * f32(layer)) * (1.0 - 0.7 * f32(layer));
-        let twinkle = 1.0 + (0.15 + 0.35 * (1.0 - direction.y))
+        let off = (grid - (square + 0.15 + 0.7 * dice.xy)) / squares * 0.785;
+        // A few are bright and most are faint; the faintest crowd the
+        // Milky Way.
+        // Two squares in three are empty, so that they do not stand in
+        // rows.
+        var bright = pow(dice.z, 14.0 - 4.0 * f32(layer)) * (2.6 - 0.8 * f32(layer))
+            * step(fract(dice.x * 7.3 + dice.y * 3.1), 0.36);
+        if layer == 2 {
+            bright *= 0.3 + 2.2 * band;
+        }
+        let twinkle = 1.0 + (0.12 + 0.4 * pow(1.0 - direction.y, 3.0))
             * sin(view.clouds.y * (3.0 + 6.0 * dice.y) + dice.x * 40.0);
-        light += mix(vec3<f32>(1.0, 0.8, 0.62), vec3<f32>(0.72, 0.82, 1.0), dice.x)
-            * bright * twinkle * exp(-dot(off, off) / 0.0000045);
+        light += mix(vec3<f32>(1.0, 0.78, 0.58), vec3<f32>(0.7, 0.8, 1.0), dice.x)
+            * bright * twinkle * exp(-dot(off, off) / (size * size));
+        squares *= 2.3;
     }
-    // The Milky Way: a band right round the sky, cloudy and uneven.
-    let band = exp(-pow(dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2, 2.0));
-    let dust = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 1.7 + 0.2, 0.0).rg;
-    light += vec3<f32>(0.75, 0.82, 1.0) * band * (0.25 + dust.r) * dust.g * 0.05;
     // The thick air low down hides them.
     return seen + light * view.heavens[4].w * night * behind * smoothstep(0.0, 0.2, direction.y);
 }
@@ -1218,6 +1245,9 @@ fn to_clouds(rise: f32, height: f32) -> f32 {
 @fragment
 fn fragment_sky(beyond: Beyond) -> Pixel {
     let direction = normalize(beyond.ray);
+    // How much of the sky a pixel covers, for what must be drawn as fine
+    // as the picture is.
+    let speck = length(fwidth(direction));
     var colour = sky_colour(direction);
     // From under water there is no sky to the side: only water. (Looking
     // up, the water's own surface is drawn over this.)
@@ -1228,7 +1258,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         return pixel;
     }
     // The stars and the moon are behind everything else in the sky.
-    colour = night_sky(colour, direction);
+    colour = night_sky(colour, direction, speck);
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
     // The sun itself, as wide as it is seen from the Earth (just over half
