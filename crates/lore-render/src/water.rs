@@ -17,6 +17,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 use lore_assets::{Scene, Water};
@@ -54,6 +55,9 @@ const RING_STEP: f32 = 1.0 / 120.0;
 const MOST_PAIRS: u32 = 3;
 /// How fast rings die away, as a share each second.
 const RINGS_DIE: f32 = 0.35;
+/// How many seconds after the last thing stirred the water its rings are
+/// too faint to see, and are no longer worked out.
+const RINGS_GONE: f32 = 20.0;
 /// How far each side of a point its neighbours count: the shader's `REACH`.
 const RING_REACH: i32 = 6;
 /// How many things can stir the water in one frame.
@@ -354,13 +358,23 @@ pub(crate) fn body_layout(gpu: &Gpu) -> Result<vk::DescriptorSetLayout, RenderEr
     .map_err(RenderError::driver(DOING))
 }
 
+/// The number the next body of water is known by. None is 0, which stands
+/// for "no water near".
+static NEXT_BODY: AtomicU64 = AtomicU64::new(1);
+
 /// One body of still water, ready to draw.
 pub(crate) struct Body {
+    /// A number no other body has had, by which a set that points at this
+    /// one's picture is told from one that points at a picture long gone:
+    /// the graphics card hands the same handle out again.
+    pub(crate) id: u64,
     pub(crate) level: f32,
     pub(crate) origin: [f32; 2],
     pub(crate) cell: f32,
     pub(crate) size: [u32; 2],
     pub(crate) colour: [f32; 4],
+    /// The water itself, to ask how deep it is at a place.
+    water: Water,
     /// How deep it is at each point of its grid, as a picture.
     depths: Picture,
     pub(crate) set: vk::DescriptorSet,
@@ -413,6 +427,33 @@ impl Body {
             grids += 1;
         }
         grids
+    }
+
+    /// Whether any of the body is drawn by grid `grid` as laid round
+    /// `eye`: whether the grid's square reaches the body at all, and is
+    /// not wholly hidden by the next finer grid lying over its middle.
+    pub(crate) fn drawn_by(&self, eye: [f32; 3], grid: u32) -> bool {
+        let (apart, middle) = grid_laid(eye, grid);
+        // The grid is a couple of hundred squares across.
+        #[allow(clippy::cast_precision_loss)]
+        let half = GRID_SQUARES as f32 / 2.0 * apart;
+        let far = self.far_corner();
+        // A little more than the body: its shore is kept past its edge.
+        let (low, high) = (
+            [self.origin[0] - self.cell, self.origin[1] - self.cell],
+            [far[0] + self.cell, far[1] + self.cell],
+        );
+        let reaches = (0..2)
+            .all(|axis| low[axis] <= middle[axis] + half && high[axis] >= middle[axis] - half);
+        if !reaches || grid == 0 {
+            return reaches;
+        }
+        // The finer grid's middle and reach, as the shader works them out.
+        let finer = [0, 2].map(|axis| (finite(eye[axis]) / apart).round() * apart);
+        let covered = half / 2.0 - apart;
+        let hidden = (0..2)
+            .all(|axis| low[axis] >= finer[axis] - covered && high[axis] <= finer[axis] + covered);
+        !hidden
     }
 
     /// The rows of the shader's `View` that describe this body.
@@ -509,11 +550,13 @@ impl Bodies {
             // Kept before the set is looked at, so that it is freed if
             // there was none to be had.
             bodies.list.push(Body {
+                id: NEXT_BODY.fetch_add(1, Ordering::Relaxed),
                 level: water.level,
                 origin: water.origin,
                 cell: water.cell,
                 size: water.size,
                 colour: water.colour,
+                water: water.clone(),
                 depths,
                 set: vk::DescriptorSet::null(),
             });
@@ -525,11 +568,19 @@ impl Bodies {
         Ok(bodies)
     }
 
-    /// The body `eye` is in, or nearest to.
+    /// The body `eye` is in or over, or else the one it is nearest to.
+    /// (A pool inside the square a moat lies in is told from the moat by
+    /// which of them there is water of at the eye.)
     pub(crate) fn nearest(&self, eye: [f32; 3]) -> Option<&Body> {
         self.list
             .iter()
-            .min_by(|one, other| one.away(eye).total_cmp(&other.away(eye)))
+            .filter(|body| body.water.depth_at(eye[0], eye[2]) > 0.0)
+            .max_by(|one, other| one.level.total_cmp(&other.level))
+            .or_else(|| {
+                self.list
+                    .iter()
+                    .min_by(|one, other| one.away(eye).total_cmp(&other.away(eye)))
+            })
     }
 }
 
@@ -548,6 +599,24 @@ impl Drop for Bodies {
     }
 }
 
+/// `number`, or nothing if it is not a number.
+fn finite(number: f32) -> f32 {
+    if number.is_finite() { number } else { 0.0 }
+}
+
+/// How grid `grid` is laid for an eye at `eye`: how far apart its points
+/// are, and the x and z of its middle. Grid 0 is the finest, and each one
+/// after it is twice as wide with its points twice as far apart. The
+/// middle is the eye to the nearest two points, so that the grid moves by
+/// whole squares and its points stay where they were.
+pub(crate) fn grid_laid(eye: [f32; 3], grid: u32) -> (f32, [f32; 2]) {
+    // Eleven grids at most: the power fits an f32 exactly.
+    #[allow(clippy::cast_possible_wrap)]
+    let apart = GRID_FINEST * 2.0_f32.powi(grid as i32);
+    let middle = [0, 2].map(|axis| (finite(eye[axis]) / (2.0 * apart)).round() * 2.0 * apart);
+    (apart, middle)
+}
+
 /// What one frame in progress needs of its own: the numbers the two
 /// shaders read, and the sets that point at them.
 struct Frame {
@@ -557,8 +626,9 @@ struct Frame {
     /// Reads the first picture of rings to draw the second, and the other
     /// way round.
     ring_sets: [vk::DescriptorSet; 2],
-    /// The picture of depths those two sets were last pointed at.
-    depths: Cell<vk::ImageView>,
+    /// The body of water whose depths those two sets were last pointed
+    /// at; 0 for none.
+    depths: Cell<u64>,
 }
 
 /// Everything about water that is the same for every scene.
@@ -595,6 +665,15 @@ pub(crate) struct WaterWorks {
     corner: Cell<Option<[f32; 2]>>,
     /// How many seconds of rings have not been worked out yet.
     owed: Cell<f32>,
+    /// How many seconds it is since anything stirred the water.
+    quiet: Cell<f32>,
+    /// What is stirring the water, each with how many seconds of its
+    /// stirring the rings have still to be given. A frame may come with
+    /// no step of the rings to give it in, or with several.
+    pending: RefCell<Vec<(Stir, f32)>>,
+    /// Whether the wind's waves have been added up at least once: with no
+    /// water in a scene they are not added up again.
+    waves_drawn: Cell<bool>,
 }
 
 /// How many numbers the grid's triangles are.
@@ -721,6 +800,9 @@ impl WaterWorks {
             )),
             corner: Cell::new(None),
             owed: Cell::new(0.0),
+            quiet: Cell::new(RINGS_GONE),
+            pending: RefCell::new(Vec::with_capacity(2 * MOST_STIRS)),
+            waves_drawn: Cell::new(false),
         };
         // Dropping `works` cleans up whatever was created.
         let device = gpu.device();
@@ -1081,7 +1163,7 @@ impl WaterWorks {
             wave_set,
             step,
             ring_sets: [first, second],
-            depths: Cell::new(self.dry.view),
+            depths: Cell::new(0),
         });
         Ok(())
     }
@@ -1091,8 +1173,9 @@ impl WaterWorks {
     /// frame before, and gives the rows of the shader's `View` that say
     /// what water there is.
     ///
-    /// `near` is the still water the eye is in or nearest; `stirs` is
-    /// whatever is stirring the water this frame.
+    /// `near` is the still water the eye is in or nearest, `any` whether
+    /// the scene has water at all, and `stirs` whatever is stirring the
+    /// water during this frame.
     ///
     /// # Safety
     ///
@@ -1106,12 +1189,17 @@ impl WaterWorks {
         frame: usize,
         eye: [f32; 3],
         (seconds, elapsed): (f64, f32),
-        near: Option<&Body>,
+        (near, any): (Option<&Body>, bool),
         stirs: &[Stir],
     ) -> Result<WaterRows, RenderError> {
         let mut rows = [[0.0; 4]; 9];
         let Some(slot) = self.frames.get(frame % self.frames.len().max(1)) else {
             return Ok(rows);
+        };
+        let elapsed = if elapsed.is_finite() {
+            elapsed.clamp(0.0, 0.25)
+        } else {
+            0.0
         };
         // The waves the wind raises on water as wide as what is near.
         let [along_x, along_z, speed] = sky::WIND;
@@ -1126,20 +1214,6 @@ impl WaterWorks {
             if (waves.1[3] / fetch).ln().abs() > 0.2 || waves.1[..3] != wanted[..3] {
                 *waves = (Waves::new([along_x, along_z], speed, fetch), wanted);
             }
-            let mut numbers = [[0.0_f32; 4]; LAYERS * EACH];
-            waves.0.numbers(seconds, &mut numbers);
-            let mut bytes = [0_u8; LAYERS * EACH * 16];
-            for (slot, number) in bytes
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(numbers.iter().flatten())
-            {
-                *slot = number.to_ne_bytes();
-            }
-            // SAFETY: the buffer was made writable and this long, and the
-            // caller guarantees the commands that read it last have finished.
-            unsafe { slot.waves.write(&bytes) }?;
             for (row, layer) in rows[3..7].iter_mut().zip(&waves.0.layers) {
                 // A layer's waves fit between 8 and 32 times into its square.
                 *row = [
@@ -1149,69 +1223,121 @@ impl WaterWorks {
                     layer.tile / 8.0,
                 ];
             }
-            // SAFETY: the caller's guarantees are the ones this asks for.
-            unsafe { self.record_waves(commands, slot, &waves.0) };
+            // With no water to draw them on, once is enough: the pictures
+            // only have to hold something.
+            if any || !self.waves_drawn.get() {
+                let mut numbers = [[0.0_f32; 4]; LAYERS * EACH];
+                waves.0.numbers(seconds, &mut numbers);
+                let mut bytes = [0_u8; LAYERS * EACH * 16];
+                for (slot, number) in bytes
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(numbers.iter().flatten())
+                {
+                    *slot = number.to_ne_bytes();
+                }
+                // SAFETY: the buffer was made writable and this long, and
+                // the caller guarantees the commands that read it last
+                // have finished; its other guarantees are the ones
+                // recording the waves asks for.
+                unsafe {
+                    slot.waves.write(&bytes)?;
+                    self.record_waves(commands, slot, &waves.0);
+                }
+                self.waves_drawn.set(true);
+            }
         }
 
-        // The rings: the square follows the eye by whole points.
+        // The rings. Their square follows the eye by whole points, and is
+        // only moved when a step of them is taken.
         let side = RING_SIDE as f32 * RING_APART;
-        let corner = [0, 2].map(|axis| {
-            let eye = if eye[axis].is_finite() {
-                eye[axis]
-            } else {
-                0.0
-            };
-            ((eye - side / 2.0) / RING_APART).round() * RING_APART
-        });
-        let before = self.corner.get().unwrap_or(corner);
-        self.corner.set(Some(corner));
-        let owed = self.owed.get()
-            + if elapsed.is_finite() {
-                elapsed.clamp(0.0, 0.25)
-            } else {
-                0.0
-            };
-        // Steps are taken in pairs: truncating is the point.
+        let wanted =
+            [0, 2].map(|axis| ((finite(eye[axis]) - side / 2.0) / RING_APART).round() * RING_APART);
+        let before = self.corner.get().unwrap_or(wanted);
+        // Steps are taken in pairs, as many as the time that has passed
+        // holds: the same rings at any frame rate. Truncating is the point.
+        let owed = self.owed.get() + elapsed;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let pairs = ((owed / (2.0 * RING_STEP)) as u32).min(MOST_PAIRS);
         #[allow(clippy::cast_precision_loss)]
-        let done = pairs as f32 * 2.0 * RING_STEP;
+        let stepped = pairs as f32 * 2.0 * RING_STEP;
         self.owed.set(if pairs == MOST_PAIRS {
             0.0
         } else {
-            owed - done
+            owed - stepped
         });
-        let moved = (corner[0] - before[0]).abs() > 1e-6 || (corner[1] - before[1]).abs() > 1e-6;
-        if pairs > 0 || moved {
-            // SAFETY: the buffer was made writable and this long, and the
-            // caller guarantees the commands that read it last have
-            // finished; the same goes for the sets pointed at new depths.
-            unsafe {
-                slot.step.write(&step_bytes(&self.weights, near, stirs))?;
-                self.point_at(slot, near.map_or(self.dry.view, Body::depths));
-                // A square that moved is carried over even if no time passed.
-                self.record_rings(commands, slot, corner, before, pairs.max(1));
+        // Water nothing has stirred for a good while is flat, near enough:
+        // there is nothing to work out until something stirs it again.
+        let quiet = if stirs.is_empty() {
+            (self.quiet.get() + elapsed).min(2.0 * RINGS_GONE)
+        } else {
+            0.0
+        };
+        self.quiet.set(quiet);
+        if let Ok(mut pending) = self.pending.try_borrow_mut() {
+            // Each thing stirs for as long as the frame it was said in.
+            if elapsed > 0.0 {
+                for stir in stirs {
+                    if pending.len() < 2 * MOST_STIRS {
+                        pending.push((*stir, elapsed));
+                    }
+                }
+            }
+            if pairs > 0 && quiet < RINGS_GONE {
+                // What stirs in these steps, each for the share of them
+                // it has left to stir for.
+                let mut acting = [Stir::default(); MOST_STIRS];
+                let mut count = 0;
+                for (stir, left) in pending.iter_mut() {
+                    if let Some(slot) = acting.get_mut(count) {
+                        let share = (left.min(stepped) / stepped).clamp(0.0, 1.0);
+                        *slot = Stir {
+                            lift: stir.lift * share,
+                            body: stir.body * share,
+                            ..*stir
+                        };
+                        count += 1;
+                    }
+                    *left -= stepped;
+                }
+                pending.retain(|(_, left)| *left > 0.0);
+                // SAFETY: the buffer was made writable and this long, and
+                // the caller guarantees the commands that read it last
+                // have finished; the same goes for the sets pointed at
+                // new depths.
+                unsafe {
+                    slot.step
+                        .write(&step_bytes(&self.weights, near, &acting[..count]))?;
+                    self.point_at(slot, near);
+                    self.record_rings(commands, slot, wanted, before, pairs);
+                }
+                self.corner.set(Some(wanted));
+            } else if quiet >= RINGS_GONE {
+                pending.clear();
             }
         }
         if let Some(body) = near {
             rows[..3].copy_from_slice(&body.rows());
         }
+        let corner = self.corner.get().unwrap_or(wanted);
         rows[7] = [corner[0], corner[1], RING_APART, RING_SIDE as f32];
         Ok(rows)
     }
 
-    /// Points a frame's ring sets at the picture of depths `depths`, if
-    /// they are not already.
+    /// Points a frame's ring sets at the depths of the water `near`, or
+    /// at "dry" with none, if they are not already.
     ///
     /// # Safety
     ///
     /// The commands last recorded with these sets must have finished.
-    unsafe fn point_at(&self, slot: &Frame, depths: vk::ImageView) {
-        if slot.depths.get() == depths {
+    unsafe fn point_at(&self, slot: &Frame, near: Option<&Body>) {
+        let id = near.map_or(0, |body| body.id);
+        if slot.depths.get() == id {
             return;
         }
         let pictures = [vk::DescriptorImageInfo::default()
-            .image_view(depths)
+            .image_view(near.map_or(self.dry.view, Body::depths))
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
         let writes = slot.ring_sets.map(|set| {
             vk::WriteDescriptorSet::default()
@@ -1222,7 +1348,7 @@ impl WaterWorks {
         });
         // SAFETY: the caller guarantees the sets are not in use.
         unsafe { self.gpu.device().update_descriptor_sets(&writes, &[]) };
-        slot.depths.set(depths);
+        slot.depths.set(id);
     }
 
     /// Records adding up each layer of waves into its pictures.

@@ -597,7 +597,7 @@ impl Playing {
             .world
             .ground
             .level
-            .water_at(eye[0], eye[2])
+            .water_around(eye)
             .map_or(0.0, |surface| surface - eye[1]);
         if player.submerged > 0.0 && eyes_under < 0.5 {
             let stir = if player.swimming {

@@ -182,6 +182,7 @@ impl SceneView {
             // Clouds need no more of the time than an f32 holds.
             #[allow(clippy::cast_possible_truncation)]
             time: self.seconds as f32,
+            exact: self.seconds,
             elapsed,
             stir: self.stir,
             // Only an upscaler mixes frames; without one a pattern that

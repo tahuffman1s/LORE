@@ -112,6 +112,34 @@ impl Level {
             .reduce(f32::max)
     }
 
+    /// How high the surface of the still water that `point` is in or
+    /// under the surface of stands, if it is in any: [`water_at`](Self::water_at)
+    /// for a point that has a height. A point under the water's own bed,
+    /// in a cellar under a pool or a cave under a lake, is not in it.
+    #[must_use]
+    pub fn water_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
+        // Feet rest a little in the bed they stand on.
+        let slack = 0.5;
+        self.waters
+            .iter()
+            .filter(|water| {
+                let deep = water.depth_at(x, z);
+                deep > 0.0 && y > water.level - deep - slack
+            })
+            .map(|water| water.level)
+            .reduce(f32::max)
+    }
+
+    /// How deep the still water at `x`, `z` is from its surface to its
+    /// bed, in metres; nothing where there is none.
+    #[must_use]
+    pub fn water_depth(&self, x: f32, z: f32) -> f32 {
+        self.waters
+            .iter()
+            .map(|water| water.depth_at(x, z))
+            .fold(0.0, f32::max)
+    }
+
     /// The still water of the level: each lake, pond and pool in the
     /// shape it took when it filled the hollow it was put in.
     #[must_use]

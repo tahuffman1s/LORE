@@ -337,7 +337,7 @@ mod tests {
             let steep: f32 = waves.layers.iter().map(|layer| layer.steepness).sum();
             let measured = 0.003 + 0.00512 * speed;
             assert!(
-                (steep / measured - 1.0).abs() < 1.0,
+                (steep / measured - 1.0).abs() < 0.02,
                 "{steep} against {measured} at {speed} m/s"
             );
         }

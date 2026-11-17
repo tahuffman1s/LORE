@@ -247,6 +247,25 @@ fn a_walk_through_the_shallows_is_splashed_and_a_deeper_one_waded() {
 }
 
 #[test]
+fn a_hop_into_a_puddle_is_one_small_splash_and_not_a_dive() {
+    // From a metre and a half up into water over the ankles.
+    let mut swum = Swum::in_tank(0.15, 1.5);
+    swum.run(60);
+    assert_eq!(swum.heard(NoiseKind::SmallSplash), 1, "{:?}", swum.noises);
+    assert_eq!(swum.heard(NoiseKind::Splash), 0, "{:?}", swum.noises);
+    assert_eq!(swum.heard(NoiseKind::Landing), 0, "{:?}", swum.noises);
+    let [WaterMark::Splash { moving, wide, .. }] = swum.marks[..] else {
+        panic!("one splash: {:?}", swum.marks);
+    };
+    // No wider than the legs, and no harder than that much water takes.
+    assert!(
+        wide < 0.3 && moving[1] > -4.5,
+        "{wide} wide, moving {moving:?}"
+    );
+    assert_eq!(swum.heard(NoiseKind::Bubbles), 0);
+}
+
+#[test]
 fn the_same_swim_marks_the_water_the_same_way_every_time() {
     let swim = || {
         let mut swum = Swum::in_tank(4.0, 3.0);

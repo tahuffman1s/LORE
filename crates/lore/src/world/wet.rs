@@ -61,7 +61,20 @@ pub(crate) fn tick(
     marks: &mut Vec<WaterMark>,
 ) {
     let [x, feet, z] = player.position;
-    let Some(surface) = level.water_at(x, z).filter(|_| player.submerged > 0.0) else {
+    // A head that was under and is now out of the water altogether (they
+    // climbed out, or were put somewhere else) still came up.
+    let was_under = before.head_under && !player.head_under;
+    let surface = level.water_around(player.position);
+    let Some(surface) = surface.filter(|_| player.submerged > 0.0) else {
+        if was_under {
+            noises.push(Noise {
+                kind: NoiseKind::Surface,
+                position: player.position,
+                loudness: 0.8,
+                delay: 0.0,
+                tick,
+            });
+        }
         return;
     };
     let deep = surface - feet;
@@ -85,9 +98,20 @@ pub(crate) fn tick(
         tick,
     };
 
+    // Into the water from the air, fast enough to be a splash and not a
+    // step: the splash is the landing, with no thud of feet as well.
+    // In water too shallow to stop them their feet find the bed a tick
+    // or two later, still falling: that is the same splash, not a second.
+    let dropped_in = before.submerged <= 0.0 && falling < -DROPPED_IN;
+    let still_dropping = before.submerged > 0.0 && falling < -DROPPED_IN;
+    if dropped_in || still_dropping {
+        noises.retain(|noise| !(noise.tick == tick && noise.kind.is_footfall()));
+    }
+
     // A foot that came down this tick came down in water.
     let mut stepped = false;
     if !player.swimming
+        && !dropped_in
         && let Some(footfall) = noises
             .iter_mut()
             .rev()
@@ -108,17 +132,25 @@ pub(crate) fn tick(
         });
     }
 
-    // Into the water from the air: the faster, the more of a splash.
-    if before.submerged <= 0.0 && falling < -DROPPED_IN {
-        let hard = (-falling / 9.0).clamp(0.25, 1.0);
+    // The faster they came down and the deeper the water, the more of a
+    // splash: a hop into a puddle wets the shins, a drop into a lake goes
+    // right under.
+    if dropped_in {
+        // How deep the water is there, not how far in they are yet.
+        let bed = level.water_depth(x, z);
+        let shallow = bed < SPLASHED_THROUGH;
+        // Water takes no more of a fall than there is water.
+        let taken = falling.max(-(2.5 + 9.0 * bed));
         marks.push(WaterMark::Splash {
             place: [x, surface, z],
-            moving: before.velocity,
-            wide: 0.5,
+            moving: [along_x, taken, along_z],
+            wide: if shallow { 0.2 } else { 0.5 },
         });
-        noises.push(noise(NoiseKind::Splash, hard));
-        // The splash is the landing: no thud of feet as well.
-        noises.retain(|noise| !(noise.tick == tick && noise.kind == NoiseKind::Landing));
+        if shallow {
+            noises.push(noise(NoiseKind::SmallSplash, 0.9));
+        } else {
+            noises.push(noise(NoiseKind::Splash, (-falling / 9.0).clamp(0.25, 1.0)));
+        }
     } else if before.submerged <= 0.0 && !stepped {
         // Let down into it gently.
         noises.push(noise(NoiseKind::SmallSplash, 0.5));

@@ -215,6 +215,8 @@ impl Headless {
         // Every frame is waited for, so the old meshes are not in use.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        // Nothing that flew in the old level is in the new one.
+        self.effects.clear();
         Ok(())
     }
 
@@ -861,8 +863,8 @@ mod tests {
             .collect();
         scene.waters.push(Water {
             name: None,
-            // No sheet stands for it: the instance it names is not there.
-            source: 7,
+            // No sheet stands for it.
+            sources: Vec::new(),
             level: 0.0,
             origin: [-5.0, -5.0],
             cell: 0.25,
@@ -956,6 +958,32 @@ mod tests {
             headless.render(&side).unwrap();
         }
         assert_eq!(headless.effects.count(), 0);
+        // Something moving through the water, with nothing thrown up,
+        // changes the picture too: that is its rings and its wake.
+        let at_rest = headless.screenshot(&side).unwrap();
+        for frame in 0..40_u8 {
+            headless.stir(crate::Stir {
+                place: [-0.8 + 0.04 * f32::from(frame), 0.2],
+                wide: 0.3,
+                moving: [2.4, 0.0],
+                body: 0.2,
+                ..crate::Stir::default()
+            });
+            headless.render(&side).unwrap();
+        }
+        assert_eq!(headless.effects.count(), 0);
+        let waked = headless.screenshot(&side).unwrap();
+        let changed = at_rest
+            .iter()
+            .zip(&waked)
+            .filter(|(before, after)| before.abs_diff(**after) > 16)
+            .count();
+        assert!(changed > 60, "a wake changed only {changed} bytes");
+        // The level set again is drawn again, water and all, with nothing
+        // left pointing at the old one's pictures.
+        headless.set_scene(&scene).unwrap();
+        headless.render(&side).unwrap();
+        headless.render(&above).unwrap();
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

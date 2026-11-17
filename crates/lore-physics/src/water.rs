@@ -30,6 +30,10 @@ const FEWEST_ACROSS: i32 = 64;
 const WANTED_ACROSS: f32 = 128.0;
 /// More points than this and the body is filled again, coarser.
 const MOST_POINTS: usize = 400_000;
+/// A grid with more points than this, dry ones round the water included,
+/// is filled again, coarser: a ring of water round a wide island is few
+/// points of water in a great many of land.
+const MOST_GRID: i64 = 3_000_000;
 /// How far under the surface the water looks for a way to the next point.
 /// Whatever comes this close to the surface holds it back.
 const UNDER: f32 = 0.002;
@@ -83,24 +87,29 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
         // The middle first, then each corner point: the first of them
         // that is over a bottom is where the water starts from.
         let found = sheet.seeds.iter().find_map(|seed| {
-            // A sheet laid over water that is already there adds nothing.
-            let already = waters.iter().any(|water| {
+            // A sheet laid over water that is already there adds nothing
+            // but itself: it is that water's too.
+            let already = waters.iter().position(|water| {
                 (water.level - sheet.level).abs() < LEVEL_WITHIN
                     && water.depth_at(seed[0], seed[1]) > 0.0
             });
-            if already {
-                return Some(None);
+            if let Some(already) = already {
+                return Some(Err(already));
             }
-            body(level, *seed, sheet.level).map(Some)
+            body(level, *seed, sheet.level).map(Ok)
         });
         match found {
-            Some(Some(mut water)) => {
+            Some(Ok(mut water)) => {
                 water.name.clone_from(&instance.name);
-                water.source = number;
+                water.sources = vec![number];
                 water.colour = sheet.colour;
                 waters.push(water);
             }
-            Some(None) => {}
+            Some(Err(already)) => {
+                if let Some(water) = waters.get_mut(already) {
+                    water.sources.push(number);
+                }
+            }
             None => unheld.push(
                 instance
                     .name
@@ -162,18 +171,21 @@ fn body(level: &Level, seed: [f32; 2], surface: f32) -> Option<Water> {
     let mut cell = FIRST_CELL;
     let mut coarsened = false;
     let mut last = None;
-    for _ in 0..8 {
-        let flood = Flood::run(level, seed, surface, cell);
-        match flood {
+    for _ in 0..12 {
+        // On the coarsest grid there is, water too wide even for that is
+        // kept as far as it got: a sea has no far shore to find.
+        let coarsest = cell >= COARSEST_CELL;
+        match Flood::run(level, seed, surface, cell, coarsest) {
             // Too large for this grid: a coarser one, and no finer again.
             None => {
-                if cell >= COARSEST_CELL {
-                    break;
-                }
                 cell = (cell * 2.0).min(COARSEST_CELL);
                 coarsened = true;
             }
             Some(flood) if flood.wet.is_empty() => return None,
+            Some(flood) if flood.sprawls() && !coarsest => {
+                cell = (cell * 2.0).min(COARSEST_CELL);
+                coarsened = true;
+            }
             Some(flood) => {
                 let across = flood.across();
                 let fine_enough = across >= FEWEST_ACROSS || cell <= FINEST_CELL || coarsened;
@@ -199,6 +211,10 @@ struct Flood {
     /// How deep the water is at each point it reached. The seed is point
     /// 0, 0.
     wet: HashMap<(i32, i32), f32>,
+    /// For each point the water was kept from by something in its way:
+    /// what is written down as its depth, so that the water reads as
+    /// ending where the thing stood and not somewhere short of it.
+    held: HashMap<(i32, i32), f32>,
     /// The least and the most column and row reached.
     low: (i32, i32),
     high: (i32, i32),
@@ -221,14 +237,24 @@ impl Flood {
         (self.high.0 - self.low.0).max(self.high.1 - self.low.1)
     }
 
+    /// Whether the grid that holds the water, with the dry ground round
+    /// it, would have more points than a grid may.
+    fn sprawls(&self) -> bool {
+        let across = i64::from(self.high.0 - self.low.0) + 1 + 2 * i64::from(MARGIN_POINTS.1);
+        let deep = i64::from(self.high.1 - self.low.1) + 1 + 2 * i64::from(MARGIN_POINTS.1);
+        across * deep > MOST_GRID || across.max(deep) > 8000
+    }
+
     /// Lets the water run. `None` if it reached more points than a grid
-    /// this fine may have.
-    fn run(level: &Level, seed: [f32; 2], surface: f32, cell: f32) -> Option<Self> {
+    /// this fine may have; unless `capped`, when it is kept as far as it
+    /// got.
+    fn run(level: &Level, seed: [f32; 2], surface: f32, cell: f32, capped: bool) -> Option<Self> {
         let mut flood = Self {
             seed,
             surface,
             cell,
             wet: HashMap::new(),
+            held: HashMap::new(),
             low: (0, 0),
             high: (0, 0),
         };
@@ -240,10 +266,8 @@ impl Flood {
         while let Some(here) = edge.pop_front() {
             let from = flood.at(here);
             // In water shallower than that, half way down what there is.
-            let under = flood
-                .wet
-                .get(&here)
-                .map_or(UNDER, |depth| UNDER.min(depth / 2.0));
+            let deep_here = flood.wet.get(&here).copied().unwrap_or(UNDER);
+            let under = UNDER.min(deep_here / 2.0);
             for step in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let there = (here.0 + step.0, here.1 + step.1);
                 if flood.wet.contains_key(&there) {
@@ -254,10 +278,16 @@ impl Flood {
                 // and there has to be a bottom when it gets there.
                 let start = Vector::new(from[0], surface - under, from[1]);
                 let along = Vector::new(to[0] - from[0], 0.0, to[1] - from[1]);
-                if level
-                    .raycast(start.to_array(), along.to_array(), cell)
-                    .is_some()
-                {
+                if let Some(hit) = level.raycast(start.to_array(), along.to_array(), cell) {
+                    // Held back, this far along the way. Read between
+                    // the two points, the depth comes to nothing where a
+                    // straight line from this point's depth to the next
+                    // one's crosses it: the next is given the depth that
+                    // puts the crossing where the water was stopped.
+                    let share = (hit.distance / cell).clamp(0.02, 1.0);
+                    let stands = (-deep_here * (1.0 - share) / share).clamp(Water::DRY, -0.0005);
+                    let kept = flood.held.entry(there).or_insert(stands);
+                    *kept = kept.max(stands);
                     continue;
                 }
                 let Some(depth) = depth_under(level, to, surface) else {
@@ -267,6 +297,9 @@ impl Flood {
                 flood.low = (flood.low.0.min(there.0), flood.low.1.min(there.1));
                 flood.high = (flood.high.0.max(there.0), flood.high.1.max(there.1));
                 if flood.wet.len() > MOST_POINTS {
+                    if capped {
+                        return Some(flood);
+                    }
                     return None;
                 }
                 edge.push_back(there);
@@ -290,9 +323,10 @@ impl Flood {
         for row in 0..deep {
             for column in 0..across {
                 let point = (first.0 + column, first.1 + row);
-                depths.push(match self.wet.get(&point) {
-                    Some(depth) => *depth,
-                    None => self.dry(level, point),
+                depths.push(match (self.wet.get(&point), self.held.get(&point)) {
+                    (Some(depth), _) => *depth,
+                    (None, Some(stands)) => *stands,
+                    (None, None) => self.dry(level, point),
                 });
             }
         }
@@ -300,7 +334,7 @@ impl Flood {
         let size = [across as u32, deep as u32];
         Water {
             name: None,
-            source: 0,
+            sources: Vec::new(),
             level: self.surface,
             origin: self.at(first),
             cell: self.cell,
@@ -429,7 +463,7 @@ mod tests {
         let [water] = &scene.waters[..] else {
             panic!("one body of water: {:?}", scene.waters.len());
         };
-        assert_eq!(water.source, 1);
+        assert_eq!(water.sources, [1]);
         assert_eq!(water.name.as_deref(), Some("pond"));
         assert!((water.level - 0.0).abs() < 1e-6);
         // Wet from wall to wall, two metres deep, and dry outside.
@@ -445,6 +479,62 @@ mod tests {
         assert_eq!(level.water_at(1.0, -2.0), Some(0.0));
         assert_eq!(level.water_at(5.0, 0.0), None);
         assert_eq!(level.waters().len(), 1);
+    }
+
+    #[test]
+    fn water_reads_as_reaching_its_walls_wherever_they_stand_between_points() {
+        // Walls that fall between the grid's points, not on them, a metre
+        // of water against them and three metres of wall over it.
+        for half in [3.07, 3.13, 3.21] {
+            let mut scene = scene(tank([0.0, 0.0], half, -1.0, 3.0), [0.0, 0.0, 0.0]);
+            fill(&mut scene);
+            let water = &scene.waters[0];
+            for (x, z) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let inside = water.depth_at(x * (half - 0.03), z * (half - 0.03));
+                let outside = water.depth_at(x * (half + 0.06), z * (half + 0.06));
+                assert!(inside > 0.0, "3 cm inside a wall at {half}: {inside}");
+                assert!(outside < 0.0, "6 cm outside a wall at {half}: {outside}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_sheet_on_the_same_water_is_that_waters_too() {
+        let mut scene = scene(tank([0.0, 0.0], 4.0, -2.0, 1.0), [-3.0, 0.0, -3.0]);
+        let second = Instance {
+            transform: {
+                let mut moved = STILL;
+                moved[3] = [5.0, 0.0, 5.0, 1.0];
+                moved
+            },
+            ..scene.instances[1].clone()
+        };
+        scene.instances.push(second);
+        fill(&mut scene);
+        assert_eq!(scene.waters.len(), 1);
+        assert_eq!(scene.waters[0].sources, [1, 2]);
+        assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+    }
+
+    #[test]
+    fn nobody_is_in_the_water_in_a_cellar_under_the_pool() {
+        // A tank two metres deep, and a floor ten metres under it.
+        let mut parts = tank([0.0, 0.0], 4.0, -2.0, 1.0);
+        parts.push(floor([-8.0, -8.0], [8.0, 8.0], -12.0));
+        let level = Level::from_scene(&scene(parts, [0.0, 0.0, 0.0]));
+        assert_eq!(level.water_around([1.0, -1.0, 1.0]), Some(0.0));
+        assert_eq!(
+            level.water_around([1.0, -2.0, 1.0]),
+            Some(0.0),
+            "on the bed"
+        );
+        assert_eq!(level.water_around([1.0, -11.0, 1.0]), None, "in the cellar");
+        assert_eq!(
+            level.water_around([6.0, -1.0, 0.0]),
+            None,
+            "beside the tank"
+        );
+        assert_eq!(level.water_at(1.0, 1.0), Some(0.0));
     }
 
     #[test]

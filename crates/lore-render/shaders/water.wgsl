@@ -155,7 +155,9 @@ fn under_water(point: vec3<f32>) -> bool {
         return false;
     }
     let deep = near_depth(point.xz);
-    if deep <= 0.0 {
+    // Not where there is none, and not under the water's own bed: a cave
+    // under a lake is dry.
+    if deep <= 0.0 || point.y < view.water.x - deep - 0.5 {
         return false;
     }
     if point.y < view.water.x - 0.5 {
@@ -181,7 +183,7 @@ fn sight_starts_under(world: vec3<f32>) -> bool {
         return false;
     }
     let deep = near_depth(eye.xz);
-    if deep <= 0.0 {
+    if deep <= 0.0 || over < -deep - 0.5 {
         return false;
     }
     if over < -0.5 {
@@ -305,7 +307,7 @@ fn light_through_water(world: vec3<f32>) -> f32 {
         return 1.0;
     }
     let deep = near_depth(world.xz);
-    if deep <= 0.0 {
+    if deep <= 0.0 || under > deep + 0.5 {
         return 1.0;
     }
     // The light came down the sun's way, bent towards straight down as it

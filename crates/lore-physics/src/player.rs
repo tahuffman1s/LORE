@@ -685,11 +685,12 @@ struct Water {
 }
 
 impl Water {
-    /// The water over `place`, however high `place` is.
+    /// The water over `place`, however high `place` is, unless it is
+    /// under the water's own bed.
     fn over(level: &Level, place: Vector) -> Self {
         Self {
             surface: level
-                .water_at(place.x, place.z)
+                .water_around(place.to_array())
                 .filter(|surface| surface.is_finite()),
             flow: Vector::ZERO,
         }

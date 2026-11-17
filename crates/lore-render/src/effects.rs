@@ -23,6 +23,10 @@ pub(crate) const MOST_BITS: usize = 6000;
 /// large, then how it moves, what kind it is and how much of it is left.
 pub(crate) const BIT_BYTES: usize = 32;
 
+/// How long a drop landing or a bubble bursting pushes on the water, in
+/// seconds: the same push whatever the frame rate.
+const DAB: f32 = 1.0 / 60.0;
+
 /// How fast things fall, in metres a second each second. The real figure:
 /// a drop that hung in the air would look like no water at all.
 const FALL: f32 = 9.81;
@@ -118,6 +122,16 @@ impl Effects {
             bytes: Vec::with_capacity(MOST_BITS * BIT_BYTES),
             dice: 0x2545_F491,
         }
+    }
+
+    /// Takes everything out of the air and the water: for a new level,
+    /// which has none of the old one's splashes.
+    pub(crate) fn clear(&mut self) {
+        self.bits.clear();
+        self.pushes.clear();
+        self.stirs.clear();
+        self.asked.clear();
+        self.bytes.clear();
     }
 
     /// A number from 0 to 1, different each time.
@@ -375,13 +389,16 @@ impl Effects {
                     {
                         // Back in the water: gone, and a ring where it fell.
                         gone = true;
-                        if self.stirs.len() < MOST_STIRS && bit.size > 0.007 {
-                            self.stirs.push(Stir {
-                                place: [bit.place[0], bit.place[2]],
-                                wide: (bit.size * 7.0).max(0.06),
-                                lift: -(bit.size * 60.0).min(1.0),
-                                ..Stir::default()
-                            });
+                        if self.pushes.len() < MOST_STIRS && bit.size > 0.007 {
+                            self.pushes.push((
+                                Stir {
+                                    place: [bit.place[0], bit.place[2]],
+                                    wide: (bit.size * 7.0).max(0.06),
+                                    lift: -(bit.size * 60.0).min(1.0),
+                                    ..Stir::default()
+                                },
+                                DAB,
+                            ));
                         }
                     }
                     // What comes down on dry land is gone a little after.
@@ -413,13 +430,16 @@ impl Effects {
                     match level {
                         Some(level) if bit.place[1] >= level - bit.size => {
                             gone = true;
-                            if self.stirs.len() < MOST_STIRS && bit.size > 0.012 {
-                                self.stirs.push(Stir {
-                                    place: [bit.place[0], bit.place[2]],
-                                    wide: 0.05,
-                                    lift: 0.6,
-                                    ..Stir::default()
-                                });
+                            if self.pushes.len() < MOST_STIRS && bit.size > 0.012 {
+                                self.pushes.push((
+                                    Stir {
+                                        place: [bit.place[0], bit.place[2]],
+                                        wide: 0.05,
+                                        lift: 0.6,
+                                        ..Stir::default()
+                                    },
+                                    DAB,
+                                ));
                             }
                         }
                         // A bubble with no water round it is no bubble.

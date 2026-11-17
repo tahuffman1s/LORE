@@ -302,6 +302,8 @@ impl Renderer {
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        // Nothing that flew in the old level is in the new one.
+        self.effects.clear();
         // Nothing of the old level belongs in the new one's first frame.
         if let Some(view) = &mut self.view {
             view.cut();

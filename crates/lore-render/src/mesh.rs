@@ -23,7 +23,7 @@ use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
 use crate::water::{
-    Bodies, Body, GRID_FINEST, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout,
+    Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
 };
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
@@ -80,6 +80,9 @@ pub(crate) struct View {
     pub(crate) rays: [[f32; 4]; 3],
     /// How long the scene has been drawn for, in seconds.
     pub(crate) time: f32,
+    /// The same, as exactly as it is kept: waves run by it, and after
+    /// some hours an f32 would move them in jerks.
+    pub(crate) exact: f64,
     /// How many seconds of that have passed since the frame before.
     pub(crate) elapsed: f32,
     /// How much whoever walks is stirring what they walk through: 0
@@ -385,7 +388,11 @@ impl Meshes {
         for (number, instance) in (0_u32..).zip(&scene.instances) {
             // A sheet of water that filled its hollow is drawn as the
             // shape it took, not as the sheet.
-            if scene.waters.iter().any(|water| water.source == number) {
+            if scene
+                .waters
+                .iter()
+                .any(|water| water.sources.contains(&number))
+            {
                 continue;
             }
             let (Some(mesh), Some(parts)) = (
@@ -639,8 +646,9 @@ pub(crate) struct MeshPipeline {
     /// The wind's waves and the rings: `None` only while the pipeline is
     /// being built.
     water: Option<WaterWorks>,
-    /// The picture of depths each frame's set was last pointed at.
-    near_water: RefCell<Vec<vk::ImageView>>,
+    /// The body of water whose depths each frame's set was last pointed
+    /// at; 0 for none.
+    near_water: RefCell<Vec<u64>>,
     /// Draws the drops, spray and bubbles a splash throws up.
     bit_pipeline: vk::Pipeline,
     /// Those bits, for each frame that can be in progress at once.
@@ -685,7 +693,7 @@ impl MeshPipeline {
             pipelines: [vk::Pipeline::null(); 4],
             body_pipeline: vk::Pipeline::null(),
             water: None,
-            near_water: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            near_water: RefCell::new(vec![0; frames.max(1)]),
             bit_pipeline: vk::Pipeline::null(),
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
@@ -1369,15 +1377,16 @@ impl MeshPipeline {
                     commands,
                     frame,
                     view.eye,
-                    (f64::from(view.time), view.elapsed),
-                    near,
+                    (view.exact, view.elapsed),
+                    (near, meshes.is_some_and(|meshes| meshes.has_water)),
                     stirs,
                 )
             }?;
             let depths = near.map_or(works.pictures()[3], Body::depths);
+            let id = near.map_or(0, |body| body.id);
             if let Ok(mut bound) = self.near_water.try_borrow_mut()
                 && let Some(bound) = bound.get_mut(frame % self.views.len().max(1))
-                && *bound != depths
+                && *bound != id
             {
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(depths)
@@ -1390,7 +1399,7 @@ impl MeshPipeline {
                 // SAFETY: the caller guarantees the commands last recorded
                 // with this frame's set have finished, so it is not in use.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
-                *bound = depths;
+                *bound = id;
             }
         }
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
@@ -1549,7 +1558,7 @@ impl MeshPipeline {
             // Water sees what is under it: the picture so far is copied
             // aside for it to read, and drawing carries on over the same
             // picture.
-            if drawn.is_some_and(|(meshes, _)| meshes.has_water) || !bits.is_empty() {
+            if meshes.is_some_and(|meshes| meshes.has_water) || !bits.is_empty() {
                 device.cmd_end_rendering(commands);
                 Self::keep_behind(device, commands, target);
                 let kept =
@@ -1597,6 +1606,10 @@ impl MeshPipeline {
                         &[],
                     );
                     for grid in (0..body.grids(view.eye)).rev() {
+                        // A grid none of this body lies in draws nothing.
+                        if !body.drawn_by(view.eye, grid) {
+                            continue;
+                        }
                         device.cmd_push_constants(
                             commands,
                             self.layout,
@@ -1986,17 +1999,7 @@ fn picture_write(
 /// how far apart its points are, how many there are and how high the water
 /// stands, and the water's colour. Its clearness is the number after.
 fn body_bytes(body: &Body, eye: [f32; 3], grid: u32) -> [u8; DRAW_BYTES] {
-    // Eleven grids at most: the sum fits an f32 exactly.
-    #[allow(clippy::cast_possible_wrap)]
-    let apart = GRID_FINEST * 2.0_f32.powi(grid as i32);
-    let middle = [0, 2].map(|axis| {
-        let eye = if eye[axis].is_finite() {
-            eye[axis]
-        } else {
-            0.0
-        };
-        (eye / (2.0 * apart)).round() * 2.0 * apart
-    });
+    let (apart, middle) = grid_laid(eye, grid);
     // Sizes are far below the point where f32 stops being exact.
     #[allow(clippy::cast_precision_loss)]
     let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
@@ -2249,6 +2252,7 @@ mod tests {
                 [9.0, 10.0, 11.0, 12.0],
             ],
             time: 13.0,
+            exact: 13.0,
             elapsed: 0.25,
             stir: 0.5,
             noise: 9.0,

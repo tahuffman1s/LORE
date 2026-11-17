@@ -280,9 +280,10 @@ impl Instance {
 pub struct Water {
     /// The name of the sheet it was filled from.
     pub name: Option<String>,
-    /// Which of the scene's instances that sheet is. It is not drawn: the
-    /// water is drawn in the shape it took.
-    pub source: u32,
+    /// Which of the scene's instances are sheets laid over this water:
+    /// the one it was filled from, and any other that lies on it. They are
+    /// not drawn: the water is drawn in the shape it took.
+    pub sources: Vec<u32>,
     /// How high the surface stands when it is still, in metres.
     pub level: f32,
     /// The x and z of the grid's first point: the one with the least of both.
@@ -329,7 +330,7 @@ impl Water {
     /// // A trough a metre long: two points across, dry at one end.
     /// let trough = Water {
     ///     name: None,
-    ///     source: 0,
+    ///     sources: vec![0],
     ///     level: 1.0,
     ///     origin: [0.0, 0.0],
     ///     cell: 1.0,
