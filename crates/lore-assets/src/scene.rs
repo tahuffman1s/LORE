@@ -125,6 +125,44 @@ pub struct Instance {
     pub extras: Option<String>,
 }
 
+impl Instance {
+    /// Whether the player collides with it. Everything is solid unless its
+    /// custom properties say otherwise: `solid` set to `false` or to 0, as
+    /// a level's maker does for grass, flowers and leaves, which are drawn
+    /// and cast shadows but are walked through.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let mut leaves = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"solid": false}"#.to_owned()),
+    /// };
+    /// assert!(!leaves.is_solid());
+    /// leaves.extras = None;
+    /// assert!(leaves.is_solid());
+    /// ```
+    #[must_use]
+    pub fn is_solid(&self) -> bool {
+        use gltf::json::{Value, deserialize::from_str};
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return true;
+        };
+        match properties.get("solid") {
+            Some(Value::Bool(solid)) => *solid,
+            // Blender writes a ticked box as 1 and an unticked one as 0 when
+            // the property was made as a whole number.
+            Some(Value::Number(solid)) => solid.as_f64() != Some(0.0),
+            _ => true,
+        }
+    }
+}
+
 /// A named place with no shape, such as a spawn point or an objective.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Marker {
