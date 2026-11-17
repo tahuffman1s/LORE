@@ -1,7 +1,8 @@
 // Draws a mesh with its material: textures, how metallic and how rough it
 // is, a normal map, baked shadowing and its own glow, lit by one sun and by
-// the sky above and the ground below. Also writes how far each pixel moved
-// since the last frame.
+// the sky above and the ground below, and in the shadow of whatever stands
+// between it and the sun. Also writes how far each pixel moved since the
+// last frame, and draws what the sun sees for those shadows.
 //
 // The light sums are the ones the glTF specification gives for its
 // metallic-roughness material (appendix B).
@@ -25,9 +26,25 @@ struct View {
     // The light a matte surface gets from the sky above and the ground below.
     sky: vec4<f32>,
     ground: vec4<f32>,
+    // The sun's shadows. The first number is 1 if there are any; the second
+    // is the width of one pixel of a shadow picture as a share of it; the
+    // third is how wide a shadow's soft edge grows for each metre between
+    // what casts it and what it falls on; the fourth changes every frame,
+    // to turn the pattern the edge is smoothed with.
+    shadows: vec4<f32>,
+    // For each shadow picture: in the first number how many metres one of
+    // its pixels covers, and in the second how many metres its depth spans.
+    shadow_reach: array<vec4<f32>, 4>,
+    // Takes a point in the world to each shadow picture: x and y from -1 to
+    // 1 across it, z from 0 nearest the sun to 1 farthest.
+    shadow_from_world: array<mat4x4<f32>, 4>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
+// What the sun sees: four pictures of how far from it the nearest surface
+// is, each covering a wider square round the eye than the one before.
+@group(0) @binding(1) var shadow_map: texture_depth_2d_array;
+@group(0) @binding(2) var shadow_sampler: sampler_comparison;
 
 // How one texture is laid over a mesh.
 struct Placing {
@@ -183,12 +200,124 @@ fn mirrored_share(mirror: vec3<f32>, roughness: f32, facing: f32) -> vec3<f32> {
     return mirror * scale_bias.x + scale_bias.y;
 }
 
+const SHADOW_PICTURES: i32 = 4;
+// How many places round a pixel are looked at to find what casts on it, and
+// how many to smooth the shadow's edge.
+const CASTER_LOOKS: i32 = 6;
+const EDGE_LOOKS: i32 = 10;
+const GOLDEN_ANGLE: f32 = 2.39996323;
+
+// A number from 0 to 1 that differs from each pixel to the next in a way
+// the eye does not pick out as a pattern (Jimenez, "Next Generation Post
+// Processing in Call of Duty: Advanced Warfare", 2014).
+fn scattered(pixel: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// Point `number` of `count` spread evenly over a disc of radius 1, the whole
+// disc turned by `turn` (a Vogel spiral).
+fn on_disc(number: i32, count: i32, turn: f32) -> vec2<f32> {
+    let out = sqrt((f32(number) + 0.5) / f32(count));
+    let round = f32(number) * GOLDEN_ANGLE + turn;
+    return vec2<f32>(cos(round), sin(round)) * out;
+}
+
+// How much of the sun reaches a point of the world on a surface facing
+// `normal`: 1 in the open, 0 in full shadow, and in between along a
+// shadow's edge, which is sharp where the shadow touches what casts it and
+// softer the farther it falls.
+//
+// The edge is smoothed by looking at a few places round the point, turned
+// differently for every pixel and every frame; the upscaler, which already
+// mixes each frame with the ones before, makes an even edge of them.
+fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let pixel_share = view.shadows.y;
+    let facing = clamp(dot(normal, view.towards_sun.xyz), 0.0, 1.0);
+    // How fast the surface falls away from the sun for each metre across
+    // it, which is how much farther a place beside the point may be before
+    // it counts as in shadow. Capped, or a surface the sun only grazes
+    // would never be shadowed.
+    let slope = min(sqrt(1.0 - facing * facing) / max(facing, 0.05), 6.0);
+    let noise = scattered(pixel + view.shadows.w * vec2<f32>(5.588238, 3.141593));
+    let turn = noise * 6.2831853;
+
+    for (var picture = 0; picture < SHADOW_PICTURES; picture++) {
+        let metres_a_pixel = view.shadow_reach[picture].x;
+        let depth_metres = view.shadow_reach[picture].y;
+        // Lifted off the surface a little, so that it does not shadow itself.
+        let lifted = world + normal * metres_a_pixel * (1.0 + 2.0 * (1.0 - facing));
+        let place = view.shadow_from_world[picture] * vec4<f32>(lifted, 1.0);
+        let uv = vec2<f32>(place.x * 0.5 + 0.5, 0.5 - place.y * 0.5);
+        // How far in from the picture's edge, as a share of it.
+        let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+        // The last tenth of a picture is handed over to the next one pixel
+        // by pixel, so that no line shows where one ends.
+        let band = 0.05;
+        if inside < 0.02 + band * noise || place.z <= 0.0 || place.z >= 1.0 {
+            continue;
+        }
+
+        // What casts on the point, on average, among the places round it
+        // that are nearer the sun.
+        let search_metres = max(0.35, 3.0 * metres_a_pixel);
+        let search = search_metres / metres_a_pixel * pixel_share;
+        let size = vec2<f32>(textureDimensions(shadow_map));
+        var casters = 0.0;
+        var caster_depth = 0.0;
+        for (var look = 0; look < CASTER_LOOKS; look++) {
+            let beside = on_disc(look, CASTER_LOOKS, turn);
+            let at = clamp(uv + beside * search, vec2<f32>(0.0), vec2<f32>(1.0));
+            let held = textureLoad(
+                shadow_map, vec2<i32>(at * size), picture, 0,
+            );
+            let allowed = (metres_a_pixel + length(beside) * search_metres * slope) / depth_metres;
+            if held < place.z - allowed {
+                casters += 1.0;
+                caster_depth += held;
+            }
+        }
+        if casters < 0.5 {
+            // Nothing wide casts here; something thinner than the gaps
+            // between those looks still may, so the point itself is asked.
+            return textureSampleCompareLevel(
+                shadow_map, shadow_sampler, uv, picture, place.z - metres_a_pixel / depth_metres,
+            );
+        }
+        // The farther the caster, the wider the edge.
+        let fall = (place.z - caster_depth / casters) * depth_metres;
+        let edge_metres = clamp(fall * view.shadows.z, 1.2 * metres_a_pixel, search_metres);
+        let edge = edge_metres / metres_a_pixel * pixel_share;
+
+        var reached = 0.0;
+        for (var look = 0; look < EDGE_LOOKS; look++) {
+            let beside = on_disc(look, EDGE_LOOKS, turn);
+            let allowed = (metres_a_pixel + length(beside) * edge_metres * slope) / depth_metres;
+            reached += textureSampleCompareLevel(
+                shadow_map, shadow_sampler, uv + beside * edge, picture, place.z - allowed,
+            );
+        }
+        var sunlit = reached / f32(EDGE_LOOKS);
+        // Shadows fade out towards the end of the widest picture.
+        if picture == SHADOW_PICTURES - 1 {
+            sunlit = mix(1.0, sunlit, clamp((inside - 0.02) / 0.1, 0.0, 1.0));
+        }
+        return sunlit;
+    }
+    return 1.0;
+}
+
 // The light the surface sends to the eye.
 fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var normal = normalize(corner.normal);
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
     normal *= side;
+    // Shadows fall on the surface as it is built, not as its normal map
+    // bends the light.
+    let sunlit = sunlight(corner.world, normal, corner.position.xy);
     if has(NORMAL) {
         let sample = textureSampleBias(
             normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
@@ -242,7 +371,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     );
     let fresnel = mirror + (1.0 - mirror) * pow(1.0 - eye_half, 5.0);
     let from_sun = ((1.0 - fresnel) * matte / PI + fresnel * density * visible)
-        * view.sun.rgb * n_sun;
+        * view.sun.rgb * n_sun * sunlit;
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
     var from_around = matte * surroundings(normal)
@@ -317,4 +446,45 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     pixel.colour = vec4<f32>(lit(corner, front, base.rgb), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
+}
+
+// What the sun sees of a mesh: only where it is. `draw.world_from_local`
+// here takes a corner point straight to the shadow picture being drawn.
+struct Cast {
+    @builtin(position) position: vec4<f32>,
+    // The first UV map, then the second, and the corner's own alpha.
+    @location(0) uv: vec4<f32>,
+    @location(1) alpha: f32,
+}
+
+@vertex
+fn vertex_shadow(
+    @location(0) position: vec3<f32>,
+    @location(3) colour: vec4<f32>,
+    @location(4) uv0: vec2<f32>,
+    @location(5) uv1: vec2<f32>,
+) -> Cast {
+    var seen: Cast;
+    seen.position = draw.world_from_local * vec4<f32>(position, 1.0);
+    seen.uv = vec4<f32>(uv0, uv1);
+    seen.alpha = colour.a;
+    return seen;
+}
+
+// A surface with holes cut in it casts a shadow with the same holes.
+@fragment
+fn fragment_shadow_cutout(seen: Cast) {
+    var alpha = material.base_colour.a * seen.alpha;
+    if has(BASE) {
+        let placing = material.placings[BASE];
+        let uv = select(seen.uv.xy, seen.uv.zw, placing.u.w > 0.5);
+        alpha *= textureSample(
+            base_texture,
+            base_sampler,
+            vec2<f32>(dot(placing.u.xy, uv) + placing.u.z, dot(placing.v.xy, uv) + placing.v.z),
+        ).a;
+    }
+    if alpha < material.emissive.w {
+        discard;
+    }
 }

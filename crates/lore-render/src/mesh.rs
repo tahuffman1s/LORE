@@ -1,20 +1,23 @@
 //! Draws a scene's meshes: each with its material, lit by the sun and the
-//! sky, nearer ones in front of farther ones.
+//! sky and shadowed from the sun by the others, nearer ones in front of
+//! farther ones.
 
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene};
 
 use crate::buffer::Buffer;
-use crate::camera::{Mat4, normal_matrix};
+use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
+use crate::shadow::{self, CASCADES, Cascade, ShadowMap};
 use crate::swapchain::COLOUR;
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
@@ -34,8 +37,12 @@ const VERTEX_BYTES: usize = 40;
 const DRAW_BYTES: usize = 128;
 
 /// The size in bytes of the shader's `View`: three 4 by 4 matrices and five
-/// rows of four numbers.
-const VIEW_BYTES: usize = 272;
+/// rows of four numbers, then for the shadows one row, a row for each
+/// shadow picture and a 4 by 4 matrix for each.
+const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64);
+
+/// The number the next scene's meshes are known by.
+static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
 
 /// How the scene is seen in one frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,18 +59,42 @@ pub(crate) struct View {
     /// How many sizes larger than usual textures are read (a negative mip
     /// bias, given as a positive number), for a picture that is upscaled.
     pub(crate) sharper: f32,
+    /// A number that differs from frame to frame when the frames are mixed
+    /// by the upscaler, which then smooths what is drawn with a pattern
+    /// turned by it; 0 when each frame is shown as it is.
+    pub(crate) noise: f32,
 }
 
 impl View {
-    fn bytes(&self, lighting: &Lighting) -> [u8; VIEW_BYTES] {
+    /// The shader's `View`. With no `shadows`, everything is in the sun.
+    fn bytes(
+        &self,
+        lighting: &Lighting,
+        shadows: Option<&[Cascade; CASCADES]>,
+    ) -> [u8; VIEW_BYTES] {
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
+        // The picture is far smaller than where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let pixel = 1.0 / shadow::SIZE as f32;
         let rows = [
             row(self.eye, -self.sharper),
             row(lighting.towards_sun, 0.0),
             row(lighting.sun, 0.0),
             row(lighting.sky, 0.0),
             row(lighting.ground, 0.0),
+            [
+                if shadows.is_some() { 1.0 } else { 0.0 },
+                pixel,
+                shadow::SUN_WIDTH,
+                self.noise,
+            ],
         ];
+        let mut reach = [[0.0; 4]; CASCADES];
+        let mut from_world = [[[0.0; 4]; 4]; CASCADES];
+        for (number, cascade) in shadows.into_iter().flatten().enumerate() {
+            reach[number] = [cascade.texel, cascade.depth, 0.0, 0.0];
+            from_world[number] = cascade.clip;
+        }
         let numbers = [self.clip, self.steady, self.before];
         let mut bytes = [0_u8; VIEW_BYTES];
         for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(
@@ -71,7 +102,9 @@ impl View {
                 .iter()
                 .flatten()
                 .flatten()
-                .chain(rows.iter().flatten()),
+                .chain(rows.iter().flatten())
+                .chain(reach.iter().flatten())
+                .chain(from_world.iter().flatten().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -197,6 +230,8 @@ struct Draw {
     /// The middle of the part in the world, which see-through parts are
     /// put in order by.
     middle: [f32; 3],
+    /// How far from its middle it reaches at most, in metres.
+    radius: f32,
     /// Where its triangles start in the index buffer, and how many numbers they are.
     first_index: u32,
     index_count: u32,
@@ -222,6 +257,12 @@ pub(crate) struct Meshes {
     see_through_from: usize,
     materials: Materials,
     lighting: Lighting,
+    /// A number no other scene's meshes have, by which the shadows drawn
+    /// for these are told from another level's.
+    id: u64,
+    /// The corners of the box that holds every part: the smallest x, y and
+    /// z, then the largest.
+    bounds: [[f32; 3]; 2],
 }
 
 impl Meshes {
@@ -272,6 +313,18 @@ impl Meshes {
                     .get(part.material as usize)
                     .unwrap_or(&fallback);
                 let [low, high] = [part.bounds.min, part.bounds.max];
+                // Half the box's diagonal, stretched as far as the part is
+                // stretched the most.
+                let half: f32 = (0..3)
+                    .map(|axis| ((high[axis] - low[axis]) * 0.5).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                let stretch = (0..3)
+                    .map(|column| {
+                        let [x, y, z, _] = instance.transform[column];
+                        (x * x + y * y + z * z).sqrt()
+                    })
+                    .fold(0.0, f32::max);
                 draws.push(Draw {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
@@ -281,6 +334,7 @@ impl Meshes {
                         &instance.transform,
                         [0, 1, 2].map(|axis| (low[axis] + high[axis]) * 0.5),
                     ),
+                    radius: half * stretch,
                     first_index,
                     index_count,
                     first_vertex,
@@ -316,12 +370,22 @@ impl Meshes {
                 Buffer::holding(gpu, &indices, vk::BufferUsageFlags::INDEX_BUFFER, doing)?,
             ))
         };
+        let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
+        for draw in draws.iter().filter(|draw| draw.radius.is_finite()) {
+            let [low, high] = &mut bounds;
+            for ((low, high), middle) in low.iter_mut().zip(high.iter_mut()).zip(draw.middle) {
+                *low = low.min(middle - draw.radius);
+                *high = high.max(middle + draw.radius);
+            }
+        }
         Ok(Self {
             buffers,
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
             lighting: Lighting::of(scene),
+            id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
+            bounds,
         })
     }
 }
@@ -449,6 +513,10 @@ pub(crate) struct MeshPipeline {
     layout: vk::PipelineLayout,
     /// One for each [`Surface`], in order.
     pipelines: [vk::Pipeline; 3],
+    /// Draw what the sun sees of solid parts and of cut-out ones.
+    shadow_pipelines: [vk::Pipeline; 2],
+    /// What the sun sees: `None` only while the pipeline is being built.
+    shadows: Option<ShadowMap>,
     /// Draws the editor's ground grid, with the same layout and view.
     grid: vk::Pipeline,
     pool: vk::DescriptorPool,
@@ -472,6 +540,8 @@ impl MeshPipeline {
             material_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             pipelines: [vk::Pipeline::null(); 3],
+            shadow_pipelines: [vk::Pipeline::null(); 2],
+            shadows: None,
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
@@ -487,14 +557,37 @@ impl MeshPipeline {
             }
         })?;
 
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
-        let sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(count)];
+        let shadows = ShadowMap::new(gpu)?;
+        let (shadow_view, shadow_sampler) = (shadows.view, shadows.sampler);
+        mesh.shadows = Some(shadows);
+        // The view, then the shadow pictures and what reads them.
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let sizes = [
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::SAMPLER,
+        ]
+        .map(|kind| {
+            vk::DescriptorPoolSize::default()
+                .ty(kind)
+                .descriptor_count(count)
+        });
         let ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .size(DRAW_BYTES as u32)];
@@ -547,11 +640,27 @@ impl MeshPipeline {
                 let buffers = [vk::DescriptorBufferInfo::default()
                     .buffer(buffer.handle)
                     .range(VIEW_BYTES as u64)];
-                let writes = [vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&buffers)];
+                let pictures = [vk::DescriptorImageInfo::default()
+                    .image_view(shadow_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let samplers = [vk::DescriptorImageInfo::default().sampler(shadow_sampler)];
+                let writes = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(&buffers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&pictures),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(2)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&samplers),
+                ];
                 device.update_descriptor_sets(&writes, &[]);
                 mesh.views.push((buffer, set));
             }
@@ -685,6 +794,66 @@ impl MeshPipeline {
                 }
             }
         }
+        // What the sun sees: only how far away each surface is, so there is
+        // no colour to write, and a solid surface needs no fragment shader
+        // at all. The nearer surface wins, with depth running from 0 at the
+        // sun. Each surface is pushed a little away from the sun, more the
+        // more it slopes, so that it does not shadow itself.
+        let shadow_raster = raster
+            .depth_bias_enable(true)
+            .depth_bias_constant_factor(2.0)
+            .depth_bias_slope_factor(2.0);
+        let shadow_depth = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+        let no_colour = vk::PipelineColorBlendStateCreateInfo::default();
+        for (cut_out, pipeline) in [false, true].into_iter().zip(&mut mesh.shadow_pipelines) {
+            if failed.is_some() {
+                break;
+            }
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_shadow"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_shadow_cutout"),
+            ];
+            let stages = if cut_out { &stages[..] } else { &stages[..1] };
+            let mut rendering =
+                vk::PipelineRenderingCreateInfo::default().depth_attachment_format(shadow::FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(stages)
+                .vertex_input_state(&vertex_input)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&shadow_raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&shadow_depth)
+                .color_blend_state(&no_colour)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above; the module holds both
+            // entry points named in `stages`.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => *pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
         // SAFETY: the module is only needed while pipelines are being created.
         unsafe { device.destroy_shader_module(module, None) };
         if let Some(code) = failed {
@@ -727,9 +896,19 @@ impl MeshPipeline {
             return Ok(());
         };
         let lighting = meshes.map_or_else(Lighting::default, |meshes| meshes.lighting);
+        // The sun's shadows of a level that has anything in it, drawn
+        // before the picture that reads them.
+        let cascades = meshes
+            .filter(|meshes| meshes.buffers.is_some())
+            .map(|meshes| shadow::cascades(view.eye, lighting.towards_sun, meshes.bounds));
+        if let (Some(meshes), Some(cascades)) = (meshes, &cascades) {
+            // SAFETY: the caller's guarantees cover the shadow pictures,
+            // which are this pipeline's own.
+            unsafe { self.record_shadows(commands, meshes, cascades) };
+        }
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
-        unsafe { view_buffer.write(&view.bytes(&lighting)) }?;
+        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref())) }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {
@@ -917,6 +1096,90 @@ impl MeshPipeline {
 }
 
 impl MeshPipeline {
+    /// Records drawing what the sun sees of `meshes` into each of
+    /// `cascades` that does not hold it already.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), before its render pass begins.
+    unsafe fn record_shadows(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        cascades: &[Cascade; CASCADES],
+    ) {
+        let (Some(shadows), Some((vertices, indices))) = (&self.shadows, &meshes.buffers) else {
+            return;
+        };
+        let device = self.gpu.device();
+        let stale = shadows.take_stale(meshes.id, cascades);
+        let casters = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
+        for (layer, cascade) in cascades.iter().enumerate() {
+            if !stale[layer] {
+                continue;
+            }
+            // SAFETY: the caller guarantees the command buffer is recording
+            // outside a render pass and that the meshes are live and of
+            // this device; the draws only name points, triangles and
+            // materials that `Meshes::new` made.
+            unsafe {
+                shadows.begin(commands, layer);
+                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+                // Both sides cast: a wall one triangle thick, or a rock
+                // with no underside, still stops the sun.
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                let mut last: Option<&Draw> = None;
+                for draw in casters
+                    .iter()
+                    .filter(|draw| cascade.holds(draw.middle, draw.radius))
+                {
+                    let cut_out = draw.surface == Surface::CutOut;
+                    if last.is_none_or(|last| last.surface != draw.surface) {
+                        device.cmd_bind_pipeline(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow_pipelines[usize::from(cut_out)],
+                        );
+                    }
+                    // Only a cut-out part reads its material, for its holes.
+                    if cut_out && last.is_none_or(|last| last.material != draw.material) {
+                        device.cmd_bind_descriptor_sets(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.layout,
+                            1,
+                            &[meshes.materials.set(draw.material)],
+                            &[],
+                        );
+                    }
+                    let seen = Draw {
+                        world: multiply(&cascade.clip, &draw.world),
+                        ..*draw
+                    };
+                    device.cmd_push_constants(
+                        commands,
+                        self.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        &draw_bytes(&seen),
+                    );
+                    device.cmd_draw_indexed(
+                        commands,
+                        draw.index_count,
+                        1,
+                        draw.first_index,
+                        draw.first_vertex,
+                        0,
+                    );
+                    last = Some(draw);
+                }
+                shadows.end(commands, layer);
+            }
+        }
+    }
+
     /// Records drawing one mesh part, changing only what differs from the
     /// part drawn before it.
     ///
@@ -1017,7 +1280,7 @@ impl Drop for MeshPipeline {
         // frees its sets.
         unsafe {
             let device = self.gpu.device();
-            for pipeline in self.pipelines {
+            for pipeline in self.pipelines.into_iter().chain(self.shadow_pipelines) {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.grid, None);
@@ -1178,6 +1441,7 @@ mod tests {
             material: 0,
             surface: Surface::Solid,
             middle: [0.0; 3],
+            radius: 1.0,
             first_index: 0,
             index_count: 3,
             first_vertex: 0,
@@ -1202,6 +1466,7 @@ mod tests {
             before: matrix,
             eye: [1.0, 2.0, 3.0],
             sharper: 1.5,
+            noise: 9.0,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
@@ -1209,7 +1474,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting);
+        let bytes = view.bytes(&lighting, None);
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -1224,6 +1489,24 @@ mod tests {
         assert_eq!([56, 57, 58].map(|at| number(&bytes, at)), [4.0, 5.0, 6.0]);
         assert_eq!([60, 61, 62].map(|at| number(&bytes, at)), [0.1, 0.2, 0.3]);
         assert_eq!([64, 65, 66].map(|at| number(&bytes, at)), [0.4, 0.5, 0.6]);
+
+        // The shadows follow: one row, a row for each picture, then a
+        // matrix for each.
+        assert_eq!(number(&bytes, 68), 0.0, "no shadows");
+        let cascades = shadow::cascades([0.0; 3], [0.0, 1.0, 0.0], [[-1.0; 3], [1.0; 3]]);
+        let bytes = view.bytes(&lighting, Some(&cascades));
+        assert_eq!(number(&bytes, 68), 1.0, "shadows");
+        assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
+        assert_eq!(number(&bytes, 72), cascades[0].texel);
+        assert_eq!(number(&bytes, 73), cascades[0].depth);
+        assert_eq!(number(&bytes, 84), cascades[3].texel);
+        assert_eq!(number(&bytes, 88), cascades[0].clip[0][0]);
+        assert_eq!(
+            number(&bytes, 151),
+            1.0,
+            "the last number of the last matrix"
+        );
+        assert_eq!(bytes.len(), 152 * 4);
     }
 
     #[test]

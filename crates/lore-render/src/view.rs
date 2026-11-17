@@ -137,6 +137,14 @@ impl SceneView {
             before: self.before.unwrap_or(steady),
             eye: camera.position,
             sharper: self.sharper,
+            // Only an upscaler mixes frames; without one a pattern that
+            // moved every frame would be seen to crawl.
+            #[allow(clippy::cast_precision_loss)]
+            noise: if self.upscale.is_some() {
+                (self.frame % 64) as f32
+            } else {
+                0.0
+            },
         };
         let cut = self.before.is_none();
         self.before = Some(steady);

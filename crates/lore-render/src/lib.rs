@@ -30,6 +30,7 @@ mod renderer;
 mod scene;
 #[cfg(test)]
 mod shading;
+mod shadow;
 mod swapchain;
 mod texture;
 mod tonemap;
