@@ -10,6 +10,7 @@ use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::Camera;
+use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
 use crate::font::Font;
 use crate::gpu::Gpu;
@@ -20,6 +21,7 @@ use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
+use crate::water::Stir;
 
 /// How many frames can be in progress on the graphics card at once.
 ///
@@ -156,6 +158,8 @@ pub struct Renderer {
     mesh: Option<MeshPipeline>,
     /// The level's meshes on the graphics card; `None` until a scene is set.
     meshes: Option<Meshes>,
+    /// What a splash threw up, and what is stirring the water.
+    effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
     /// Where the scene is seen from.
@@ -228,6 +232,7 @@ impl Renderer {
             tonemap: None,
             mesh: None,
             meshes: None,
+            effects: Effects::new(),
             grid: false,
             camera: Camera::default(),
             view: None,
@@ -332,6 +337,28 @@ impl Renderer {
         if let Some(view) = &mut self.view {
             view.cut();
         }
+    }
+
+    /// Says that something went into the water, or is pushing through it:
+    /// drops fly up from where it did, spray hangs for a moment, bubbles
+    /// are dragged under, and rings run out across the water.
+    ///
+    /// Call it once for each thing, when it happens. See [`Splash`].
+    pub fn splash(&mut self, splash: Splash) {
+        self.effects.splash(splash);
+    }
+
+    /// Says that something is in the water during the next frame drawn: a
+    /// leg wading, a body swimming. Rings run out from it, and it trails
+    /// a wake as it moves. Call it every frame for as long as it is there.
+    pub fn stir(&mut self, stir: Stir) {
+        self.effects.stir(stir);
+    }
+
+    /// Lets `count` bubbles go at `place`, under water: breath, or the air
+    /// a hand drags down with it. They rise and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.effects.bubbles(place, count);
     }
 
     /// Draws the editor's ground grid over the level, or stops drawing it,
@@ -545,6 +572,11 @@ impl Renderer {
             (now - last).as_secs_f32().min(LONGEST_FRAME_SECONDS)
         });
         self.last_frame = Some(now);
+        // What flies moves on by as long as the last frame took.
+        self.effects.step(
+            seconds,
+            self.meshes.as_ref().map_or(&[][..], Meshes::waters),
+        );
 
         // SAFETY: every handle used here belongs to `self.gpu`'s device and
         // is alive; the fence wait makes sure this slot's command buffer and
@@ -598,7 +630,8 @@ impl Renderer {
                     meshes: self.meshes.as_ref(),
                     sky: true,
                     grid: self.grid,
-                    stirs: &[],
+                    stirs: self.effects.stirs(),
+                    bits: self.effects.bytes(),
                 },
                 &self.camera,
                 seconds,

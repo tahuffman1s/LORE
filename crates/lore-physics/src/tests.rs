@@ -1890,9 +1890,10 @@ fn what_the_water_is_doing_to_a_player_can_be_read_tick_by_tick() {
     assert_eq!((dry.pulls, dry.breath, dry.hoist), (0, 1.0, 0.0));
 }
 
-/// A dry floor with a pond beside it that nobody goes into.
+/// A dry floor, with a sheet of water far off over nothing: no ground
+/// holds it, so there is no water in the level at all.
 fn level_of_land() -> Level {
-    flooded(&[floor()], [20.0, 20.0], [30.0, 30.0], 0.5)
+    flooded(&[floor()], [900.0, 900.0], [910.0, 910.0], 0.5)
 }
 
 #[test]

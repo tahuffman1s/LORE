@@ -565,11 +565,14 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // colours part a little on the way, red bent least.
     let reach = f32(size.y) * 0.05 * clamp(straight, 0.0, 1.5) / (1.0 + far * 0.25);
     let bend = normal.xz * reach;
-    var seen_at = clamp(pixel_at + vec2<i32>(bend), vec2<i32>(0), size - vec2<i32>(1));
+    var seen_at = pixel_at + vec2<i32>(bend);
+    let outside = any(seen_at < vec2<i32>(0)) || any(seen_at >= size);
+    seen_at = clamp(seen_at, vec2<i32>(0), size - vec2<i32>(1));
     var under = nearest / max(textureLoad(behind_depth, seen_at, 0), 0.0000001) - surface;
     var parted = vec2<i32>(bend * 0.06);
-    // Bent onto something in front of the water, it is not bent at all.
-    if under <= 0.0 {
+    // Bent onto something in front of the water, or off the picture, it
+    // is not bent at all.
+    if under <= 0.0 || outside {
         seen_at = pixel_at;
         under = straight;
         parted = vec2<i32>(0);
@@ -610,18 +613,17 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit) * 0.85;
     var foam = 0.0;
     if ring.w > 0.01 {
-        let bubbles = froth(wet.rest * 26.0, view.clouds.y);
-        foam = ring.w * smoothstep(0.25, 0.7, bubbles + ring.w * 0.5);
+        foam = foam_cover(froth(wet.rest, view.clouds.y), ring.w);
     }
     if fast >= 0.05 {
         // Carried along with the water, as its waves are.
         let turn = view.clouds.y / 1.5;
         let first = fract(turn);
-        let one = froth((wet.rest - wet.flow * (first - 0.5) * 1.5) * 24.0, view.clouds.y);
+        let one = froth(wet.rest - wet.flow * (first - 0.5) * 1.5, view.clouds.y);
         let other = froth(
-            (wet.rest - wet.flow * (fract(turn + 0.5) - 0.5) * 1.5) * 24.0 + 5.3, view.clouds.y,
+            wet.rest - wet.flow * (fract(turn + 0.5) - 0.5) * 1.5 + 5.3, view.clouds.y,
         );
-        let bubbles = mix(one, other, abs(2.0 * first - 1.0));
+        let lace = mix(one, other, abs(2.0 * first - 1.0));
         // It breaks where it is shallow and quick, in patches that stay
         // where the bed makes them, and wherever its own surface is steep.
         let shelf = 1.0 - smoothstep(0.015, 0.1, deep);
@@ -630,7 +632,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         ).r;
         let breaking = shelf * smoothstep(0.5, 1.8, fast) * smoothstep(0.38, 0.62, patches)
             + smoothstep(0.3, 0.7, length(slope)) * 0.6;
-        foam = max(foam, clamp(breaking, 0.0, 1.0) * smoothstep(0.3, 0.75, bubbles));
+        foam = max(foam, foam_cover(lace, breaking));
     }
     colour = mix(colour, white, clamp(foam, 0.0, 1.0));
 
@@ -643,32 +645,27 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     return pixel;
 }
 
-// How frothy the water is at a place, from 0 to 1: bubbles of several
-// sizes packed against each other, which shift and burst as time goes by.
+// How frothy the water is at a place, from 0 to 1: foam is bubbles packed
+// against each other, and what shows white is the walls between them, in
+// a lace of several sizes that shifts as bubbles burst. Read from the
+// block the clouds are shaped from, whose second number is packed cells.
 fn froth(place: vec2<f32>, seconds: f32) -> f32 {
-    var most = 0.0;
-    var scale = 1.0;
-    for (var size = 0; size < 3; size++) {
-        let at = place * scale + vec2<f32>(f32(size) * 7.3, f32(size) * 3.1);
-        let square = floor(at);
-        var nearest = 1.0;
-        for (var down = -1; down <= 1; down++) {
-            for (var across = -1; across <= 1; across++) {
-                let other = square + vec2<f32>(f32(across), f32(down));
-                // Where the bubble in that square sits, wandering slowly.
-                let dealt = fract(sin(vec2<f32>(
-                    dot(other, vec2<f32>(127.1, 311.7)),
-                    dot(other, vec2<f32>(269.5, 183.3)),
-                )) * 43758.5453);
-                let centre = other + 0.5 + 0.4 * sin(seconds * (0.6 + dealt.x) + 6.2831 * dealt);
-                nearest = min(nearest, length(at - centre));
-            }
-        }
-        // A bright rim round each bubble and a darker middle.
-        most = max(most, (1.0 - smoothstep(0.0, 0.55, nearest)) * (1.0 - 0.25 * f32(size)));
-        scale *= 2.3;
-    }
-    return most;
+    let wide = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 0.42, seconds * 0.021), 0.0,
+    ).g;
+    let small = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 0.13 + 0.37, 0.5 + seconds * 0.034), 0.0,
+    ).g;
+    // The middle of a cell is a bubble; between them is foam.
+    return (1.0 - wide) * 0.6 + (1.0 - small) * 0.4;
+}
+
+// How white foam makes the water at a place, given how much of it there
+// is there, from 0 to 1: a thin lace where there is little, and nearly
+// all white, with dark holes, where there is much.
+fn foam_cover(lace: f32, amount: f32) -> f32 {
+    let much = clamp(amount, 0.0, 1.0);
+    return smoothstep(1.0 - 0.9 * much, 1.25 - 0.9 * much, lace + 0.25) * min(much * 4.0, 1.0);
 }
 
 // Water whose surface a level's maker drew: a stream running downhill, or

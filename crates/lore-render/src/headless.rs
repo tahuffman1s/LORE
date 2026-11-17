@@ -9,6 +9,7 @@ use lore_ui::DrawList;
 
 use crate::buffer::Buffer;
 use crate::camera::Camera;
+use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
 use crate::font::Font;
 use crate::gpu::Gpu;
@@ -19,6 +20,7 @@ use crate::tonemap::{Canvas, Over, Then, TonemapPipeline};
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
+use crate::water::Stir;
 
 /// The format of the picture nobody sees: what most windows use, without
 /// the sRGB curve built in.
@@ -74,6 +76,8 @@ pub struct Headless {
     tonemap: TonemapPipeline,
     mesh: MeshPipeline,
     meshes: Option<Meshes>,
+    /// What a splash threw up, and what is stirring the water.
+    effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
     view: SceneView,
@@ -172,6 +176,7 @@ impl Headless {
             tonemap,
             mesh,
             meshes: None,
+            effects: Effects::new(),
             grid: false,
             view,
             extent,
@@ -221,6 +226,28 @@ impl Headless {
         self.view.still = !passing;
     }
 
+    /// Says that something went into the water, or is pushing through it:
+    /// drops fly up from where it did, spray hangs for a moment, bubbles
+    /// are dragged under, and rings run out across the water.
+    ///
+    /// Call it once for each thing, when it happens. See [`Splash`].
+    pub fn splash(&mut self, splash: Splash) {
+        self.effects.splash(splash);
+    }
+
+    /// Says that something is in the water during the next frame drawn: a
+    /// leg wading, a body swimming. Rings run out from it, and it trails
+    /// a wake as it moves. Call it every frame for as long as it is there.
+    pub fn stir(&mut self, stir: Stir) {
+        self.effects.stir(stir);
+    }
+
+    /// Lets `count` bubbles go at `place`, under water: breath, or the air
+    /// a hand drags down with it. They rise and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.effects.bubbles(place, count);
+    }
+
     /// Draws the editor's ground grid or not from now on, as
     /// [`Renderer::set_grid`](crate::Renderer::set_grid) does.
     pub fn set_grid(&mut self, shown: bool) {
@@ -252,6 +279,10 @@ impl Headless {
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
         let device = self.gpu.device();
         let start = Instant::now();
+        // What flies moves on by a frame, unless time is held still.
+        let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
+        self.effects
+            .step(passed, self.meshes.as_ref().map_or(&[][..], Meshes::waters));
         // SAFETY: every handle belongs to `self.gpu`'s device and is alive;
         // the last frame was waited for, so nothing here is still in use,
         // and this frame is waited for before anything can be destroyed.
@@ -274,7 +305,8 @@ impl Headless {
                     meshes: self.meshes.as_ref(),
                     sky: true,
                     grid: self.grid,
-                    stirs: &[],
+                    stirs: self.effects.stirs(),
+                    bits: self.effects.bytes(),
                 },
                 camera,
                 FRAME_SECONDS,

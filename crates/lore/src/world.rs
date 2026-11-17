@@ -24,11 +24,13 @@ use crate::sound_output::SoundAsk;
 mod bodies;
 mod ground;
 mod spawn;
+mod wet;
 
 pub(crate) use bodies::{Body, Dummy};
 pub use bodies::{DummyId, PlayerInput};
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
+pub use wet::WaterMark;
 
 /// What a training dummy is called to the game's script.
 const DUMMY_NAME: &str = "Training dummy";
@@ -63,6 +65,8 @@ pub struct World {
     walking: Walking,
     /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
+    /// What the player did to the water in the newest tick.
+    marks: Vec<WaterMark>,
     /// How many times the player has been put at a spawn point.
     spawned: u32,
 }
@@ -100,6 +104,7 @@ impl World {
             shooting: Shooting::default(),
             walking: Walking::default(),
             noises: Vec::new(),
+            marks: Vec::new(),
             spawned,
         }
     }
@@ -175,6 +180,15 @@ impl World {
     #[must_use]
     pub fn noises(&self) -> &[Noise] {
         &self.noises
+    }
+
+    /// What the player did to the water in the newest tick, in the order
+    /// it happened: each splash of going in, of a stroke or of a foot in
+    /// the shallows, and each lot of bubbles let go under it. The player
+    /// sees what is in this list ([`Playing`]): drops, rings and bubbles.
+    #[must_use]
+    pub fn water_marks(&self) -> &[WaterMark] {
+        &self.marks
     }
 
     /// Stands a training dummy with its feet at `feet`: something the
@@ -253,6 +267,7 @@ impl Game for World {
             ..
         } = &self.ground;
         let Body { player, asked } = &mut self.player;
+        let before = *player;
         player.step(level, rules, &asked.movement, *tick);
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick.
@@ -264,6 +279,17 @@ impl Game for World {
         self.noises.clear();
         self.walking
             .tick(player, self.tick, *tick, &mut self.noises);
+        // What they did to the water, if they are in any: seen and heard.
+        self.marks.clear();
+        wet::tick(
+            &before,
+            player,
+            level,
+            asked.movement.yaw,
+            (self.tick, *tick),
+            &mut self.noises,
+            &mut self.marks,
+        );
         // The weapon the player holds, by what they are pressing. The
         // script hears of every shot, hit and reload here.
         self.shooting.tick(
@@ -384,7 +410,19 @@ pub struct Playing {
     before: Option<[f32; 3]>,
     /// The noises of the ticks since the last frame, for the frame to play.
     heard: Vec<Noise>,
+    /// What was done to the water in the ticks since the last frame, for
+    /// the frame to show.
+    marks: Vec<WaterMark>,
+    /// Whether the rumble of being under water is playing.
+    under: bool,
 }
+
+/// The most marks on the water kept for a frame to show.
+const MOST_MARKS: usize = 64;
+
+/// What the rumble heard with the head under water is known by, so that
+/// it can be stopped: no script's sound has this number.
+const UNDER_WATER: lore_script::SoundId = lore_script::SoundId(u64::MAX);
 
 /// The most noises kept for a frame to play. With more than this in a
 /// quarter of a second the newest are left out: nobody could tell them
@@ -469,6 +507,8 @@ impl Playing {
             eye,
             before: None,
             heard: Vec::with_capacity(MOST_HEARD),
+            marks: Vec::with_capacity(MOST_MARKS),
+            under: false,
         }
     }
 
@@ -528,6 +568,75 @@ impl Playing {
     }
 }
 
+impl Playing {
+    /// Shows and sounds what the player is doing to the water: the marks
+    /// of the ticks since the last frame, the rings and wake of a body
+    /// that is in it now, and the hush of a head that is under it.
+    fn show_water(&mut self, frame: &mut Frame, eye: [f32; 3]) {
+        for mark in self.marks.drain(..) {
+            match mark {
+                WaterMark::Splash {
+                    place,
+                    moving,
+                    wide,
+                } => frame.splash(lore_render::Splash {
+                    place,
+                    moving,
+                    wide,
+                }),
+                WaterMark::Bubbles { place, count } => frame.bubbles(place, count),
+            }
+        }
+        let player = *self.world.player();
+        let [along_x, rising, along_z] = player.velocity;
+        let speed = along_x.hypot(along_z);
+        // Someone standing or swimming in the water moves it as they move:
+        // legs are narrower than a body, and one well under the surface
+        // does not trouble it at all.
+        let eyes_under = self
+            .world
+            .ground
+            .level
+            .water_at(eye[0], eye[2])
+            .map_or(0.0, |surface| surface - eye[1]);
+        if player.submerged > 0.0 && eyes_under < 0.5 {
+            let stir = if player.swimming {
+                lore_render::Stir {
+                    place: [eye[0], eye[2]],
+                    wide: 0.3,
+                    lift: rising * 0.25,
+                    moving: [along_x, along_z],
+                    body: 0.025,
+                    churn: (speed / 3.0).min(1.0) * 0.12,
+                }
+            } else {
+                let deep = player.submerged.min(1.0);
+                lore_render::Stir {
+                    place: [eye[0], eye[2]],
+                    wide: 0.16 + 0.14 * deep,
+                    lift: 0.0,
+                    moving: [along_x, along_z],
+                    body: 0.02 + 0.04 * deep,
+                    churn: (speed / 4.0).min(1.0) * 0.3 * (deep * 4.0).min(1.0),
+                }
+            };
+            frame.stir(stir);
+        }
+        // With the ears under, everything is muffled and the water hums.
+        frame.hear_under_water(player.head_under);
+        if player.head_under != self.under {
+            self.under = player.head_under;
+            if self.under {
+                if let Some(rumble) = self.world.game.sounds_mut().take("underwater", 0) {
+                    frame.sound(SoundAsk::Play(UNDER_WATER, rumble.looping()));
+                }
+            } else {
+                frame.sound(SoundAsk::Stop(UNDER_WATER));
+            }
+        }
+    }
+}
+
 impl Game for Playing {
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
@@ -546,6 +655,10 @@ impl Game for Playing {
         let noises = self.world.noises();
         self.heard
             .extend_from_slice(&noises[..noises.len().min(room)]);
+        let room = MOST_MARKS.saturating_sub(self.marks.len());
+        let marks = self.world.water_marks();
+        self.marks
+            .extend_from_slice(&marks[..marks.len().min(room)]);
     }
 
     /// Looks from the player's eyes and plays what was heard since the
@@ -574,6 +687,7 @@ impl Game for Playing {
         });
         let seen = self.seen_at(frame.alpha(), turn);
         frame.look_from(seen.eye, seen.yaw, seen.pitch);
+        self.show_water(frame, seen.eye);
     }
 }
 

@@ -114,7 +114,10 @@ fn fragment(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let inside = min(min(point.x, point.y), min(size.x - 1 - point.x, size.y - 1 - point.y));
     let edge = 1.0 - smoothstep(0.0, 40.0, f32(inside));
     let shallow = 1.0 - smoothstep(0.0, 0.25, deep);
-    let dying = (step.grid.z + 14.0 * edge * edge + 3.0 * shallow) * seconds;
+    // A wave that stands too tall for its length breaks, and is gone the
+    // faster the taller it stands.
+    let breaking = max(abs(here.r) - 0.04, 0.0) * 30.0;
+    let dying = (step.grid.z + 14.0 * edge * edge + 3.0 * shallow + breaking) * seconds;
     var next = (here.r * (2.0 - dying) - here.g - 9.81 / apart * seconds * seconds * pull)
         / (1.0 + dying);
 
@@ -134,6 +137,6 @@ fn fragment(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         churned = max(churned, stir.moving.w * near);
     }
     // Nothing here makes a wave taller than the water would hold.
-    next = clamp(next, -0.25, 0.25);
+    next = clamp(next, -0.14, 0.14);
     return vec4<f32>(next, here.r, churned, 0.0);
 }

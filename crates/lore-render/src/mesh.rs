@@ -8,11 +8,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
-use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene};
+use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene, Water};
 
 use crate::buffer::Buffer;
 use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
+use crate::effects::{BIT_BYTES, MOST_BITS};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
@@ -256,6 +257,9 @@ pub(crate) struct Contents<'a> {
     pub(crate) grid: bool,
     /// Whatever is stirring the water this frame.
     pub(crate) stirs: &'a [Stir],
+    /// The drops, spray and bubbles in the air and the water this frame,
+    /// as [`Effects::bytes`](crate::effects::Effects::bytes) gives them.
+    pub(crate) bits: &'a [u8],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -331,6 +335,9 @@ pub(crate) struct Meshes {
     /// The still water in the scene, lakes and ponds, each in the shape it
     /// took when it filled its hollow.
     bodies: Bodies,
+    /// The same water as the level's maker's file gave it, for what flies
+    /// to ask where the surface is.
+    waters: Vec<Water>,
     materials: Materials,
     lighting: Lighting,
     /// The sky under that light.
@@ -483,6 +490,7 @@ impl Meshes {
             has_water: !scene.waters.is_empty()
                 || draws.iter().any(|draw| draw.surface == Surface::Water),
             bodies: Bodies::new(gpu, scene)?,
+            waters: scene.waters.clone(),
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
@@ -491,6 +499,13 @@ impl Meshes {
             id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
             bounds,
         })
+    }
+}
+
+impl Meshes {
+    /// The still water of the scene, each body in the shape it took.
+    pub(crate) fn waters(&self) -> &[Water] {
+        &self.waters
     }
 }
 
@@ -626,6 +641,10 @@ pub(crate) struct MeshPipeline {
     water: Option<WaterWorks>,
     /// The picture of depths each frame's set was last pointed at.
     near_water: RefCell<Vec<vk::ImageView>>,
+    /// Draws the drops, spray and bubbles a splash throws up.
+    bit_pipeline: vk::Pipeline,
+    /// Those bits, for each frame that can be in progress at once.
+    bits: Vec<Buffer>,
     /// Draw what the sun sees of solid parts and of cut-out ones.
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
@@ -667,6 +686,8 @@ impl MeshPipeline {
             body_pipeline: vk::Pipeline::null(),
             water: None,
             near_water: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            bit_pipeline: vk::Pipeline::null(),
+            bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             clouds: None,
@@ -694,6 +715,14 @@ impl MeshPipeline {
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
         mesh.clouds = Some(clouds);
+        for _ in 0..frames.max(1) {
+            mesh.bits.push(Buffer::writable(
+                gpu,
+                (MOST_BITS * BIT_BYTES) as u64,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                doing,
+            )?);
+        }
         let water = WaterWorks::new(gpu, frames)?;
         let water_pictures = water.pictures();
         let (repeating, stopping) = (water.repeating, water.stopping);
@@ -1081,6 +1110,48 @@ impl MeshPipeline {
                         Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
                 }
             }
+            // Drops, spray and bubbles: a square for each, which the
+            // shader makes the corners of, from two rows of four numbers
+            // that are handed over once for each square.
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_bit"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_bit"),
+            ];
+            let bindings = [vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(BIT_BYTES as u32)
+                .input_rate(vk::VertexInputRate::INSTANCE)];
+            let attributes = [0_u32, 1].map(|row| {
+                vk::VertexInputAttributeDescription::default()
+                    .location(row)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(row * 16)
+            });
+            let bit_input = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&bindings)
+                .vertex_attribute_descriptions(&attributes);
+            let info = info.stages(&stages).vertex_input_state(&bit_input);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.bit_pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
         }
         // What the sun sees: only how far away each surface is, so there is
         // no colour to write, and a solid surface needs no fragment shader
@@ -1236,7 +1307,17 @@ impl MeshPipeline {
             sky,
             grid,
             stirs,
+            bits,
         } = contents;
+        // What flies is handed over before anything is recorded.
+        let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
+        let bits = &bits[..bits.len().min(MOST_BITS * BIT_BYTES)];
+        if let (Some(buffer), false) = (bit_buffer, bits.is_empty()) {
+            // SAFETY: the buffer was made writable and long enough for
+            // every bit there can be, and the caller guarantees the
+            // commands that read it last have finished.
+            unsafe { buffer.write(bits) }?;
+        }
         // The grid is laid out round the eye.
         let grid = grid.then_some(view.eye);
         let device = self.gpu.device();
@@ -1471,7 +1552,7 @@ impl MeshPipeline {
             // Water sees what is under it: the picture so far is copied
             // aside for it to read, and drawing carries on over the same
             // picture.
-            if drawn.is_some_and(|(meshes, _)| meshes.has_water) {
+            if drawn.is_some_and(|(meshes, _)| meshes.has_water) || !bits.is_empty() {
                 device.cmd_end_rendering(commands);
                 Self::keep_behind(device, commands, target);
                 let kept =
@@ -1554,6 +1635,21 @@ impl MeshPipeline {
                         last = Some(draw);
                     }
                 }
+            }
+            // What a splash threw up, over the water it came out of.
+            if let (Some(buffer), false) = (bit_buffer, bits.is_empty()) {
+                device.cmd_bind_pipeline(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.bit_pipeline,
+                );
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_bind_vertex_buffers(commands, 0, &[buffer.handle], &[0]);
+                // There is room for a few thousand at most.
+                #[allow(clippy::cast_possible_truncation)]
+                let count = (bits.len() / BIT_BYTES) as u32;
+                device.cmd_draw(commands, 6, count, 0, 0);
             }
             // After the meshes, so that its see-through lines lie over them.
             if let Some(eye) = grid {
@@ -1958,6 +2054,7 @@ impl Drop for MeshPipeline {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.body_pipeline, None);
+            device.destroy_pipeline(self.bit_pipeline, None);
             device.destroy_pipeline(self.sky, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);

@@ -15,6 +15,7 @@
 mod buffer;
 mod camera;
 mod clouds;
+mod effects;
 mod error;
 mod font;
 mod gpu;
@@ -43,6 +44,7 @@ mod water;
 mod waves;
 
 pub use camera::Camera;
+pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use font::Font;
 pub use gpu::{Gpu, validation_errors};

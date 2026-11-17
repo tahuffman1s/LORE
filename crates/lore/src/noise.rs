@@ -24,6 +24,18 @@ pub enum NoiseKind {
     DryFire,
     /// A reload beginning.
     Reload,
+    /// A body dropping into water.
+    Splash,
+    /// A foot coming down in shallow water, or something small going in.
+    SmallSplash,
+    /// A step through water up to the knees or deeper.
+    Wade,
+    /// One stroke of a swimmer at the surface.
+    SwimStroke,
+    /// The head coming up out of the water.
+    Surface,
+    /// Air let go under water.
+    Bubbles,
 }
 
 impl NoiseKind {
@@ -38,7 +50,19 @@ impl NoiseKind {
             Self::Gunshot => "gunshot",
             Self::DryFire => "dry-fire",
             Self::Reload => "reload",
+            Self::Splash => "splash",
+            Self::SmallSplash => "splash-small",
+            Self::Wade => "wade",
+            Self::SwimStroke => "swim-stroke",
+            Self::Surface => "surface",
+            Self::Bubbles => "bubbles",
         }
+    }
+
+    /// Whether it is a foot coming down on the ground: a step or a landing.
+    #[must_use]
+    pub const fn is_footfall(self) -> bool {
+        matches!(self, Self::Footstep | Self::Landing)
     }
 
     /// How far it carries at full loudness: `far` is where it can no
@@ -46,7 +70,20 @@ impl NoiseKind {
     #[must_use]
     pub const fn range(self) -> Range {
         match self {
-            Self::Footstep | Self::Landing => Range::FOOTSTEP,
+            Self::Footstep
+            | Self::Landing
+            | Self::SmallSplash
+            | Self::Wade
+            | Self::SwimStroke
+            | Self::Surface => Range::FOOTSTEP,
+            Self::Splash => Range {
+                near: 2.0,
+                far: 70.0,
+            },
+            Self::Bubbles => Range {
+                near: 1.0,
+                far: 15.0,
+            },
             Self::Gunshot => Range::GUNFIRE,
             Self::DryFire | Self::Reload => Range {
                 near: 1.0,

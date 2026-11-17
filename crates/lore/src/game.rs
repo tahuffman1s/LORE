@@ -1,6 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
 use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
+use lore_render::{Splash, Stir};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -73,6 +74,14 @@ pub struct Frame {
     /// The sounds to start and stop. Empty, and so without memory of its
     /// own, in a frame that asks for none.
     sounds: Vec<SoundAsk>,
+    /// What went into the water, what is in it, and the bubbles let go
+    /// under it, for the picture. Empty, and so without memory of their
+    /// own, in a frame with none.
+    splashes: Vec<Splash>,
+    stirs: Vec<Stir>,
+    bubbles: Vec<([f32; 3], u32)>,
+    /// Whether the ears are under water, if the game said.
+    under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
     #[cfg(feature = "editor")]
     panels: Option<PanelFrame>,
@@ -151,6 +160,10 @@ impl Frame {
             action_set: None,
             rumble: None,
             sounds: Vec::new(),
+            splashes: Vec::new(),
+            stirs: Vec::new(),
+            bubbles: Vec::new(),
+            under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
             #[cfg(feature = "editor")]
@@ -611,6 +624,66 @@ impl Frame {
     /// with no window has no speakers, so nothing happens there.
     pub(crate) fn sound(&mut self, ask: SoundAsk) {
         self.sounds.push(ask);
+    }
+
+    /// Says that something went into the water, or pushed through its
+    /// surface, since the last frame: drops fly up from where it did,
+    /// spray hangs for a moment, bubbles are dragged under, and rings run
+    /// out across the water. The player's own splashes are shown without
+    /// being asked for; this is for whatever else a game drops in.
+    ///
+    /// ```
+    /// use lore::render::Splash;
+    ///
+    /// fn stone_lands(frame: &mut lore::Frame) {
+    ///     frame.splash(Splash {
+    ///         place: [4.0, 0.0, -7.5],
+    ///         moving: [1.0, -6.0, 0.0],
+    ///         wide: 0.08,
+    ///     });
+    /// }
+    /// ```
+    pub fn splash(&mut self, splash: Splash) {
+        self.splashes.push(splash);
+    }
+
+    /// Says that something is in the water during this frame: rings run
+    /// out from it, and it trails a wake as it moves. Say it every frame
+    /// for as long as the thing is there. The player is there already.
+    pub fn stir(&mut self, stir: Stir) {
+        self.stirs.push(stir);
+    }
+
+    /// Lets `count` bubbles go at `place`, which is under water: they rise
+    /// and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.bubbles.push((place, count));
+    }
+
+    /// Says whether the ears are under water this frame: with them under,
+    /// everything that is heard is muffled.
+    pub(crate) fn hear_under_water(&mut self, under: bool) {
+        self.under_water = Some(under);
+    }
+
+    /// The splashes said this frame, in order.
+    pub(crate) fn take_splashes(&mut self) -> Vec<Splash> {
+        std::mem::take(&mut self.splashes)
+    }
+
+    /// What was said to be in the water this frame.
+    pub(crate) fn take_stirs(&mut self) -> Vec<Stir> {
+        std::mem::take(&mut self.stirs)
+    }
+
+    /// The bubbles let go this frame: where, and how many.
+    pub(crate) fn take_bubbles(&mut self) -> Vec<([f32; 3], u32)> {
+        std::mem::take(&mut self.bubbles)
+    }
+
+    /// Whether the ears are under water, if the game said this frame.
+    pub(crate) fn under_water(&self) -> Option<bool> {
+        self.under_water
     }
 
     /// The sounds asked for this frame, in order.

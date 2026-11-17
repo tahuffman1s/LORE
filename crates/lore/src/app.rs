@@ -714,9 +714,26 @@ impl<G: Game> App<G> {
             }
             self.last_view = Some(view.position);
         }
+        // What was done to the water since the last frame is shown.
+        let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
+        let bubbles = frame.take_bubbles();
+        if let Some(renderer) = &mut self.renderer {
+            for splash in splashes {
+                renderer.splash(splash);
+            }
+            for stir in stirs {
+                renderer.stir(stir);
+            }
+            for (place, count) in bubbles {
+                renderer.bubbles(place, count);
+            }
+        }
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);
+        }
+        if let Some(under) = frame.under_water() {
+            self.sound.set_underwater(if under { 1.0 } else { 0.0 });
         }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);

@@ -122,10 +122,6 @@ mod output {
         /// splash of going in included. Say it every frame, beside
         /// [`listen_from`](Self::listen_from); the change is eased over a
         /// tenth of a second, so a plain 0 or 1 does not click.
-        #[allow(
-            dead_code,
-            reason = "the world does not say where the water is yet (#286)"
-        )]
         pub(crate) fn set_underwater(&mut self, amount: f32) {
             self.voices.set_underwater(amount);
         }

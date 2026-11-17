@@ -231,6 +231,7 @@ pub(crate) fn frames(
                         sky: false,
                         grid: false,
                         stirs: &[],
+                        bits: &[],
                     },
                     camera,
                     1.0 / 60.0,

@@ -174,7 +174,7 @@ impl Waves {
             for along in -MOST_FITS..MOST_FITS {
                 for down in -MOST_FITS..MOST_FITS {
                     let fits = along * along + down * down;
-                    if fits < FEWEST_FITS * FEWEST_FITS || fits >= MOST_FITS * MOST_FITS {
+                    if !(FEWEST_FITS * FEWEST_FITS..MOST_FITS * MOST_FITS).contains(&fits) {
                         continue;
                     }
                     #[allow(clippy::cast_precision_loss)]
