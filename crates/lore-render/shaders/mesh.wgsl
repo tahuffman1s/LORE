@@ -51,6 +51,10 @@ struct View {
     // for 24 heights above the horizon (see `sky.rs`).
     sky_air: array<vec4<f32>, 24>,
     sky_haze: array<vec4<f32>, 24>,
+    // The fog: how much of what is behind a metre of it is hidden at the
+    // height in the third number, and how fast it thins with each metre
+    // above that. The first is 0 if there is none.
+    fog: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -242,6 +246,38 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     // Under the horizon is dark ground: where a level ends, or has a hole,
     // it does not open onto more sky.
     return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
+}
+
+// `colour` as it is seen from the eye through the fog between: far things
+// fade into the colour of the sky low down in their direction, so hills
+// turn pale and blue with distance and the land meets the sky without a
+// line.
+//
+// The fog is thickest low down and thins evenly upwards, which lets how
+// much of it a line of sight crosses be worked out exactly, with no steps
+// (Quilez, "Better Fog").
+fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    if view.fog.x <= 0.0 {
+        return colour;
+    }
+    let line = world - view.eye.xyz;
+    let far = length(line);
+    if far < 0.001 {
+        return colour;
+    }
+    let direction = line / far;
+    let thins = view.fog.y;
+    // How thick it is at the eye; an eye far below the fog's own height
+    // is in fog as thick as it gets.
+    let at_eye = view.fog.x * exp(min((view.fog.z - view.eye.y) * thins, 3.0));
+    let climbs = direction.y * thins;
+    var crossed = at_eye * far;
+    if abs(climbs) > 0.00001 {
+        crossed = at_eye * (1.0 - exp(-climbs * far)) / climbs;
+    }
+    let hidden = 1.0 - exp(-max(crossed, 0.0));
+    let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
+    return mix(colour, sky_colour(low), hidden);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
@@ -502,7 +538,7 @@ fn motion(corner: Corner) -> vec2<f32> {
 fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
     let base = base_colour(corner);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(lit(corner, front, base.rgb), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), 1.0);
     pixel.motion = motion(corner);
     return pixel;
 }
@@ -513,7 +549,7 @@ fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
 fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
     let base = base_colour(corner);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(lit(corner, front, base.rgb), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), 1.0);
     pixel.motion = motion(corner);
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
@@ -537,7 +573,7 @@ struct Mixed {
 fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let base = base_colour(corner);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(lit(corner, front, base.rgb), base.a);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }

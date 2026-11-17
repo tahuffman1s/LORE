@@ -19,6 +19,13 @@ use crate::mesh::Lighting;
 pub(crate) const CLOUD_COVER: f32 = 0.5;
 pub(crate) const CLOUD_HEIGHT: f32 = 1500.0;
 
+/// The fog: how much of what is behind one metre of it is hidden, at the
+/// height it is thickest (0, where levels are built), and how fast it
+/// thins with each metre above that. A light haze: things 300 metres off
+/// are a fifth gone and the far hills fade into the sky. A game cannot
+/// set it yet.
+pub(crate) const FOG: [f32; 3] = [0.0008, 0.012, 0.0];
+
 /// How many heights above the horizon the sky is worked out for.
 pub(crate) const HEIGHTS: usize = 24;
 

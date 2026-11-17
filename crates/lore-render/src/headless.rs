@@ -617,6 +617,72 @@ mod tests {
     }
 
     #[test]
+    fn far_ground_fades_into_the_colour_of_the_sky() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor four kilometres across.
+        let mut scene = Scene::default();
+        let corners = [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]];
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: corners.map(|[x, z]| [x * 2000.0, 0.0, z * 2000.0]).to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        headless.set_scene(&scene).unwrap();
+        // From sixty metres up, looking a little down: the floor at the
+        // foot of the picture is under a hundred metres off, and just
+        // under the horizon it is more than a kilometre away.
+        let camera = Camera {
+            position: [0.0, 60.0, 0.0],
+            pitch: -0.3,
+            ..Camera::default()
+        };
+        let picture = headless.screenshot(&camera).unwrap();
+        let pixel = |x: usize, y: usize| {
+            let at = (y * SIZE[0] + x) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        // The horizon is between rows 18 and 19 of the picture.
+        let (near, far, sky) = (pixel(48, 62), pixel(48, 21), pixel(48, 16));
+        assert!(
+            (near[0] - near[2]).abs() < 30,
+            "white up close, whatever shades it: {near:?}"
+        );
+        assert!(
+            far[2] - far[0] > near[2] - near[0] + 5,
+            "bluer with distance: {far:?} against {near:?}"
+        );
+        // And it meets the sky without a line.
+        assert!(
+            (0..3).all(|colour| (far[colour] - sky[colour]).abs() < 45),
+            "{far:?} against the sky's {sky:?}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn frames_are_drawn_and_timed_with_no_window() {
         let Some(mut headless) = headless(96, 64) else {
             return;

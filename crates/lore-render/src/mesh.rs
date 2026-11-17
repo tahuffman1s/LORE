@@ -44,9 +44,9 @@ const DRAW_BYTES: usize = 128;
 const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64) + SKY_BYTES;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
-/// for the clouds, and a row for each height of the air's light and of the
-/// haze's.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS);
+/// for the clouds, a row for each height of the air's light and of the
+/// haze's, and one for the fog.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -117,6 +117,9 @@ impl View {
             sky::CLOUD_HEIGHT,
             if sky.is_some() { 1.0 } else { 0.0 },
         ];
+        // Fog is the colour of the sky, so there is none without one.
+        let [thick, thins, height] = sky::FOG;
+        let fog = [if sky.is_some() { thick } else { 0.0 }, thins, height, 0.0];
         let mut scattered = [[0.0; 4]; 2 * sky::HEIGHTS];
         if let Some(sky) = sky {
             for (row, [red, green, blue]) in
@@ -137,7 +140,8 @@ impl View {
                 .chain(from_world.iter().flatten().flatten())
                 .chain(self.rays.iter().flatten())
                 .chain(&clouds)
-                .chain(scattered.iter().flatten()),
+                .chain(scattered.iter().flatten())
+                .chain(&fog),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -1678,6 +1682,9 @@ mod tests {
         assert_eq!(number(&bytes, 260), above.air[23][0]);
         assert_eq!(number(&bytes, 264), above.haze[0][0]);
         assert_eq!(number(&bytes, 358), above.haze[23][2]);
+        assert_eq!(number(&bytes, 360), sky::FOG[0], "the fog");
+        assert_eq!(number(&bytes, 361), sky::FOG[1]);
+        assert_eq!(bytes.len(), 364 * 4);
     }
 
     #[test]
