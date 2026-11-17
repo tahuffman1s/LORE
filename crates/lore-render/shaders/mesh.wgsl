@@ -356,7 +356,9 @@ fn mirrored_share(mirror: vec3<f32>, roughness: f32, facing: f32) -> vec3<f32> {
 
 const SKY_HEIGHTS: f32 = 24.0;
 // How many steps a line of sight takes through the clouds.
-const CLOUD_STEPS: i32 = 64;
+const CLOUD_STEPS: i32 = 56;
+// How many of them are spent on the lower half of the layer.
+const CLOUD_LOW_STEPS: i32 = 32;
 // How strongly haze sends light onwards, as in `sky.rs`.
 const HAZE_ONWARDS: f32 = 0.8;
 
@@ -481,13 +483,24 @@ fn cloud_kind(place: vec3<f32>, fine: bool) -> vec2<f32> {
     if up <= 0.0 || up >= 1.0 {
         return vec2<f32>(0.0);
     }
+    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
+    return cloud_in(place, weather_over(place.xz - drift), fine);
+}
+
+// The same, for whoever already knows the weather over the place (what
+// `weather_over` says of it): the weather changes over kilometres, so one
+// reading of it serves for places near each other.
+fn cloud_in(place: vec3<f32>, weather: vec3<f32>, fine: bool) -> vec2<f32> {
+    let up = (place.y - view.clouds.z) / CLOUD_DEPTH;
+    if up <= 0.0 || up >= 1.0 {
+        return vec2<f32>(0.0);
+    }
     let seconds = view.clouds.y;
     let aloft = vec3<f32>(view.wind.x, 0.0, view.wind.y) * view.wind.z * 2.4;
     let carried = place - aloft * seconds;
-    let weather = weather_over(carried.xz);
     // Flat underneath, heaped on top: the higher up, the less of the sky
     // is cloud.
-    let heap = 1.0 - smoothstep(0.3 * weather.y, weather.y, up) * 0.95;
+    let heap = 1.0 - smoothstep(0.3 * weather.y, weather.y, up);
     // A storm is a tower as wide at the top as at the bottom, where it
     // meets air it cannot rise through and spreads out into an anvil.
     let tower = (0.72 + 0.28 * smoothstep(0.7, 0.86, up)) * (1.0 - smoothstep(0.93, 1.0, up));
@@ -591,6 +604,10 @@ fn under_clouds(world: vec3<f32>) -> f32 {
     var crossed = 0.0;
     var storm = 0.0;
     for (var look = 0; look < 3; look++) {
+        // Only a storm reaches as high as the last look.
+        if look == 2 && storm <= 0.0 {
+            break;
+        }
         let height = view.clouds.z + looks[look].x;
         let found = cloud_kind(world + sun * ((height - world.y) * slope), false);
         crossed += cloud_water(found.x) * (1.0 + 2.0 * found.y) * looks[look].y;
@@ -1100,17 +1117,46 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 
         let enters = max(to_clouds(direction.y, view.clouds.z - eye_height), 0.0);
         let leaves = min(to_clouds(direction.y, view.clouds.z + CLOUD_DEPTH - eye_height), CLOUD_REACH);
-        let stride = (leaves - enters) / f32(CLOUD_STEPS);
+        // Fair-weather cloud keeps to the lower half of the layer and only
+        // a storm climbs through the upper: so the lower half gets most of
+        // the steps, and the upper is walked only when a few looks along
+        // it find a storm over it.
+        let middle = clamp(
+            to_clouds(direction.y, view.clouds.z + 0.5 * CLOUD_DEPTH - eye_height), enters, leaves,
+        );
+        let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
+        var stormy = false;
+        for (var look = 0; look < 4 && leaves > middle; look++) {
+            let away = middle + (leaves - middle) * (f32(look) + start) / 4.0;
+            if weather_over(view.eye.xz + direction.xz * away - drift).z > 0.0 {
+                stormy = true;
+                break;
+            }
+        }
         var light = vec3<f32>(0.0);
         var distance = 0.0;
         var weight = 0.0;
+        var weather = vec3<f32>(0.0);
         for (var number = 0; number < CLOUD_STEPS && leaves > enters; number++) {
-            let away = enters + (f32(number) + start) * stride;
+            var stride = (middle - enters) / f32(CLOUD_LOW_STEPS);
+            var away = enters + (f32(number) + start) * stride;
+            if number >= CLOUD_LOW_STEPS {
+                if !stormy {
+                    break;
+                }
+                stride = (leaves - middle) / f32(CLOUD_STEPS - CLOUD_LOW_STEPS);
+                away = middle + (f32(number - CLOUD_LOW_STEPS) + start) * stride;
+            }
             // How high this point of the line is over a round Earth.
             let height = sqrt(earth * earth + away * away + 2.0 * earth * away * direction.y)
                 - 6360000.0;
             let place = vec3<f32>(view.eye.x + direction.x * away, height, view.eye.z + direction.z * away);
-            let found = cloud_kind(place, true);
+            // The weather is read at every other step, and serves for the
+            // step after and for the looks towards the sun.
+            if number % 2 == 0 {
+                weather = weather_over(place.xz - drift);
+            }
+            let found = cloud_in(place, weather, true);
             // The furthest clouds thin away instead of ending at a line.
             let thick = cloud_water(found.x)
                 * (1.0 - smoothstep(0.75 * CLOUD_REACH, CLOUD_REACH, away));
@@ -1122,12 +1168,12 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             var crossed = 0.0;
             var reach = 60.0;
             var along = 0.0;
-            for (var look = 0; look < 5; look++) {
+            for (var look = 0; look < 4; look++) {
                 // A storm is thicker cloud, and darker for it.
-                let shading = cloud_kind(place + sun * (along + reach * 0.5), false);
+                let shading = cloud_in(place + sun * (along + reach * 0.5), weather, false);
                 crossed += shading.x * (1.0 + 2.5 * shading.y) * reach;
                 along += reach;
-                reach *= 2.1;
+                reach *= 2.6;
             }
             let depth = crossed * CLOUD_STOPS;
             let up = clamp((height - view.clouds.z) / CLOUD_DEPTH, 0.0, 1.0);
