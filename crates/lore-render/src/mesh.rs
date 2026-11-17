@@ -18,7 +18,7 @@ use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
-use crate::shadow::{self, CASCADES, Cascade, ShadowMap};
+use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
 
@@ -40,8 +40,9 @@ const DRAW_BYTES: usize = 128;
 
 /// The size in bytes of the shader's `View`: three 4 by 4 matrices and five
 /// rows of four numbers, then for the shadows one row, a row for each
-/// shadow picture and a 4 by 4 matrix for each.
-const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64) + SKY_BYTES;
+/// shadow picture (the sun's four and the one from above) and a 4 by 4
+/// matrix for each.
+const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
@@ -87,7 +88,7 @@ impl View {
     fn bytes(
         &self,
         lighting: &Lighting,
-        shadows: Option<&[Cascade; CASCADES]>,
+        shadows: Option<&[Cascade; PICTURES]>,
         sky: Option<&Sky>,
     ) -> [u8; VIEW_BYTES] {
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
@@ -107,8 +108,8 @@ impl View {
                 self.noise,
             ],
         ];
-        let mut reach = [[0.0; 4]; CASCADES];
-        let mut from_world = [[[0.0; 4]; 4]; CASCADES];
+        let mut reach = [[0.0; 4]; PICTURES];
+        let mut from_world = [[[0.0; 4]; 4]; PICTURES];
         for (number, cascade) in shadows.into_iter().flatten().enumerate() {
             reach[number] = [cascade.texel, cascade.depth, 0.0, 0.0];
             from_world[number] = cascade.clip;
@@ -1475,7 +1476,7 @@ impl MeshPipeline {
         &self,
         commands: vk::CommandBuffer,
         meshes: &Meshes,
-        cascades: &[Cascade; CASCADES],
+        cascades: &[Cascade; PICTURES],
     ) {
         let (Some(shadows), Some((vertices, indices))) = (&self.shadows, &meshes.buffers) else {
             return;
@@ -1883,36 +1884,41 @@ mod tests {
         assert_eq!(number(&bytes, 72), cascades[0].texel);
         assert_eq!(number(&bytes, 73), cascades[0].depth);
         assert_eq!(number(&bytes, 84), cascades[3].texel);
-        assert_eq!(number(&bytes, 88), cascades[0].clip[0][0]);
         assert_eq!(
-            number(&bytes, 151),
+            number(&bytes, 88),
+            cascades[4].texel,
+            "the picture from above"
+        );
+        assert_eq!(number(&bytes, 92), cascades[0].clip[0][0]);
+        assert_eq!(
+            number(&bytes, 171),
             1.0,
             "the last number of the last matrix"
         );
-        assert_eq!(bytes.len(), 152 * 4 + SKY_BYTES);
+        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES);
 
         // Then the sky: the lines of sight, the clouds, and the light the
         // air and the haze scatter, a row for each height.
-        assert_eq!(number(&bytes, 152), 1.0);
-        assert_eq!(number(&bytes, 163), 12.0);
-        assert_eq!(number(&bytes, 164), 0.0, "no clouds without a sky");
-        assert_eq!(number(&bytes, 165), 13.0, "the time");
-        assert_eq!(number(&bytes, 166), sky::CLOUD_HEIGHT);
-        assert_eq!(number(&bytes, 167), 0.0, "no sky");
+        assert_eq!(number(&bytes, 172), 1.0);
+        assert_eq!(number(&bytes, 183), 12.0);
+        assert_eq!(number(&bytes, 184), 0.0, "no clouds without a sky");
+        assert_eq!(number(&bytes, 185), 13.0, "the time");
+        assert_eq!(number(&bytes, 186), sky::CLOUD_HEIGHT);
+        assert_eq!(number(&bytes, 187), 0.0, "no sky");
         let above = Sky::of(&lighting);
         let bytes = view.bytes(&lighting, None, Some(&above));
-        assert_eq!(number(&bytes, 164), sky::CLOUD_COVER);
-        assert_eq!(number(&bytes, 167), 1.0, "a sky");
-        assert_eq!(number(&bytes, 168), above.air[0][0]);
-        assert_eq!(number(&bytes, 260), above.air[23][0]);
-        assert_eq!(number(&bytes, 264), above.haze[0][0]);
-        assert_eq!(number(&bytes, 358), above.haze[23][2]);
-        assert_eq!(number(&bytes, 360), sky::FOG[0], "the fog");
-        assert_eq!(number(&bytes, 361), sky::FOG[1]);
-        assert_eq!(number(&bytes, 364), sky::WIND[0], "the wind");
-        assert_eq!(number(&bytes, 366), sky::WIND[2]);
-        assert_eq!(number(&bytes, 367), 0.25, "since the last frame");
-        assert_eq!(bytes.len(), 368 * 4);
+        assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
+        assert_eq!(number(&bytes, 187), 1.0, "a sky");
+        assert_eq!(number(&bytes, 188), above.air[0][0]);
+        assert_eq!(number(&bytes, 280), above.air[23][0]);
+        assert_eq!(number(&bytes, 284), above.haze[0][0]);
+        assert_eq!(number(&bytes, 378), above.haze[23][2]);
+        assert_eq!(number(&bytes, 380), sky::FOG[0], "the fog");
+        assert_eq!(number(&bytes, 381), sky::FOG[1]);
+        assert_eq!(number(&bytes, 384), sky::WIND[0], "the wind");
+        assert_eq!(number(&bytes, 386), sky::WIND[2]);
+        assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
+        assert_eq!(bytes.len(), 388 * 4);
     }
 
     #[test]

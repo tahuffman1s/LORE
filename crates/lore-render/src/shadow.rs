@@ -82,15 +82,32 @@ fn unit(direction: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// How many pictures there are in all: the sun's, and one of the level
+/// seen from straight above, which says what is overhead.
+pub(crate) const PICTURES: usize = CASCADES + 1;
+
+/// Half the width of the picture from above, in metres.
+const OVERHEAD_REACH: f32 = 96.0;
+
 /// The squares for an eye at `eye` under a sun found in the direction
-/// `towards_sun`, in a level that lies between the corners `low` and `high`.
+/// `towards_sun`, in a level that lies between the corners `low` and `high`:
+/// the sun's, nearest first, and then the one seen from straight above.
 pub(crate) fn cascades(
     eye: [f32; 3],
     towards_sun: [f32; 3],
-    [low, high]: [[f32; 3]; 2],
-) -> [Cascade; CASCADES] {
+    bounds: [[f32; 3]; 2],
+) -> [Cascade; PICTURES] {
+    std::array::from_fn(|number| match REACH.get(number) {
+        Some(half) => square(eye, towards_sun, bounds, *half),
+        None => square(eye, [0.0, 1.0, 0.0], bounds, OVERHEAD_REACH),
+    })
+}
+
+/// One square, `half` metres to each side of the eye, seen from the
+/// direction `towards`.
+fn square(eye: [f32; 3], towards: [f32; 3], [low, high]: [[f32; 3]; 2], half: f32) -> Cascade {
     // The way the light travels.
-    let away = unit(towards_sun).map(|part| -part);
+    let away = unit(towards).map(|part| -part);
     // Any direction that is not the light's own will do to hang the square from.
     let lean = if away[1].abs() > 0.99 {
         [0.0, 0.0, 1.0]
@@ -122,38 +139,36 @@ pub(crate) fn cascades(
     let (nearest, farthest) = (nearest - 1.0, farthest + 1.0);
     let depth = farthest - nearest;
 
-    REACH.map(|half| {
-        // The sizes are far below where f32 stops being exact.
-        #[allow(clippy::cast_precision_loss)]
-        let texel = 2.0 * half / SIZE as f32;
-        let step = texel * STEP_PIXELS;
-        let middle = [across, along].map(|axis| {
-            let at = (dot(eye, axis) / step).round() * step;
-            if at.is_finite() { at } else { 0.0 }
-        });
-        let column = |axis: usize| {
-            [
-                across[axis] / half,
-                along[axis] / half,
-                away[axis] / depth,
-                0.0,
-            ]
-        };
-        Cascade {
-            clip: [
-                column(0),
-                column(1),
-                column(2),
-                [-middle[0] / half, -middle[1] / half, -nearest / depth, 1.0],
-            ],
-            texel,
-            depth,
-            across,
-            along,
-            middle,
-            half,
-        }
-    })
+    // The sizes are far below where f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let texel = 2.0 * half / SIZE as f32;
+    let step = texel * STEP_PIXELS;
+    let middle = [across, along].map(|axis| {
+        let at = (dot(eye, axis) / step).round() * step;
+        if at.is_finite() { at } else { 0.0 }
+    });
+    let column = |axis: usize| {
+        [
+            across[axis] / half,
+            along[axis] / half,
+            away[axis] / depth,
+            0.0,
+        ]
+    };
+    Cascade {
+        clip: [
+            column(0),
+            column(1),
+            column(2),
+            [-middle[0] / half, -middle[1] / half, -nearest / depth, 1.0],
+        ],
+        texel,
+        depth,
+        across,
+        along,
+        middle,
+        half,
+    }
 }
 
 impl Cascade {
@@ -176,11 +191,11 @@ pub(crate) struct ShadowMap {
     /// All four, for the shader to read.
     pub(crate) view: vk::ImageView,
     /// Each one by itself, to draw into.
-    layers: [vk::ImageView; CASCADES],
+    layers: [vk::ImageView; PICTURES],
     /// Compares a depth with the picture's and smooths the answer.
     pub(crate) sampler: vk::Sampler,
     /// The level and the square each picture was last drawn for.
-    drawn: RefCell<[Option<(u64, Mat4)>; CASCADES]>,
+    drawn: RefCell<[Option<(u64, Mat4)>; PICTURES]>,
 }
 
 impl ShadowMap {
@@ -193,9 +208,9 @@ impl ShadowMap {
             image: vk::Image::null(),
             memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
-            layers: [vk::ImageView::null(); CASCADES],
+            layers: [vk::ImageView::null(); PICTURES],
             sampler: vk::Sampler::null(),
-            drawn: RefCell::new([None; CASCADES]),
+            drawn: RefCell::new([None; PICTURES]),
         };
         // Not every graphics card can smooth between the pixels of a depth
         // picture; one that cannot gets a harder edge.
@@ -234,7 +249,7 @@ impl ShadowMap {
                             depth: 1,
                         })
                         .mip_levels(1)
-                        .array_layers(CASCADES as u32)
+                        .array_layers(PICTURES as u32)
                         .samples(vk::SampleCountFlags::TYPE_1)
                         .usage(
                             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
@@ -273,7 +288,7 @@ impl ShadowMap {
                         .image(map.image)
                         .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
                         .format(FORMAT)
-                        .subresource_range(range(0, CASCADES as u32)),
+                        .subresource_range(range(0, PICTURES as u32)),
                     None,
                 )
                 .map_err(RenderError::driver(doing))?;
@@ -315,9 +330,9 @@ impl ShadowMap {
     pub(crate) fn take_stale(
         &self,
         level: u64,
-        cascades: &[Cascade; CASCADES],
-    ) -> [bool; CASCADES] {
-        let mut stale = [true; CASCADES];
+        cascades: &[Cascade; PICTURES],
+    ) -> [bool; PICTURES] {
+        let mut stale = [true; PICTURES];
         let Ok(mut drawn) = self.drawn.try_borrow_mut() else {
             return stale;
         };

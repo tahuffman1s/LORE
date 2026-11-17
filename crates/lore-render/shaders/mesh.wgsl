@@ -32,12 +32,14 @@ struct View {
     // what casts it and what it falls on; the fourth changes every frame,
     // to turn the pattern the edge is smoothed with.
     shadows: vec4<f32>,
+    // The fifth of each of the next two is not the sun's: it is the level
+    // seen from straight above, which says what is overhead.
     // For each shadow picture: in the first number how many metres one of
     // its pixels covers, and in the second how many metres its depth spans.
-    shadow_reach: array<vec4<f32>, 4>,
+    shadow_reach: array<vec4<f32>, 5>,
     // Takes a point in the world to each shadow picture: x and y from -1 to
     // 1 across it, z from 0 nearest the sun to 1 farthest.
-    shadow_from_world: array<mat4x4<f32>, 4>,
+    shadow_from_world: array<mat4x4<f32>, 5>,
     // The way the eye looks, then how far a line of sight leans to the
     // right and up between the middle of the picture and its edge. The
     // fourth numbers of the last two are the part-of-a-pixel shift the
@@ -62,7 +64,8 @@ struct View {
 
 @group(0) @binding(0) var<uniform> view: View;
 // What the sun sees: four pictures of how far from it the nearest surface
-// is, each covering a wider square round the eye than the one before.
+// is, each covering a wider square round the eye than the one before. A
+// fifth is the level seen from straight above.
 @group(0) @binding(1) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
 // What clouds are shaped from: a block of noise that repeats in every
@@ -383,6 +386,8 @@ fn under_clouds(world: vec3<f32>) -> f32 {
 }
 
 const SHADOW_PICTURES: i32 = 4;
+// How many places round a point are asked whether something is overhead.
+const CANOPY_LOOKS: i32 = 8;
 // How many places round a pixel are looked at to find what casts on it, and
 // how many to smooth the shadow's edge.
 const CASTER_LOOKS: i32 = 6;
@@ -491,6 +496,46 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
     return 1.0;
 }
 
+// How much of the sky a point of the world can see, from a little (under
+// thick cover) to 1 (in the open).
+//
+// The picture from above says how high the highest thing over each place
+// is. A point sees the sky straight up if nothing is over it, and round
+// about if nothing is over the places beside it; a few such places are
+// looked at, farther out the higher up the sky they stand for, turned
+// differently for every pixel and frame so that the upscaler makes a
+// smooth shade of them.
+fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+    let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+    if inside < 0.04 {
+        return 1.0;
+    }
+    let metres_a_pixel = view.shadow_reach[4].x;
+    let depth_metres = view.shadow_reach[4].y;
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    let turn = scattered(pixel + view.shadows.w * vec2<f32>(1.618034, 4.236068)) * 6.2831853;
+    var open = 0.0;
+    for (var look = 0; look < CANOPY_LOOKS; look++) {
+        // From straight up out to nine metres away.
+        let beside = on_disc(look, CANOPY_LOOKS, turn) * 9.0;
+        let at = uv + beside / metres_a_pixel / size;
+        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        // How far over the point's own height the highest thing there is.
+        let over = (above.z - held) * depth_metres;
+        // Cover counts if it is higher than it is far off: a bush beside
+        // the point hides little sky, a crown over it hides a lot.
+        open += 1.0 - smoothstep(0.6, 2.2, over - 0.45 * length(beside));
+    }
+    let seen = open / f32(CANOPY_LOOKS);
+    // Light still finds its way in under the thickest cover.
+    return mix(1.0, 0.22 + 0.78 * seen, clamp((inside - 0.04) / 0.08, 0.0, 1.0));
+}
+
 // The light the surface sends to the eye.
 fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var normal = normalize(corner.normal);
@@ -499,7 +544,13 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     normal *= side;
     // Shadows fall on the surface as it is built, not as its normal map
     // bends the light.
-    let sunlit = sunlight(corner.world, normal, corner.position.xy) * under_clouds(corner.world);
+    // A leaf, a petal, a blade of grass: thin, with holes cut in it. The
+    // sun lights it from either side, and shows through it.
+    let thin = material.emissive.w > 0.0;
+    let sun_side = select(1.0, sign(dot(normal, view.towards_sun.xyz) + 0.0001), thin);
+    let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
+        * under_clouds(corner.world);
+    let sky_seen = open_sky(corner.world, corner.position.xy);
     if has(NORMAL) {
         let sample = textureSampleBias(
             normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
@@ -554,6 +605,15 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let fresnel = mirror + (1.0 - mirror) * pow(1.0 - eye_half, 5.0);
     let from_sun = ((1.0 - fresnel) * matte / PI + fresnel * density * visible)
         * view.sun.rgb * n_sun * sunlit;
+    // The sun behind a leaf comes through it: the leaf's own colour,
+    // yellower and brighter, more the more squarely the sun is behind it.
+    var from_behind = vec3<f32>(0.0);
+    if thin {
+        let behind = clamp(-dot(normal, to_sun), 0.0, 1.0);
+        let tinted = matte * vec3<f32>(1.25, 1.2, 0.55);
+        from_behind = tinted / PI * view.sun.rgb * (0.25 + 0.75 * behind) * sunlit
+            * step(0.0001, behind) * 0.9;
+    }
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
     var from_around = matte * surroundings(normal)
@@ -571,7 +631,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
             emissive_texture, emissive_sampler, placed(EMISSIVE, corner), view.eye.w,
         ).rgb;
     }
-    return from_sun + from_around + glow;
+    return from_sun + from_behind + from_around * sky_seen + glow;
 }
 
 // How far the pixel moved since the last frame.
