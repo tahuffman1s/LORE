@@ -545,7 +545,9 @@ impl Effects {
                 self.free_bolt().glimmer(place, seed);
                 return;
             }
-            let from = [spot[0], base + 100.0, spot[1]];
+            // It starts up in the cloud, which hides it until it comes
+            // out underneath.
+            let from = [spot[0], base + self.between(500.0, 1400.0), spot[1]];
             let to = if kind < 0.95 {
                 // A little under where levels are built, so that it meets
                 // the ground wherever the ground is.

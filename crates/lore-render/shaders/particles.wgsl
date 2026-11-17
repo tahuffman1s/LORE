@@ -97,16 +97,38 @@ fn fragment_bit(bit: Bit) -> Mixed {
         // Lightning: a white-hot channel with a glow round it, blue-white
         // as anything so hot is, that the air between dims.
         let from_middle = abs(bit.across.x) / bit.about.z;
-        let glow = pow(max(1.0 - abs(bit.across.x), 0.0), 3.0) * 0.22;
+        let glow = pow(max(1.0 - abs(bit.across.x), 0.0), 3.0) * 0.14;
         // The air between scatters its blue away, as it does the low
         // sun's: far lightning is yellow, and orange at the horizon.
         let far = length(bit.world - view.eye.xyz);
         let tint = exp(-vec3<f32>(0.0, 0.0000078, 0.0000273) * far);
+        // It starts up inside the cloud, and the cloud hides it there:
+        // what cloud there is between the eye and this stretch of it is
+        // looked through, so that the bolt is seen to come out of the
+        // cloud's underside, as lightning does.
+        let sight = (bit.world - view.eye.xyz) / max(far, 0.001);
+        var enters = 0.0;
+        var leaves = far;
+        if abs(sight.y) > 0.0001 {
+            let low = (view.clouds.z - view.eye.y) / sight.y;
+            let high = (view.clouds.z + CLOUD_DEPTH - view.eye.y) / sight.y;
+            enters = clamp(min(low, high), 0.0, far);
+            leaves = clamp(max(low, high), 0.0, far);
+        }
+        var hidden = 0.0;
+        if view.clouds.x > 0.0 && leaves > enters {
+            let stride = (leaves - enters) / 6.0;
+            for (var look = 0; look < 6; look++) {
+                let found = cloud_kind(view.eye.xyz + sight * (enters + (f32(look) + 0.5) * stride), true);
+                hidden += cloud_water(found.x) * (1.0 + found.y) * stride;
+            }
+        }
+        let through = exp(-hidden * CLOUD_STOPS);
         var strip: Mixed;
         strip.colour = vec4<f32>(
             flash_light() * tint * 40.0 * (0.25 + 0.75 * left),
             clamp((exp(-from_middle * from_middle) + glow) * min(left * 5.0, 1.0), 0.0, 1.0)
-                * exp(-far / 60000.0),
+                * exp(-far / 60000.0) * through,
         );
         strip.motion = vec4<f32>(0.0);
         return strip;

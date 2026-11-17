@@ -35,7 +35,8 @@ use crate::effects::BIT_BYTES;
 /// A flash of lightning.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Lightning {
-    /// Where it starts, in metres: in the cloud, or at its base.
+    /// Where it starts, in metres: up in the cloud, which hides it until
+    /// it comes out underneath.
     pub from: [f32; 3],
     /// Where it ends: on the ground, or further along the cloud.
     pub to: [f32; 3],
@@ -301,7 +302,7 @@ impl Bolt {
             return;
         }
         self.segments.clear();
-        self.light = add(from, [0.0, 600.0, 0.0]);
+        self.light = add(from, [0.0, 300.0, 0.0]);
         let mut dice = Dice(seed.wrapping_mul(0x9E37_79B1) | 1);
         // One flash to the ground in ten is positive: a single stroke,
         // brighter, with few forks, and a current that goes on flowing.
