@@ -402,6 +402,13 @@ fn fresh(noise: &Noise, now: u32, tick_rate: u32) -> bool {
 }
 
 impl Playing {
+    /// The action set the game's script has chosen: `gameplay` unless it
+    /// said otherwise.
+    #[must_use]
+    pub fn action_set(&self) -> lore_input::ActionSetId {
+        self.world.game().host().action_set()
+    }
+
     /// Starts `game` with its player in the world. The player walks
     /// `level`, usually the game's `level.glb` as
     /// [`level::load`](crate::level::load) reads it (see

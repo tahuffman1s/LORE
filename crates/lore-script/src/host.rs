@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use lore_input::{ActionMap, InputFrame, Rumble};
+use lore_input::{ActionMap, ActionSetId, InputFrame, Rumble};
 use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
-use crate::api::{self, Handlers, Shared};
+use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
@@ -162,6 +162,8 @@ pub struct ScriptHost {
     weapons: Rc<WeaponState>,
     /// The game's time. Kept here so a save does not start it again.
     clock: Rc<Clock>,
+    /// The action set the script chose, shared with each version of it.
+    live_set: Rc<LiveSet>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
 }
@@ -267,6 +269,7 @@ impl ScriptHost {
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
+            live_set: Rc::default(),
             versions: 0,
         };
         // A script error is already logged and kept in `last_error`.
@@ -440,6 +443,21 @@ impl ScriptHost {
     /// asked more than once, this is the latest.
     pub fn take_rumble(&mut self) -> Option<Rumble> {
         self.running.as_ref()?.shared.rumble.take()
+    }
+
+    /// The action set the script made live with `game.input.useSet` since
+    /// this was last called, for whoever owns the input to switch to
+    /// ([`Input::set_active_set`](lore_input::Input::set_active_set)). When
+    /// the script chose more than once, this is the latest.
+    pub fn take_action_set(&mut self) -> Option<ActionSetId> {
+        (self.live_set.asked.take()).then(|| self.live_set.live.get())
+    }
+
+    /// The action set the script's game is in: `gameplay` until the script
+    /// chooses another. It is what `game.input.currentSet()` gives a script.
+    #[must_use]
+    pub fn action_set(&self) -> ActionSetId {
+        self.live_set.live.get()
     }
 
     /// Tells the script which sounds the game has, by name, so that asking
@@ -674,7 +692,17 @@ impl ScriptHost {
             }
             self.kept.replace(kept);
         }
-        self.install()?;
+        // The new version starts in `gameplay`, as its variables start
+        // again: a shop that was open is closed in both. A version that
+        // fails to load leaves the old one in the set it chose.
+        let before = self.live_set.live.replace(ActionMap::GAMEPLAY);
+        if let Err(error) = self.install() {
+            self.live_set.live.set(before);
+            return Err(error);
+        }
+        if self.live_set.live.get() != before {
+            self.live_set.asked.set(true);
+        }
         if had_version {
             log::info!("{}", reloaded(saved));
         }
@@ -772,6 +800,7 @@ impl ScriptHost {
             handles: Handles::default(),
             loading: Cell::new(true),
             rumble: Cell::new(None),
+            live_set: Rc::clone(&self.live_set),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),
