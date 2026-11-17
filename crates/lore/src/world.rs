@@ -694,6 +694,8 @@ impl Game for Playing {
 #[cfg(test)]
 mod heard;
 #[cfg(test)]
+mod wetted;
+#[cfg(test)]
 mod rates;
 
 #[cfg(test)]

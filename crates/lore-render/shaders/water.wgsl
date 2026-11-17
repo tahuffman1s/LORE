@@ -185,14 +185,89 @@ fn water_glow() -> vec3<f32> {
         * (view.sky.rgb + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 0.5);
 }
 
+// Whether the sun reaches a point of the world, asked once of the nearest
+// of the sun's pictures that holds it: a plain yes or no, for where many
+// points are asked about and their answers added up.
+fn sun_reaches(world: vec3<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    for (var picture = 0; picture < SHADOW_PICTURES - 1; picture++) {
+        let place = view.shadow_from_world[picture] * vec4<f32>(world, 1.0);
+        let uv = vec2<f32>(place.x * 0.5 + 0.5, 0.5 - place.y * 0.5);
+        let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+        if inside < 0.03 || place.z <= 0.0 || place.z >= 1.0 {
+            continue;
+        }
+        let allowed = 2.0 * view.shadow_reach[picture].x / view.shadow_reach[picture].y;
+        return textureSampleCompareLevel(
+            shadow_map, shadow_sampler, uv, picture, place.z - allowed,
+        );
+    }
+    return 1.0;
+}
+
+// How much of the sun's light is in the water along the line of sight to
+// `world`, from 0 for none to about 1 for as much as open water has: the
+// water between is walked, and at each step the sun either reaches it or
+// is kept off by what stands over the water, and is gathered or thinned
+// there by the waves it came through. That is what draws shafts of light
+// in the water under a gap in the leaves, and makes them waver.
+fn light_in_water(world: vec3<f32>) -> f32 {
+    let line = world - view.eye.xyz;
+    let far = length(line);
+    let way = line / max(far, 0.001);
+    let reach = min(far, 14.0);
+    let steps = 12;
+    let stride = reach / f32(steps);
+    let start = scattered(way.xz * 811.0 + way.y * 293.0 + view.shadows.w * 1.618);
+    let sun = view.towards_sun.xyz;
+    let bent = normalize(vec3<f32>(sun.x * 0.75, max(sun.y, 0.2), sun.z * 0.75));
+    var lit = 0.0;
+    var weight = 0.0;
+    for (var number = 0; number < steps; number++) {
+        let along = (f32(number) + start) * stride;
+        let at = view.eye.xyz + way * along;
+        let under = view.water.x - at.y;
+        if under <= 0.0 {
+            break;
+        }
+        // Nearer water counts for more: what is far is seen through more
+        // water.
+        let counts = exp(-along * 0.22);
+        weight += counts;
+        // Where the light came through the surface, and how the longer
+        // waves there gather or spread it.
+        let above = at.xz + bent.xz / bent.y * under;
+        let about = view.waves[0];
+        let slope = textureSampleLevel(wave_slope, wave_sampler, above / about.x, 0, 0.0);
+        let finer = textureSampleLevel(
+            wave_slope, wave_sampler, above / view.waves[1].x, 1, 0.0,
+        );
+        let turns = 6.2831853 / sqrt(about.z * about.w);
+        let curved = (slope.z + slope.w) * turns + (finer.z + finer.w) * turns * 1.6;
+        let beam = clamp(1.0 / max(1.0 + 0.3 * min(under, 3.0) * curved, 0.25), 0.3, 3.0);
+        lit += counts * sun_reaches(vec3<f32>(above.x, view.water.x + 0.05, above.y)) * beam
+            * exp(-under * 0.12);
+    }
+    return lit / max(weight, 0.001);
+}
+
 // `colour` at `world` as an eye under water sees it: light is lost along
 // the way, red first, and the water's own colour takes its place, so that
-// a few metres off everything is green-blue shadow.
+// a few metres off everything is green-blue shadow. The water's own colour
+// is the light in it: the sky's, everywhere, and the sun's where it gets in.
 fn through_water(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let far = length(world - view.eye.xyz);
-    let murk = 1.7 / max(view.water.w, 0.05);
+    let murk = 1.0 / max(view.water.w, 0.05);
     let passes = exp(-far * (WATER_TAKES + WATER_SCATTERS) * murk);
-    return colour * passes + water_glow() * (1.0 - passes);
+    let tint = vec3<f32>(0.035, 0.16, 0.13);
+    // Deeper down there is less light of either kind.
+    let down = exp(-max(view.water.x - view.eye.y, 0.0) * 0.08);
+    let glow = tint * down
+        * (view.sky.rgb * 0.8
+            + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 1.3 * light_in_water(world));
+    return colour * passes + glow * (1.0 - passes);
 }
 
 // How much brighter or dimmer the sun is on something under still water:

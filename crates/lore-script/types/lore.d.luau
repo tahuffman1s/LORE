@@ -481,8 +481,10 @@ declare game: {
     --- little at a time as it plays. A WAV file is held in memory whole, so
     --- export long sounds as Ogg Vorbis.
     --- The engine also has starter sounds a new game can use straight away:
-    --- "footstep", "gunshot", "landing", "dry-fire" and "reload". A file of
-    --- your own with one of those names replaces the starter sound.
+    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", and for
+    --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
+    --- "bubbles", "drip" and "underwater". A file of your own with one of
+    --- those names replaces the starter sound.
     ---
     --- Sounds are played from functions that run while the game is on, such
     --- as `game.onStart` and `game.onTick`, not while the script loads.

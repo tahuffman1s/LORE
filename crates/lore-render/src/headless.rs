@@ -814,6 +814,147 @@ mod tests {
     }
 
     #[test]
+    fn still_water_is_drawn_in_the_shape_it_filled_and_a_splash_stirs_it() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart, Water};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor a metre down, and a body of dark water that filled
+        // a round hollow three metres across over the middle of it (the
+        // hollow itself is not drawn: only where the water says it is).
+        let mut scene = Scene::default();
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * 500.0, -1.0, z * 500.0])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        let points = 41_u32;
+        let depths = (0..points * points)
+            .map(|at| {
+                let (x, z) = ((at % points) as f32 * 0.25 - 5.0, (at / points) as f32 * 0.25 - 5.0);
+                if x.hypot(z) < 1.5 { 1.0 } else { Water::DRY }
+            })
+            .collect();
+        scene.waters.push(Water {
+            name: None,
+            // No sheet stands for it: the instance it names is not there.
+            source: 7,
+            level: 0.0,
+            origin: [-5.0, -5.0],
+            cell: 0.25,
+            size: [points, points],
+            depths,
+            colour: [0.0, 0.02, 0.02, 0.3],
+        });
+        headless.set_scene(&scene).unwrap();
+        let light = |picture: &[u8], [x, y]: [usize; 2]| {
+            let at = (y * SIZE[0] + x) * 4;
+            i32::from(picture[at]) + i32::from(picture[at + 1]) + i32::from(picture[at + 2])
+        };
+        // From four metres up, straight down: murky water in the middle,
+        // the white floor beside it, and a round shore between.
+        let above = Camera {
+            position: [0.0, 4.0, 0.0],
+            pitch: -1.5,
+            ..Camera::default()
+        };
+        let picture = headless.screenshot(&above).unwrap();
+        // Water takes the red out of what is seen through it first.
+        let red = |picture: &[u8], [x, y]: [usize; 2]| i32::from(picture[(y * SIZE[0] + x) * 4]);
+        let (middle, beside) = (red(&picture, [48, 32]), red(&picture, [6, 32]));
+        assert!(beside > middle + 40, "red in the water {middle}, on the floor {beside}");
+        assert!(
+            red(&picture, [48, 3]) > middle + 40,
+            "the floor past its far shore"
+        );
+        assert!(light(&picture, [6, 32]) > light(&picture, [48, 32]) + 40);
+        // From under it, looking up, the picture is the water's and not
+        // the bright sky's.
+        let under = Camera {
+            position: [0.0, -0.6, 0.0],
+            pitch: 0.4,
+            ..Camera::default()
+        };
+        let from_below = headless.screenshot(&under).unwrap();
+        let dry = Camera {
+            position: [20.0, -0.6, 0.0],
+            ..under
+        };
+        let from_air = headless.screenshot(&dry).unwrap();
+        assert!(
+            light(&from_air, [48, 8]) > light(&from_below, [48, 8]) + 40,
+            "sky {} against water overhead {}",
+            light(&from_air, [48, 8]),
+            light(&from_below, [48, 8])
+        );
+
+        // Time passes; something drops in; drops fly and rings spread,
+        // and the picture of the water is not what it was.
+        headless.let_time_pass(true);
+        let side = Camera {
+            position: [0.0, 1.2, 3.0],
+            pitch: -0.4,
+            ..Camera::default()
+        };
+        for _ in 0..4 {
+            headless.render(&side).unwrap();
+        }
+        let calm = headless.screenshot(&side).unwrap();
+        headless.splash(crate::Splash {
+            place: [0.0, 0.0, 0.0],
+            moving: [0.0, -7.0, 0.0],
+            wide: 0.5,
+        });
+        headless.stir(crate::Stir {
+            place: [0.4, 0.0],
+            wide: 0.3,
+            moving: [1.0, 0.0],
+            body: 0.1,
+            churn: 0.5,
+            ..crate::Stir::default()
+        });
+        headless.bubbles([0.0, -0.5, 0.0], 12);
+        for _ in 0..12 {
+            headless.render(&side).unwrap();
+        }
+        let stirred = headless.screenshot(&side).unwrap();
+        let changed = calm
+            .iter()
+            .zip(&stirred)
+            .filter(|(before, after)| before.abs_diff(**after) > 24)
+            .count();
+        assert!(changed > 150, "only {changed} bytes of the picture changed");
+        // And it all dies away: nothing is left in the air.
+        for _ in 0..600 {
+            headless.render(&side).unwrap();
+        }
+        assert_eq!(headless.effects.count(), 0);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn what_a_level_says_bends_in_the_wind_moves_and_nothing_else_does() {
         use lore_assets::{Instance, Material, Mesh, MeshPart};
 

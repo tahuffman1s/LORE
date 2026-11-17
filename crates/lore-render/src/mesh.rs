@@ -765,11 +765,8 @@ impl MeshPipeline {
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
             // What water looks through: the picture and its depth as they
             // were before it was drawn.
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(5)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The picture is asked its size where what flies is placed.
+            both_stages(5, vk::DescriptorType::SAMPLED_IMAGE),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(6)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
