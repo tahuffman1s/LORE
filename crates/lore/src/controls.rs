@@ -1,5 +1,6 @@
 //! The player's own controls: one bindings file on their computer that every
-//! game played with LORE reads when it starts.
+//! game played with LORE reads when it starts, and again whenever the file is
+//! saved while the game runs ([`Config::controls_file`](crate::Config)).
 //!
 //! The file is `bindings.toml` in the `lore` folder of the place each
 //! system keeps settings: `~/.config` on Linux (or `XDG_CONFIG_HOME`),
@@ -10,8 +11,14 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use lore_input::ActionMap;
+
+use crate::map::{Stamp, stamp};
+
+/// How often a running game looks at the bindings file for changes.
+const POLL_EVERY: Duration = Duration::from_millis(100);
 
 /// Names another bindings file to use than the usual one.
 pub const FILE_VARIABLE: &str = "LORE_BINDINGS";
@@ -54,29 +61,149 @@ pub(crate) fn player_file(variable: &str, name: &str) -> Option<PathBuf> {
 /// has not changed their controls. No problem stops a game from starting.
 #[must_use]
 pub fn load(path: &Path, actions: &mut ActionMap) -> Vec<String> {
+    match read(path, actions) {
+        Ok(said) => said,
+        Err(Unused::Unreadable(said)) => vec![format!(
+            "{said}, so the game's own controls are used. Check that the file is yours to \
+             read and is plain text."
+        )],
+        Err(Unused::NotToml(said)) => vec![format!(
+            "{said} None of the file was used, so the game's own controls are in place."
+        )],
+    }
+}
+
+/// Why none of a bindings file was used. Each holds the start of what to
+/// tell the player; what is said next depends on which controls are kept.
+enum Unused {
+    /// The file is there and could not be read.
+    Unreadable(String),
+    /// The file is not TOML.
+    NotToml(String),
+}
+
+/// Gives `actions` the bindings in the file at `path`, as [`load`] does.
+/// When none of the file could be used, `actions` is as it was.
+fn read(path: &Path, actions: &mut ActionMap) -> Result<Vec<String>, Unused> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return vec![format!(
-                "Your controls in {} could not be read ({error}), so the game's own controls \
-                 are used. Check that the file is yours to read and is plain text.",
+            return Err(Unused::Unreadable(format!(
+                "Your controls in {} could not be read ({error})",
                 path.display()
-            )];
+            )));
         }
     };
-    let mut said = match actions.read_bindings(&text) {
-        Ok(problems) => problems
-            .iter()
-            .map(|problem| format!("{}: {problem}", path.display()))
-            .collect(),
-        Err(error) => vec![format!(
-            "{}: {error} None of the file was used, so the game's own controls are in place.",
-            path.display()
-        )],
-    };
+    let problems = actions
+        .read_bindings(&text)
+        .map_err(|error| Unused::NotToml(format!("{}: {error}", path.display())))?;
+    let mut said: Vec<String> = problems
+        .iter()
+        .map(|problem| format!("{}: {problem}", path.display()))
+        .collect();
     said.extend(actions.conflicts().iter().map(ToString::to_string));
-    said
+    Ok(said)
+}
+
+/// The player's bindings file while a game runs: notices when it is saved
+/// and reads it again.
+#[derive(Debug)]
+pub(crate) struct Live {
+    path: PathBuf,
+    /// The game's own controls, as they were before the file was read. Each
+    /// reading starts from these, so a line taken out of the file goes back
+    /// to what the game binds.
+    own: ActionMap,
+    /// The file as it was when last read.
+    known: Option<Stamp>,
+    /// A newer state seen once, waiting to be seen again.
+    pending: Option<Stamp>,
+    next_poll: Instant,
+}
+
+/// What a newly saved bindings file came to.
+#[derive(Debug)]
+pub(crate) struct Reread {
+    /// The controls now in effect, or `None` when none of the file could be
+    /// used and the controls stay as they were.
+    pub controls: Option<ActionMap>,
+    /// What to tell the player, as [`load`] returns.
+    pub said: Vec<String>,
+}
+
+impl Live {
+    /// Reads the file at `path` into `actions`, which are the game's own
+    /// controls, and watches the file from then on. Also returns what to
+    /// tell the player, as [`load`] does.
+    pub(crate) fn start(path: PathBuf, actions: &mut ActionMap) -> (Self, Vec<String>) {
+        let own = actions.clone();
+        // Looked at before it is read: a save in between is seen as a change.
+        let known = stamp(&path);
+        let said = load(&path, actions);
+        let live = Self {
+            path,
+            own,
+            known,
+            pending: None,
+            next_poll: Instant::now() + POLL_EVERY,
+        };
+        (live, said)
+    }
+
+    /// The controls as the file now has them, if it was saved since it was
+    /// last read. `None` when nothing changed.
+    ///
+    /// Call this every frame; it looks at the file at most ten times a
+    /// second. A change must look the same on two looks in a row, so a file
+    /// caught half-written is not read. A file that is gone is not a change
+    /// (some tools save by deleting and renaming): the controls stay as they
+    /// are. So do they when the saved file cannot be read or is not TOML,
+    /// which is what a file looks like halfway through being edited.
+    pub(crate) fn changed(&mut self) -> Option<Reread> {
+        let now = Instant::now();
+        if now < self.next_poll {
+            return None;
+        }
+        self.next_poll = now + POLL_EVERY;
+        self.look()
+    }
+
+    /// One look at the file: see [`changed`](Self::changed).
+    fn look(&mut self) -> Option<Reread> {
+        let seen = stamp(&self.path);
+        if seen.is_none() || seen == self.known {
+            self.pending = None;
+            return None;
+        }
+        if seen != self.pending {
+            self.pending = seen;
+            return None;
+        }
+        self.known = seen;
+        self.pending = None;
+        let mut controls = self.own.clone();
+        Some(match read(&self.path, &mut controls) {
+            Ok(said) => Reread {
+                controls: Some(controls),
+                said,
+            },
+            Err(Unused::Unreadable(said)) => Reread {
+                controls: None,
+                said: vec![format!(
+                    "{said}, so your controls stay as they were. Check that the file is \
+                     yours to read and is plain text."
+                )],
+            },
+            Err(Unused::NotToml(said)) => Reread {
+                controls: None,
+                said: vec![format!(
+                    "{said} None of the file was used, so your controls stay as they \
+                     were. Fix that line and save the file again."
+                )],
+            },
+        })
+    }
 }
 
 /// Writes the bindings file for `actions` to `path`, making its folder if
@@ -191,5 +318,68 @@ mod tests {
         );
         assert!(said[0].ends_with("the game's own controls are in place."));
         assert_eq!(actions, ActionMap::default_fps());
+    }
+
+    #[test]
+    fn a_saved_file_is_read_again_and_a_line_taken_out_goes_back() {
+        let path = scratch("live").join("bindings.toml");
+        fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
+        let mut actions = ActionMap::default_fps();
+        let (mut live, said) = Live::start(path.clone(), &mut actions);
+        assert_eq!(said, Vec::<String>::new());
+        let jump = actions.action("jump").unwrap();
+        assert_ne!(actions, ActionMap::default_fps());
+        assert!(live.look().is_none(), "nothing was saved");
+
+        // A different length, so the change shows whatever the clock says.
+        fs::write(&path, "[bindings]\njump = [\"H\", \"GamepadSouth\"]\n# mine\n").unwrap();
+        assert!(live.look().is_none(), "one look could be half a file");
+        let reread = live.look().unwrap();
+        assert_eq!(reread.said, Vec::<String>::new());
+        let controls = reread.controls.unwrap();
+        assert_ne!(controls.bindings(jump), actions.bindings(jump));
+        assert!(live.look().is_none(), "read once");
+
+        fs::write(&path, "[bindings]\n").unwrap();
+        assert!(live.look().is_none());
+        let controls = live.look().unwrap().controls.unwrap();
+        assert_eq!(controls, ActionMap::default_fps());
+    }
+
+    #[test]
+    fn a_file_saved_broken_or_taken_away_leaves_the_controls_as_they_were() {
+        let path = scratch("live-broken").join("bindings.toml");
+        let mut actions = ActionMap::default_fps();
+        let (mut live, said) = Live::start(path.clone(), &mut actions);
+        assert_eq!(said, Vec::<String>::new());
+        assert!(live.look().is_none(), "no file yet");
+
+        fs::write(&path, "[bindings\njump = [\"F\"]\n").unwrap();
+        assert!(live.look().is_none());
+        let reread = live.look().unwrap();
+        assert!(reread.controls.is_none());
+        assert_eq!(reread.said.len(), 1, "{:?}", reread.said);
+        assert!(
+            reread.said[0].contains("bindings.toml: Line 1, column "),
+            "{:?}",
+            reread.said
+        );
+        assert!(
+            reread.said[0]
+                .ends_with("so your controls stay as they were. Fix that line and save the file again."),
+            "{:?}",
+            reread.said
+        );
+        assert!(live.look().is_none(), "said once");
+
+        fs::remove_file(&path).unwrap();
+        assert!(live.look().is_none());
+        assert!(live.look().is_none(), "a file that is gone is not a change");
+
+        // Made after the game started, as `lore controls` does.
+        fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
+        assert!(live.look().is_none());
+        let controls = live.look().unwrap().controls.unwrap();
+        assert_ne!(controls, ActionMap::default_fps());
     }
 }

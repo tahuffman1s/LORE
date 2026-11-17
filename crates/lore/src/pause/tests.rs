@@ -71,6 +71,8 @@ struct Played {
     applied: Vec<Settings>,
     /// The rumble the last frame asked for.
     rumble: Option<Rumble>,
+    /// Controls read again from the bindings file, for the next frame.
+    new_controls: Option<ActionMap>,
 }
 
 impl Played {
@@ -94,6 +96,7 @@ impl Played {
             closed: false,
             applied: Vec::new(),
             rumble: None,
+            new_controls: None,
         }
     }
 
@@ -106,7 +109,8 @@ impl Played {
         let mut frame = Frame::new(0.0)
             .for_window(Some(SCREEN), std::mem::take(&mut self.drawn))
             .with_pointer(FRAME, self.pointer, self.pointer_down)
-            .with_device(self.input.last_device(), self.style);
+            .with_device(self.input.last_device(), self.style)
+            .with_controls(self.new_controls.take());
         self.game.frame(&mut frame);
         self.drawn = frame.take_ui();
         self.closed |= frame.closing();
@@ -782,6 +786,28 @@ fn hints_name_what_the_menu_is_bound_to_not_what_it_usually_is() {
         "X Select",
         "no hint for a button that is not there"
     );
+}
+
+#[test]
+fn hints_follow_a_bindings_file_saved_while_the_menu_is_open() {
+    let mut played = Played::new();
+    played.tap(Key::Escape);
+    assert_eq!(played.hints("Quit"), "Enter Select Esc Back");
+
+    // What the window does when the file is saved.
+    let mut saved = ActionMap::default_fps();
+    saved
+        .read_bindings("[bindings]\nmenu_confirm = [\"F\", \"GamepadWest\"]")
+        .unwrap();
+    played.input.set_bindings(saved.clone());
+    played.new_controls = Some(saved);
+    played.frame();
+    assert_eq!(played.hints("Quit"), "F Select Esc Back");
+    assert!(played.is_open(), "the menu stays where it was");
+
+    // The new key works the menu, and the hints stay in later frames.
+    played.tap(GamepadButton::DpadDown);
+    assert_eq!(played.hints("Quit"), "X Select B Back");
 }
 
 #[test]

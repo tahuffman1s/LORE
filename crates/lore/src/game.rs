@@ -1,6 +1,6 @@
 //! The interface a game implements to be driven by the engine.
 
-use lore_input::{ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
+use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -58,6 +58,8 @@ pub struct Frame {
     /// What the player last used, and whose gamepad it is.
     device: Device,
     gamepad_style: GamepadStyle,
+    /// The controls, in the one frame after they changed.
+    controls: Option<ActionMap>,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
     /// The player's settings to put into effect, when they have changed.
@@ -139,6 +141,7 @@ impl Frame {
             wheel: 0.0,
             device: Device::KeyboardAndMouse,
             gamepad_style: GamepadStyle::Xbox,
+            controls: None,
             ui_scale: 1.0,
             settings: None,
             ui: DrawBuffer::default(),
@@ -373,6 +376,35 @@ impl Frame {
     pub(crate) fn with_device(mut self, device: Device, style: GamepadStyle) -> Self {
         self.device = device;
         self.gamepad_style = style;
+        self
+    }
+
+    /// The player's controls as they now are, in the one frame after their
+    /// bindings file was saved and read again while the game runs
+    /// ([`Config::controls_file`](crate::Config)). `None` in every other
+    /// frame.
+    ///
+    /// The engine has already put them into effect, and every
+    /// [`ActionId`](lore_input::ActionId) means what it did. This is for a
+    /// game that shows which key or button does something, to read the
+    /// names again:
+    ///
+    /// ```
+    /// # fn frame(frame: &mut lore::Frame, prompt: &mut String) {
+    /// if let Some(controls) = frame.new_controls() {
+    ///     if let Ok(jump) = controls.action("jump") {
+    ///         *prompt = format!("{:?}", controls.bindings(jump));
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn new_controls(&self) -> Option<&ActionMap> {
+        self.controls.as_ref()
+    }
+
+    pub(crate) fn with_controls(mut self, controls: Option<ActionMap>) -> Self {
+        self.controls = controls;
         self
     }
 
