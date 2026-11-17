@@ -261,17 +261,6 @@ fn no_game_in(folder: &Path, command: &str) -> String {
     )
 }
 
-/// Gives `actions` the player's own controls from their bindings file, and
-/// warns about anything in the file that could not be used. A game starts
-/// whatever the file holds.
-pub fn use_player_controls(actions: &mut ActionMap) {
-    if let Some(path) = crate::controls::file() {
-        for problem in crate::controls::load(&path, actions) {
-            log::warn!("{problem}");
-        }
-    }
-}
-
 /// `lore controls`: what the player's controls are and where they are
 /// kept, as text to print. Writes the bindings file if there is none, so
 /// there is something to open and edit.
@@ -333,7 +322,8 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
     }
     said.push_str(&format!(
         "\nThey are kept in {}{}.\nOpen that file in a text editor, change a line and save. \
-         Games read it when they start.\n",
+         Games read it when they start, and a game that is running \
+         reads it again when you save.\n",
         path.display(),
         if created { ", made just now" } else { "" }
     ));

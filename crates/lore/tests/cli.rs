@@ -94,7 +94,7 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
     let warned = stderr(&output);
     assert!(
         warned.contains(&format!(
-            "{}: Line 20: \"GamepadWset\" is not a known binding. Did you mean \
+            "{}: Line 21: \"GamepadWset\" is not a known binding. Did you mean \
              \"GamepadWest\"? Action \"reload\" keeps the game's own controls.",
             file.display()
         )),

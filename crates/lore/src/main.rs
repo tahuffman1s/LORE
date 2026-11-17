@@ -151,10 +151,12 @@ enum Command {
         after_help = "Your controls are kept in one text file on this computer, which every game \
                       played with LORE\nreads when it starts. This command prints where it \
                       is, and makes it if it is not there yet.\nOpen it in a text editor, \
-                      change a line such as jump = [\"F\", \"GamepadSouth\"] and save.\n\n\
+                      change a line such as jump = [\"F\", \"GamepadSouth\"] and save. A \
+                      game that is\nrunning uses the change at once.\n\n\
                       Names are a key (Space, F, LeftShift), a mouse button (MouseLeft, \
                       MouseWheelUp) or a gamepad\nbutton (GamepadSouth, RightTrigger). To \
-                      go back to a game's own controls, delete the file.\nTo keep the file \
+                      go back to a game's own controls, delete the file; a game that is\n\
+                      running goes back at its next start. To keep the file \
                       somewhere else, set LORE_BINDINGS to its path."
     )]
     Controls,
@@ -769,10 +771,13 @@ fn controls() -> Result<(), String> {
 /// The settings a game is played with: the usual ones, with the player's own
 /// controls.
 fn player_config() -> Config {
-    let mut config = Config::default();
-    cli::use_player_controls(&mut config.actions);
-    // What the pause menu's settings screen saved the last time.
-    config.settings_file = lore::settings::file();
+    let mut config = Config {
+        // Read when the window opens, and again whenever the player saves it.
+        controls_file: lore::controls::file(),
+        // What the pause menu's settings screen saved the last time.
+        settings_file: lore::settings::file(),
+        ..Config::default()
+    };
     if let Some(file) = &config.settings_file {
         let (settings, problems) = lore::settings::load(file);
         config.settings = settings;

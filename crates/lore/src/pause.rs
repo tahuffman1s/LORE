@@ -92,6 +92,9 @@ impl<G: Game> Game for PauseMenu<G> {
             return;
         };
         frame.set_ui_scale(menu.shown_scale);
+        if let Some(controls) = frame.new_controls() {
+            menu.hints = Hints::of(controls, &menu.actions);
+        }
         self.game.frame(frame);
         // Drawn after the game's own HUD, so on top of it.
         menu.show(frame);
@@ -180,8 +183,8 @@ impl Bound {
 
 /// What the buttons that work the menu are bound to, for its hints.
 ///
-/// Read once, from the controls the game starts with. Bindings changed
-/// while the game runs are not followed yet (#18).
+/// Read from the controls the game starts with, and again when the
+/// player's bindings file is saved while the game runs.
 #[derive(Debug, Clone, Copy)]
 struct Hints {
     confirm: Bound,
