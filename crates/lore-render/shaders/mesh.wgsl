@@ -226,6 +226,15 @@ fn vertex(
         was = vec4<f32>(blown(world.xyz, foot, seconds - view.wind.w), 1.0);
         world = vec4<f32>(blown(world.xyz, foot, seconds), 1.0);
     }
+    // Still water (marked by a sway below nothing) rises and falls with
+    // its waves, so they have shape, and not only shading. They are drawn
+    // taller than they are: a lake's are a few centimetres high.
+    if draw.sway < 0.0 && dot(uv0, uv0) < 0.0001 {
+        let away = length(view.eye.xyz - world.xyz);
+        let blowing = 0.35 + 0.85 * gust(world.xz, view.clouds.y);
+        world.y += waves(world.xz, away, blowing, view.wind.xy).z * 2.2;
+        was = world;
+    }
     var corner: Corner;
     corner.position = view.clip_from_world * world;
     corner.steady = view.steady_from_world * world;
@@ -739,11 +748,12 @@ fn ripples(place: vec2<f32>) -> f32 {
 // running a little to one side or the other of the wind, at the speed a
 // wave of its length runs on deep water (longer ones faster), so they
 // overtake and cross each other as real ones do and no pattern holds.
+// The third number is how high the surface stands there, in metres.
 // `far` is how far away the place is: waves too small to see from there
 // are left out, which would otherwise only glitter. `strength` scales
 // them all: little in a lull, more under a gust. `wind` is the way they
 // run: the wind's, or downstream on water that flows.
-fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32> {
+fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec3<f32> {
     let seconds = view.clouds.y;
     // Real crests are not ruled lines: the surface they cross is pushed
     // about by eddies and gusts, so each place is read a little to one
@@ -758,6 +768,8 @@ fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32
     ) - 0.5;
     let bent = place + wander * 3.4;
     var slope = vec2<f32>(0.0);
+    // How far the surface stands above or below its rest, in metres.
+    var lifted = 0.0;
     var long = 6.1;
     for (var number = 0; number < 11; number++) {
         // Each train runs its own way, most of them near the wind's and a
@@ -776,12 +788,14 @@ fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32
         // Crests are sharper than troughs, and the short waves are the
         // steeper.
         let lean = cos(along) * (1.0 + 0.45 * sin(along));
-        slope += way * (lean * (0.03 + 0.004 * f32(number)) * strength * seen);
+        let steep = (0.03 + 0.004 * f32(number)) * strength * seen;
+        slope += way * (lean * steep);
+        lifted += sin(along) * steep / turns;
         // Lengths that share no common measure, so the pattern never
         // comes round again.
         long *= 0.66 + 0.07 * fract(f32(number) * 0.618);
     }
-    return slope;
+    return vec3<f32>(slope, lifted);
 }
 
 // The same for water that runs: `flow` is how fast it moves along x and z
@@ -799,6 +813,52 @@ fn running(place: vec2<f32>, flow: vec2<f32>) -> f32 {
     let one = ripples(place - flow * (first - 0.5) * 1.5);
     let other = ripples(place - flow * (second - 0.5) * 1.5 + vec2<f32>(3.7, 1.9));
     return mix(one, other, abs(2.0 * first - 1.0));
+}
+
+// What a line of sight that bounces off the water at `from` towards
+// `bounced` comes to among what was drawn before the water: the colour
+// there, and in the fourth number how surely it was found (0 if the line
+// leaves the picture or meets nothing).
+//
+// The line is walked in longer and longer steps; at each, the place is
+// looked up in the picture kept from before the water was drawn, and if
+// what is drawn there is nearer the eye than the line is, the line has
+// gone behind it, which is where it struck. Each pixel starts a different
+// part of a step in, as the soft edges of shadows do.
+fn mirrored_land(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(behind_colour));
+    var stride = 0.5;
+    let start = scattered(pixel + view.shadows.w * vec2<f32>(3.33, 9.17));
+    var at = origin + bounced * (0.25 + stride * start);
+    for (var number = 0; number < 30; number++) {
+        at += bounced * stride;
+        stride *= 1.2;
+        let clip = view.clip_from_world * vec4<f32>(at, 1.0);
+        if clip.w <= 0.0001 {
+            break;
+        }
+        let across = clip.xy / clip.w;
+        let uv = vec2<f32>(across.x * 0.5 + 0.5, 0.5 - across.y * 0.5);
+        let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+        if inside <= 0.0 {
+            break;
+        }
+        let spot = vec2<i32>(uv * size);
+        // Depth is larger the nearer; nothing at all is 0, the sky.
+        let held = textureLoad(behind_depth, spot, 0);
+        let ahead = clip.z / clip.w;
+        if held > ahead && held > 0.0 {
+            // How far in front of the line what is drawn there stands. A
+            // thing far in front is passed behind, not struck.
+            let nearest = ahead * clip.w;
+            let in_front = clip.w - nearest / held;
+            if in_front < max(2.5 * stride, 1.5) {
+                let colour = textureLoad(behind_colour, spot, 0).rgb;
+                return vec4<f32>(colour, smoothstep(0.0, 0.07, inside));
+            }
+        }
+    }
+    return vec4<f32>(0.0);
 }
 
 // How much red, green and blue light a metre of clear water takes away:
@@ -830,7 +890,7 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let fast = min(length(flow), 2.5);
     var slope: vec2<f32>;
     if fast < 0.05 {
-        slope = waves(place, far, blowing, view.wind.xy);
+        slope = waves(place, far, blowing, view.wind.xy).xy;
     } else {
         // Running water: its waves run downstream and are carried along
         // with it, for a second and a half before they start again where
@@ -841,10 +901,10 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
         let turn = view.clouds.y / 1.5;
         let first = fract(turn);
         let second = fract(turn + 0.5);
-        let one = waves(place - flow * (first - 0.5) * 1.5, far, rough, down);
+        let one = waves(place - flow * (first - 0.5) * 1.5, far, rough, down).xy;
         let other = waves(
             place - flow * (second - 0.5) * 1.5 + vec2<f32>(3.7, 1.9), far, rough, down,
-        );
+        ).xy;
         slope = mix(one, other, abs(2.0 * first - 1.0));
     }
     // A little unevenness, so that the trains are not too regular.
@@ -874,6 +934,10 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let open = open_sky(corner.world, corner.position.xy);
     let overhead = view.sky.rgb * vec3<f32>(0.1, 0.16, 0.07);
     mirrored = mix(overhead, mirrored, smoothstep(0.25, 0.95, open));
+    // And the land: the trees and the banks, where the bounced line of
+    // sight comes to them.
+    let land = mirrored_land(corner.world, bounced, corner.position.xy);
+    mirrored = mix(mirrored, land.rgb, land.a);
     // The sun itself, broken into glitter by the ripples; none in shadow.
     let sunlit = sunlight(corner.world, vec3<f32>(0.0, 1.0, 0.0), corner.position.xy)
         * under_clouds(corner.world);

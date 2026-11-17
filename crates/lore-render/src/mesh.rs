@@ -401,7 +401,13 @@ impl Meshes {
                     first_vertex,
                     mirrored: instance.mirrored,
                     double_sided: material.double_sided,
-                    sway: instance.wind(),
+                    // Water is marked by a sway below nothing: its points
+                    // rise and fall with its waves.
+                    sway: if instance.is_water() {
+                        -1.0
+                    } else {
+                        instance.wind()
+                    },
                 });
             }
         }

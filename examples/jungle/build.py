@@ -687,27 +687,32 @@ WATER_LOOK = {
 
 
 def lake():
-    """A flat sheet over the lake's bowl, a little past its shore."""
+    """A sheet over the lake's bowl, a little past its shore, of points
+    close enough together for its waves to have shape."""
     positions, normals, uvs = (array.array("f") for _ in range(3))
     indices = array.array("I")
-    rings, round_ = 10, 40
-    positions.extend((LAKE[0], WATER, LAKE[1]))
-    for ring in range(1, rings + 1):
-        for step in range(round_):
-            angle = step / round_ * math.tau
-            far = 38.0 * ring / rings
-            positions.extend((LAKE[0] + math.cos(angle) * far, WATER, LAKE[1] + math.sin(angle) * far / 1.15))
-    count = len(positions) // 3
-    normals.extend((0.0, 1.0, 0.0) * count)
-    # Still water: no flow.
-    uvs.extend((0.0, 0.0) * count)
-    for step in range(round_):
-        indices.extend((0, 1 + (step + 1) % round_, 1 + step))
-    for ring in range(rings - 1):
-        for step in range(round_):
-            a = 1 + ring * round_ + step
-            b = 1 + ring * round_ + (step + 1) % round_
-            indices.extend((a, b, a + round_, b, b + round_, a + round_))
+    apart, reach = 0.7, 34.0
+    across = int(2 * reach / apart) + 1
+    numbers = {}
+    for row in range(across):
+        for column in range(across):
+            x = LAKE[0] - reach + column * apart
+            z = LAKE[1] - reach + row * apart
+            # Only where there is water, or nearly.
+            if height(x, z) > WATER + 0.6:
+                continue
+            numbers[(row, column)] = len(positions) // 3
+            positions.extend((x, WATER, z))
+            normals.extend((0.0, 1.0, 0.0))
+            # Still water: no flow.
+            uvs.extend((0.0, 0.0))
+    for row in range(across - 1):
+        for column in range(across - 1):
+            corners = [numbers.get((row + r, column + c)) for r in (0, 1) for c in (0, 1)]
+            if None in corners:
+                continue
+            a, b, c, d = corners
+            indices.extend((a, c, b, b, c, d))
     return Part(positions, normals, uvs, indices, WATER_LOOK)
 
 
