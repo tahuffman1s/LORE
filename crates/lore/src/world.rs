@@ -334,6 +334,7 @@ impl Controls {
                 jump: held(self.jump),
                 crouch: held(self.crouch),
                 sprint: held(self.sprint),
+                pitch: *pitch,
             },
             pitch: *pitch,
             fire: held(self.fire),

@@ -63,6 +63,11 @@ struct View {
     // Whoever walks: in the first number, how much they are stirring what
     // they walk through, from 0 standing still to 1 at a run.
     walker: vec4<f32>,
+    // The still water the eye is in or beside: how high its surface is, 1
+    // if the eye is under it, and 1 if there is any.
+    water: vec4<f32>,
+    // The smallest x and z, then the largest x and z, of that water.
+    water_box: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -236,6 +241,12 @@ fn vertex(
         let away = length(view.eye.xyz - world.xyz);
         let blowing = 0.35 + 0.85 * gust(world.xz, view.clouds.y);
         world.y += waves(world.xz, away, blowing, view.wind.xy).z * 2.2;
+        // Whoever wades or swims pushes rings out across it.
+        let out = length(world.xz - view.eye.xz);
+        if out < 8.0 && view.eye.y - 1.75 < world.y && view.eye.y + 0.3 > world.y {
+            world.y += sin(out * 9.0 - view.clouds.y * 11.0) * exp(-out * 0.6)
+                * view.walker.x * 0.06;
+        }
         was = world;
     }
     var corner: Corner;
@@ -340,12 +351,19 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
 // much of it a line of sight crosses be worked out exactly, with no steps
 // (Quilez, "Better Fog").
 fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    if view.fog.x <= 0.0 {
-        return colour;
-    }
     let line = world - view.eye.xyz;
     let far = length(line);
     if far < 0.001 {
+        return colour;
+    }
+    // An eye under water sees through water, not air: light is lost
+    // along the way, red first, and the water's own colour takes its
+    // place, so that a few metres off everything is green-blue shadow.
+    if view.water.y > 0.5 {
+        let passes = exp(-far * WATER_TAKES * 1.7);
+        return colour * passes + water_glow() * (1.0 - passes);
+    }
+    if view.fog.x <= 0.0 {
         return colour;
     }
     let direction = line / far;
@@ -361,6 +379,39 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let hidden = 1.0 - exp(-max(crossed, 0.0));
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
     return mix(colour, sky_colour(low), hidden);
+}
+
+// How much red, green and blue light a metre of clear water takes away:
+// red goes first, which is why deep water is blue-green.
+const WATER_TAKES: vec3<f32> = vec3<f32>(0.42, 0.09, 0.065);
+
+// The colour of a great depth of water seen from inside it: the light from
+// above, scattered about in it.
+fn water_glow() -> vec3<f32> {
+    return vec3<f32>(0.035, 0.16, 0.13)
+        * (view.sky.rgb + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 0.5);
+}
+
+// How much brighter or dimmer the sun is on something under still water:
+// the waves on the surface gather the light into bright moving lines on
+// the bottom and leave it dimmer between them. 1 where there is no water
+// over the place.
+fn light_through_water(world: vec3<f32>) -> f32 {
+    let under = view.water.x - world.y;
+    if view.water.z < 0.5 || under <= 0.02 {
+        return 1.0;
+    }
+    let box = view.water_box;
+    if world.x < box.x || world.z < box.y || world.x > box.z || world.z > box.w {
+        return 1.0;
+    }
+    // Where the surface slopes towards a place from two sides, the light
+    // through it is gathered there.
+    let slopes = waves(world.xz * 1.7, 0.0, 1.4, view.wind.xy).xy;
+    let lines = smoothstep(0.03, 0.2, length(slopes));
+    // Sharp in the shallows, washed out a few metres down.
+    let sharp = exp(-under * 0.35);
+    return mix(1.0, 0.55 + 1.5 * lines, sharp) * exp(-under * 0.12);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
@@ -579,7 +630,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let thin = material.emissive.w > 0.0;
     let sun_side = select(1.0, sign(dot(normal, view.towards_sun.xyz) + 0.0001), thin);
     let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
-        * under_clouds(corner.world);
+        * under_clouds(corner.world)
+        * light_through_water(corner.world);
     let sky_seen = open_sky(corner.world, corner.position.xy);
     if has(NORMAL) {
         let sample = textureSampleBias(
@@ -871,10 +923,6 @@ fn mirrored_land(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> vec
     return vec4<f32>(0.0);
 }
 
-// How much red, green and blue light a metre of clear water takes away:
-// red goes first, which is why deep water is blue-green.
-const WATER_TAKES: vec3<f32> = vec3<f32>(0.42, 0.09, 0.065);
-
 // The surface of water, and the water under it.
 //
 // What is under the surface is seen through it, bent by the ripples, and
@@ -888,6 +936,23 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let far = length(line);
     let to_eye = line / max(far, 0.001);
     let sun = view.towards_sun.xyz;
+
+    // Seen from underneath: straight up, the sky shows through a bright
+    // round window, bent and broken by the waves; to the sides the surface
+    // is a mirror of the water below it.
+    if !front {
+        let blowing = 0.35 + 0.85 * gust(corner.world.xz, view.clouds.y);
+        let bent = waves(corner.world.xz, far, blowing, view.wind.xy).xy;
+        let upward = clamp(-to_eye.y + (bent.x + bent.y) * 1.5, 0.0, 1.0);
+        let window = smoothstep(0.62, 0.74, upward);
+        let above = sky_colour(normalize(vec3<f32>(-to_eye.x + bent.x * 2.0, 0.6, -to_eye.z + bent.y * 2.0)))
+            * vec3<f32>(0.75, 0.95, 0.9)
+            + view.sun.rgb * 0.25 * window;
+        var seen: Mixed;
+        seen.colour = vec4<f32>(through_fog(mix(water_glow() * 1.3, above, window), corner.world), 1.0);
+        seen.motion = vec4<f32>(0.0);
+        return seen;
+    }
 
     // Which way the surface faces here, from how the ripples slope. Far
     // off they are smaller than a pixel and would only glitter, so they
@@ -935,8 +1000,8 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let wading = step(view.eye.y - 1.75, corner.world.y) * step(corner.world.y, view.eye.y);
     if wading > 0.5 && out < 7.0 {
         let stir = view.walker.x;
-        let ring = sin(out * 9.0 - view.clouds.y * 11.0) * exp(-out * 0.75) * stir;
-        slope += from_walker / max(out, 0.05) * ring * 0.55;
+        let ring = sin(out * 9.0 - view.clouds.y * 11.0) * exp(-out * 0.6) * stir;
+        slope += from_walker / max(out, 0.05) * ring * 1.3;
     }
     let normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
 
@@ -1013,7 +1078,10 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let foam = clamp(shore * (0.4 + 0.5 * fast) + 0.05 * fast, 0.0, 1.0)
         * smoothstep(0.55 - 0.12 * fast, 0.78, broken + shore * 0.1) * (0.6 + 0.15 * fast);
     let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
-    colour = mix(colour, white * 0.9, foam);
+    // Whoever wades churns the water white round their legs as they move.
+    let churned = wading * view.walker.x * (1.0 - smoothstep(0.25, 1.5, out))
+        * smoothstep(0.35, 0.6, broken);
+    colour = mix(colour, white * 0.9, max(foam, churned * 0.85));
     // The very edge fades out, so that the water does not end in a line.
     let edge = smoothstep(0.0, 0.03, deep);
 
@@ -1108,6 +1176,14 @@ fn to_clouds(rise: f32, height: f32) -> f32 {
 fn fragment_sky(beyond: Beyond) -> Pixel {
     let direction = normalize(beyond.ray);
     var colour = sky_colour(direction);
+    // From under water there is no sky to the side: only water. (Looking
+    // up, the water's own surface is drawn over this.)
+    if view.water.y > 0.5 {
+        var pixel: Pixel;
+        pixel.colour = vec4<f32>(water_glow(), 1.0);
+        pixel.motion = vec2<f32>(0.0);
+        return pixel;
+    }
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
     // The sun itself: a small bright disc with a soft rim.

@@ -1151,6 +1151,25 @@ def main():
     cover(["anthurium_botany_01"], 120, 0, reach * 1.2, (1.8, 3.0), creek_gap=2.0)
     cover(["grass_medium_02"], 500, 0, reach * 1.3, (1.5, 2.6), creek_gap=1.9, water_gap=0.1)
 
+    # ---- under the lake: weeds and grasses on its bed, which sway as the
+    # plants on land do.
+    weeds = [piece for name in ("grass_medium_02", "fern_02", "shrub_03") for piece in pieces(name)]
+    grown = 0
+    while grown < 420:
+        angle, far = random.uniform(0, math.tau), 34.0 * math.sqrt(random.random())
+        x, z = LAKE[0] + math.cos(angle) * far, LAKE[1] + math.sin(angle) * far
+        bed = height(x, z)
+        if bed > WATER - 0.35:
+            continue
+        mesh, _ = random.choice(weeds)
+        # Taller the deeper they stand, but never out of the water.
+        tall = min(random.uniform(1.5, 4.0), (WATER - bed) * 2.2)
+        level.put(
+            f"weed.{grown:03}", mesh, (x, bed - 0.03, z),
+            random.uniform(0, math.tau), tall, solid=False, wind=1.4,
+        )
+        grown += 1
+
     # ---- what lies on the ground: solid
     def litter(names, count, most, sizes, sink, inner=4, outer=120, **wanted):
         kinds = [piece for name in names for piece in pieces(name, most)]

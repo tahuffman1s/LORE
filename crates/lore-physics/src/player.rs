@@ -16,6 +16,23 @@ const EDGE_PROBE: f32 = 0.03;
 /// A ledge lower than this is not worth a step; the plain move handles it.
 const LOWEST_STEP: f32 = 0.02;
 
+/// How deep the water over the feet has to be before the player swims, and
+/// how shallow before they walk again. The gap between the two keeps them
+/// from flickering between swimming and wading at the edge.
+const SWIM_FROM: f32 = 1.3;
+const WADE_FROM: f32 = 1.1;
+/// How far over the water the eyes of a swimmer at rest are, in metres.
+const EYES_OVER_WATER: f32 = 0.12;
+/// How fast a swimmer goes, and goes when sprinting, in metres a second.
+const SWIM_SPEED: f32 = 2.2;
+const SWIM_FAST: f32 = 3.4;
+/// How quickly a swimmer reaches the speed they ask for, and how strongly
+/// the water lifts them back to the surface.
+const SWIM_PULL: f32 = 4.0;
+const LIFT: f32 = 7.0;
+/// How much water at swimming depth slows walking.
+const WADING_DRAG: f32 = 0.45;
+
 /// A player's body in the level.
 ///
 /// This is everything movement remembers between ticks. It is small and
@@ -42,6 +59,8 @@ pub struct Player {
     pub ground_normal: [f32; 3],
     /// Jump was held during the last tick. A jump needs a fresh press.
     pub jump_held: bool,
+    /// In water too deep to stand in: floating, and going where they look.
+    pub swimming: bool,
 }
 
 impl Player {
@@ -60,6 +79,7 @@ impl Player {
             eye_height: settings.eye_height(false),
             ground_normal: [0.0, 1.0, 0.0],
             jump_held: false,
+            swimming: false,
         }
     }
 
@@ -104,6 +124,57 @@ impl Player {
         let to_middle = Vector::Y * (settings.height(self.crouched) / 2.0);
         let mut middle = unstick(level, &body.shape, feet + to_middle);
 
+        // How deep the still water over the feet is, if they are in any.
+        let depth = level
+            .water_at(feet.x, feet.z)
+            .map(|surface| surface - feet.y)
+            .filter(|depth| depth.is_finite() && *depth > 0.0);
+        self.swimming =
+            depth.is_some_and(|depth| depth > if self.swimming { WADE_FROM } else { SWIM_FROM });
+        if let (true, Some(depth)) = (self.swimming, depth) {
+            // Swimming: forward is the way the player looks, up and down
+            // included; jump rises and crouch dives. Left alone, the water
+            // lifts them until their eyes are just over it.
+            let pitch = if input.pitch.is_finite() {
+                input.pitch.clamp(-1.5, 1.5)
+            } else {
+                0.0
+            };
+            let (sin, cos) = (libm::sinf(input.yaw), libm::cosf(input.yaw));
+            let (up, level_part) = (libm::sinf(pitch), libm::cosf(pitch));
+            let ahead = Vector::new(-sin * level_part, up, -cos * level_part);
+            let aside = Vector::new(cos, 0.0, -sin);
+            let rise = f32::from(u8::from(input.jump)) - f32::from(u8::from(input.crouch));
+            let wish = ahead * input.forward + aside * input.right + Vector::Y * rise;
+            let push = wish.length().min(1.0);
+            let wish = wish.try_normalize().unwrap_or(Vector::ZERO);
+            let top_speed = if input.sprint { SWIM_FAST } else { SWIM_SPEED };
+            velocity += (wish * (top_speed * push) - velocity) * (SWIM_PULL * dt).min(1.0);
+            // Where the feet are when the eyes are just over the water.
+            let afloat = depth - (self.eye_height - EYES_OVER_WATER);
+            if afloat > 0.0 && rise >= 0.0 && wish.y > -0.3 {
+                velocity.y += afloat.min(1.0) * LIFT * dt;
+            }
+            // Nobody swims up out of the water into the air.
+            if afloat <= 0.0 {
+                velocity.y = velocity.y.min(0.0);
+            }
+            let moved = slide(level, &body.shape, middle, velocity, dt, body.steep, false);
+            let feet = moved.position - to_middle;
+            self.grounded = false;
+            self.sprinting = false;
+            self.crouched = false;
+            self.jump_held = input.jump;
+            if feet.is_finite() && moved.velocity.is_finite() {
+                self.position = feet.to_array();
+                self.velocity = moved.velocity.to_array();
+                self.ground_normal = [0.0, 1.0, 0.0];
+            } else {
+                *self = before;
+            }
+            return;
+        }
+
         if input.jump && !self.jump_held && self.grounded && !self.crouched {
             velocity.y = settings.jump_speed();
             self.grounded = false;
@@ -130,6 +201,9 @@ impl Player {
         } else {
             settings.walk_speed
         });
+        // Water round the legs slows a walker, more the deeper it is.
+        let top_speed = top_speed
+            * (1.0 - WADING_DRAG * depth.map_or(0.0, |depth| (depth / SWIM_FROM).min(1.0)));
         let wish_speed = top_speed * push;
 
         let mut ground = Vector::from_array(self.ground_normal);

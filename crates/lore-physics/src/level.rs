@@ -44,6 +44,19 @@ pub struct Level {
     /// `None` when there are no triangles, so nothing is ever hit.
     mesh: Option<TriMesh>,
     triangles: usize,
+    /// The still water in the level: lakes and ponds.
+    waters: Vec<Water>,
+}
+
+/// A body of still water: a level surface and the box it lies in. Whatever
+/// is under the surface inside the box is in the water.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Water {
+    /// The smallest and largest x and z of its surface.
+    low: [f32; 2],
+    high: [f32; 2],
+    /// How high the surface is.
+    surface: f32,
 }
 
 impl std::fmt::Debug for Level {
@@ -80,7 +93,48 @@ impl Level {
                 );
             }
         }
-        Self::from_triangles(&triangles)
+        let mut level = Self::from_triangles(&triangles);
+        // Water that lies level is a lake or a pond, to be waded and swum
+        // in. Water that slopes is a stream: too shallow to matter here.
+        for instance in scene
+            .instances
+            .iter()
+            .filter(|instance| instance.is_water())
+        {
+            let Some(mesh) = scene.meshes.get(instance.mesh as usize) else {
+                continue;
+            };
+            let mut low = [f32::INFINITY; 3];
+            let mut high = [f32::NEG_INFINITY; 3];
+            for point in mesh.parts.iter().flat_map(|part| &part.positions) {
+                let placed = place(&instance.transform, *point);
+                for axis in 0..3 {
+                    low[axis] = low[axis].min(placed[axis]);
+                    high[axis] = high[axis].max(placed[axis]);
+                }
+            }
+            if low.iter().chain(&high).all(|part| part.is_finite()) && high[1] - low[1] < 0.05 {
+                level.waters.push(Water {
+                    low: [low[0], low[2]],
+                    high: [high[0], high[2]],
+                    surface: high[1],
+                });
+            }
+        }
+        level
+    }
+
+    /// How high the surface of the still water over `x`, `z` is, if there
+    /// is any there: a lake or a pond that the level marks as water.
+    #[must_use]
+    pub fn water_at(&self, x: f32, z: f32) -> Option<f32> {
+        self.waters
+            .iter()
+            .filter(|water| {
+                x >= water.low[0] && x <= water.high[0] && z >= water.low[1] && z <= water.high[1]
+            })
+            .map(|water| water.surface)
+            .reduce(f32::max)
     }
 
     /// A level made of loose triangles, each three corner positions in metres.
@@ -108,6 +162,7 @@ impl Level {
         Self {
             triangles: if mesh.is_some() { count } else { 0 },
             mesh,
+            waters: Vec::new(),
         }
     }
 

@@ -530,6 +530,7 @@ fn the_same_inputs_replay_to_the_same_bits() {
         jump: tick.is_multiple_of(45),
         crouch: tick % 200 > 170,
         sprint: tick % 120 < 60,
+        pitch: 0.0,
     };
     let play = |mut player: Player, ticks: std::ops::Range<usize>| {
         let mut history = Vec::new();
@@ -887,6 +888,7 @@ fn a_long_erratic_run_never_ends_up_inside_or_outside_the_level() {
                 jump: bits >> 16 & 3 == 0,
                 crouch: bits >> 18 & 7 == 0,
                 sprint: bits >> 21 & 1 == 0,
+                pitch: 0.0,
             };
         } else {
             // Jump is pressed, not held, so it can fire again.
@@ -1091,4 +1093,186 @@ fn a_shape_over_a_kilometre_wide_triangle_is_measured_to_a_hair() {
             );
         }
     }
+}
+
+/// Mesh `mesh` of a scene, stood where `transform` says.
+fn stood_as(mesh: u32, transform: [[f32; 4]; 4]) -> Instance {
+    Instance {
+        mesh,
+        transform,
+        mirrored: false,
+        name: None,
+        extras: None,
+    }
+}
+
+/// A pool: a floor four metres down, twenty metres across, with still
+/// water over it up to height 0, and dry land beside it at height 0.
+fn pool() -> Level {
+    let square = |low: [f32; 2], high: [f32; 2], y: f32| MeshPart {
+        positions: vec![
+            [low[0], y, high[1]],
+            [high[0], y, high[1]],
+            [high[0], y, low[1]],
+            [low[0], y, low[1]],
+        ],
+        normals: vec![[0.0, 1.0, 0.0]; 4],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        ..MeshPart::default()
+    };
+    let mesh = |part: MeshPart| Mesh {
+        name: None,
+        parts: vec![part],
+    };
+    let still = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let scene = Scene {
+        meshes: vec![
+            mesh(square([-10.0, -10.0], [10.0, 10.0], -4.0)),
+            mesh(square([10.0, -10.0], [40.0, 10.0], 0.0)),
+            mesh(square([-10.0, -10.0], [10.0, 10.0], 0.0)),
+        ],
+        instances: vec![
+            stood_as(0, still),
+            stood_as(1, still),
+            Instance {
+                extras: Some(r#"{"water": true}"#.to_owned()),
+                ..stood_as(2, still)
+            },
+        ],
+        ..Scene::default()
+    };
+    Level::from_scene(&scene)
+}
+
+#[test]
+fn a_player_in_deep_water_floats_swims_where_they_look_and_dives() {
+    let level = pool();
+    assert_eq!(level.water_at(0.0, 0.0), Some(0.0));
+    assert_eq!(level.water_at(20.0, 0.0), None, "the land beside it is dry");
+    let settings = MoveSettings::default();
+    let eyes = |player: &Player| player.position[1] + player.eye_height;
+
+    // Dropped in from above, they go under and come up to float with their
+    // eyes just over the water, and stay there.
+    let mut player = Player::at([0.0, 1.0, 0.0], &settings);
+    run(&mut player, &level, MoveInput::default(), 6 * SECOND);
+    assert!(player.swimming && !player.grounded, "{player:?}");
+    assert!(
+        eyes(&player) > 0.0 && eyes(&player) < 0.3,
+        "eyes {} over the water",
+        eyes(&player)
+    );
+    let rest = player.position[1];
+    run(&mut player, &level, MoveInput::default(), 2 * SECOND);
+    assert!(close(player.position[1], rest, 0.05), "{player:?}");
+
+    // Forward along the surface: a couple of metres a second, no deeper.
+    let from = player.position;
+    run(&mut player, &level, forward(), 2 * SECOND);
+    let swum = flat_distance_of(player.position, from);
+    assert!((3.0..5.5).contains(&swum), "swam {swum} m in two seconds");
+    assert!(close(player.position[1], rest, 0.1), "{player:?}");
+
+    // Looking down and going forward dives; crouch dives too.
+    let down = MoveInput {
+        pitch: -1.2,
+        ..forward()
+    };
+    run(&mut player, &level, down, SECOND);
+    assert!(player.position[1] < rest - 1.0, "dived: {player:?}");
+    let sink = MoveInput {
+        crouch: true,
+        ..MoveInput::default()
+    };
+    run(&mut player, &level, sink, 3 * SECOND);
+    // The floor stops them, and they are not walking on it.
+    assert!(close(player.position[1], -4.0, 0.1), "{player:?}");
+    assert!(player.swimming);
+
+    // Jump rises; let go, they float again.
+    let rise = MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    };
+    run(&mut player, &level, rise, 3 * SECOND);
+    run(&mut player, &level, MoveInput::default(), 3 * SECOND);
+    assert!(close(player.position[1], rest, 0.1), "{player:?}");
+}
+
+#[test]
+fn a_swimmer_who_reaches_the_shore_walks_out_and_water_slows_wading() {
+    let level = pool();
+    let settings = MoveSettings::default();
+    // Out of the pool towards the land at +x: swim to the wall... the pool
+    // here has a sheer side, so start beside it on land and walk.
+    let mut dry = Player::at([20.0, 0.5, 0.0], &settings);
+    run(&mut dry, &level, MoveInput::default(), SECOND);
+    assert!(dry.grounded && !dry.swimming, "{dry:?}");
+    let from = dry.position;
+    run(&mut dry, &level, forward(), 2 * SECOND);
+    let walked = flat_distance_of(dry.position, from);
+
+    // A shallow pool: the same floor one metre under the water.
+    let shallow = {
+        let square = |y: f32| MeshPart {
+            positions: vec![
+                [-30.0, y, 30.0],
+                [30.0, y, 30.0],
+                [30.0, y, -30.0],
+                [-30.0, y, -30.0],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..MeshPart::default()
+        };
+        let still = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        Level::from_scene(&Scene {
+            meshes: vec![
+                Mesh {
+                    name: None,
+                    parts: vec![square(-1.0)],
+                },
+                Mesh {
+                    name: None,
+                    parts: vec![square(0.0)],
+                },
+            ],
+            instances: vec![
+                stood_as(0, still),
+                Instance {
+                    extras: Some(r#"{"water": true}"#.to_owned()),
+                    ..stood_as(1, still)
+                },
+            ],
+            ..Scene::default()
+        })
+    };
+    let mut wader = Player::at([0.0, -0.5, 0.0], &settings);
+    run(&mut wader, &shallow, MoveInput::default(), SECOND);
+    assert!(
+        wader.grounded && !wader.swimming,
+        "a metre of water is waded: {wader:?}"
+    );
+    let from = wader.position;
+    run(&mut wader, &shallow, forward(), 2 * SECOND);
+    let waded = flat_distance_of(wader.position, from);
+    assert!(
+        waded < walked * 0.8 && waded > walked * 0.4,
+        "waded {waded} m against {walked} m on dry land"
+    );
+}
+
+/// How far apart two places are, leaving out how high they are.
+fn flat_distance_of(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (a[0] - b[0]).hypot(a[2] - b[2])
 }

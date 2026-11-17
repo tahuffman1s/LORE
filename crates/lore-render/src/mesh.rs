@@ -46,8 +46,9 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
-/// haze's, one for the fog, one for the wind and one for whoever walks.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1);
+/// haze's, one for the fog, one for the wind, one for whoever walks and
+/// two for the still water the eye is in or beside.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 2);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -93,6 +94,7 @@ impl View {
         lighting: &Lighting,
         shadows: Option<&[Cascade; PICTURES]>,
         sky: Option<&Sky>,
+        water: [[f32; 4]; 2],
     ) -> [u8; VIEW_BYTES] {
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
         // The picture is far smaller than where f32 stops being exact.
@@ -153,7 +155,8 @@ impl View {
                 .chain(scattered.iter().flatten())
                 .chain(&fog)
                 .chain(&wind)
-                .chain(&[self.stir, 0.0, 0.0, 0.0]),
+                .chain(&[self.stir, 0.0, 0.0, 0.0])
+                .chain(water.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -314,6 +317,9 @@ pub(crate) struct Meshes {
     /// Whether any of them is water, which looks through a copy of the
     /// picture behind it.
     has_water: bool,
+    /// The still water in the scene, lakes and ponds: the smallest and
+    /// largest x and z of each one's surface, and how high it is.
+    lakes: Vec<([f32; 2], [f32; 2], f32)>,
     materials: Materials,
     lighting: Lighting,
     /// The sky under that light.
@@ -358,6 +364,7 @@ impl Meshes {
 
         let fallback = Material::default();
         let mut draws = Vec::new();
+        let mut lakes = Vec::new();
         for instance in &scene.instances {
             let (Some(mesh), Some(parts)) = (
                 scene.meshes.get(instance.mesh as usize),
@@ -365,6 +372,7 @@ impl Meshes {
             ) else {
                 continue;
             };
+            let water = instance.is_water();
             for (part, range) in mesh.parts.iter().zip(parts) {
                 let Some((first_index, index_count, first_vertex)) = *range else {
                     continue;
@@ -390,7 +398,7 @@ impl Meshes {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
                     material: Materials::number(scene, part.material),
-                    surface: if instance.is_water() {
+                    surface: if water {
                         Surface::Water
                     } else {
                         Surface::of(material)
@@ -404,15 +412,41 @@ impl Meshes {
                     index_count,
                     first_vertex,
                     mirrored: instance.mirrored,
-                    double_sided: material.double_sided,
+                    // Water is seen from underneath as well.
+                    double_sided: material.double_sided || water,
                     // Water is marked by a sway below nothing: its points
                     // rise and fall with its waves.
-                    sway: if instance.is_water() {
-                        -1.0
-                    } else {
-                        instance.wind()
-                    },
+                    sway: if water { -1.0 } else { instance.wind() },
                 });
+                // Water that lies level is a lake or a pond: the eye can
+                // be under it.
+                if water {
+                    let corners = (0..8).map(|corner| {
+                        moved(
+                            &instance.transform,
+                            [0, 1, 2].map(|axis| {
+                                if corner >> axis & 1 == 0 {
+                                    low[axis]
+                                } else {
+                                    high[axis]
+                                }
+                            }),
+                        )
+                    });
+                    let mut least = [f32::INFINITY; 3];
+                    let mut most = [f32::NEG_INFINITY; 3];
+                    for corner in corners {
+                        for axis in 0..3 {
+                            least[axis] = least[axis].min(corner[axis]);
+                            most[axis] = most[axis].max(corner[axis]);
+                        }
+                    }
+                    if least.iter().chain(&most).all(|part| part.is_finite())
+                        && most[1] - least[1] < 0.05
+                    {
+                        lakes.push(([least[0], least[2]], [most[0], most[2]], most[1]));
+                    }
+                }
             }
         }
         // Parts that share a material follow one another, so the material
@@ -453,6 +487,7 @@ impl Meshes {
         Ok(Self {
             buffers,
             has_water: draws.iter().any(|draw| draw.surface == Surface::Water),
+            lakes,
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
@@ -461,6 +496,38 @@ impl Meshes {
             id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
             bounds,
         })
+    }
+}
+
+impl Meshes {
+    /// The still water the eye at `eye` is in or beside, as the shader
+    /// takes it: how high its surface is, 1 if the eye is under it, and 1
+    /// if there is any; then the smallest x and z and the largest x and z
+    /// of its surface.
+    fn water_round(&self, eye: [f32; 3]) -> [[f32; 4]; 2] {
+        let near = self
+            .lakes
+            .iter()
+            .map(|(low, high, surface)| {
+                // How far outside the water's box the eye is.
+                let out = [0, 1].map(|axis| {
+                    (low[axis] - eye[axis * 2])
+                        .max(eye[axis * 2] - high[axis])
+                        .max(0.0)
+                });
+                (out[0].hypot(out[1]), low, high, surface)
+            })
+            .min_by(|one, other| one.0.total_cmp(&other.0));
+        match near {
+            Some((away, low, high, surface)) => {
+                let under = away <= 0.0 && eye[1] < *surface;
+                [
+                    [*surface, f32::from(u8::from(under)), 1.0, 0.0],
+                    [low[0], low[1], high[0], high[1]],
+                ]
+            }
+            None => [[0.0; 4]; 2],
+        }
     }
 }
 
@@ -1120,9 +1187,10 @@ impl MeshPipeline {
             unsafe { self.record_shadows(commands, meshes, cascades) };
         }
         let sky = sky.then(|| meshes.map_or(&self.usual_sky, |meshes| &meshes.sky));
+        let water = meshes.map_or([[0.0; 4]; 2], |meshes| meshes.water_round(view.eye));
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
-        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky)) }?;
+        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky, water)) }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {
@@ -1869,7 +1937,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting, None, None);
+        let bytes = view.bytes(&lighting, None, None, [[0.0; 4]; 2]);
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -1889,7 +1957,7 @@ mod tests {
         // matrix for each.
         assert_eq!(number(&bytes, 68), 0.0, "no shadows");
         let cascades = shadow::cascades([0.0; 3], [0.0, 1.0, 0.0], [[-1.0; 3], [1.0; 3]]);
-        let bytes = view.bytes(&lighting, Some(&cascades), None);
+        let bytes = view.bytes(&lighting, Some(&cascades), None, [[0.0; 4]; 2]);
         assert_eq!(number(&bytes, 68), 1.0, "shadows");
         assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
         assert_eq!(number(&bytes, 72), cascades[0].texel);
@@ -1917,7 +1985,12 @@ mod tests {
         assert_eq!(number(&bytes, 186), sky::CLOUD_HEIGHT);
         assert_eq!(number(&bytes, 187), 0.0, "no sky");
         let above = Sky::of(&lighting);
-        let bytes = view.bytes(&lighting, None, Some(&above));
+        let bytes = view.bytes(
+            &lighting,
+            None,
+            Some(&above),
+            [[2.0, 1.0, 1.0, 0.0], [3.0, 4.0, 5.0, 6.0]],
+        );
         assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
         assert_eq!(number(&bytes, 187), 1.0, "a sky");
         assert_eq!(number(&bytes, 188), above.air[0][0]);
@@ -1930,7 +2003,9 @@ mod tests {
         assert_eq!(number(&bytes, 386), sky::WIND[2]);
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
         assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
-        assert_eq!(bytes.len(), 392 * 4);
+        assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
+        assert_eq!(number(&bytes, 399), 6.0, "and the far corner of its box");
+        assert_eq!(bytes.len(), 400 * 4);
     }
 
     #[test]

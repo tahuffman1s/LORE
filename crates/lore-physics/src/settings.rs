@@ -22,6 +22,10 @@ pub struct MoveInput {
     pub crouch: bool,
     /// Sprint is held. It only counts while standing and heading forward.
     pub sprint: bool,
+    /// How far up (positive) or down the player looks, in radians. It only
+    /// matters in water deep enough to swim in, where forward is the way
+    /// the player looks.
+    pub pitch: f32,
 }
 
 impl MoveInput {
