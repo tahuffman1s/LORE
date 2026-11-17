@@ -55,6 +55,9 @@ struct View {
     // height in the third number, and how fast it thins with each metre
     // above that. The first is 0 if there is none.
     fog: vec4<f32>,
+    // The wind: the way it blows along x and z, how fast in metres a
+    // second, and how many seconds ago the last frame was drawn.
+    wind: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -115,6 +118,8 @@ struct Draw {
     // -1 if the mesh is placed mirrored, which turns its normal map's
     // sideways direction around, and 1 if not.
     handedness: f32,
+    // How far the wind moves the mesh: 0 for one that stands still.
+    sway: f32,
 }
 
 var<immediate> draw: Draw;
@@ -144,6 +149,39 @@ fn unfolded(folded: vec2<f32>) -> vec3<f32> {
     return normalize(direction);
 }
 
+// How hard the wind blows at a place on the ground at a moment, from a
+// lull near 0.2 to a gust near 1.4. Gusts are patches of the block the
+// clouds are shaped from, carried along by the wind itself: so a gust
+// crosses the land as a front, and what it reaches first bends first.
+fn gust(place: vec2<f32>, seconds: f32) -> f32 {
+    let carried = place - view.wind.xy * view.wind.z * seconds;
+    let wide = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(carried / 70.0, seconds * 0.013), 0.0,
+    ).r;
+    return 0.2 + 1.2 * wide;
+}
+
+// Where the wind has a point of a mesh that sways: `world` is where it
+// stands in still air, `foot` where the mesh is rooted.
+//
+// The whole of a tree leans with the gust at its foot, more the higher up,
+// and keeps its length; on top of that each leaf shivers on its own, more
+// the farther out from the trunk it is.
+fn blown(world: vec3<f32>, foot: vec3<f32>, seconds: f32) -> vec3<f32> {
+    let along = vec3<f32>(view.wind.x, 0.0, view.wind.y);
+    let strength = gust(foot.xz, seconds) * view.wind.z / 5.0 * draw.sway;
+    let up = clamp(world.y - foot.y, 0.0, 30.0);
+    let lean = 0.0045 * up * up * strength;
+    var moved = world + along * lean;
+    // What leans over is no taller than it was.
+    moved.y -= lean * lean / max(2.0 * up, 0.5);
+    // Leaves: quick, small, and out of step with one another.
+    let out = min(length(world.xz - foot.xz) + 0.25 * up, 3.0);
+    let own = dot(world, vec3<f32>(1.7, 2.3, 1.3));
+    let shiver = sin(seconds * 5.3 + own) * cos(seconds * 3.1 + own * 1.7);
+    return moved + vec3<f32>(along.x, 0.5, along.z) * (shiver * 0.014 * out * strength);
+}
+
 @vertex
 fn vertex(
     @location(0) position: vec3<f32>,
@@ -153,12 +191,20 @@ fn vertex(
     @location(4) uv0: vec2<f32>,
     @location(5) uv1: vec2<f32>,
 ) -> Corner {
-    // Nothing in a level moves yet, so a point was where it is now.
-    let world = draw.world_from_local * vec4<f32>(position, 1.0);
+    // Nothing in a level moves but what the wind moves: that was where the
+    // wind of the last frame had it.
+    var world = draw.world_from_local * vec4<f32>(position, 1.0);
+    var was = world;
+    if draw.sway > 0.0 {
+        let foot = draw.world_from_local[3].xyz;
+        let seconds = view.clouds.y;
+        was = vec4<f32>(blown(world.xyz, foot, seconds - view.wind.w), 1.0);
+        world = vec4<f32>(blown(world.xyz, foot, seconds), 1.0);
+    }
     var corner: Corner;
     corner.position = view.clip_from_world * world;
     corner.steady = view.steady_from_world * world;
-    corner.before = view.before_from_world * world;
+    corner.before = view.before_from_world * was;
     corner.world = world.xyz;
     corner.normal = draw.normal_from_local * unfolded(normal);
     // A direction along the surface turns with the mesh itself.
@@ -294,7 +340,9 @@ fn cloud(place: vec3<f32>, fine: bool) -> f32 {
     }
     // The wind carries the clouds along, in metres a second.
     let seconds = view.clouds.y;
-    let carried = place + vec3<f32>(11.0, 0.0, 4.0) * seconds;
+    // The wind aloft is the same wind, and stronger.
+    let aloft = vec3<f32>(view.wind.x, 0.0, view.wind.y) * view.wind.z * 2.4;
+    let carried = place - aloft * seconds;
     let shape = textureSampleLevel(
         cloud_volume, cloud_sampler, carried / vec3<f32>(9000.0, 3200.0, 9000.0), 0.0,
     ).r;
@@ -308,7 +356,7 @@ fn cloud(place: vec3<f32>, fine: bool) -> f32 {
         let small = textureSampleLevel(
             cloud_volume,
             cloud_sampler,
-            (carried + vec3<f32>(6.0, -2.0, 3.0) * seconds) / 1700.0,
+            (carried - (aloft * 0.5 + vec3<f32>(0.0, 2.0, 0.0)) * seconds) / 1700.0,
             0.0,
         ).g;
         let eaten = (1.0 - small) * 0.42;
@@ -584,16 +632,21 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
 // time, so the ripples change and never repeat in step.
 fn ripples(place: vec2<f32>) -> f32 {
     let seconds = view.clouds.y;
+    // They run before the wind, the small ones a little across it.
+    let wind = view.wind.xy * view.wind.z;
     let wide = textureSampleLevel(
         cloud_volume,
         cloud_sampler,
-        vec3<f32>(place / 9.0 + seconds * vec2<f32>(0.019, 0.011), seconds * 0.021),
+        vec3<f32>((place - wind * 0.045 * seconds) / 9.0, seconds * 0.021),
         0.0,
     ).g;
     let small = textureSampleLevel(
         cloud_volume,
         cloud_sampler,
-        vec3<f32>(place / 2.7 - seconds * vec2<f32>(0.023, 0.037), 0.5 + seconds * 0.043),
+        vec3<f32>(
+            (place - vec2<f32>(wind.x - wind.y, wind.x + wind.y) * 0.03 * seconds) / 2.7,
+            0.5 + seconds * 0.043,
+        ),
         0.0,
     ).g;
     return wide * 0.62 + small * 0.38;
@@ -620,7 +673,8 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
         ripples(place + vec2<f32>(reach, 0.0)) - here,
         ripples(place + vec2<f32>(0.0, reach)) - here,
     ) / reach;
-    let rough = 0.34 / (1.0 + far / 60.0);
+    // A gust roughens the water it is passing over.
+    let rough = (0.2 + 0.18 * gust(place, view.clouds.y)) / (1.0 + far / 60.0);
     let normal = normalize(vec3<f32>(-slope.x * rough, 1.0, -slope.y * rough));
 
     // What the surface mirrors: the sky in the direction the line of

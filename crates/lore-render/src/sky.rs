@@ -26,6 +26,12 @@ pub(crate) const CLOUD_HEIGHT: f32 = 1500.0;
 /// set it yet.
 pub(crate) const FOG: [f32; 3] = [0.0008, 0.012, 0.0];
 
+/// The wind: the way it blows along x and z (length one), and how fast,
+/// in metres a second. A fresh breeze. Clouds drift along it, the water's
+/// ripples run with it and whatever a level says bends in the wind bends
+/// to it. A game cannot set it yet.
+pub(crate) const WIND: [f32; 3] = [0.94, 0.342, 5.0];
+
 /// How many heights above the horizon the sky is worked out for.
 pub(crate) const HEIGHTS: usize = 24;
 

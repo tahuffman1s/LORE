@@ -139,8 +139,10 @@ impl SceneView {
         let (width, height) = (size.width as f32, size.height as f32);
         let [forward, right, up] = camera.rays(size.width, size.height);
         let (across, upwards) = (2.0 * jitter.0 / width, -2.0 * jitter.1 / height);
+        let mut elapsed = 0.0;
         if !self.still && seconds.is_finite() {
-            self.seconds += f64::from(seconds.clamp(0.0, 1.0));
+            elapsed = seconds.clamp(0.0, 1.0);
+            self.seconds += f64::from(elapsed);
         }
         let view = View {
             // The picture is 2 wide and 2 high with y running up, and the
@@ -159,6 +161,7 @@ impl SceneView {
             // Clouds need no more of the time than an f32 holds.
             #[allow(clippy::cast_possible_truncation)]
             time: self.seconds as f32,
+            elapsed,
             // Only an upscaler mixes frames; without one a pattern that
             // moved every frame would be seen to crawl.
             #[allow(clippy::cast_precision_loss)]

@@ -179,6 +179,49 @@ impl Instance {
         self.ticked("water").unwrap_or(false)
     }
 
+    /// How far the wind moves it: 0 for a thing that stands still, which is
+    /// everything unless a level's maker says otherwise, and 1 for a tree
+    /// or a plant that bends and flutters as real ones do. The custom
+    /// property `wind` holds the number; more than 1 is a reed or a rope,
+    /// less is something stiff.
+    ///
+    /// It bends from where it stands (the object's own origin), more the
+    /// higher up, so the origin belongs at the foot of the trunk.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let fern = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"wind": 1.5, "solid": false}"#.to_owned()),
+    /// };
+    /// assert_eq!(fern.wind(), 1.5);
+    /// ```
+    #[must_use]
+    pub fn wind(&self) -> f32 {
+        use gltf::json::{Value, deserialize::from_str};
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return 0.0;
+        };
+        // The number is a setting, and no finer than an f32.
+        #[allow(clippy::cast_possible_truncation)]
+        let wind = match properties.get("wind") {
+            Some(Value::Number(wind)) => wind.as_f64().unwrap_or(0.0) as f32,
+            Some(Value::Bool(true)) => 1.0,
+            _ => 0.0,
+        };
+        if wind.is_finite() {
+            wind.clamp(0.0, 4.0)
+        } else {
+            0.0
+        }
+    }
+
     /// What the custom property `name` says, if it is there and is true,
     /// false or a number: Blender writes a ticked box as 1 and an unticked
     /// one as 0 when the property was made as a whole number.

@@ -213,6 +213,14 @@ impl Headless {
         Ok(())
     }
 
+    /// Lets time pass between pictures, or holds it still again. It is held
+    /// still to begin with, so that the same camera gives the same
+    /// picture; with time passing, each picture is a sixtieth of a second
+    /// after the last, and clouds drift and what bends in the wind moves.
+    pub fn let_time_pass(&mut self, passing: bool) {
+        self.view.still = !passing;
+    }
+
     /// Draws the editor's ground grid or not from now on, as
     /// [`Renderer::set_grid`](crate::Renderer::set_grid) does.
     pub fn set_grid(&mut self, shown: bool) {
@@ -760,6 +768,107 @@ mod tests {
             light(along) > light(deep) + 200 && along[2] >= along[0],
             "along {along:?}, down {deep:?}"
         );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn what_a_level_says_bends_in_the_wind_moves_and_nothing_else_does() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A red leaf a metre across, eight metres over where it is rooted,
+        // above a white floor.
+        let square = |wide: f32, height: f32, material: u32| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * wide, height, z * wide])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let scene = |properties: Option<&str>| {
+            let mut scene = Scene::default();
+            scene.meshes.push(square(200.0, 0.0, 0));
+            scene.meshes.push(square(0.5, 8.0, 1));
+            scene.materials.push(Material::default());
+            scene.materials.push(Material {
+                base_color: [1.0, 0.0, 0.0, 1.0],
+                ..Material::default()
+            });
+            for (mesh, extras) in [(0, None), (1, properties)] {
+                scene.instances.push(Instance {
+                    mesh,
+                    transform,
+                    mirrored: false,
+                    name: None,
+                    extras: extras.map(str::to_owned),
+                });
+            }
+            scene
+        };
+        let camera = Camera {
+            position: [0.0, 14.0, 0.0],
+            pitch: -std::f32::consts::FRAC_PI_2,
+            ..Camera::default()
+        };
+        // Where the leaf is in the picture: the middle of its red pixels.
+        let leaf = |headless: &mut Headless| {
+            let picture = headless.screenshot(&camera).unwrap();
+            let (mut across, mut down, mut count) = (0.0_f32, 0.0_f32, 0.0_f32);
+            for y in 0..SIZE[1] {
+                for x in 0..SIZE[0] {
+                    let at = (y * SIZE[0] + x) * 4;
+                    if picture[at] > 120 && picture[at + 1] < 60 {
+                        #[allow(clippy::cast_precision_loss)]
+                        {
+                            across += x as f32;
+                            down += y as f32;
+                        }
+                        count += 1.0;
+                    }
+                }
+            }
+            assert!(count > 20.0, "the leaf is in the picture: {count} pixels");
+            [across / count, down / count]
+        };
+        // How far the leaf goes in the next two seconds.
+        let wanders = |headless: &mut Headless| {
+            let from = leaf(headless);
+            let mut farthest = 0.0_f32;
+            for _ in 0..12 {
+                for _ in 0..10 {
+                    headless.render(&camera).unwrap();
+                }
+                let now = leaf(headless);
+                farthest = farthest.max((now[0] - from[0]).hypot(now[1] - from[1]));
+            }
+            farthest
+        };
+
+        // Held still, as pictures are to begin with, it stays where it is.
+        headless.set_scene(&scene(Some(r#"{"wind": 1}"#))).unwrap();
+        assert!(wanders(&mut headless) < 0.01);
+        // With time passing it moves.
+        headless.let_time_pass(true);
+        let moved = wanders(&mut headless);
+        assert!(moved > 0.3, "the leaf moved {moved} pixels");
+        // And a leaf nobody said bends does not.
+        headless.set_scene(&scene(None)).unwrap();
+        let moved = wanders(&mut headless);
+        assert!(moved < 0.01, "a stiff leaf moved {moved} pixels");
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

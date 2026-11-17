@@ -45,8 +45,8 @@ const VIEW_BYTES: usize = 272 + 16 + CASCADES * (16 + 64) + SKY_BYTES;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
-/// haze's, and one for the fog.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1);
+/// haze's, one for the fog and one for the wind.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -73,6 +73,8 @@ pub(crate) struct View {
     pub(crate) rays: [[f32; 4]; 3],
     /// How long the scene has been drawn for, in seconds.
     pub(crate) time: f32,
+    /// How many seconds of that have passed since the frame before.
+    pub(crate) elapsed: f32,
     /// A number that differs from frame to frame when the frames are mixed
     /// by the upscaler, which then smooths what is drawn with a pattern
     /// turned by it; 0 when each frame is shown as it is.
@@ -120,6 +122,10 @@ impl View {
         // Fog is the colour of the sky, so there is none without one.
         let [thick, thins, height] = sky::FOG;
         let fog = [if sky.is_some() { thick } else { 0.0 }, thins, height, 0.0];
+        // The wind, and how long ago the last frame was: what bends in it
+        // was where the wind of that moment had it.
+        let [along_x, along_z, speed] = sky::WIND;
+        let wind = [along_x, along_z, speed, self.elapsed];
         let mut scattered = [[0.0; 4]; 2 * sky::HEIGHTS];
         if let Some(sky) = sky {
             for (row, [red, green, blue]) in
@@ -141,7 +147,8 @@ impl View {
                 .chain(self.rays.iter().flatten())
                 .chain(&clouds)
                 .chain(scattered.iter().flatten())
-                .chain(&fog),
+                .chain(&fog)
+                .chain(&wind),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -283,6 +290,8 @@ struct Draw {
     mirrored: bool,
     /// Both of its sides are drawn.
     double_sided: bool,
+    /// How far the wind moves it: 0 for a thing that stands still.
+    sway: f32,
 }
 
 /// Where one mesh part's data sits in the buffers, or `None` if it was left out.
@@ -388,6 +397,7 @@ impl Meshes {
                     first_vertex,
                     mirrored: instance.mirrored,
                     double_sided: material.double_sided,
+                    sway: instance.wind(),
                 });
             }
         }
@@ -623,7 +633,8 @@ impl MeshPipeline {
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
         mesh.clouds = Some(clouds);
         // The view, then the shadow pictures and what reads them, then the
-        // block the clouds are shaped from and what reads that.
+        // block the clouds are shaped from and what reads that: the wind
+        // is read from it too, where points are placed.
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -644,12 +655,12 @@ impl MeshPipeline {
                 .binding(3)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(4)
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1418,7 +1429,7 @@ impl MeshPipeline {
 /// The shader's `Draw` for one mesh part.
 fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     // A mirrored mesh has its normal map's sideways direction turned around.
-    let handedness = [if draw.mirrored { -1.0 } else { 1.0 }];
+    let handedness = [if draw.mirrored { -1.0 } else { 1.0 }, draw.sway];
     let numbers = draw
         .world
         .iter()
@@ -1607,6 +1618,7 @@ mod tests {
             first_vertex: 0,
             mirrored: false,
             double_sided: false,
+            sway: 0.5,
         };
         let bytes = draw_bytes(&draw);
         assert_eq!(number(&bytes, 0), 1.0, "the matrix comes first");
@@ -1614,6 +1626,11 @@ mod tests {
         assert_eq!(number(&bytes, 28), 1.0, "then which way round it is");
         draw.mirrored = true;
         assert_eq!(number(&draw_bytes(&draw), 28), -1.0);
+        assert_eq!(
+            number(&draw_bytes(&draw), 29),
+            0.5,
+            "and how far the wind moves it"
+        );
     }
 
     #[test]
@@ -1632,6 +1649,7 @@ mod tests {
                 [9.0, 10.0, 11.0, 12.0],
             ],
             time: 13.0,
+            elapsed: 0.25,
             noise: 9.0,
         };
         let lighting = Lighting {
@@ -1692,7 +1710,10 @@ mod tests {
         assert_eq!(number(&bytes, 358), above.haze[23][2]);
         assert_eq!(number(&bytes, 360), sky::FOG[0], "the fog");
         assert_eq!(number(&bytes, 361), sky::FOG[1]);
-        assert_eq!(bytes.len(), 364 * 4);
+        assert_eq!(number(&bytes, 364), sky::WIND[0], "the wind");
+        assert_eq!(number(&bytes, 366), sky::WIND[2]);
+        assert_eq!(number(&bytes, 367), 0.25, "since the last frame");
+        assert_eq!(bytes.len(), 368 * 4);
     }
 
     #[test]
