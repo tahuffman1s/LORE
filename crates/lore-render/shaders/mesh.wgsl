@@ -571,17 +571,45 @@ fn cloud_water(thick: f32) -> f32 {
     return min(thick * 4.0, 1.0);
 }
 
-// How much of the sun gets through the clouds to a point of the world.
+// How much of the sun gets through the clouds to a point of the world:
+// the shadows clouds cast. The line from the point to the sun is looked at
+// where it crosses the clouds low down, in their middle and high up, and
+// the cloud it meets at each shades the point. A fair-weather cloud lets a
+// third of the light through and round it; a storm lets through next to
+// none, and being tall throws its shadow a long way when the sun is low.
 fn under_clouds(world: vec3<f32>) -> f32 {
     if view.clouds.x <= 0.0 || view.clouds.w < 0.5 {
         return 1.0;
     }
     let sun = view.towards_sun.xyz;
-    // Where the line from the point to the sun passes through the middle
-    // of the clouds.
-    let height = view.clouds.z + CLOUD_MIDDLE;
-    let over = world + sun * ((height - world.y) / max(sun.y, 0.08));
-    return mix(1.0, 0.25, smoothstep(0.0, 0.45, cloud(over, false)));
+    let slope = 1.0 / max(sun.y, 0.08);
+    // How far above the clouds' base each look is, and how deep the part
+    // of the layer it stands for, in metres.
+    var looks = array<vec2<f32>, 3>(
+        vec2<f32>(CLOUD_MIDDLE, 800.0), vec2<f32>(1500.0, 1700.0), vec2<f32>(3800.0, 3000.0),
+    );
+    var crossed = 0.0;
+    var storm = 0.0;
+    for (var look = 0; look < 3; look++) {
+        let height = view.clouds.z + looks[look].x;
+        let found = cloud_kind(world + sun * ((height - world.y) * slope), false);
+        crossed += cloud_water(found.x) * (1.0 + 2.0 * found.y) * looks[look].y;
+        storm = max(storm, found.y * step(0.001, found.x));
+    }
+    let shaded = 1.0 - exp(-crossed * slope * CLOUD_STOPS * 0.25);
+    return mix(1.0, mix(0.3, 0.05, storm), shaded);
+}
+
+// How much of the sky's light reaches a point under the weather over it:
+// all of it in fair weather, less under a sky that is all cloud, and a
+// third under a storm, which is why it goes dark before the rain.
+fn under_weather(world: vec3<f32>) -> f32 {
+    if view.clouds.x <= 0.0 || view.clouds.w < 0.5 {
+        return 1.0;
+    }
+    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
+    let weather = weather_over(world.xz - drift);
+    return 1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z);
 }
 
 const SHADOW_PICTURES: i32 = 4;
@@ -750,7 +778,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
         * under_clouds(corner.world)
         * light_through_water(corner.world);
-    let sky_seen = open_sky(corner.world, corner.position.xy);
+    let sky_seen = open_sky(corner.world, corner.position.xy) * under_weather(corner.world);
     if has(NORMAL) {
         let sample = textureSampleBias(
             normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
@@ -1095,7 +1123,9 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             var reach = 60.0;
             var along = 0.0;
             for (var look = 0; look < 5; look++) {
-                crossed += cloud(place + sun * (along + reach * 0.5), false) * reach;
+                // A storm is thicker cloud, and darker for it.
+                let shading = cloud_kind(place + sun * (along + reach * 0.5), false);
+                crossed += shading.x * (1.0 + 2.5 * shading.y) * reach;
                 along += reach;
                 reach *= 2.1;
             }
@@ -1110,7 +1140,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             // The sky lights it from all round, the base least, and the
             // base of a storm hardly at all.
             let from_sky = around * (0.35 + 0.75 * min(up * 2.5, 1.0))
-                * (1.0 - 0.85 * found.y * (1.0 - up));
+                * (1.0 - 0.93 * found.y * (1.0 - up * up));
             var from_flash = vec3<f32>(0.0);
             if found.y > 0.0 {
                 // Lightning lights the cloud round it from inside.
