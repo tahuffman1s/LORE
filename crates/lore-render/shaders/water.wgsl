@@ -42,7 +42,8 @@ fn layer_seen(layer: i32, grain: f32) -> f32 {
 // where the water is `deep` metres deep, waves longer than twice that feel
 // the bottom and die away. `deep` below nothing means "not known".
 fn wave_strength(place: vec2<f32>, deep: f32) -> vec4<f32> {
-    let blowing = gust(place, view.clouds.y) / 0.8;
+    // A storm overhead stands the short waves up.
+    let blowing = gust(place, view.clouds.y) / 0.8 * (1.0 + 1.5 * view.weather[0].w);
     var strength = mix(vec4<f32>(1.0), vec4<f32>(blowing), vec4<f32>(0.35, 0.7, 1.0, 1.0));
     if deep >= 0.0 {
         strength *= vec4<f32>(
@@ -533,7 +534,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // No ring is steeper than water stands before it breaks.
     let steep = length(ring.yz);
     ring = vec4<f32>(ring.x, ring.yz * min(1.0, 0.7 / max(steep, 0.001)), ring.w);
-    let slope = waves.slope + ring.yz;
+    let slope = waves.slope + ring.yz + rain_rings(corner.world.xz);
     var normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
     // How widely the waves too small to draw spread what the water mirrors.
     let rough = clamp(sqrt(2.0 * max(waves.unseen, 0.0)), 0.015, 0.5);

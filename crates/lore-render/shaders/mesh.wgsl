@@ -85,6 +85,11 @@ struct View {
     // Lightning: where the light of each stroke there can be comes from,
     // and how bright it is now, from 0 to 1 (`bolt.rs`).
     flashes: array<vec4<f32>, 2>,
+    // The weather. At the eye: how hard it rains and how hard it hails,
+    // from 0 to 1, how wet the ground has got, and how much of a storm
+    // is overhead, which is how much harder the wind blows. Then how
+    // stormy the whole sky is, from 0 for fair weather to 1.
+    weather: array<vec4<f32>, 2>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -217,7 +222,9 @@ fn gust(place: vec2<f32>, seconds: f32) -> f32 {
 // the farther out from the trunk it is.
 fn blown(world: vec3<f32>, foot: vec3<f32>, seconds: f32) -> vec3<f32> {
     let along = vec3<f32>(view.wind.x, 0.0, view.wind.y);
-    let strength = gust(foot.xz, seconds) * view.wind.z / 5.0 * draw.sway;
+    // Under a storm it blows three times as hard.
+    let strength = gust(foot.xz, seconds) * view.wind.z / 5.0 * draw.sway
+        * (1.0 + 2.0 * view.weather[0].w);
     let up = clamp(world.y - foot.y, 0.0, 30.0);
     let lean = 0.0045 * up * up * strength;
     var moved = world + along * lean;
@@ -405,7 +412,10 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let thins = view.fog.y;
     // How thick it is at the eye; an eye far below the fog's own height
     // is in fog as thick as it gets.
-    let at_eye = view.fog.x * exp(min((view.fog.z - view.eye.y) * thins, 3.0));
+    // Rain fills the air: in a downpour nothing is seen past a few
+    // hundred metres.
+    let at_eye = view.fog.x * (1.0 + 4.0 * view.weather[0].x)
+        * exp(min((view.fog.z - view.eye.y) * thins, 3.0));
     let climbs = direction.y * thins;
     var crossed = at_eye * far;
     if abs(climbs) > 0.00001 {
@@ -413,7 +423,9 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     }
     let hidden = 1.0 - exp(-max(crossed, 0.0));
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
-    return struck(mix(colour, sky_colour(low), hidden), world);
+    // Under a storm what things fade into is darker.
+    let faded = mix(colour, storm_haze(low), hidden);
+    return struck(rain_over(faded, direction, far), world);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
@@ -454,7 +466,10 @@ fn weather_over(carried: vec2<f32>) -> vec3<f32> {
     let map = textureSampleLevel(
         cloud_volume, cloud_sampler, vec3<f32>(carried / 53000.0, 0.37), 0.0,
     ).rg;
-    let storm = smoothstep(0.55, 0.69, map.r) * smoothstep(0.38, 0.6, map.g);
+    // The stormier the sky is said to be, the more of the map is storm.
+    let more = view.weather[1].x * 0.3;
+    let storm = smoothstep(0.55 - more, 0.69 - more, map.r)
+        * smoothstep(0.38 - more, 0.6 - more, map.g);
     let sheet = 1.0 - smoothstep(0.2, 0.38, map.g);
     let cover = view.clouds.x * (clamp(1.0 + (map.r - 0.45) * 2.4, 0.0, 2.0) + 0.5 * sheet);
     let heaped = 0.2 + 0.25 * smoothstep(0.38, 0.7, map.g);
@@ -562,6 +577,95 @@ fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
             / (1.0 + dot(off, off) / 4000000.0);
     }
     return seen;
+}
+
+// The colour far things fade into, low down towards `low`: the sky's
+// there, and under a storm greyer and darker, as the air is under one.
+fn storm_haze(low: vec3<f32>) -> vec3<f32> {
+    let clear = sky_colour(low);
+    let storm = view.weather[0].w;
+    let grey = vec3<f32>(dot(clear, vec3<f32>(0.2126, 0.7152, 0.0722)));
+    return mix(clear, grey, 0.7 * storm) * (1.0 - 0.62 * storm);
+}
+
+// `colour`, seen `far` along `direction`, with the rain and the hail that
+// fall between: streaks at five distances from the eye, each twice as far
+// as the last, and none of them beyond what is seen. A drop falls eight
+// metres a second and is seen as the streak it draws while the eye takes
+// it in, some tenth of a second; a hailstone falls twice as fast, and is white. The wind leans
+// them. They are lit by the sky.
+fn rain_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
+    let rain = view.weather[0].x;
+    let hail = view.weather[0].y;
+    if rain <= 0.001 {
+        return colour;
+    }
+    let run = max(length(direction.xz), 0.05);
+    let round = atan2(direction.x, direction.z);
+    // How far aside the wind carries a drop for each metre it falls, as
+    // the eye sees it across its line of sight.
+    let blown = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * (1.0 + 2.0 * view.weather[0].w);
+    let lean = dot(blown, vec2<f32>(cos(round), -sin(round))) / 8.0;
+    let light = (view.sky.rgb * 0.7 + view.sun.rgb / PI * 0.06) * (1.0 - 0.4 * view.weather[0].w);
+    // Straight up and straight down there are no streaks to see, only
+    // drops coming at the eye.
+    let level = smoothstep(0.1, 0.5, run);
+    var seen = colour;
+    var away = 1.6;
+    for (var layer = 0; layer < 5; layer++) {
+        if far < away {
+            break;
+        }
+        let up = view.eye.y + direction.y / run * away;
+        let along = round * away - up * lean + f32(layer) * 13.7;
+        // A column about two pixels wide, with a drop in some.
+        let wide = away * 0.006;
+        let column = floor(along / wide);
+        let dice = fract(sin(column * 12.9898 + f32(layer) * 78.233) * vec3<f32>(43758.5453, 22578.1459, 19642.349));
+        let within = abs(fract(along / wide) - 0.5);
+        if dice.x < rain * 0.75 && within < 0.3 {
+            let falling = fract((up + view.clouds.y * (7.0 + 2.0 * dice.z)) / 1.6 + dice.y);
+            if falling < 0.4 {
+                seen = mix(seen, light, 0.38 * level * (1.0 - falling / 0.4));
+            }
+        }
+        if dice.y < hail * 0.2 && within < 0.35 {
+            let falling = fract((up + view.clouds.y * (16.0 + 5.0 * dice.x)) / 3.7 + dice.z);
+            if falling < 0.05 {
+                seen = mix(seen, light * 1.6, 0.8 * level);
+            }
+        }
+        away *= 2.0;
+    }
+    return seen;
+}
+
+// The rings raindrops make on water: how much they tilt it at a place.
+// The water is cut into squares, and in each a drop falls every second or
+// so somewhere by chance; its ring spreads and dies.
+fn rain_rings(place: vec2<f32>) -> vec2<f32> {
+    let rain = view.weather[0].x;
+    var slope = vec2<f32>(0.0);
+    if rain <= 0.001 {
+        return slope;
+    }
+    for (var layer = 0; layer < 2; layer++) {
+        let grid = place / 0.3 + f32(layer) * 7.37;
+        let square = floor(grid);
+        let dice = fract(
+            sin(dot(square, vec2<f32>(127.1, 311.7)) + f32(layer) * 19.19)
+                * vec3<f32>(43758.5453, 22578.1459, 19642.349),
+        );
+        if dice.y < rain * 1.2 {
+            let age = fract(view.clouds.y * (0.9 + 0.4 * dice.z) + dice.x * 7.0);
+            let out = grid - (square + 0.3 + 0.4 * dice.xz);
+            let far = length(out);
+            let reach = far - age * 0.45;
+            slope += out / max(far, 0.001)
+                * sin(reach * 40.0) * exp(-reach * reach * 81.0) * (1.0 - age) * 0.35;
+        }
+    }
+    return slope;
 }
 
 // How much water there is where `cloud` says the cloud is so thick: a
@@ -808,7 +912,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
 
     // What the water laps at is soaked: darker, because light gets into
     // wet ground and less of it out again, and smooth enough to shine.
-    let wet = shore_wet(corner.world);
+    // So is what the rain falls on: whatever faces up under an open sky.
+    let wet = max(
+        shore_wet(corner.world),
+        view.weather[0].z * smoothstep(0.2, 0.7, normal.y) * sky_seen,
+    );
     // Only what is out of the water shines: under it there is no air for
     // the wet to be a mirror against.
     let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
@@ -1170,6 +1278,14 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     }
     // The sun shows through thin cloud and not through thick.
     colour += view.sun.rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
+
+    // In rain the sky is seen through it: greyed, and streaked.
+    if view.weather[0].x > 0.0 {
+        let grey = storm_haze(vec3<f32>(direction.x, 0.02, direction.z));
+        colour = rain_over(
+            mix(colour, grey, 1.0 - exp(-view.weather[0].x * 0.7)), direction, 1000000000.0,
+        );
+    }
 
     var pixel: Pixel;
     pixel.colour = vec4<f32>(colour, 1.0);

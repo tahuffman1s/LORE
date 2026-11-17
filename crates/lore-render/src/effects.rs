@@ -109,6 +109,11 @@ pub(crate) struct Effects {
     /// When, by the clouds' clock, the sky is next looked over for a
     /// storm to strike from.
     looks_next: f64,
+    /// How stormy the whole sky is, from 0 to 1.
+    storminess: f32,
+    /// At the eye: how hard it rains and hails, how wet the ground has
+    /// got, and how much of a storm is overhead, each from 0 to 1.
+    here: [f32; 4],
 }
 
 impl Default for Effects {
@@ -130,6 +135,8 @@ impl Effects {
             dice: 0x2545_F491,
             bolts: [Bolt::new(), Bolt::new()],
             looks_next: 1.0,
+            storminess: 0.0,
+            here: [0.0; 4],
         }
     }
 
@@ -363,6 +370,11 @@ impl Effects {
             for bolt in &mut self.bolts {
                 bolt.step(seconds.min(0.05));
             }
+            // The ground is soaked by half a minute of hard rain, and
+            // takes some minutes to dry.
+            let [rain, _, wet, _] = self.here;
+            self.here[2] =
+                (wet + seconds.min(0.05) * (rain / 30.0 - (1.0 - rain) / 300.0)).clamp(0.0, 1.0);
         }
         self.pack();
     }
@@ -488,6 +500,21 @@ impl Effects {
         self.free_bolt().strike(lightning);
     }
 
+    /// Says how stormy the whole sky is, from 0 to 1.
+    pub(crate) fn set_storminess(&mut self, storminess: f32) {
+        self.storminess = if storminess.is_finite() {
+            storminess.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The weather as the shader takes it: what it is at the eye, then how
+    /// stormy the whole sky is.
+    pub(crate) fn weather(&self) -> [[f32; 4]; 2] {
+        [self.here, [self.storminess, 0.0, 0.0, 0.0]]
+    }
+
     /// Where the light of each stroke comes from, and how bright it is
     /// now, from 0 to 1.
     pub(crate) fn flashes(&self) -> [[f32; 4]; 2] {
@@ -501,6 +528,34 @@ impl Effects {
     /// in the cloud; one in four comes to the ground, and now and then one
     /// runs along under the cloud.
     pub(crate) fn storms(&mut self, time: f64, eye: [f32; 3]) {
+        let [along_x, along_z, speed] = sky::WIND;
+        // As the shader carries the clouds: f32 holds all of it they need.
+        #[allow(clippy::cast_possible_truncation)]
+        let carried = speed * 2.4 * time as f32;
+        let step = |low: f32, high: f32, value: f32| {
+            let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+            share * share * (3.0 - 2.0 * share)
+        };
+        // How much of a storm is over a place, as `weather_over` in the
+        // shader reads it.
+        let more = self.storminess * 0.3;
+        let storm_over = |x: f32, z: f32| {
+            let [place, kind] = clouds::read([
+                (x - along_x * carried) / 53_000.0,
+                (z - along_z * carried) / 53_000.0,
+                0.37,
+            ]);
+            step(0.55 - more, 0.69 - more, place) * step(0.38 - more, 0.6 - more, kind)
+        };
+        // Under a storm it rains, and in the heart of one it hails.
+        let overhead = if eye.iter().all(|part| part.is_finite()) {
+            storm_over(eye[0], eye[2])
+        } else {
+            0.0
+        };
+        self.here[0] = step(0.25, 0.7, overhead);
+        self.here[1] = step(0.85, 0.97, overhead);
+        self.here[3] = overhead;
         if time < self.looks_next {
             // The clock was put back: a new level.
             if time + 5.0 < self.looks_next {
@@ -509,10 +564,6 @@ impl Effects {
             return;
         }
         self.looks_next = time + f64::from(self.between(0.4, 1.2));
-        let [along_x, along_z, speed] = sky::WIND;
-        // As the shader carries the clouds: f32 holds all of it they need.
-        #[allow(clippy::cast_possible_truncation)]
-        let carried = speed * 2.4 * time as f32;
         for _ in 0..4 {
             let off = [
                 self.between(-30_000.0, 30_000.0),
@@ -522,17 +573,7 @@ impl Effects {
                 continue;
             }
             let spot = [eye[0] + off[0], eye[2] + off[1]];
-            // The weather there, as `weather_over` in the shader reads it.
-            let [place, kind] = clouds::read([
-                (spot[0] - along_x * carried) / 53_000.0,
-                (spot[1] - along_z * carried) / 53_000.0,
-                0.37,
-            ]);
-            let step = |low: f32, high: f32, value: f32| {
-                let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
-                share * share * (3.0 - 2.0 * share)
-            };
-            if step(0.55, 0.69, place) * step(0.38, 0.6, kind) <= 0.5 {
+            if storm_over(spot[0], spot[1]) <= 0.5 {
                 continue;
             }
             let base = sky::CLOUD_HEIGHT;
@@ -623,6 +664,45 @@ impl Effects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn it_rains_under_a_storm_and_the_ground_gets_wet_and_dries() {
+        let mut effects = Effects::new();
+        let dry: &[Water] = &[];
+        #[allow(clippy::cast_precision_loss)]
+        let places = (0..400).map(|step| [step as f32 * 150.0, 2.0, 0.0]);
+        // A sky that is all storms has one within sixty kilometres.
+        effects.set_storminess(1.0);
+        let under = places.clone().find(|eye| {
+            effects.storms(0.0, *eye);
+            effects.weather()[0][0] > 0.95
+        });
+        assert!(under.is_some(), "no storm anywhere");
+        assert!(effects.weather()[0][3] > 0.5, "and the wind blows harder");
+        for _ in 0..2400 {
+            effects.step(1.0 / 60.0, dry);
+        }
+        assert!(
+            effects.weather()[0][2] > 0.9,
+            "forty seconds of it soak the ground"
+        );
+        // And fair weather has dry places, where it dries again.
+        effects.set_storminess(0.0);
+        let clear = places.clone().find(|eye| {
+            effects.storms(0.0, *eye);
+            effects.weather()[0][0] == 0.0
+        });
+        assert!(clear.is_some(), "storms everywhere in fair weather");
+        for _ in 0..6000 {
+            effects.step(1.0 / 60.0, dry);
+        }
+        let wet = effects.weather()[0][2];
+        assert!(wet > 0.4 && wet < 0.75, "{wet}");
+        effects.set_storminess(f32::NAN);
+        assert_eq!(effects.weather()[1][0], 0.0);
+        effects.storms(0.0, [f32::NAN, 0.0, 0.0]);
+        assert_eq!(effects.weather()[0][0], 0.0);
+    }
 
     /// Water at height 0 everywhere, or none at all.
     struct Sea(bool);

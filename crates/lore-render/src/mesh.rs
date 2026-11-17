@@ -53,8 +53,8 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2);
+/// the light of lightning, and two for the weather.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + 2);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -107,6 +107,7 @@ impl View {
         sky: Option<&Sky>,
         water: &WaterRows,
         flashes: &[[f32; 4]; 2],
+        weather: &[[f32; 4]; 2],
     ) -> [u8; VIEW_BYTES] {
         let mut water = *water;
         // The last of its rows is the eye's own.
@@ -172,7 +173,8 @@ impl View {
                 .chain(&wind)
                 .chain(&[self.stir, 0.0, 0.0, 0.0])
                 .chain(water.iter().flatten())
-                .chain(flashes.iter().flatten()),
+                .chain(flashes.iter().flatten())
+                .chain(weather.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -269,6 +271,10 @@ pub(crate) struct Contents<'a> {
     /// Where the light of each stroke of lightning comes from, and how
     /// bright it is now.
     pub(crate) flashes: [[f32; 4]; 2],
+    /// The weather: at the eye, how hard it rains and hails, how wet the
+    /// ground is and how much of a storm is overhead; then how stormy the
+    /// whole sky is.
+    pub(crate) weather: [[f32; 4]; 2],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -1320,6 +1326,7 @@ impl MeshPipeline {
             stirs,
             bits,
             flashes,
+            weather,
         } = contents;
         // What flies is handed over before anything is recorded.
         let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
@@ -1412,7 +1419,14 @@ impl MeshPipeline {
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
         unsafe {
-            view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky, &water, &flashes))
+            view_buffer.write(&view.bytes(
+                &lighting,
+                cascades.as_ref(),
+                sky,
+                &water,
+                &flashes,
+                &weather,
+            ))
         }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -2273,7 +2287,14 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting, None, None, &[[0.0; 4]; 9], &[[0.0; 4]; 2]);
+        let bytes = view.bytes(
+            &lighting,
+            None,
+            None,
+            &[[0.0; 4]; 9],
+            &[[0.0; 4]; 2],
+            &[[0.0; 4]; 2],
+        );
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -2298,6 +2319,7 @@ mod tests {
             Some(&cascades),
             None,
             &[[0.0; 4]; 9],
+            &[[0.0; 4]; 2],
             &[[0.0; 4]; 2],
         );
         assert_eq!(number(&bytes, 68), 1.0, "shadows");
@@ -2341,6 +2363,7 @@ mod tests {
             Some(&above),
             &water,
             &[[1.0, 2.0, 3.0, 0.5], [0.0; 4]],
+            &[[0.25, 0.0, 0.5, 1.0], [0.75, 0.0, 0.0, 0.0]],
         );
         assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
         assert_eq!(number(&bytes, 187), 1.0, "a sky");
@@ -2361,7 +2384,9 @@ mod tests {
         assert_eq!(number(&bytes, 424), 0.05, "how near the eye sees");
         assert_eq!(number(&bytes, 428), 1.0, "where lightning's light is");
         assert_eq!(number(&bytes, 431), 0.5, "and how bright");
-        assert_eq!(bytes.len(), 436 * 4);
+        assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
+        assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
+        assert_eq!(bytes.len(), 444 * 4);
     }
 
     #[test]

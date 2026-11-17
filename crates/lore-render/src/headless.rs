@@ -247,6 +247,15 @@ impl Headless {
         self.effects.strike(lightning);
     }
 
+    /// Says how stormy the sky is, from 0, fair weather with the odd storm
+    /// passing, to 1, storms over most of it. Under a storm it rains, and
+    /// hails in its core; the wind blows harder, the ground gets wet and
+    /// lightning strikes. Anything that is not a number from 0 to 1 is
+    /// taken as the nearest that is.
+    pub fn set_storminess(&mut self, storminess: f32) {
+        self.effects.set_storminess(storminess);
+    }
+
     /// Says that something is in the water during the next frame drawn: a
     /// leg wading, a body swimming. Rings run out from it, and it trails
     /// a wake as it moves. Call it every frame for as long as it is there.
@@ -321,6 +330,7 @@ impl Headless {
                     stirs: self.effects.stirs(),
                     bits: self.effects.bytes(),
                     flashes: self.effects.flashes(),
+                    weather: self.effects.weather(),
                 },
                 camera,
                 FRAME_SECONDS,
