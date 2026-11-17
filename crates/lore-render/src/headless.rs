@@ -852,7 +852,10 @@ mod tests {
         let points = 41_u32;
         let depths = (0..points * points)
             .map(|at| {
-                let (x, z) = ((at % points) as f32 * 0.25 - 5.0, (at / points) as f32 * 0.25 - 5.0);
+                let (x, z) = (
+                    (at % points) as f32 * 0.25 - 5.0,
+                    (at / points) as f32 * 0.25 - 5.0,
+                );
                 if x.hypot(z) < 1.5 { 1.0 } else { Water::DRY }
             })
             .collect();
@@ -883,7 +886,10 @@ mod tests {
         // Water takes the red out of what is seen through it first.
         let red = |picture: &[u8], [x, y]: [usize; 2]| i32::from(picture[(y * SIZE[0] + x) * 4]);
         let (middle, beside) = (red(&picture, [48, 32]), red(&picture, [6, 32]));
-        assert!(beside > middle + 40, "red in the water {middle}, on the floor {beside}");
+        assert!(
+            beside > middle + 40,
+            "red in the water {middle}, on the floor {beside}"
+        );
         assert!(
             red(&picture, [48, 3]) > middle + 40,
             "the floor past its far shore"

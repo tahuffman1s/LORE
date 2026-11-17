@@ -127,10 +127,13 @@ fn fragment(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     for (var number = 0; number < count; number++) {
         let stir = step.stirs[number];
         let off = place - stir.place.xy;
-        let wide = max(stir.place.z, apart * 1.5);
+        // Nothing narrower than a few points can be drawn in the square:
+        // what is, is spread over that much, and pushes as much water.
+        let wide = max(stir.place.z, apart * 4.0);
+        let spread = stir.place.z * stir.place.z / (wide * wide);
         let near = exp(-dot(off, off) / (wide * wide));
         // Straight up or down: a foot coming down, a drop landing.
-        next += stir.place.w * near * seconds;
+        next += stir.place.w * min(spread, 1.0) * near * seconds;
         // Moving along: water is pushed up ahead and drawn down behind.
         let along = dot(off, stir.moving.xy) / (wide * wide);
         next += stir.moving.z * along * near * seconds;

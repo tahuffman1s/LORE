@@ -44,13 +44,23 @@ fn tank(deep: f32, over: f32) -> Scene {
         ])
     };
     let parts = vec![
-        quad([[-s, -deep, s], [s, -deep, s], [s, -deep, -s], [-s, -deep, -s]]),
+        quad([
+            [-s, -deep, s],
+            [s, -deep, s],
+            [s, -deep, -s],
+            [-s, -deep, -s],
+        ]),
         wall([-s, -s], [s, -s]),
         wall([s, -s], [s, s]),
         wall([s, s], [-s, s]),
         wall([-s, s], [-s, -s]),
     ];
-    let sheet = quad([[-1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, -1.0], [-1.0, 0.0, -1.0]]);
+    let sheet = quad([
+        [-1.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 0.0, -1.0],
+        [-1.0, 0.0, -1.0],
+    ]);
     let stood = |mesh: u32, extras: Option<&str>| Instance {
         mesh,
         transform: STILL,
@@ -122,7 +132,11 @@ impl Swum {
             self.asks.extend(frame.take_sounds());
             self.under = frame.under_water();
             self.shown.0 += frame.take_splashes().len();
-            self.shown.1 += frame.take_bubbles().iter().map(|(_, count)| count).sum::<u32>();
+            self.shown.1 += frame
+                .take_bubbles()
+                .iter()
+                .map(|(_, count)| count)
+                .sum::<u32>();
             self.stirred += frame.take_stirs().len();
         }
     }
@@ -153,17 +167,35 @@ fn dropping_into_water_is_a_splash_and_bubbles_and_coming_up_is_heard_too() {
     // They are carried under: bubbles, the hush, and the water's hum.
     swum.run(30);
     assert!(swum.heard(NoiseKind::Bubbles) >= 1);
-    assert!(swum.marks.iter().any(|mark| matches!(mark, WaterMark::Bubbles { .. })));
+    assert!(
+        swum.marks
+            .iter()
+            .any(|mark| matches!(mark, WaterMark::Bubbles { .. }))
+    );
     assert_eq!(swum.under, Some(true));
-    assert!(matches!(swum.asks[..], [.., SoundAsk::Play(UNDER_WATER, _)] | [SoundAsk::Play(UNDER_WATER, _), ..]), "{:?}", swum.asks);
+    assert!(
+        matches!(
+            swum.asks[..],
+            [.., SoundAsk::Play(UNDER_WATER, _)] | [SoundAsk::Play(UNDER_WATER, _), ..]
+        ),
+        "{:?}",
+        swum.asks
+    );
     // Left alone they come up: heard, splashed, and the hum stops.
     swum.run(6 * 60);
     assert_eq!(swum.heard(NoiseKind::Surface), 1, "{:?}", swum.noises);
     assert_eq!(swum.under, Some(false));
-    assert!(matches!(swum.asks.last(), Some(SoundAsk::Stop(UNDER_WATER))));
+    assert!(matches!(
+        swum.asks.last(),
+        Some(SoundAsk::Stop(UNDER_WATER))
+    ));
     // The picture was told all of it: every mark once, and a body in the
     // water for as long as it was at the surface.
-    let splashes = swum.marks.iter().filter(|mark| matches!(mark, WaterMark::Splash { .. })).count();
+    let splashes = swum
+        .marks
+        .iter()
+        .filter(|mark| matches!(mark, WaterMark::Splash { .. }))
+        .count();
     assert_eq!(swum.shown.0, splashes);
     assert!(swum.shown.1 >= 14, "{} bubbles", swum.shown.1);
     assert!(swum.stirred > 120, "stirred for {} frames", swum.stirred);
@@ -177,7 +209,10 @@ fn each_stroke_of_a_swimmer_is_seen_and_heard_a_hand_on_each_side_in_turn() {
     swum.input.press(Key::W);
     swum.run(8 * 60);
     let strokes = swum.heard(NoiseKind::SwimStroke);
-    assert!((3..=6).contains(&strokes), "{strokes} strokes in eight seconds");
+    assert!(
+        (3..=6).contains(&strokes),
+        "{strokes} strokes in eight seconds"
+    );
     let hands: Vec<f32> = swum.marks[before..]
         .iter()
         .filter_map(|mark| match mark {
@@ -187,7 +222,10 @@ fn each_stroke_of_a_swimmer_is_seen_and_heard_a_hand_on_each_side_in_turn() {
         .collect();
     assert_eq!(hands.len(), strokes);
     // Swimming along -z, the hands go in to the left and to the right.
-    assert!(hands.windows(2).all(|pair| pair[0] * pair[1] < 0.0), "{hands:?}");
+    assert!(
+        hands.windows(2).all(|pair| pair[0] * pair[1] < 0.0),
+        "{hands:?}"
+    );
     assert_eq!(swum.heard(NoiseKind::Footstep), 0);
 }
 

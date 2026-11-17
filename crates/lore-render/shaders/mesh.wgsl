@@ -662,7 +662,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     // What the water laps at is soaked: darker, because light gets into
     // wet ground and less of it out again, and smooth enough to shine.
     let wet = shore_wet(corner.world);
-    roughness = mix(roughness, min(roughness, 0.22), wet);
+    // Only what is out of the water shines: under it there is no air for
+    // the wet to be a mirror against.
+    let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
+    roughness = mix(roughness, min(roughness, 0.4), wet * out);
+    roughness = mix(roughness, max(roughness, 0.9), wet * (1.0 - out));
     // Metal mirrors light in its own colour and has no matte colour;
     // anything else mirrors a little white light.
     let matte = base * (1.0 - metallic) * mix(1.0, 0.55, wet);

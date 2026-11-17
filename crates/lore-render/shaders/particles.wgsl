@@ -53,7 +53,9 @@ fn vertex_bit(
         half.y += fast * 0.004;
     }
     let drawn = max(half, vec2<f32>(pixel * 0.75));
-    let fainter = (half.x * half.y) / (drawn.x * drawn.y);
+    // What is right in front of the eye would fill the picture: it fades
+    // out over the last half metre, as the eye lets it.
+    let fainter = (half.x * half.y) / (drawn.x * drawn.y) * smoothstep(0.25, 0.7, away);
     let world = place.xyz + right * (corner.x * drawn.x) + up * (corner.y * drawn.y);
     var bit: Bit;
     bit.position = view.clip_from_world * vec4<f32>(world, 1.0);
@@ -129,7 +131,7 @@ fn fragment_bit(bit: Bit) -> Mixed {
         let glint = pow(max(dot(normal, normalize(vec3<f32>(0.2, 1.0, 0.1))), 0.0), 18.0);
         let light = view.sky.rgb * 0.8 + view.sun.rgb / PI * 0.5 * sunlit;
         colour = light * (0.5 + 1.6 * glint);
-        alpha = clamp(rim * 0.75 + glint * 0.8 + 0.07, 0.0, 1.0) * left;
+        alpha = clamp(rim * 0.7 + glint * 0.8 + 0.2 * bulge, 0.0, 1.0) * left;
     }
     var pixel: Mixed;
     pixel.colour = vec4<f32>(through_fog(colour, bit.world), alpha * bit.about.z);

@@ -26,7 +26,6 @@ import struct
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +36,7 @@ AGENT = {"User-Agent": "lore-example-level/1.0"}
 
 
 
-def fetch(url, path):
+def fetch(url, path, tries=8):
     """Downloads `url` to `path` unless it is there already. A download
     that breaks off is carried on from where it stopped."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -45,7 +44,7 @@ def fetch(url, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     print("  fetching", url.rsplit("/", 1)[-1], file=sys.stderr)
     part = path + ".part"
-    for attempt in range(8):
+    for attempt in range(tries):
         have = os.path.getsize(part) if os.path.exists(part) else 0
         headers = dict(AGENT)
         if have:
@@ -496,36 +495,19 @@ class Level:
 
 # ---------------------------------------------------------------- lilies
 
-# Photographs from Wikimedia Commons, at 2048 pixels wide: the page they are
-# on, and where in the picture a clean stretch of lily pad is (its middle
-# and how far across, as shares of the picture's width and height).
-PADS = {
-    # CC0 (Unsplash): lily pads beaded with water.
-    "Lily Pads in a Pond (Unsplash).jpg": ((0.575, 0.665), (0.125, 0.185)),
-    # Public domain: a white water lily among its pads.
-    "Water Lily 2018.jpg": ((0.40, 0.69), (0.12, 0.10)),
-}
-
-
-def photograph(name):
-    """One of Wikimedia Commons' pictures, no more than 2048 pixels wide."""
-    address = "https://commons.wikimedia.org/wiki/Special:FilePath/" + urllib.parse.quote(name) + "?width=2048"
-    kept = fetch(address, os.path.join(CACHE, "pictures", name.replace(" ", "_")))
-    time.sleep(2)
-    return kept
-
-
-def lily_pad(picture, middle, across, seed):
-    """A lily pad: a round leaf with a slit to its middle, lying flat, with
-    a stretch of a photographed pad laid over it."""
+def lily_pad(seed):
+    """A lily pad: a round leaf with a slit to its middle, lying flat. Its
+    green is its own, darker along the veins that run out from its middle
+    and paler towards its rim."""
     shape = random.Random(seed)
-    positions, normals, uvs = (array.array("f") for _ in range(3))
+    positions, normals, uvs, colours = (array.array("f") for _ in range(4))
     indices = array.array("I")
-    round_, slit = 30, shape.uniform(0.25, 0.5)
-    turned = shape.uniform(0, math.tau)
+    round_, slit = 36, shape.uniform(0.25, 0.5)
+    green = (shape.uniform(0.07, 0.11), shape.uniform(0.2, 0.3), shape.uniform(0.03, 0.06))
     positions.extend((0.0, 0.004, 0.0))
     normals.extend((0.0, 1.0, 0.0))
-    uvs.extend(middle)
+    uvs.extend((0.5, 0.5))
+    colours.extend((green[0] * 1.5, green[1] * 1.35, green[2] * 1.2, 1.0))
     for step in range(round_ + 1):
         angle = slit / 2 + (math.tau - slit) * step / round_
         # No leaf is a circle: the rim wanders in and out, and lifts a little.
@@ -533,17 +515,18 @@ def lily_pad(picture, middle, across, seed):
         x, z = math.cos(angle) * out, math.sin(angle) * out
         positions.extend((x, 0.004 + 0.012 * max(0.0, math.sin(angle * 5 + seed)), z))
         normals.extend((0.0, 1.0, 0.0))
-        # The picture is turned under each pad, so no two show the same of it.
-        ux = math.cos(angle + turned) * out * 0.92
-        uz = math.sin(angle + turned) * out * 0.92
-        uvs.extend((middle[0] + ux * across[0], middle[1] + uz * across[1]))
+        uvs.extend((0.5 + x * 0.5, 0.5 + z * 0.5))
+        # A vein at every third point of the rim.
+        shade = 0.78 if step % 3 == 0 else 1.0
+        colours.extend((green[0] * shade, green[1] * shade, green[2] * shade, 1.0))
     for step in range(round_):
         indices.extend((0, 2 + step, 1 + step))
-    look = {
-        "name": "lily pad " + picture, "base": picture, "arm": None, "normal": None,
-        "cut": False, "rough": 0.32, "two_sided": True,
-    }
-    return Part(positions, normals, uvs, indices, look)
+    part = Part(positions, normals, uvs, indices, {
+        "name": "lily pad", "base": None, "arm": None, "normal": None,
+        "cut": False, "colour": [1.0, 1.0, 1.0, 1.0], "rough": 0.38, "two_sided": True,
+    })
+    part.colours = colours
+    return part
 
 
 def water_lily(pink):
@@ -653,6 +636,10 @@ STEP = 0.8
 WATER = 0.0
 LAKE = (18.0, -50.0)
 START = (-8.0, 52.0)
+# A pond in a hollow of its own, up the slope from the creek: where it is,
+# and how far from its middle its rim is.
+POND = (-27.0, 27.0)
+POND_REACH = 4.2
 # The creek, from its spring to the lake.
 CREEK = [(-62, 80), (-42, 62), (-19, 46), (2, 37), (8, 19), (-2, 3), (8, -13), (13, -26), (16, -36)]
 
@@ -722,6 +709,32 @@ def rolling_ground(x, z):
     return ground
 
 
+def with_pond(ground, x, z):
+    """The ground with the pond's hollow in it: a level shelf round a bowl
+    a stride and a half deep. Only the hollow is made here. No shore is
+    traced for the water: the engine lets it fill what it is put in."""
+    far = math.hypot(x - POND[0], z - POND[1])
+    if far > POND_REACH + 5.0:
+        return ground
+    rim = pond_level() + 0.3
+    inside = max(0.0, 1.0 - (far / POND_REACH) ** 2)
+    hollow = rim - 1.75 * inside * inside
+    # The shelf gives way to the land as it was over five metres.
+    blend = min(max((far - POND_REACH) / 5.0, 0.0), 1.0)
+    blend = blend * blend * (3 - 2 * blend)
+    return hollow * (1.0 - blend) + ground * blend
+
+
+_POND = []
+
+
+def pond_level():
+    """How high the pond's water stands: a little under the land there."""
+    if not _POND:
+        _POND.append(rolling_ground(*POND) - 0.2)
+    return _POND[0]
+
+
 _START = []
 
 
@@ -757,7 +770,7 @@ def height(x, z):
         blend = min(max((far - 2.5) / 5.5, 0.0), 1.0)
         blend = blend * blend * (3 - 2 * blend)
         ground = min(ground, bank) * (1.0 - blend) + ground * blend
-    return ground
+    return with_pond(ground, x, z)
 
 
 def slope_at(x, z):
@@ -849,33 +862,15 @@ WATER_LOOK = {
 }
 
 
-def lake():
-    """A sheet over the lake's bowl, a little past its shore, of points
-    close enough together for its waves to have shape."""
-    positions, normals, uvs = (array.array("f") for _ in range(3))
-    indices = array.array("I")
-    apart, reach = 0.7, 34.0
-    across = int(2 * reach / apart) + 1
-    numbers = {}
-    for row in range(across):
-        for column in range(across):
-            x = LAKE[0] - reach + column * apart
-            z = LAKE[1] - reach + row * apart
-            # Only where there is water, or nearly.
-            if height(x, z) > WATER + 0.6:
-                continue
-            numbers[(row, column)] = len(positions) // 3
-            positions.extend((x, WATER, z))
-            normals.extend((0.0, 1.0, 0.0))
-            # Still water: no flow.
-            uvs.extend((0.0, 0.0))
-    for row in range(across - 1):
-        for column in range(across - 1):
-            corners = [numbers.get((row + r, column + c)) for r in (0, 1) for c in (0, 1)]
-            if None in corners:
-                continue
-            a, b, c, d = corners
-            indices.extend((a, c, b, b, c, d))
+def sheet(x, z, level):
+    """A small sheet of water, two strides across. That is all the engine
+    needs to be told: it lets the water run from there until the land holds
+    it in, and draws it in the shape it took."""
+    positions = array.array("f", (x - 1, level, z + 1, x + 1, level, z + 1, x + 1, level, z - 1, x - 1, level, z - 1))
+    normals = array.array("f", (0.0, 1.0, 0.0) * 4)
+    # Still water: no flow.
+    uvs = array.array("f", (0.0, 0.0) * 4)
+    indices = array.array("I", (0, 1, 2, 0, 2, 3))
     return Part(positions, normals, uvs, indices, WATER_LOOK)
 
 
@@ -886,6 +881,11 @@ def creek():
     rows = 0
     for number in range(0, len(COURSE), 1):
         x, z = COURSE[number]
+        # Where its bed is under the lake's water it has arrived: the lake
+        # is there, in the shape it fills. (A little is left to run into
+        # it; the engine stops running water where still water begins.)
+        if BED[max(number - 3, 0)] + 0.3 < WATER:
+            break
         ahead = COURSE[min(number + 1, len(COURSE) - 1)]
         behind = COURSE[max(number - 1, 0)]
         tx, tz = ahead[0] - behind[0], ahead[1] - behind[1]
@@ -1052,7 +1052,10 @@ def main():
         "pebbles": (texture_set("ganges_river_pebbles"), 1.6),
         "rock": (texture_set("mossy_rock"), 3.0),
     })), (0, 0, 0))
-    level.put("lake", level.mesh("lake", [lake()]), (0, 0, 0), water=True)
+    # The lake and the pond: a small sheet in the middle of each, at the
+    # height the water stands. The engine fills the hollow it lies over.
+    level.put("lake", level.mesh("lake", [sheet(LAKE[0], LAKE[1], WATER)]), (0, 0, 0), water=True)
+    level.put("pond", level.mesh("pond", [sheet(POND[0], POND[1], pond_level())]), (0, 0, 0), water=True)
     level.put("creek", level.mesh("creek", [creek()]), (0, 0, 0), water=True)
 
     def pieces(name, most=None, keep=None, without=()):
@@ -1097,6 +1100,8 @@ def main():
             max(abs(x), abs(z)) < WIDE / 2 - 6
             and height(x, z) > WATER + water_gap
             and to_creek(x, z)[0] > creek_gap
+            # Nothing but what may stand in water grows in the pond.
+            and (water_gap < 0 or math.hypot(x - POND[0], z - POND[1]) > POND_REACH + 0.5)
         )
 
     def scatter(count, inner, outer, centre=START, **wanted):
@@ -1286,10 +1291,7 @@ def main():
     # ---- on the lake: lily pads in drifts where the water is shallow, some
     # with a flower. They float: the engine moves them with the waves.
     print("Lilies...", file=sys.stderr)
-    pads = []
-    for name, (centre, across) in PADS.items():
-        picture = photograph(name)
-        pads += [level.mesh("lily pad", [lily_pad(picture, centre, across, seed)]) for seed in range(4)]
+    pads = [level.mesh("lily pad", [lily_pad(seed)]) for seed in range(6)]
     flowers = [level.mesh("water lily", [water_lily(pink)]) for pink in (False, True)]
     drifts = []
     while len(drifts) < 16:

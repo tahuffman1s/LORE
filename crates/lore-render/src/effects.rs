@@ -372,7 +372,7 @@ impl Effects {
                             self.stirs.push(Stir {
                                 place: [bit.place[0], bit.place[2]],
                                 wide: (bit.size * 7.0).max(0.06),
-                                lift: -(bit.size * 220.0).min(3.0),
+                                lift: -(bit.size * 60.0).min(1.0),
                                 ..Stir::default()
                             });
                         }

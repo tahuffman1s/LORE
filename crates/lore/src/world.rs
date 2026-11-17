@@ -588,7 +588,7 @@ impl Playing {
             }
         }
         let player = *self.world.player();
-        let [along_x, rising, along_z] = player.velocity;
+        let [along_x, _, along_z] = player.velocity;
         let speed = along_x.hypot(along_z);
         // Someone standing or swimming in the water moves it as they move:
         // legs are narrower than a body, and one well under the surface
@@ -604,7 +604,7 @@ impl Playing {
                 lore_render::Stir {
                     place: [eye[0], eye[2]],
                     wide: 0.3,
-                    lift: rising * 0.25,
+                    lift: 0.0,
                     moving: [along_x, along_z],
                     body: 0.025,
                     churn: (speed / 3.0).min(1.0) * 0.12,
@@ -694,9 +694,9 @@ impl Game for Playing {
 #[cfg(test)]
 mod heard;
 #[cfg(test)]
-mod wetted;
-#[cfg(test)]
 mod rates;
+#[cfg(test)]
+mod wetted;
 
 #[cfg(test)]
 mod tests {

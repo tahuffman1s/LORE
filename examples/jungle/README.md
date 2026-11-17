@@ -1,14 +1,25 @@
 # jungle
 
 A jungle to walk through: giant trees hung with lianas, ferns and broad
-leaves under them, and a creek that runs downhill between mossy stones into
-a lake. Birds, insects and frogs all round, and the creek and the lake
-heard as water is: from the nearest of it to you, all along the bank.
+leaves under them, a pond in a hollow up the slope, and a creek that runs
+downhill between mossy stones into a lake with lilies on it. Birds, insects
+and frogs all round, and the creek and the lake heard as water is: from the
+nearest of it to you, all along the bank.
 
 It is here to show what the engine draws: the sun's shadows, a sky worked
 out from the sun with clouds that have depth, haze that fades far trees,
-water you can see into that flows, and one wind that bends the trees,
-carries the clouds and ruffles the water.
+and one wind that bends the trees, carries the clouds and ruffles the
+water. And it is here for the water. Walk into the lake: it darkens the
+shore it laps at, rings and a wake run out from your legs and drops fly
+from each step, and where it is neck deep you are afloat and swimming by
+strokes. Look down and swim, or crouch, to go under: shafts of sun come
+down between the leaves, the light ripples over the bottom, your breath
+goes up in bubbles and everything you hear is muffled. Jump in from the
+bank for the splash.
+
+Neither the lake nor the pond has a shore drawn for it. `build.py` makes
+the hollows in the ground and lays a sheet of water two strides across in
+the middle of each; the engine lets each one fill its hollow.
 
 ## Play it
 
@@ -37,8 +48,9 @@ the sun's shadows every few metres, which can be felt as a hitch (#337).
 ## What is not there
 
 - No animals: the engine has no creatures yet (#336). They are heard, not seen.
-- The plants do not stop you, and neither does the water: there is no
-  wading or swimming yet (#45, #286).
+- The plants do not stop you.
+- The creek is not swum in or filled by the engine: it is a ribbon of
+  running water laid along its bed, and it does not push you along (#286).
 - The shadows of swaying leaves stand still (#337).
 - The trees are thinned from scans of one to four million triangles each
   by keeping about a tenth of their leaves and making those twice the
@@ -76,6 +88,7 @@ domain. Nothing here needs crediting, and here it is anyway.
 - The water: "Shallow small river with stony riverbed" and "Welling rivulet
   in the woods", by "stephan", public domain (from pdsounds.org)
 
-Made here, by `build.py`: the shape of the ground, the creek's course, the
-water, and the lianas, which are ropes hung from the trees and wrapped in
-the trees' own bark.
+Made here, by `build.py`: the shape of the ground with its hollows, the
+creek's course and its ribbon of water, the lily pads and their flowers,
+and the lianas, which are ropes hung from the trees and wrapped in the
+trees' own bark.

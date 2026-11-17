@@ -127,7 +127,11 @@ pub(crate) fn tick(
     // A stroke: at the surface a hand goes in ahead, left and right in
     // turn; under water it only drags a little air with it.
     if player.pulls != before.pulls {
-        let side = if player.pulls.is_multiple_of(2) { 0.32 } else { -0.32 };
+        let side = if player.pulls.is_multiple_of(2) {
+            0.32
+        } else {
+            -0.32
+        };
         if player.head_under {
             marks.push(WaterMark::Bubbles {
                 place: at(0.4, side, feet + player.eye_height - 0.1),

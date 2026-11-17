@@ -165,17 +165,36 @@ fn under_water(point: vec3<f32>) -> bool {
     return point.y < view.water.x + lifted;
 }
 
-// Whether the line of sight to `world` starts under water: whether the
-// place where it leaves the eye is under the surface. Asked for each
-// pixel, so an eye that is half under sees the waterline across the
+// Whether the line of sight to `world` starts under water. With the eye
+// well over the water or well under it, that is the same for the whole
+// picture. With the eye at the surface itself, within a few centimetres,
+// it is asked for each pixel of the place where its line of sight leaves
+// the eye: so an eye that is half under sees the waterline across the
 // picture, with the waves in it.
 fn sight_starts_under(world: vec3<f32>) -> bool {
     if view.water.z < 0.5 {
         return false;
     }
-    let line = world - view.eye.xyz;
-    let ahead = max(dot(normalize(line), view.sky_rays[0].xyz), 0.2);
-    return under_water(view.eye.xyz + normalize(line) * (view.lens.x * 1.05 / ahead));
+    let eye = view.eye.xyz;
+    let over = eye.y - view.water.x;
+    if over > 0.5 {
+        return false;
+    }
+    let deep = near_depth(eye.xz);
+    if deep <= 0.0 {
+        return false;
+    }
+    if over < -0.5 {
+        return true;
+    }
+    let lifted = swell(eye.xz, 0.02, wave_strength(eye.xz, deep)).shift.y + rings(eye.xz).x;
+    let clear = over - lifted;
+    if abs(clear) > 0.035 {
+        return clear < 0.0;
+    }
+    let line = normalize(world - eye);
+    let ahead = max(dot(line, view.sky_rays[0].xyz), 0.2);
+    return under_water(eye + line * (view.lens.x * 1.05 / ahead));
 }
 
 // The colour of a great depth of water seen from inside it: the light from
@@ -314,10 +333,7 @@ fn light_through_water(world: vec3<f32>) -> f32 {
         let sharp = 1.0 / (1.0 + past * past);
         curve += vec3<f32>(slope.z, slope.w, shift.w) * (turns * strength[layer] * sharp);
     }
-    let ring = rings(above);
-    // The rings bend light too; how they curve is not kept, so their
-    // slope stands in for it.
-    let stretched = vec2<f32>(1.0 + thrown * curve.x + ring.y * 2.0, 1.0 + thrown * curve.y + ring.z * 2.0);
+    let stretched = vec2<f32>(1.0 + thrown * curve.x, 1.0 + thrown * curve.y);
     let apart = abs(stretched.x * stretched.y - thrown * thrown * curve.z * curve.z);
     let gathered = 0.8 / max(apart, 0.16);
     // Sharp lines in the shallows; a few metres down they are washed out
@@ -344,7 +360,7 @@ fn shore_wet(world: vec3<f32>) -> f32 {
     // Soaked at the waterline, damp a hand's width above it, in a line
     // that is not ruled.
     let uneven = textureSampleLevel(cloud_volume, cloud_sampler, vec3<f32>(world.xz / 3.1, 0.3), 0.0).r;
-    return 1.0 - smoothstep(0.015, 0.06 + 0.12 * uneven, over);
+    return 1.0 - smoothstep(0.01, 0.03 + 0.06 * uneven, over);
 }
 
 // ------------------------------------------------------- what it mirrors
@@ -511,7 +527,10 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         strength = vec4<f32>(0.25, 0.7, 1.0, 1.0) * (0.5 + 0.6 * fast);
         waves = swell_running(wet.rest, wet.flow, grain, strength);
     }
-    let ring = rings(wet.rest);
+    var ring = rings(wet.rest);
+    // No ring is steeper than water stands before it breaks.
+    let steep = length(ring.yz);
+    ring = vec4<f32>(ring.x, ring.yz * min(1.0, 0.7 / max(steep, 0.001)), ring.w);
     let slope = waves.slope + ring.yz;
     var normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
     // How widely the waves too small to draw spread what the water mirrors.
@@ -529,7 +548,12 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // leaves water for air is bent away from straight up, and past 48.6
     // degrees none gets out); outside it the surface is a mirror of the
     // water below.
-    if !front {
+    //
+    // Which side is seen is asked of where the eye is, not of which way
+    // the surface's triangles face: a steep wave seen from above shows
+    // its triangles' backs, and is still water seen from above.
+    let from_below = select(!front, sight_starts_under(corner.world), wet.deep >= 0.0);
+    if from_below {
         normal = -normal;
         let facing = clamp(dot(normal, to_eye), 0.0, 1.0);
         // How squarely the line of sight leaves the water, from Snell's law.
