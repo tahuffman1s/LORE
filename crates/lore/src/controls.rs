@@ -332,7 +332,11 @@ mod tests {
         assert!(live.look().is_none(), "nothing was saved");
 
         // A different length, so the change shows whatever the clock says.
-        fs::write(&path, "[bindings]\njump = [\"H\", \"GamepadSouth\"]\n# mine\n").unwrap();
+        fs::write(
+            &path,
+            "[bindings]\njump = [\"H\", \"GamepadSouth\"]\n# mine\n",
+        )
+        .unwrap();
         assert!(live.look().is_none(), "one look could be half a file");
         let reread = live.look().unwrap();
         assert_eq!(reread.said, Vec::<String>::new());
@@ -365,8 +369,9 @@ mod tests {
             reread.said
         );
         assert!(
-            reread.said[0]
-                .ends_with("so your controls stay as they were. Fix that line and save the file again."),
+            reread.said[0].ends_with(
+                "so your controls stay as they were. Fix that line and save the file again."
+            ),
             "{:?}",
             reread.said
         );
