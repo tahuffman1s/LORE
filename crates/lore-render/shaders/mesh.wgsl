@@ -663,10 +663,10 @@ fn ripples(place: vec2<f32>) -> f32 {
 // overtake and cross each other as real ones do and no pattern holds.
 // `far` is how far away the place is: waves too small to see from there
 // are left out, which would otherwise only glitter. `strength` scales
-// them all: little in a lull, more under a gust.
-fn waves(place: vec2<f32>, far: f32, strength: f32) -> vec2<f32> {
+// them all: little in a lull, more under a gust. `wind` is the way they
+// run: the wind's, or downstream on water that flows.
+fn waves(place: vec2<f32>, far: f32, strength: f32, wind: vec2<f32>) -> vec2<f32> {
     let seconds = view.clouds.y;
-    let wind = view.wind.xy;
     var slope = vec2<f32>(0.0);
     // Each is 0.62 as long as the one before, from 5.5 metres down.
     var long = 5.5;
@@ -738,16 +738,33 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     // ruffled patches that cross a lake.
     let blowing = 0.35 + 0.85 * gust(place, view.clouds.y);
     let fast = min(length(flow), 2.5);
-    // Running water has no room for trains of waves; it is rough with its
-    // own eddies, which are carried along with it.
-    var slope = waves(place, far, blowing) * (1.0 - smoothstep(0.1, 0.8, fast));
-    let reach = 0.25;
+    var slope: vec2<f32>;
+    if fast < 0.05 {
+        slope = waves(place, far, blowing, view.wind.xy);
+    } else {
+        // Running water: its waves run downstream and are carried along
+        // with it, for a second and a half before they start again where
+        // they began; two sets half a cycle apart are faded into each
+        // other, so the starting again is never seen.
+        let down = flow / fast;
+        let rough = 0.45 + 0.5 * fast;
+        let turn = view.clouds.y / 1.5;
+        let first = fract(turn);
+        let second = fract(turn + 0.5);
+        let one = waves(place - flow * (first - 0.5) * 1.5, far, rough, down);
+        let other = waves(
+            place - flow * (second - 0.5) * 1.5 + vec2<f32>(3.7, 1.9), far, rough, down,
+        );
+        slope = mix(one, other, abs(2.0 * first - 1.0));
+    }
+    // A little unevenness, so that the trains are not too regular.
+    let reach = 0.5;
     let here = running(place, flow);
-    let eddies = vec2<f32>(
+    let uneven = vec2<f32>(
         running(place + vec2<f32>(reach, 0.0), flow) - here,
         running(place + vec2<f32>(0.0, reach), flow) - here,
     ) / reach;
-    slope += eddies * (0.05 + 0.22 * fast) / (1.0 + far / 40.0);
+    slope += uneven * 0.05 / (1.0 + far / 40.0);
     let normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
 
     // What the surface mirrors: the sky in the direction the line of
@@ -807,10 +824,10 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
 
     // Foam where the water meets the shore, in broken patches that move
     // with the ripples, and a little where it runs fast.
-    let shore = 1.0 - smoothstep(0.015, 0.16, deep);
+    let shore = 1.0 - smoothstep(0.01, 0.09, deep);
     let broken = running(place * 2.3 + view.clouds.y * 0.07, flow * 2.3);
-    let foam = clamp(shore * 0.8 + 0.1 * fast, 0.0, 1.0)
-        * smoothstep(0.45, 0.7, broken + shore * 0.2) * 0.8;
+    let foam = clamp(shore * 0.7 + 0.06 * fast, 0.0, 1.0)
+        * smoothstep(0.5, 0.74, broken + shore * 0.15) * 0.75;
     let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
     colour = mix(colour, white * 0.9, foam);
     // The very edge fades out, so that the water does not end in a line.
