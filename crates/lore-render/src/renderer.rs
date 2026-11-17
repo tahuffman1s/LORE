@@ -598,6 +598,7 @@ impl Renderer {
                     meshes: self.meshes.as_ref(),
                     sky: true,
                     grid: self.grid,
+                    stirs: &[],
                 },
                 &self.camera,
                 seconds,

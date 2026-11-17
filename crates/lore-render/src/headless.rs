@@ -274,6 +274,7 @@ impl Headless {
                     meshes: self.meshes.as_ref(),
                     sky: true,
                     grid: self.grid,
+                    stirs: &[],
                 },
                 camera,
                 FRAME_SECONDS,

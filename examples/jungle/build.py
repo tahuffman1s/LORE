@@ -26,6 +26,7 @@ import struct
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -63,8 +64,11 @@ def fetch(url, path):
             os.replace(part, path)
             return path
         except (OSError, urllib.error.URLError) as problem:
-            print(f"  ({problem}; trying again)", file=sys.stderr)
-            time.sleep(2 + 3 * attempt)
+            # A server that says it is being asked too often is given a
+            # good while before it is asked again.
+            wait = 30 + 30 * attempt if "429" in str(problem) else 2 + 3 * attempt
+            print(f"  ({problem}; trying again in {wait} seconds)", file=sys.stderr)
+            time.sleep(wait)
     raise SystemExit(f"Could not download {url}. Check the connection and run this again.")
 
 
@@ -354,6 +358,13 @@ class Level:
             made = {k: v for k, v in made.items() if v}
             if "colour" in about:
                 made["pbrMetallicRoughness"] = {"baseColorFactor": about["colour"]}
+            if "rough" in about:
+                # A plain surface, not metal, this rough: 0 is a mirror.
+                made.setdefault("pbrMetallicRoughness", {}).update(
+                    {"metallicFactor": 0.0, "roughnessFactor": about["rough"]}
+                )
+            if about.get("two_sided"):
+                made["doubleSided"] = True
             if about["cut"]:
                 # Leaves and petals: holes cut by the picture's alpha, seen
                 # from both sides, and they cast shadows with their holes.
@@ -481,6 +492,108 @@ class Level:
 
 
 
+
+
+# ---------------------------------------------------------------- lilies
+
+# Photographs from Wikimedia Commons, at 2048 pixels wide: the page they are
+# on, and where in the picture a clean stretch of lily pad is (its middle
+# and how far across, as shares of the picture's width and height).
+PADS = {
+    # CC0 (Unsplash): lily pads beaded with water.
+    "Lily Pads in a Pond (Unsplash).jpg": ((0.575, 0.665), (0.125, 0.185)),
+    # Public domain: a white water lily among its pads.
+    "Water Lily 2018.jpg": ((0.40, 0.69), (0.12, 0.10)),
+}
+
+
+def photograph(name):
+    """One of Wikimedia Commons' pictures, no more than 2048 pixels wide."""
+    address = "https://commons.wikimedia.org/wiki/Special:FilePath/" + urllib.parse.quote(name) + "?width=2048"
+    kept = fetch(address, os.path.join(CACHE, "pictures", name.replace(" ", "_")))
+    time.sleep(2)
+    return kept
+
+
+def lily_pad(picture, middle, across, seed):
+    """A lily pad: a round leaf with a slit to its middle, lying flat, with
+    a stretch of a photographed pad laid over it."""
+    shape = random.Random(seed)
+    positions, normals, uvs = (array.array("f") for _ in range(3))
+    indices = array.array("I")
+    round_, slit = 30, shape.uniform(0.25, 0.5)
+    turned = shape.uniform(0, math.tau)
+    positions.extend((0.0, 0.004, 0.0))
+    normals.extend((0.0, 1.0, 0.0))
+    uvs.extend(middle)
+    for step in range(round_ + 1):
+        angle = slit / 2 + (math.tau - slit) * step / round_
+        # No leaf is a circle: the rim wanders in and out, and lifts a little.
+        out = 1.0 + 0.06 * math.sin(angle * 3 + seed) + 0.03 * math.sin(angle * 7 + seed * 2)
+        x, z = math.cos(angle) * out, math.sin(angle) * out
+        positions.extend((x, 0.004 + 0.012 * max(0.0, math.sin(angle * 5 + seed)), z))
+        normals.extend((0.0, 1.0, 0.0))
+        # The picture is turned under each pad, so no two show the same of it.
+        ux = math.cos(angle + turned) * out * 0.92
+        uz = math.sin(angle + turned) * out * 0.92
+        uvs.extend((middle[0] + ux * across[0], middle[1] + uz * across[1]))
+    for step in range(round_):
+        indices.extend((0, 2 + step, 1 + step))
+    look = {
+        "name": "lily pad " + picture, "base": picture, "arm": None, "normal": None,
+        "cut": False, "rough": 0.32, "two_sided": True,
+    }
+    return Part(positions, normals, uvs, indices, look)
+
+
+def water_lily(pink):
+    """A water lily in flower: three rings of pointed petals opening
+    upwards, white or pink, round a yellow middle."""
+    positions, normals, uvs, colours = (array.array("f") for _ in range(4))
+    indices = array.array("I")
+
+    def petal(turn, lean, long, wide, tint):
+        # A petal is a strip that widens and then comes to a point, curled
+        # up along its length.
+        first = len(positions) // 3
+        rows = 5
+        for row in range(rows + 1):
+            t = row / rows
+            half = wide * math.sin(math.pi * min(t * 1.15, 1.0)) * (1.0 - 0.55 * t)
+            out = long * t
+            # How far it has risen: more upright the nearer the middle.
+            reach = out * math.cos(lean + 0.5 * t)
+            up = out * math.sin(lean + 0.5 * t)
+            for side in (-1.0, 1.0):
+                x, z = reach, side * half
+                positions.extend((
+                    x * math.cos(turn) - z * math.sin(turn),
+                    0.02 + up + 0.012 * abs(side) * (1 - t),
+                    x * math.sin(turn) + z * math.cos(turn),
+                ))
+                normals.extend((-math.cos(turn) * math.sin(lean), math.cos(lean), -math.sin(turn) * math.sin(lean)))
+                uvs.extend((t, (side + 1) / 2))
+                # Cream at the foot, the petal's own colour at the tip.
+                shade = 0.82 + 0.18 * t
+                colours.extend((tint[0] * shade, tint[1] * shade, tint[2] * (0.9 + 0.1 * t) * shade, 1.0))
+        for row in range(rows):
+            a = first + row * 2
+            indices.extend((a, a + 2, a + 1, a + 1, a + 2, a + 3))
+
+    tint = (1.0, 0.72, 0.82) if pink else (1.0, 1.0, 0.96)
+    for ring, (count, lean, long, wide) in enumerate(((9, 0.25, 0.085, 0.024), (8, 0.7, 0.07, 0.021), (7, 1.1, 0.05, 0.017))):
+        for number in range(count):
+            petal(number / count * math.tau + ring * 0.37, lean, long, wide, tint)
+    # The middle: a tuft of short yellow strips.
+    for number in range(14):
+        petal(number / 14 * math.tau + 0.2, 1.25, 0.022, 0.004, (1.0, 0.78, 0.12))
+    part = Part(positions, normals, uvs, indices, {
+        "name": "water lily", "base": None, "arm": None, "normal": None,
+        # Thin, like a leaf: the sun shows through a petal.
+        "cut": True, "colour": [1.0, 1.0, 1.0, 1.0], "rough": 0.55,
+    })
+    part.colours = colours
+    return part
 
 
 # ---------------------------------------------------------------- sounds
@@ -1169,6 +1282,40 @@ def main():
             random.uniform(0, math.tau), tall, solid=False, wind=1.4,
         )
         grown += 1
+
+    # ---- on the lake: lily pads in drifts where the water is shallow, some
+    # with a flower. They float: the engine moves them with the waves.
+    print("Lilies...", file=sys.stderr)
+    pads = []
+    for name, (centre, across) in PADS.items():
+        picture = photograph(name)
+        pads += [level.mesh("lily pad", [lily_pad(picture, centre, across, seed)]) for seed in range(4)]
+    flowers = [level.mesh("water lily", [water_lily(pink)]) for pink in (False, True)]
+    drifts = []
+    while len(drifts) < 16:
+        angle, far = random.uniform(0, math.tau), random.uniform(14.0, 30.0)
+        x, z = LAKE[0] + math.cos(angle) * far, LAKE[1] + math.sin(angle) * far
+        if WATER - 1.7 < height(x, z) < WATER - 0.3:
+            drifts.append((x, z))
+    floating = 0
+    for x, z in drifts:
+        for _ in range(random.randrange(7, 16)):
+            px, pz = x + random.gauss(0, 1.6), z + random.gauss(0, 1.6)
+            if height(px, pz) > WATER - 0.2:
+                continue
+            wide = random.uniform(0.11, 0.2)
+            turn = random.uniform(0, math.tau)
+            level.put(
+                f"lily.{floating:03}", random.choice(pads), (px, WATER + 0.004, pz), turn, wide,
+                solid=False, floats=True,
+            )
+            if random.random() < 0.22:
+                level.put(
+                    f"lily.{floating:03}.flower", random.choice(flowers),
+                    (px + random.uniform(-0.1, 0.1), WATER + 0.006, pz + random.uniform(-0.1, 0.1)),
+                    turn, random.uniform(0.9, 1.5), solid=False, floats=True,
+                )
+            floating += 1
 
     # ---- what lies on the ground: solid
     def litter(names, count, most, sizes, sink, inner=4, outer=120, **wanted):

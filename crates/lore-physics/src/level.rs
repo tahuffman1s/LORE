@@ -1,6 +1,6 @@
 //! The level's triangles, and the few questions the player asks of them.
 
-use lore_assets::{Scene, Transform};
+use lore_assets::{Scene, Transform, Water};
 use parry3d::glamx::Vec3;
 use parry3d::math::{Pose, Vector as Wide};
 use parry3d::query::{self, Ray, RayCast, ShapeCastOptions};
@@ -44,19 +44,9 @@ pub struct Level {
     /// `None` when there are no triangles, so nothing is ever hit.
     mesh: Option<TriMesh>,
     triangles: usize,
-    /// The still water in the level: lakes and ponds.
+    /// The still water in the level: lakes and ponds, each in the shape
+    /// it took when it filled its hollow.
     waters: Vec<Water>,
-}
-
-/// A body of still water: a level surface and the box it lies in. Whatever
-/// is under the surface inside the box is in the water.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Water {
-    /// The smallest and largest x and z of its surface.
-    low: [f32; 2],
-    high: [f32; 2],
-    /// How high the surface is.
-    surface: f32,
 }
 
 impl std::fmt::Debug for Level {
@@ -75,6 +65,21 @@ impl Level {
     /// forever; check [`Level::triangle_count`] to warn about that.
     #[must_use]
     pub fn from_scene(scene: &Scene) -> Self {
+        let mut level = Self::solids(scene);
+        // Water that lies level is a lake or a pond, to be waded and swum
+        // in: it fills the hollow it is over. A scene that was filled
+        // when it was loaded says where; one that was not is filled here.
+        // Water that slopes is a stream: too shallow to matter here.
+        level.waters = if scene.waters.is_empty() {
+            crate::water::filled(&level, scene).0
+        } else {
+            scene.waters.clone()
+        };
+        level
+    }
+
+    /// The solid shapes of `scene`, with no water in them yet.
+    pub(crate) fn solids(scene: &Scene) -> Self {
         let mut triangles = Vec::new();
         for instance in scene
             .instances
@@ -93,35 +98,7 @@ impl Level {
                 );
             }
         }
-        let mut level = Self::from_triangles(&triangles);
-        // Water that lies level is a lake or a pond, to be waded and swum
-        // in. Water that slopes is a stream: too shallow to matter here.
-        for instance in scene
-            .instances
-            .iter()
-            .filter(|instance| instance.is_water())
-        {
-            let Some(mesh) = scene.meshes.get(instance.mesh as usize) else {
-                continue;
-            };
-            let mut low = [f32::INFINITY; 3];
-            let mut high = [f32::NEG_INFINITY; 3];
-            for point in mesh.parts.iter().flat_map(|part| &part.positions) {
-                let placed = place(&instance.transform, *point);
-                for axis in 0..3 {
-                    low[axis] = low[axis].min(placed[axis]);
-                    high[axis] = high[axis].max(placed[axis]);
-                }
-            }
-            if low.iter().chain(&high).all(|part| part.is_finite()) && high[1] - low[1] < 0.05 {
-                level.waters.push(Water {
-                    low: [low[0], low[2]],
-                    high: [high[0], high[2]],
-                    surface: high[1],
-                });
-            }
-        }
-        level
+        Self::from_triangles(&triangles)
     }
 
     /// How high the surface of the still water over `x`, `z` is, if there
@@ -130,11 +107,16 @@ impl Level {
     pub fn water_at(&self, x: f32, z: f32) -> Option<f32> {
         self.waters
             .iter()
-            .filter(|water| {
-                x >= water.low[0] && x <= water.high[0] && z >= water.low[1] && z <= water.high[1]
-            })
-            .map(|water| water.surface)
+            .filter(|water| water.depth_at(x, z) > 0.0)
+            .map(|water| water.level)
             .reduce(f32::max)
+    }
+
+    /// The still water of the level: each lake, pond and pool in the
+    /// shape it took when it filled the hollow it was put in.
+    #[must_use]
+    pub fn waters(&self) -> &[Water] {
+        &self.waters
     }
 
     /// A level made of loose triangles, each three corner positions in metres.
@@ -316,7 +298,7 @@ pub(crate) struct Touch {
 }
 
 /// `point` moved to where `transform` puts it.
-fn place(transform: &Transform, point: [f32; 3]) -> [f32; 3] {
+pub(crate) fn place(transform: &Transform, point: [f32; 3]) -> [f32; 3] {
     let mut out = [transform[3][0], transform[3][1], transform[3][2]];
     for (column, value) in point.into_iter().enumerate() {
         for (row, cell) in out.iter_mut().enumerate() {

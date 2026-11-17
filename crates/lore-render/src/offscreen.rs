@@ -230,6 +230,7 @@ pub(crate) fn frames(
                         meshes: Some(&meshes),
                         sky: false,
                         grid: false,
+                        stirs: &[],
                     },
                     camera,
                     1.0 / 60.0,

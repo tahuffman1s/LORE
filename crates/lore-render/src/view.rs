@@ -192,6 +192,7 @@ impl SceneView {
             } else {
                 0.0
             },
+            near: camera.near_metres(),
         };
         let cut = self.before.is_none();
         self.before = Some(steady);

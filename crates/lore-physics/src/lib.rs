@@ -37,7 +37,9 @@ mod settings;
 mod slide;
 #[cfg(test)]
 mod tests;
+mod water;
 
 pub use level::{Level, RayHit};
 pub use player::Player;
 pub use settings::{MoveInput, MoveSettings};
+pub use water::fill;

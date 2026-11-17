@@ -39,6 +39,8 @@ mod tonemap;
 mod ui_pass;
 mod upscale;
 mod view;
+mod water;
+mod waves;
 
 pub use camera::Camera;
 pub use error::{RenderError, Version};
@@ -49,3 +51,4 @@ pub use headless::{FrameTime, Headless};
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};
 pub use upscale::Upscaling;
+pub use water::Stir;

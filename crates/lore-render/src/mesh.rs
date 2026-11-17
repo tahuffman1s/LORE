@@ -21,6 +21,9 @@ use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
+use crate::water::{
+    Bodies, Body, GRID_FINEST, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout,
+};
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
 const SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.spv"));
@@ -47,8 +50,9 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
 /// haze's, one for the fog, one for the wind, one for whoever walks and
-/// two for the still water the eye is in or beside.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 2);
+/// nine for the water: the still water the eye is in or nearest, the
+/// wind's waves, the rings round the eye and the eye's own.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -84,6 +88,8 @@ pub(crate) struct View {
     /// by the upscaler, which then smooths what is drawn with a pattern
     /// turned by it; 0 when each frame is shown as it is.
     pub(crate) noise: f32,
+    /// How near to the eye the nearest thing drawn can be, in metres.
+    pub(crate) near: f32,
 }
 
 impl View {
@@ -94,8 +100,11 @@ impl View {
         lighting: &Lighting,
         shadows: Option<&[Cascade; PICTURES]>,
         sky: Option<&Sky>,
-        water: [[f32; 4]; 2],
+        water: &WaterRows,
     ) -> [u8; VIEW_BYTES] {
+        let mut water = *water;
+        // The last of its rows is the eye's own.
+        water[8] = [self.near, 0.0, 0.0, 0.0];
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
         // The picture is far smaller than where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
@@ -245,6 +254,8 @@ pub(crate) struct Contents<'a> {
     pub(crate) sky: bool,
     /// Whether the editor's ground grid is drawn over them.
     pub(crate) grid: bool,
+    /// Whatever is stirring the water this frame.
+    pub(crate) stirs: &'a [Stir],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -317,9 +328,9 @@ pub(crate) struct Meshes {
     /// Whether any of them is water, which looks through a copy of the
     /// picture behind it.
     has_water: bool,
-    /// The still water in the scene, lakes and ponds: the smallest and
-    /// largest x and z of each one's surface, and how high it is.
-    lakes: Vec<([f32; 2], [f32; 2], f32)>,
+    /// The still water in the scene, lakes and ponds, each in the shape it
+    /// took when it filled its hollow.
+    bodies: Bodies,
     materials: Materials,
     lighting: Lighting,
     /// The sky under that light.
@@ -364,8 +375,12 @@ impl Meshes {
 
         let fallback = Material::default();
         let mut draws = Vec::new();
-        let mut lakes = Vec::new();
-        for instance in &scene.instances {
+        for (number, instance) in (0_u32..).zip(&scene.instances) {
+            // A sheet of water that filled its hollow is drawn as the
+            // shape it took, not as the sheet.
+            if scene.waters.iter().any(|water| water.source == number) {
+                continue;
+            }
             let (Some(mesh), Some(parts)) = (
                 scene.meshes.get(instance.mesh as usize),
                 placed.get(instance.mesh as usize),
@@ -416,37 +431,16 @@ impl Meshes {
                     double_sided: material.double_sided || water,
                     // Water is marked by a sway below nothing: its points
                     // rise and fall with its waves.
-                    sway: if water { -1.0 } else { instance.wind() },
+                    // Water is marked by a sway of -1 and what floats on
+                    // it by -2: both rise and fall with the waves.
+                    sway: if water {
+                        -1.0
+                    } else if instance.floats() {
+                        -2.0
+                    } else {
+                        instance.wind()
+                    },
                 });
-                // Water that lies level is a lake or a pond: the eye can
-                // be under it.
-                if water {
-                    let corners = (0..8).map(|corner| {
-                        moved(
-                            &instance.transform,
-                            [0, 1, 2].map(|axis| {
-                                if corner >> axis & 1 == 0 {
-                                    low[axis]
-                                } else {
-                                    high[axis]
-                                }
-                            }),
-                        )
-                    });
-                    let mut least = [f32::INFINITY; 3];
-                    let mut most = [f32::NEG_INFINITY; 3];
-                    for corner in corners {
-                        for axis in 0..3 {
-                            least[axis] = least[axis].min(corner[axis]);
-                            most[axis] = most[axis].max(corner[axis]);
-                        }
-                    }
-                    if least.iter().chain(&most).all(|part| part.is_finite())
-                        && most[1] - least[1] < 0.05
-                    {
-                        lakes.push(([least[0], least[2]], [most[0], most[2]], most[1]));
-                    }
-                }
             }
         }
         // Parts that share a material follow one another, so the material
@@ -486,8 +480,9 @@ impl Meshes {
         }
         Ok(Self {
             buffers,
-            has_water: draws.iter().any(|draw| draw.surface == Surface::Water),
-            lakes,
+            has_water: !scene.waters.is_empty()
+                || draws.iter().any(|draw| draw.surface == Surface::Water),
+            bodies: Bodies::new(gpu, scene)?,
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
@@ -496,38 +491,6 @@ impl Meshes {
             id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
             bounds,
         })
-    }
-}
-
-impl Meshes {
-    /// The still water the eye at `eye` is in or beside, as the shader
-    /// takes it: how high its surface is, 1 if the eye is under it, and 1
-    /// if there is any; then the smallest x and z and the largest x and z
-    /// of its surface.
-    fn water_round(&self, eye: [f32; 3]) -> [[f32; 4]; 2] {
-        let near = self
-            .lakes
-            .iter()
-            .map(|(low, high, surface)| {
-                // How far outside the water's box the eye is.
-                let out = [0, 1].map(|axis| {
-                    (low[axis] - eye[axis * 2])
-                        .max(eye[axis * 2] - high[axis])
-                        .max(0.0)
-                });
-                (out[0].hypot(out[1]), low, high, surface)
-            })
-            .min_by(|one, other| one.0.total_cmp(&other.0));
-        match near {
-            Some((away, low, high, surface)) => {
-                let under = away <= 0.0 && eye[1] < *surface;
-                [
-                    [*surface, f32::from(u8::from(under)), 1.0, 0.0],
-                    [low[0], low[1], high[0], high[1]],
-                ]
-            }
-            None => [[0.0; 4]; 2],
-        }
     }
 }
 
@@ -652,8 +615,17 @@ pub(crate) struct MeshPipeline {
     /// What a material's set holds; each scene's materials make sets like it.
     material_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
+    /// What a body of still water's set holds; each scene's make sets like it.
+    body_layout: vk::DescriptorSetLayout,
     /// One for each [`Surface`], in order.
     pipelines: [vk::Pipeline; 4],
+    /// Draws still water from the shape it took when it filled its hollow.
+    body_pipeline: vk::Pipeline,
+    /// The wind's waves and the rings: `None` only while the pipeline is
+    /// being built.
+    water: Option<WaterWorks>,
+    /// The picture of depths each frame's set was last pointed at.
+    near_water: RefCell<Vec<vk::ImageView>>,
     /// Draw what the sun sees of solid parts and of cut-out ones.
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
@@ -690,7 +662,11 @@ impl MeshPipeline {
             set_layout: vk::DescriptorSetLayout::null(),
             material_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
+            body_layout: vk::DescriptorSetLayout::null(),
             pipelines: [vk::Pipeline::null(); 4],
+            body_pipeline: vk::Pipeline::null(),
+            water: None,
+            near_water: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             clouds: None,
@@ -718,6 +694,17 @@ impl MeshPipeline {
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
         mesh.clouds = Some(clouds);
+        let water = WaterWorks::new(gpu, frames)?;
+        let water_pictures = water.pictures();
+        let (repeating, stopping) = (water.repeating, water.stopping);
+        mesh.water = Some(water);
+        let both_stages = |binding: u32, kind: vk::DescriptorType| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(kind)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+        };
         // The view, then the shadow pictures and what reads them, then the
         // block the clouds are shaped from and what reads that: the wind
         // is read from it too, where points are placed.
@@ -759,6 +746,16 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The water: the wind's waves (two pictures and what reads
+            // them), the rings (a picture and what reads it), and how
+            // deep the still water nearest the eye is. Read where points
+            // are placed too: the surface is moved by its waves.
+            both_stages(7, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(8, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(9, vk::DescriptorType::SAMPLER),
+            both_stages(10, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(11, vk::DescriptorType::SAMPLER),
+            both_stages(12, vk::DescriptorType::SAMPLED_IMAGE),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -766,11 +763,11 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, four pictures and two readers.
+            // Each frame's set has one view, eight pictures and four readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
-                vk::DescriptorType::SAMPLED_IMAGE => 4,
-                _ => 2,
+                vk::DescriptorType::SAMPLED_IMAGE => 8,
+                _ => 4,
             };
             vk::DescriptorPoolSize::default()
                 .ty(kind)
@@ -790,8 +787,9 @@ impl MeshPipeline {
                 )
                 .map_err(RenderError::driver(doing))?;
             mesh.material_layout = material::set_layout(gpu)?;
+            mesh.body_layout = body_layout(gpu)?;
             let set_layouts = [mesh.set_layout];
-            let both = [mesh.set_layout, mesh.material_layout];
+            let both = [mesh.set_layout, mesh.material_layout, mesh.body_layout];
             mesh.layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -836,7 +834,24 @@ impl MeshPipeline {
                     .image_view(cloud_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
                 let volume_samplers = [vk::DescriptorImageInfo::default().sampler(cloud_sampler)];
+                let water_views = water_pictures.map(|view| {
+                    [vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
+                });
+                let water_samplers = [repeating, stopping]
+                    .map(|sampler| [vk::DescriptorImageInfo::default().sampler(sampler)]);
+                let water_write = |binding: u32, info| picture_write(set, binding, info);
+                let reader_write = |binding: u32, info| {
+                    picture_write(set, binding, info).descriptor_type(vk::DescriptorType::SAMPLER)
+                };
                 let writes = [
+                    water_write(7, &water_views[0]),
+                    water_write(8, &water_views[1]),
+                    reader_write(9, &water_samplers[0]),
+                    water_write(10, &water_views[2]),
+                    reader_write(11, &water_samplers[1]),
+                    water_write(12, &water_views[3]),
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
                         .dst_binding(0)
@@ -997,6 +1012,76 @@ impl MeshPipeline {
                 }
             }
         }
+        // Still water that filled its hollow: a grid of points laid round
+        // the eye, two numbers each, mixed over what is behind it as other
+        // water is.
+        if failed.is_none() {
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_body"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_body"),
+            ];
+            let bindings = [vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(8)
+                .input_rate(vk::VertexInputRate::VERTEX)];
+            let attributes = [vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0)];
+            let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&bindings)
+                .vertex_attribute_descriptions(&attributes);
+            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::GREATER);
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD); 2];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                .color_attachment_formats(&formats)
+                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&grid_input)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&depth)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.body_pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
         // What the sun sees: only how far away each surface is, so there is
         // no colour to write, and a solid surface needs no fragment shader
         // at all. The nearer surface wins, with depth running from 0 at the
@@ -1146,7 +1231,12 @@ impl MeshPipeline {
         view: &View,
         contents: Contents<'_>,
     ) -> Result<(), RenderError> {
-        let Contents { meshes, sky, grid } = contents;
+        let Contents {
+            meshes,
+            sky,
+            grid,
+            stirs,
+        } = contents;
         // The grid is laid out round the eye.
         let grid = grid.then_some(view.eye);
         let device = self.gpu.device();
@@ -1187,10 +1277,47 @@ impl MeshPipeline {
             unsafe { self.record_shadows(commands, meshes, cascades) };
         }
         let sky = sky.then(|| meshes.map_or(&self.usual_sky, |meshes| &meshes.sky));
-        let water = meshes.map_or([[0.0; 4]; 2], |meshes| meshes.water_round(view.eye));
+        // The water: its waves and rings are worked out before the picture
+        // that reads them, and everything drawn is told which still water
+        // the eye is in or nearest.
+        let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye));
+        let mut water = [[0.0; 4]; 9];
+        if let Some(works) = &self.water {
+            // SAFETY: the caller's guarantees cover the water's pictures,
+            // which are this pipeline's own, and the body, which is the
+            // meshes'.
+            water = unsafe {
+                works.record(
+                    commands,
+                    frame,
+                    view.eye,
+                    (f64::from(view.time), view.elapsed),
+                    near,
+                    stirs,
+                )
+            }?;
+            let depths = near.map_or(works.pictures()[3], Body::depths);
+            if let Ok(mut bound) = self.near_water.try_borrow_mut()
+                && let Some(bound) = bound.get_mut(frame % self.views.len().max(1))
+                && *bound != depths
+            {
+                let pictures = [vk::DescriptorImageInfo::default()
+                    .image_view(depths)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let writes = [vk::WriteDescriptorSet::default()
+                    .dst_set(*view_set)
+                    .dst_binding(12)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&pictures)];
+                // SAFETY: the caller guarantees the commands last recorded
+                // with this frame's set have finished, so it is not in use.
+                unsafe { device.update_descriptor_sets(&writes, &[]) };
+                *bound = depths;
+            }
+        }
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
-        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky, water)) }?;
+        unsafe { view_buffer.write(&view.bytes(&lighting, cascades.as_ref(), sky, &water)) }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {
@@ -1366,6 +1493,42 @@ impl MeshPipeline {
                     &[*view_set],
                     &[],
                 );
+            }
+            // Still water first, each body from the shape it took, the
+            // coarsest of its grids first.
+            if let (Some(meshes), Some((points, triangles))) =
+                (meshes, self.water.as_ref().and_then(WaterWorks::grid))
+                && !meshes.bodies.list.is_empty()
+            {
+                device.cmd_bind_pipeline(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.body_pipeline,
+                );
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_bind_vertex_buffers(commands, 0, &[points.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, triangles.handle, 0, vk::IndexType::UINT32);
+                for body in &meshes.bodies.list {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.layout,
+                        2,
+                        &[body.set],
+                        &[],
+                    );
+                    for grid in (0..body.grids(view.eye)).rev() {
+                        device.cmd_push_constants(
+                            commands,
+                            self.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            &body_bytes(body, view.eye, grid),
+                        );
+                        device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
+                    }
+                }
             }
             if let Some((meshes, (vertices, indices))) = drawn {
                 device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
@@ -1704,6 +1867,69 @@ impl MeshPipeline {
     }
 }
 
+/// Pointing binding `binding` of `set` at the picture `info` names.
+fn picture_write(
+    set: vk::DescriptorSet,
+    binding: u32,
+    info: &[vk::DescriptorImageInfo; 1],
+) -> vk::WriteDescriptorSet<'_> {
+    vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(binding)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .image_info(info)
+}
+
+/// The shader's `Draw` for one of the grids a body of still water is drawn
+/// with as seen from `eye`: grid 0 is the finest, and each one after it is
+/// twice as wide with its points twice as far apart.
+///
+/// Where the mesh shader keeps how a mesh stands, this keeps how the grid
+/// is laid (how far apart its points are, whether it is the finest, how
+/// many squares it has a side, and where its middle is: the eye, to the
+/// nearest two points, so that the grid moves by whole squares and its
+/// points stay where they were); and where the shader keeps how surface
+/// directions turn, the body itself: where its grid of depths starts and
+/// how far apart its points are, how many there are and how high the water
+/// stands, and the water's colour. Its clearness is the number after.
+fn body_bytes(body: &Body, eye: [f32; 3], grid: u32) -> [u8; DRAW_BYTES] {
+    // Eleven grids at most: the sum fits an f32 exactly.
+    #[allow(clippy::cast_possible_wrap)]
+    let apart = GRID_FINEST * 2.0_f32.powi(grid as i32);
+    let middle = [0, 2].map(|axis| {
+        let eye = if eye[axis].is_finite() {
+            eye[axis]
+        } else {
+            0.0
+        };
+        (eye / (2.0 * apart)).round() * 2.0 * apart
+    });
+    // Sizes are far below the point where f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
+    let finest = if grid == 0 { 1.0 } else { 0.0 };
+    let numbers = [
+        [apart, finest, squares, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+        [middle[0], body.level, middle[1], 1.0],
+        [body.origin[0], body.origin[1], body.cell, 0.0],
+        [size[0], size[1], body.level, 0.0],
+        [body.colour[0], body.colour[1], body.colour[2], 0.0],
+        [body.colour[3], 0.0, 0.0, 0.0],
+    ];
+    let mut bytes = [0_u8; DRAW_BYTES];
+    for (slot, number) in bytes
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(numbers.iter().flatten())
+    {
+        *slot = number.to_ne_bytes();
+    }
+    bytes
+}
+
 /// The shader's `Draw` for one mesh part.
 fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     // A mirrored mesh has its normal map's sideways direction turned around.
@@ -1731,12 +1957,14 @@ impl Drop for MeshPipeline {
             for pipeline in self.pipelines.into_iter().chain(self.shadow_pipelines) {
                 device.destroy_pipeline(pipeline, None);
             }
+            device.destroy_pipeline(self.body_pipeline, None);
             device.destroy_pipeline(self.sky, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_set_layout(self.material_layout, None);
+            device.destroy_descriptor_set_layout(self.body_layout, None);
         }
     }
 }
@@ -1930,6 +2158,7 @@ mod tests {
             elapsed: 0.25,
             stir: 0.5,
             noise: 9.0,
+            near: 0.05,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
@@ -1937,7 +2166,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting, None, None, [[0.0; 4]; 2]);
+        let bytes = view.bytes(&lighting, None, None, &[[0.0; 4]; 9]);
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -1957,7 +2186,7 @@ mod tests {
         // matrix for each.
         assert_eq!(number(&bytes, 68), 0.0, "no shadows");
         let cascades = shadow::cascades([0.0; 3], [0.0, 1.0, 0.0], [[-1.0; 3], [1.0; 3]]);
-        let bytes = view.bytes(&lighting, Some(&cascades), None, [[0.0; 4]; 2]);
+        let bytes = view.bytes(&lighting, Some(&cascades), None, &[[0.0; 4]; 9]);
         assert_eq!(number(&bytes, 68), 1.0, "shadows");
         assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
         assert_eq!(number(&bytes, 72), cascades[0].texel);
@@ -1985,12 +2214,15 @@ mod tests {
         assert_eq!(number(&bytes, 186), sky::CLOUD_HEIGHT);
         assert_eq!(number(&bytes, 187), 0.0, "no sky");
         let above = Sky::of(&lighting);
-        let bytes = view.bytes(
-            &lighting,
-            None,
-            Some(&above),
-            [[2.0, 1.0, 1.0, 0.0], [3.0, 4.0, 5.0, 6.0]],
-        );
+        // The water: the body the eye is nearest, the layers of waves,
+        // the rings, and the eye's own, which the view fills in itself.
+        let mut water = [[0.0; 4]; 9];
+        water[0] = [2.0, 0.25, 1.0, 0.8];
+        water[1] = [3.0, 4.0, 5.0, 6.0];
+        water[3] = [5.4, 0.01, 0.17, 0.68];
+        water[7] = [-6.0, -7.0, 0.025, 512.0];
+        water[8] = [99.0; 4];
+        let bytes = view.bytes(&lighting, None, Some(&above), &water);
         assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
         assert_eq!(number(&bytes, 187), 1.0, "a sky");
         assert_eq!(number(&bytes, 188), above.air[0][0]);
@@ -2004,8 +2236,11 @@ mod tests {
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
         assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
         assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
-        assert_eq!(number(&bytes, 399), 6.0, "and the far corner of its box");
-        assert_eq!(bytes.len(), 400 * 4);
+        assert_eq!(number(&bytes, 399), 6.0, "and how many points its grid has");
+        assert_eq!(number(&bytes, 404), 5.4, "the first layer of waves");
+        assert_eq!(number(&bytes, 423), 512.0, "the rings");
+        assert_eq!(number(&bytes, 424), 0.05, "how near the eye sees");
+        assert_eq!(bytes.len(), 428 * 4);
     }
 
     #[test]
