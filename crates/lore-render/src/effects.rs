@@ -14,6 +14,7 @@
 //! what happened is shown, worked out afresh on each computer.
 
 use crate::bolt::{Bolt, Lightning};
+use crate::sky::Day;
 use crate::{clouds, sky};
 use lore_assets::Water;
 
@@ -114,6 +115,8 @@ pub(crate) struct Effects {
     /// At the eye: how hard it rains and hails, how wet the ground has
     /// got, and how much of a storm is overhead, each from 0 to 1.
     here: [f32; 4],
+    /// The sky at the hour the game says it is, if it has said.
+    day: Option<(f64, Day)>,
 }
 
 impl Default for Effects {
@@ -137,6 +140,7 @@ impl Effects {
             looks_next: 1.0,
             storminess: 0.0,
             here: [0.0; 4],
+            day: None,
         }
     }
 
@@ -498,6 +502,23 @@ impl Effects {
     /// Lets a flash of lightning go.
     pub(crate) fn strike(&mut self, lightning: Lightning) {
         self.free_bolt().strike(lightning);
+    }
+
+    /// Says what hour of the day it is, counted from the first midnight,
+    /// or with `None` that the level's own light is the light. The sky is
+    /// worked out again when the hour has moved on by twenty seconds: the
+    /// sun moves a twelfth of a degree in that.
+    pub(crate) fn set_hour(&mut self, hour: Option<f64>) {
+        match (hour, &self.day) {
+            (None, _) => self.day = None,
+            (Some(hour), Some((made, _))) if (hour - made).abs() < 1.0 / 180.0 => {}
+            (Some(hour), _) => self.day = Some((hour, Day::at(hour))),
+        }
+    }
+
+    /// The sky at the hour it is, if the game has said the hour.
+    pub(crate) fn day(&self) -> Option<&Day> {
+        self.day.as_ref().map(|(_, day)| day)
     }
 
     /// Says how stormy the whole sky is, from 0 to 1.

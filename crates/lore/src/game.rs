@@ -84,6 +84,8 @@ pub struct Frame {
     /// to be, if it was said.
     strikes: Vec<Lightning>,
     storminess: Option<f32>,
+    /// The hour of the day, if the game said it this frame.
+    hour: Option<f64>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
@@ -169,6 +171,7 @@ impl Frame {
             bubbles: Vec::new(),
             strikes: Vec::new(),
             storminess: None,
+            hour: None,
             under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
@@ -695,6 +698,19 @@ impl Frame {
     /// wind blows harder and lightning strikes by itself.
     pub fn set_storminess(&mut self, storminess: f32) {
         self.storminess = Some(storminess);
+    }
+
+    /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
+    /// midnight, and hours past 24 run on into the next day. The sun and
+    /// the moon stand where that hour has them, night falls and the stars
+    /// come out. Until a game says the hour it is always day.
+    pub fn set_hour(&mut self, hour: f64) {
+        self.hour = Some(hour);
+    }
+
+    /// The hour of the day, if the game said it this frame.
+    pub(crate) fn take_hour(&mut self) -> Option<f64> {
+        self.hour.take()
     }
 
     /// The lightning let go this frame.

@@ -201,3 +201,8 @@ game.weather.setStorminess(0.8)
 if game.weather.storminess() > 0.5 then
     game.weather.strike(game.player.position + vector.create(0, 0, -200))
 end
+
+game.sky.setHour(18.5)
+game.onTick(function()
+    game.sky.setHour((game.sky.hour() or 12) + 1 / 600)
+end)

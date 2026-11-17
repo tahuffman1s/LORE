@@ -273,6 +273,9 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(hour) = self.host.take_hour() {
+            frame.set_hour(hour);
+        }
         if let Some(storminess) = self.host.take_storminess() {
             frame.set_storminess(storminess);
         }

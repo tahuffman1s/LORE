@@ -256,6 +256,16 @@ impl Headless {
         self.effects.set_storminess(storminess);
     }
 
+    /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
+    /// midnight, and hours past 24 run on into the next day, which moves
+    /// the moon a day further round its month. The sun and the moon stand
+    /// where that hour has them, dusk and night fall, the stars come out
+    /// and the moon lights the land. With `None`, which is how a level
+    /// starts, the level's own light is the light and it is always day.
+    pub fn set_hour(&mut self, hour: Option<f64>) {
+        self.effects.set_hour(hour);
+    }
+
     /// Says that something is in the water during the next frame drawn: a
     /// leg wading, a body swimming. Rings run out from it, and it trails
     /// a wake as it moves. Call it every frame for as long as it is there.
@@ -331,6 +341,7 @@ impl Headless {
                     bits: self.effects.bytes(),
                     flashes: self.effects.flashes(),
                     weather: self.effects.weather(),
+                    day: self.effects.day(),
                 },
                 camera,
                 FRAME_SECONDS,

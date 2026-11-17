@@ -448,6 +448,14 @@ impl ScriptHost {
         self.running.as_ref()?.shared.rumble.take()
     }
 
+    /// The hour of the day the script said it is with `game.sky.setHour`,
+    /// if it has said so since this was last called.
+    pub fn take_hour(&mut self) -> Option<f64> {
+        (self.weather.hour_changed.take())
+            .then(|| self.weather.hour.get())
+            .flatten()
+    }
+
     /// How stormy the script said the sky is with
     /// `game.weather.setStorminess`, from 0 to 1, if it has said so since
     /// this was last called.

@@ -41,6 +41,9 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
 /// What `game` holds that is neither a function nor a table of them.
 pub(crate) const GAME_VALUES: &[&str] = &["player"];
 
+/// Every function on `game.sky`.
+pub(crate) const SKY_FUNCTIONS: &[&str] = &["setHour", "hour"];
+
 /// Every function on `game.weather`.
 pub(crate) const WEATHER_FUNCTIONS: &[&str] = &["setStorminess", "storminess", "strike"];
 
@@ -58,6 +61,10 @@ pub struct WeatherAsked {
     pub strikes: RefCell<Vec<([f32; 3], u32)>>,
     /// How many strikes have been asked for.
     pub struck: Cell<u32>,
+    /// The hour of the day the script last said it is, if it has said,
+    /// and whether it has said so since the engine last took it.
+    pub hour: Cell<Option<f64>>,
+    pub hour_changed: Cell<bool>,
 }
 
 /// Every function on `game.input`.
@@ -324,6 +331,40 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
+    let heavens = lua.create_table()?;
+    let asked = Rc::clone(&shared.weather);
+    heavens.set(
+        "setHour",
+        lua.create_function(move |lua, value: Value| {
+            #[allow(clippy::cast_precision_loss)]
+            let hour = match &value {
+                Value::Number(number) if number.is_finite() => *number,
+                Value::Integer(number) => *number as f64,
+                other => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.sky.setHour needs a number, but it was given {}. It takes \
+                             the hour of the day: 12 is noon, 18 is the sun setting and 24 \
+                             is midnight. Write it like this: game.sky.setHour(18.5)",
+                            describe(other)
+                        ),
+                    ));
+                }
+            };
+            asked.hour.set(Some(hour.max(0.0)));
+            asked.hour_changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let said = Rc::clone(&shared.weather);
+    heavens.set(
+        "hour",
+        lua.create_function(move |_, ()| Ok(said.hour.get()))?,
+    )?;
+    strict(lua, &heavens, "game.sky", SKY_FUNCTIONS)?;
+    game.set("sky", heavens)?;
+
     let sky = weather(lua, shared)?;
     strict(lua, &sky, "game.weather", WEATHER_FUNCTIONS)?;
     game.set("weather", sky)?;
@@ -341,6 +382,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("hud");
     members.push("input");
+    members.push("sky");
     members.push("weather");
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
@@ -813,7 +855,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 21] = [
+        let groups: [(&str, &[&str]); 22] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -826,6 +868,7 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("game.sky.", SKY_FUNCTIONS),
             ("game.weather.", WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),

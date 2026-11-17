@@ -258,6 +258,140 @@ impl Sky {
     }
 }
 
+/// The sky at an hour of the day: the light it gives the land, the sky
+/// that light makes, and where the sun, the moon and the stars stand.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Day {
+    /// The light on the land: the sun's by day and the moon's by night.
+    pub(crate) lighting: Lighting,
+    pub(crate) sky: Sky,
+    /// What the shader is told of the heavens, a row each: towards the sun
+    /// itself, and how far the night has come from 0 to 1; towards the
+    /// moon, and how far the stars have turned, in radians; the pole they
+    /// turn about; the colour of the sun's own disc, and 1; the light of
+    /// the night sky, and how bright the stars are.
+    pub(crate) heavens: [[f32; 4]; 5],
+}
+
+/// `value` between `low` and `high`, as a share from 0 to 1 that starts
+/// and ends gently.
+fn eased(low: f32, high: f32, value: f32) -> f32 {
+    let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+    share * share * (3.0 - 2.0 * share)
+}
+
+impl Day {
+    /// The sky `hours` after the first midnight: 12 is noon, 18 the sun
+    /// setting, and 36 noon the day after, with the moon a day further
+    /// round its month.
+    ///
+    /// The sun goes round a tilted circle through where the usual sun
+    /// stands, which is its noon; it rises at six and sets at six. The
+    /// moon goes round nearly the same circle and falls behind the sun by
+    /// one turn in twenty-nine and a half days, which is what gives it
+    /// its phases: it starts nearly full, rising as the sun sets.
+    pub(crate) fn at(hours: f64) -> Self {
+        let usual = Lighting::default();
+        let hours = if hours.is_finite() { hours } else { 12.0 };
+        let noon = usual.towards_sun;
+        let flat = (noon[0] * noon[0] + noon[2] * noon[2]).sqrt().max(1e-6);
+        // Where the sun sets: level, and at right angles to its noon.
+        let west = [noon[2] / flat, 0.0, -noon[0] / flat];
+        let pole = [
+            noon[1] * west[2] - noon[2] * west[1],
+            noon[2] * west[0] - noon[0] * west[2],
+            noon[0] * west[1] - noon[1] * west[0],
+        ];
+        #[allow(clippy::cast_possible_truncation)]
+        let turn = ((hours - 12.0).rem_euclid(24.0) / 24.0 * std::f64::consts::TAU) as f32;
+        let round = |turn: f32, lean: f32| {
+            let (aside, along) = turn.sin_cos();
+            let at =
+                [0, 1, 2].map(|axis| (noon[axis] + pole[axis] * lean) * along + west[axis] * aside);
+            let long = at
+                .iter()
+                .map(|part| part * part)
+                .sum::<f32>()
+                .sqrt()
+                .max(1e-6);
+            at.map(|part| part / long)
+        };
+        let sun = round(turn, 0.0);
+        #[allow(clippy::cast_possible_truncation)]
+        let month = (hours / 24.0 / 29.53 + 0.47).rem_euclid(1.0) as f32;
+        let moon = round(turn - month * std::f32::consts::TAU, 0.09);
+        // How much of the moon's face the sun lights, as seen from here.
+        let between: f32 = (0..3).map(|axis| sun[axis] * moon[axis]).sum();
+        let lit = (1.0 - between) * 0.5;
+        let moon_up = eased(-0.03, 0.1, moon[1]);
+
+        let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        // The sun is dimmed and reddened by the air its light comes
+        // through, against what it comes through at noon (Kasten and
+        // Young's count of it), and is gone two degrees under the horizon.
+        let air = |rise: f32| {
+            let rise = rise.clamp(0.0, 1.0);
+            1.0 / (rise + 0.505_72 * (rise.asin().to_degrees() + 6.079_95).powf(-1.6364))
+        };
+        let more = air(sun[1]) - air(noon[1]);
+        let stopped = [0.066_f32, 0.139, 0.285];
+        let up = eased(-0.035, 0.035, sun[1]);
+        let sunlight = [0, 1, 2]
+            .map(|colour| usual.sun[colour] * (-stopped[colour] * more).exp().min(1.0) * up);
+        // Moonlight is the sun's, a great deal fainter, and looks blue to
+        // an eye in the dark.
+        let moonlight =
+            [0.6, 0.75, 1.0].map(|part: f32| part * grey(usual.sun) * 0.06 * lit * moon_up);
+        let by_sun = grey(sunlight) >= grey(moonlight);
+        let (towards, light) = if by_sun {
+            (sun, sunlight)
+        } else {
+            (moon, moonlight)
+        };
+        // A light under the horizon would light the land from below.
+        let towards = {
+            let lifted = [towards[0], towards[1].max(0.03), towards[2]];
+            let long = lifted.iter().map(|part| part * part).sum::<f32>().sqrt();
+            lifted.map(|part| part / long)
+        };
+        // The sky's own light fades through dusk, and is gone when the sun
+        // is twelve degrees down; the night has a little of its own.
+        let day = eased(-0.21, 0.3, sun[1]).powf(1.5);
+        let night = 1.0 - eased(-0.2, -0.02, sun[1]);
+        let dark = grey(usual.sky) * (0.6 + 0.9 * lit * moon_up);
+        let from_day = usual.sky.map(|part| part * day);
+        let lighting = Lighting {
+            towards_sun: towards,
+            sun: light,
+            sky: [0, 1, 2]
+                .map(|colour| from_day[colour] + [0.55, 0.7, 1.0][colour] * dark * 0.04 * night),
+            ground: usual.ground,
+        };
+        // The sky is the real sun's, wherever the light on the land is from.
+        let sky = Sky::of(&Lighting {
+            towards_sun: sun,
+            sky: from_day,
+            ..lighting
+        });
+        Self {
+            lighting,
+            sky,
+            heavens: [
+                [sun[0], sun[1], sun[2], night],
+                [moon[0], moon[1], moon[2], turn],
+                [pole[0], pole[1], pole[2], 0.0],
+                [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
+                [
+                    0.45 * dark * 0.03 * night,
+                    0.6 * dark * 0.03 * night,
+                    dark * 0.03 * night,
+                    grey(usual.sky) * 1.2,
+                ],
+            ],
+        }
+    }
+}
+
 /// How much of the light the air scatters goes off at an angle whose cosine
 /// is `to_sun` from the way it came.
 fn air_towards(to_sun: f32) -> f32 {
@@ -344,6 +478,68 @@ mod tests {
                 (brightness - wanted).abs() < 0.08 * wanted,
                 "{brightness} against {wanted}"
             );
+        }
+    }
+
+    #[test]
+    fn the_day_goes_round_from_noon_through_dusk_to_a_moonlit_night() {
+        let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        let noon = Day::at(12.0);
+        let usual = Lighting::default();
+        for axis in 0..3 {
+            assert!((noon.lighting.towards_sun[axis] - usual.towards_sun[axis]).abs() < 1e-4);
+            assert!((noon.lighting.sun[axis] - usual.sun[axis]).abs() < 1e-3);
+        }
+        assert_eq!(noon.heavens[0][3], 0.0, "no night at noon");
+        // An hour before it sets the sun is low, dimmer and redder.
+        let evening = Day::at(17.0);
+        assert!(evening.heavens[0][1] > 0.0 && evening.heavens[0][1] < 0.3);
+        let [red, _, blue] = evening.lighting.sun;
+        assert!(
+            red / blue > 1.3 * usual.sun[0] / usual.sun[2],
+            "{red} {blue}"
+        );
+        assert!(grey(evening.lighting.sun) < 0.8 * grey(usual.sun));
+        // At midnight the sun is far down, the stars are out, and the
+        // nearly full moon is up and is the light on the land.
+        let midnight = Day::at(24.0);
+        assert!(midnight.heavens[0][1] < -0.5);
+        assert_eq!(midnight.heavens[0][3], 1.0);
+        assert!(midnight.heavens[1][1] > 0.3, "the moon is up");
+        let moonlit = grey(midnight.lighting.sun);
+        assert!(
+            moonlit > 0.0 && moonlit < 0.1 * grey(usual.sun),
+            "{moonlit}"
+        );
+        assert!(midnight.lighting.towards_sun[1] > 0.3);
+        assert!(grey(midnight.lighting.sky) < 0.1 * grey(usual.sky));
+        assert!(midnight.sky.air.iter().flatten().all(|part| *part == 0.0));
+        // Half a month on the moon is new, and the night is darker.
+        let moonless = Day::at(24.0 + 24.0 * 15.0);
+        assert!(grey(moonless.lighting.sun) < 0.2 * moonlit);
+        // Every hour, and what is no hour, gives numbers.
+        for hours in [
+            0.0,
+            5.9,
+            6.0,
+            6.1,
+            18.0,
+            18.3,
+            1e9,
+            -7.0,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            let day = Day::at(hours);
+            let all = (day.heavens.iter().flatten())
+                .chain(&day.lighting.sun)
+                .chain(&day.lighting.sky)
+                .chain(&day.lighting.towards_sun)
+                .chain(day.sky.air.iter().flatten())
+                .chain(day.sky.haze.iter().flatten());
+            for part in all {
+                assert!(part.is_finite(), "{hours}: {day:?}");
+            }
         }
     }
 

@@ -53,8 +53,9 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, and two for the weather.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + 2);
+/// the light of lightning, two for the weather and five for the sun, the
+/// moon and the stars.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + 2 + 5);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -106,8 +107,7 @@ impl View {
         shadows: Option<&[Cascade; PICTURES]>,
         sky: Option<&Sky>,
         water: &WaterRows,
-        flashes: &[[f32; 4]; 2],
-        weather: &[[f32; 4]; 2],
+        above: &Above,
     ) -> [u8; VIEW_BYTES] {
         let mut water = *water;
         // The last of its rows is the eye's own.
@@ -173,13 +173,23 @@ impl View {
                 .chain(&wind)
                 .chain(&[self.stir, 0.0, 0.0, 0.0])
                 .chain(water.iter().flatten())
-                .chain(flashes.iter().flatten())
-                .chain(weather.iter().flatten()),
+                .chain(above.flashes.iter().flatten())
+                .chain(above.weather.iter().flatten())
+                .chain(above.heavens.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
         bytes
     }
+}
+
+/// What is in the sky of one frame besides its light, as the shader takes
+/// it: where lightning's light comes from, the weather, and the heavens.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Above {
+    pub(crate) flashes: [[f32; 4]; 2],
+    pub(crate) weather: [[f32; 4]; 2],
+    pub(crate) heavens: [[f32; 4]; 5],
 }
 
 /// The light a scene is drawn in: one sun, and the sky and ground around it.
@@ -275,6 +285,9 @@ pub(crate) struct Contents<'a> {
     /// ground is and how much of a storm is overhead; then how stormy the
     /// whole sky is.
     pub(crate) weather: [[f32; 4]; 2],
+    /// The sky at the hour it is, if the game has said the hour: with
+    /// none, the level's own light is the light.
+    pub(crate) day: Option<&'a sky::Day>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -1327,6 +1340,7 @@ impl MeshPipeline {
             bits,
             flashes,
             weather,
+            day,
         } = contents;
         // What flies is handed over before anything is recorded.
         let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
@@ -1365,7 +1379,24 @@ impl MeshPipeline {
             unsafe { device.update_descriptor_sets(&writes, &[]) };
             *bound = target.behind.view;
         }
-        let lighting = meshes.map_or_else(Lighting::default, |meshes| meshes.lighting);
+        let lighting = day.map_or_else(
+            || meshes.map_or_else(Lighting::default, |meshes| meshes.lighting),
+            |day| day.lighting,
+        );
+        // With no hour said, the sun is the level's light and there is no
+        // moon and no star.
+        let [x, y, z] = lighting.towards_sun;
+        let [red, green, blue] = lighting.sun;
+        let heavens = day.map_or(
+            [
+                [x, y, z, 0.0],
+                [0.0; 4],
+                [0.0, 1.0, 0.0, 0.0],
+                [red, green, blue, 0.0],
+                [0.0; 4],
+            ],
+            |day| day.heavens,
+        );
         // The sun's shadows of a level that has anything in it, drawn
         // before the picture that reads them.
         let cascades = meshes
@@ -1376,7 +1407,12 @@ impl MeshPipeline {
             // which are this pipeline's own.
             unsafe { self.record_shadows(commands, meshes, cascades) };
         }
-        let sky = sky.then(|| meshes.map_or(&self.usual_sky, |meshes| &meshes.sky));
+        let sky = sky.then(|| {
+            day.map_or_else(
+                || meshes.map_or(&self.usual_sky, |meshes| &meshes.sky),
+                |day| &day.sky,
+            )
+        });
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
@@ -1424,8 +1460,11 @@ impl MeshPipeline {
                 cascades.as_ref(),
                 sky,
                 &water,
-                &flashes,
-                &weather,
+                &Above {
+                    flashes,
+                    weather,
+                    heavens,
+                },
             ))
         }?;
         let readers =
@@ -2287,14 +2326,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(
-            &lighting,
-            None,
-            None,
-            &[[0.0; 4]; 9],
-            &[[0.0; 4]; 2],
-            &[[0.0; 4]; 2],
-        );
+        let bytes = view.bytes(&lighting, None, None, &[[0.0; 4]; 9], &Above::default());
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -2319,8 +2351,7 @@ mod tests {
             Some(&cascades),
             None,
             &[[0.0; 4]; 9],
-            &[[0.0; 4]; 2],
-            &[[0.0; 4]; 2],
+            &Above::default(),
         );
         assert_eq!(number(&bytes, 68), 1.0, "shadows");
         assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
@@ -2362,8 +2393,11 @@ mod tests {
             None,
             Some(&above),
             &water,
-            &[[1.0, 2.0, 3.0, 0.5], [0.0; 4]],
-            &[[0.25, 0.0, 0.5, 1.0], [0.75, 0.0, 0.0, 0.0]],
+            &Above {
+                flashes: [[1.0, 2.0, 3.0, 0.5], [0.0; 4]],
+                weather: [[0.25, 0.0, 0.5, 1.0], [0.75, 0.0, 0.0, 0.0]],
+                heavens: [[9.0; 4]; 5],
+            },
         );
         assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
         assert_eq!(number(&bytes, 187), 1.0, "a sky");
@@ -2386,7 +2420,8 @@ mod tests {
         assert_eq!(number(&bytes, 431), 0.5, "and how bright");
         assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
         assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
-        assert_eq!(bytes.len(), 444 * 4);
+        assert_eq!(number(&bytes, 444), 9.0, "the sun, the moon and the stars");
+        assert_eq!(bytes.len(), 464 * 4);
     }
 
     #[test]

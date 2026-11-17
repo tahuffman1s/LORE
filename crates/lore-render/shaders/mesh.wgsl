@@ -90,6 +90,12 @@ struct View {
     // is overhead, which is how much harder the wind blows. Then how
     // stormy the whole sky is, from 0 for fair weather to 1.
     weather: array<vec4<f32>, 2>,
+    // The heavens (`sky.rs`): towards the sun itself, and how far the
+    // night has come from 0 to 1; towards the moon, and how far the stars
+    // have turned, in radians; the pole they turn about; the colour of the
+    // sun's own disc, and 1 if there is a moon and stars at all; the light
+    // of the night sky, and how bright the stars are.
+    heavens: array<vec4<f32>, 5>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -377,11 +383,15 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     let share = clamp(place - f32(below), 0.0, 1.0);
     let air = mix(view.sky_air[below].rgb, view.sky_air[below + 1].rgb, share);
     let haze = mix(view.sky_haze[below].rgb, view.sky_haze[below + 1].rgb, share);
-    let to_sun = dot(direction, view.towards_sun.xyz);
+    // The sky is the sun's own, even when the light on the land is the
+    // moon's.
+    let to_sun = dot(direction, view.heavens[0].xyz);
     let by_air = 3.0 / (16.0 * PI) * (1.0 + to_sun * to_sun);
     let g = HAZE_ONWARDS;
     let by_haze = (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * to_sun, 1.5));
-    let above = air * by_air + haze * by_haze;
+    // The night sky has a little light of its own, more of it low down.
+    let above = air * by_air + haze * by_haze
+        + view.heavens[4].rgb * (1.0 + 0.8 * (1.0 - clamp(direction.y, 0.0, 1.0)));
     // Under the horizon is dark ground: where a level ends, or has a hole,
     // it does not open onto more sky.
     return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
@@ -570,13 +580,103 @@ fn flash_light() -> vec3<f32> {
 // themselves are drawn as what they are (`bolt.rs`, `particles.wgsl`).
 fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     var seen = colour;
+    // By night there is little light for a flash to be beside: it lights
+    // the land as bright as day.
+    let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let dark = clamp(1.0 / max(dot(view.sun.rgb, grey) / PI + dot(view.sky.rgb, grey), 0.03), 1.0, 30.0);
     for (var which = 0; which < 2; which++) {
         let flash = view.flashes[which];
         let off = world - flash.xyz;
-        seen += colour * vec3<f32>(0.8, 0.86, 1.0) * flash.w * 1.2
+        seen += colour * vec3<f32>(0.8, 0.86, 1.0) * flash.w * 1.2 * dark
             / (1.0 + dot(off, off) / 4000000.0);
     }
     return seen;
+}
+
+// `colour`, the clear sky towards `direction`, with the stars and the moon
+// in it: none of either unless the game has said what hour it is.
+//
+// The stars are one to a square of a grid laid on the sky, most of them
+// too faint to see and a few bright, each its own colour from orange to
+// blue-white; they turn about the pole as the hours pass and twinkle,
+// most near the horizon. The Milky Way is a faint band among them. The
+// moon is a ball lit by the sun, wherever the sun is: its phase comes of
+// that, and its seas are dark. It is drawn nearly twice its real size,
+// which is how large it looks to an eye.
+fn night_sky(colour: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    if view.heavens[3].w < 0.5 || direction.y < -0.03 {
+        return colour;
+    }
+    var seen = colour;
+    let night = view.heavens[0].w;
+    var behind = 1.0;
+
+    let towards = view.heavens[1].xyz;
+    let wide = 0.0081;
+    let across = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), towards) + vec3<f32>(0.00001, 0.0, 0.0));
+    let upwards = cross(towards, across);
+    let on = vec2<f32>(dot(direction, across), dot(direction, upwards)) / wide;
+    let out = dot(on, on);
+    if dot(direction, towards) > 0.0 && out < 1.0 {
+        // The way its ground faces at this point of its face.
+        let facing = across * on.x + upwards * on.y - towards * sqrt(1.0 - out);
+        // Its dust sends light back the way it came, so it does not
+        // darken towards its rim as a smooth ball would.
+        let sunlit = sqrt(clamp(dot(facing, view.heavens[0].xyz), 0.0, 1.0));
+        let seas = textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(on * 0.19 + vec2<f32>(0.31, 0.62), 0.47), 0.0,
+        ).r;
+        let ground = mix(0.5, 1.0, smoothstep(0.38, 0.55, seas));
+        let rim = smoothstep(1.0, 0.9, out);
+        // The dark of the moon is lit a little by the Earth.
+        seen += vec3<f32>(1.0, 0.97, 0.9) * view.heavens[4].w * 1.6 * ground
+            * (sunlit + 0.012) * rim * smoothstep(-0.03, 0.02, direction.y);
+        behind = 1.0 - rim;
+    }
+    if night <= 0.01 {
+        return seen;
+    }
+
+    // The sky of stars, turned back to where it stood at noon.
+    let pole = view.heavens[2].xyz;
+    let turn = view.heavens[1].w;
+    let fixed = direction * cos(turn) - cross(pole, direction) * sin(turn)
+        + pole * dot(pole, direction) * (1.0 - cos(turn));
+    // Which face of a box round the eye the line of sight goes through,
+    // and where on it.
+    let big = abs(fixed);
+    var face = fixed.xy / fixed.z;
+    var which = sign(fixed.z) * 3.0;
+    if big.x >= big.y && big.x >= big.z {
+        face = fixed.yz / fixed.x;
+        which = sign(fixed.x);
+    } else if big.y >= big.z {
+        face = fixed.xz / fixed.y;
+        which = sign(fixed.y) * 2.0;
+    }
+    var light = vec3<f32>(0.0);
+    for (var layer = 0; layer < 2; layer++) {
+        let squares = 30.0 + 55.0 * f32(layer);
+        let grid = face * squares;
+        let square = floor(grid);
+        let dice = fract(
+            sin(dot(square, vec2<f32>(127.1, 311.7)) + which * 37.3 + f32(layer) * 91.7)
+                * vec3<f32>(43758.5453, 22578.1459, 19642.349),
+        );
+        let off = (grid - (square + 0.2 + 0.6 * dice.xy)) / squares * 0.785;
+        // A few are bright and most are faint.
+        let bright = pow(dice.z, 7.0 - 3.0 * f32(layer)) * (1.0 - 0.7 * f32(layer));
+        let twinkle = 1.0 + (0.15 + 0.35 * (1.0 - direction.y))
+            * sin(view.clouds.y * (3.0 + 6.0 * dice.y) + dice.x * 40.0);
+        light += mix(vec3<f32>(1.0, 0.8, 0.62), vec3<f32>(0.72, 0.82, 1.0), dice.x)
+            * bright * twinkle * exp(-dot(off, off) / 0.0000045);
+    }
+    // The Milky Way: a band right round the sky, cloudy and uneven.
+    let band = exp(-pow(dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2, 2.0));
+    let dust = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 1.7 + 0.2, 0.0).rg;
+    light += vec3<f32>(0.75, 0.82, 1.0) * band * (0.25 + dust.r) * dust.g * 0.05;
+    // The thick air low down hides them.
+    return seen + light * view.heavens[4].w * night * behind * smoothstep(0.0, 0.2, direction.y);
 }
 
 // The colour far things fade into, low down towards `low`: the sky's
@@ -1127,6 +1227,8 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         pixel.motion = vec2<f32>(0.0);
         return pixel;
     }
+    // The stars and the moon are behind everything else in the sky.
+    colour = night_sky(colour, direction);
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
     // The sun itself, as wide as it is seen from the Earth (just over half
@@ -1135,9 +1237,9 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     // come through, which is many times as much when it stands low (Kasten
     // and Young's count of it).
     var disc = vec3<f32>(0.0);
-    let beside = cross(direction, sun);
+    let beside = cross(direction, view.heavens[0].xyz);
     let out = dot(beside, beside) / (0.00465 * 0.00465);
-    if to_sun > 0.0 && out < 1.0 {
+    if dot(direction, view.heavens[0].xyz) > 0.0 && out < 1.0 {
         let rise = max(direction.y, 0.0);
         let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
         disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
@@ -1277,7 +1379,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         }
     }
     // The sun shows through thin cloud and not through thick.
-    colour += view.sun.rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
+    colour += view.heavens[3].rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
 
     // In rain the sky is seen through it: greyed, and streaked.
     if view.weather[0].x > 0.0 {

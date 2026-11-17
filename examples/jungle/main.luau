@@ -69,10 +69,13 @@ end)
 
 -- The weather, and a panel to try it with. "interact" (E, or Y on a
 -- gamepad) opens the panel. In it the menu's own controls work: up and down
--- pick a line, left and right make the sky calmer or stormier, Enter or A
--- does what the line says, and Escape or B closes it.
+-- pick a line, left and right make the sky calmer or stormier or move the
+-- hour of the day, Enter or A does what the line says, and Escape or B
+-- closes it.
 local lines = {
     "Storminess",
+    "Time of day",
+    "Time passes",
     "Lightning ahead",
     "Lightning close by",
     "Lightning far off",
@@ -90,9 +93,13 @@ local panel = {
     -- the way they are looking.
     heading = vector.create(0, 0, -1),
     last = nil :: vector?,
+    -- Whether the hours go by, and when the hour was last moved on: a day
+    -- takes eight minutes.
+    passing = false,
+    moved = 0,
 }
 
-local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 540, height = 400, color = "#000000b0" })
+local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 540, height = 480, color = "#000000b0" })
 local title = game.hud.text("Weather", { at = "top left", right = 50, down = 44, size = 40, color = "white" })
 local meter = game.hud.bar(0, { at = "top left", right = 330, down = 108, width = 210, height = 22, color = "#6fa8ff" })
 local shown = {}
@@ -123,6 +130,16 @@ local function show()
         local words = lines[number]
         if number == 1 then
             words = string.format("Storminess  %d%%", math.floor(stormy * 100 + 0.5))
+        elseif number == 2 then
+            local hour = game.sky.hour()
+            if hour then
+                local minutes = math.floor(hour * 60 + 0.5) % 1440
+                words = string.format("Time of day  %02d:%02d", minutes // 60, minutes % 60)
+            else
+                words = "Time of day  the level's own"
+            end
+        elseif number == 3 then
+            words = "Time passes  " .. (if panel.passing then "yes" else "no")
         end
         local chosen = number == panel.line
         piece.visible = panel.open
@@ -155,17 +172,19 @@ local function strike(near: number, far: number)
 end
 
 local function choose()
-    if panel.line == 2 then
-        strike(150, 400)
-    elseif panel.line == 3 then
-        strike(30, 80)
+    if panel.line == 3 then
+        panel.passing = not panel.passing
     elseif panel.line == 4 then
-        strike(1500, 4000)
+        strike(150, 400)
     elseif panel.line == 5 then
-        game.weather.setStorminess(1)
+        strike(30, 80)
     elseif panel.line == 6 then
-        game.weather.setStorminess(0)
+        strike(1500, 4000)
     elseif panel.line == 7 then
+        game.weather.setStorminess(1)
+    elseif panel.line == 8 then
+        game.weather.setStorminess(0)
+    elseif panel.line == 9 then
         open(false)
     end
 end
@@ -180,6 +199,12 @@ game.onTick(function()
         end
     end
     panel.last = here
+    -- The hours go by whether or not the panel is up.
+    local now = game.time()
+    if panel.passing then
+        game.sky.setHour((game.sky.hour() or 12) + (now - panel.moved) * 24 / 480)
+    end
+    panel.moved = now
 
     if not panel.open then
         if game.input.justPressed("interact") then
@@ -200,6 +225,9 @@ game.onTick(function()
             panel.line = panel.line % #lines + 1
         elseif panel.line == 1 then
             game.weather.setStorminess(game.weather.storminess() + (if x > 0 then 0.1 else -0.1))
+        elseif panel.line == 2 then
+            -- Half an hour at a push, round and round the day.
+            game.sky.setHour(((game.sky.hour() or 12) + (if x > 0 then 0.5 else -0.5)) % 24)
         end
     end
     panel.held = pushed

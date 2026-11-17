@@ -718,6 +718,7 @@ impl<G: Game> App<G> {
         let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
         let bubbles = frame.take_bubbles();
         let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
+        let hour = frame.take_hour();
         if let Some(renderer) = &mut self.renderer {
             for splash in splashes {
                 renderer.splash(splash);
@@ -733,6 +734,9 @@ impl<G: Game> App<G> {
             }
             if let Some(storminess) = storminess {
                 renderer.set_storminess(storminess);
+            }
+            if hour.is_some() {
+                renderer.set_hour(hour);
             }
         }
         // The ears are where the eyes are.

@@ -488,6 +488,23 @@ declare game: {
     ---
     --- Sounds are played from functions that run while the game is on, such
     --- as `game.onStart` and `game.onTick`, not while the script loads.
+    sky: {
+        --- Says what hour of the day it is: 12 is noon, 18 is the sun
+        --- setting, 24 is midnight, and hours past 24 run on into the next
+        --- day, which moves the moon a day further round its month. The
+        --- sun and the moon stand where that hour has them: evening
+        --- reddens, night falls, the stars come out and the moon lights
+        --- the land. Until a script says the hour it is always day, in the
+        --- level's own light. To make time pass, say it every tick.
+        --- Example: game.sky.setHour(18.5)
+        --- Example: game.onTick(function() game.sky.setHour(6 + game.time() / 60) end)
+        setHour: (hour: number) -> (),
+
+        --- The hour the script last said it is, or nil if it has said none.
+        --- Example: local hour = game.sky.hour() or 12
+        hour: () -> number?,
+    },
+
     weather: {
         --- Says how stormy the sky is, from 0, fair weather with the odd
         --- storm passing, to 1, storms over most of it. Under a storm it
