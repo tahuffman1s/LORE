@@ -196,3 +196,8 @@ game.after(60, function()
     health:remove()
     dot:remove()
 end)
+
+game.weather.setStorminess(0.8)
+if game.weather.storminess() > 0.5 then
+    game.weather.strike(game.player.position + vector.create(0, 0, -200))
+end

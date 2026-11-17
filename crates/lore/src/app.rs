@@ -717,6 +717,7 @@ impl<G: Game> App<G> {
         // What was done to the water since the last frame is shown.
         let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
         let bubbles = frame.take_bubbles();
+        let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
         if let Some(renderer) = &mut self.renderer {
             for splash in splashes {
                 renderer.splash(splash);
@@ -726,6 +727,12 @@ impl<G: Game> App<G> {
             }
             for (place, count) in bubbles {
                 renderer.bubbles(place, count);
+            }
+            for strike in strikes {
+                renderer.strike(strike);
+            }
+            if let Some(storminess) = storminess {
+                renderer.set_storminess(storminess);
             }
         }
         // The ears are where the eyes are.

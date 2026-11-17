@@ -41,6 +41,25 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
 /// What `game` holds that is neither a function nor a table of them.
 pub(crate) const GAME_VALUES: &[&str] = &["player"];
 
+/// Every function on `game.weather`.
+pub(crate) const WEATHER_FUNCTIONS: &[&str] = &["setStorminess", "storminess", "strike"];
+
+/// What the script has asked of the weather with `game.weather`. It
+/// outlives a version of the script: the sky stays as it was said to be
+/// when the script is read again.
+#[derive(Debug, Default)]
+pub struct WeatherAsked {
+    /// How stormy the sky was last said to be, from 0 to 1.
+    pub storminess: Cell<f32>,
+    /// Whether that has been said since the engine last took it.
+    pub changed: Cell<bool>,
+    /// Where lightning was asked to strike and the engine has not yet
+    /// taken, each with the number of the strike it is.
+    pub strikes: RefCell<Vec<([f32; 3], u32)>>,
+    /// How many strikes have been asked for.
+    pub struck: Cell<u32>,
+}
+
 /// Every function on `game.input`.
 pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "pressed",
@@ -115,6 +134,8 @@ pub(crate) struct Shared {
     pub rumble: Cell<Option<Rumble>>,
     /// The action set the script chose.
     pub live_set: Rc<LiveSet>,
+    /// What the script asked of the weather.
+    pub weather: Rc<WeatherAsked>,
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
@@ -303,6 +324,10 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
+    let sky = weather(lua, shared)?;
+    strict(lua, &sky, "game.weather", WEATHER_FUNCTIONS)?;
+    game.set("weather", sky)?;
+
     let sounds = audio::table(lua, shared)?;
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
     game.set("audio", sounds)?;
@@ -316,6 +341,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("hud");
     members.push("input");
+    members.push("weather");
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
@@ -476,6 +502,74 @@ fn reader<R: mlua::IntoLuaMulti + 'static>(
 
 /// `game.input.rumble(strong, weak, seconds)`: remember a rumble for the
 /// engine to play on the player's gamepad. `seconds` can be left out.
+/// `game.weather`: how stormy the sky is, and lightning where it is asked
+/// for.
+fn weather(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
+    /// The most strikes kept between two frames: no more could be seen.
+    const MOST: usize = 8;
+    let weather = lua.create_table()?;
+    let asked = Rc::clone(&shared.weather);
+    weather.set(
+        "setStorminess",
+        lua.create_function(move |lua, value: Value| {
+            // The sky needs no more precision than an f32 holds.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            let amount = match &value {
+                Value::Number(number) => *number as f32,
+                Value::Integer(number) => *number as f32,
+                other => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.weather.setStorminess needs a number, but it was given {}. \
+                             It takes how stormy the sky is, from 0 (fair weather) to 1 \
+                             (storms over most of it). Write it like this: \
+                             game.weather.setStorminess(0.8)",
+                            describe(other)
+                        ),
+                    ));
+                }
+            };
+            asked.storminess.set(if amount.is_finite() {
+                amount.clamp(0.0, 1.0)
+            } else {
+                0.0
+            });
+            asked.changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let said = Rc::clone(&shared.weather);
+    weather.set(
+        "storminess",
+        lua.create_function(move |_, ()| Ok(f64::from(said.storminess.get())))?,
+    )?;
+    let asked = Rc::clone(&shared.weather);
+    weather.set(
+        "strike",
+        lua.create_function(move |lua, value: Value| {
+            let Value::Vector(place) = &value else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.weather.strike needs a place, but it was given {}. It takes \
+                         where on the ground the lightning strikes. Write it like this: \
+                         game.weather.strike(game.player.position + vector.create(0, 0, -200))",
+                        describe(&value)
+                    ),
+                ));
+            };
+            let mut strikes = asked.strikes.borrow_mut();
+            if strikes.len() < MOST {
+                asked.struck.set(asked.struck.get().wrapping_add(1));
+                strikes.push(([place.x(), place.y(), place.z()], asked.struck.get()));
+            }
+            Ok(())
+        })?,
+    )?;
+    Ok(weather)
+}
+
 fn rumble(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     const NAMES: [&str; 3] = ["strong", "weak", "seconds"];
     let shared = Rc::clone(shared);
@@ -719,7 +813,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 20] = [
+        let groups: [(&str, &[&str]); 21] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -732,6 +826,7 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("game.weather.", WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),

@@ -1,7 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
 use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
-use lore_render::{Splash, Stir};
+use lore_render::{Lightning, Splash, Stir};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -80,6 +80,10 @@ pub struct Frame {
     splashes: Vec<Splash>,
     stirs: Vec<Stir>,
     bubbles: Vec<([f32; 3], u32)>,
+    /// The lightning let go this frame, and how stormy the sky was said
+    /// to be, if it was said.
+    strikes: Vec<Lightning>,
+    storminess: Option<f32>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
@@ -163,6 +167,8 @@ impl Frame {
             splashes: Vec::new(),
             stirs: Vec::new(),
             bubbles: Vec::new(),
+            strikes: Vec::new(),
+            storminess: None,
             under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
@@ -674,6 +680,31 @@ impl Frame {
     /// What was said to be in the water this frame.
     pub(crate) fn take_stirs(&mut self) -> Vec<Stir> {
         std::mem::take(&mut self.stirs)
+    }
+
+    /// Lets a flash of lightning go: a forked bolt made from its seed that
+    /// comes down, flickers and is gone in under a second, lighting the
+    /// clouds and the land. `Lightning::down_to` makes one that strikes a
+    /// place on the ground.
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.strikes.push(lightning);
+    }
+
+    /// Says how stormy the sky is, from 0, fair weather with the odd storm
+    /// passing, to 1, storms over most of it. Under a storm it rains, the
+    /// wind blows harder and lightning strikes by itself.
+    pub fn set_storminess(&mut self, storminess: f32) {
+        self.storminess = Some(storminess);
+    }
+
+    /// The lightning let go this frame.
+    pub(crate) fn take_strikes(&mut self) -> Vec<Lightning> {
+        std::mem::take(&mut self.strikes)
+    }
+
+    /// How stormy the sky was said to be this frame, if it was said.
+    pub(crate) fn take_storminess(&mut self) -> Option<f32> {
+        self.storminess.take()
     }
 
     /// The bubbles let go this frame: where, and how many.

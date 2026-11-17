@@ -273,6 +273,15 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(storminess) = self.host.take_storminess() {
+            frame.set_storminess(storminess);
+        }
+        for (at, number) in self.host.take_strikes() {
+            frame.strike(lore_render::Lightning::down_to(
+                at,
+                number.wrapping_mul(0x9E37_79B1),
+            ));
+        }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
         }

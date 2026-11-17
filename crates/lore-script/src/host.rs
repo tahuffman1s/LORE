@@ -164,6 +164,8 @@ pub struct ScriptHost {
     clock: Rc<Clock>,
     /// The action set the script chose, shared with each version of it.
     live_set: Rc<LiveSet>,
+    /// What the script asked of the weather; it outlives a reload too.
+    weather: Rc<crate::api::WeatherAsked>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
 }
@@ -270,6 +272,7 @@ impl ScriptHost {
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
             live_set: Rc::default(),
+            weather: Rc::default(),
             versions: 0,
         };
         // A script error is already logged and kept in `last_error`.
@@ -443,6 +446,20 @@ impl ScriptHost {
     /// asked more than once, this is the latest.
     pub fn take_rumble(&mut self) -> Option<Rumble> {
         self.running.as_ref()?.shared.rumble.take()
+    }
+
+    /// How stormy the script said the sky is with
+    /// `game.weather.setStorminess`, from 0 to 1, if it has said so since
+    /// this was last called.
+    pub fn take_storminess(&mut self) -> Option<f32> {
+        (self.weather.changed.take()).then(|| self.weather.storminess.get())
+    }
+
+    /// Where on the ground the script asked lightning to strike with
+    /// `game.weather.strike` since this was last called, each with a
+    /// number no other strike has.
+    pub fn take_strikes(&mut self) -> Vec<([f32; 3], u32)> {
+        std::mem::take(&mut *self.weather.strikes.borrow_mut())
     }
 
     /// The action set the script made live with `game.input.useSet` since
@@ -801,6 +818,7 @@ impl ScriptHost {
             loading: Cell::new(true),
             rumble: Cell::new(None),
             live_set: Rc::clone(&self.live_set),
+            weather: Rc::clone(&self.weather),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

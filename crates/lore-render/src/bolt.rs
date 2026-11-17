@@ -45,6 +45,26 @@ pub struct Lightning {
     pub seed: u32,
 }
 
+impl Lightning {
+    /// A flash that comes down out of the clouds onto `at`, a place on
+    /// the ground: it starts up in the cloud, a little to one side, as
+    /// `seed` has it.
+    #[must_use]
+    pub fn down_to(at: [f32; 3], seed: u32) -> Self {
+        let mut dice = Dice(seed.wrapping_mul(0x85EB_CA77) | 1);
+        let high = crate::sky::CLOUD_HEIGHT + dice.between(500.0, 1400.0);
+        Self {
+            from: [
+                at[0] + dice.between(-0.3, 0.3) * high,
+                at[1].max(0.0) + high,
+                at[2] + dice.between(-0.3, 0.3) * high,
+            ],
+            to: at,
+            seed,
+        }
+    }
+}
+
 /// The most stretches a flash is made of, and the most strokes.
 pub(crate) const MOST_SEGMENTS: usize = 900;
 const MOST_STROKES: usize = 12;

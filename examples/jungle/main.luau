@@ -66,3 +66,147 @@ game.onTick(function()
         lake:moveTo(nearestOnLake(here))
     end
 end)
+
+-- The weather, and a panel to try it with. "interact" (E, or Y on a
+-- gamepad) opens the panel. In it the menu's own controls work: up and down
+-- pick a line, left and right make the sky calmer or stormier, Enter or A
+-- does what the line says, and Escape or B closes it.
+local lines = {
+    "Storminess",
+    "Lightning ahead",
+    "Lightning close by",
+    "Lightning far off",
+    "A storm, now",
+    "Fair weather",
+    "Close",
+}
+local panel = {
+    open = false,
+    line = 1,
+    -- Whether a direction was held in the last tick: one push moves one line.
+    held = false,
+    strikes = 0,
+    -- The way the player last walked, which is as near as a script knows to
+    -- the way they are looking.
+    heading = vector.create(0, 0, -1),
+    last = nil :: vector?,
+}
+
+local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 540, height = 400, color = "#000000b0" })
+local title = game.hud.text("Weather", { at = "top left", right = 50, down = 44, size = 40, color = "white" })
+local meter = game.hud.bar(0, { at = "top left", right = 330, down = 108, width = 210, height = 22, color = "#6fa8ff" })
+local shown = {}
+for number, words in lines do
+    shown[number] = game.hud.text(words, {
+        at = "top left",
+        right = 50,
+        down = 100 + (number - 1) * 40,
+        size = 30,
+        color = "white",
+    })
+end
+local hint = game.hud.text('Weather: press "interact" (E, or Y on a gamepad)', {
+    at = "top left",
+    right = 30,
+    down = 30,
+    size = 26,
+    color = "#ffffffc0",
+})
+
+-- Draws the panel as it now is.
+local function show()
+    back.visible, title.visible, meter.visible = panel.open, panel.open, panel.open
+    hint.visible = not panel.open
+    local stormy = game.weather.storminess()
+    meter.value = stormy
+    for number, piece in shown do
+        local words = lines[number]
+        if number == 1 then
+            words = string.format("Storminess  %d%%", math.floor(stormy * 100 + 0.5))
+        end
+        local chosen = number == panel.line
+        piece.visible = panel.open
+        piece.color = if chosen then "yellow" else "white"
+        piece.text = (if chosen then "> " else "   ") .. words
+    end
+end
+
+local function open(now: boolean)
+    panel.open = now
+    -- In the "menu" set the player's own controls hear nothing, so walking
+    -- and looking wait while the panel is up.
+    game.input.useSet(if now then "menu" else "gameplay")
+    show()
+end
+
+-- Lightning strikes between `near` and `far` metres off, about the way the
+-- player is heading and a different way each time.
+local function strike(near: number, far: number)
+    panel.strikes += 1
+    local aside = ((panel.strikes * 0.618) % 1 - 0.5) * 1.2
+    local c, s = math.cos(aside), math.sin(aside)
+    local way = panel.heading
+    local x, z = way.x * c - way.z * s, way.x * s + way.z * c
+    local away = near + (far - near) * ((panel.strikes * 0.381) % 1)
+    local here = game.player.position
+    -- A little under the player's feet: the bolt comes down to the ground
+    -- wherever the ground is there.
+    game.weather.strike(vector.create(here.x + x * away, here.y - 25, here.z + z * away))
+end
+
+local function choose()
+    if panel.line == 2 then
+        strike(150, 400)
+    elseif panel.line == 3 then
+        strike(30, 80)
+    elseif panel.line == 4 then
+        strike(1500, 4000)
+    elseif panel.line == 5 then
+        game.weather.setStorminess(1)
+    elseif panel.line == 6 then
+        game.weather.setStorminess(0)
+    elseif panel.line == 7 then
+        open(false)
+    end
+end
+
+game.onTick(function()
+    local here = game.player.position
+    if panel.last then
+        local x, z = here.x - panel.last.x, here.z - panel.last.z
+        local far = math.sqrt(x * x + z * z)
+        if far > 0.02 then
+            panel.heading = vector.create(x / far, 0, z / far)
+        end
+    end
+    panel.last = here
+
+    if not panel.open then
+        if game.input.justPressed("interact") then
+            open(true)
+        end
+        return
+    end
+    if game.input.justPressed("menu_back") then
+        open(false)
+        return
+    end
+    local x, y = game.input.axis("menu_move")
+    local pushed = math.abs(x) > 0.5 or math.abs(y) > 0.5
+    if pushed and not panel.held then
+        if y > 0.5 then
+            panel.line = (panel.line - 2) % #lines + 1
+        elseif y < -0.5 then
+            panel.line = panel.line % #lines + 1
+        elseif panel.line == 1 then
+            game.weather.setStorminess(game.weather.storminess() + (if x > 0 then 0.1 else -0.1))
+        end
+    end
+    panel.held = pushed
+    if game.input.justPressed("menu_confirm") then
+        choose()
+    end
+    show()
+end)
+
+show()

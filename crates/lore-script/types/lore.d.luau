@@ -488,6 +488,28 @@ declare game: {
     ---
     --- Sounds are played from functions that run while the game is on, such
     --- as `game.onStart` and `game.onTick`, not while the script loads.
+    weather: {
+        --- Says how stormy the sky is, from 0, fair weather with the odd
+        --- storm passing, to 1, storms over most of it. Under a storm it
+        --- is dark, it rains and in its heart it hails, the wind blows
+        --- harder and lightning strikes by itself. The clouds take a
+        --- moment to follow. A number outside 0 to 1 is brought into it.
+        --- Example: game.weather.setStorminess(0.8)
+        setStorminess: (amount: number) -> (),
+
+        --- How stormy the sky was last said to be, from 0 to 1. It is 0
+        --- until the script says otherwise.
+        --- Example: if game.weather.storminess() > 0.5 then print("Take cover!") end
+        storminess: () -> number,
+
+        --- Lets lightning strike the ground at a place: a forked bolt
+        --- comes down from the clouds over it, flickers and is gone in
+        --- under a second, lighting the land round it. It is seen, not
+        --- yet heard, and hurts nobody.
+        --- Example: game.weather.strike(game.player.position + vector.create(0, 0, -200))
+        strike: (at: vector) -> (),
+    },
+
     audio: {
         --- Plays a sound that is not in the world: it is as loud wherever the
         --- player stands. For music, menus and announcements. Options, all
