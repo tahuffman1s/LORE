@@ -4,6 +4,7 @@ use std::f32::consts::TAU;
 
 use crate::play::{Heard, hear};
 use crate::stream::{self, Reader, Streamer, Taken};
+use crate::underwater::Underwater;
 use crate::{Group, Importance, Listener, Place, Play, Range, Sound};
 
 /// How long a sound takes to fade when it is stopped or changes volume.
@@ -70,6 +71,8 @@ pub struct Mixer {
     slew: f32,
     /// How quickly the dulling filter follows the sound.
     dulling: f32,
+    /// What the whole mix sounds like with the ears under water.
+    underwater: Underwater,
     /// The fade-out of sounds that were cut off to make room, left then
     /// right, waiting to be added to the next mix.
     tail: Box<[f32]>,
@@ -119,6 +122,7 @@ impl Mixer {
             streamer: Streamer::default(),
             slew: 1.0 / fade_frames,
             dulling: 1.0 - (-TAU * BEHIND_CUTOFF / rate as f32).exp(),
+            underwater: Underwater::new(rate),
             tail: vec![0.0; tail_frames * 2].into_boxed_slice(),
             tail_frames: 0,
             next_id: 1,
@@ -230,6 +234,28 @@ impl Mixer {
         };
     }
 
+    /// Says how far under water the player's ears are: 0 in air, 1 fully
+    /// under, and between the two as the head goes through the surface.
+    ///
+    /// Under water everything is muffled, music and the splash just made
+    /// included: the high notes go, it is all a little quieter, and it is
+    /// harder to tell which side a sound is on. The change takes a tenth of
+    /// a second to be heard, so it never clicks. Call it whenever the
+    /// amount changes, or every tick.
+    ///
+    /// ```
+    /// use lore_audio::Mixer;
+    ///
+    /// let mut mixer = Mixer::new(48_000);
+    /// // The player dives:
+    /// mixer.set_underwater(1.0);
+    /// // And comes up again:
+    /// mixer.set_underwater(0.0);
+    /// ```
+    pub fn set_underwater(&mut self, amount: f32) {
+        self.underwater.set(amount);
+    }
+
     /// Fills `out` with the next stretch of sound: left sample, right
     /// sample, left, right, each between -1 and 1.
     ///
@@ -262,6 +288,8 @@ impl Mixer {
                 voice.retire(&mut self.retired, self.keep_retired);
             }
         }
+
+        self.underwater.apply(out);
 
         for frame in out.as_chunks_mut::<2>().0 {
             self.volume_now = approach(self.volume_now, self.volume, self.slew);

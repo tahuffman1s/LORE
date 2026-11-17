@@ -54,6 +54,8 @@ mod output {
         fn set_volume(&mut self, volume: f32);
         /// Sets how loud music or everything else is, from 0 to 1.
         fn set_group_volume(&mut self, group: Group, volume: f32);
+        /// Says how far under water the ears are, from 0 (in air) to 1.
+        fn set_underwater(&mut self, amount: f32);
     }
 
     impl Voices for Mixer {
@@ -79,6 +81,10 @@ mod output {
 
         fn set_group_volume(&mut self, group: Group, volume: f32) {
             Mixer::set_group_volume(self, group, volume);
+        }
+
+        fn set_underwater(&mut self, amount: f32) {
+            Mixer::set_underwater(self, amount);
         }
     }
 
@@ -108,6 +114,20 @@ mod output {
         /// Puts the ears at `position`, facing `yaw`: the player's eyes.
         pub(crate) fn listen_from(&mut self, position: [f32; 3], yaw: f32) {
             self.voices.set_listener(Listener { position, yaw });
+        }
+
+        /// Says how far under water the ears are: 0 in air, 1 with the
+        /// head fully under, and between the two as it goes through the
+        /// surface. Under water everything that plays is muffled, the
+        /// splash of going in included. Say it every frame, beside
+        /// [`listen_from`](Self::listen_from); the change is eased over a
+        /// tenth of a second, so a plain 0 or 1 does not click.
+        #[allow(
+            dead_code,
+            reason = "the world does not say where the water is yet (#286)"
+        )]
+        pub(crate) fn set_underwater(&mut self, amount: f32) {
+            self.voices.set_underwater(amount);
         }
 
         /// Sets how loud everything, music and effects are: the player's
@@ -191,6 +211,9 @@ pub(crate) struct LazySpeakers {
     /// How loud the player wants everything, effects and music, to tell
     /// the speakers once they are open.
     volumes: Volumes,
+    /// How far under water the ears are, to tell the speakers once they
+    /// are open.
+    underwater: f32,
     /// When to next try a device that is not working.
     retry_at: Option<std::time::Instant>,
 }
@@ -205,6 +228,7 @@ impl LazySpeakers {
     fn ready(&mut self) -> &mut lore_audio::Speakers {
         let listener = self.listener;
         let volumes = self.volumes;
+        let underwater = self.underwater;
         let now = std::time::Instant::now();
         let retry_at = &mut self.retry_at;
         let speakers = self.speakers.get_or_insert_with(|| {
@@ -212,6 +236,7 @@ impl LazySpeakers {
             let mut speakers = lore_audio::Speakers::open_or_silent();
             speakers.set_listener(listener);
             volumes.tell(&mut speakers);
+            speakers.set_underwater(underwater);
             *retry_at = Some(now + Self::RETRY_EVERY);
             speakers
         });
@@ -221,6 +246,7 @@ impl LazySpeakers {
                 log::info!("Sound is playing again.");
                 speakers.set_listener(listener);
                 volumes.tell(speakers);
+                speakers.set_underwater(underwater);
             }
         }
         speakers
@@ -265,6 +291,13 @@ impl Voices for LazySpeakers {
         }
         if let Some(speakers) = &mut self.speakers {
             speakers.set_group_volume(group, volume);
+        }
+    }
+
+    fn set_underwater(&mut self, amount: f32) {
+        self.underwater = amount;
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_underwater(amount);
         }
     }
 }
@@ -530,6 +563,26 @@ mod tests {
         );
         assert_eq!(played.error(), None);
         let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn with_the_ears_under_water_what_plays_is_muffled() {
+        let mut output = SoundOutput::new(Mixer::new(RATE));
+        // The fastest wobble a sound can hold: nothing but high notes.
+        let hiss = lore_audio::Sound::from_samples(RATE, 1, [0.5, -0.5].repeat(64)).unwrap();
+        output.handle([SoundAsk::Play(SoundId(1), Play::everywhere(hiss).looping())]);
+        let loudest = |output: &mut SoundOutput<Mixer>| {
+            let mut out = vec![0.0; 2 * RATE as usize / 2];
+            output.voices_mut().mix(&mut out);
+            out[out.len() / 2..]
+                .iter()
+                .fold(0.0_f32, |loudest, sample| loudest.max(sample.abs()))
+        };
+        assert_eq!(loudest(&mut output), 0.5);
+        output.set_underwater(1.0);
+        assert!(loudest(&mut output) < 0.01);
+        output.set_underwater(0.0);
+        assert_eq!(loudest(&mut output), 0.5);
     }
 
     #[test]
