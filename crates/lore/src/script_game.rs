@@ -273,6 +273,9 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(set) = self.host.take_action_set() {
+            frame.use_action_set(set);
+        }
         // A frame means someone is here to listen.
         self.load_sounds();
         while let Some(command) = self.host.take_sound() {
@@ -492,6 +495,22 @@ mod tests {
         );
         // What the script asked for while drawing is in the same frame.
         assert!(frame.rumble_requested().is_some());
+    }
+
+    #[test]
+    fn the_action_set_a_script_chooses_is_asked_of_the_window_once() {
+        let script = "game.onStart(function() game.input.useSet(\"menu\") end)";
+        let actions = ActionMap::default_fps();
+        let mut game = ScriptGame::from_source(script, &actions);
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        assert_eq!(frame.action_set(), actions.set("menu").ok());
+
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        assert_eq!(frame.action_set(), None, "the window already has it");
     }
 
     /// The script error is drawn for real, with no window, and the picture

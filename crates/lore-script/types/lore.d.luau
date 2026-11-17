@@ -611,5 +611,27 @@ declare game: {
         --- played (`lore run`).
         --- Example: if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
         rumble: (strong: number, weak: number, seconds: number?) -> (),
+
+        --- Switches to another set of actions. Only the actions of one set
+        --- hear the player at a time: "gameplay" (moving, looking, "jump"
+        --- and the rest) when a game starts, or "menu" (the "menu_..."
+        --- actions), in which the mouse is a pointer and no longer turns
+        --- the view. Use "menu" while your own shop or inventory is open,
+        --- and always give the player a way back: in "menu" the "pause"
+        --- action is not heard, so go back to "gameplay" on "menu_back"
+        --- (Escape, or B on a gamepad). The button that was down when the
+        --- set changed presses nothing in the new set until it is let go.
+        --- The window switches when it draws its next picture, so read the
+        --- new set's actions in later ticks, not in the tick that calls
+        --- useSet. Saving the script puts the game back in "gameplay".
+        --- Example: if game.input.justPressed("interact") then game.input.useSet("menu") end
+        --- Example: if game.input.justPressed("menu_back") then game.input.useSet("gameplay") end
+        useSet: (set: string) -> (),
+
+        --- The name of the set of actions the game is in: the one last
+        --- given to `useSet`, at once, or "gameplay" if there was none.
+        --- The engine's own pause menu does not change it.
+        --- Example: shop.visible = game.input.currentSet() == "menu"
+        currentSet: () -> string,
     },
 }
