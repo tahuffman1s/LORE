@@ -107,7 +107,7 @@ fn fragment_bit(bit: Bit) -> Mixed {
         colour = mix(behind * 0.95, above, mirror) + view.sun.rgb * flash * sunlit
             // A drop in the light is bright against what is behind it.
             + (view.sky.rgb * 0.3 + view.sun.rgb / PI * 0.22 * sunlit) * (0.25 + 0.75 * rim);
-        alpha = smoothstep(1.0, 0.8, out) * (0.3 + 0.7 * rim * rim + min(flash, 1.0));
+        alpha = smoothstep(1.0, 0.8, out) * (0.45 + 0.55 * rim * rim + min(flash, 1.0));
     } else if kind < 1.5 {
         // Spray: a soft white puff, thick in the middle, lit by the sun
         // and the sky and thinning as it hangs.
@@ -122,7 +122,7 @@ fn fragment_bit(bit: Bit) -> Mixed {
         let surface = 1.0 / bit.position.w;
         let nearest = bit.position.z * surface;
         let behind = nearest / max(textureLoad(behind_depth, pixel_at, 0), 0.0000001) - surface;
-        alpha = clamp(thick * thick * 0.16 * left, 0.0, 1.0) * smoothstep(0.0, 0.12, behind);
+        alpha = clamp(thick * thick * 0.24 * left, 0.0, 1.0) * smoothstep(0.0, 0.12, behind);
     } else {
         // A bubble under water: air in a skin of water. Nearly nothing in
         // its middle, a bright rim where the light is turned back, and a

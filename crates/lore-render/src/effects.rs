@@ -203,14 +203,21 @@ impl Effects {
         // went in, faster the harder it hit, and carried along with it.
         // How many there are goes with how hard: a handful to a few hundred.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let crown = (10.0 + 150.0 * hard).min(380.0) as u32;
+        let crown = (10.0 + 260.0 * hard).min(700.0) as u32;
         for _ in 0..crown {
             let round = self.between(0.0, std::f32::consts::TAU);
             let (sin, cos) = round.sin_cos();
             let out = self.between(0.15, 0.55) * speed.min(9.0);
             let up = self.between(0.25, 0.85) * (0.7 * downward + 0.45 * speed).min(8.0);
             let rim = wide * self.between(0.35, 0.6);
-            let size = self.between(0.003, 0.011) * (0.7 + 0.5 * hard.min(1.0));
+            // Mostly drops; of a hard splash, one in six is a gout of water
+            // the size of a fist, which is what is seen from across a lake.
+            let gout = hard > 0.6 && self.dealt() < 0.17;
+            let size = if gout {
+                self.between(0.02, 0.055)
+            } else {
+                self.between(0.003, 0.011) * (0.7 + 0.5 * hard.min(1.0))
+            };
             let carried = self.between(0.2, 0.7);
             let bit = Bit {
                 kind: Kind::Drop,
@@ -251,19 +258,19 @@ impl Effects {
         }
         // Spray: what is too fine to see the drops of.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let puffs = (2.0 + 9.0 * hard).min(22.0) as u32;
+        let puffs = (2.0 + 22.0 * hard).min(48.0) as u32;
         for _ in 0..puffs {
             let round = self.between(0.0, std::f32::consts::TAU);
             let (sin, cos) = round.sin_cos();
             let out = self.between(0.1, 0.6) * (0.4 + speed * 0.12);
-            let up = self.between(0.3, 1.0) * (0.3 + 0.16 * speed);
+            let up = self.between(0.3, 1.0) * (0.3 + 0.3 * speed).min(5.0);
             let bit = Bit {
                 kind: Kind::Spray,
                 place: [x + cos * wide * 0.3, y + 0.05, z + sin * wide * 0.3],
                 moving: [cos * out + along_x * 0.3, up, sin * out + along_z * 0.3],
-                size: wide * self.between(0.3, 0.7),
+                size: wide * self.between(0.35, 0.9),
                 age: -self.between(0.0, 0.08),
-                lasts: self.between(0.5, 1.1),
+                lasts: self.between(0.6, 1.3),
                 own: self.dealt(),
             };
             self.add(bit);
