@@ -707,6 +707,31 @@ fn a_scene_becomes_a_level_where_its_meshes_stand() {
     let level = Level::from_scene(&scene);
     assert_eq!(level.triangle_count(), 4);
 
+    // A placement marked as not solid is left out: the player falls
+    // through where it is drawn.
+    let mut leafy = scene.clone();
+    leafy.instances[1].extras = Some(r#"{"solid": false, "kind": "leaves"}"#.to_owned());
+    let without = Level::from_scene(&leafy);
+    assert_eq!(without.triangle_count(), 2);
+    let mut through = Player::at([20.0, 8.0, 0.0], &MoveSettings::default());
+    run(&mut through, &without, MoveInput::default(), 2 * SECOND);
+    assert!(
+        !through.grounded && through.position[1] < 0.0,
+        "{through:?}"
+    );
+    // Unticked in Blender as a whole number; anything else stays solid.
+    for (properties, solid) in [
+        (r#"{"solid": 0}"#, false),
+        (r#"{"solid": 1}"#, true),
+        (r#"{"solid": true}"#, true),
+        (r#"{"solid": "no"}"#, true),
+        (r#"{"other": false}"#, true),
+        ("not json", true),
+    ] {
+        leafy.instances[1].extras = Some(properties.to_owned());
+        assert_eq!(leafy.instances[1].is_solid(), solid, "{properties}");
+    }
+
     let settings = MoveSettings::default();
     let mut first = Player::at([0.0, 4.0, 0.0], &settings);
     let mut second = Player::at([20.0, 8.0, 0.0], &settings);
