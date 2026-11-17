@@ -147,18 +147,52 @@ impl Instance {
     /// ```
     #[must_use]
     pub fn is_solid(&self) -> bool {
+        // Water is waded into, whatever else is said of it.
+        !self.is_water() && self.ticked("solid").unwrap_or(true)
+    }
+
+    /// Whether it is the surface of water: a lake, a pond, the sea. A
+    /// level's maker says so with the custom property `water` set to
+    /// `true` (or 1) on a flat mesh laid where the surface is. It is drawn
+    /// as water, with waves and the sky mirrored in it, casts no shadow
+    /// and is not solid.
+    ///
+    /// The colour of its material is the colour of deep water. Where its
+    /// points have a colour of their own, the alpha says how deep the
+    /// water is there, from 0 at the shore, where it is clear and edged
+    /// with foam, to 1 where the bottom cannot be seen.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let lake = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"water": true}"#.to_owned()),
+    /// };
+    /// assert!(lake.is_water() && !lake.is_solid());
+    /// ```
+    #[must_use]
+    pub fn is_water(&self) -> bool {
+        self.ticked("water").unwrap_or(false)
+    }
+
+    /// What the custom property `name` says, if it is there and is true,
+    /// false or a number: Blender writes a ticked box as 1 and an unticked
+    /// one as 0 when the property was made as a whole number.
+    fn ticked(&self, name: &str) -> Option<bool> {
         use gltf::json::{Value, deserialize::from_str};
 
         let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
         else {
-            return true;
+            return None;
         };
-        match properties.get("solid") {
-            Some(Value::Bool(solid)) => *solid,
-            // Blender writes a ticked box as 1 and an unticked one as 0 when
-            // the property was made as a whole number.
-            Some(Value::Number(solid)) => solid.as_f64() != Some(0.0),
-            _ => true,
+        match properties.get(name)? {
+            Value::Bool(ticked) => Some(*ticked),
+            Value::Number(ticked) => Some(ticked.as_f64() != Some(0.0)),
+            _ => None,
         }
     }
 }

@@ -726,6 +726,10 @@ fn a_scene_becomes_a_level_where_its_meshes_stand() {
         (r#"{"solid": true}"#, true),
         (r#"{"solid": "no"}"#, true),
         (r#"{"other": false}"#, true),
+        // Water is waded into.
+        (r#"{"water": true}"#, false),
+        (r#"{"water": 1, "solid": true}"#, false),
+        (r#"{"water": false}"#, true),
         ("not json", true),
     ] {
         leafy.instances[1].extras = Some(properties.to_owned());

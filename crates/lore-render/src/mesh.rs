@@ -241,11 +241,14 @@ enum Surface {
     CutOut,
     /// What is behind shows through, by its alpha.
     SeeThrough,
+    /// The surface of water: see-through where it is shallow, a mirror of
+    /// the sky where it is looked along, and moving.
+    Water,
 }
 
 impl Surface {
     /// In the order of the pipelines that draw them.
-    const ALL: [Self; 3] = [Self::Solid, Self::CutOut, Self::SeeThrough];
+    const ALL: [Self; 4] = [Self::Solid, Self::CutOut, Self::SeeThrough, Self::Water];
 
     fn of(material: &Material) -> Self {
         match material.alpha_mode {
@@ -370,7 +373,11 @@ impl Meshes {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
                     material: Materials::number(scene, part.material),
-                    surface: Surface::of(material),
+                    surface: if instance.is_water() {
+                        Surface::Water
+                    } else {
+                        Surface::of(material)
+                    },
                     middle: moved(
                         &instance.transform,
                         [0, 1, 2].map(|axis| (low[axis] + high[axis]) * 0.5),
@@ -389,7 +396,7 @@ impl Meshes {
         draws.sort_by_key(|draw| (draw.surface, draw.material));
         let see_through_from = draws
             .iter()
-            .position(|draw| draw.surface == Surface::SeeThrough)
+            .position(|draw| draw.surface >= Surface::SeeThrough)
             .unwrap_or(draws.len());
 
         if scene
@@ -554,7 +561,7 @@ pub(crate) struct MeshPipeline {
     material_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
     /// One for each [`Surface`], in order.
-    pipelines: [vk::Pipeline; 3],
+    pipelines: [vk::Pipeline; 4],
     /// Draw what the sun sees of solid parts and of cut-out ones.
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
@@ -588,7 +595,7 @@ impl MeshPipeline {
             set_layout: vk::DescriptorSetLayout::null(),
             material_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
-            pipelines: [vk::Pipeline::null(); 3],
+            pipelines: [vk::Pipeline::null(); 4],
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             clouds: None,
@@ -804,7 +811,7 @@ impl MeshPipeline {
 
         let mut failed = None;
         for (surface, pipeline) in Surface::ALL.into_iter().zip(&mut mesh.pipelines) {
-            let see_through = surface == Surface::SeeThrough;
+            let see_through = surface >= Surface::SeeThrough;
             let stages = [
                 vk::PipelineShaderStageCreateInfo::default()
                     .stage(vk::ShaderStageFlags::VERTEX)
@@ -817,6 +824,7 @@ impl MeshPipeline {
                         Surface::Solid => c"fragment",
                         Surface::CutOut => c"fragment_cutout",
                         Surface::SeeThrough => c"fragment_blend",
+                        Surface::Water => c"fragment_water",
                     }),
             ];
             // Depth is 1 at the camera and 0 far away, so the greater depth
@@ -1731,6 +1739,7 @@ mod tests {
     #[test]
     fn solid_parts_are_drawn_before_cut_out_and_see_through_ones() {
         assert!(Surface::Solid < Surface::CutOut && Surface::CutOut < Surface::SeeThrough);
+        assert!(Surface::SeeThrough < Surface::Water);
         let with = |alpha_mode| Material {
             alpha_mode,
             ..Material::default()

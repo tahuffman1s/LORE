@@ -578,6 +578,100 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     return pixel;
 }
 
+// How high the water's surface is at a place, from 0 to 1: two layers of
+// ripples, a wide slow one and a small quick one, crossing each other.
+// They come from the block the clouds are shaped from, moved through over
+// time, so the ripples change and never repeat in step.
+fn ripples(place: vec2<f32>) -> f32 {
+    let seconds = view.clouds.y;
+    let wide = textureSampleLevel(
+        cloud_volume,
+        cloud_sampler,
+        vec3<f32>(place / 9.0 + seconds * vec2<f32>(0.019, 0.011), seconds * 0.021),
+        0.0,
+    ).g;
+    let small = textureSampleLevel(
+        cloud_volume,
+        cloud_sampler,
+        vec3<f32>(place / 2.7 - seconds * vec2<f32>(0.023, 0.037), 0.5 + seconds * 0.043),
+        0.0,
+    ).g;
+    return wide * 0.62 + small * 0.38;
+}
+
+// The surface of water. What is under it shows through where it is shallow
+// and looked down into; looked along, it mirrors the sky. The mesh's own
+// colour says how deep it is: alpha 0 at the shore, 1 where the bottom is
+// out of sight.
+@fragment
+fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
+    let line = view.eye.xyz - corner.world;
+    let far = length(line);
+    let to_eye = line / max(far, 0.001);
+    let sun = view.towards_sun.xyz;
+
+    // Which way the surface faces here, from how the ripples slope. Far
+    // off they are smaller than a pixel and would only glitter, so they
+    // are flattened with distance.
+    let place = corner.world.xz;
+    let reach = 0.12;
+    let here = ripples(place);
+    let slope = vec2<f32>(
+        ripples(place + vec2<f32>(reach, 0.0)) - here,
+        ripples(place + vec2<f32>(0.0, reach)) - here,
+    ) / reach;
+    let rough = 0.34 / (1.0 + far / 60.0);
+    let normal = normalize(vec3<f32>(-slope.x * rough, 1.0, -slope.y * rough));
+
+    // What the surface mirrors: the sky in the direction the line of
+    // sight bounces off to, and the clouds where that direction meets them.
+    var bounced = reflect(-to_eye, normal);
+    bounced.y = abs(bounced.y) + 0.015;
+    bounced = normalize(bounced);
+    var mirrored = sky_colour(bounced);
+    if view.clouds.x > 0.0 {
+        let height = view.clouds.z + CLOUD_DEPTH * 0.35;
+        let over = corner.world + bounced * ((height - corner.world.y) / max(bounced.y, 0.06));
+        let white = view.sun.rgb / PI * 0.9 + view.sky.rgb;
+        mirrored = mix(mirrored, white, smoothstep(0.0, 0.5, cloud(over, false)) * 0.85);
+    }
+    // The sun itself, broken into glitter by the ripples; none in shadow.
+    let sunlit = sunlight(corner.world, vec3<f32>(0.0, 1.0, 0.0), corner.position.xy)
+        * under_clouds(corner.world);
+    let glint = pow(max(dot(bounced, sun), 0.0), 700.0) * 18.0;
+    mirrored += view.sun.rgb * glint * sunlit;
+
+    // How much is mirrored and how much is seen into: nearly all mirror
+    // when looked along, nearly none straight down (Schlick's Fresnel).
+    let facing = max(dot(normal, to_eye), 0.0);
+    let mirror = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
+
+    // The water itself: its own colour, lit by the sky and, a little, by
+    // the sun that gets into it.
+    let depth = clamp(corner.colour.a, 0.0, 1.0);
+    let body = material.base_colour.rgb * corner.colour.rgb
+        * (view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.5);
+    // Shallow water hides little of what is under it.
+    let hides = clamp(depth * 1.2, 0.0, 0.97);
+
+    var cover = mirror + (1.0 - mirror) * hides;
+    var colour = (mirror * mirrored + (1.0 - mirror) * hides * body) / max(cover, 0.001);
+
+    // Foam where the water meets the shore, in broken patches that move
+    // with the ripples.
+    let shore = 1.0 - smoothstep(0.0, 0.07, depth);
+    let broken = ripples(place * 2.3 + view.clouds.y * 0.07);
+    let foam = shore * smoothstep(0.46, 0.66, broken + shore * 0.2) * 0.85;
+    let white = view.sky.rgb + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
+    colour = mix(colour, white * 0.9, foam);
+    cover = mix(cover, 0.9, foam);
+
+    var pixel: Mixed;
+    pixel.colour = vec4<f32>(through_fog(colour, corner.world), cover);
+    pixel.motion = vec4<f32>(0.0);
+    return pixel;
+}
+
 // What the sun sees of a mesh: only where it is. `draw.world_from_local`
 // here takes a corner point straight to the shadow picture being drawn.
 struct Cast {

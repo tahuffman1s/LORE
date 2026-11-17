@@ -683,6 +683,88 @@ mod tests {
     }
 
     #[test]
+    fn water_shows_the_bottom_where_it_is_shallow_and_the_sky_when_looked_along() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor, and a sheet of dark water a metre over it: how
+        // deep the water says it is is set below.
+        let square = |wide: f32, height: f32, material: u32, colour: Option<[f32; 4]>| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * wide, height, z * wide])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                colors: colour.map(|colour| vec![colour; 4]),
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let placed = |mesh: u32, extras: Option<&str>| Instance {
+            mesh,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: extras.map(str::to_owned),
+        };
+        let scene = |deep: f32| {
+            let mut scene = Scene::default();
+            scene.meshes.push(square(500.0, 0.0, 0, None));
+            scene
+                .meshes
+                .push(square(500.0, 1.0, 1, Some([1.0, 1.0, 1.0, deep])));
+            scene.materials.push(Material::default());
+            scene.materials.push(Material {
+                base_color: [0.02, 0.07, 0.08, 1.0],
+                ..Material::default()
+            });
+            scene.instances.push(placed(0, None));
+            scene.instances.push(placed(1, Some(r#"{"water": true}"#)));
+            scene
+        };
+        let middle = |headless: &mut Headless, pitch: f32| {
+            let camera = Camera {
+                position: [0.0, 3.0, 0.0],
+                pitch,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        let light = |[red, green, blue]: [i32; 3]| red + green + blue;
+
+        // Straight down into shallow water: the white floor, nearly as it is.
+        headless.set_scene(&scene(0.0)).unwrap();
+        let shallow = middle(&mut headless, -1.5);
+        // Into deep water: its own dark colour.
+        headless.set_scene(&scene(1.0)).unwrap();
+        let deep = middle(&mut headless, -1.5);
+        assert!(
+            light(shallow) > light(deep) + 250,
+            "shallow {shallow:?}, deep {deep:?}"
+        );
+        // Along deep water: the sky, far brighter than the water itself.
+        let along = middle(&mut headless, -0.05);
+        assert!(
+            light(along) > light(deep) + 200 && along[2] >= along[0],
+            "along {along:?}, down {deep:?}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn frames_are_drawn_and_timed_with_no_window() {
         let Some(mut headless) = headless(96, 64) else {
             return;
