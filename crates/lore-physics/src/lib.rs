@@ -2,7 +2,8 @@
 //!
 //! A [`Level`] holds the triangles of a loaded scene. A [`Player`] is moved
 //! through it one tick at a time by [`Player::step`]: walking, sprinting,
-//! crouching and jumping, sliding along walls, climbing stairs and ramps.
+//! crouching and jumping, sliding along walls, climbing stairs and ramps,
+//! and, where the level has still water, wading into it and swimming.
 //!
 //! ```no_run
 //! use lore_physics::{Level, MoveInput, MoveSettings, Player};
