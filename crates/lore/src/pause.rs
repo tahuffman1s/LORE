@@ -101,6 +101,10 @@ impl<G: Game> Game for PauseMenu<G> {
     }
 }
 
+/// What the gamepad does when the rumble setting is changed, so the player
+/// feels how strong they have made it: both motors, then seconds.
+const RUMBLE_SAMPLE: [f32; 3] = [0.6, 0.6, 0.15];
+
 /// The actions the menu reads, looked up once.
 #[derive(Debug, Clone, Copy)]
 struct Actions {
@@ -294,6 +298,7 @@ struct Widgets {
     effects_volume: WidgetId,
     sensitivity: WidgetId,
     invert_look: WidgetId,
+    rumble: WidgetId,
     ui_size: WidgetId,
     reset: WidgetId,
     done: WidgetId,
@@ -348,6 +353,7 @@ impl Widgets {
                         settings.sensitivity,
                     ),
                     screen.toggle("Invert look", settings.invert_look),
+                    slider(screen, "Rumble", Settings::RUMBLE, settings.rumble),
                     slider(
                         screen,
                         "HUD and menu size",
@@ -365,6 +371,7 @@ impl Widgets {
             effects_volume,
             sensitivity,
             invert_look,
+            rumble,
             ui_size,
             reset,
             done,
@@ -392,6 +399,7 @@ impl Widgets {
             effects_volume,
             sensitivity,
             invert_look,
+            rumble,
             ui_size,
             reset,
             done,
@@ -559,6 +567,7 @@ impl Menu {
                         (self.ui).set_slider(widgets.effects_volume, self.settings.effects_volume);
                     let _ = (self.ui).set_slider(widgets.sensitivity, self.settings.sensitivity);
                     let _ = (self.ui).set_toggle(widgets.invert_look, self.settings.invert_look);
+                    let _ = self.ui.set_slider(widgets.rumble, self.settings.rumble);
                     let _ = self.ui.set_slider(widgets.ui_size, self.settings.ui_size);
                 } else {
                     return false;
@@ -578,6 +587,13 @@ impl Menu {
                     }
                     Value::Slider(number) if widget == widgets.sensitivity => {
                         self.settings.sensitivity = number;
+                    }
+                    Value::Slider(number) if widget == widgets.rumble => {
+                        self.settings.rumble = number;
+                        // Felt at the strength just chosen: the settings
+                        // are put into effect before the rumble is played.
+                        let [strong, weak, seconds] = RUMBLE_SAMPLE;
+                        frame.rumble(Rumble::new(strong, weak, seconds));
                     }
                     Value::Slider(number) if widget == widgets.ui_size => {
                         self.settings.ui_size = number;

@@ -315,6 +315,7 @@ fn start(
         pacer: FramePacer::new(config.max_fps, Instant::now()),
         input,
         look,
+        rumble_share: config.settings.rumble_share(),
         controls,
         new_controls: None,
         pointer: None,
@@ -355,6 +356,9 @@ struct App<G> {
     /// The action the player's turning speed is applied to, if the game
     /// has one by that name.
     look: Option<lore_input::ActionId>,
+    /// What the strength of every rumble is multiplied by: the player's
+    /// setting, which no game gets round.
+    rumble_share: f32,
     /// The player's bindings file, watched for saves.
     controls: Option<controls::Live>,
     /// Controls read from that file since the last frame, for the game to
@@ -716,6 +720,7 @@ impl<G: Game> App<G> {
         }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);
+            self.rumble_share = settings.rumble_share();
             if let Some(look) = self.look {
                 self.input.set_sensitivity(look, settings.look());
             }
@@ -728,7 +733,7 @@ impl<G: Game> App<G> {
         if let Some(rumble) = frame.rumble_requested()
             && self.focused
         {
-            self.gamepads.rumble(rumble);
+            self.gamepads.rumble(rumble.scaled(self.rumble_share));
         }
         if let (Some(title), Some(window)) = (frame.take_title(), &self.window) {
             window.set_title(&title);

@@ -51,6 +51,10 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
         )),
         "{said}"
     );
+    assert!(
+        said.contains("\nGamepad rumble is at 100% of what a game asks for. To change it,"),
+        "{said}"
+    );
     assert_eq!(stderr(&output), "");
     let written = fs::read_to_string(&file).unwrap();
     assert!(
@@ -70,6 +74,7 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
         )
         .replace("# melee = [\"V\", \"RightStickPress\"]", "melee = []");
     fs::write(&file, &edited).unwrap();
+    fs::write(folder.join("settings.toml"), "rumble = 0\n").unwrap();
 
     let output = lore(&folder, &["controls"]);
 
@@ -89,6 +94,14 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
     );
     assert!(
         said.contains(&format!("\nThey are kept in {}.\n", file.display())),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "\nGamepad rumble is off. To change it, from 0 (off) to 100, use Settings in the \
+             menu a game opens with Escape or Start, or the line `rumble = 50` in {}.\n",
+            folder.join("settings.toml").display()
+        )),
         "{said}"
     );
     let warned = stderr(&output);

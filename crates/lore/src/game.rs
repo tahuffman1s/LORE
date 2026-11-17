@@ -575,7 +575,8 @@ impl Frame {
     /// gamepad has no rumble motors, or on macOS, where rumble is not
     /// supported yet. Never make rumble the only sign of something: show or
     /// play it as well. A game run with no window has no gamepad, so nothing
-    /// happens there.
+    /// happens there. The player's rumble setting scales what is asked for
+    /// here, down to nothing: it is theirs, and no game gets round it.
     pub fn rumble(&mut self, rumble: Rumble) {
         self.rumble = Some(rumble);
     }

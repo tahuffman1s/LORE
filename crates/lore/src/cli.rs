@@ -327,7 +327,36 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
         path.display(),
         if created { ", made just now" } else { "" }
     ));
+    let (rumble, unread) = rumble_setting();
+    said.push_str(&rumble);
+    problems.extend(unread);
     Ok((said, problems))
+}
+
+/// What `lore controls` says of how hard the gamepad shakes, which is
+/// the player's setting and not a binding, and what is wrong with the
+/// settings file it was read from.
+fn rumble_setting() -> (String, Vec<String>) {
+    let file = crate::settings::file();
+    let (settings, problems) = file
+        .as_deref()
+        .map_or_else(Default::default, crate::settings::load);
+    let strength = if settings.rumble <= 0.0 {
+        "Gamepad rumble is off".to_owned()
+    } else {
+        format!(
+            "Gamepad rumble is at {}% of what a game asks for",
+            settings.rumble.round()
+        )
+    };
+    let place = file.map_or_else(String::new, |file| {
+        format!(", or the line `rumble = 50` in {}", file.display())
+    });
+    let said = format!(
+        "\n{strength}. To change it, from 0 (off) to 100, use Settings in the menu a game \
+         opens with Escape or Start{place}.\n"
+    );
+    (said, problems)
 }
 
 /// The name of the game in `folder`: the folder's own name.

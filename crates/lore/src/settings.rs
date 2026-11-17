@@ -1,8 +1,8 @@
 //! The player's own settings: how loud (everything, and music and effects
-//! each), how fast the view turns, which way
-//! up, and how big the HUD and menus are. One file on their computer that
-//! every game played with LORE reads when it starts, and that the pause
-//! menu's settings screen writes.
+//! each), how fast the view turns, which way up, how hard the gamepad
+//! shakes, and how big the HUD and menus are. One file on their computer
+//! that every game played with LORE reads when it starts, and that the
+//! pause menu's settings screen writes.
 //!
 //! The file is `settings.toml`, beside the bindings file (see
 //! [`controls`](crate::controls)): in the `lore` folder of the place each
@@ -65,13 +65,16 @@ pub struct Settings {
     pub sensitivity: f32,
     /// Whether pushing the mouse or stick up looks down.
     pub invert_look: bool,
+    /// How hard the gamepad shakes, in percent of what the game asks for,
+    /// from 0 (never) to 100 (as the game asks).
+    pub rumble: f32,
     /// How big the HUD and menus are, in percent, from 75 to 150.
     pub ui_size: f32,
 }
 
 impl Default for Settings {
-    /// Full volume, the game's own turning speed, up is up, and the HUD
-    /// and menus at their designed size.
+    /// Full volume, the game's own turning speed, up is up, rumble as the
+    /// game asks for it, and the HUD and menus at their designed size.
     fn default() -> Self {
         Self {
             volume: 100.0,
@@ -79,6 +82,7 @@ impl Default for Settings {
             effects_volume: 100.0,
             sensitivity: 1.0,
             invert_look: false,
+            rumble: 100.0,
             ui_size: 100.0,
         }
     }
@@ -97,6 +101,12 @@ impl Settings {
         lowest: 0.1,
         highest: 3.0,
         step: 0.1,
+    };
+    /// What [`rumble`](Self::rumble) can be.
+    pub const RUMBLE: Range = Range {
+        lowest: 0.0,
+        highest: 100.0,
+        step: 5.0,
     };
     /// What [`ui_size`](Self::ui_size) can be.
     pub const UI_SIZE: Range = Range {
@@ -135,6 +145,12 @@ impl Settings {
     pub fn look(&self) -> [f32; 2] {
         let along = if self.invert_look { -1.0 } else { 1.0 };
         [self.sensitivity, self.sensitivity * along]
+    }
+
+    /// What the strength of every rumble is multiplied by, from 0 to 1.
+    #[must_use]
+    pub fn rumble_share(&self) -> f32 {
+        (self.rumble / 100.0).clamp(0.0, 1.0)
     }
 
     /// What HUD and menu sizes are multiplied by: 1 is the designed size.
@@ -177,6 +193,7 @@ impl Settings {
                 "music_volume" => number(name, value, Self::VOLUME, &mut settings.music_volume),
                 "effects_volume" => number(name, value, Self::VOLUME, &mut settings.effects_volume),
                 "sensitivity" => number(name, value, Self::SENSITIVITY, &mut settings.sensitivity),
+                "rumble" => number(name, value, Self::RUMBLE, &mut settings.rumble),
                 "ui_size" => number(name, value, Self::UI_SIZE, &mut settings.ui_size),
                 "invert_look" => match value {
                     DeValue::Boolean(flag) => {
@@ -190,7 +207,7 @@ impl Settings {
                 _ => Some(format!(
                     "`{name}` is not a setting, so the line was skipped. The settings are \
                      `volume`, `music_volume`, `effects_volume`, `sensitivity`, \
-                     `invert_look` and `ui_size`."
+                     `invert_look`, `rumble` and `ui_size`."
                 )),
             };
             if let Some(said) = said {
@@ -238,6 +255,12 @@ impl Settings {
             text,
             "# true makes pushing the mouse or stick up look down.\ninvert_look = {}\n",
             self.invert_look
+        );
+        let _ = writeln!(
+            text,
+            "# How hard the gamepad shakes, in percent of what a game asks for, from 0\n\
+             # (never) to 100.\nrumble = {}\n",
+            self.rumble.round()
         );
         let _ = writeln!(
             text,
@@ -358,6 +381,7 @@ mod tests {
             effects_volume: 80.0,
             sensitivity: 1.7,
             invert_look: true,
+            rumble: 40.0,
             ui_size: 125.0,
         };
         let text = chosen.to_text();
@@ -373,6 +397,8 @@ mod tests {
         );
         assert_eq!(read.look()[1], -read.sensitivity);
         assert_eq!(read.ui_scale(), 1.25);
+        assert_eq!(read.rumble_share(), 0.4);
+        assert_eq!(Settings::default().rumble_share(), 1.0);
         // Half way along the slider is a quarter of the signal.
         let half = Settings {
             volume: 50.0,
@@ -404,8 +430,8 @@ mod tests {
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
                 "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look` \
-                 and `ui_size`.",
+                 `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
+                 `rumble` and `ui_size`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
             ]
         );
