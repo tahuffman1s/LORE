@@ -69,9 +69,8 @@ end)
 
 -- The weather, and a panel to try it with. "interact" (E, or Y on a
 -- gamepad) opens the panel. In it the menu's own controls work: up and down
--- pick a line, left and right make the sky calmer or stormier or move the
--- hour of the day, Enter or A does what the line says, and Escape or B
--- closes it.
+-- pick a line, holding left or right slides the storminess or the hour of
+-- the day, Enter or A does what the line says, and Escape or B closes it.
 local lines = {
     "Storminess",
     "Time of day",
@@ -101,7 +100,14 @@ local panel = {
 
 local back = game.hud.box({ at = "top left", right = 30, down = 30, width = 540, height = 480, color = "#000000b0" })
 local title = game.hud.text("Weather", { at = "top left", right = 50, down = 44, size = 40, color = "white" })
-local meter = game.hud.bar(0, { at = "top left", right = 330, down = 108, width = 210, height = 22, color = "#6fa8ff" })
+-- Two sliders: how stormy the sky is, and the hour of the day from
+-- midnight on the left round to midnight on the right. Each is a bar with
+-- a knob on it; left and right slide the one on the chosen line.
+local slideFrom, slideWide = 330, 210
+local meter = game.hud.bar(0, { at = "top left", right = slideFrom, down = 108, width = slideWide, height = 22, color = "#6fa8ff" })
+local clock = game.hud.bar(0.5, { at = "top left", right = slideFrom, down = 148, width = slideWide, height = 22, color = "#ffd27f" })
+local meterKnob = game.hud.box({ at = "top left", right = slideFrom, down = 102, width = 8, height = 34, color = "white" })
+local clockKnob = game.hud.box({ at = "top left", right = slideFrom, down = 142, width = 8, height = 34, color = "white" })
 local shown = {}
 for number, words in lines do
     shown[number] = game.hud.text(words, {
@@ -125,7 +131,11 @@ local function show()
     back.visible, title.visible, meter.visible = panel.open, panel.open, panel.open
     hint.visible = not panel.open
     local stormy = game.weather.storminess()
-    meter.value = stormy
+    local day = ((game.sky.hour() or 12) % 24) / 24
+    meter.value, clock.value = stormy, day
+    meterKnob.right = slideFrom + stormy * slideWide - 4
+    clockKnob.right = slideFrom + day * slideWide - 4
+    clock.visible, meterKnob.visible, clockKnob.visible = panel.open, panel.open, panel.open
     for number, piece in shown do
         local words = lines[number]
         if number == 1 then
@@ -134,9 +144,9 @@ local function show()
             local hour = game.sky.hour()
             if hour then
                 local minutes = math.floor(hour * 60 + 0.5) % 1440
-                words = string.format("Time of day  %02d:%02d", minutes // 60, minutes % 60)
+                words = string.format("Time  %02d:%02d", minutes // 60, minutes % 60)
             else
-                words = "Time of day  the level's own"
+                words = "Time  --:--"
             end
         elseif number == 3 then
             words = "Time passes  " .. (if panel.passing then "yes" else "no")
@@ -201,8 +211,9 @@ game.onTick(function()
     panel.last = here
     -- The hours go by whether or not the panel is up.
     local now = game.time()
+    local passed = math.min(now - panel.moved, 0.1)
     if panel.passing then
-        game.sky.setHour((game.sky.hour() or 12) + (now - panel.moved) * 24 / 480)
+        game.sky.setHour((game.sky.hour() or 12) + passed * 24 / 480)
     end
     panel.moved = now
 
@@ -223,14 +234,19 @@ game.onTick(function()
             panel.line = (panel.line - 2) % #lines + 1
         elseif y < -0.5 then
             panel.line = panel.line % #lines + 1
-        elseif panel.line == 1 then
-            game.weather.setStorminess(game.weather.storminess() + (if x > 0 then 0.1 else -0.1))
-        elseif panel.line == 2 then
-            -- Half an hour at a push, round and round the day.
-            game.sky.setHour(((game.sky.hour() or 12) + (if x > 0 then 0.5 else -0.5)) % 24)
         end
     end
     panel.held = pushed
+    -- A slider slides for as long as left or right is held: across the
+    -- storminess in two seconds, and through the day in six.
+    if math.abs(x) > 0.5 and math.abs(y) <= 0.5 then
+        local slid = (if x > 0 then passed else -passed)
+        if panel.line == 1 then
+            game.weather.setStorminess(game.weather.storminess() + slid / 2)
+        elseif panel.line == 2 then
+            game.sky.setHour(((game.sky.hour() or 12) + slid * 24 / 6) % 24)
+        end
+    end
     if game.input.justPressed("menu_confirm") then
         choose()
     end
