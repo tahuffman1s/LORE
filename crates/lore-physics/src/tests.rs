@@ -501,6 +501,103 @@ fn a_steep_bank_cannot_be_climbed_or_stood_on() {
     assert!(dropped.position[2] > -3.0, "{dropped:?}");
 }
 
+/// A ravine: two faces of `steepness` degrees, 8 m across, meeting in a
+/// crease along z at the origin. The crease runs down toward +z at `tilt`
+/// degrees.
+fn ravine(steepness: f32, tilt: f32) -> Vec<Triangle> {
+    let rise = 4.0 * libm::tanf(steepness.to_radians());
+    let (sin, cos) = (libm::sinf(tilt.to_radians()), libm::cosf(tilt.to_radians()));
+    let tilted = |[x, y, z]: [f32; 3]| [x, y * cos - z * sin, y * sin + z * cos];
+    let crease = |z: f32| tilted([0.0, 0.0, z]);
+    let side = |x: f32, z: f32| tilted([x, rise, z]);
+    [
+        quad(
+            side(-4.0, -10.0),
+            side(-4.0, 10.0),
+            crease(10.0),
+            crease(-10.0),
+        ),
+        quad(
+            crease(-10.0),
+            crease(10.0),
+            side(4.0, 10.0),
+            side(4.0, -10.0),
+        ),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_player_wedged_in_a_ravine_stands_in_it_and_can_jump_out_of_it() {
+    // Two 55° faces, each too steep to stand on: the player slides down
+    // them into the crease and is held there by both.
+    let level = level(&[ravine(55.0, 0.0)]);
+    let mut player = Player::at([0.6, 3.0, 0.0], &MoveSettings::default());
+    run(&mut player, &level, MoveInput::default(), 2 * SECOND);
+    assert!(player.grounded, "stuck in the crease: {player:?}");
+    assert!(close(player.position[0], 0.0, 0.02), "{player:?}");
+    assert!(player.ground_normal[1] > 0.99, "{player:?}");
+    let rest = player.position;
+    run(&mut player, &level, MoveInput::default(), SECOND);
+    assert_eq!(player.position, rest, "standing in the crease is still");
+
+    // And jumps from it as from a floor.
+    let jump = MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    };
+    let mut peak = rest[1];
+    for _ in 0..2 * SECOND {
+        player.step(&level, &MoveSettings::default(), &jump, DT);
+        peak = peak.max(player.position[1]);
+    }
+    assert!(
+        close(peak - rest[1], 1.1, 0.05),
+        "jumped {}",
+        peak - rest[1]
+    );
+    assert!(player.grounded, "{player:?}");
+
+    // Walking along the crease is walking.
+    run(&mut player, &level, MoveInput::default(), SECOND / 2);
+    let along = MoveInput {
+        yaw: std::f32::consts::PI,
+        ..forward()
+    };
+    run(&mut player, &level, along, SECOND);
+    assert!(player.grounded, "{player:?}");
+    assert!(player.position[2] > 3.0, "{player:?}");
+    assert!(close(player.position[0], 0.0, 0.02), "{player:?}");
+}
+
+#[test]
+fn a_crease_is_stood_in_only_where_it_is_no_steeper_than_a_slope_one_can_stand_on() {
+    // A gentle ravine holds the player where they come down in it.
+    let level_crease = level(&[ravine(55.0, 30.0)]);
+    let mut held = Player::at([0.3, 3.0, 0.0], &MoveSettings::default());
+    run(&mut held, &level_crease, MoveInput::default(), 2 * SECOND);
+    assert!(held.grounded, "{held:?}");
+    let rest = held.position;
+    run(&mut held, &level_crease, MoveInput::default(), SECOND);
+    assert_eq!(held.position, rest, "a gentle crease does not slide");
+
+    // A steep one is slid down, as a steep slope is.
+    let level_crease = level(&[ravine(55.0, 60.0)]);
+    let mut sliding = Player::at([0.3, 3.0, 0.0], &MoveSettings::default());
+    let mut stood = 0;
+    for _ in 0..SECOND {
+        sliding.step(
+            &level_crease,
+            &MoveSettings::default(),
+            &MoveInput::default(),
+            DT,
+        );
+        stood += usize::from(sliding.grounded);
+    }
+    assert_eq!(stood, 0, "{sliding:?}");
+    assert!(sliding.position[1] < -1.0, "{sliding:?}");
+}
+
 #[test]
 fn walking_off_a_ledge_falls() {
     let level = level(&[floor(), block([-3.0, 0.0, -3.0], [3.0, 2.0, 3.0])]);

@@ -932,7 +932,27 @@ impl Body<'_> {
                     .surface_below(feet + Vector::Y * EDGE_PROBE, EDGE_PROBE + 3.0 * SKIN)
                     .filter(standable)
             })
+            .or_else(|| self.crease(middle - Vector::Y * drop, touch.normal))
             .map(ground)
+    }
+
+    /// Which way the crease a shape centred at `middle` sits in faces, if
+    /// it is wedged in one it can stand in: the steep face it rests on,
+    /// facing `normal`, and another face it cannot go down without
+    /// touching (a ravine, a crevice between two boulders, a pit). Two
+    /// faces together hold up what neither holds alone, as long as the
+    /// crease they make is no steeper than ground that can be stood on.
+    fn crease(&self, middle: Vector, normal: Vector) -> Option<Vector> {
+        let away = Vector::new(normal.x, 0.0, normal.z).try_normalize()?;
+        let other = self.level.sweep(
+            &self.shape,
+            middle + away * SKIN,
+            Vector::NEG_Y * (2.0 * SKIN),
+            SKIN,
+        )?;
+        (normal + other.normal)
+            .try_normalize()
+            .filter(|crease| crease.y >= self.steep)
     }
 
     /// Whether there is a ledge ahead to climb out onto: something too
