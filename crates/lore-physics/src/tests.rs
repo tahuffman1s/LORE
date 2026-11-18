@@ -470,6 +470,22 @@ fn a_gentle_ramp_is_walked_at_full_speed_both_ways() {
 }
 
 #[test]
+fn landing_on_a_gentle_ramp_does_not_slide_the_player_down_it() {
+    let level = level(&[floor(), ramp(30.0)]);
+    // Over the middle of the ramp, four metres above it.
+    let under = 5.0 * 30.0_f32.to_radians().tan();
+    let mut player = Player::at([0.0, under + 4.0, -7.0], &MoveSettings::default());
+    run(&mut player, &level, MoveInput::default(), 2 * SECOND);
+    assert!(player.grounded, "{player:?}");
+    // The tick it lands in may carry it a few centimetres; no more.
+    assert!(
+        close(player.position[0], 0.0, 1.0e-4) && close(player.position[2], -7.0, 0.08),
+        "the fall pushed the player along the ramp: {player:?}"
+    );
+    assert_eq!(player.velocity, [0.0; 3]);
+}
+
+#[test]
 fn a_steep_bank_cannot_be_climbed_or_stood_on() {
     let level = level(&[floor(), ramp(60.0)]);
     let mut player = standing_at(&level, [0.0, 0.0, 0.0]);

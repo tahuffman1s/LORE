@@ -537,6 +537,7 @@ impl Player {
             velocity = water.flow + posture.slowed(velocity - water.flow, part, dt / 2.0);
             velocity += pushed(part) * (dt / 2.0);
             let falling = velocity.y;
+            let across = velocity.x.hypot(velocity.z);
             let moved = slide(level, &body.shape, middle, velocity, dt, body.steep, false);
             middle = moved.position;
             velocity = moved.velocity;
@@ -555,6 +556,15 @@ impl Player {
             if landing && let Some(found) = body.ground_below(middle, LANDING_REACH) {
                 middle.y -= found.drop;
                 velocity.y = 0.0;
+                // Coming down onto a slope tips the fall along it; feet that
+                // land stop that, and keep no more speed across the ground
+                // than the body came down with.
+                let now = velocity.x.hypot(velocity.z);
+                if now > across {
+                    let keep = across / now;
+                    velocity.x *= keep;
+                    velocity.z *= keep;
+                }
                 ground = found.normal;
                 self.grounded = true;
                 if !self.swimming && footing.rebound(-falling) > 0.0 {
