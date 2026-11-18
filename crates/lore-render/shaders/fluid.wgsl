@@ -547,7 +547,9 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
     }
     var behind = textureLoad(behind_colour, seen_at, 0).rgb;
     // Ground under fluid is wet, so darker.
-    behind *= mix(1.0, mix(1.0, 0.6, clamp(thick / 0.002, 0.0, 1.0)), 1.0 - metal);
+    // Only what the fluid lies on is wet: not a wall far behind a stream.
+    let lying_on = 1.0 - smoothstep(0.01, 0.04, room - thick);
+    behind *= mix(1.0, mix(1.0, 0.6, clamp(thick / 0.002, 0.0, 1.0) * lying_on), 1.0 - metal);
 
     // The light that reaches the fluid, and the share of it that is sent
     // back to the eye in the fluid's own colour.

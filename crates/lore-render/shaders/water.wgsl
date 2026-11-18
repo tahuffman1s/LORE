@@ -48,6 +48,31 @@ fn water_glows() -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
+// How much of a glowing liquid's glow shows at a place, from 0 to 1. One
+// that is rough on top, as lava is, has cooled there into dark plates of
+// crust that drift slowly, and glows through the cracks between them and
+// where they are thin; a smooth one glows all over.
+fn crusted(place: vec2<f32>) -> f32 {
+    let crust = smoothstep(0.2, 0.5, view.water_look[1].w);
+    if crust <= 0.0 {
+        return 1.0;
+    }
+    let drift = view.clouds.y * 0.004;
+    let plates = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 2.3, 0.27 + drift), 0.0,
+    ).g;
+    let small = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 0.7 + 0.3, 0.64 + drift * 1.7), 0.0,
+    ).g;
+    let warm = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 9.0, 0.45), 0.0,
+    ).r;
+    // The cracks are the walls between the packed cells.
+    let cracks = max(smoothstep(0.66, 0.88, 1.0 - plates), 0.6 * smoothstep(0.74, 0.92, 1.0 - small));
+    let glowing = clamp(cracks + 0.18 * smoothstep(0.5, 0.8, warm), 0.0, 1.0);
+    return mix(1.0, 0.06 + 0.94 * glowing, crust);
+}
+
 // How much of the light that meets the surface head on is mirrored: from
 // how much the liquid bends light, if it has a look.
 fn water_mirrors() -> f32 {
@@ -793,7 +818,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
     // What the liquid gives off itself is added after the light, so that
     // shade does not darken it.
-    var seen = bottom * passes + (body + water_glows()) * (1.0 - passes);
+    var seen = bottom * passes + (body + water_glows() * crusted(wet.rest)) * (1.0 - passes);
     var mirrors = mirror;
     if frozen > 0.0 {
         // Ice. Where it is clear the water shows through it, darker and
