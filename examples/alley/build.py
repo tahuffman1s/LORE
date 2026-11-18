@@ -2024,10 +2024,12 @@ class Props:
                 part = copy
             self.parts.append(placed(part, at, turn, scale, tint))
 
-    def model(self, name, at, turn=0.0, nodes=None, most=None, scale=1.0, tint=None, sit=True, size=SIZE):
+    def model(self, name, at, turn=0.0, nodes=None, most=None, scale=1.0, tint=None, sit=True, size=SIZE, wall=False):
         """Stands a Poly Haven model (or the named nodes of it) on `at`:
         its footprint's middle there and, with `sit`, its lowest point on
-        it. Returns its size."""
+        it. With `wall` it is fixed to a wall instead: `at` is a point on
+        the wall's face and the model's back is put against it, so nothing
+        of it is inside the wall. Returns its size."""
         pieces = kit_pieces(name, size)
         chosen = [node for node in pieces if nodes is None or node in nodes]
         parts = []
@@ -2036,7 +2038,7 @@ class Props:
         if not parts:
             raise SystemExit(f"{name} has none of the pieces {nodes}: {sorted(pieces)}")
         low, high = box_of(parts)
-        shift = (-(low[0] + high[0]) / 2, -low[1] if sit else 0.0, -(low[2] + high[2]) / 2)
+        shift = (-(low[0] + high[0]) / 2, -low[1] if sit else 0.0, -low[2] if wall else -(low[2] + high[2]) / 2)
         self.add(parts, at, turn, shift, scale, tint)
         return tuple((high[k] - low[k]) * scale for k in range(3))
 
@@ -2216,24 +2218,26 @@ def furnish(level, solids, fronts):
                             ("W", -27.2, 10.0), ("E", 27.0, 11.3)):
         (x, y, z), turn = on_wall(wall, along, up, 0.0)
         props.model("exterior_aircon_unit", (x, y, z), turn, nodes=[chooser.choice(units)], most=2500)
-    lamps = [("E", -17.5, 4.3), ("W", -4.0, 4.6), ("E", 4.0, 4.6), ("W", 21.5, 4.2), ("YN", -5.8, 3.6)]
-    for wall, along, up in lamps:
+    # A lantern over each of the yard's back doors. (The other back doors
+    # have a security light: the one at E -13 is under the fire escape,
+    # where a lantern would stand up through the landing.)
+    for wall, along, up in (("EY", -5.5, 2.85), ("YN", -4.6, 2.85)):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("street_lamp_02", (x, y, z), turn, sit=False, most=4000)
-    for wall, along, up in (("W", -26.4, 2.55), ("E", 26.0, 2.6), ("W", 17.0, 2.6), ("EY", 6.5, 3.4)):
+        props.model("street_lamp_02", (x, y, z), turn, sit=False, most=4000, wall=True)
+    for wall, along, up in (("W", -26.4, 2.7), ("E", 26.0, 2.7), ("W", 17.0, 2.7), ("EY", 6.5, 3.4), ("E", -13.0, 2.7)):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("security_light", (x, y, z), turn, sit=False, most=1500)
+        props.model("security_light", (x, y, z), turn, sit=False, most=1500, wall=True)
     for wall, along, up in (("W", -29.0, 3.4), ("E", 29.0, 3.4), ("EY", -8.2, 4.5)):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("security_camera_02", (x, y, z), turn, sit=False, most=2500)
+        props.model("security_camera_02", (x, y, z), turn, sit=False, most=2500, wall=True)
     for wall, along, up in (("W", -25.4, 1.45), ("E", 13.0, 1.5), ("WY", -3.0, 1.4)):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("power_box_01", (x, y, z), turn, sit=False, most=2500)
+        props.model("power_box_01", (x, y, z), turn, sit=False, most=2500, wall=True)
     (x, y, z), turn = on_wall("E", 23.6, 1.2)
-    props.model("garden_hose_wall_mounted_01", (x, y, z), turn, sit=False, most=2000)
+    props.model("garden_hose_wall_mounted_01", (x, y, z), turn, sit=False, most=2000, wall=True)
     for wall, along, up in (("W", -26.0, 1.3), ("E", 25.2, 1.35)):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("fire_alarm", (x, y, z), turn, sit=False)
+        props.model("fire_alarm", (x, y, z), turn, sit=False, wall=True)
     # Pipes up a wall: whole two-metre lengths with a clamp at each joint.
     pipes = kit_pieces("modular_pipes")
     pipe, clamp = pipes["pipe_200cm_metal"], pipes["pipe_support_metal"]
@@ -2253,7 +2257,7 @@ def furnish(level, solids, fronts):
         node = chooser.choice(sorted(pieces))
         (x, _, z), turn = on_wall(wall, along, 0.0)
         y = height(*on_wall(wall, along, 0.0, 0.4)[0][::2])
-        props.model(name, (x, y, z), turn, nodes=[node], sit=True)
+        props.model(name, (x, y, z), turn, nodes=[node], sit=True, wall=True)
 
     # ---- overhead: cables strung across the alley and the yard, and along
     # the walls from one building to the next.
