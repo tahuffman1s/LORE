@@ -405,7 +405,12 @@ fn vertex(
         (draw.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz,
         tangent.w * draw.handedness,
     );
-    corner.colour = colour;
+    // The point's colour is kept on the screen's curve, so that dark ones
+    // do not band (`srgb8` in `mesh.rs`): back to light. Its alpha is a
+    // share, kept as it is.
+    let seen = colour.rgb;
+    let light = select(pow((seen + 0.055) / 1.055, vec3<f32>(2.4)), seen / 12.92, seen <= vec3<f32>(0.04045));
+    corner.colour = vec4<f32>(light, colour.a);
     corner.uv = vec4<f32>(uv0, uv1);
     return corner;
 }

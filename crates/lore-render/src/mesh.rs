@@ -653,6 +653,20 @@ fn unorm8(value: f32) -> u8 {
     packed
 }
 
+/// A share of light from 0 to 1 as a byte, on the curve a screen uses
+/// (sRGB): even steps of the byte look like even steps of brightness, so
+/// dark colours keep as many steps as light ones, where steps of light
+/// itself would band in the dark. The shader's `vertex` takes it back.
+fn srgb8(value: f32) -> u8 {
+    let light = value.clamp(0.0, 1.0);
+    let seen = if light <= 0.003_130_8 {
+        light * 12.92
+    } else {
+        1.055 * light.powf(1.0 / 2.4) - 0.055
+    };
+    unorm8(seen)
+}
+
 /// A direction folded flat onto a square (octahedral encoding), which takes
 /// two numbers instead of three and loses nothing a screen can show.
 ///
@@ -720,11 +734,11 @@ fn append(part: &MeshPart, vertices: &mut Vec<u8>, indices: &mut Vec<u8>) -> Pla
             .map_or([0.0, 0.0, 0.0, 1.0], |tangents| tangents[number]);
         vertices.extend(tangent.map(|value| snorm8(value).to_ne_bytes()[0]));
         // A point with no colour of its own is white, so the material's shows.
-        let colour = part
+        let [red, green, blue, alpha] = part
             .colors
             .as_ref()
             .map_or([1.0; 4], |colours| colours[number]);
-        vertices.extend(colour.map(unorm8));
+        vertices.extend([srgb8(red), srgb8(green), srgb8(blue), unorm8(alpha)]);
         for value in each(&part.uv0).iter().chain(&each(&part.uv1)) {
             vertices.extend_from_slice(&value.to_ne_bytes());
         }
@@ -3253,10 +3267,35 @@ mod tests {
             "a normal along +Z folds to the middle"
         );
         assert_eq!(second[16..20], [127, 0, 0, 129]);
-        // A colour brighter than white is white.
-        assert_eq!(second[20..24], [255, 128, 0, 255]);
+        // A colour brighter than white is white; red, green and blue are
+        // on the screen's curve, where half the light is 188, and alpha,
+        // which is a share and not a light, is not.
+        assert_eq!(second[20..24], [255, 188, 0, 255]);
         assert_eq!(second[24..28], 0.25_f32.to_ne_bytes());
         assert_eq!(second[36..40], 3.0_f32.to_ne_bytes());
+    }
+
+    #[test]
+    fn dark_point_colours_keep_their_steps() {
+        // The darkest hundredth of light has two dozen steps of the byte,
+        // where as light itself it would have three.
+        assert!(srgb8(0.01) >= 25 && unorm8(0.01) <= 3);
+        // Each byte is the one its own light comes back to, so nothing is
+        // lost on the way there and back.
+        let mut before = 0;
+        for byte in 0..=255_u8 {
+            let light = f32::from(byte) / 255.0;
+            // As the shader takes it back.
+            let back = if light <= 0.040_45 {
+                light / 12.92
+            } else {
+                ((light + 0.055) / 1.055).powf(2.4)
+            };
+            assert_eq!(srgb8(back), byte, "{byte} came back as {}", srgb8(back));
+            assert!(byte == 0 || srgb8(back) > before);
+            before = srgb8(back);
+        }
+        assert_eq!((srgb8(-1.0), srgb8(f32::NAN), srgb8(2.0)), (0, 0, 255));
     }
 
     #[test]
