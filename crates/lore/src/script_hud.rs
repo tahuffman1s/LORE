@@ -7,7 +7,7 @@
 //! frame no memory and next to no time.
 
 use lore_script::{HudPiece, HudShape, ScriptHost};
-use lore_ui::{Ui, UiInput, WidgetId};
+use lore_ui::{Color, Ui, UiInput, WidgetId};
 
 use crate::game::Frame;
 
@@ -79,6 +79,15 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> WidgetId {
             ui.hud_bar(piece.anchor, piece.offset, *size, piece.color, *value)
         }
         HudShape::Box { size } => ui.hud_rect(piece.anchor, piece.offset, *size, piece.color),
+        // The frame graph is drawn by the engine from the frame times; until
+        // that is built, it stands in as a box of the same size that cannot
+        // be seen, so the piece keeps its place in the list.
+        HudShape::Graph { size, .. } => ui.hud_rect(
+            piece.anchor,
+            piece.offset,
+            *size,
+            Color::rgba(0.0, 0.0, 0.0, 0.0),
+        ),
     };
     if !piece.visible {
         let _ = ui.set_shown(widget, false);
@@ -94,9 +103,12 @@ fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
     let _ = match &piece.shape {
         HudShape::Text { text, .. } => ui.set_text(widget, text),
         HudShape::Bar { value, .. } => ui.set_bar(widget, *value),
-        HudShape::Box { .. } => Ok(()),
+        HudShape::Box { .. } | HudShape::Graph { .. } => Ok(()),
     };
-    let _ = ui.set_color(widget, piece.color);
+    // The stand-in for a graph stays unseen.
+    if !matches!(piece.shape, HudShape::Graph { .. }) {
+        let _ = ui.set_color(widget, piece.color);
+    }
     let _ = ui.set_offset(widget, piece.offset);
     let _ = ui.set_shown(widget, piece.visible);
 }

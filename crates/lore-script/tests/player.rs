@@ -347,7 +347,9 @@ fn mistakes_with_the_player_say_what_to_write() {
     assert_eq!(
         spawn_error("print(game.player.health)"),
         "game.player.health does not exist. It has: name, position, weapon, ammo, reserve, \
-         and the functions game.player:giveWeapon, game.player:takeWeapon."
+         velocity, eye, aim, grounded, movement, flySpeed, and the functions \
+         game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
+         game.player:setMovement, game.player:setFlySpeed."
     );
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),

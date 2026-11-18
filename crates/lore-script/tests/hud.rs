@@ -408,7 +408,7 @@ fn mistakes_in_making_a_piece_say_what_to_write() {
         ),
         (
             "game.hud.label(\"Hi\")",
-            "game.hud.label does not exist. game.hud has: text, bar, box.",
+            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph.",
         ),
         (
             "game.hud.txet(\"Hi\")",
@@ -429,7 +429,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, hovered, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -462,7 +462,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, hovered, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",

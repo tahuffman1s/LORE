@@ -6,7 +6,9 @@ use std::fmt::{Display, Write as _};
 use std::rc::Rc;
 use std::time::Instant;
 
-use lore_input::{ActionKind, ActionMap, ActionSetId, ActionState, InputFrame, Rumble};
+use lore_input::{
+    ActionKind, ActionMap, ActionSetId, ActionState, InputFrame, Rumble, UnknownName,
+};
 use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
@@ -17,6 +19,7 @@ use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
 use crate::time_api::{self, Clock, Timer};
+use crate::tools_api::{self, FRAMES_FUNCTIONS, Tools};
 use crate::weapon_api::{self, Kind, WeaponState};
 use crate::weather_api::{self, Climate};
 
@@ -37,6 +40,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onWeaponFire",
     "onWeaponHit",
     "onWeaponReload",
+    "setTimeSpeed",
+    "timeSpeed",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -53,6 +58,11 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "rumble",
     "useSet",
     "currentSet",
+    "bind",
+    "pointer",
+    "wheel",
+    "stepped",
+    "label",
 ];
 
 /// How many functions one event accepts. Far more than a game needs: reaching
@@ -95,7 +105,17 @@ impl Default for LiveSet {
 
 /// State the engine and one script VM both reach.
 pub(crate) struct Shared {
-    pub actions: Rc<ActionMap>,
+    /// The game's actions. Shared and growable: `game.input.bind` adds the
+    /// game's own while the file loads.
+    pub actions: Rc<RefCell<ActionMap>>,
+    /// The names this version of the script has bound with `game.input.bind`.
+    pub bound: RefCell<Vec<String>>,
+    /// Whether the engine already has a copy of the actions, so a new one
+    /// added now is not heard until the game is started again.
+    pub reloading: bool,
+    /// What the engine feeds the script about the screen, the frames and
+    /// the player. It outlives this version of the script.
+    pub tools: Rc<Tools>,
     pub handlers: RefCell<Handlers>,
     /// The input for the tick being run.
     pub input: RefCell<InputFrame>,
@@ -301,14 +321,23 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     input.set(
         "currentSet",
         lua.create_function(move |_, ()| {
-            Ok(live.actions.set_name(live.live_set.live.get()).to_owned())
+            Ok(live
+                .actions
+                .borrow()
+                .set_name(live.live_set.live.get())
+                .to_owned())
         })?,
     )?;
+    tools_api::install_input(lua, shared, &input)?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
     game.set("weather", weather_api::weather(lua, shared)?)?;
+
+    let frames = tools_api::frames(lua, shared)?;
+    strict(lua, &frames, "game.frames", FRAMES_FUNCTIONS)?;
+    game.set("frames", frames)?;
 
     let sounds = audio::table(lua, shared)?;
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
@@ -321,6 +350,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
+    members.push("frames");
     members.push("hud");
     members.push("input");
     members.push("sky");
@@ -460,27 +490,32 @@ fn reader<R: mlua::IntoLuaMulti + 'static>(
             ));
         };
         let action = action.to_str()?;
-        match shared.actions.action(&action) {
-            Ok(id) => match wrong_shape(reads, shared.actions.kind(id), name, &action) {
+        let actions = shared.actions.borrow();
+        match actions.action(&action) {
+            Ok(id) => match wrong_shape(reads, actions.kind(id), name, &action) {
                 Some(message) => Err(fail(lua, message)),
                 None => Ok(read(shared.input.borrow().get(id))),
             },
-            Err(unknown) => {
-                let mut message = unknown.to_string();
-                if unknown.suggestion.is_none() {
-                    message.push_str(" The actions are: ");
-                    for (index, id) in shared.actions.actions().enumerate() {
-                        if index > 0 {
-                            message.push_str(", ");
-                        }
-                        message.push_str(shared.actions.name(id));
-                    }
-                    message.push('.');
-                }
-                Err(fail(lua, message))
-            }
+            Err(unknown) => Err(fail(lua, unknown_action(&actions, &unknown))),
         }
     })
+}
+
+/// The words for an action name the game does not have: the nearest real
+/// name, or all of them.
+pub(crate) fn unknown_action(actions: &ActionMap, unknown: &UnknownName) -> String {
+    let mut message = unknown.to_string();
+    if unknown.suggestion.is_none() {
+        message.push_str(" The actions are: ");
+        for (index, id) in actions.actions().enumerate() {
+            if index > 0 {
+                message.push_str(", ");
+            }
+            message.push_str(actions.name(id));
+        }
+        message.push('.');
+    }
+    message
 }
 
 /// `game.input.rumble(strong, weak, seconds)`: remember a rumble for the
@@ -538,7 +573,8 @@ fn use_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
         let name = name.to_str()?;
         // Which actions hear the player is part of the game's rules.
         time_api::rules_only(lua, &shared, "game.input.useSet")?;
-        match shared.actions.set(&name) {
+        let actions = shared.actions.borrow();
+        match actions.set(&name) {
             Ok(set) => {
                 shared.clock.note(&name);
                 shared.live_set.live.set(set);
@@ -549,11 +585,11 @@ fn use_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 let mut message = unknown.to_string();
                 if unknown.suggestion.is_none() {
                     message.push_str(" The action sets are: ");
-                    for (index, set) in shared.actions.sets().enumerate() {
+                    for (index, set) in actions.sets().enumerate() {
                         if index > 0 {
                             message.push_str(", ");
                         }
-                        message.push_str(shared.actions.set_name(set));
+                        message.push_str(actions.set_name(set));
                     }
                     message.push('.');
                 }
@@ -728,7 +764,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 22] = [
+        let groups: [(&str, &[&str]); 25] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -740,6 +776,9 @@ mod tests {
             ("HudBar:", hud::PIECE_METHODS),
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
+            ("HudGraph.", hud::GRAPH_FIELDS),
+            ("HudGraph:", hud::PIECE_METHODS),
+            ("game.frames.", FRAMES_FUNCTIONS),
             ("game.input.", INPUT_FUNCTIONS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
