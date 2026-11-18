@@ -249,6 +249,8 @@ impl Headless {
             .extend(scene.lights.iter().filter_map(Lamp::from_light));
         // Nothing that flew in the old level is in the new one.
         self.effects.clear();
+        // Nothing of the old level belongs in the new one's first frame.
+        self.view.cut();
         Ok(())
     }
 

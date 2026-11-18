@@ -577,7 +577,11 @@ fn inspect(instance: &Instance, device: vk::PhysicalDevice) -> (Candidate, bool)
             .raw
             .get_physical_device_queue_family_properties(device);
         let queue_family = (0u32..).zip(&families).find_map(|(index, family)| {
-            let draws = family.queue_flags.contains(vk::QueueFlags::GRAPHICS);
+            // Upscaling and the bounce light run compute work on the same
+            // queue as the drawing.
+            let draws = family
+                .queue_flags
+                .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE);
             let shows = !windowed
                 || instance
                     .surfaces

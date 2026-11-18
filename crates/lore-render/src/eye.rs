@@ -300,12 +300,12 @@ pub(crate) struct EyePass {
     pool: vk::DescriptorPool,
     /// What the scene is measured into.
     grid: Picture,
-    /// For each frame: the set that says which picture is measured, that
-    /// picture, the buffer the measuring is copied back into, and whether
+    /// For each frame: the set that says which picture is measured, which
+    /// target's picture that is (see [`SceneTarget::id`]), the buffer the measuring is copied back into, and whether
     /// one was copied and not yet taken.
     frames: Vec<(
         vk::DescriptorSet,
-        std::cell::Cell<vk::ImageView>,
+        std::cell::Cell<u64>,
         Buffer,
         std::cell::Cell<bool>,
     )>,
@@ -392,7 +392,7 @@ impl EyePass {
                 )?;
                 eye.frames.push((
                     set,
-                    std::cell::Cell::new(vk::ImageView::null()),
+                    std::cell::Cell::new(0),
                     buffer,
                     std::cell::Cell::new(false),
                 ));
@@ -512,7 +512,7 @@ impl EyePass {
             return;
         };
         let device = self.gpu.device();
-        if bound.get() != target.colour.view {
+        if bound.get() != target.id {
             let pictures = [vk::DescriptorImageInfo::default()
                 .image_view(target.colour.view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -524,7 +524,7 @@ impl EyePass {
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
-            bound.set(target.colour.view);
+            bound.set(target.id);
         }
         let Some((_, _, buffer, _)) = self.frames.get(frame % self.frames.len().max(1)) else {
             return;

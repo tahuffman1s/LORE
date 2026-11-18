@@ -797,7 +797,7 @@ pub(crate) struct MeshPipeline {
     views: Vec<(Buffer, vk::DescriptorSet)>,
     /// The copy of the picture each of those sets was last pointed at:
     /// a window that changes size gets a new one.
-    behind: RefCell<Vec<vk::ImageView>>,
+    behind: RefCell<Vec<u64>>,
     /// Measures each frame's picture for the eye to adapt to: `None` only
     /// while the pipeline is being built.
     eye: Option<EyePass>,
@@ -845,7 +845,7 @@ impl MeshPipeline {
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
-            behind: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            behind: RefCell::new(vec![0; frames.max(1)]),
             eye: None,
             lamp_buffers: Vec::with_capacity(frames.max(1)),
             lamp_frame: RefCell::new(LampFrame::new()),
@@ -1754,7 +1754,7 @@ impl MeshPipeline {
         // Water looks through this target's own copy of the picture.
         if let Ok(mut behind) = self.behind.try_borrow_mut()
             && let Some(bound) = behind.get_mut(frame % self.views.len().max(1))
-            && *bound != target.behind.view
+            && *bound != target.id
         {
             let pictures = [
                 target.behind.view,
@@ -1778,7 +1778,7 @@ impl MeshPipeline {
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
-            *bound = target.behind.view;
+            *bound = target.id;
         }
         let lighting = day.map_or_else(
             || meshes.map_or_else(Lighting::default, |meshes| meshes.lighting),
@@ -2318,6 +2318,19 @@ impl MeshPipeline {
                 .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                 .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            // How far each pixel moved, written before the pass is broken
+            // off and written again after: the second half waits for the
+            // first.
+            barrier(target.motion.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
             // What the copies held is thrown away; the last frame's water
             // may still be reading them.
             barrier(target.behind.image, COLOUR)

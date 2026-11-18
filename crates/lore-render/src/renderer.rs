@@ -932,7 +932,12 @@ impl Renderer {
                 .semaphore(slot.acquired)
                 .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)];
             let buffers = [vk::CommandBufferSubmitInfo::default().command_buffer(slot.commands)];
-            let signals = [vk::SemaphoreSubmitInfo::default().semaphore(target.drawn)];
+            // Signalled once every command is done, the last change of
+            // layout for presenting included: a signal that names no stages
+            // waits for none of them.
+            let signals = [vk::SemaphoreSubmitInfo::default()
+                .semaphore(target.drawn)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
             let submit = [vk::SubmitInfo2::default()
                 .wait_semaphore_infos(&waits)
                 .command_buffer_infos(&buffers)
