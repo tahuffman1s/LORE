@@ -1303,6 +1303,96 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec2<f32> {
     );
 }
 
+// How much of a point is under the snow that lies round it, from 0 (it
+// stands clear of it, or is under cover) to 1 (it is `deep` or less over
+// the ground beside it).
+//
+// Snow is a layer with a depth, and fills from the ground up: what lies
+// on the ground is under it whichever way it faces, and so is the foot of
+// a wall, a kerb's face and the bottom of a bin. Where the ground is comes
+// from the picture from above, which holds the height of the highest
+// thing over each place: the lowest of that at the point and a stride to
+// each side of it is the ground the snow stands on. A point that is under
+// every one of them is under cover, where no snow fell.
+const SNOW_GROUND_LOOKS: array<vec2<f32>, 11> = array<vec2<f32>, 11>(
+    vec2<f32>(0.0, 0.0), vec2<f32>(0.4, 0.0), vec2<f32>(-0.4, 0.0), vec2<f32>(0.0, 0.4), vec2<f32>(0.0, -0.4),
+    vec2<f32>(1.6, 0.0), vec2<f32>(0.8, 1.386), vec2<f32>(-0.8, 1.386),
+    vec2<f32>(-1.6, 0.0), vec2<f32>(-0.8, -1.386), vec2<f32>(0.8, -1.386),
+);
+fn snow_buries(world: vec3<f32>, deep: f32) -> f32 {
+    if view.shadows.x < 0.5 || deep <= 0.001 {
+        return 0.0;
+    }
+    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+    let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+    if inside < 0.04 {
+        return 0.0;
+    }
+    let metres_a_pixel = view.shadow_reach[4].x;
+    let depth_metres = view.shadow_reach[4].y;
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    // How far over the point the lowest of the highest things beside it
+    // is, and the lowest a few strides out.
+    var lowest = 1.0e9;
+    var beyond = 1.0e9;
+    for (var look = 0; look < 11; look++) {
+        let at = uv + SNOW_GROUND_LOOKS[look] / metres_a_pixel / size;
+        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        // Where the picture holds nothing (off the level's edge, or in a
+        // building it shows no roof of) there is no ground, and nothing
+        // is learnt.
+        if held < 0.99999 {
+            let over = (above.z - held) * depth_metres;
+            if look < 5 {
+                lowest = min(lowest, over);
+            } else {
+                beyond = min(beyond, over);
+            }
+        }
+    }
+    if lowest > 1.0e8 {
+        return 0.0;
+    }
+    let covered = smoothstep(0.1, 0.35, lowest);
+    let stands = max(-lowest, 0.0);
+    // What it stands beside is the ground if the land a few strides out
+    // is no lower: the lid of a bin is not, and the wall over it is not
+    // at the foot of anything.
+    let raised = smoothstep(0.35, 0.7, lowest - beyond);
+    return smoothstep(0.0, 0.1, deep - stands) * (1.0 - covered) * (1.0 - raised);
+}
+
+// How much of a point of the world is snow, from 0 to 1, and the two
+// grains of noise that make its edge ragged. `faces_up` is how far the
+// surface there faces up, as it is built (-1 to 1), and `open` how much of
+// the sky it sees.
+//
+// Snow lies on what faces up under an open sky: first on what is flattest
+// and in patches, then, as it deepens, on all but what is steep. Under
+// trees and ledges there is little or none. And it buries what is in it:
+// whatever is no higher over the ground than the snow is deep has as much
+// snow as the ground beside it, whichever way it faces. What a surface's
+// normal map says plays no part: snow settles on a road, not between its
+// grains.
+fn snow_on(world: vec3<f32>, faces_up: f32, open: f32) -> vec3<f32> {
+    let lies = view.weather[2].x * smoothstep(0.3, 0.75, open);
+    let patches = textureSampleLevel(
+        cloud_volume, cloud_sampler, world * vec3<f32>(0.13, 0.19, 0.13) + 0.21, 0.0,
+    ).r;
+    let small = textureSampleLevel(cloud_volume, cloud_sampler, world * 0.9 + 0.5, 0.0).g;
+    let needs = mix(0.97, 0.3, lies);
+    let ragged = (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
+    let own = smoothstep(needs - 0.1, needs + 0.1, faces_up + ragged);
+    let level = smoothstep(needs - 0.1, needs + 0.1, 1.0 + ragged);
+    // The snow's top is not ruled: it stands higher here and lower there.
+    let buried = snow_buries(world, view.weather[6].x * (0.7 + 0.6 * patches));
+    // Only what is out of the water is snowed on.
+    let out = smoothstep(-0.02, 0.0, world.y - view.water.x);
+    let amount = mix(own, max(own, level), buried) * smoothstep(0.0, 0.12, lies) * out;
+    return vec3<f32>(amount, patches, small);
+}
+
 // How far from the eye tracks in the snow are drawn, in metres, how far
 // off they are still carved into it and not only shaded, and the side of
 // the square their map repeats in.
@@ -1461,46 +1551,70 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // Only what is out of the water shines, and only that is snowed on:
     // under it there is no air for the wet to be a mirror against.
     let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
-    // Snow lies on what faces up under an open sky: first on what is
-    // flattest and in patches, then, as it deepens, on all but what is
-    // steep. Under trees and ledges there is little or none. It is white,
-    // matte, and hides the fine shape of what it lies on.
+    // Snow lies on what faces up under an open sky and buries what is in
+    // it (see `snow_on`). It is white, matte, and hides the fine shape of
+    // what it lies on.
     var base_seen = base;
     var snowed = 0.0;
+    var sparkle = 0.0;
+    // How much light reaches snow banked against the side of a thing: it
+    // is in the corner the thing makes with the ground, where the sun's
+    // shadows are not known for it (they are worked out for the side it
+    // is banked on, not for the snow) and less of the sky is seen. So it
+    // has a good half of the light, and what faces up has all it had.
+    var banked_sun = 1.0;
+    var banked_sky = 1.0;
     if view.weather[2].x > 0.0 {
-        let lies = view.weather[2].x * smoothstep(0.3, 0.75, open);
-        let patches = textureSampleLevel(
-            cloud_volume, cloud_sampler, corner.world * vec3<f32>(0.13, 0.19, 0.13) + 0.21, 0.0,
-        ).r;
-        let small = textureSampleLevel(
-            cloud_volume, cloud_sampler, corner.world * 0.9 + 0.5, 0.0,
-        ).g;
-        let needs = mix(0.97, 0.3, lies);
-        let faces = mix(normalize(corner.normal).y * side, normal.y, 0.6)
-            + (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
-        snowed = smoothstep(needs - 0.1, needs + 0.1, faces) * smoothstep(0.0, 0.12, lies) * out;
+        let upright = normalize(corner.normal) * side;
+        let faces_up = smoothstep(0.25, 0.6, upright.y);
+        banked_sun = mix(0.55, 1.0, faces_up);
+        banked_sky = mix(0.85, 1.0, faces_up);
+        let found = snow_on(corner.world, upright.y, open);
+        let patches = found.y;
+        let small = found.z;
+        snowed = found.x;
         var snow = vec3<f32>(0.9, 0.92, 0.95);
         var tilt = vec3<f32>(0.0);
-        // Tracks are in the snow on the ground and on what stands still:
-        // not on a leaf that hangs over where someone walked.
-        if snowed > 0.01 && draw.sway == 0.0 && !thin {
+        // Tracks are in the snow on the ground and on what stands still,
+        // paint on the ground and litter with it: not on a leaf that hangs
+        // over where someone walked.
+        if snowed > 0.01 && draw.sway == 0.0 {
             // Where it has been trodden: pressed snow is denser, so it is
             // darker and bluer, and the bottom of a deep track sees less
             // of the sky. A print in snow no deeper than a finger goes
             // through to the ground.
-            let track = snow_tracks(
-                corner.world, normalize(corner.normal) * side, (vec2<f32>(small, patches) - 0.5) * 0.07,
-            );
+            let track = snow_tracks(corner.world, upright, (vec2<f32>(small, patches) - 0.5) * 0.07);
             let depth = view.weather[6].x;
             let sunk = track.x * (0.14 + 0.4 * smoothstep(0.01, 0.25, depth));
             snow = mix(snow, vec3<f32>(0.55, 0.63, 0.78), 0.6 * track.x) * (1.0 - sunk);
             snowed *= 1.0 - 0.6 * track.x * (1.0 - smoothstep(0.02, 0.08, depth));
             tilt = vec3<f32>(-track.y, 0.0, -track.z);
         }
+        // Near the eye the snow has a shape of its own: low drifts and
+        // hollows a hand across, and grains that catch the sun.
+        let off = distance(view.eye.xyz, corner.world);
+        let close = 1.0 - smoothstep(18.0, 36.0, off);
+        if snowed > 0.01 && close > 0.0 {
+            let apart = 0.04;
+            let east = textureSampleLevel(
+                cloud_volume, cloud_sampler, (corner.world + vec3<f32>(apart, 0.0, 0.0)) * 0.9 + 0.5, 0.0,
+            ).g;
+            let south = textureSampleLevel(
+                cloud_volume, cloud_sampler, (corner.world + vec3<f32>(0.0, 0.0, apart)) * 0.9 + 0.5, 0.0,
+            ).g;
+            tilt -= vec3<f32>(east - small, 0.0, south - small) * (0.022 / apart) * close;
+            let grain = floor(corner.world * 140.0);
+            let chance = fract(sin(dot(grain, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+            let turned = fract(chance * 91.7 + dot(normalize(view.eye.xyz - corner.world), vec3<f32>(7.1, 3.3, 5.9)));
+            sparkle = step(0.985, chance) * smoothstep(0.7, 1.0, turned) * (1.0 - smoothstep(3.0, 9.0, off));
+        }
         base_seen = mix(base, snow, snowed);
         metallic *= 1.0 - snowed;
         roughness = mix(roughness, 0.78, snowed);
-        normal = normalize(mix(normal, normalize(corner.normal) * side + vec3<f32>(0.0, 0.35, 0.0), 0.7 * snowed));
+        // What the snow hides has no bumps of its own; what is buried to
+        // its side has snow banked on it, which faces up more than it does.
+        let banked = normalize(upright + vec3<f32>(0.0, 0.35 + 1.4 * (1.0 - clamp(upright.y, 0.0, 1.0)), 0.0));
+        normal = normalize(mix(normal, banked, snowed));
         // The walls of a track face the way they slope.
         normal = normalize(normal + tilt * snowed);
     }
@@ -1541,15 +1655,15 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     );
     let fresnel = mirror + (1.0 - mirror) * pow(1.0 - eye_half, 5.0);
     let from_sun = ((1.0 - fresnel) * matte / PI + fresnel * density * visible)
-        * view.sun.rgb * n_sun * sunlit;
+        * view.sun.rgb * n_sun * sunlit * mix(1.0, banked_sun, snowed);
     // The sun behind a leaf comes through it: the leaf's own colour,
     // yellower and brighter, more the more squarely the sun is behind it.
     var from_behind = vec3<f32>(0.0);
-    if thin {
+    if thin && snowed < 0.99 {
         let behind = clamp(-dot(normal, to_sun), 0.0, 1.0);
         let tinted = matte * mix(vec3<f32>(1.25, 1.2, 0.55), vec3<f32>(0.5), snowed);
         from_behind = tinted / PI * view.sun.rgb * (0.25 + 0.75 * behind) * sunlit
-            * step(0.0001, behind) * 0.9;
+            * step(0.0001, behind) * 0.9 * (1.0 - snowed);
     }
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
@@ -1575,7 +1689,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         }
         reaches = mix(reaches, over_reaches, painted.share);
     }
-    from_around *= reaches;
+    // Snow fills the crevices it lies on.
+    from_around *= mix(reaches, banked_sky, snowed);
 
     var glow = material.emissive.rgb;
     if has(EMISSIVE) {
@@ -1588,7 +1703,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // brick or a road comes back off it. Less comes down the lower the sun.
     let from_sides = matte / PI * view.sun.rgb * shade.x
         * (SIDES_GIVE_BACK * sky.y * sqrt(max(view.towards_sun.y, 0.0)));
-    return from_sun + from_behind + from_around * sky_seen + from_sides + glow;
+    let glints = view.sun.rgb * (sparkle * snowed * n_sun * sunlit * banked_sun * 1.6);
+    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints;
 }
 
 // How far the pixel moved since the last frame.
