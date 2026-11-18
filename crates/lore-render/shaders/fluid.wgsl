@@ -35,6 +35,9 @@
 // How far in front of the eye the fluid is, smoothed across and then down.
 @group(3) @binding(5) var fluid_across_map: texture_2d<f32>;
 @group(3) @binding(6) var fluid_down_map: texture_2d<f32>;
+// Which way the surfaces under lying drops face, added up weighted by how
+// much of each drop's dome is over the pixel, and that weight.
+@group(3) @binding(7) var fluid_lie_map: texture_2d<f32>;
 
 // Fluid is blended no nearer to a solid than this, in metres, so that a
 // drop lying on the ground is not hidden by the ground it lies on.
@@ -126,6 +129,9 @@ struct FluidTrace {
     leaves: f32,
     scene: f32,
     direction: vec3<f32>,
+    // Where the line enters the drop, in the drop's own frame scaled so
+    // that the drop is a ball of radius one.
+    entry: vec3<f32>,
 }
 
 fn fluid_trace(corner: FluidCorner) -> FluidTrace {
@@ -155,6 +161,7 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     let root = sqrt(cut);
     trace.enters = nearest + (-half_b - root) / quad;
     trace.leaves = nearest + (-half_b + root) / quad;
+    trace.entry = start + going * ((-half_b - root) / quad);
     // How far away the solid world is along this line: the depth is the
     // nearest distance drawn divided by the distance in front of the eye.
     let ahead = max(dot(direction, view.sky_rays[0].xyz), 0.0001);
@@ -194,6 +201,7 @@ fn fragment_fluid_front(corner: FluidCorner) -> FluidFront {
 struct FluidSums {
     @location(1) amount: vec4<f32>,
     @location(2) light: vec4<f32>,
+    @location(3) lie: vec4<f32>,
 }
 
 // Adds up what each drop does along the line of sight: the metres of it
@@ -228,6 +236,13 @@ fn fragment_fluid_amount(corner: FluidCorner) -> FluidSums {
     var sums: FluidSums;
     sums.amount = vec4<f32>(absorbs * chord, chord);
     sums.light = vec4<f32>(scatters * chord, wet);
+    // A film lying on a surface lies as flat as the surface, except at its
+    // rim: how much of the dome is over this pixel says how much it counts.
+    // A thick mound keeps the round shape of its drops.
+    let rise = sqrt(max(1.0 - dot(trace.entry.xy, trace.entry.xy), 0.0));
+    let lies = corner.second.w * (1.0 - smoothstep(0.15, 0.5, reach.y / reach.x))
+        * select(0.0, rise, chord > 0.0);
+    sums.lie = vec4<f32>(fluid_axes(corner.second.xyz)[2] * lies, lies);
     return sums;
 }
 
@@ -466,23 +481,37 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
     let size = vec2<i32>(textureDimensions(fluid_down_map));
     let kind_plus = textureLoad(fluid_kind_map, at, 0).r;
     let light = textureLoad(fluid_light_map, at, 0);
-    let away = textureLoad(fluid_down_map, at, 0).r;
+    let smoothed = textureLoad(fluid_down_map, at, 0).r;
     let wet = clamp(light.a, 0.0, 1.0);
-    if kind_plus == 0u || away <= 0.0 {
+    if kind_plus == 0u || smoothed <= 0.0 {
         if wet <= 0.0 {
             discard;
         }
         return fluid_wet_ground(at, size, wet);
     }
 
+    // Where the surface is, as the drops drew it: the smoothed distance
+    // only turns the surface, and does not move it, or seen from low down
+    // a puddle would be pulled under the ground it lies on.
     let ray = fluid_ray(at, size);
-    let world = view.eye.xyz + ray * away;
+    let away = fluid_distance(textureLoad(fluid_near, at, 0));
+    let world = view.eye.xyz + ray * select(smoothed, away, away > 0.0);
     let to_eye = -normalize(ray);
-    let normal = fluid_facing(
-        fluid_run(at, size, world, away, vec2<i32>(1, 0)),
-        fluid_run(at, size, world, away, vec2<i32>(0, 1)),
+    let smooth_world = view.eye.xyz + ray * smoothed;
+    var normal = fluid_facing(
+        fluid_run(at, size, smooth_world, smoothed, vec2<i32>(1, 0)),
+        fluid_run(at, size, smooth_world, smoothed, vec2<i32>(0, 1)),
         to_eye,
     );
+    // Inside a puddle, where the domes of several drops overlap, the
+    // surface is as flat as the ground under it; at its rim it curves down
+    // as the smoothed depth says.
+    let lie = textureLoad(fluid_lie_map, at, 0);
+    if lie.a > 0.0 && length(lie.rgb) > 0.0001 {
+        var flat_normal = normalize(lie.rgb);
+        flat_normal = select(-flat_normal, flat_normal, dot(flat_normal, to_eye) >= 0.0);
+        normal = normalize(mix(normal, flat_normal, smoothstep(0.3, 1.2, lie.a)));
+    }
 
     // How thick the fluid is: no more than lies between its surface and
     // the solid world behind it. Drops that overlap are counted once for
@@ -490,7 +519,7 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
     let sums = textureLoad(fluid_amount_map, at, 0);
     let held = textureLoad(behind_depth, at, 0);
     let solid_away = select(1.0e9, view.lens.x / held, held > 0.0);
-    let room = max(solid_away - away, 0.0) * length(ray);
+    let room = max(solid_away - length(world - view.eye.xyz) / length(ray), 0.0) * length(ray);
     let thick = min(sums.a, room);
     let share = thick / max(sums.a, 0.000001);
     let takes = sums.rgb * share;

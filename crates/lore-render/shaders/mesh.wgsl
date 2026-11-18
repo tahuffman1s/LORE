@@ -111,6 +111,12 @@ struct View {
     // sun's own disc, and 1 if there is a moon and stars at all; the light
     // of the night sky, and how bright the stars are.
     heavens: array<vec4<f32>, 5>,
+    // How the level's water looks, if its game has said (`fluid.rs`), as
+    // three rows. What a metre of it takes of red, green and blue light,
+    // and 1 if it has a look at all (else the row and the two after are
+    // zero). What a metre of it scatters, and how rough its surface is.
+    // What it glows, and how much it bends light.
+    water_look: array<vec4<f32>, 3>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;

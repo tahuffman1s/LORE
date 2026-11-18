@@ -58,8 +58,9 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
 /// the light of lightning, seven for the weather and five for the sun, the
-/// moon and the stars.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5);
+/// moon and the stars, and three for how the level's still and running water
+/// looks.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5 + 3);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -200,7 +201,8 @@ impl View {
                 .chain(water.iter().flatten())
                 .chain(above.flashes.iter().flatten())
                 .chain(above.weather.rows.iter().flatten())
-                .chain(above.heavens.iter().flatten()),
+                .chain(above.heavens.iter().flatten())
+                .chain(above.water_look.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -215,6 +217,9 @@ pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
     pub(crate) weather: Air,
     pub(crate) heavens: [[f32; 4]; 5],
+    /// How the level's water looks if it says so, as the shader's
+    /// `water_look`: all zero if not.
+    pub(crate) water_look: [[f32; 4]; 3],
 }
 
 /// The light a scene is drawn in: one sun, and the sky and ground around it.
@@ -1403,6 +1408,18 @@ impl MeshPipeline {
             tracks,
             fluid,
         } = contents;
+        // How the level's water looks, if its game has said: the first
+        // row's last number is 1 when it has, and all is zero when not.
+        let water_look = fluid
+            .and_then(FluidScene::water)
+            .map_or([[0.0; 4]; 3], |look| {
+                let [takes, scatters, glows] = look.rows();
+                [
+                    [takes[0], takes[1], takes[2], 1.0],
+                    [scatters[0], scatters[1], scatters[2], takes[3]],
+                    glows,
+                ]
+            });
         // Fluid is worked out in pictures of its own, made now so that
         // nothing fails once rendering has begun; a frame with none draws
         // exactly what it did before.
@@ -1547,6 +1564,7 @@ impl MeshPipeline {
                     flashes,
                     weather,
                     heavens,
+                    water_look,
                 },
             ))
         }?;
@@ -2500,6 +2518,7 @@ mod tests {
                     wind: [0.0, 1.0, 9.0],
                 },
                 heavens: [[9.0; 4]; 5],
+                water_look: [[0.5; 4], [0.25; 4], [0.75; 4]],
             },
         );
         assert_eq!(number(&bytes, 184), 0.6, "how much of the sky is cloud");
@@ -2526,7 +2545,9 @@ mod tests {
         assert_eq!(number(&bytes, 456), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 460), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 464), 9.0, "the sun, the moon and the stars");
-        assert_eq!(bytes.len(), 484 * 4);
+        assert_eq!(number(&bytes, 484), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 495), 0.75, "and how much it bends light");
+        assert_eq!(bytes.len(), 496 * 4);
     }
 
     #[test]

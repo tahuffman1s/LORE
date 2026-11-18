@@ -46,6 +46,10 @@ pub(crate) struct FluidPictures {
     amount: Picture,
     /// The light the fluid scatters, and how wet the ground at a rim is.
     light: Picture,
+    /// Which way the surfaces under lying drops face, added up weighted by
+    /// how much of each drop is over the pixel, and that weight: inside a
+    /// puddle the liquid lies as flat as what it lies on.
+    lie: Picture,
     /// How far away the fluid is, smoothed across and then down.
     across: Picture,
     down: Picture,
@@ -60,6 +64,7 @@ impl FluidPictures {
             kind: Picture::null(),
             amount: Picture::null(),
             light: Picture::null(),
+            lie: Picture::null(),
             across: Picture::null(),
             down: Picture::null(),
         };
@@ -77,6 +82,7 @@ impl FluidPictures {
             (&mut pictures.kind, KIND_FORMAT),
             (&mut pictures.amount, SUMS_FORMAT),
             (&mut pictures.light, SUMS_FORMAT),
+            (&mut pictures.lie, SUMS_FORMAT),
             (&mut pictures.across, DISTANCE_FORMAT),
             (&mut pictures.down, DISTANCE_FORMAT),
         ] {
@@ -97,6 +103,7 @@ impl Drop for FluidPictures {
                 &self.kind,
                 &self.amount,
                 &self.light,
+                &self.lie,
                 &self.across,
                 &self.down,
             ] {
@@ -206,6 +213,7 @@ impl FluidWorks {
             picture_binding(4),
             picture_binding(5),
             picture_binding(6),
+            picture_binding(7),
         ];
         let sizes = [
             vk::DescriptorPoolSize::default()
@@ -213,7 +221,7 @@ impl FluidWorks {
                 .descriptor_count(count),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(count * 6),
+                .descriptor_count(count * 7),
         ];
         for _ in 0..frames {
             works.looks.push(Buffer::writable(
@@ -324,7 +332,7 @@ impl FluidWorks {
             .depth_test_enable(true)
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::GREATER);
-        let drawn = [KIND_FORMAT, SUMS_FORMAT, SUMS_FORMAT];
+        let drawn = [KIND_FORMAT, SUMS_FORMAT, SUMS_FORMAT, SUMS_FORMAT];
         let front = self.pipeline(
             module,
             &Stage {
@@ -334,7 +342,7 @@ impl FluidWorks {
                 colours: &drawn,
                 depth_format: SceneTarget::DEPTH_FORMAT,
                 depth: &nearest,
-                blends: &[everything, nothing, nothing],
+                blends: &[everything, nothing, nothing, nothing],
             },
         )?;
         self.front = front;
@@ -348,7 +356,7 @@ impl FluidWorks {
                 colours: &drawn,
                 depth_format: SceneTarget::DEPTH_FORMAT,
                 depth: &no_depth,
-                blends: &[nothing, added, added],
+                blends: &[nothing, added, added, added],
             },
         )?;
         // Pass 2: one number a pixel, over the whole picture.
@@ -528,13 +536,14 @@ impl FluidWorks {
                 pictures.light.view,
                 pictures.across.view,
                 pictures.down.view,
+                pictures.lie.view,
             ];
             let infos = views.map(|view| {
                 [vk::DescriptorImageInfo::default()
                     .image_view(view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
             });
-            let writes: [vk::WriteDescriptorSet; 6] = std::array::from_fn(|picture| {
+            let writes: [vk::WriteDescriptorSet; 7] = std::array::from_fn(|picture| {
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(1 + picture as u32)
@@ -628,6 +637,7 @@ impl FluidFrame<'_> {
             to_draw(pictures.kind.image),
             to_draw(pictures.amount.image),
             to_draw(pictures.light.image),
+            to_draw(pictures.lie.image),
             to_draw(pictures.across.image),
             to_draw(pictures.down.image),
             barrier(pictures.near.image, DEPTH)
@@ -654,6 +664,7 @@ impl FluidFrame<'_> {
             colour_to_read(pictures.kind.image),
             colour_to_read(pictures.amount.image),
             colour_to_read(pictures.light.image),
+            colour_to_read(pictures.lie.image),
             barrier(pictures.near.image, DEPTH)
                 .src_stage_mask(depth_stages)
                 .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
@@ -679,6 +690,7 @@ impl FluidFrame<'_> {
             clear(pictures.kind.view, no_kind),
             clear(pictures.amount.view, zero),
             clear(pictures.light.view, zero),
+            clear(pictures.lie.view, zero),
         ];
         // Nothing drawn is as far as can be.
         let depth = vk::RenderingAttachmentInfo::default()
