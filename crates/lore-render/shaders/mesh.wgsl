@@ -355,10 +355,13 @@ fn mirrored_share(mirror: vec3<f32>, roughness: f32, facing: f32) -> vec3<f32> {
 }
 
 const SKY_HEIGHTS: f32 = 24.0;
-// How many steps a line of sight takes through the clouds.
-const CLOUD_STEPS: i32 = 56;
+// How many steps a line of sight takes through the clouds, at the most.
+// Each pixel starts a different part of a step in and the upscaler blends
+// the frames, so a few steps make smooth cloud: more cost a great deal
+// where there is no graphics card and show little where there is one.
+const CLOUD_STEPS: i32 = 36;
 // How many of them are spent on the lower half of the layer.
-const CLOUD_LOW_STEPS: i32 = 32;
+const CLOUD_LOW_STEPS: i32 = 22;
 // How strongly haze sends light onwards, as in `sky.rs`.
 const HAZE_ONWARDS: f32 = 0.8;
 
@@ -516,8 +519,7 @@ fn cloud_in(place: vec3<f32>, weather: vec3<f32>, fine: bool) -> vec2<f32> {
         // The small shapes drift faster and sink, so that clouds change
         // as they go.
         let drifted = carried - (aloft * 0.5 + vec3<f32>(0.0, 2.0, 0.0)) * seconds;
-        let small = textureSampleLevel(cloud_volume, cloud_sampler, drifted / 1900.0, 0.0).g * 0.65
-            + textureSampleLevel(cloud_volume, cloud_sampler, drifted / 590.0 + 0.31, 0.0).g * 0.35;
+        let small = textureSampleLevel(cloud_volume, cloud_sampler, drifted / 1300.0, 0.0).g;
         // At a cloud's base they tear it into wisps; higher up they round
         // it into billows.
         let eaten = mix(small, 1.0 - small, smoothstep(0.0, 0.1, up)) * 0.45;
@@ -546,13 +548,11 @@ fn high_cloud(place: vec3<f32>) -> f32 {
     if cover <= 0.0 {
         return 0.0;
     }
-    let streak = textureSampleLevel(
-        cloud_volume, cloud_sampler, vec3<f32>(along / 42000.0, up * 0.2, across / 9000.0), 0.0,
-    ).r;
-    let fibre = textureSampleLevel(
-        cloud_volume, cloud_sampler, vec3<f32>(along / 6000.0, 0.5 + up * 0.3, across / 2100.0), 0.0,
-    ).g;
-    let thick = clamp((streak * 0.55 + fibre * 0.45 - (1.0 - 0.72 * cover)) * 3.0, 0.0, 1.0);
+    // One reading gives both the long streaks and the fibres in them.
+    let both = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(along / 19000.0, up * 0.25, across / 4300.0), 0.0,
+    ).rg;
+    let thick = clamp((both.r * 0.55 + both.g * 0.45 - (1.0 - 0.72 * cover)) * 3.0, 0.0, 1.0);
     // Thickest in the middle of its layer.
     return thick * (1.0 - abs(2.0 * up - 1.0));
 }
@@ -584,15 +584,23 @@ fn cloud_water(thick: f32) -> f32 {
     return min(thick * 4.0, 1.0);
 }
 
-// How much of the sun gets through the clouds to a point of the world:
-// the shadows clouds cast. The line from the point to the sun is looked at
-// where it crosses the clouds low down, in their middle and high up, and
-// the cloud it meets at each shades the point. A fair-weather cloud lets a
-// third of the light through and round it; a storm lets through next to
-// none, and being tall throws its shadow a long way when the sun is low.
-fn under_clouds(world: vec3<f32>) -> f32 {
+// How much of the sun gets through the clouds to a point of the world, and
+// then how much of the sky's light reaches it under the weather there.
+//
+// The first is the shadows clouds cast. The line from the point to the sun
+// is looked at where it crosses the clouds low down, in their middle and
+// high up, and the cloud it meets at each shades the point. A fair-weather
+// cloud lets a third of the light through and round it; a storm lets
+// through next to none, and being tall throws its shadow a long way when
+// the sun is low. The second is all of the sky's light in fair weather,
+// less under a sky that is all cloud, and a third under a storm, which is
+// why it goes dark before the rain.
+//
+// The weather is read once, where the line to the sun meets the bottom of
+// the clouds, and serves for all of it: it changes over kilometres.
+fn cloud_shade(world: vec3<f32>) -> vec2<f32> {
     if view.clouds.x <= 0.0 || view.clouds.w < 0.5 {
-        return 1.0;
+        return vec2<f32>(1.0);
     }
     let sun = view.towards_sun.xyz;
     let slope = 1.0 / max(sun.y, 0.08);
@@ -601,32 +609,31 @@ fn under_clouds(world: vec3<f32>) -> f32 {
     var looks = array<vec2<f32>, 3>(
         vec2<f32>(CLOUD_MIDDLE, 800.0), vec2<f32>(1500.0, 1700.0), vec2<f32>(3800.0, 3000.0),
     );
+    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
+    let low = world + sun * ((view.clouds.z + CLOUD_MIDDLE - world.y) * slope);
+    let weather = weather_over(low.xz - drift);
     var crossed = 0.0;
     var storm = 0.0;
     for (var look = 0; look < 3; look++) {
-        // Only a storm reaches as high as the last look.
-        if look == 2 && storm <= 0.0 {
+        // No cloud of this weather is as high as this look.
+        if looks[look].x > weather.y * CLOUD_DEPTH {
             break;
         }
         let height = view.clouds.z + looks[look].x;
-        let found = cloud_kind(world + sun * ((height - world.y) * slope), false);
+        let found = cloud_in(world + sun * ((height - world.y) * slope), weather, false);
         crossed += cloud_water(found.x) * (1.0 + 2.0 * found.y) * looks[look].y;
         storm = max(storm, found.y * step(0.001, found.x));
     }
     let shaded = 1.0 - exp(-crossed * slope * CLOUD_STOPS * 0.25);
-    return mix(1.0, mix(0.3, 0.05, storm), shaded);
+    return vec2<f32>(
+        mix(1.0, mix(0.3, 0.05, storm), shaded),
+        1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z),
+    );
 }
 
-// How much of the sky's light reaches a point under the weather over it:
-// all of it in fair weather, less under a sky that is all cloud, and a
-// third under a storm, which is why it goes dark before the rain.
-fn under_weather(world: vec3<f32>) -> f32 {
-    if view.clouds.x <= 0.0 || view.clouds.w < 0.5 {
-        return 1.0;
-    }
-    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
-    let weather = weather_over(world.xz - drift);
-    return 1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z);
+// How much of the sun gets through the clouds to a point of the world.
+fn under_clouds(world: vec3<f32>) -> f32 {
+    return cloud_shade(world).x;
 }
 
 const SHADOW_PICTURES: i32 = 4;
@@ -792,10 +799,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     // sun lights it from either side, and shows through it.
     let thin = material.emissive.w > 0.0;
     let sun_side = select(1.0, sign(dot(normal, view.towards_sun.xyz) + 0.0001), thin);
+    let shade = cloud_shade(corner.world);
     let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
-        * under_clouds(corner.world)
+        * shade.x
         * light_through_water(corner.world);
-    let sky_seen = open_sky(corner.world, corner.position.xy) * under_weather(corner.world);
+    let sky_seen = open_sky(corner.world, corner.position.xy) * shade.y;
     if has(NORMAL) {
         let sample = textureSampleBias(
             normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
@@ -1093,15 +1101,15 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         let earth = 6360000.0 + eye_height;
 
         // The high cloud first, since it is behind the rest: thin enough
-        // that three looks through it are enough, and that it does not
+        // that two looks through it are enough, and that it does not
         // shade itself.
         let under = view.clouds.z + CLOUD_DEPTH + HIGH_CLOUD.x - eye_height;
         let first = max(to_clouds(direction.y, under), 0.0);
         let last = min(to_clouds(direction.y, under + HIGH_CLOUD.y), CLOUD_REACH * 1.5);
         if last > first {
-            let stride = (last - first) / 3.0;
+            let stride = (last - first) / 2.0;
             var crossed = 0.0;
-            for (var number = 0; number < 3; number++) {
+            for (var number = 0; number < 2; number++) {
                 let away = first + (f32(number) + start) * stride;
                 let height = sqrt(earth * earth + away * away + 2.0 * earth * away * direction.y)
                     - 6360000.0;
@@ -1126,8 +1134,8 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         );
         let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
         var stormy = false;
-        for (var look = 0; look < 4 && leaves > middle; look++) {
-            let away = middle + (leaves - middle) * (f32(look) + start) / 4.0;
+        for (var look = 0; look < 3 && leaves > middle; look++) {
+            let away = middle + (leaves - middle) * (f32(look) + start) / 3.0;
             if weather_over(view.eye.xz + direction.xz * away - drift).z > 0.0 {
                 stormy = true;
                 break;
@@ -1166,14 +1174,14 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             // How much cloud the sun's light crossed to get here: a few
             // longer and longer steps towards the sun.
             var crossed = 0.0;
-            var reach = 60.0;
+            var reach = 80.0;
             var along = 0.0;
-            for (var look = 0; look < 4; look++) {
+            for (var look = 0; look < 3; look++) {
                 // A storm is thicker cloud, and darker for it.
                 let shading = cloud_in(place + sun * (along + reach * 0.5), weather, false);
                 crossed += shading.x * (1.0 + 2.5 * shading.y) * reach;
                 along += reach;
-                reach *= 2.6;
+                reach *= 3.2;
             }
             let depth = crossed * CLOUD_STOPS;
             let up = clamp((height - view.clouds.z) / CLOUD_DEPTH, 0.0, 1.0);
