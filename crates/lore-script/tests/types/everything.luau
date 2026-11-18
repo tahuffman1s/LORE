@@ -315,3 +315,51 @@ game.onTick(function(step)
     end
     game.setTimeSpeed(0.25)
 end)
+
+-- Fluids: kinds, letting them out, and what a character stands in.
+local honey: Fluid = game.fluid("honey")
+local goo: Fluid = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
+local pond = game.fluid("pond", { from = goo, color = "#203040", clarity = 2, cloudiness = 0.3, shine = 0.9, metal = 0, refraction = 1.34, viscosity = 0.1, density = 1, beading = 0.4, slippery = 0.5, sticky = 0, bouncy = 0, corrosive = 0, dries = 120, washes = true })
+game.fluid("blob", { from = "water", color = "red" })
+honey.viscosity = 0.6
+honey.color = "#f6bf59"
+honey.clarity = 0.02
+honey.cloudiness = 0.4
+honey.glow = 0
+honey.shine = 0.9
+honey.metal = 0
+honey.refraction = 1.5
+honey.density = 1.4
+honey.beading = 0.3
+honey.slippery = 0.1
+honey.sticky = 0.6
+honey.bouncy = 0
+honey.corrosive = 0
+honey.dries = 0
+honey.washes = false
+print(honey.name, honey.color, honey.clarity, honey.cloudiness, honey.glow, honey.shine, honey.metal, honey.refraction)
+print(honey.viscosity, honey.density, honey.beading, honey.slippery, honey.sticky, honey.bouncy, honey.corrosive, honey.dries, honey.washes, pond)
+
+game.onTick(function()
+    if game.input.pressed("fire") then
+        game.fluids.spray("water", game.player.eye, game.player.aim * 12)
+        game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litres = 0.02, spread = 10 })
+    end
+    if game.fluids.amount() > 100 or game.fluids.amount("water") > 50 then
+        game.fluids.clear("oil")
+        game.fluids.clear(goo)
+        game.fluids.clear()
+    end
+    local wet = game.fluids.under(game.player)
+    if wet then
+        print(wet.seconds)
+    end
+end)
+
+game.fluids.onTouch(function(touch)
+    local who: Character = touch.character
+    local kind: Fluid = touch.fluid
+    if kind == game.fluid("acid") and who == game.player then
+        print(touch.harm * 20, touch.cover, touch.depth, touch.seconds)
+    end
+end)

@@ -12,6 +12,9 @@ lore-input = { path = "../lore-input" }
 lore-ui = { path = "../lore-ui" }
 # What a weapon is made of, for `game.weapon`, and the state of each one held.
 lore-weapons = { path = "../lore-weapons" }
+# What a kind of fluid is made of, for `game.fluid`.
+lore-fluid = { path = "../lore-fluid" }
+libm = "0.2"
 log = "0.4"
 mlua = { version = "0.12", features = ["luau"] }
 

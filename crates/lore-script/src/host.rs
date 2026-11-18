@@ -20,6 +20,7 @@ use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
+use crate::fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder};
 use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
@@ -170,6 +171,9 @@ pub struct ScriptHost {
     live_set: Rc<LiveSet>,
     /// What the script said of the weather; it outlives a reload too.
     weather: Rc<crate::weather_api::Climate>,
+    /// The kinds of fluid the script made and what it asked of them; they
+    /// outlive a reload too.
+    fluids: Rc<crate::fluid_api::FluidState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -280,6 +284,7 @@ impl ScriptHost {
             clock: Rc::default(),
             live_set: Rc::default(),
             weather: Rc::default(),
+            fluids: Rc::default(),
             versions: 0,
             tools: Rc::default(),
         };
@@ -566,6 +571,62 @@ impl ScriptHost {
     pub fn lightning_struck(&mut self, at: [f32; 3]) {
         let [x, y, z] = at;
         self.call_all(|handlers| &handlers.lightning, mlua::Vector::new(x, y, z));
+    }
+
+    /// If any kind of fluid was made or changed since this was last called,
+    /// calls `see` with EVERY kind the script has (its number and what it
+    /// is, kind 0 "water" included) and gives true; otherwise calls nothing
+    /// and gives false. True on the very first call, so the engine always
+    /// learns water.
+    pub fn take_fluid_kinds(&mut self, see: impl FnMut(u8, &FluidKind)) -> bool {
+        self.fluids.take_kinds(see)
+    }
+
+    /// The look the level's own lakes and creeks are to be drawn with:
+    /// `None` while water's look is exactly the ready-made water's (the
+    /// level draws its water as it always has), `Some` once the script has
+    /// made water look otherwise (and `None` again if it puts it back
+    /// exactly).
+    #[must_use]
+    pub fn water_look(&self) -> Option<FluidLook> {
+        self.fluids.water_look()
+    }
+
+    /// Calls `see` with each thing asked of the fluids since this was last
+    /// called, oldest first, and forgets them. Allocates nothing.
+    pub fn take_fluid_asks(&mut self, see: impl FnMut(FluidAsk)) {
+        self.fluids.take_asks(see);
+    }
+
+    /// Says how many litres of each kind there now are (the index is the
+    /// kind): what `game.fluids.amount` reads. Until said, every amount is 0.
+    pub fn set_fluid_litres(&mut self, litres: &[f32; lore_fluid::MOST_KINDS]) {
+        self.fluids.set_litres(litres);
+    }
+
+    /// Says what `who` stands in after a tick of `step` seconds, `None` for
+    /// nothing. Kept for `game.fluids.under(character)`; counts how long
+    /// they have stood in fluid without a break (reset by a `None`); and
+    /// when `Some`, calls the `game.fluids.onTouch` functions with the
+    /// touch. A step that is not a number or not above 0 counts as 0.
+    pub fn stand_in_fluid(&mut self, who: CharacterId, under: Option<FluidUnder>, step: f32) {
+        let step = if step.is_finite() && step > 0.0 {
+            step
+        } else {
+            0.0
+        };
+        let Some(standing) = self.fluids.stand(who, under, step) else {
+            return;
+        };
+        let Some(version) = &self.running else { return };
+        if version.shared.handlers.borrow().fluid_touch.is_empty() || !self.characters.has(who) {
+            return;
+        }
+        let Ok(table) = crate::fluid_api::touch_table(&version.vm, &version.shared, who, &standing)
+        else {
+            return;
+        };
+        self.call_all(|handlers| &handlers.fluid_touch, table);
     }
 
     /// The action set the script made live with `game.input.useSet` since
@@ -1006,6 +1067,7 @@ impl ScriptHost {
             rumble: Cell::new(None),
             live_set: Rc::clone(&self.live_set),
             weather: Rc::clone(&self.weather),
+            fluids: Rc::clone(&self.fluids),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

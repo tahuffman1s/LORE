@@ -798,7 +798,7 @@ fn fraction(lua: &Lua, what: &str, value: &Value) -> mlua::Result<f32> {
 }
 
 /// A colour from its name or its hex code, with the text to read back.
-fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Color, String)> {
+pub(crate) fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Color, String)> {
     let Value::String(written) = value else {
         return Err(fail(
             lua,

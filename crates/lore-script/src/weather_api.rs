@@ -362,7 +362,7 @@ impl Climate {
 }
 
 /// A number a script wrote for `function`, which `takes` such a number.
-fn number(
+pub(crate) fn number(
     lua: &Lua,
     function: &str,
     value: Option<&Value>,

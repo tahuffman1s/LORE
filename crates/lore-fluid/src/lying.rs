@@ -61,9 +61,14 @@ fn creep_speed(phys: &Physics, p: &Particle, radius: f32) -> f32 {
         .max(run_speed(phys, p, radius))
 }
 
+/// How much of itself a corrosive drop uses up per unit of volume it eats,
+/// times its corrosiveness: a modelling choice, not a measured number.
+const ACID_SPENT: f32 = 0.5;
+
 impl Fluids {
     /// What a drop that has just landed does to the other kinds under it:
-    /// washes them away, or lies on top and covers part of them.
+    /// washes them away, eats them (if it is corrosive), or lies on top and
+    /// covers part of them.
     pub(crate) fn settle_landings(&mut self) {
         let Self {
             parts,
@@ -78,7 +83,11 @@ impl Fluids {
             if !(p.landed_now && p.lying && !p.dead) {
                 continue;
             }
-            let washes = physics.get(usize::from(p.kind)).is_some_and(|f| f.washes);
+            let (washes, corrosive) = physics
+                .get(usize::from(p.kind))
+                .map_or((false, 0.0), |f| (f.washes, f.corrosive));
+            // Volume of other kinds this drop has eaten.
+            let mut eaten = 0.0f32;
             let radius = p.patch();
             let reach = radius + R_MAX;
             let lo = [p.pos[0] - reach, p.pos[1] - reach, p.pos[2] - reach];
@@ -117,15 +126,26 @@ impl Fluids {
                 let small = radius.min(rq);
                 let mut share = ((radius + rq - d) / (2.0 * small)).clamp(0.0, 1.0)
                     * (small * small / (rq * rq));
-                if washes {
-                    share = (2.0 * share).min(1.0);
+                let mut times = if washes { 2.0 } else { 1.0 };
+                if corrosive > 0.0 {
+                    times = f32::max(times, 1.0 + corrosive);
                 }
+                if times > 1.0 {
+                    share = (times * share).min(1.0);
+                }
+                eaten += q.volume * share;
                 q.volume *= 1.0 - share;
                 if q.volume < MIN_VOLUME {
                     q.dead = true;
                 }
             });
             if let Some(slot) = parts.get_mut(i) {
+                if corrosive > 0.0 {
+                    slot.volume = (slot.volume - corrosive * ACID_SPENT * eaten).max(0.0);
+                    if slot.volume < MIN_VOLUME {
+                        slot.dead = true;
+                    }
+                }
                 slot.landed_now = false;
                 slot.still = 0;
                 slot.calm = false;

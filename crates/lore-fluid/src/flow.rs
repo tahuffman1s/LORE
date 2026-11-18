@@ -64,7 +64,9 @@ pub struct Flow {
     /// 1 nearly as high as the fall.
     pub bouncy: f32,
     /// How much it harms whoever stays in it, 0 harmless to 1 acid. The
-    /// game decides what that costs; this only reports it underfoot.
+    /// game decides what that costs; underfoot it is only reported. It also
+    /// eats other fluids it lands on, more the higher it is, and the acid is
+    /// used up doing so.
     pub corrosive: f32,
     /// How many seconds a settled drop lasts before it has dried away. 0 is
     /// for ever (water in a game that has no sun; honey).

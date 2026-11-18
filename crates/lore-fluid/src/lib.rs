@@ -8,7 +8,8 @@
 //! not; what stays becomes a drop lying on the surface. A lying drop spreads
 //! into a puddle, merges with its neighbours, runs down slopes and walls at
 //! the speed its thickness allows (leaving a thin wet trail), drips from
-//! ledges, dries, and, if it is water, washes other kinds away. Every number
+//! ledges, dries, and, if it is water, washes other kinds away (and if it
+//! is corrosive, eats them and is used up doing so). Every number
 //! comes from a formula for real liquids: see [`Flow`] for the few you set.
 //!
 //! ```no_run
@@ -105,6 +106,8 @@ pub struct Drop {
     /// One unit long: the way it flies, or the surface's normal when it lies.
     pub facing: [f32; 3],
     /// 0 for a ball in flight up to 1 for a film pressed flat on a surface.
+    /// A drop that lies is never 0 (at least 0.05, even when mounded), so a
+    /// renderer can tell it from a ball in flight.
     pub flat: f32,
     /// In flight, how many radii it is drawn out along `facing`: 1 is
     /// round, more is a piece of a thread.
@@ -466,7 +469,7 @@ impl Fluids {
                     place: p.pos,
                     radius: r,
                     facing: p.normal,
-                    flat: (1.0 - p.h / r.max(1.0e-6)).clamp(0.0, 1.0),
+                    flat: (1.0 - p.h / r.max(1.0e-6)).clamp(0.05, 1.0),
                     long: 1.0,
                     thick: p.h,
                     kind: p.kind,
