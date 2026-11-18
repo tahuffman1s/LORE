@@ -1996,7 +1996,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let from_world = mirrored_world * shines * mirrors;
     // The lamps light it whether or not the sky can see it.
     let lamplight = from_lamps(
-        corner.world, normal, to_eye, corner.position.xy, matte, mirror, roughness, kept, thin,
+        corner.world, normal, built, to_eye, corner.position.xy, matte, mirror, roughness, kept, thin,
     );
     // Where the probes are, the light from all round is theirs: the sky's
     // and the ground's as far as each can be seen from here, and the light

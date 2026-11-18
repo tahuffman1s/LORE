@@ -372,7 +372,7 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
 // the copy of the level; there a ray would go on to strike a wall or the
 // floor, not the sky. Over the many rays of the probes round about, it
 // lets through as much of the sky as a canopy has gaps.
-fn open_above(world: vec3<f32>) -> f32 {
+fn open_where_it_stopped(world: vec3<f32>) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
@@ -510,7 +510,7 @@ fn fragment_trace(whole: Whole) -> @location(0) vec4<f32> {
     if struck.colour.a < 0.0 {
         // Nothing struck: the sky, or the ground beyond the copy, where it
         // is open over the place the ray stopped.
-        let open = open_above(start + way * struck.went);
+        let open = open_where_it_stopped(start + way * struck.went);
         return vec4<f32>(surroundings(way) * sky * open, RAY_REACH);
     }
     let far = struck.colour.a;
