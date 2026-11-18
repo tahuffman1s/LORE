@@ -4,9 +4,11 @@
 --
 --     require("./pause_menu")
 --
--- Keep that line below the HUD your game makes, so the menu is drawn over
--- it. The menu works itself from then on; a game that wants to know, or to
--- open it at a moment of its own, keeps what the line gives:
+-- Keep that line last. HUD pieces are drawn in the order they are made, so
+-- whatever the game makes after it (later in the file, or later still from
+-- inside game.onStart) is drawn over the menu and the dimmed game. The
+-- menu works itself from then on; a game that wants to know, or to open it
+-- at a moment of its own, keeps what the line gives:
 --
 --     local pauseMenu = require("./pause_menu")
 --     if pauseMenu.isOpen() then ... end
@@ -20,7 +22,8 @@
 --
 -- While the menu is open the game is paused (game.pause): time stands
 -- still, and game.onTick functions are still called, with a step of 0. A
--- game.onTick of your own that must not hear the menu's keys starts with
+-- game.onTick of your own that must do nothing while the game is paused,
+-- by this menu or by anything else, starts with
 --     if game.paused() then return end
 --
 -- What the player does in it is what menu.luau says: up and down choose,
@@ -39,7 +42,8 @@ local PLACE = { right = 40, down = 40, width = 820 }
 local RUMBLE_SAMPLE = { 0.6, 0.6, 0.15 }
 
 -- The game is dimmed behind the menu. Made first, so it is under the menu;
--- far bigger than any screen, so it covers every one.
+-- far bigger than any screen, so it covers every one. The functions below
+-- show and hide it, so change its colour rather than take it out.
 local dim = game.hud.box({ at = "center", width = 8000, height = 4000, color = "#00000099" })
 dim.visible = false
 
@@ -49,8 +53,10 @@ local front: menu.Panel? = nil
 -- paused it before the menu opened.
 local resumes = true
 
--- The three screens, each a panel of its own. They are made further down;
--- the rows above them need their names.
+-- The three screens, each a panel of its own. They are filled in near the
+-- bottom of the file, and named here so that the Resume, Settings and Quit
+-- rows, which come first, can say which screen to show. Keep these two
+-- lines whatever else you change.
 local topPanel: menu.Panel, settingsPanel: menu.Panel?, quitPanel: menu.Panel
 local top: menu.Menu, settings: { menu.Menu }, quit: menu.Menu
 
@@ -98,7 +104,8 @@ function pauseMenu.isOpen(): boolean
     return front ~= nil
 end
 
--- The first screen.
+-- The first screen. A row can be taken out, or one of your own put in
+-- (menu.button("Save", { press = saveGame })): nothing else needs to change.
 top = menu.new("Paused", {
     menu.button("Resume", { press = pauseMenu.close }),
     menu.button("Settings", {

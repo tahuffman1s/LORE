@@ -1,8 +1,10 @@
 //! Creates a new game folder from the built-in template.
 //!
 //! This is what `lore new` runs. A new game is a `main.luau` that already
-//! plays, a small level to play it in, a short README, the files an editor needs for autocomplete, and a
-//! `CLAUDE.md` so Claude Code knows how to work on the game.
+//! plays, the pause and settings menu it requires (`pause_menu.luau`, made
+//! with `menu.luau`), a small level to play it in, a short README, the files
+//! an editor needs for autocomplete, and a `CLAUDE.md` so Claude Code knows
+//! how to work on the game.
 
 use std::fmt;
 use std::fs;
@@ -366,6 +368,11 @@ mod tests {
         let script = fs::read_to_string(game.folder.join("main.luau")).unwrap();
         assert!(script.contains("Welcome to my-game!"));
         assert!(!script.contains(NAME_PLACEHOLDER));
+        // The pause menu the script's last line puts in, and what it is made with.
+        assert!(script.contains("require(\"./pause_menu\")"));
+        for (file, text) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
+            assert!(fs::read_to_string(game.folder.join(file)).unwrap() == text);
+        }
         let readme = fs::read_to_string(game.folder.join("README.md")).unwrap();
         assert!(readme.starts_with("# my-game\n") || readme.starts_with("# my-game\r\n"));
         assert_eq!(

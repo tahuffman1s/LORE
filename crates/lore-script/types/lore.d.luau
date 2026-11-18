@@ -658,7 +658,8 @@ declare game: {
     --- weather wait, and nothing in the world moves. `game.onTick`
     --- functions still run, with a `step` of 0, so a menu can hear the
     --- player and let the game go on. Pausing a paused game does nothing.
-    --- Saving the script lets the game go on, as its menus start closed.
+    --- Saving the script (a reload) ends the pause, because a reloaded
+    --- script starts with its menus closed.
     --- Example: if game.input.justPressed("pause") then game.pause() end
     pause: () -> (),
 
@@ -1362,26 +1363,28 @@ declare game: {
         list: () -> { Setting },
 
         --- What a setting is set to now: a number, true or false, or one of
-        --- its words, by its kind. A name that is no setting is a mistake
-        --- that says the nearest one.
-        --- Example: local loud = game.settings.get("volume")
+        --- its words, by its kind (see `Setting.kind`), which is why an
+        --- editor shows `any`. A name that is no setting is a mistake that
+        --- says the nearest one.
+        --- Example: local loud: number = game.settings.get("volume")
         --- Example: if game.settings.get("invert_look") then print("Inverted") end
         get: (name: string) -> any,
 
         --- Changes a setting, at once, and has the engine save it. A number
         --- outside what the setting takes is taken as the nearest end; a
         --- word that is not one of a choice's is a mistake that lists them.
-        --- It changes the game, so it belongs in `game.onTick`, not in
-        --- `game.onDraw`.
+        --- A choice's words are in lower case; capitals, and spaces round
+        --- the word, are forgiven. It changes the game, so it belongs in
+        --- `game.onTick`, not in `game.onDraw`.
         --- Example: game.settings.set("volume", 40)
         --- Example: game.settings.set("upscaling", "performance")
         set: (name: string, value: number | boolean | string) -> (),
 
         --- Puts every setting back to what a new player has, or only the
-        --- one named.
+        --- one named. A name that is nil is a mistake, not "all of them".
         --- Example: game.settings.reset()
         --- Example: game.settings.reset("field_of_view")
-        reset: (name: string?) -> (),
+        reset: (() -> ()) & ((name: string) -> ()),
     },
 
     --- How fast this computer is drawing pictures. It is different on every

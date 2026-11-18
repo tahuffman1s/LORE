@@ -12,7 +12,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::api::{Shared, describe, fail};
 use crate::error::closest;
@@ -176,8 +176,9 @@ impl SettingsState {
         let list = self.list.borrow();
         if list.is_empty() {
             return format!(
-                "{function}: \"{name}\" is not a setting, because this game was started \
-                 with no settings at all. Play it with `lore run` to have the player's."
+                "{function}: \"{name}\" is not a setting, because whatever runs this game \
+                 handed it no settings at all. `lore run` and `lore check` hand over the \
+                 player's; game.settings.list() is empty here."
             );
         }
         let names = || list.iter().map(|setting| setting.name.as_str());
@@ -367,13 +368,16 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     let (state, rules) = (Rc::clone(&shared.settings), Rc::clone(shared));
     settings.set(
         "reset",
-        lua.create_function(move |lua, name: Value| {
-            let only = match &name {
-                Value::Nil => None,
-                given => Some(name_of(
+        lua.create_function(move |lua, given: Variadic<Value>| {
+            // Only a call with nothing between the brackets means all of
+            // them: a name that turned out to be nil (a misspelt variable)
+            // must not put back every setting the player has made.
+            let only = match given.first() {
+                None => None,
+                Some(name) => Some(name_of(
                     lua,
                     "game.settings.reset",
-                    given,
+                    name,
                     "game.settings.reset(\"volume\"), or game.settings.reset() for all of them",
                 )?),
             };

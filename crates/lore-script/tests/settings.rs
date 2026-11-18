@@ -217,6 +217,13 @@ fn a_name_that_is_no_setting_says_the_nearest_or_all_of_them() {
         "game.settings.reset: \"gamma\" is not a setting. The settings are: volume, \
          subtitles, upscaling."
     );
+    // A name that turned out to be nil is not "all of them".
+    assert_eq!(
+        mistake("local chosen = {}; game.settings.reset(chosen.name)"),
+        "game.settings.reset needs the name of a setting in quotes, but it was given nothing. \
+         Write it like this: game.settings.reset(\"volume\"), or game.settings.reset() for all \
+         of them"
+    );
     assert_eq!(
         mistake("game.settings.get(5)"),
         "game.settings.get needs the name of a setting in quotes, but it was given a number. \
@@ -301,8 +308,9 @@ fn a_game_started_with_no_settings_has_an_empty_list_and_says_so() {
     assert_eq!(printed(), ["0"]);
     assert_eq!(
         host.last_error().unwrap().message,
-        "game.settings.get: \"volume\" is not a setting, because this game was started with \
-         no settings at all. Play it with `lore run` to have the player's."
+        "game.settings.get: \"volume\" is not a setting, because whatever runs this game \
+         handed it no settings at all. `lore run` and `lore check` hand over the player's; \
+         game.settings.list() is empty here."
     );
 }
 
