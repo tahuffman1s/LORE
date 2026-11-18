@@ -501,6 +501,86 @@ fn a_steep_bank_cannot_be_climbed_or_stood_on() {
     assert!(dropped.position[2] > -3.0, "{dropped:?}");
 }
 
+/// A hillside 40 m wide that climbs toward -z at `degrees`, from z = 0.
+fn hillside(degrees: f32) -> Vec<Triangle> {
+    let top = 20.0 * libm::tanf(degrees.to_radians());
+    quad(
+        [-20.0, 0.0, 0.0],
+        [20.0, 0.0, 0.0],
+        [20.0, top, -20.0],
+        [-20.0, top, -20.0],
+    )
+    .to_vec()
+}
+
+/// A player settled on a hillside of `degrees` at `x`, `z`.
+fn on_hillside(level: &Level, degrees: f32, x: f32, z: f32) -> Player {
+    let y = -z * libm::tanf(degrees.to_radians());
+    standing_at(level, [x, y + 0.05, z])
+}
+
+#[test]
+fn walking_uphill_beside_a_wall_is_no_faster_than_walking_beside_it_on_the_flat() {
+    // A wall facing -x at x = 3, up a hillside and on the flat; the player
+    // walks up beside it, pushing a little into it.
+    let slope = 40.0;
+    let wall = block([3.0, 0.0, -20.0], [4.0, 20.0, 0.0]);
+    let hill = level(&[hillside(slope), wall.clone()]);
+    let flat = level(&[floor(), wall]);
+    let up = MoveInput {
+        right: 0.3,
+        ..forward()
+    };
+    // How far ahead (-z) they get in a second, once they are going.
+    let ahead = |level: &Level, start: Player| {
+        let mut player = start;
+        run(&mut player, level, up, SECOND);
+        let from = player.position[2];
+        run(&mut player, level, up, SECOND);
+        assert!(player.grounded, "{player:?}");
+        assert!(player.position[0] > 2.6, "not at the wall: {player:?}");
+        from - player.position[2]
+    };
+    let on_hill = ahead(&hill, on_hillside(&hill, slope, 2.6, -3.0));
+    let on_flat = ahead(&flat, standing_at(&flat, [2.6, 0.0, -3.0]));
+    // Walking up a slope goes at full speed along it, so it gets less far
+    // across the ground, wall or no wall.
+    let tipped = on_flat * libm::cosf(slope.to_radians());
+    assert!(
+        close(on_hill, tipped, 0.01 * tipped),
+        "{on_hill} m up the hill beside the wall in a second, against {tipped} m"
+    );
+}
+
+#[test]
+fn pushing_into_a_wall_across_a_slope_slides_along_it_as_on_the_flat() {
+    // A wall across a hillside, and the same wall on the flat, walked at
+    // nearly head on and at an angle: how fast the player goes along it.
+    let slope = 40.0;
+    let wall = block([-20.0, 0.0, -9.0], [20.0, 20.0, -8.0]);
+    let hill = level(&[hillside(slope), wall.clone()]);
+    let flat = level(&[floor(), wall]);
+    let along = |level: &Level, start: Player, yaw: f32| {
+        let mut player = start;
+        let turned = MoveInput { yaw, ..forward() };
+        run(&mut player, level, turned, SECOND);
+        let from = player.position[0];
+        run(&mut player, level, turned, SECOND / 2);
+        assert!(player.grounded, "{player:?}");
+        (from - player.position[0]) * 2.0
+    };
+    for (yaw, within) in [(0.15, 0.3), (0.5, 0.03)] {
+        let on_hill = along(&hill, on_hillside(&hill, slope, 2.0, -6.0), yaw);
+        let on_flat = along(&flat, standing_at(&flat, [2.0, 0.0, -6.0]), yaw);
+        assert!(on_flat > 0.05, "{on_flat} m/s along the wall on the flat");
+        // The climb the wall stops does not become speed along it.
+        assert!(
+            on_hill <= on_flat && on_hill >= on_flat * (1.0 - within),
+            "{on_hill} m/s along the wall on the hill, {on_flat} m/s on the flat"
+        );
+    }
+}
+
 /// A ravine: two faces of `steepness` degrees, 8 m across, meeting in a
 /// crease along z at the origin. The crease runs down toward +z at `tilt`
 /// degrees.

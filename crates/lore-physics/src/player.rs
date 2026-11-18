@@ -422,19 +422,24 @@ impl Player {
                 .map_or(Vector::ZERO, |direction| direction * speed);
             let mut moved = slide(level, &body.shape, middle, tilted, dt, body.steep, true);
             if moved.blocked
-                && let Some(stepped) = body.step_up(middle, velocity)
+                && let Some(stepped) = body.step_up(middle, tilted, moved.position.y)
                 && flat_distance(stepped.position, middle)
                     > flat_distance(moved.position, middle) + 1.0e-4
             {
                 moved = stepped;
             }
             middle = moved.position;
-            // Back to level velocity, keeping the speed walls left us.
-            velocity = Vector::new(moved.velocity.x, 0.0, moved.velocity.z)
-                .try_normalize()
-                .map_or(Vector::ZERO, |direction| {
-                    direction * moved.velocity.length()
-                });
+            // Back to level velocity: the tilt undone, so that what a wall
+            // took off the move is taken off the walk, and the climb a wall
+            // stopped is not turned into speed along it. Never faster than
+            // the move left it.
+            let level_share = flat_speed(tilted);
+            velocity = if level_share > 0.0 {
+                Vector::new(moved.velocity.x, 0.0, moved.velocity.z) * (speed / level_share)
+            } else {
+                Vector::ZERO
+            }
+            .clamp_length_max(moved.velocity.length());
 
             // Stay on the ground down stairs and ramps; otherwise start falling.
             let reach = positive(settings.step_height).max(LANDING_REACH);
@@ -981,8 +986,9 @@ impl Body<'_> {
     }
 
     /// Tries the move again from a step higher: up, across, and back down.
-    /// Gives the result only if it ends standing on something.
-    fn step_up(&self, middle: Vector, velocity: Vector) -> Option<Slid> {
+    /// Gives the result only if it ends standing on something higher than
+    /// `blocked`, where the plain move left the shape's middle.
+    fn step_up(&self, middle: Vector, velocity: Vector, blocked: f32) -> Option<Slid> {
         let step = positive(self.settings.step_height);
         let headroom = self
             .level
@@ -1007,16 +1013,16 @@ impl Body<'_> {
             true,
         );
         let landing = self.ground_below(across.position, rise)?;
-        // Only a real step up counts. Landing back on the same floor would
-        // just be the blocked move again, pressed closer to the wall.
+        let position = across.position - Vector::Y * landing.drop;
+        // Only a real step up counts. Landing back on the same floor, or
+        // the same slope, would just be the blocked move again, pressed
+        // closer to the wall: on a slope that is where the step's touch
+        // sits higher than the feet, and it is no step. Nor is anything
+        // touched higher up than a step reaches.
         let feet = middle.y - self.to_feet;
         let climbed = landing.height - feet;
-        (LOWEST_STEP..=step + SKIN)
-            .contains(&climbed)
-            .then_some(Slid {
-                position: across.position - Vector::Y * landing.drop,
-                ..across
-            })
+        (position.y - blocked >= LOWEST_STEP && climbed <= step + SKIN)
+            .then_some(Slid { position, ..across })
     }
 }
 
