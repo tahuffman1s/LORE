@@ -5,7 +5,7 @@ use crate::draw::{Command, DrawList, Painter};
 use crate::error::UiError;
 use crate::focus;
 use crate::input::{Direction, InputMode, Repeater, UiInput, held_direction};
-use crate::layout::{measure_screen, place_hud, place_screen, slider_track, tab_width};
+use crate::layout::{measure_screen, place_hud, place_screen, safe_area, slider_track, tab_width};
 use crate::node::{Anchor, Kind, NONE, Node, Rect, Screen, ScreenId, WidgetId};
 use crate::paint::{self, Look};
 use crate::theme::{Color, EstimatedText, TextMeasure, Theme, UI_SCALE_RANGE};
@@ -732,14 +732,7 @@ impl Ui {
     }
 
     fn layout(&mut self) {
-        let margin = self.theme.safe_margin.clamp(0.0, 0.25);
-        let [width, height] = self.size;
-        let safe = Rect {
-            x: width * margin,
-            y: height * margin,
-            w: width * (1.0 - 2.0 * margin),
-            h: height * (1.0 - 2.0 * margin),
-        };
+        let safe = safe_area(self.size, self.theme.safe_margin);
         for &piece in &self.hud {
             place_hud(&mut self.nodes[piece as usize], safe, self.measure.as_ref());
         }

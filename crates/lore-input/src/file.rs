@@ -8,7 +8,14 @@
 //! [bindings]
 //! jump = ["F", "GamepadSouth"]
 //! # move = ["WASD", "LeftStick"]
+//!
+//! [game_bindings]
+//! # weather menu = ["F1", "GamepadSelect"]
 //! ```
+//!
+//! `[bindings]` holds the standard controls. `[game_bindings]` holds the
+//! actions a game made for itself; a game reads the ones it has and passes
+//! over the rest, so one file can serve several games.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -21,6 +28,9 @@ use crate::names::UnknownName;
 
 /// The table of the file that holds the bindings.
 const TABLE: &str = "bindings";
+
+/// The table of the file that holds the actions games made for themselves.
+const GAME_TABLE: &str = "game_bindings";
 
 /// What a written file says before its bindings.
 const HEADER: &str = "\
@@ -35,6 +45,9 @@ const HEADER: &str = "\
 # \"MouseWheelUp\") or a gamepad button (\"GamepadSouth\", \"RightTrigger\").
 # Moving and looking take \"WASD\", \"ArrowKeys\", \"LeftStick\", \"RightStick\" or
 # \"MouseMotion\"; four keys of your own are \"I/K/J/L\": up, down, left, right.
+#
+# Under [bindings] are the controls every game shares. Under [game_bindings]
+# are actions that games made for themselves.
 ";
 
 /// Why a bindings file could not be read at all: it is not valid TOML.
@@ -100,6 +113,12 @@ pub enum ProblemKind {
         /// The name that was found.
         name: String,
     },
+    /// An action every game has, listed under `[game_bindings]`, which is
+    /// for the actions games made for themselves.
+    NotOwn {
+        /// The action that is in the wrong table.
+        action: String,
+    },
     /// The game has no action of this name.
     UnknownAction(UnknownName),
     /// The standard controls had an action of this name once and no longer
@@ -155,6 +174,12 @@ impl fmt::Display for BindingsProblem {
                 f,
                 "\"{name}\" is not read. Bindings go under a line saying [{TABLE}], \
                  like jump = [\"Space\", \"GamepadSouth\"]."
+            ),
+            ProblemKind::NotOwn { action } => write!(
+                f,
+                "\"{action}\" is not an action a game made for itself, so it does not belong \
+                 under [{GAME_TABLE}]. Move this line up under [{TABLE}]. It is not used until \
+                 then."
             ),
             ProblemKind::UnknownAction(unknown) => {
                 write!(f, "{unknown} The line is not used.")
@@ -232,6 +257,24 @@ impl ActionMap {
         for (key, value) in document.get_ref() {
             let line = position(text, key.span().start).0;
             match value.get_ref() {
+                DeValue::Table(entries) if key.get_ref() == GAME_TABLE => {
+                    for (action, list) in entries {
+                        let line = position(text, action.span().start).0;
+                        let name: &str = action.get_ref();
+                        // An action this game does not have belongs to another game.
+                        let Ok(id) = self.action(name) else { continue };
+                        let result = if self.is_own(id) {
+                            self.read_entry(name, list.get_ref())
+                        } else {
+                            Err(ProblemKind::NotOwn {
+                                action: name.to_owned(),
+                            })
+                        };
+                        if let Err(kind) = result {
+                            problems.push(BindingsProblem { line, kind });
+                        }
+                    }
+                }
                 DeValue::Table(entries) if key.get_ref() == TABLE => {
                     for (action, list) in entries {
                         let line = position(text, action.span().start).0;
@@ -338,7 +381,22 @@ impl ActionMap {
     #[must_use]
     pub fn write_bindings(&self, defaults: &Self) -> String {
         let mut text = format!("{HEADER}\n[{TABLE}]\n");
-        for action in self.actions() {
+        self.write_table(&mut text, defaults, false);
+        if self.actions().any(|action| self.is_own(action)) {
+            text.push_str(
+                "\n# Actions that games made for themselves. Each game reads the ones it has\n\
+                 # and passes over the rest.\n",
+            );
+            // Writing to a `String` cannot fail.
+            let _ = writeln!(text, "[{GAME_TABLE}]");
+            self.write_table(&mut text, defaults, true);
+        }
+        text
+    }
+
+    /// Writes one line for each action that is (`own`) or is not a game's own.
+    fn write_table(&self, text: &mut String, defaults: &Self, own: bool) {
+        for action in self.actions().filter(|action| self.is_own(*action) == own) {
             let name = self.name(action);
             let bindings = self.bindings(action);
             let unchanged = defaults
@@ -347,7 +405,7 @@ impl ActionMap {
             if unchanged {
                 text.push_str("# ");
             }
-            write_key(&mut text, name);
+            write_key(text, name);
             text.push_str(" = [");
             for (index, binding) in bindings.iter().enumerate() {
                 let comma = if index == 0 { "" } else { ", " };
@@ -356,7 +414,6 @@ impl ActionMap {
             }
             text.push_str("]\n");
         }
-        text
     }
 }
 
@@ -697,5 +754,68 @@ mod tests {
             "{said}"
         );
         assert_eq!(map, ActionMap::standard());
+    }
+
+    fn game_map() -> ActionMap {
+        let mut map = ActionMap::standard();
+        map.own_button("weather menu", ["F1", "DpadUp"]).unwrap();
+        map.own_button("zoom", ["F2", "GamepadSelect"]).unwrap();
+        map
+    }
+
+    #[test]
+    fn a_games_own_actions_have_a_table_and_read_back() {
+        let defaults = game_map();
+        let mut map = defaults.clone();
+        let menu = map.action("weather menu").unwrap();
+        map.set_bindings(menu, [Binding::Button(Key::F5.into())])
+            .unwrap();
+
+        let text = map.write_bindings(&defaults);
+        let tables = text.find("\n[bindings]\n").unwrap();
+        let game = text.find("\n[game_bindings]\n").unwrap();
+        assert!(tables < game, "{text}");
+        assert!(text.contains("games made for themselves"), "{text}");
+        assert!(text.contains("\n\"weather menu\" = [\"F5\"]\n"), "{text}");
+        assert!(
+            text.contains("\n# zoom = [\"F2\", \"GamepadSelect\"]\n"),
+            "{text}"
+        );
+        assert!(!text[..game].contains("zoom"), "{text}");
+
+        let mut read = defaults.clone();
+        assert_eq!(read.read_bindings(&text), Ok(Vec::new()));
+        assert_eq!(read, map);
+        // A map with no own actions writes no second table.
+        let plain = ActionMap::standard();
+        assert!(!plain.write_bindings(&plain).contains("\n[game_bindings]\n"));
+    }
+
+    #[test]
+    fn game_bindings_skip_other_games_and_refuse_standard_actions() {
+        let mut map = game_map();
+        let problems = map
+            .read_bindings(
+                "[game_bindings]\n\"another game's action\" = [\"F9\"]\njump = [\"F\", \"GamepadSouth\"]\n\
+                 zoom = [\"F6\", \"GamepadSelect\"]\n[bindings]\n\"weather menu\" = [\"F7\", \"DpadUp\"]\n",
+            )
+            .unwrap();
+        assert_eq!(
+            problems,
+            [BindingsProblem {
+                line: 3,
+                kind: ProblemKind::NotOwn {
+                    action: "jump".into()
+                }
+            }]
+        );
+        assert!(said(&problems)[0].contains("Move this line up"));
+        let jump = map.action("jump").unwrap();
+        assert_eq!(map.bindings(jump), game_map().bindings(jump));
+        let zoom = map.action("zoom").unwrap();
+        assert_eq!(map.bindings(zoom)[0], Binding::Button(Key::F6.into()));
+        // Forgiving: an own action under [bindings] is still read.
+        let menu = map.action("weather menu").unwrap();
+        assert_eq!(map.bindings(menu)[0], Binding::Button(Key::F7.into()));
     }
 }

@@ -50,6 +50,37 @@ declare extern type Character with
     --- Example: if game.player.ammo + game.player.reserve == 0 then game.player:giveWeapon("pistol") end
     reserve: number
 
+    --- How fast the character is moving, in metres a second, with y up. It
+    --- is zero for one the engine has given no motion.
+    --- Example: local speed = vector.magnitude(game.player.velocity)
+    velocity: vector
+
+    --- Where the character's eyes are, in metres: the point a first person
+    --- view is drawn from. A little above `position`.
+    --- Example: game.audio.playAt("whoosh", game.player.eye)
+    eye: vector
+
+    --- The direction the eyes look along, as a vector of length 1. In third
+    --- person it is the way the camera looks. (0, 0, -1) for one the engine
+    --- has given no motion.
+    --- Example: game.weather.strike(game.player.position + game.player.aim * 40)
+    aim: vector
+
+    --- True while the character stands on the ground, false in the air or
+    --- while flying.
+    --- Example: if game.player.grounded then print("Standing") end
+    grounded: boolean
+
+    --- How the character moves: "walk", "fly" or "noclip". Change the
+    --- player's with `game.player:setMovement`.
+    --- Example: if game.player.movement == "fly" then print("Flying") end
+    movement: ("walk" | "fly" | "noclip")
+
+    --- How fast the character flies, in metres a second: 11 until
+    --- `game.player:setFlySpeed` says otherwise.
+    --- Example: print(game.player.flySpeed)
+    flySpeed: number
+
     --- Puts a new, full weapon in the character's hands, in place of what
     --- they held. The name is one of the engine's weapons ("rifle",
     --- "pistol", "shotgun", "rocket launcher", "grenade") or one made with
@@ -61,6 +92,29 @@ declare extern type Character with
     --- Empties the character's hands. Does nothing if they hold no weapon.
     --- Example: game.player:takeWeapon()
     function takeWeapon(self): ()
+
+    --- Puts the player's feet at `position`, standing still, so
+    --- `game.player.position` reads it at once. With `facing` (any way to
+    --- look along, such as vector.create(0, 0, -1)) the player looks that
+    --- way afterwards; leave it out to keep looking as before. Only
+    --- `game.player` can be moved so far. It changes the game, so it
+    --- belongs in the game's rules, not in `game.onDraw`.
+    --- Example: game.player:teleport(vector.create(0, 2, 0), vector.create(0, 0, -1))
+    function teleport(self, position: vector, facing: vector?): ()
+
+    --- Chooses how the player moves: "walk" (on foot, with gravity), "fly"
+    --- (no gravity, walls still stop the player) or "noclip" (flying
+    --- through walls and floors). It stays through a reload of the script.
+    --- Only `game.player` can be changed so far.
+    --- Example: if game.input.justPressed("map") then game.player:setMovement("fly") end
+    function setMovement(self, mode: "walk" | "fly" | "noclip"): ()
+
+    --- How fast the player flies and noclips, in metres a second, from 0.5
+    --- to 200; numbers outside that are taken as the nearest end. 11 if
+    --- never set. It stays through a reload of the script. Only
+    --- `game.player` can be changed so far.
+    --- Example: game.player:setFlySpeed(30)
+    function setFlySpeed(self, metresPerSecond: number): ()
 end
 
 --- Where a shot landed: what a `game.onWeaponHit` function is handed.
@@ -176,10 +230,34 @@ declare extern type HudText with
     right: number
     down: number
 
+    --- True while the pointer (the mouse, free to move because a menu is
+    --- open) is over the piece, as this tick saw it. False while the piece
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
+    --- Example: if ammo.hovered then ammo.color = "yellow" end
+    hovered: boolean
+
+    --- True from the tick the click (the "menu_click" action: the left mouse
+    --- button or the right trigger) begins over the piece, until it is let
+    --- go, even if the pointer moves off the piece meanwhile. Of pieces
+    --- laid over each other only the top one (the last made) is pressed.
+    --- Always false if the game has no "menu_click" action. For a slider
+    --- that follows the pointer while held, see `pointerAt`.
+    --- Example: if ammo.pressed then ammo.color = "red" end
+    pressed: boolean
+
     --- Takes it off the HUD for good. To hide it for a while, set
     --- `visible` instead.
     --- Example: ammo:remove()
     function remove(self): ()
+
+    --- Where the pointer is across the piece, as parts of its size: 0 at its
+    --- left and top edge, 1 at its right and bottom edge. It is not held
+    --- between 0 and 1, so a drag past the end of a slider reads past 1:
+    --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
+    --- Example: local across, down = ammo:pointerAt()
+    function pointerAt(self): (number, number)
 end
 
 --- A bar on the HUD, such as health: what `game.hud.bar` gives.
@@ -206,9 +284,33 @@ declare extern type HudBar with
     right: number
     down: number
 
+    --- True while the pointer (the mouse, free to move because a menu is
+    --- open) is over the piece, as this tick saw it. False while the piece
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
+    --- Example: if health.hovered then health.color = "yellow" end
+    hovered: boolean
+
+    --- True from the tick the click (the "menu_click" action: the left mouse
+    --- button or the right trigger) begins over the piece, until it is let
+    --- go, even if the pointer moves off the piece meanwhile. Of pieces
+    --- laid over each other only the top one (the last made) is pressed.
+    --- Always false if the game has no "menu_click" action. For a slider
+    --- that follows the pointer while held, see `pointerAt`.
+    --- Example: if bar.pressed then volume = math.clamp(bar:pointerAt(), 0, 1); bar.value = volume end
+    pressed: boolean
+
     --- Takes it off the HUD for good.
     --- Example: health:remove()
     function remove(self): ()
+
+    --- Where the pointer is across the piece, as parts of its size: 0 at its
+    --- left and top edge, 1 at its right and bottom edge. It is not held
+    --- between 0 and 1, so a drag past the end of a slider reads past 1:
+    --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
+    --- Example: if bar.pressed then volume = math.clamp(bar:pointerAt(), 0, 1); bar.value = volume end
+    function pointerAt(self): (number, number)
 end
 
 --- A plain box on the HUD, such as a crosshair dot or a panel behind text:
@@ -230,9 +332,77 @@ declare extern type HudBox with
     right: number
     down: number
 
+    --- True while the pointer (the mouse, free to move because a menu is
+    --- open) is over the piece, as this tick saw it. False while the piece
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
+    --- Example: if dot.hovered then dot.color = "yellow" end
+    hovered: boolean
+
+    --- True from the tick the click (the "menu_click" action: the left mouse
+    --- button or the right trigger) begins over the piece, until it is let
+    --- go, even if the pointer moves off the piece meanwhile. Of pieces
+    --- laid over each other only the top one (the last made) is pressed.
+    --- Always false if the game has no "menu_click" action. For a slider
+    --- that follows the pointer while held, see `pointerAt`.
+    --- Example: if dot.pressed then dot.color = "red" end
+    pressed: boolean
+
     --- Takes it off the HUD for good.
     --- Example: dot:remove()
     function remove(self): ()
+
+    --- Where the pointer is across the piece, as parts of its size: 0 at its
+    --- left and top edge, 1 at its right and bottom edge. It is not held
+    --- between 0 and 1, so a drag past the end of a slider reads past 1:
+    --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
+    --- Example: local across, down = dot:pointerAt()
+    function pointerAt(self): (number, number)
+end
+
+--- A graph of how long the last pictures took to draw, against lines at 60
+--- and 30 frames a second: what `game.hud.frameGraph` gives. The engine
+--- draws it, so there is nothing to feed it.
+--- Example: local graph = game.hud.frameGraph({ at = "top right" })
+declare extern type HudGraph with
+    --- False hides it until it is set to true again.
+    --- Example: graph.visible = false
+    visible: boolean
+
+    --- How far it sits right of and below where it is pinned, in pixels on
+    --- a screen 1080 high (below 0 is left or up).
+    --- Example: graph.down = 40
+    right: number
+    down: number
+
+    --- True while the pointer (the mouse, free to move because a menu is
+    --- open) is over the piece, as this tick saw it. False while the piece
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
+    --- Example: if graph.hovered then graph.visible = false end
+    hovered: boolean
+
+    --- True from the tick the click (the "menu_click" action: the left mouse
+    --- button or the right trigger) begins over the piece, until it is let
+    --- go, even if the pointer moves off the piece meanwhile. Of pieces
+    --- laid over each other only the top one (the last made) is pressed.
+    --- Always false if the game has no "menu_click" action. For a slider
+    --- that follows the pointer while held, see `pointerAt`.
+    --- Example: if graph.pressed then graph.visible = false end
+    pressed: boolean
+
+    --- Takes it off the HUD for good.
+    --- Example: graph:remove()
+    function remove(self): ()
+
+    --- Where the pointer is across the piece, as parts of its size: 0 at its
+    --- left and top edge, 1 at its right and bottom edge. It is not held
+    --- between 0 and 1, so a drag past the end of a slider reads past 1:
+    --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
+    --- Example: local across, down = graph:pointerAt()
+    function pointerAt(self): (number, number)
 end
 
 declare game: {
@@ -252,6 +422,8 @@ declare game: {
     --- `distance += speed * step` moves at the same speed everywhere. To wait
     --- or to repeat, use `game.after` and `game.every` instead of counting.
     --- You can add several handlers; they run in the order they were added.
+    --- While time is stopped (`game.setTimeSpeed(0)`) the handlers still run
+    --- every tick, so the game can hear the player, but `step` is 0.
     --- Example: game.onTick(function() if game.input.justPressed("jump") then print("Jump!") end end)
     onTick: (handler: (step: number) -> ()) -> (),
 
@@ -286,6 +458,22 @@ declare game: {
     --- fills in the pictures between ticks.
     --- Example: local shown = game.tween(0, 100, 1)
     tween: (from: number, to: number, seconds: number) -> Tween,
+
+    --- How fast the game runs, from 0 to 8: 1 is usual, 0 stops it, 0.25 is
+    --- slow and 4 is fast. The game runs more or fewer ticks a second; each
+    --- tick is still the same length. At 0 the game's time does not move:
+    --- `game.time()` stays still, timers and tweens wait and the weather
+    --- holds. `game.onTick` functions still run, with a `step` of 0, so the
+    --- game can hear the player and start time again. Numbers outside 0 to 8
+    --- are taken as the nearest end. It stays through a reload of the script.
+    --- Example: game.input.bind("pause_time", { "F2", "GamepadSelect" })
+    --- Example: if game.input.justPressed("pause_time") then game.setTimeSpeed(0) end
+    setTimeSpeed: (speed: number) -> (),
+
+    --- How fast the game is running: what `game.setTimeSpeed` last said, or
+    --- 1.
+    --- Example: if game.timeSpeed() == 0 then print("Time is stopped") end
+    timeSpeed: () -> number,
 
     --- Calls `handler` each time this file is saved and loaded again while
     --- the game is running. Variables in the file start over on a reload;
@@ -777,6 +965,16 @@ declare game: {
         ---     by 100 if left out.
         --- Example: local dot = game.hud.box({ at = "center", width = 6, height = 6 })
         box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBox,
+
+        --- Puts a graph of the last frame times on the HUD, drawn against
+        --- lines at 60 and 30 frames a second. Its own options:
+        ---   width, height: its size in pixels on a screen 1080 high. 240
+        ---     by 80 if left out.
+        ---   frames: how many of the newest frames it shows, from 10 to
+        ---     1000. 240 if left out.
+        --- Example: local graph = game.hud.frameGraph({ at = "top right" })
+        --- Example: local long = game.hud.frameGraph({ at = "top right", down = 100, frames = 1000 })
+        frameGraph: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, frames: number? }?) -> HudGraph,
     },
 
     --- What the player is doing right now, by action name. An action works
@@ -797,7 +995,7 @@ declare game: {
     ---
     --- "pause" opens the menu every game has. While it is open, the actions
     --- above all read as let go, and the menu's own are heard instead:
-    --- "menu_move", "menu_confirm", "menu_back", "menu_previous_tab",
+    --- "menu_move", "menu_confirm", "menu_click", "menu_back", "menu_previous_tab",
     --- "menu_next_tab" and "menu_close". Escape goes back one screen, and
     --- closes the menu from its first screen; "menu_close" (P, or Start on
     --- a gamepad) closes it from anywhere.
@@ -864,5 +1062,79 @@ declare game: {
         --- The engine's own pause menu does not change it.
         --- Example: shop.visible = game.input.currentSet() == "menu"
         currentSet: () -> string,
+
+        --- Makes an action of the game's own: a button the player can
+        --- rebind in the menu, such as a key that opens your map. `name` is
+        --- 1 to 40 lower case letters, digits and underscores, like the
+        --- engine's own "menu_click" or "use_item", and not the name of one
+        --- of the engine's actions (read those with `pressed`). `bindings`
+        --- are button names: "F1", "MouseLeft", "GamepadSelect",
+        --- "LeftBumper"... Give a gamepad button too, so nobody is left
+        --- out. A gamepad has two buttons LORE leaves free for a game:
+        --- GamepadSelect and LeftBumper. Sharing any other button with an
+        --- engine action works, but the player is told of the clash. Write
+        --- it at the top of the file, outside any function; once made, read
+        --- it like any action. The action works whichever set of actions is
+        --- live.
+        --- Example: game.input.bind("open_map", { "F1", "GamepadSelect" })
+        --- Example: if game.input.justPressed("open_map") then mapShown = not mapShown end
+        bind: (name: string, bindings: { string }) -> (),
+
+        --- Where the pointer is, in pixels on a screen 1080 high, from the
+        --- top left corner: x right and y down. nil when there is no free
+        --- pointer (the mouse is looking around, or a gamepad is in use).
+        --- Open a menu with `useSet("menu")` to get one.
+        --- Example: local x, y = game.input.pointer()
+        pointer: () -> (number?, number?),
+
+        --- How many notches the mouse wheel rolled since the last tick:
+        --- above 0 when the wheel is rolled forward, as when scrolling up. A
+        --- touchpad gives parts of a notch.
+        --- Example: scroll += game.input.wheel()
+        wheel: () -> number,
+
+        --- For moving through a menu: x and y, each -1, 0 or 1. Each is 1 or
+        --- -1 on the tick a direction is first pushed (more than half way),
+        --- then again every 0.1 seconds once it has been held for 0.4
+        --- seconds; otherwise 0. Right and up are positive. Works for
+        --- "menu_move" and "move" (x and y), for a one direction action (x
+        --- only) and for a button (x is 1 on the steps).
+        --- Example: local x, y = game.input.stepped("menu_move")
+        --- Example: if y ~= 0 then selected = (selected - y - 1) % #items + 1 end
+        stepped: (action: string) -> (number, number),
+
+        --- What to show the player for an action: the name of what it is
+        --- bound to on the device they used last ("E", "Left click", or on a
+        --- gamepad what is printed on the button: "A", "Cross"), or the
+        --- other device's if that has none, or "" if nothing is bound.
+        --- The player can change it while the game runs, so it can only be
+        --- read while drawing, in `game.onDraw`.
+        --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
+        label: (action: string) -> string,
+    },
+
+    --- How fast this computer is drawing pictures. It is different on every
+    --- computer, so it can only be read while drawing, in `game.onDraw`
+    --- (the game's rules cannot read it). Show it with `game.hud.text`.
+    --- All are 0 before the first picture.
+    frames: {
+        --- Pictures a second, over the last second of pictures.
+        --- Example: game.onDraw(function() fps.text = math.floor(game.frames.rate()) end)
+        rate: () -> number,
+
+        --- The "1% low", in pictures a second: the slowest hundredth of the
+        --- last 1000 pictures (at least one picture), averaged. It says how
+        --- smooth the game feels better than `rate` does.
+        --- Example: game.onDraw(function() low.text = math.floor(game.frames.lowRate()) end)
+        lowRate: () -> number,
+
+        --- How long the last picture took, in seconds.
+        --- Example: game.onDraw(function() cost.text = string.format("%.1f ms", game.frames.lastTime() * 1000) end)
+        lastTime: () -> number,
+
+        --- How long the slowest of the last 1000 pictures took, in seconds:
+        --- the worst stutter lately.
+        --- Example: game.onDraw(function() worst.text = string.format("%.1f ms", game.frames.slowestTime() * 1000) end)
+        slowestTime: () -> number,
     },
 }

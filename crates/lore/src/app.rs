@@ -27,6 +27,12 @@ use crate::translate;
 /// standing player's, in metres.
 const STANDING_EYE: f32 = 1.6;
 
+/// How tall the screen is in the HUD's own units, whatever its size in pixels.
+const HUD_HEIGHT: f32 = 1080.0;
+
+/// The smallest and largest size a `Ui` lays the HUD out at.
+const UI_SCALES: (f32, f32) = (0.75, 1.5);
+
 /// A view that moves further than this in one frame, in metres, has jumped
 /// rather than moved. Falling at terminal speed at 20 frames a second is
 /// under 3 m a frame.
@@ -317,7 +323,10 @@ fn start(
         look,
         rumble_share: config.settings.rumble_share(),
         controls,
-        new_controls: None,
+        // The game is told the controls once, so the first label it draws
+        // is right: with no bindings file they are the config's own.
+        new_controls: Some(config.actions.clone()),
+        ui_scale: config.settings.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1),
         pointer: None,
         pointer_down: false,
         pointer_tapped: false,
@@ -364,6 +373,9 @@ struct App<G> {
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
     new_controls: Option<ActionMap>,
+    /// The size the player chose for the HUD, for turning the pointer's
+    /// pixels into HUD units.
+    ui_scale: f32,
     /// Where the mouse pointer is over the window, in pixels from its
     /// top-left corner.
     pointer: Option<[f32; 2]>,
@@ -561,6 +573,8 @@ impl<G: Game> App<G> {
             // A menu scrolls by parts of a notch too, so a touchpad is smooth.
             self.wheel =
                 (self.wheel + notches).clamp(-MOST_NOTCHES_PER_EVENT, MOST_NOTCHES_PER_EVENT);
+            // A script reads the wheel over the free pointer as well.
+            self.input.roll_wheel(notches);
         }
         self.scroll += notches;
         // A faulty device can report absurd distances. Without a limit, a
@@ -628,6 +642,30 @@ impl<G: Game> App<G> {
         log::info!("Your controls were saved, so they were read again and are in use.");
     }
 
+    /// Tells the input where the free pointer is, in the HUD's own units,
+    /// so what a tick reads of it matches what is drawn: the same scale as
+    /// the HUD is laid out with. A captured mouse points at nothing.
+    fn point_input(&mut self) {
+        let Some(window) = &self.window else {
+            self.input.set_pointer(None, [0.0, 0.0]);
+            return;
+        };
+        let size = window.inner_size();
+        #[allow(clippy::cast_precision_loss)]
+        let (width, height) = (size.width as f32, size.height.max(1) as f32);
+        let scale = height / HUD_HEIGHT * self.ui_scale;
+        if !(scale.is_finite() && scale > 0.0) {
+            self.input.set_pointer(None, [0.0, 0.0]);
+            return;
+        }
+        let at = if self.captured {
+            None
+        } else {
+            self.pointer.map(|[x, y]| [x / scale, y / scale])
+        };
+        self.input.set_pointer(at, [width / scale, height / scale]);
+    }
+
     /// Runs the ticks that are due and lets the game prepare the next frame.
     /// Returns whether the game asked to end.
     fn update(&mut self) -> bool {
@@ -638,6 +676,7 @@ impl<G: Game> App<G> {
         self.follow_controls();
 
         self.gamepads.poll(&mut self.input, self.focused);
+        self.point_input();
         let step = self.clock.step().as_secs_f32();
         let due = tick::run_due(
             &mut self.clock,
@@ -764,6 +803,16 @@ impl<G: Game> App<G> {
         }
         if let Some(under) = frame.under_water() {
             self.sound.set_underwater(if under { 1.0 } else { 0.0 });
+        }
+        // The size the HUD was just laid out at: a `Ui` keeps its size
+        // between these, so the pointer's units are the same.
+        self.ui_scale = if frame.ui_scale().is_finite() {
+            frame.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1)
+        } else {
+            1.0
+        };
+        if let Some(speed) = frame.time_speed() {
+            self.clock.set_speed(speed);
         }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);

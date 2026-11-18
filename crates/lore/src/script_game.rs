@@ -71,7 +71,8 @@ fn said_of(map: &Map) {
 impl ScriptGame {
     /// A game running `host` with no files behind it: it has the starter
     /// sounds, and nothing placed in its level.
-    fn without_files(host: ScriptHost) -> Self {
+    fn without_files(mut host: ScriptHost) -> Self {
+        host.set_text_measure(crate::error_overlay::measure());
         let mut game = Self {
             host,
             errors: None,
@@ -153,7 +154,8 @@ impl ScriptGame {
     /// Fails if `folder` has no `main.luau` or the file cannot be read.
     pub fn open(folder: impl AsRef<Path>, actions: &ActionMap) -> Result<Self, OpenError> {
         let folder = folder.as_ref();
-        let host = ScriptHost::open(folder, actions.clone())?;
+        let mut host = ScriptHost::open(folder, actions.clone())?;
+        host.set_text_measure(crate::error_overlay::measure());
         let (map_file, read) = MapFile::open(folder);
         let (map, map_error) = match read {
             Ok(map) => {
@@ -268,7 +270,18 @@ impl Game for ScriptGame {
     }
 
     fn frame(&mut self, frame: &mut Frame) {
-        // First, so what the script asks for while drawing is in this frame.
+        // What the script reads while it draws: how long pictures take, who
+        // is playing and with which controls, so a label and a graph are
+        // right in this very frame.
+        if frame.delta_seconds() > 0.0 {
+            self.host.frame_drawn(frame.delta_seconds());
+        }
+        self.host.set_device(frame.device(), frame.gamepad_style());
+        if let Some(controls) = frame.new_controls() {
+            self.host.set_controls(controls);
+        }
+        frame.set_time_speed(self.host.time_speed());
+        // After those, so what the script asks for while drawing is in this frame.
         self.host.draw(frame.alpha());
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
@@ -524,6 +537,90 @@ mod tests {
         let mut frame = Frame::new(0.0);
         game.frame(&mut frame);
         assert_eq!(frame.action_set(), None, "the window already has it");
+    }
+
+    /// The rects `game` draws over one frame that lasted `seconds`, as
+    /// `(left, top, colour)`.
+    fn rects(game: &mut ScriptGame, seconds: f32) -> Vec<([f32; 2], lore_ui::Color)> {
+        let mut frame = Frame::new(0.0).with_pointer(seconds, None, false);
+        game.frame(&mut frame);
+        frame
+            .take_ui()
+            .draw()
+            .iter()
+            .filter_map(|draw| match draw {
+                Draw::Rect {
+                    position, color, ..
+                } => Some((position, color)),
+                Draw::Text { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_graph_draws_its_lines_and_a_mark_for_each_frame_drawn() {
+        let script =
+            r#"game.hud.frameGraph({ at = "top left", width = 100, height = 50, frames = 10 })"#;
+        let mut game = ScriptGame::from_source(script, &ActionMap::default());
+        // Nothing drawn yet: only the lines at 60 and 30 frames a second.
+        assert_eq!(rects(&mut game, 0.0).len(), 2);
+        let first = rects(&mut game, 0.01);
+        assert_eq!(first.len(), 3, "{first:?}");
+        let more = rects(&mut game, 0.02);
+        let marks = rects(&mut game, 0.06);
+        assert_eq!((more.len(), marks.len()), (4, 5));
+        // The three marks, oldest to newest: they go from left to right,
+        // and a slower frame is marked higher up, in a poorer colour.
+        let marks = &marks[2..];
+        assert!(marks[0].0[0] < marks[1].0[0] && marks[1].0[0] < marks[2].0[0]);
+        assert!(marks[0].0[1] > marks[1].0[1] && marks[1].0[1] > marks[2].0[1]);
+        assert!(marks[0].1 != marks[1].1 && marks[1].1 != marks[2].1);
+        // Frames fill the graph and then push the oldest out.
+        for _ in 0..20 {
+            rects(&mut game, 0.016);
+        }
+        assert_eq!(rects(&mut game, 0.016).len(), 12);
+    }
+
+    #[test]
+    fn a_frame_graph_that_is_hidden_draws_nothing() {
+        let script = r#"
+            local graph = game.hud.frameGraph({ frames = 10 })
+            graph.visible = false
+        "#;
+        let mut game = ScriptGame::from_source(script, &ActionMap::default());
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        assert_eq!(rects(&mut game, 0.016), []);
+    }
+
+    #[test]
+    fn the_frame_tells_the_script_the_controls_and_the_device_and_hears_the_speed_of_time() {
+        let script = r#"
+            local hint = game.hud.text("")
+            game.onDraw(function() hint.text = game.input.label("jump") end)
+            game.onTick(function() game.setTimeSpeed(0.5) end)
+        "#;
+        let actions = ActionMap::standard();
+        let mut game = ScriptGame::from_source(script, &actions);
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0)
+            .with_device(
+                lore_input::Device::Gamepad,
+                lore_input::GamepadStyle::PlayStation,
+            )
+            .with_controls(Some(actions));
+        game.frame(&mut frame);
+        assert_eq!(frame.time_speed(), Some(0.5));
+        let said = frame
+            .take_ui()
+            .draw()
+            .iter()
+            .find_map(|draw| match draw {
+                Draw::Text { text, .. } => Some(text.to_string()),
+                Draw::Rect { .. } => None,
+            })
+            .unwrap_or_default();
+        assert_eq!(said, "Cross");
     }
 
     /// The script error is drawn for real, with no window, and the picture

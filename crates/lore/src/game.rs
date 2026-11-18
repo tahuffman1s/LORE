@@ -63,6 +63,8 @@ pub struct Frame {
     controls: Option<ActionMap>,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
+    /// How fast game time runs, if the game said this frame.
+    time_speed: Option<f32>,
     /// The player's settings to put into effect, when they have changed.
     settings: Option<Settings>,
     ui: DrawBuffer,
@@ -168,6 +170,7 @@ impl Frame {
             gamepad_style: GamepadStyle::Xbox,
             controls: None,
             ui_scale: 1.0,
+            time_speed: None,
             settings: None,
             ui: DrawBuffer::default(),
             title: None,
@@ -477,6 +480,17 @@ impl Frame {
     /// Sets the player's own size for the HUD and menus, for the game to read.
     pub(crate) fn set_ui_scale(&mut self, scale: f32) {
         self.ui_scale = scale;
+    }
+
+    /// Says how fast game time runs from now on: the window's clock runs
+    /// that many ticks for each one real time asks for.
+    pub(crate) fn set_time_speed(&mut self, speed: f32) {
+        self.time_speed = Some(speed);
+    }
+
+    /// How fast the game said time runs, if it said this frame.
+    pub(crate) fn time_speed(&self) -> Option<f32> {
+        self.time_speed
     }
 
     /// Puts the player's settings into effect: how loud the speakers are

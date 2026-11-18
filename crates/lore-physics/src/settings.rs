@@ -8,6 +8,18 @@ use crate::footing::Footing;
 /// straight up, so that forward always points somewhere.
 const STEEPEST_LOOK: f32 = 1.5;
 
+/// How the player moves: on foot, flying, or flying through walls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MoveMode {
+    /// On foot, with gravity: walking, running, jumping, swimming.
+    #[default]
+    Walk,
+    /// Flying where the eyes look, with no gravity; walls still stop them.
+    Fly,
+    /// Flying as `Fly` does, through anything.
+    Noclip,
+}
+
 /// What the player is asking for during one tick.
 ///
 /// This is deliberately not tied to keys or sticks: fill it from actions,
@@ -36,6 +48,9 @@ pub struct MoveInput {
     /// What the ground underfoot does to walking. The default changes
     /// nothing; see [`Footing`].
     pub footing: Footing,
+    /// How the player moves. Flying goes where the eyes look (pitch
+    /// included), jump rises, crouch sinks and sprint is faster.
+    pub mode: MoveMode,
 }
 
 impl MoveInput {
@@ -127,6 +142,8 @@ pub struct MoveSettings {
     /// The steepest ground the player can stand on, in degrees from flat.
     /// Anything steeper is slid down.
     pub steepest_slope: f32,
+    /// Top speed while flying, in metres a second. Sprinting doubles it.
+    pub fly_speed: f32,
 }
 
 impl Default for MoveSettings {
@@ -154,6 +171,7 @@ impl Default for MoveSettings {
             air_speed: 0.75,
             step_height: 0.4,
             steepest_slope: 45.0,
+            fly_speed: 11.0,
         }
     }
 }

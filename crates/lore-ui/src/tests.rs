@@ -1,7 +1,7 @@
 use crate::input::{REPEAT_DELAY, REPEAT_EVERY, Repeater, held_direction};
 use crate::{
-    Anchor, Color, Direction, Draw, InputMode, SMALLEST_TEXT, Theme, Ui, UiError, UiEvent, UiInput,
-    Value, WidgetId,
+    Anchor, Color, Direction, Draw, EstimatedText, InputMode, SMALLEST_TEXT, Theme, Ui, UiError,
+    UiEvent, UiInput, Value, WidgetId, hud_area, hud_text_size,
 };
 
 const HD: [u32; 2] = [1920, 1080];
@@ -152,6 +152,36 @@ fn hud_pieces_are_pinned_inside_the_safe_area() {
             "{anchor:?} y {position:?}"
         );
     }
+}
+
+#[test]
+fn hud_area_agrees_with_where_the_ui_places_a_piece() {
+    let screen = [1920.0, 1080.0];
+    for anchor in [
+        Anchor::TopLeft,
+        Anchor::Center,
+        Anchor::BottomRight,
+        Anchor::Top,
+    ] {
+        let mut ui = Ui::default();
+        ui.hud_rect(anchor, [7.0, -3.0], [100.0, 50.0], Color::WHITE);
+        ui.hud_text(anchor, [7.0, -3.0], 32.0, "30 / 90");
+        idle(&mut ui);
+        let (position, size, _) = rects(&ui)[0];
+        let [x, y, w, h] = hud_area(anchor, [7.0, -3.0], [100.0, 50.0], screen);
+        assert_eq!([x, y], position, "{anchor:?}");
+        assert_eq!([w, h], size, "{anchor:?}");
+
+        let measured = hud_text_size("30 / 90", 32.0, &EstimatedText);
+        let [x, y, w, h] = hud_area(anchor, [7.0, -3.0], measured, screen);
+        let drawn = find(&ui, "30 / 90");
+        assert!(
+            (drawn[0] - x).abs() < 0.01 && (drawn[1] - y).abs() < 0.01,
+            "{anchor:?}"
+        );
+        assert!(w > 0.0 && h >= SMALLEST_TEXT);
+    }
+    assert_eq!(hud_text_size("x", 1.0, &EstimatedText)[1], SMALLEST_TEXT);
 }
 
 #[test]

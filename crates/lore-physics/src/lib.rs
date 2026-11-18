@@ -32,6 +32,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod fly;
 mod footing;
 mod level;
 mod player;
@@ -44,5 +45,5 @@ mod water;
 pub use footing::Footing;
 pub use level::{Level, RayHit};
 pub use player::Player;
-pub use settings::{MoveInput, MoveSettings};
+pub use settings::{MoveInput, MoveMode, MoveSettings};
 pub use water::fill;

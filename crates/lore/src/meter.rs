@@ -20,17 +20,29 @@ const PADDING: f32 = 8.0;
 const TEXT: f32 = 20.0;
 /// The frame time at the graph's top edge, in seconds: a frame this long
 /// or longer is a spike to the top.
-const TOP: f32 = 1.0 / 25.0;
+pub(crate) const TOP: f32 = 1.0 / 25.0;
 /// How often the numbers are written again, in seconds: often enough to
 /// follow, seldom enough to read.
 const WRITE_EVERY: f32 = 0.25;
 
 const PANEL: Color = Color::rgba(0.05, 0.05, 0.06, 0.72);
-const LINE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
+pub(crate) const LINE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
 /// Under a sixtieth of a second, under a thirtieth, and slower.
 const GOOD: Color = Color::rgba(0.35, 0.9, 0.45, 1.0);
 const FAIR: Color = Color::rgba(0.98, 0.78, 0.25, 1.0);
 const POOR: Color = Color::rgba(0.98, 0.35, 0.3, 1.0);
+
+/// The colour of a mark for a frame of `seconds`: good while it kept up
+/// with 60 frames a second, fair while it kept up with 30, poor beyond.
+pub(crate) fn colour_of(seconds: f32) -> Color {
+    if seconds <= 1.0 / 58.0 {
+        GOOD
+    } else if seconds <= 1.0 / 29.0 {
+        FAIR
+    } else {
+        POOR
+    }
+}
 
 /// Counts frames and draws the meter.
 pub(crate) struct FrameMeter {
@@ -116,14 +128,7 @@ impl FrameMeter {
             let _ = self
                 .ui
                 .set_offset(*mark, [-MARGIN - PADDING - left, Self::down(seconds)]);
-            let colour = if seconds <= 1.0 / 58.0 {
-                GOOD
-            } else if seconds <= 1.0 / 29.0 {
-                FAIR
-            } else {
-                POOR
-            };
-            let _ = self.ui.set_color(*mark, colour);
+            let _ = self.ui.set_color(*mark, colour_of(seconds));
         }
         if self.since_written >= WRITE_EVERY {
             self.since_written = 0.0;

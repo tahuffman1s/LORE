@@ -246,3 +246,72 @@ game.onTick(function()
         game.sky.setHour((game.sky.hour() or 12) + 1 / 600)
     end
 end)
+
+-- A button of the game's own, the pointer and the wheel, and stepping
+-- through a menu.
+game.input.bind("open_map", { "F1", "GamepadSelect" })
+local mapShown = false
+local selected = 1
+local scroll = 0
+game.onTick(function()
+    if game.input.justPressed("open_map") then
+        mapShown = not mapShown
+    end
+    local px, py = game.input.pointer()
+    if px and py then
+        print(px + py)
+    end
+    scroll += game.input.wheel()
+    local sx, sy = game.input.stepped("menu_move")
+    if sy ~= 0 then
+        selected = (selected - sy - 1) % 4 + 1
+    end
+    selected += sx
+end)
+
+-- What is drawn: how the frames are going, what a key is called, and the
+-- pieces under the pointer.
+local fps = game.hud.text("", { at = "top left" })
+local hint = game.hud.text("", { at = "bottom" })
+local slider = game.hud.bar(0.5, { at = "center", width = 300 })
+local graph = game.hud.frameGraph({ at = "top right", down = 100, width = 300, height = 100, frames = 500 })
+local plain = game.hud.frameGraph()
+game.onDraw(function()
+    fps.text = math.floor(game.frames.rate()) .. " fps, " .. string.format("%.1f ms", game.frames.lastTime() * 1000)
+    fps.text ..= " slowest " .. string.format("%.1f ms", game.frames.slowestTime() * 1000) .. " low " .. game.frames.lowRate()
+    hint.text = "Press " .. game.input.label("interact") .. " to open"
+    if slider.pressed then
+        slider.value = math.clamp(slider:pointerAt(), 0, 1)
+    end
+    local across: number, down: number = graph:pointerAt()
+    graph.visible = not plain.hovered and not plain.pressed
+    print(across, down, fps.hovered, fps.pressed, hint.pressed)
+end)
+graph:remove()
+
+-- Seeing and moving the player.
+game.onTick(function()
+    local pace: number = vector.magnitude(game.player.velocity)
+    local eyes: vector = game.player.eye
+    local looking: vector = game.player.aim
+    local mode: string = game.player.movement
+    print(pace, eyes, looking, mode, game.player.grounded, game.player.flySpeed)
+    if game.input.justPressed("map") then
+        game.player:teleport(vector.create(0, 2, 0))
+        game.player:teleport(game.player.position + vector.create(10, 0, 0), vector.create(0, 0, -1))
+        game.player:setMovement("fly")
+        game.player:setMovement("noclip")
+        game.player:setMovement("walk")
+        game.player:setFlySpeed(30)
+    end
+end)
+
+-- The speed of time.
+game.onTick(function(step)
+    if game.input.justPressed("open_map") and game.timeSpeed() > 0 then
+        game.setTimeSpeed(0)
+    elseif step == 0 and game.input.justPressed("menu_back") then
+        game.setTimeSpeed(1)
+    end
+    game.setTimeSpeed(0.25)
+end)

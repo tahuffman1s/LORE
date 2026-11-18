@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use parry3d::shape::Capsule;
 
 use crate::level::{Level, Vector};
-use crate::settings::{MoveInput, MoveSettings, positive};
+use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
 use crate::slide::{SKIN, Slid, slide, unstick};
 
 /// How far below the feet counts as standing on something when landing.
@@ -261,6 +261,10 @@ impl Player {
             return;
         }
         let input = input.cleaned();
+        if input.mode != MoveMode::Walk {
+            self.fly(level, settings, &input, dt);
+            return;
+        }
         let before = *self;
 
         // Whether they stand on ice, which is slippery.

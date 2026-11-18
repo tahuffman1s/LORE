@@ -47,6 +47,7 @@ mod keep;
 mod limit;
 mod modules;
 mod time_api;
+mod tools_api;
 mod weapon_api;
 mod weather_api;
 
@@ -56,6 +57,7 @@ pub use error::{OpenError, ScriptError};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lore_weapons as weapons;
+pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 

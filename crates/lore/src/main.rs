@@ -157,9 +157,16 @@ enum Command {
                       MouseWheelUp) or a gamepad\nbutton (GamepadSouth, RightTrigger). To \
                       go back to a game's own controls, delete the file; a game that is\n\
                       running goes back at its next start. To keep the file \
-                      somewhere else, set LORE_BINDINGS to its path."
+                      somewhere else, set LORE_BINDINGS to its path.\n\n\
+                      Give a game's folder (lore controls my-game) to list the actions the \
+                      game's script made for\nitself with game.input.bind as well. They are \
+                      kept in the file's [game_bindings] table, so a change to\nthem stays \
+                      with that game."
     )]
-    Controls,
+    Controls {
+        /// A game's folder, to show the controls the game's script made for itself too
+        folder: Option<PathBuf>,
+    },
     /// Open a test window that shows what your keyboard, mouse or gamepad is doing
     Demo,
     /// Measure how fast this computer draws a built-in test scene
@@ -281,7 +288,7 @@ fn main() -> ExitCode {
 
     let outcome = match pack_to_play() {
         Some(Ok(Asked::Play(pack))) => play_pack(&pack),
-        Some(Ok(Asked::Controls)) => controls(),
+        Some(Ok(Asked::Controls)) => controls(None),
         // Prints help to standard output and mistakes to standard error,
         // with the exit code each should have.
         Some(Err(error)) => error.exit(),
@@ -313,7 +320,7 @@ fn command() -> Result<(), String> {
             target.unwrap_or_else(Target::here),
             runtime_dir.as_deref(),
         ),
-        Some(Command::Controls) => controls(),
+        Some(Command::Controls { folder }) => controls(folder.as_deref()),
         Some(Command::Demo) => demo(),
         Some(Command::Bench {
             frames,
@@ -362,8 +369,12 @@ fn new(folder: &Path) -> Result<(), String> {
 }
 
 /// Opens the game in `folder` for `lore {verb}`, or says how to get one.
-fn open(folder: &Path, config: &Config, verb: &str) -> Result<ScriptGame, String> {
-    cli::open_game(folder, &config.actions, &format!("lore {verb}"))
+/// The config's actions become the game's own map, with the actions its
+/// script made for itself, so the engine hears everything the script reads.
+fn open(folder: &Path, config: &mut Config, verb: &str) -> Result<ScriptGame, String> {
+    let game = cli::open_game(folder, &config.actions, &format!("lore {verb}"))?;
+    config.actions = game.host().actions();
+    Ok(game)
 }
 
 /// `lore check`: runs a second of the game with no window, presses every
@@ -381,8 +392,8 @@ fn check(folder: &Path) -> Result<(), String> {
     /// of a player who has not moved from the middle of a flat floor.
     const DUMMY_AT: [f32; 3] = [0.0, 0.0, -10.0];
 
-    let config = Config::default();
-    let mut game = open(folder, &config, "check")?;
+    let mut config = Config::default();
+    let mut game = open(folder, &mut config, "check")?;
     // Said before the script's own lines; a level with a mistake fails the
     // check at the end, after the script has had its turn.
     let level = cli::load_level(folder).inspect_err(|error| eprintln!("{error}"));
@@ -390,6 +401,9 @@ fn check(folder: &Path) -> Result<(), String> {
     // one the script is let play. Each such file is logged as it is found.
     game.check_sounds();
     let mut input = lore::input::Input::new(config.actions.clone());
+    // Something is under the pointer all through, so code that only runs
+    // while a piece of the HUD is hovered runs too.
+    press::point_in_middle(&mut input);
     let step = 1.0 / TICKS as f32;
     let mut pressed = Pressed::default();
     // A script that fails to load never runs, so there is nothing to tick.
@@ -468,7 +482,7 @@ fn check(folder: &Path) -> Result<(), String> {
     // is played again from the start at other paces.
     let paced = cli::paced(
         || {
-            let mut game = open(folder, &config, "check").ok()?;
+            let mut game = cli::open_game(folder, &config.actions, "lore check").ok()?;
             game.load_sounds();
             Some(game)
         },
@@ -555,8 +569,11 @@ fn check(folder: &Path) -> Result<(), String> {
     }
     println!(
         "Each of the {} actions was also pressed, held and let go, one at a time, with \
-         every key, button and stick it is bound to: sticks were pushed all the way round \
-         and the mouse was moved. Code that only runs on input was run, with no errors. \
+         every key, button and stick it is bound to, the game's own actions made with \
+         game.input.bind among them: sticks were pushed all the way round and the mouse \
+         was moved. The pointer stood in the middle of a 1920 by 1080 screen throughout, \
+         so code that runs only while something is hovered was run too. Code that only \
+         runs on input was run, with no errors. \
          Two actions held together were not tried, and neither was code that needs more \
          than a press, such as a shot that has to hit someone: read that code carefully, \
          and try it by playing with `lore run`.",
@@ -602,7 +619,7 @@ fn run(folder: &Path) -> Result<(), String> {
         return play_pack(folder);
     }
     let mut config = player_config();
-    let game = open(folder, &config, "run")?;
+    let game = open(folder, &mut config, "run")?;
     config.level = cli::load_level(folder).map_err(|error| not_started(&error, "run"))?;
 
     match scaffold::refresh_types(folder) {
@@ -687,6 +704,8 @@ fn start(config: Config, game: ScriptGame) -> Result<(), String> {
 fn play_pack(pack: &Path) -> Result<(), String> {
     let mut config = player_config();
     let packed = player::open(pack, &config.actions).map_err(|error| error.to_string())?;
+    // The engine hears the actions the game's script made for itself.
+    config.actions = packed.game.host().actions();
     // The window carries the game's own name; one with none keeps the usual title.
     if !packed.name.is_empty() {
         config.title.clone_from(&packed.name);
@@ -721,7 +740,7 @@ fn package(folder: &Path, target: Target, runtime_dir: Option<&Path>) -> Result<
 
     // Loading the script is the cheapest check there is: a game that does not
     // load for its maker will not load for a player.
-    let game = open(folder, &Config::default(), "package")?;
+    let game = open(folder, &mut Config::default(), "package")?;
     if let Some(error) = game.host().last_error() {
         return Err(format!(
             "{} has a mistake (the error is shown above), so the game was not \
@@ -758,9 +777,10 @@ fn package(folder: &Path, target: Target, runtime_dir: Option<&Path>) -> Result<
     Ok(())
 }
 
-/// `lore controls`: shows the player's controls and where they are kept.
-fn controls() -> Result<(), String> {
-    let (said, problems) = cli::controls()?;
+/// `lore controls`: shows the player's controls and where they are kept,
+/// and with a game's folder the game's own actions too.
+fn controls(game: Option<&Path>) -> Result<(), String> {
+    let (said, problems) = cli::controls(game)?;
     print!("{said}");
     for problem in problems {
         log::warn!("{problem}");
