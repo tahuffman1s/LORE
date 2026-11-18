@@ -35,7 +35,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use lore_render::Upscaling;
+use lore_render::{LampShadows, Upscaling};
 use lore_script::{Setting, SettingKind, SettingValue};
 use toml::de::{DeTable, DeValue};
 
@@ -140,6 +140,13 @@ words!(Upscaling, UPSCALING:
     Upscaling::Balanced => "balanced",
     Upscaling::Performance => "performance",
     Upscaling::UltraPerformance => "ultra-performance",
+);
+
+words!(LampShadows, LAMP_SHADOWS:
+    LampShadows::Off => "off",
+    LampShadows::Low => "low",
+    LampShadows::Medium => "medium",
+    LampShadows::High => "high",
 );
 
 /// The word a player and a script know `upscaling` by: what
@@ -268,6 +275,12 @@ settings! {
     /// there is haze, mist or dust, and lamps that glow in fog. false draws
     /// the fog as if all of it were in sunlight, which is faster.
     light_shafts: bool = true, Shape::Toggle, "Graphics", "Light shafts";
+    /// How many lamps near you cast shadows, so that their light stops at
+    /// walls: "off" (none: lamplight goes through walls), "low" (4, with
+    /// softer edges), "medium" (8) or "high" (16). More is slower where
+    /// many lamps are near.
+    lamp_shadows: LampShadows = LampShadows::Medium, Shape::Choice(LAMP_SHADOWS), "Graphics",
+        "Lamp shadows";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -829,6 +842,7 @@ mod tests {
             frame_rate_limit: 144.0,
             reflections: false,
             light_shafts: false,
+            lamp_shadows: LampShadows::High,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -906,7 +920,7 @@ mod tests {
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit`, `reflections` and `light_shafts`.",
+                 `frame_rate_limit`, `reflections`, `light_shafts` and `lamp_shadows`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

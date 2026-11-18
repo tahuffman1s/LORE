@@ -182,19 +182,62 @@ Cost: lavapipe 43 ms against 36 ms without it (the bench's thin haze); about
 0.3 ms on the RX 7800 XT at 1280×720. A player can turn it off ("Light
 shafts").
 
+### Lamps cast shadows (#400)
+
+A lamp with no shadow lights through walls: a lantern on one side of a wall
+lit the room on the other. Now the lamps that matter most cast shadows.
+
+- Each frame the lamps in view that may cast (`castsShadows`, true unless a
+  script says otherwise) are ranked by how far their light reaches over how
+  far they are from the eye, and the first eight (the player's "Lamp
+  shadows" setting: off, 4, 8 or 16) are given shadows. A lamp that has one
+  counts half again as much, so two lamps that matter about as much do not
+  trade it as the eye moves, and a shadow fades in and out over a quarter
+  of a second. The choice is made on the CPU and unit-tested.
+- A lamp that shines every way sees the world as a cube of six depth
+  pictures; a spot no wider than about 55° from its middle to its edge
+  needs one picture along its beam, and a wider one only the faces of the
+  cube its beam reaches. Every lamp's pictures are kept in one image, six
+  to a lamp (256 pixels square at "low", 512 above), as Doom 2016 keeps
+  its lights' in one atlas.
+- A lamp's pictures are drawn once and kept until it moves, its light's
+  reach changes by more than a step (a flicker does not), or the level
+  changes. Only the level casts so far, and it does not move (#337). At
+  most 24 pictures are drawn in a frame; a lamp whose pictures do not fit
+  waits a frame. A lamp that moves (a carried torch, a swinging lantern)
+  keeps its own slot and all its shadow, and its pictures are drawn again
+  every frame: that cost is not in the numbers below, whose lamps stand
+  still.
+- A new lamp takes a slot only once the shadow it replaces has faded out,
+  so no shadow is cut off.
+- Each face of a cube is drawn 10% wider than its quarter turn, so the
+  soft edge of a shadow near a face's border is read whole from that face.
+- Edges are soft as the sun's are (`lamp_shadowed`): four looks round the
+  point find what casts on it, and six more read an edge as wide as the
+  lamp's size seen past that caster, turned in every pixel and frame for
+  FSR to blend. A candle's shadow is sharp; a campfire's is soft.
+- Drops, spray and the bodies of water and fluid ask once whether a lamp
+  reaches them (`lamp_reaches`), and so does each step of the lit air:
+  a lamp in mist throws beams through a gate's bars.
+
+Cost, `lore bench --lamps N` at 1280×720: on lavapipe, twenty lamps 60.3
+ms with no shadows and 63.4 ms with eight; sixty-four lamps 76.3 ms and
+87.1 ms. On an RX 7800 XT sixty-four lamps take 1.80 ms with none
+shadowed and 1.83 ms with sixteen. A scene with no lamps costs what it
+did (lavapipe: main 43.8 ms, this 41.0 ms). The atlas is made only when a
+lamp first needs it, and freed when the setting is off.
+
 ## What comes next (#401)
 
-1. **Lamps cast shadows** (#400): the few that matter most, in one atlas
-   kept from frame to frame. Today lamplight goes through walls.
-2. **Screen-space light** (#104, #338): a depth and normal pre-pass and
+1. **Screen-space light** (#104, #338): a depth and normal pre-pass and
    the visibility bitmask. That gives contact shadows, ambient light
    occluded by direction, and one bounce of what is on screen.
-3. **Bounce light from the world** (#287): probes of irradiance and depth
+2. **Bounce light from the world** (#287): probes of irradiance and depth
    in cascades round the eye, traced in compute through a voxel or
    distance-field copy of the level, with ray queries where the card has
    them (#120). This is the light that bounces off screen, and what keeps
    interiors from glowing.
-4. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
+3. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
    glass glows only while it is lit and as bright as it should.
 
 ## Sources

@@ -619,6 +619,12 @@ declare extern type Lamp with
     --- Example: game.lamp("alarm").flicker = "mmmmmmaaaaaa"
     flicker: string
 
+    --- Whether its light stops at walls: true unless you say false. The
+    --- player's "Lamp shadows" setting says how many lamps near the player
+    --- get shadows at once (eight unless they change it).
+    --- Example: game.lamp("ceiling").castsShadows = false
+    castsShadows: boolean
+
     --- Takes the lamp away. Its name can be made again with `game.lamp`.
     --- Example: game.lamp("campfire"):remove()
     function remove(self): ()
@@ -630,7 +636,7 @@ end
 --- Each other setting replaces one thing, and is also a field of `Lamp`;
 --- a beam points straight down unless `pointing` says otherwise.
 --- Example: game.lamp("gate", { from = "street lamp", at = vector.create(0, 6, -12) })
-type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens: number?, color: string?, kelvin: number?, beam: number?, pointing: vector?, softness: number?, range: number?, radius: number?, flicker: string? }
+type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens: number?, color: string?, kelvin: number?, beam: number?, pointing: vector?, softness: number?, range: number?, radius: number?, flicker: string?, castsShadows: boolean? }
 
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.

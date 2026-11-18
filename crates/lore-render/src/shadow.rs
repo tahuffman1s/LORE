@@ -184,83 +184,67 @@ impl Cascade {
     }
 }
 
-/// The pictures themselves on the graphics card, and what was last drawn
-/// into each.
-pub(crate) struct ShadowMap {
+/// Pictures of how far away things are, side by side in one image, that
+/// are drawn into one at a time and read together: the sun's (see
+/// [`ShadowMap`]) and the lamps' (see
+/// [`LampAtlas`](crate::lamp_shadow::LampAtlas)).
+pub(crate) struct DepthLayers {
     gpu: Arc<Gpu>,
     image: vk::Image,
     memory: vk::DeviceMemory,
-    /// All four, for the shader to read.
+    /// All of them, for the shader to read.
     pub(crate) view: vk::ImageView,
     /// Each one by itself, to draw into.
-    layers: [vk::ImageView; PICTURES],
-    /// Compares a depth with the picture's and smooths the answer.
-    pub(crate) sampler: vk::Sampler,
-    /// The level and the square each picture was last drawn for.
-    drawn: RefCell<[Option<(u64, Mat4)>; PICTURES]>,
+    layers: Vec<vk::ImageView>,
+    /// How many pixels wide and high each picture is.
+    pub(crate) size: u32,
 }
 
-impl ShadowMap {
-    /// Makes the four pictures, with nothing drawn in them yet.
-    pub(crate) fn new(gpu: &Arc<Gpu>) -> Result<Self, RenderError> {
-        let doing = "making room for the sun's shadows";
+impl DepthLayers {
+    /// Makes `count` pictures `size` pixels square, ready to be read and
+    /// holding "nothing near" until something is drawn into them.
+    pub(crate) fn new(
+        gpu: &Arc<Gpu>,
+        size: u32,
+        count: u32,
+        doing: &'static str,
+    ) -> Result<Self, RenderError> {
         let device = gpu.device();
-        let mut map = Self {
+        let mut made = Self {
             gpu: Arc::clone(gpu),
             image: vk::Image::null(),
             memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
-            layers: [vk::ImageView::null(); PICTURES],
-            sampler: vk::Sampler::null(),
-            drawn: RefCell::new([None; PICTURES]),
-        };
-        // Not every graphics card can smooth between the pixels of a depth
-        // picture; one that cannot gets a harder edge.
-        // SAFETY: the instance and physical device are alive.
-        let can_smooth = unsafe {
-            gpu.instance()
-                .get_physical_device_format_properties(gpu.physical_device(), FORMAT)
-        }
-        .optimal_tiling_features
-        .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR);
-        let filter = if can_smooth {
-            vk::Filter::LINEAR
-        } else {
-            vk::Filter::NEAREST
-        };
-        let range = |layer: u32, count: u32| vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: layer,
-            layer_count: count,
+            layers: Vec::with_capacity(count as usize),
+            size,
         };
         // SAFETY: the device is alive, and each object is created from valid
-        // settings and stored in `map` straight away, which frees whatever
+        // settings and stored in `made` straight away, which frees whatever
         // was made if a later step fails. The memory is as large as the
         // image asks for and of a kind it allows.
         unsafe {
-            map.image = device
+            made.image = device
                 .create_image(
                     &vk::ImageCreateInfo::default()
                         .image_type(vk::ImageType::TYPE_2D)
                         .format(FORMAT)
                         .extent(vk::Extent3D {
-                            width: SIZE,
-                            height: SIZE,
+                            width: size,
+                            height: size,
                             depth: 1,
                         })
                         .mip_levels(1)
-                        .array_layers(PICTURES as u32)
+                        .array_layers(count)
                         .samples(vk::SampleCountFlags::TYPE_1)
                         .usage(
                             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                                | vk::ImageUsageFlags::SAMPLED,
+                                | vk::ImageUsageFlags::SAMPLED
+                                | vk::ImageUsageFlags::TRANSFER_DST,
                         ),
                     None,
                 )
                 .map_err(RenderError::driver(doing))?;
-            let needs = device.get_image_memory_requirements(map.image);
+            let needs = device.get_image_memory_requirements(made.image);
             let kind = gpu
                 .memory_type(
                     needs.memory_type_bits,
@@ -273,7 +257,7 @@ impl ShadowMap {
                     doing,
                     code: vk::Result::ERROR_FEATURE_NOT_PRESENT,
                 })?;
-            map.memory = device
+            made.memory = device
                 .allocate_memory(
                     &vk::MemoryAllocateInfo::default()
                         .allocation_size(needs.size)
@@ -282,68 +266,84 @@ impl ShadowMap {
                 )
                 .map_err(RenderError::driver(doing))?;
             device
-                .bind_image_memory(map.image, map.memory, 0)
+                .bind_image_memory(made.image, made.memory, 0)
                 .map_err(RenderError::driver(doing))?;
-            map.view = device
+            made.view = device
                 .create_image_view(
                     &vk::ImageViewCreateInfo::default()
-                        .image(map.image)
+                        .image(made.image)
                         .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
                         .format(FORMAT)
-                        .subresource_range(range(0, PICTURES as u32)),
+                        .subresource_range(range(0, count)),
                     None,
                 )
                 .map_err(RenderError::driver(doing))?;
-            for (layer, view) in (0_u32..).zip(&mut map.layers) {
-                *view = device
+            for layer in 0..count {
+                let view = device
                     .create_image_view(
                         &vk::ImageViewCreateInfo::default()
-                            .image(map.image)
+                            .image(made.image)
                             .view_type(vk::ImageViewType::TYPE_2D)
                             .format(FORMAT)
                             .subresource_range(range(layer, 1)),
                         None,
                     )
                     .map_err(RenderError::driver(doing))?;
+                made.layers.push(view);
             }
-            // A point is lit if it is no farther from the sun than what the
-            // picture holds. Outside the picture counts as lit.
-            map.sampler = device
-                .create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(filter)
-                        .min_filter(filter)
-                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .compare_enable(true)
-                        .compare_op(vk::CompareOp::LESS_OR_EQUAL),
-                    None,
-                )
-                .map_err(RenderError::driver(doing))?;
         }
-        Ok(map)
+        // A shader that only might read a picture still needs it readable:
+        // every picture is cleared to "nothing near" and left ready to read.
+        let image = made.image;
+        // SAFETY: the image is this device's, new, and used by nothing else.
+        unsafe {
+            crate::buffer::once(gpu, doing, |commands| {
+                let to_clear = [vk::ImageMemoryBarrier2::default()
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range(0, count))
+                    .dst_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)];
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_clear),
+                );
+                device.cmd_clear_depth_stencil_image(
+                    commands,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                    &[range(0, count)],
+                );
+                let to_read = [vk::ImageMemoryBarrier2::default()
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range(0, count))
+                    .src_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_read),
+                );
+            })?;
+        }
+        Ok(made)
     }
 
-    /// The pictures that have to be drawn before `cascades` of the level
-    /// numbered `level` can be read: those that hold something else, or
-    /// nothing yet. They are counted as drawn from now on.
-    pub(crate) fn take_stale(
-        &self,
-        level: u64,
-        cascades: &[Cascade; PICTURES],
-    ) -> [bool; PICTURES] {
-        let mut stale = [true; PICTURES];
-        let Ok(mut drawn) = self.drawn.try_borrow_mut() else {
-            return stale;
-        };
-        for ((stale, drawn), cascade) in stale.iter_mut().zip(drawn.iter_mut()).zip(cascades) {
-            let wanted = Some((level, cascade.clip));
-            *stale = *drawn != wanted;
-            *drawn = wanted;
-        }
-        stale
+    /// How many pictures there are.
+    pub(crate) fn count(&self) -> usize {
+        self.layers.len()
     }
 
     /// Records the start of drawing into picture `layer`, cleared to "as far
@@ -351,8 +351,8 @@ impl ShadowMap {
     ///
     /// # Safety
     ///
-    /// `commands` must be a command buffer of this map's device that is
-    /// being recorded, outside a render pass, and the map must only be in
+    /// `commands` must be a command buffer of this device that is being
+    /// recorded, outside a render pass, and the pictures must only be in
     /// use by earlier commands on the same queue.
     pub(crate) unsafe fn begin(&self, commands: vk::CommandBuffer, layer: usize) {
         let device = self.gpu.device();
@@ -360,8 +360,8 @@ impl ShadowMap {
             return;
         };
         let extent = vk::Extent2D {
-            width: SIZE,
-            height: SIZE,
+            width: self.size,
+            height: self.size,
         };
         let area = vk::Rect2D {
             offset: vk::Offset2D::default(),
@@ -407,13 +407,14 @@ impl ShadowMap {
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: SIZE as f32,
-            height: SIZE as f32,
+            width: self.size as f32,
+            height: self.size as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         };
         // SAFETY: the caller guarantees the command buffer is recording and
-        // the map is this device's; every struct lives until its call returns.
+        // the pictures are this device's; every struct lives until its call
+        // returns.
         unsafe {
             device.cmd_pipeline_barrier2(
                 commands,
@@ -460,31 +461,127 @@ impl ShadowMap {
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(self.image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: u32::try_from(layer).unwrap_or(0),
-                layer_count: 1,
-            })
+            .subresource_range(range(u32::try_from(layer).unwrap_or(0), 1))
+    }
+}
+
+impl Drop for DepthLayers {
+    fn drop(&mut self) {
+        // SAFETY: the owner waits for the graphics card to go idle before
+        // dropping the pictures, so they are not in use; destroying a null
+        // handle is allowed.
+        unsafe {
+            let device = self.gpu.device();
+            for view in &self.layers {
+                device.destroy_image_view(*view, None);
+            }
+            device.destroy_image_view(self.view, None);
+            device.destroy_image(self.image, None);
+            device.free_memory(self.memory, None);
+        }
+    }
+}
+
+/// Pictures `layer` to `layer + count` of a depth image.
+fn range(layer: u32, count: u32) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::DEPTH,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: layer,
+        layer_count: count,
+    }
+}
+
+/// Makes the reader that compares a depth with a picture's and smooths the
+/// answer: a point is lit if it is no farther from the light than what the
+/// picture holds. Outside the picture counts as what its edge holds.
+pub(crate) fn comparing_sampler(gpu: &Gpu, doing: &'static str) -> Result<vk::Sampler, RenderError> {
+    // Not every graphics card can smooth between the pixels of a depth
+    // picture; one that cannot gets a harder edge.
+    // SAFETY: the instance and physical device are alive.
+    let can_smooth = unsafe {
+        gpu.instance()
+            .get_physical_device_format_properties(gpu.physical_device(), FORMAT)
+    }
+    .optimal_tiling_features
+    .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR);
+    let filter = if can_smooth {
+        vk::Filter::LINEAR
+    } else {
+        vk::Filter::NEAREST
+    };
+    // SAFETY: the device is alive and the settings are valid.
+    unsafe {
+        gpu.device().create_sampler(
+            &vk::SamplerCreateInfo::default()
+                .mag_filter(filter)
+                .min_filter(filter)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .compare_enable(true)
+                .compare_op(vk::CompareOp::LESS_OR_EQUAL),
+            None,
+        )
+    }
+    .map_err(RenderError::driver(doing))
+}
+
+/// The sun's pictures on the graphics card, and what was last drawn into
+/// each.
+pub(crate) struct ShadowMap {
+    gpu: Arc<Gpu>,
+    pub(crate) pictures: DepthLayers,
+    /// Compares a depth with the picture's and smooths the answer.
+    pub(crate) sampler: vk::Sampler,
+    /// The level and the square each picture was last drawn for.
+    drawn: RefCell<[Option<(u64, Mat4)>; PICTURES]>,
+}
+
+impl ShadowMap {
+    /// Makes the pictures, with nothing drawn in them yet.
+    pub(crate) fn new(gpu: &Arc<Gpu>) -> Result<Self, RenderError> {
+        let doing = "making room for the sun's shadows";
+        // The count is a small constant.
+        #[allow(clippy::cast_possible_truncation)]
+        let pictures = DepthLayers::new(gpu, SIZE, PICTURES as u32, doing)?;
+        let sampler = comparing_sampler(gpu, doing)?;
+        Ok(Self {
+            gpu: Arc::clone(gpu),
+            pictures,
+            sampler,
+            drawn: RefCell::new([None; PICTURES]),
+        })
+    }
+
+    /// The pictures that have to be drawn before `cascades` of the level
+    /// numbered `level` can be read: those that hold something else, or
+    /// nothing yet. They are counted as drawn from now on.
+    pub(crate) fn take_stale(
+        &self,
+        level: u64,
+        cascades: &[Cascade; PICTURES],
+    ) -> [bool; PICTURES] {
+        let mut stale = [true; PICTURES];
+        let Ok(mut drawn) = self.drawn.try_borrow_mut() else {
+            return stale;
+        };
+        for ((stale, drawn), cascade) in stale.iter_mut().zip(drawn.iter_mut()).zip(cascades) {
+            let wanted = Some((level, cascade.clip));
+            *stale = *drawn != wanted;
+            *drawn = wanted;
+        }
+        stale
     }
 }
 
 impl Drop for ShadowMap {
     fn drop(&mut self) {
         // SAFETY: the owner waits for the graphics card to go idle before
-        // dropping the map, so it is not in use; destroying a null handle
-        // is allowed.
-        unsafe {
-            let device = self.gpu.device();
-            device.destroy_sampler(self.sampler, None);
-            for view in self.layers {
-                device.destroy_image_view(view, None);
-            }
-            device.destroy_image_view(self.view, None);
-            device.destroy_image(self.image, None);
-            device.free_memory(self.memory, None);
-        }
+        // dropping the map, so the sampler is not in use.
+        unsafe { self.gpu.device().destroy_sampler(self.sampler, None) };
     }
 }
 

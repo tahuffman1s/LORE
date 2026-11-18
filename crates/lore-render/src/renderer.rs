@@ -9,6 +9,7 @@ use lore_assets::Scene;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
@@ -181,6 +182,8 @@ pub struct Renderer {
     last_frame: Option<Instant>,
     /// Whether the air is lit: see [`set_light_shafts`](Self::set_light_shafts).
     light_shafts: bool,
+    /// Which lamps cast shadows: see [`set_lamp_shadows`](Self::set_lamp_shadows).
+    lamp_shadows: LampShadows,
     /// What the scene's light is multiplied by before tone mapping: the
     /// player's brightness, and the game's own.
     exposure: f32,
@@ -261,6 +264,7 @@ impl Renderer {
             last_frame: None,
             exposure: 1.0,
             light_shafts: true,
+            lamp_shadows: LampShadows::default(),
             game_exposure: 1.0,
             lamps: Vec::new(),
             eye: Eye::new(EyeAdaptation::default()),
@@ -589,6 +593,18 @@ impl Renderer {
         self.light_shafts = on;
     }
 
+    /// How many lamps cast shadows, and how sharp the shadows are.
+    ///
+    /// Each frame the lamps in view whose light reaches farthest for how
+    /// far they are from the eye are given shadows, up to the number
+    /// `shadows` allows (eight by default), so a lantern on one side of a
+    /// wall no longer lights the other. Each shadow is kept from frame to
+    /// frame until its lamp moves. `Off` lets all lamplight through walls,
+    /// and frees the memory the shadows take.
+    pub fn set_lamp_shadows(&mut self, shadows: LampShadows) {
+        self.lamp_shadows = shadows;
+    }
+
     /// Lets wet ground, puddles and polished things mirror the world round
     /// them, or only the light of the sky.
     ///
@@ -802,6 +818,7 @@ impl Renderer {
             }
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
+            view.lamp_shadows = self.lamp_shadows;
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,

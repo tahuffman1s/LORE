@@ -7,6 +7,7 @@ use ash::vk;
 use lore_assets::Scene;
 use lore_ui::DrawList;
 
+use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
 use crate::buffer::Buffer;
 use crate::camera::Camera;
@@ -96,6 +97,8 @@ pub struct Headless {
     reflections: bool,
     /// Whether the air is lit, as for a window.
     light_shafts: bool,
+    /// Which lamps cast shadows, as for a window.
+    lamp_shadows: LampShadows,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -199,6 +202,7 @@ impl Headless {
             measuring: Vec::new(),
             reflections: true,
             light_shafts: true,
+            lamp_shadows: LampShadows::default(),
             view,
             extent,
             image,
@@ -423,6 +427,13 @@ impl Headless {
         self.light_shafts = on;
     }
 
+    /// How many lamps cast shadows, and how sharp, as
+    /// [`Renderer::set_lamp_shadows`](crate::Renderer::set_lamp_shadows)
+    /// says. Eight lamps to begin with.
+    pub fn set_lamp_shadows(&mut self, shadows: LampShadows) {
+        self.lamp_shadows = shadows;
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -511,6 +522,7 @@ impl Headless {
                 .map_err(RenderError::driver("recording a frame"))?;
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
+            self.view.lamp_shadows = self.lamp_shadows;
             self.view.record(
                 self.commands,
                 0,
