@@ -18,6 +18,7 @@ use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
 use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
+use crate::weather_api::{self, Climate};
 
 /// Every function directly on `game`. The type definitions shipped for editors
 /// are tested against this list.
@@ -69,6 +70,7 @@ pub(crate) struct Handlers {
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
+    pub lightning: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -115,6 +117,8 @@ pub(crate) struct Shared {
     pub rumble: Cell<Option<Rumble>>,
     /// The action set the script chose.
     pub live_set: Rc<LiveSet>,
+    /// What the script said of the weather and the hour.
+    pub weather: Rc<Climate>,
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
@@ -303,6 +307,9 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
+    game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set("weather", weather_api::weather(lua, shared)?)?;
+
     let sounds = audio::table(lua, shared)?;
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
     game.set("audio", sounds)?;
@@ -316,6 +323,8 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("hud");
     members.push("input");
+    members.push("sky");
+    members.push("weather");
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
@@ -356,7 +365,7 @@ const SPAWN_TAKES_NOTHING: &str = "game.onSpawn's function is not handed a playe
      game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)";
 
 /// `game.onTick` and friends: remember a function to call later.
-fn on_event(
+pub(crate) fn on_event(
     lua: &Lua,
     shared: &Rc<Shared>,
     name: &'static str,
@@ -719,7 +728,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 20] = [
+        let groups: [(&str, &[&str]); 22] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -732,6 +741,8 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),

@@ -273,6 +273,18 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(hour) = self.host.take_hour() {
+            frame.set_hour(hour);
+        }
+        // The weather as the script has said it. A world the script
+        // plays in says more after this: what has followed from it.
+        frame.set_weather(crate::world::said_weather(&self.host.weather()));
+        for (at, number) in self.host.take_strikes() {
+            frame.strike(lore_render::Lightning::down_to(
+                at,
+                number.wrapping_mul(0x9E37_79B1),
+            ));
+        }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
         }
@@ -287,6 +299,7 @@ impl Game for ScriptGame {
                 },
                 AudioCommand::Stop(id) => frame.sound(SoundAsk::Stop(id)),
                 AudioCommand::StopAll => frame.sound(SoundAsk::StopAll),
+                AudioCommand::Move(id, place) => frame.sound(SoundAsk::Move(id, place)),
             }
         }
         // After the script has drawn, so what it changed is in this frame.

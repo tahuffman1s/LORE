@@ -26,6 +26,10 @@ pub struct Scene {
     pub lights: Vec<Light>,
     /// Named places with no shape, such as spawn points.
     pub markers: Vec<Marker>,
+    /// The still water of the level, each body in the shape it took when
+    /// it was let fill the hollow it was put in. A file has none: the
+    /// engine works them out when it loads a level (`lore_physics::fill`).
+    pub waters: Vec<Water>,
     /// The file's objects as a tree, for skins and animations to move.
     /// Empty when the file has neither, as a level usually has not.
     pub nodes: Vec<Node>,
@@ -147,19 +151,224 @@ impl Instance {
     /// ```
     #[must_use]
     pub fn is_solid(&self) -> bool {
+        // Water is waded into, whatever else is said of it.
+        !self.is_water() && self.ticked("solid").unwrap_or(true)
+    }
+
+    /// Whether it is the surface of water: a lake, a pond, the sea. A
+    /// level's maker says so with the custom property `water` set to
+    /// `true` (or 1) on a flat mesh laid where the surface is. It is drawn
+    /// as water, with waves and the sky mirrored in it, casts no shadow
+    /// and is not solid.
+    ///
+    /// The colour of its material is the colour of the water itself, and
+    /// that colour's alpha how clear it is (1 is clear water). Its first
+    /// UV map says how fast the water runs along x and z, in metres a
+    /// second: nothing for a lake, and downstream for a creek.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let lake = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"water": true}"#.to_owned()),
+    /// };
+    /// assert!(lake.is_water() && !lake.is_solid());
+    /// ```
+    #[must_use]
+    pub fn is_water(&self) -> bool {
+        self.ticked("water").unwrap_or(false)
+    }
+
+    /// Whether it floats on still water: a lily pad, a leaf, a plank. A
+    /// level's maker says so with the custom property `floats` set to
+    /// `true` (or 1) on something laid at the water's height. It then
+    /// rises and falls with the water's waves, and with the rings a
+    /// wader sends out, as the water under it does. It is drawn as what
+    /// it is; whether it is solid is its `solid` property's to say.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let pad = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"floats": true, "solid": false}"#.to_owned()),
+    /// };
+    /// assert!(pad.floats() && !pad.is_water());
+    /// ```
+    #[must_use]
+    pub fn floats(&self) -> bool {
+        self.ticked("floats").unwrap_or(false)
+    }
+
+    /// How far the wind moves it: 0 for a thing that stands still, which is
+    /// everything unless a level's maker says otherwise, and 1 for a tree
+    /// or a plant that bends and flutters as real ones do. The custom
+    /// property `wind` holds the number; more than 1 is a reed or a rope,
+    /// less is something stiff.
+    ///
+    /// It bends from where it stands (the object's own origin), more the
+    /// higher up, so the origin belongs at the foot of the trunk.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let fern = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"wind": 1.5, "solid": false}"#.to_owned()),
+    /// };
+    /// assert_eq!(fern.wind(), 1.5);
+    /// ```
+    #[must_use]
+    pub fn wind(&self) -> f32 {
         use gltf::json::{Value, deserialize::from_str};
 
         let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
         else {
-            return true;
+            return 0.0;
         };
-        match properties.get("solid") {
-            Some(Value::Bool(solid)) => *solid,
-            // Blender writes a ticked box as 1 and an unticked one as 0 when
-            // the property was made as a whole number.
-            Some(Value::Number(solid)) => solid.as_f64() != Some(0.0),
-            _ => true,
+        // The number is a setting, and no finer than an f32.
+        #[allow(clippy::cast_possible_truncation)]
+        let wind = match properties.get("wind") {
+            Some(Value::Number(wind)) => wind.as_f64().unwrap_or(0.0) as f32,
+            Some(Value::Bool(true)) => 1.0,
+            _ => 0.0,
+        };
+        if wind.is_finite() {
+            wind.clamp(0.0, 4.0)
+        } else {
+            0.0
         }
+    }
+
+    /// What the custom property `name` says, if it is there and is true,
+    /// false or a number: Blender writes a ticked box as 1 and an unticked
+    /// one as 0 when the property was made as a whole number.
+    fn ticked(&self, name: &str) -> Option<bool> {
+        use gltf::json::{Value, deserialize::from_str};
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return None;
+        };
+        match properties.get(name)? {
+            Value::Bool(ticked) => Some(*ticked),
+            Value::Number(ticked) => Some(ticked.as_f64() != Some(0.0)),
+            _ => None,
+        }
+    }
+}
+
+/// A body of still water: a lake, a pond, a pool, the water in a trough.
+///
+/// A level's maker lays a sheet marked `water` anywhere over a hollow, at
+/// the height the water should stand ([`Instance::is_water`]). The engine
+/// lets it run from there: it spreads over everything lower than itself
+/// that it can reach, and stops at whatever stands in its way. What it
+/// covered is kept here as a grid of points seen from above, each with how
+/// deep the water is over it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Water {
+    /// The name of the sheet it was filled from.
+    pub name: Option<String>,
+    /// Which of the scene's instances are sheets laid over this water:
+    /// the one it was filled from, and any other that lies on it. They are
+    /// not drawn: the water is drawn in the shape it took.
+    pub sources: Vec<u32>,
+    /// How high the surface stands when it is still, in metres.
+    pub level: f32,
+    /// The x and z of the grid's first point: the one with the least of both.
+    pub origin: [f32; 2],
+    /// How far apart the grid's points are along x and along z, in metres.
+    pub cell: f32,
+    /// How many points the grid has along x, and how many along z.
+    pub size: [u32; 2],
+    /// For each point, row by row (all of the first z, then the next): how
+    /// deep the water is there, in metres. A point the water did not reach
+    /// has a depth below nothing: how far above the surface the ground
+    /// stands there, down to [`Water::DRY`] for a wall or anything higher.
+    pub depths: Vec<f32>,
+    /// The colour of the water itself, and in the fourth number how clear
+    /// it is: 1 is clear water, less is murkier.
+    pub colour: [f32; 4],
+}
+
+impl Water {
+    /// The depth written down for a point the water is nowhere near
+    /// reaching: a wall, a bank two metres high, the far side of a dam.
+    pub const DRY: f32 = -2.0;
+
+    /// The depth at one point of the grid: `column` along x and `row`
+    /// along z. Outside the grid it is [`Water::DRY`].
+    #[must_use]
+    pub fn depth(&self, column: i64, row: i64) -> f32 {
+        let [across, deep] = self.size;
+        if column < 0 || row < 0 || column >= i64::from(across) || row >= i64::from(deep) {
+            return Self::DRY;
+        }
+        // Both were just checked to be inside the grid, which fits a u32.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let at = row as usize * across as usize + column as usize;
+        self.depths.get(at).copied().unwrap_or(Self::DRY)
+    }
+
+    /// How deep the water is at `x`, `z`, in metres, read between the
+    /// grid's points; below nothing where there is none.
+    ///
+    /// ```
+    /// use lore_assets::Water;
+    ///
+    /// // A trough a metre long: two points across, dry at one end.
+    /// let trough = Water {
+    ///     name: None,
+    ///     sources: vec![0],
+    ///     level: 1.0,
+    ///     origin: [0.0, 0.0],
+    ///     cell: 1.0,
+    ///     size: [2, 1],
+    ///     depths: vec![0.5, -0.5],
+    ///     colour: [0.0, 0.1, 0.1, 1.0],
+    /// };
+    /// assert!((trough.depth_at(0.25, 0.0) - 0.25).abs() < 1e-6);
+    /// assert!(trough.depth_at(0.75, 0.0) < 0.0);
+    /// assert_eq!(trough.depth_at(-5.0, 0.0), Water::DRY);
+    /// ```
+    #[must_use]
+    pub fn depth_at(&self, x: f32, z: f32) -> f32 {
+        if !(self.cell > 0.0 && x.is_finite() && z.is_finite()) {
+            return Self::DRY;
+        }
+        let along = (x - self.origin[0]) / self.cell;
+        let down = (z - self.origin[1]) / self.cell;
+        let [across, deep] = self.size;
+        // Sizes are far below the point where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let (most_along, most_down) = (across as f32 - 1.0, deep as f32 - 1.0);
+        if along < -0.5 || down < -0.5 || along > most_along + 0.5 || down > most_down + 0.5 {
+            return Self::DRY;
+        }
+        let (along, down) = (along.clamp(0.0, most_along), down.clamp(0.0, most_down));
+        // Both are inside the grid, which fits an i64 many times over.
+        #[allow(clippy::cast_possible_truncation)]
+        let (column, row) = (along.floor() as i64, down.floor() as i64);
+        #[allow(clippy::cast_precision_loss)]
+        let (share_x, share_z) = (along - column as f32, down - row as f32);
+        let near =
+            self.depth(column, row) * (1.0 - share_x) + self.depth(column + 1, row) * share_x;
+        let far = self.depth(column, row + 1) * (1.0 - share_x)
+            + self.depth(column + 1, row + 1) * share_x;
+        // At the last column or row the share of the next is nothing, so
+        // what is read past the grid's end does not count.
+        near * (1.0 - share_z) + far * share_z
     }
 }
 

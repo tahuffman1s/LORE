@@ -24,9 +24,11 @@ enum Request {
     Stop(Playing),
     StopAll,
     MoveTo(Playing, [f32; 3]),
+    Loudness(Playing, f32),
     Listener(Listener),
     Volume(f32),
     GroupVolume(Group, f32),
+    Underwater(f32),
 }
 
 /// The computer's speakers or headphones, with a [`Mixer`] playing
@@ -161,6 +163,12 @@ impl Speakers {
         self.send(Request::MoveTo(playing, position));
     }
 
+    /// Makes a playing sound as loud as `volume` says, from 0 to 2: see
+    /// [`Mixer::set_loudness`].
+    pub fn set_loudness(&mut self, playing: Playing, volume: f32) {
+        self.send(Request::Loudness(playing, volume));
+    }
+
     /// Says where the player's head is. Call it every tick.
     pub fn set_listener(&mut self, listener: Listener) {
         self.send(Request::Listener(listener));
@@ -175,6 +183,12 @@ impl Speakers {
     /// 1 (full). See [`Mixer::set_group_volume`].
     pub fn set_group_volume(&mut self, group: Group, volume: f32) {
         self.send(Request::GroupVolume(group, volume));
+    }
+
+    /// Says how far under water the player's ears are, from 0 (in air) to
+    /// 1 (fully under). See [`Mixer::set_underwater`].
+    pub fn set_underwater(&mut self, amount: f32) {
+        self.send(Request::Underwater(amount));
     }
 
     fn send(&mut self, request: Request) {
@@ -304,9 +318,11 @@ impl Feed {
                 Request::Stop(playing) => self.mixer.stop(playing),
                 Request::StopAll => self.mixer.stop_all(),
                 Request::MoveTo(playing, position) => self.mixer.move_to(playing, position),
+                Request::Loudness(playing, volume) => self.mixer.set_loudness(playing, volume),
                 Request::Listener(listener) => self.mixer.set_listener(listener),
                 Request::Volume(volume) => self.mixer.set_volume(volume),
                 Request::GroupVolume(group, volume) => self.mixer.set_group_volume(group, volume),
+                Request::Underwater(amount) => self.mixer.set_underwater(amount),
             }
         }
 

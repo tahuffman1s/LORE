@@ -1,21 +1,32 @@
 //! Draws a scene's meshes: each with its material, lit by the sun and the
-//! sky, nearer ones in front of farther ones.
+//! sky and shadowed from the sun by the others, nearer ones in front of
+//! farther ones.
 
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
-use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene};
+use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene, Water};
 
 use crate::buffer::Buffer;
-use crate::camera::{Mat4, normal_matrix};
+use crate::camera::{Mat4, multiply, normal_matrix};
+use crate::clouds::CloudVolume;
+use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
+use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
+use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
+use crate::tracks::TrackMap;
+use crate::water::{
+    Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
+};
+use crate::weather::eased;
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
 const SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.spv"));
@@ -34,8 +45,22 @@ const VERTEX_BYTES: usize = 40;
 const DRAW_BYTES: usize = 128;
 
 /// The size in bytes of the shader's `View`: three 4 by 4 matrices and five
-/// rows of four numbers.
-const VIEW_BYTES: usize = 272;
+/// rows of four numbers, then for the shadows one row, a row for each
+/// shadow picture (the sun's four and the one from above) and a 4 by 4
+/// matrix for each.
+const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
+
+/// The part of it that is the sky: three rows for the lines of sight, one
+/// for the clouds, a row for each height of the air's light and of the
+/// haze's, one for the fog, one for the wind, one for whoever walks and
+/// nine for the water: the still water the eye is in or nearest, the
+/// wind's waves, the rings round the eye and the eye's own; and two for
+/// the light of lightning, seven for the weather and five for the sun, the
+/// moon and the stars.
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5);
+
+/// The number the next scene's meshes are known by.
+static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
 
 /// How the scene is seen in one frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,18 +77,108 @@ pub(crate) struct View {
     /// How many sizes larger than usual textures are read (a negative mip
     /// bias, given as a positive number), for a picture that is upscaled.
     pub(crate) sharper: f32,
+    /// The way the eye looks, then how far a line of sight leans to the
+    /// right and up between the middle of the picture and its edge
+    /// ([`Camera::rays`](crate::Camera)). The fourth number of the first
+    /// is how many pixels high the picture is, and the fourth numbers of
+    /// the last two are the upscaler's shift across and up.
+    pub(crate) rays: [[f32; 4]; 3],
+    /// How long the scene has been drawn for, in seconds.
+    pub(crate) time: f32,
+    /// The same, as exactly as it is kept: waves run by it, and after
+    /// some hours an f32 would move them in jerks.
+    pub(crate) exact: f64,
+    /// How many seconds of that have passed since the frame before.
+    pub(crate) elapsed: f32,
+    /// How much whoever walks is stirring what they walk through: 0
+    /// standing still, 1 at a run.
+    pub(crate) stir: f32,
+    /// A number that differs from frame to frame when the frames are mixed
+    /// by the upscaler, which then smooths what is drawn with a pattern
+    /// turned by it; 0 when each frame is shown as it is.
+    pub(crate) noise: f32,
+    /// How near to the eye the nearest thing drawn can be, in metres.
+    pub(crate) near: f32,
 }
 
 impl View {
-    fn bytes(&self, lighting: &Lighting) -> [u8; VIEW_BYTES] {
+    /// The shader's `View`. With no `shadows`, everything is in the sun;
+    /// with no `sky`, none is drawn and no cloud shades the ground.
+    fn bytes(
+        &self,
+        lighting: &Lighting,
+        shadows: Option<&[Cascade; PICTURES]>,
+        sky: Option<&Sky>,
+        water: &WaterRows,
+        above: &Above,
+    ) -> [u8; VIEW_BYTES] {
+        let mut water = *water;
+        // The last of its rows is the eye's own.
+        water[8] = [self.near, 0.0, 0.0, 0.0];
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
+        // The picture is far smaller than where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let pixel = 1.0 / shadow::SIZE as f32;
+        // Under a sky that is all cloud the light from above is the
+        // cloud's: grey, where a clear sky's is blue.
+        // And what the sun sends is no longer a beam but comes from the
+        // whole of it: a little over half of what a surface facing up
+        // had, which is more than gets through real cloud and what an eye
+        // used to the grey makes of it.
+        let weigh = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        let closed = eased(0.6, 1.0, above.weather.cover);
+        let through =
+            weigh(lighting.sun) * lighting.towards_sun[1].max(0.0) / std::f32::consts::PI * 0.55;
+        let grey = weigh(lighting.sky);
+        let from_sky = lighting
+            .sky
+            .map(|part| part + (grey - part) * 0.85 * closed + through * closed);
         let rows = [
             row(self.eye, -self.sharper),
             row(lighting.towards_sun, 0.0),
             row(lighting.sun, 0.0),
-            row(lighting.sky, 0.0),
+            row(from_sky, 0.0),
             row(lighting.ground, 0.0),
+            [
+                if shadows.is_some() { 1.0 } else { 0.0 },
+                pixel,
+                shadow::SUN_WIDTH,
+                self.noise,
+            ],
         ];
+        let mut reach = [[0.0; 4]; PICTURES];
+        let mut from_world = [[[0.0; 4]; 4]; PICTURES];
+        for (number, cascade) in shadows.into_iter().flatten().enumerate() {
+            reach[number] = [cascade.texel, cascade.depth, 0.0, 0.0];
+            from_world[number] = cascade.clip;
+        }
+        let air = &above.weather;
+        let clouds = [
+            if sky.is_some() { air.cover } else { 0.0 },
+            self.time,
+            sky::CLOUD_HEIGHT,
+            if sky.is_some() { 1.0 } else { 0.0 },
+        ];
+        // Fog is the colour of the sky, so there is none without one.
+        let [_, thins, height] = sky::FOG;
+        let fog = [
+            if sky.is_some() { air.fog } else { 0.0 },
+            thins,
+            height,
+            sky::FOG[0],
+        ];
+        // The wind, and how long ago the last frame was: what bends in it
+        // was where the wind of that moment had it.
+        let [along_x, along_z, speed] = air.wind;
+        let wind = [along_x, along_z, speed, self.elapsed];
+        let mut scattered = [[0.0; 4]; 2 * sky::HEIGHTS];
+        if let Some(sky) = sky {
+            for (row, [red, green, blue]) in
+                scattered.iter_mut().zip(sky.air.iter().chain(&sky.haze))
+            {
+                *row = [*red, *green, *blue, 0.0];
+            }
+        }
         let numbers = [self.clip, self.steady, self.before];
         let mut bytes = [0_u8; VIEW_BYTES];
         for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(
@@ -71,12 +186,33 @@ impl View {
                 .iter()
                 .flatten()
                 .flatten()
-                .chain(rows.iter().flatten()),
+                .chain(rows.iter().flatten())
+                .chain(reach.iter().flatten())
+                .chain(from_world.iter().flatten().flatten())
+                .chain(self.rays.iter().flatten())
+                .chain(&clouds)
+                .chain(scattered.iter().flatten())
+                .chain(&fog)
+                .chain(&wind)
+                .chain(&[self.stir, 0.0, 0.0, 0.0])
+                .chain(water.iter().flatten())
+                .chain(above.flashes.iter().flatten())
+                .chain(above.weather.rows.iter().flatten())
+                .chain(above.heavens.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
         bytes
     }
+}
+
+/// What is in the sky of one frame besides its light, as the shader takes
+/// it: where lightning's light comes from, the weather, and the heavens.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Above {
+    pub(crate) flashes: [[f32; 4]; 2],
+    pub(crate) weather: Air,
+    pub(crate) heavens: [[f32; 4]; 5],
 }
 
 /// The light a scene is drawn in: one sun, and the sky and ground around it.
@@ -156,8 +292,27 @@ impl Lighting {
 pub(crate) struct Contents<'a> {
     /// The level's meshes, if a level has been set.
     pub(crate) meshes: Option<&'a Meshes>,
+    /// Whether the sky is drawn behind them, and its clouds shade them.
+    pub(crate) sky: bool,
     /// Whether the editor's ground grid is drawn over them.
     pub(crate) grid: bool,
+    /// Whatever is stirring the water this frame.
+    pub(crate) stirs: &'a [Stir],
+    /// The drops, spray and bubbles in the air and the water this frame,
+    /// as [`Effects::bytes`](crate::effects::Effects::bytes) gives them.
+    pub(crate) bits: &'a [u8],
+    /// Where the light of each stroke of lightning comes from, and how
+    /// bright it is now.
+    pub(crate) flashes: [[f32; 4]; 2],
+    /// The weather, as [`Effects::air`](crate::effects::Effects::air)
+    /// gives it.
+    pub(crate) weather: Air,
+    /// The sky at the hour it is, if the game has said the hour: with
+    /// none, the level's own light is the light.
+    pub(crate) day: Option<&'a sky::Day>,
+    /// The rows of the map of trodden snow that have changed, as
+    /// [`Effects::tracks`](crate::effects::Effects::tracks) gives them.
+    pub(crate) tracks: [Option<(u32, &'a [u8])>; 2],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -169,11 +324,14 @@ enum Surface {
     CutOut,
     /// What is behind shows through, by its alpha.
     SeeThrough,
+    /// The surface of water: see-through where it is shallow, a mirror of
+    /// the sky where it is looked along, and moving.
+    Water,
 }
 
 impl Surface {
     /// In the order of the pipelines that draw them.
-    const ALL: [Self; 3] = [Self::Solid, Self::CutOut, Self::SeeThrough];
+    const ALL: [Self; 4] = [Self::Solid, Self::CutOut, Self::SeeThrough, Self::Water];
 
     fn of(material: &Material) -> Self {
         match material.alpha_mode {
@@ -197,6 +355,8 @@ struct Draw {
     /// The middle of the part in the world, which see-through parts are
     /// put in order by.
     middle: [f32; 3],
+    /// How far from its middle it reaches at most, in metres.
+    radius: f32,
     /// Where its triangles start in the index buffer, and how many numbers they are.
     first_index: u32,
     index_count: u32,
@@ -206,6 +366,8 @@ struct Draw {
     mirrored: bool,
     /// Both of its sides are drawn.
     double_sided: bool,
+    /// How far the wind moves it: 0 for a thing that stands still.
+    sway: f32,
 }
 
 /// Where one mesh part's data sits in the buffers, or `None` if it was left out.
@@ -220,8 +382,25 @@ pub(crate) struct Meshes {
     draws: Vec<Draw>,
     /// How many of `draws` come before the first see-through one.
     see_through_from: usize,
+    /// Whether any of them is water, which looks through a copy of the
+    /// picture behind it.
+    has_water: bool,
+    /// The still water in the scene, lakes and ponds, each in the shape it
+    /// took when it filled its hollow.
+    bodies: Bodies,
+    /// The same water as the level's maker's file gave it, for what flies
+    /// to ask where the surface is.
+    waters: Vec<Water>,
     materials: Materials,
     lighting: Lighting,
+    /// The sky under that light.
+    sky: Sky,
+    /// A number no other scene's meshes have, by which the shadows drawn
+    /// for these are told from another level's.
+    id: u64,
+    /// The corners of the box that holds every part: the smallest x, y and
+    /// z, then the largest.
+    bounds: [[f32; 3]; 2],
 }
 
 impl Meshes {
@@ -256,13 +435,23 @@ impl Meshes {
 
         let fallback = Material::default();
         let mut draws = Vec::new();
-        for instance in &scene.instances {
+        for (number, instance) in (0_u32..).zip(&scene.instances) {
+            // A sheet of water that filled its hollow is drawn as the
+            // shape it took, not as the sheet.
+            if scene
+                .waters
+                .iter()
+                .any(|water| water.sources.contains(&number))
+            {
+                continue;
+            }
             let (Some(mesh), Some(parts)) = (
                 scene.meshes.get(instance.mesh as usize),
                 placed.get(instance.mesh as usize),
             ) else {
                 continue;
             };
+            let water = instance.is_water();
             for (part, range) in mesh.parts.iter().zip(parts) {
                 let Some((first_index, index_count, first_vertex)) = *range else {
                     continue;
@@ -272,20 +461,49 @@ impl Meshes {
                     .get(part.material as usize)
                     .unwrap_or(&fallback);
                 let [low, high] = [part.bounds.min, part.bounds.max];
+                // Half the box's diagonal, stretched as far as the part is
+                // stretched the most.
+                let half: f32 = (0..3)
+                    .map(|axis| ((high[axis] - low[axis]) * 0.5).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                let stretch = (0..3)
+                    .map(|column| {
+                        let [x, y, z, _] = instance.transform[column];
+                        (x * x + y * y + z * z).sqrt()
+                    })
+                    .fold(0.0, f32::max);
                 draws.push(Draw {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
                     material: Materials::number(scene, part.material),
-                    surface: Surface::of(material),
+                    surface: if water {
+                        Surface::Water
+                    } else {
+                        Surface::of(material)
+                    },
                     middle: moved(
                         &instance.transform,
                         [0, 1, 2].map(|axis| (low[axis] + high[axis]) * 0.5),
                     ),
+                    radius: half * stretch,
                     first_index,
                     index_count,
                     first_vertex,
                     mirrored: instance.mirrored,
-                    double_sided: material.double_sided,
+                    // Water is seen from underneath as well.
+                    double_sided: material.double_sided || water,
+                    // Water is marked by a sway below nothing: its points
+                    // rise and fall with its waves.
+                    // Water is marked by a sway of -1 and what floats on
+                    // it by -2: both rise and fall with the waves.
+                    sway: if water {
+                        -1.0
+                    } else if instance.floats() {
+                        -2.0
+                    } else {
+                        instance.wind()
+                    },
                 });
             }
         }
@@ -294,7 +512,7 @@ impl Meshes {
         draws.sort_by_key(|draw| (draw.surface, draw.material));
         let see_through_from = draws
             .iter()
-            .position(|draw| draw.surface == Surface::SeeThrough)
+            .position(|draw| draw.surface >= Surface::SeeThrough)
             .unwrap_or(draws.len());
 
         if scene
@@ -316,13 +534,35 @@ impl Meshes {
                 Buffer::holding(gpu, &indices, vk::BufferUsageFlags::INDEX_BUFFER, doing)?,
             ))
         };
+        let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
+        for draw in draws.iter().filter(|draw| draw.radius.is_finite()) {
+            let [low, high] = &mut bounds;
+            for ((low, high), middle) in low.iter_mut().zip(high.iter_mut()).zip(draw.middle) {
+                *low = low.min(middle - draw.radius);
+                *high = high.max(middle + draw.radius);
+            }
+        }
         Ok(Self {
             buffers,
+            has_water: !scene.waters.is_empty()
+                || draws.iter().any(|draw| draw.surface == Surface::Water),
+            bodies: Bodies::new(gpu, scene)?,
+            waters: scene.waters.clone(),
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
             lighting: Lighting::of(scene),
+            sky: Sky::of(&Lighting::of(scene)),
+            id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
+            bounds,
         })
+    }
+}
+
+impl Meshes {
+    /// The still water of the scene, each body in the shape it took.
+    pub(crate) fn waters(&self) -> &[Water] {
+        &self.waters
     }
 }
 
@@ -447,14 +687,45 @@ pub(crate) struct MeshPipeline {
     /// What a material's set holds; each scene's materials make sets like it.
     material_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
+    /// What a body of still water's set holds; each scene's make sets like it.
+    body_layout: vk::DescriptorSetLayout,
     /// One for each [`Surface`], in order.
-    pipelines: [vk::Pipeline; 3],
+    pipelines: [vk::Pipeline; 4],
+    /// Draws still water from the shape it took when it filled its hollow.
+    body_pipeline: vk::Pipeline,
+    /// The wind's waves and the rings: `None` only while the pipeline is
+    /// being built.
+    water: Option<WaterWorks>,
+    /// The body of water whose depths each frame's set was last pointed
+    /// at; 0 for none.
+    near_water: RefCell<Vec<u64>>,
+    /// Where the snow is trodden: `None` only while the pipeline is being
+    /// built.
+    tracks: Option<TrackMap>,
+    /// Draws the drops, spray and bubbles a splash throws up.
+    bit_pipeline: vk::Pipeline,
+    /// Those bits, for each frame that can be in progress at once.
+    bits: Vec<Buffer>,
+    /// Draw what the sun sees of solid parts and of cut-out ones.
+    shadow_pipelines: [vk::Pipeline; 2],
+    /// What the sun sees: `None` only while the pipeline is being built.
+    shadows: Option<ShadowMap>,
+    /// What the clouds are shaped from: `None` only while the pipeline is
+    /// being built.
+    clouds: Option<CloudVolume>,
+    /// Draws the sky behind everything.
+    sky: vk::Pipeline,
+    /// The sky of a scene that sets no light of its own.
+    usual_sky: Sky,
     /// Draws the editor's ground grid, with the same layout and view.
     grid: vk::Pipeline,
     pool: vk::DescriptorPool,
     /// The [`View`] of each frame that can be in progress at once, with the
     /// set that points the shader at it.
     views: Vec<(Buffer, vk::DescriptorSet)>,
+    /// The copy of the picture each of those sets was last pointed at:
+    /// a window that changes size gets a new one.
+    behind: RefCell<Vec<vk::ImageView>>,
     /// The see-through parts of the frame being recorded, farthest first:
     /// how far each is from the eye, squared, and which it is. Kept between
     /// frames so that putting them in order needs no new memory.
@@ -471,10 +742,23 @@ impl MeshPipeline {
             set_layout: vk::DescriptorSetLayout::null(),
             material_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
-            pipelines: [vk::Pipeline::null(); 3],
+            body_layout: vk::DescriptorSetLayout::null(),
+            pipelines: [vk::Pipeline::null(); 4],
+            body_pipeline: vk::Pipeline::null(),
+            water: None,
+            near_water: RefCell::new(vec![0; frames.max(1)]),
+            tracks: None,
+            bit_pipeline: vk::Pipeline::null(),
+            bits: Vec::with_capacity(frames.max(1)),
+            shadow_pipelines: [vk::Pipeline::null(); 2],
+            shadows: None,
+            clouds: None,
+            sky: vk::Pipeline::null(),
+            usual_sky: Sky::of(&Lighting::default()),
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
+            behind: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
             order: RefCell::new(Vec::new()),
         };
         // Dropping `mesh` cleans up whatever was created; destroying a null handle is allowed.
@@ -487,14 +771,105 @@ impl MeshPipeline {
             }
         })?;
 
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
-        let sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(count)];
+        let shadows = ShadowMap::new(gpu)?;
+        let (shadow_view, shadow_sampler) = (shadows.view, shadows.sampler);
+        mesh.shadows = Some(shadows);
+        let clouds = CloudVolume::new(gpu)?;
+        let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
+        mesh.clouds = Some(clouds);
+        for _ in 0..frames.max(1) {
+            mesh.bits.push(Buffer::writable(
+                gpu,
+                (MOST_BITS * BIT_BYTES) as u64,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                doing,
+            )?);
+        }
+        let water = WaterWorks::new(gpu, frames)?;
+        let water_pictures = water.pictures();
+        let (repeating, stopping) = (water.repeating, water.stopping);
+        mesh.water = Some(water);
+        let tracks = TrackMap::new(gpu, frames)?;
+        let track_view = tracks.view();
+        mesh.tracks = Some(tracks);
+        let both_stages = |binding: u32, kind: vk::DescriptorType| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(kind)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+        };
+        // The view, then the shadow pictures and what reads them, then the
+        // block the clouds are shaped from and what reads that: the wind
+        // is read from it too, where points are placed.
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(4)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            // What water looks through: the picture and its depth as they
+            // were before it was drawn.
+            // The picture is asked its size where what flies is placed.
+            both_stages(5, vk::DescriptorType::SAMPLED_IMAGE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(6)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The water: the wind's waves (two pictures and what reads
+            // them), the rings (a picture and what reads it), and how
+            // deep the still water nearest the eye is. Read where points
+            // are placed too: the surface is moved by its waves.
+            both_stages(7, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(8, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(9, vk::DescriptorType::SAMPLER),
+            both_stages(10, vk::DescriptorType::SAMPLED_IMAGE),
+            both_stages(11, vk::DescriptorType::SAMPLER),
+            both_stages(12, vk::DescriptorType::SAMPLED_IMAGE),
+            // Where the snow near the eye is trodden.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(13)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let sizes = [
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::SAMPLER,
+        ]
+        .map(|kind| {
+            // Each frame's set has one view, nine pictures and four readers.
+            let each = match kind {
+                vk::DescriptorType::UNIFORM_BUFFER => 1,
+                vk::DescriptorType::SAMPLED_IMAGE => 9,
+                _ => 4,
+            };
+            vk::DescriptorPoolSize::default()
+                .ty(kind)
+                .descriptor_count(count * each)
+        });
         let ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .size(DRAW_BYTES as u32)];
@@ -509,8 +884,9 @@ impl MeshPipeline {
                 )
                 .map_err(RenderError::driver(doing))?;
             mesh.material_layout = material::set_layout(gpu)?;
+            mesh.body_layout = body_layout(gpu)?;
             let set_layouts = [mesh.set_layout];
-            let both = [mesh.set_layout, mesh.material_layout];
+            let both = [mesh.set_layout, mesh.material_layout, mesh.body_layout];
             mesh.layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -547,11 +923,62 @@ impl MeshPipeline {
                 let buffers = [vk::DescriptorBufferInfo::default()
                     .buffer(buffer.handle)
                     .range(VIEW_BYTES as u64)];
-                let writes = [vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&buffers)];
+                let pictures = [vk::DescriptorImageInfo::default()
+                    .image_view(shadow_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let samplers = [vk::DescriptorImageInfo::default().sampler(shadow_sampler)];
+                let volumes = [vk::DescriptorImageInfo::default()
+                    .image_view(cloud_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let volume_samplers = [vk::DescriptorImageInfo::default().sampler(cloud_sampler)];
+                let water_views = water_pictures.map(|view| {
+                    [vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
+                });
+                let water_samplers = [repeating, stopping]
+                    .map(|sampler| [vk::DescriptorImageInfo::default().sampler(sampler)]);
+                let trodden = [vk::DescriptorImageInfo::default()
+                    .image_view(track_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let water_write = |binding: u32, info| picture_write(set, binding, info);
+                let reader_write = |binding: u32, info| {
+                    picture_write(set, binding, info).descriptor_type(vk::DescriptorType::SAMPLER)
+                };
+                let writes = [
+                    water_write(7, &water_views[0]),
+                    water_write(8, &water_views[1]),
+                    reader_write(9, &water_samplers[0]),
+                    water_write(10, &water_views[2]),
+                    reader_write(11, &water_samplers[1]),
+                    water_write(12, &water_views[3]),
+                    water_write(13, &trodden),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(&buffers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&pictures),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(2)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&samplers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(3)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&volumes),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(4)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&volume_samplers),
+                ];
                 device.update_descriptor_sets(&writes, &[]);
                 mesh.views.push((buffer, set));
             }
@@ -609,7 +1036,7 @@ impl MeshPipeline {
 
         let mut failed = None;
         for (surface, pipeline) in Surface::ALL.into_iter().zip(&mut mesh.pipelines) {
-            let see_through = surface == Surface::SeeThrough;
+            let see_through = surface >= Surface::SeeThrough;
             let stages = [
                 vk::PipelineShaderStageCreateInfo::default()
                     .stage(vk::ShaderStageFlags::VERTEX)
@@ -622,6 +1049,7 @@ impl MeshPipeline {
                         Surface::Solid => c"fragment",
                         Surface::CutOut => c"fragment_cutout",
                         Surface::SeeThrough => c"fragment_blend",
+                        Surface::Water => c"fragment_water",
                     }),
             ];
             // Depth is 1 at the camera and 0 far away, so the greater depth
@@ -685,6 +1113,231 @@ impl MeshPipeline {
                 }
             }
         }
+        // Still water that filled its hollow: a grid of points laid round
+        // the eye, two numbers each, mixed over what is behind it as other
+        // water is.
+        if failed.is_none() {
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_body"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_body"),
+            ];
+            let bindings = [vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(8)
+                .input_rate(vk::VertexInputRate::VERTEX)];
+            let attributes = [vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0)];
+            let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&bindings)
+                .vertex_attribute_descriptions(&attributes);
+            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::GREATER);
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD); 2];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                .color_attachment_formats(&formats)
+                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&grid_input)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&depth)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.body_pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+            // Drops, spray and bubbles: a square for each, which the
+            // shader makes the corners of, from two rows of four numbers
+            // that are handed over once for each square.
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_bit"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_bit"),
+            ];
+            let bindings = [vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(BIT_BYTES as u32)
+                .input_rate(vk::VertexInputRate::INSTANCE)];
+            let attributes = [0_u32, 1].map(|row| {
+                vk::VertexInputAttributeDescription::default()
+                    .location(row)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(row * 16)
+            });
+            let bit_input = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&bindings)
+                .vertex_attribute_descriptions(&attributes);
+            let info = info.stages(&stages).vertex_input_state(&bit_input);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.bit_pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
+        // What the sun sees: only how far away each surface is, so there is
+        // no colour to write, and a solid surface needs no fragment shader
+        // at all. The nearer surface wins, with depth running from 0 at the
+        // sun. Each surface is pushed a little away from the sun, more the
+        // more it slopes, so that it does not shadow itself.
+        let shadow_raster = raster
+            .depth_bias_enable(true)
+            .depth_bias_constant_factor(2.0)
+            .depth_bias_slope_factor(2.0);
+        let shadow_depth = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+        let no_colour = vk::PipelineColorBlendStateCreateInfo::default();
+        for (cut_out, pipeline) in [false, true].into_iter().zip(&mut mesh.shadow_pipelines) {
+            if failed.is_some() {
+                break;
+            }
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_shadow"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_shadow_cutout"),
+            ];
+            let stages = if cut_out { &stages[..] } else { &stages[..1] };
+            let mut rendering =
+                vk::PipelineRenderingCreateInfo::default().depth_attachment_format(shadow::FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(stages)
+                .vertex_input_state(&vertex_input)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&shadow_raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&shadow_depth)
+                .color_blend_state(&no_colour)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above; the module holds both
+            // entry points named in `stages`.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => *pipeline = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
+        // The sky: one triangle with no points of its own, drawn only where
+        // nothing else was (where the depth is still the farthest), and
+        // hiding nothing.
+        if failed.is_none() {
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_sky"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_sky"),
+            ];
+            let no_points = vk::PipelineVertexInputStateCreateInfo::default();
+            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::EQUAL);
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA); 2];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                .color_attachment_formats(&formats)
+                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&no_points)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&depth)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.sky = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
         // SAFETY: the module is only needed while pipelines are being created.
         unsafe { device.destroy_shader_module(module, None) };
         if let Some(code) = failed {
@@ -719,17 +1372,157 @@ impl MeshPipeline {
         frame: usize,
         target: &SceneTarget,
         view: &View,
-        meshes: Option<&Meshes>,
-        grid: Option<[f32; 3]>,
+        contents: Contents<'_>,
     ) -> Result<(), RenderError> {
+        let Contents {
+            meshes,
+            sky,
+            grid,
+            stirs,
+            bits,
+            flashes,
+            weather,
+            day,
+            tracks,
+        } = contents;
+        // What flies is handed over before anything is recorded.
+        let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
+        let bits = &bits[..bits.len().min(MOST_BITS * BIT_BYTES)];
+        if let (Some(buffer), false) = (bit_buffer, bits.is_empty()) {
+            // SAFETY: the buffer was made writable and long enough for
+            // every bit there can be, and the caller guarantees the
+            // commands that read it last have finished.
+            unsafe { buffer.write(bits) }?;
+        }
+        // The grid is laid out round the eye.
+        let grid = grid.then_some(view.eye);
         let device = self.gpu.device();
         let Some((view_buffer, view_set)) = self.views.get(frame % self.views.len().max(1)) else {
             return Ok(());
         };
-        let lighting = meshes.map_or_else(Lighting::default, |meshes| meshes.lighting);
+        // Water looks through this target's own copy of the picture.
+        if let Ok(mut behind) = self.behind.try_borrow_mut()
+            && let Some(bound) = behind.get_mut(frame % self.views.len().max(1))
+            && *bound != target.behind.view
+        {
+            let pictures = [target.behind.view, target.behind_depth.view].map(|view| {
+                [vk::DescriptorImageInfo::default()
+                    .image_view(view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
+            });
+            let writes = [0_usize, 1].map(|picture| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*view_set)
+                    .dst_binding(5 + picture as u32)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&pictures[picture])
+            });
+            // SAFETY: the caller guarantees the commands last recorded with
+            // this frame's set have finished, so it is not in use.
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            *bound = target.behind.view;
+        }
+        let lighting = day.map_or_else(
+            || meshes.map_or_else(Lighting::default, |meshes| meshes.lighting),
+            |day| day.lighting,
+        );
+        // With no hour said, the sun is the level's light and there is no
+        // moon and no star.
+        let [x, y, z] = lighting.towards_sun;
+        let [red, green, blue] = lighting.sun;
+        let heavens = day.map_or(
+            [
+                [x, y, z, 0.0],
+                [0.0; 4],
+                [0.0, 1.0, 0.0, 0.0],
+                [red, green, blue, 0.0],
+                [0.0; 4],
+            ],
+            |day| day.heavens,
+        );
+        // The sun's shadows of a level that has anything in it, drawn
+        // before the picture that reads them.
+        let cascades = meshes
+            .filter(|meshes| meshes.buffers.is_some())
+            .map(|meshes| shadow::cascades(view.eye, lighting.towards_sun, meshes.bounds));
+        if let (Some(meshes), Some(cascades)) = (meshes, &cascades) {
+            // SAFETY: the caller's guarantees cover the shadow pictures,
+            // which are this pipeline's own.
+            unsafe { self.record_shadows(commands, meshes, cascades) };
+        }
+        let sky = sky.then(|| {
+            day.map_or_else(
+                || meshes.map_or(&self.usual_sky, |meshes| &meshes.sky),
+                |day| &day.sky,
+            )
+        });
+        // Where the snow has been trodden since the last frame.
+        if let Some(map) = &self.tracks {
+            // SAFETY: the caller's guarantees cover the map, which is this
+            // pipeline's own, and no pass has been begun yet.
+            unsafe { map.record(commands, frame, tracks) }?;
+        }
+        // The water: its waves and rings are worked out before the picture
+        // that reads them, and everything drawn is told which still water
+        // the eye is in or nearest.
+        // All of it stands as high as rain has raised it.
+        let rise = weather.rows[1][1];
+        let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
+        let mut water = [[0.0; 4]; 9];
+        if let Some(works) = &self.water {
+            // SAFETY: the caller's guarantees cover the water's pictures,
+            // which are this pipeline's own, and the body, which is the
+            // meshes'.
+            water = unsafe {
+                works.record(
+                    commands,
+                    frame,
+                    view.eye,
+                    (view.exact, view.elapsed),
+                    (near, meshes.is_some_and(|meshes| meshes.has_water)),
+                    (stirs, weather.wind),
+                )
+            }?;
+            // The eye is under water when it is under the water as it
+            // stands now, not as the level was built.
+            if near.is_some() {
+                water[0][0] += rise;
+            }
+            let depths = near.map_or(works.pictures()[3], Body::depths);
+            let id = near.map_or(0, |body| body.id);
+            if let Ok(mut bound) = self.near_water.try_borrow_mut()
+                && let Some(bound) = bound.get_mut(frame % self.views.len().max(1))
+                && *bound != id
+            {
+                let pictures = [vk::DescriptorImageInfo::default()
+                    .image_view(depths)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let writes = [vk::WriteDescriptorSet::default()
+                    .dst_set(*view_set)
+                    .dst_binding(12)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&pictures)];
+                // SAFETY: the caller guarantees the commands last recorded
+                // with this frame's set have finished, so it is not in use.
+                unsafe { device.update_descriptor_sets(&writes, &[]) };
+                *bound = id;
+            }
+        }
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
-        unsafe { view_buffer.write(&view.bytes(&lighting)) }?;
+        unsafe {
+            view_buffer.write(&view.bytes(
+                &lighting,
+                cascades.as_ref(),
+                sky,
+                &water,
+                &Above {
+                    flashes,
+                    weather,
+                    heavens,
+                },
+            ))
+        }?;
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {
@@ -861,22 +1654,99 @@ impl MeshPipeline {
                 &[*view_set],
                 &[],
             );
-            if let Some(
-                meshes @ Meshes {
-                    buffers: Some((vertices, indices)),
-                    draws,
-                    ..
-                },
-            ) = meshes
-            {
+            let drawn = meshes.and_then(|meshes| Some((meshes, meshes.buffers.as_ref()?)));
+            if let Some((meshes, (vertices, indices))) = drawn {
                 device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
-                let (solid, see_through) = draws.split_at(meshes.see_through_from.min(draws.len()));
+                let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
                 let mut last = None;
                 for draw in solid {
                     self.draw(commands, meshes, draw, last);
                     last = Some(draw);
                 }
+            }
+            // The sky fills what the solid parts left open, before anything
+            // see-through is mixed over it.
+            if sky.is_some() {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, self.sky);
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_draw(commands, 3, 1, 0, 0);
+            }
+            // Water sees what is under it: the picture so far is copied
+            // aside for it to read, and drawing carries on over the same
+            // picture.
+            if meshes.is_some_and(|meshes| meshes.has_water) || !bits.is_empty() {
+                device.cmd_end_rendering(commands);
+                Self::keep_behind(device, commands, target);
+                let kept =
+                    attachments.map(|attachment| attachment.load_op(vk::AttachmentLoadOp::LOAD));
+                let kept_depth = depth.load_op(vk::AttachmentLoadOp::LOAD);
+                let again = vk::RenderingInfo::default()
+                    .render_area(area)
+                    .layer_count(1)
+                    .color_attachments(&kept)
+                    .depth_attachment(&kept_depth);
+                device.cmd_begin_rendering(commands, &again);
+                device.cmd_set_viewport(commands, 0, &[viewport]);
+                device.cmd_set_scissor(commands, 0, &[area]);
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    0,
+                    &[*view_set],
+                    &[],
+                );
+            }
+            // Still water first, each body from the shape it took, the
+            // coarsest of its grids first.
+            if let (Some(meshes), Some((points, triangles))) =
+                (meshes, self.water.as_ref().and_then(WaterWorks::grid))
+                && !meshes.bodies.list.is_empty()
+            {
+                device.cmd_bind_pipeline(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.body_pipeline,
+                );
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_bind_vertex_buffers(commands, 0, &[points.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, triangles.handle, 0, vk::IndexType::UINT32);
+                for body in &meshes.bodies.list {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.layout,
+                        2,
+                        &[body.set],
+                        &[],
+                    );
+                    for grid in (0..body.grids(view.eye)).rev() {
+                        // A grid none of this body lies in draws nothing.
+                        if !body.drawn_by(view.eye, grid) {
+                            continue;
+                        }
+                        device.cmd_push_constants(
+                            commands,
+                            self.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            &body_bytes(body, view.eye, grid, weather.rows[1][1]),
+                        );
+                        device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
+                    }
+                }
+            }
+            if let Some((meshes, (vertices, indices))) = drawn {
+                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+                let draws = &meshes.draws;
+                let see_through = &draws[meshes.see_through_from.min(draws.len())..];
+                // The sky changed what is bound, so the first of these sets
+                // everything again.
+                let mut last = None;
                 // Farthest first, so that each is mixed over what is behind it.
                 if let Ok(mut order) = self.order.try_borrow_mut() {
                     order.clear();
@@ -893,6 +1763,21 @@ impl MeshPipeline {
                         last = Some(draw);
                     }
                 }
+            }
+            // What a splash threw up, over the water it came out of.
+            if let (Some(buffer), false) = (bit_buffer, bits.is_empty()) {
+                device.cmd_bind_pipeline(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.bit_pipeline,
+                );
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_bind_vertex_buffers(commands, 0, &[buffer.handle], &[0]);
+                // There is room for a few thousand at most.
+                #[allow(clippy::cast_possible_truncation)]
+                let count = (bits.len() / BIT_BYTES) as u32;
+                device.cmd_draw(commands, 6, count, 0, 0);
             }
             // After the meshes, so that its see-through lines lie over them.
             if let Some(eye) = grid {
@@ -917,6 +1802,219 @@ impl MeshPipeline {
 }
 
 impl MeshPipeline {
+    /// Records copying the colour and depth drawn so far into the target's
+    /// `behind` pictures, between two halves of the mesh pass.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), outside a render pass, with the
+    /// target's colour and depth in the states the mesh pass draws in; they
+    /// are left in those states.
+    unsafe fn keep_behind(device: &ash::Device, commands: vk::CommandBuffer, target: &SceneTarget) {
+        let depth_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+        let barrier = |image: vk::Image, range: vk::ImageSubresourceRange| {
+            vk::ImageMemoryBarrier2::default()
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(range)
+        };
+        let copying = vk::PipelineStageFlags2::ALL_TRANSFER;
+        let to_copy = [
+            barrier(target.colour.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            barrier(target.depth.image, DEPTH)
+                .src_stage_mask(depth_stages)
+                .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            // What the copies held is thrown away; the last frame's water
+            // may still be reading them.
+            barrier(target.behind.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+            barrier(target.behind_depth.image, DEPTH)
+                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_stage_mask(copying)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+        ];
+        let to_carry_on = [
+            barrier(target.colour.image, COLOUR)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            barrier(target.depth.image, DEPTH)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .dst_stage_mask(depth_stages)
+                .dst_access_mask(
+                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL),
+            barrier(target.behind.image, COLOUR)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            barrier(target.behind_depth.image, DEPTH)
+                .src_stage_mask(copying)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+        ];
+        let whole = |aspect: vk::ImageAspectFlags| {
+            let layers = vk::ImageSubresourceLayers {
+                aspect_mask: aspect,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            [vk::ImageCopy::default()
+                .src_subresource(layers)
+                .dst_subresource(layers)
+                .extent(target.extent.into())]
+        };
+        // SAFETY: the caller guarantees the command buffer is recording
+        // outside a render pass and that the target is this device's; each
+        // image is copied in the state the barrier before left it in, and
+        // each copy is the size and format of what it is copied from.
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                commands,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
+            );
+            device.cmd_copy_image(
+                commands,
+                target.colour.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                target.behind.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &whole(vk::ImageAspectFlags::COLOR),
+            );
+            device.cmd_copy_image(
+                commands,
+                target.depth.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                target.behind_depth.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &whole(vk::ImageAspectFlags::DEPTH),
+            );
+            device.cmd_pipeline_barrier2(
+                commands,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_carry_on),
+            );
+        }
+    }
+
+    /// Records drawing what the sun sees of `meshes` into each of
+    /// `cascades` that does not hold it already.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), before its render pass begins.
+    unsafe fn record_shadows(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        cascades: &[Cascade; PICTURES],
+    ) {
+        let (Some(shadows), Some((vertices, indices))) = (&self.shadows, &meshes.buffers) else {
+            return;
+        };
+        let device = self.gpu.device();
+        let stale = shadows.take_stale(meshes.id, cascades);
+        let casters = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
+        for (layer, cascade) in cascades.iter().enumerate() {
+            if !stale[layer] {
+                continue;
+            }
+            // SAFETY: the caller guarantees the command buffer is recording
+            // outside a render pass and that the meshes are live and of
+            // this device; the draws only name points, triangles and
+            // materials that `Meshes::new` made.
+            unsafe {
+                shadows.begin(commands, layer);
+                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+                // Both sides cast: a wall one triangle thick, or a rock
+                // with no underside, still stops the sun.
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                let mut last: Option<&Draw> = None;
+                for draw in casters
+                    .iter()
+                    .filter(|draw| cascade.holds(draw.middle, draw.radius))
+                {
+                    let cut_out = draw.surface == Surface::CutOut;
+                    if last.is_none_or(|last| last.surface != draw.surface) {
+                        device.cmd_bind_pipeline(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow_pipelines[usize::from(cut_out)],
+                        );
+                    }
+                    // Only a cut-out part reads its material, for its holes.
+                    if cut_out && last.is_none_or(|last| last.material != draw.material) {
+                        device.cmd_bind_descriptor_sets(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.layout,
+                            1,
+                            &[meshes.materials.set(draw.material)],
+                            &[],
+                        );
+                    }
+                    let seen = Draw {
+                        world: multiply(&cascade.clip, &draw.world),
+                        ..*draw
+                    };
+                    device.cmd_push_constants(
+                        commands,
+                        self.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        &draw_bytes(&seen),
+                    );
+                    device.cmd_draw_indexed(
+                        commands,
+                        draw.index_count,
+                        1,
+                        draw.first_index,
+                        draw.first_vertex,
+                        0,
+                    );
+                    last = Some(draw);
+                }
+                shadows.end(commands, layer);
+            }
+        }
+    }
+
     /// Records drawing one mesh part, changing only what differs from the
     /// part drawn before it.
     ///
@@ -993,10 +2091,63 @@ impl MeshPipeline {
     }
 }
 
+/// Pointing binding `binding` of `set` at the picture `info` names.
+fn picture_write(
+    set: vk::DescriptorSet,
+    binding: u32,
+    info: &[vk::DescriptorImageInfo; 1],
+) -> vk::WriteDescriptorSet<'_> {
+    vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(binding)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .image_info(info)
+}
+
+/// The shader's `Draw` for one of the grids a body of still water is drawn
+/// with as seen from `eye`: grid 0 is the finest, and each one after it is
+/// twice as wide with its points twice as far apart.
+///
+/// Where the mesh shader keeps how a mesh stands, this keeps how the grid
+/// is laid (how far apart its points are, whether it is the finest, how
+/// many squares it has a side, and where its middle is: the eye, to the
+/// nearest two points, so that the grid moves by whole squares and its
+/// points stay where they were); and where the shader keeps how surface
+/// directions turn, the body itself: where its grid of depths starts and
+/// how far apart its points are, how many there are and how high the water
+/// stands, and the water's colour. Its clearness is the number after.
+fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
+    let (apart, middle) = grid_laid(eye, grid);
+    // Sizes are far below the point where f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
+    let finest = if grid == 0 { 1.0 } else { 0.0 };
+    let numbers = [
+        [apart, finest, squares, 0.0],
+        [0.0; 4],
+        [0.0; 4],
+        [middle[0], body.level + rise, middle[1], 1.0],
+        [body.origin[0], body.origin[1], body.cell, 0.0],
+        [size[0], size[1], body.level + rise, 0.0],
+        [body.colour[0], body.colour[1], body.colour[2], 0.0],
+        [body.colour[3], 0.0, 0.0, 0.0],
+    ];
+    let mut bytes = [0_u8; DRAW_BYTES];
+    for (slot, number) in bytes
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(numbers.iter().flatten())
+    {
+        *slot = number.to_ne_bytes();
+    }
+    bytes
+}
+
 /// The shader's `Draw` for one mesh part.
 fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     // A mirrored mesh has its normal map's sideways direction turned around.
-    let handedness = [if draw.mirrored { -1.0 } else { 1.0 }];
+    let handedness = [if draw.mirrored { -1.0 } else { 1.0 }, draw.sway];
     let numbers = draw
         .world
         .iter()
@@ -1017,14 +2168,18 @@ impl Drop for MeshPipeline {
         // frees its sets.
         unsafe {
             let device = self.gpu.device();
-            for pipeline in self.pipelines {
+            for pipeline in self.pipelines.into_iter().chain(self.shadow_pipelines) {
                 device.destroy_pipeline(pipeline, None);
             }
+            device.destroy_pipeline(self.body_pipeline, None);
+            device.destroy_pipeline(self.bit_pipeline, None);
+            device.destroy_pipeline(self.sky, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_set_layout(self.material_layout, None);
+            device.destroy_descriptor_set_layout(self.body_layout, None);
         }
     }
 }
@@ -1178,11 +2333,13 @@ mod tests {
             material: 0,
             surface: Surface::Solid,
             middle: [0.0; 3],
+            radius: 1.0,
             first_index: 0,
             index_count: 3,
             first_vertex: 0,
             mirrored: false,
             double_sided: false,
+            sway: 0.5,
         };
         let bytes = draw_bytes(&draw);
         assert_eq!(number(&bytes, 0), 1.0, "the matrix comes first");
@@ -1190,6 +2347,11 @@ mod tests {
         assert_eq!(number(&bytes, 28), 1.0, "then which way round it is");
         draw.mirrored = true;
         assert_eq!(number(&draw_bytes(&draw), 28), -1.0);
+        assert_eq!(
+            number(&draw_bytes(&draw), 29),
+            0.5,
+            "and how far the wind moves it"
+        );
     }
 
     #[test]
@@ -1202,6 +2364,17 @@ mod tests {
             before: matrix,
             eye: [1.0, 2.0, 3.0],
             sharper: 1.5,
+            rays: [
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [9.0, 10.0, 11.0, 12.0],
+            ],
+            time: 13.0,
+            exact: 13.0,
+            elapsed: 0.25,
+            stir: 0.5,
+            noise: 9.0,
+            near: 0.05,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
@@ -1209,7 +2382,7 @@ mod tests {
             sky: [0.1, 0.2, 0.3],
             ground: [0.4, 0.5, 0.6],
         };
-        let bytes = view.bytes(&lighting);
+        let bytes = view.bytes(&lighting, None, None, &[[0.0; 4]; 9], &Above::default());
         assert_eq!(
             number(&bytes, 47),
             7.0,
@@ -1224,6 +2397,102 @@ mod tests {
         assert_eq!([56, 57, 58].map(|at| number(&bytes, at)), [4.0, 5.0, 6.0]);
         assert_eq!([60, 61, 62].map(|at| number(&bytes, at)), [0.1, 0.2, 0.3]);
         assert_eq!([64, 65, 66].map(|at| number(&bytes, at)), [0.4, 0.5, 0.6]);
+
+        // The shadows follow: one row, a row for each picture, then a
+        // matrix for each.
+        assert_eq!(number(&bytes, 68), 0.0, "no shadows");
+        let cascades = shadow::cascades([0.0; 3], [0.0, 1.0, 0.0], [[-1.0; 3], [1.0; 3]]);
+        let bytes = view.bytes(
+            &lighting,
+            Some(&cascades),
+            None,
+            &[[0.0; 4]; 9],
+            &Above::default(),
+        );
+        assert_eq!(number(&bytes, 68), 1.0, "shadows");
+        assert_eq!(number(&bytes, 71), 9.0, "the frame's noise");
+        assert_eq!(number(&bytes, 72), cascades[0].texel);
+        assert_eq!(number(&bytes, 73), cascades[0].depth);
+        assert_eq!(number(&bytes, 84), cascades[3].texel);
+        assert_eq!(
+            number(&bytes, 88),
+            cascades[4].texel,
+            "the picture from above"
+        );
+        assert_eq!(number(&bytes, 92), cascades[0].clip[0][0]);
+        assert_eq!(
+            number(&bytes, 171),
+            1.0,
+            "the last number of the last matrix"
+        );
+        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES);
+
+        // Then the sky: the lines of sight, the clouds, and the light the
+        // air and the haze scatter, a row for each height.
+        assert_eq!(number(&bytes, 172), 1.0);
+        assert_eq!(number(&bytes, 183), 12.0);
+        assert_eq!(number(&bytes, 184), 0.0, "no clouds without a sky");
+        assert_eq!(number(&bytes, 185), 13.0, "the time");
+        assert_eq!(number(&bytes, 186), sky::CLOUD_HEIGHT);
+        assert_eq!(number(&bytes, 187), 0.0, "no sky");
+        let above = Sky::of(&lighting);
+        // The water: the body the eye is nearest, the layers of waves,
+        // the rings, and the eye's own, which the view fills in itself.
+        let mut water = [[0.0; 4]; 9];
+        water[0] = [2.0, 0.25, 1.0, 0.8];
+        water[1] = [3.0, 4.0, 5.0, 6.0];
+        water[3] = [5.4, 0.01, 0.17, 0.68];
+        water[7] = [-6.0, -7.0, 0.025, 512.0];
+        water[8] = [99.0; 4];
+        let bytes = view.bytes(
+            &lighting,
+            None,
+            Some(&above),
+            &water,
+            &Above {
+                flashes: [[1.0, 2.0, 3.0, 0.5], [0.0; 4]],
+                weather: Air {
+                    rows: [
+                        [0.25, 0.0, 0.5, 1.0],
+                        [0.75, 0.0, 0.0, 0.0],
+                        [0.0; 4],
+                        [0.0; 4],
+                        [0.0; 4],
+                        [0.3, 0.0, 0.0, 0.0],
+                        [0.4, 0.0, 0.0, 0.0],
+                    ],
+                    cover: 0.6,
+                    fog: 0.002,
+                    wind: [0.0, 1.0, 9.0],
+                },
+                heavens: [[9.0; 4]; 5],
+            },
+        );
+        assert_eq!(number(&bytes, 184), 0.6, "how much of the sky is cloud");
+        assert_eq!(number(&bytes, 187), 1.0, "a sky");
+        assert_eq!(number(&bytes, 188), above.air[0][0]);
+        assert_eq!(number(&bytes, 280), above.air[23][0]);
+        assert_eq!(number(&bytes, 284), above.haze[0][0]);
+        assert_eq!(number(&bytes, 378), above.haze[23][2]);
+        assert_eq!(number(&bytes, 380), 0.002, "the fog");
+        assert_eq!(number(&bytes, 381), sky::FOG[1]);
+        assert_eq!(number(&bytes, 385), 1.0, "the wind");
+        assert_eq!(number(&bytes, 386), 9.0);
+        assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
+        assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
+        assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
+        assert_eq!(number(&bytes, 399), 6.0, "and how many points its grid has");
+        assert_eq!(number(&bytes, 404), 5.4, "the first layer of waves");
+        assert_eq!(number(&bytes, 423), 512.0, "the rings");
+        assert_eq!(number(&bytes, 424), 0.05, "how near the eye sees");
+        assert_eq!(number(&bytes, 428), 1.0, "where lightning's light is");
+        assert_eq!(number(&bytes, 431), 0.5, "and how bright");
+        assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
+        assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
+        assert_eq!(number(&bytes, 456), 0.3, "how strong the tornado is");
+        assert_eq!(number(&bytes, 460), 0.4, "how deep the snow lies");
+        assert_eq!(number(&bytes, 464), 9.0, "the sun, the moon and the stars");
+        assert_eq!(bytes.len(), 484 * 4);
     }
 
     #[test]
@@ -1270,6 +2539,7 @@ mod tests {
     #[test]
     fn solid_parts_are_drawn_before_cut_out_and_see_through_ones() {
         assert!(Surface::Solid < Surface::CutOut && Surface::CutOut < Surface::SeeThrough);
+        assert!(Surface::SeeThrough < Surface::Water);
         let with = |alpha_mode| Material {
             alpha_mode,
             ..Material::default()

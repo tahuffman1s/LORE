@@ -254,8 +254,8 @@ fn wrong_arguments_say_how_to_write_the_call() {
         ),
         (
             r#"local sound = game.audio.play("door"); print(sound.volume)"#,
-            "sound.volume does not exist. A sound has one function, which stops it: \
-             sound:stop()",
+            "sound.volume does not exist. A sound has two functions: sound:stop() stops it, \
+             and sound:moveTo(place) moves it.",
         ),
         (
             r#"local sound = game.audio.play("door"); sound.volume = 1"#,
@@ -311,4 +311,56 @@ fn only_the_latest_requests_wait_when_nobody_takes_them() {
         panic!("a sound was played");
     };
     assert_eq!(last.id, SoundId(999));
+}
+
+#[test]
+fn a_sound_in_the_world_is_moved_and_a_mistake_says_what_to_write() {
+    let mut host = started(
+        r#"local creek = game.audio.playAt("door", vector.create(1, 2, 3), { loop = true })
+        creek:moveTo(vector.create(4, 5, 6))
+        creek:moveTo(vector.create(7, 8, 9))"#,
+    );
+    let asked = asked(&mut host);
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    let AudioCommand::Play(played) = &asked[0] else {
+        panic!("{asked:?}");
+    };
+    // Both moves name the sound that was played, in the order they were made.
+    assert_eq!(
+        asked[1..],
+        [
+            AudioCommand::Move(played.id, [4.0, 5.0, 6.0]),
+            AudioCommand::Move(played.id, [7.0, 8.0, 9.0]),
+        ]
+    );
+
+    for (body, said) in [
+        (
+            r#"game.audio.play("door").moveTo(vector.create(0, 0, 0))"#,
+            "sound.moveTo needs a colon, not a dot",
+        ),
+        (
+            r#"game.audio.play("door"):moveTo(5)"#,
+            "sound:moveTo needs the place to move the sound to, as vector.create(x, y, z) in \
+             metres, but it was given a number.",
+        ),
+        (
+            r#"game.audio.play("door"):moveTo(vector.create(0 / 0, 0, 0))"#,
+            "sound:moveTo was given a place that is not a real point",
+        ),
+    ] {
+        let mut host = started(body);
+        let error = host
+            .last_error()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(error.contains(said), "{body}: {error}");
+        // The sound itself was played before the mistake.
+        assert_eq!(asked_len(&mut host), 1, "{body}");
+    }
+}
+
+/// How many things the script asked of the sound.
+fn asked_len(host: &mut ScriptHost) -> usize {
+    std::iter::from_fn(|| host.take_sound()).count()
 }

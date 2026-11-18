@@ -23,8 +23,26 @@ use lore_script::SoundRequest;
 /// The folder inside a game's folder that holds its sounds.
 pub const SOUNDS_FOLDER: &str = "sounds";
 
-/// The sounds every game has without a file of its own.
-pub const STARTER_SOUNDS: [&str; 5] = ["dry-fire", "footstep", "gunshot", "landing", "reload"];
+/// The sounds every game has without a file of its own, in order.
+pub const STARTER_SOUNDS: [&str; 17] = [
+    "bubbles",
+    "drip",
+    "dry-fire",
+    "footstep",
+    "gunshot",
+    "landing",
+    "rain",
+    "reload",
+    "splash",
+    "splash-small",
+    "surface",
+    "swim-stroke",
+    "thunder",
+    "thunder-far",
+    "underwater",
+    "wade",
+    "wind",
+];
 
 /// How often a game's folder is looked at for new, changed or removed sounds.
 const LOOK_EVERY: Duration = Duration::from_millis(250);
@@ -46,6 +64,12 @@ const OTHER_SOUND_ENDINGS: [&str; 8] = ["mp3", "flac", "opus", "m4a", "aac", "ai
 
 /// The sound, and the folder of sounds, that are music.
 const MUSIC: &str = "music";
+
+/// How far a drip or a burst of bubbles carries: across a room.
+const DRIP: Range = Range {
+    near: 1.0,
+    far: 15.0,
+};
 
 /// One take, or several to choose among.
 #[derive(Debug)]
@@ -437,6 +461,49 @@ fn starters() -> BTreeMap<String, Entry> {
         ("gunshot", takes(starter::gunfire(), Range::GUNFIRE)),
         ("landing", one(starter::landing(), Range::FOOTSTEP)),
         ("reload", one(starter::reload(), close)),
+        // Water. A body falling in carries as far as a sound of the
+        // game's own; a step in the shallows, a stroke or a head coming
+        // up as far as a footstep; a drip from across a room.
+        ("splash", takes(starter::splashes(), close)),
+        (
+            "splash-small",
+            takes(starter::small_splashes(), Range::FOOTSTEP),
+        ),
+        ("wade", takes(starter::wading(), Range::FOOTSTEP)),
+        // Thunder is heard for miles.
+        (
+            "thunder",
+            takes(
+                starter::thunder(),
+                Range {
+                    near: 400.0,
+                    far: 16_000.0,
+                },
+            ),
+        ),
+        (
+            "thunder-far",
+            takes(
+                starter::far_thunder(),
+                Range {
+                    near: 3_000.0,
+                    far: 30_000.0,
+                },
+            ),
+        ),
+        (
+            "swim-stroke",
+            takes(starter::swim_strokes(), Range::FOOTSTEP),
+        ),
+        ("surface", takes(starter::surfacing(), Range::FOOTSTEP)),
+        ("bubbles", takes(starter::bubbles(), DRIP)),
+        ("drip", takes(starter::drips(), DRIP)),
+        // Heard with the head under: to loop, the same in both ears.
+        ("underwater", one(starter::underwater(), close)),
+        // The weather, to loop for as long as it lasts: the engine plays
+        // them by itself, louder the harder it rains and blows.
+        ("rain", one(starter::rain(), close)),
+        ("wind", one(starter::wind(), close)),
     ];
     entries
         .into_iter()
@@ -716,6 +783,47 @@ mod tests {
         let own = sounds.play(&request("gunshot")).unwrap();
         assert_eq!(own.sound.seconds(), 0.1);
         assert_ne!(starter, 0.1);
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn water_is_heard_with_no_file_and_the_rumble_under_it_is_one_sound_to_loop() {
+        let mut sounds = Sounds::starter();
+        let water = [
+            ("splash", 1.1..1.8),
+            ("splash-small", 0.25..0.45),
+            ("wade", 0.45..0.65),
+            ("swim-stroke", 0.5..0.7),
+            ("surface", 0.75..0.95),
+            ("bubbles", 1.0..1.4),
+            ("underwater", 4.0..6.0),
+            ("drip", 0.1..0.2),
+            // The weather's loops are here too: they are found the same way.
+            ("rain", 5.9..6.1),
+            ("wind", 7.9..8.1),
+        ];
+        for (name, seconds) in water {
+            assert!(STARTER_SOUNDS.contains(&name), "{name}");
+            let play = sounds.take(name, 7).unwrap();
+            assert!(seconds.contains(&play.sound.seconds()), "{name}");
+            assert_eq!(play.group, Group::Effects, "{name}");
+            assert_eq!(play.place, Place::Everywhere, "{name}");
+        }
+        // Several takes: one after another is never the same one twice.
+        let first = sounds.take("splash", 1).unwrap().sound.seconds();
+        let second = sounds.take("splash", 1).unwrap().sound.seconds();
+        assert_ne!(first, second);
+        // The rumble has one take, and is as it was made: no change of
+        // pitch or volume from one dive to the next.
+        let rumble = sounds.take("underwater", 3).unwrap();
+        assert_eq!((rumble.pitch, rumble.volume), (1.0, 1.0));
+        // A file of the game's own takes the engine's place, as with any
+        // starter sound.
+        let folder = game("water", &[("sounds/splash.wav", &test_wav(&[1000; 480]))]);
+        let mut sounds = Sounds::in_folder(&folder);
+        sounds.load();
+        assert_eq!(sounds.take("splash", 1).unwrap().sound.seconds(), 0.01);
+        assert!(sounds.take("wade", 1).is_some());
         let _ = fs::remove_dir_all(folder);
     }
 

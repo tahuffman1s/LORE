@@ -108,6 +108,14 @@ declare extern type Sound with
     --- Stopping a sound that has already ended does nothing.
     --- Example: music:stop()
     function stop(self): ()
+
+    --- Moves a sound that was started with `game.audio.playAt` to another
+    --- place, in metres: for something that makes a noise as it goes, or
+    --- for a creek, which is heard all along it if its sound is kept at
+    --- the place on it nearest the player. Moving a sound that has ended,
+    --- or one started with `game.audio.play`, does nothing.
+    --- Example: game.onTick(function() hum:moveTo(game.player.position) end)
+    function moveTo(self, position: vector): ()
 end
 
 --- A wait started with `game.after` or `game.every`. Keep it only to stop
@@ -473,11 +481,224 @@ declare game: {
     --- little at a time as it plays. A WAV file is held in memory whole, so
     --- export long sounds as Ogg Vorbis.
     --- The engine also has starter sounds a new game can use straight away:
-    --- "footstep", "gunshot", "landing", "dry-fire" and "reload". A file of
-    --- your own with one of those names replaces the starter sound.
+    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", and for
+    --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
+    --- "bubbles", "drip" and "underwater"; and the weather's, which the
+    --- engine plays by itself: "rain", "wind", "thunder" and "thunder-far".
+    --- A file of your own with one of those names replaces the starter
+    --- sound.
     ---
     --- Sounds are played from functions that run while the game is on, such
     --- as `game.onStart` and `game.onTick`, not while the script loads.
+    sky: {
+        --- Says what hour of the day it is: 12 is noon, 18 is the sun
+        --- setting, 24 is midnight, and hours past 24 run on into the next
+        --- day, which moves the moon a day further round its month. The
+        --- sun and the moon stand where that hour has them: evening
+        --- reddens, night falls, the stars come out and the moon lights
+        --- the land. Until a script says the hour it is always day, in the
+        --- level's own light. To make time pass, say how long a day lasts
+        --- with game.sky.setDayLength.
+        --- Example: game.sky.setHour(18.5)
+        setHour: (hour: number) -> (),
+
+        --- The hour it is, or nil if the script has said none. Past
+        --- midnight it runs on over 24: use `% 24` for the hour of the day.
+        --- Example: local hour = (game.sky.hour() or 12) % 24
+        hour: () -> number?,
+
+        --- Says how many minutes of play a whole day and night last, and
+        --- from then on the hours pass by themselves: the sun crosses the
+        --- sky, sets, and rises again. 24 is a day in twenty-four minutes,
+        --- a game hour a minute. 0 stops the hours where they are. If no
+        --- hour has been said yet the day begins at noon.
+        --- Example: game.sky.setDayLength(24)
+        setDayLength: (minutes: number) -> (),
+
+        --- How many minutes a day lasts, or 0 if the hours do not pass.
+        --- Example: if game.sky.dayLength() == 0 then game.sky.setDayLength(30) end
+        dayLength: () -> number,
+    },
+
+    --- The weather: say it in one word with game.weather.set, or a number
+    --- at a time with the functions after it. Each "set" function but
+    --- setSnowDepth and setIce can be given a number of seconds after its
+    --- value, and the weather then changes that slowly instead of at once.
+    --- What each function reads back is the weather as it is now, on its
+    --- way there. A number outside what a function takes is brought into
+    --- it. The weather stays as it is when the script is saved again.
+    weather: {
+        --- Brings in a kind of weather by name, over twenty seconds or
+        --- over the number of seconds given. The kinds are "clear", "fair",
+        --- "cloudy", "overcast", "fog", "drizzle", "rain", "storm",
+        --- "sleet", "snow" and "blizzard". Each sets the cloud, the
+        --- storminess, the rain, the fog and how fast the wind blows (not
+        --- which way, or how gusty). "rain", "drizzle" and "storm" also
+        --- warm the air if it is too cold for them, and "sleet", "snow"
+        --- and "blizzard" cool it; the other kinds leave its warmth as it
+        --- is, so "clear" after a blizzard is a clear, freezing day. The
+        --- functions below then change one thing at a time.
+        --- Example: game.weather.set("storm")
+        --- Example: game.weather.set("blizzard", 60)
+        set: (kind: string, seconds: number?) -> (),
+
+        --- Says how much of the sky is cloud: 0 is none, 0.5 the heaps of
+        --- a fair day, and 1 a grey sky that is all cloud, under which the
+        --- sun casts no shadows.
+        --- Example: game.weather.setCloudCover(0.9, 30)
+        setCloudCover: (amount: number, seconds: number?) -> (),
+
+        --- How much of the sky is cloud, from 0 to 1. It is 0.5 until the
+        --- script says otherwise.
+        --- Example: if game.weather.cloudCover() > 0.9 then print("A grey day.") end
+        cloudCover: () -> number,
+
+        --- Says how stormy the sky is, from 0, fair weather with the odd
+        --- storm passing, to 1, storms over most of it. Under a storm it
+        --- is dark, it rains and in its heart it hails, the wind blows
+        --- three times as hard and lightning strikes by itself.
+        --- Example: game.weather.setStorminess(0.8)
+        setStorminess: (amount: number, seconds: number?) -> (),
+
+        --- How stormy the sky is, from 0 to 1. It is 0 until the script
+        --- says otherwise.
+        --- Example: if game.weather.storminess() > 0.5 then print("Take cover!") end
+        storminess: () -> number,
+
+        --- Says how hard it rains from a grey sky, everywhere at once:
+        --- 0 is dry, 0.3 drizzle, 1 a downpour. The sky clouds over to
+        --- match. What comes down depends on how warm it is: rain above 3
+        --- degrees, sleet from 0 to 3, snow at 0 and below. Rain wets the
+        --- ground and raises the lakes; snow settles.
+        --- Example: game.weather.setRain(0.6, 20)
+        setRain: (amount: number, seconds: number?) -> (),
+
+        --- How hard it rains from the grey sky now, from 0 to 1: 0 until
+        --- the script says otherwise. In the cold this is snow or sleet,
+        --- and a storm passing over rains besides: for what is really
+        --- coming down on the player, use game.weather.falling.
+        --- Example: if game.weather.rain() > 0 then print("Grey skies.") end
+        rain: () -> number,
+
+        --- Says how warm the air is, in degrees Celsius: 20 is a mild day
+        --- and 0 is freezing. Below freezing, what falls is snow, snow
+        --- that lies stays, and lakes and ponds freeze over until their
+        --- ice can be walked on. Above it, snow and ice melt.
+        --- Example: game.weather.setTemperature(-8, 60)
+        setTemperature: (degrees: number, seconds: number?) -> (),
+
+        --- How warm the air is, in degrees Celsius. It is 20 until the
+        --- script says otherwise.
+        --- Example: if game.weather.temperature() < 0 then print("It is freezing.") end
+        temperature: () -> number,
+
+        --- Says the wind, as the way the air moves: the vector points
+        --- where the wind blows to, and its length is how fast it blows,
+        --- in metres a second. 5 is a breeze, 12 strong enough to make
+        --- walking against it hard work, 20 a gale. Trees bend to it,
+        --- clouds and rain and snow go with it, waves run before it, and a
+        --- strong one pushes the player. Only along the ground counts.
+        --- Example: game.weather.setWind(vector.create(12, 0, 0))
+        setWind: (wind: vector, seconds: number?) -> (),
+
+        --- The wind: a vector pointing where it blows to, as long as it
+        --- is fast in metres a second. Until the script says otherwise it
+        --- is a breeze of 5.
+        --- Example: local speed = vector.magnitude(game.weather.wind())
+        wind: () -> vector,
+
+        --- Says how gusty the wind is, from 0, a steady wind, to 1, lulls
+        --- and squalls. It is 0.5 until the script says otherwise.
+        --- Example: game.weather.setGusts(1)
+        setGusts: (amount: number, seconds: number?) -> (),
+
+        --- How gusty the wind is, from 0 to 1.
+        --- Example: local gusty = game.weather.gusts() > 0.7
+        gusts: () -> number,
+
+        --- Says how thick the fog is: 0 is the light haze of a clear day,
+        --- 0.5 hides what is a few hundred metres off, and at 1 nothing is
+        --- seen past forty metres.
+        --- Example: game.weather.setFog(0.7, 30)
+        setFog: (amount: number, seconds: number?) -> (),
+
+        --- How thick the fog is, from 0 to 1. It is 0 until the script says
+        --- otherwise.
+        --- Example: if game.weather.fog() > 0.6 then print("You can hardly see.") end
+        fog: () -> number,
+
+        --- Says how deep the snow lies, in metres. Snow settles by itself
+        --- while it snows and melts when the air is above freezing; this
+        --- puts it there at once, for a level that begins in winter. At
+        --- 0.05 the land is white and the player leaves footprints; from
+        --- 0.1 they plough a furrow through it and walk slower, and low
+        --- plants are pressed down under it. New snow fills tracks in.
+        --- Example: game.weather.setSnowDepth(0.3)
+        setSnowDepth: (metres: number) -> (),
+
+        --- How deep the snow lies where the player is, in metres.
+        --- Example: if game.weather.snowDepth() > 0.3 then print("Hard going.") end
+        snowDepth: () -> number,
+
+        --- Says how thick the ice on lakes and ponds is, in metres. Still
+        --- water freezes by itself while the air is below freezing and
+        --- thaws above it; this freezes it at once. Thin ice is only seen.
+        --- At 0.05 it bears the player, who then walks on the lake instead
+        --- of swimming in it, and slides. Running water does not freeze.
+        --- Example: game.weather.setIce(0.2)
+        setIce: (metres: number) -> (),
+
+        --- How thick the ice on still water is, in metres.
+        --- Example: if game.weather.ice() >= 0.05 then print("The lake will hold you.") end
+        ice: () -> number,
+
+        --- What is coming down on the player now, and how hard from 0 to
+        --- 1: "rain", "sleet", "snow" or "hail", or "nothing" and 0.
+        --- Example: local what, hard = game.weather.falling()
+        --- Example: if game.weather.falling() == "snow" then print("Snow!") end
+        falling: () -> (string, number),
+
+        --- Lets lightning strike the ground at a place: a forked bolt
+        --- comes down from the clouds over it, flickers and is gone in
+        --- under a second, lighting the land round it. Only where the
+        --- place is along the ground counts: the bolt lands on whatever is
+        --- highest there. Its thunder is heard when the sound has come
+        --- from there, three seconds for each kilometre. It hurts nobody.
+        --- More than eight in one tick are not all seen.
+        --- Example: game.weather.strike(game.player.position + vector.create(0, 0, -200))
+        strike: (at: vector) -> (),
+
+        --- Calls your function whenever lightning strikes the ground,
+        --- whether a storm sent it or game.weather.strike did, with the
+        --- place it struck.
+        --- Example: game.weather.onLightning(function(at) print("Lightning struck", at) end)
+        onLightning: (handler: (at: vector) -> ()) -> (),
+
+        --- Lets a tornado come down at a place on the ground. It brings
+        --- its own storm, grows, travels over the land and dies away. Its
+        --- wind pulls in whoever is near, spins them round it and, if it
+        --- is strong, lifts them. There is one at a time: a new one takes
+        --- the place of the old. Options, all of which can be left out:
+        ---   strength: from 0.1, a rope that breaks branches, to 1, a
+        ---             wedge that leaves nothing standing (0.5).
+        ---   heading:  the way it travels (with the wind).
+        ---   speed:    how fast it travels, in metres a second, from 0
+        ---             to 40 (9).
+        ---   lasts:    how many seconds it is there, from 5 to 3600 (120).
+        --- Example: game.weather.startTornado(game.player.position + vector.create(0, 0, -300))
+        --- Example: game.weather.startTornado(at, { strength = 0.9, lasts = 180 })
+        startTornado: (at: vector, options: { strength: number?, heading: vector?, speed: number?, lasts: number? }?) -> (),
+
+        --- Where the foot of the tornado is now, or nil if there is none.
+        --- Example: local twister = game.weather.tornado()
+        tornado: () -> vector?,
+
+        --- Lets the tornado die away, which takes a few seconds. Does
+        --- nothing if there is none.
+        --- Example: game.weather.stopTornado()
+        stopTornado: () -> (),
+    },
+
     audio: {
         --- Plays a sound that is not in the world: it is as loud wherever the
         --- player stands. For music, menus and announcements. Options, all

@@ -22,13 +22,18 @@ use crate::shooting::Shooting;
 use crate::sound_output::SoundAsk;
 
 mod bodies;
+mod climate;
 mod ground;
 mod spawn;
+mod trail;
+mod wet;
 
 pub(crate) use bodies::{Body, Dummy};
 pub use bodies::{DummyId, PlayerInput};
+pub(crate) use climate::said as said_weather;
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
+pub use wet::WaterMark;
 
 /// What a training dummy is called to the game's script.
 const DUMMY_NAME: &str = "Training dummy";
@@ -63,9 +68,38 @@ pub struct World {
     walking: Walking,
     /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
+    /// What the player did to the water in the newest tick.
+    marks: Vec<WaterMark>,
+    /// The trail the player is leaving in the snow, and where they pressed
+    /// it down in the newest tick.
+    trail: trail::Trail,
+    treads: Vec<lore_render::Tread>,
     /// How many times the player has been put at a spawn point.
     spawned: u32,
+    /// The weather, and what has followed from it: the snow that lies,
+    /// the ice, how far rain has raised the water, the tornado.
+    climate: climate::Climate,
+    /// Lightning: when the sky is next looked over for a storm to strike
+    /// from (a tick), the dice it is looked over with, the strokes that
+    /// have fallen since the last frame, and the thunder still on its way:
+    /// the tick it arrives, where the stroke fell and how far off that is.
+    looks_at: u32,
+    dice: u32,
+    strokes: Vec<lore_render::Lightning>,
+    thunder: Vec<(u32, [f32; 3], f32)>,
 }
+
+/// How fast sound goes, in metres a second.
+const SOUND: f32 = 343.0;
+/// The most strokes kept for one frame.
+const MOST_STROKES: usize = 8;
+/// The most thunder on its way at once, and how far off a stroke can fall
+/// and still be heard, in metres. A sky full of storms strikes somewhere
+/// within thirty kilometres every few seconds, and thunder from the far
+/// ones is a minute and more in coming: so there is room for all that is
+/// on its way from within hearing, and what is not heard is not kept.
+const MOST_THUNDER: usize = 32;
+const THUNDER_HEARD: f32 = 25_000.0;
 
 impl World {
     /// The world of `game` with its player in it, on a flat floor at
@@ -100,7 +134,15 @@ impl World {
             shooting: Shooting::default(),
             walking: Walking::default(),
             noises: Vec::new(),
+            marks: Vec::new(),
+            trail: trail::Trail::default(),
+            treads: Vec::with_capacity(8),
             spawned,
+            climate: climate::Climate::default(),
+            looks_at: 60,
+            dice: 0x2F6E_2B1D,
+            strokes: Vec::with_capacity(MOST_STROKES),
+            thunder: Vec::with_capacity(MOST_THUNDER),
         }
     }
 
@@ -140,6 +182,112 @@ impl World {
         &mut self.game
     }
 
+    /// A number from 0 to 1, different each time and the same on every
+    /// run.
+    fn dealt(&mut self) -> f32 {
+        self.dice ^= self.dice << 13;
+        self.dice ^= self.dice >> 17;
+        self.dice ^= self.dice << 5;
+        // The top 24 bits are exact as an f32.
+        #[allow(clippy::cast_precision_loss)]
+        let share = (self.dice >> 8) as f32 / 16_777_216.0;
+        share
+    }
+
+    /// Lets lightning fall at `place`, a place on the ground: the bolt is
+    /// seen in the next frame, and its thunder is heard when the sound has
+    /// come from there. If more thunder is on its way than is kept, the
+    /// farthest gives way to a nearer, and the bolt is seen all the same.
+    ///
+    /// Only the picture of it waits for a frame. With no frame drawn for
+    /// a while, more bolts than one frame can show are not kept to be
+    /// seen: but the dice are thrown, the thunder is on its way and the
+    /// script is told all the same, so that the world is the same world
+    /// however often it is drawn.
+    fn strike(&mut self, place: [f32; 3]) {
+        let seed = self.dice;
+        self.dealt();
+        if self.strokes.len() < MOST_STROKES {
+            self.strokes
+                .push(lore_render::Lightning::down_to(place, seed));
+        }
+        let eye = self.player.player.position;
+        let away = (0..3)
+            .map(|axis| (place[axis] - eye[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        // Whole ticks: sound takes three seconds a kilometre.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ticks = (away / SOUND / self.ground.step.max(1e-4)).min(1e6) as u32;
+        let thunder = (self.tick.saturating_add(ticks), place, away);
+        if away <= THUNDER_HEARD {
+            if self.thunder.len() < MOST_THUNDER {
+                self.thunder.push(thunder);
+            } else if let Some(farthest) =
+                (self.thunder.iter_mut()).max_by(|one, other| one.2.total_cmp(&other.2))
+                && farthest.2 > away
+            {
+                *farthest = thunder;
+            }
+        }
+        // The script hears of it: where it struck.
+        self.game.host_mut().lightning_struck(place);
+    }
+
+    /// Lightning: every few seconds a few places within thirty kilometres of the player are
+    /// looked at, and the first with a thunder cloud over it is struck,
+    /// on whatever ground is under it.
+    fn storm(&mut self) {
+        if self.tick < self.looks_at {
+            return;
+        }
+        let step = self.ground.step.max(1e-4);
+        // Truncation is the point: whole ticks.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let wait = ((1.6 + 2.4 * self.dealt()) / step) as u32;
+        self.looks_at = self.tick.saturating_add(wait.max(1));
+        let (seconds, weather) = (self.sky_seconds(), *self.climate.weather());
+        let [x, _, z] = self.player.player.position;
+        for _ in 0..4 {
+            let spot = [
+                x + (self.dealt() - 0.5) * 60_000.0,
+                z + (self.dealt() - 0.5) * 60_000.0,
+            ];
+            if weather.storm_at(spot, seconds) <= 0.5 {
+                continue;
+            }
+            // The ground under it, or a little under where levels are
+            // built if the level does not reach so far.
+            let ground = (self.ground.level)
+                .raycast([spot[0], 4_000.0, spot[1]], [0.0, -1.0, 0.0], 8_000.0)
+                .map_or([spot[0], -20.0, spot[1]], |hit| hit.point);
+            self.strike(ground);
+            return;
+        }
+    }
+
+    /// How long the world has run, in seconds of its own time: what the
+    /// sky's clock shows.
+    fn sky_seconds(&self) -> f64 {
+        f64::from(self.tick) * f64::from(self.ground.step)
+    }
+
+    /// How far the rain that has fallen has raised the level's still
+    /// water, in metres.
+    #[must_use]
+    pub fn water_rise(&self) -> f32 {
+        self.climate.water_rise()
+    }
+
+    /// The weather of the newest tick, with what has followed from it: how
+    /// far the wind has carried the clouds, the snow that lies, the ice on
+    /// the water and the tornado if there is one. The picture is drawn in
+    /// it ([`Playing`] hands it over each frame).
+    #[must_use]
+    pub fn weather(&self) -> &lore_render::Weather {
+        self.climate.weather()
+    }
+
     /// How many ticks the world has run.
     #[must_use]
     pub fn tick_number(&self) -> u32 {
@@ -175,6 +323,23 @@ impl World {
     #[must_use]
     pub fn noises(&self) -> &[Noise] {
         &self.noises
+    }
+
+    /// What the player did to the water in the newest tick, in the order
+    /// it happened: each splash of going in, of a stroke or of a foot in
+    /// the shallows, and each lot of bubbles let go under it. The player
+    /// sees what is in this list ([`Playing`]): drops, rings and bubbles.
+    #[must_use]
+    pub fn water_marks(&self) -> &[WaterMark] {
+        &self.marks
+    }
+
+    /// Where the player pressed the snow down in the newest tick: a print
+    /// where a foot came down, and the furrow of wading through snow that
+    /// is deep. The player sees what is in this list ([`Playing`]): tracks.
+    #[must_use]
+    pub fn treads(&self) -> &[lore_render::Tread] {
+        &self.treads
     }
 
     /// Stands a training dummy with its feet at `feet`: something the
@@ -246,6 +411,19 @@ impl Game for World {
         // before they move.
         self.respawn();
         self.tick = self.tick.saturating_add(1);
+        // The weather moves on: what falls on the player raises the water
+        // or settles as snow, the cold freezes the lakes, the tornado
+        // travels. It is said to the level before anything is moved in it,
+        // since the level's shapes are shared.
+        let seconds = self.sky_seconds();
+        self.climate.step(
+            self.game.host_mut(),
+            &self.ground.level,
+            self.player.player.position,
+            seconds,
+            self.ground.step,
+        );
+        self.storm();
         let Ground {
             level,
             rules,
@@ -253,7 +431,17 @@ impl Game for World {
             ..
         } = &self.ground;
         let Body { player, asked } = &mut self.player;
-        player.step(level, rules, &asked.movement, *tick);
+        // A gale pushes the player, a tornado takes them off their feet,
+        // and deep snow is slow to walk through.
+        self.climate.blow(player, rules.gravity, seconds, *tick);
+        let mut moving = asked.movement;
+        if player.grounded {
+            let slowed = self.climate.snow_slows();
+            moving.forward *= slowed;
+            moving.right *= slowed;
+        }
+        let before = *player;
+        player.step(level, rules, &moving, *tick);
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick.
         self.game
@@ -264,6 +452,46 @@ impl Game for World {
         self.noises.clear();
         self.walking
             .tick(player, self.tick, *tick, &mut self.noises);
+        // And what their feet did to the snow, if any lies.
+        self.treads.clear();
+        let landed = (self.noises.last())
+            .is_some_and(|noise| noise.kind == crate::noise::NoiseKind::Landing);
+        self.trail.tick(
+            player,
+            asked.movement.yaw,
+            (self.climate.snow(), landed),
+            &mut self.treads,
+        );
+        // Thunder that has got here from a stroke that fell a while ago.
+        let (now, noises) = (self.tick, &mut self.noises);
+        self.thunder.retain(|(arrives, position, away)| {
+            if *arrives > now {
+                return true;
+            }
+            noises.push(Noise {
+                kind: if *away < 1_500.0 {
+                    crate::noise::NoiseKind::Thunder
+                } else {
+                    crate::noise::NoiseKind::FarThunder
+                },
+                position: *position,
+                loudness: 1.0,
+                delay: 0.0,
+                tick: now,
+            });
+            false
+        });
+        // What they did to the water, if they are in any: seen and heard.
+        self.marks.clear();
+        wet::tick(
+            &before,
+            player,
+            level,
+            asked.movement.yaw,
+            (self.tick, *tick),
+            &mut self.noises,
+            &mut self.marks,
+        );
         // The weapon the player holds, by what they are pressing. The
         // script hears of every shot, hit and reload here.
         self.shooting.tick(
@@ -277,11 +505,32 @@ impl Game for World {
             &mut self.noises,
         );
         self.game.tick(input, step);
+        // Lightning the script asked for in this tick falls where it asked,
+        // on whatever is highest there: taken here, before a frame can show
+        // it with no thunder to follow.
+        for (place, _) in self.game.host_mut().take_strikes() {
+            let [x, _, z] = place;
+            let struck = (self.ground.level)
+                .raycast([x, 4_000.0, z], [0.0, -1.0, 0.0], 8_000.0)
+                .map_or(place, |hit| hit.point);
+            self.strike(struck);
+        }
     }
 
     /// The script's own presenting, such as its HUD and its rumble.
     fn frame(&mut self, frame: &mut Frame) {
+        // The sky and the water are drawn where the rules have them.
+        frame.set_sky_clock(self.sky_seconds());
+        frame.set_water_rise(self.climate.water_rise());
+        // The world sends the bolts, so that it knows where each fell.
+        frame.set_storm_bolts(false);
+        for stroke in self.strokes.drain(..) {
+            frame.strike(stroke);
+        }
         self.game.frame(frame);
+        // After the script's own frame, which says the weather as it
+        // asked for it: this is the weather with what followed from it.
+        frame.set_weather(*self.climate.weather());
     }
 }
 
@@ -334,6 +583,7 @@ impl Controls {
                 jump: held(self.jump),
                 crouch: held(self.crouch),
                 sprint: held(self.sprint),
+                pitch: *pitch,
             },
             pitch: *pitch,
             fire: held(self.fire),
@@ -383,7 +633,42 @@ pub struct Playing {
     before: Option<[f32; 3]>,
     /// The noises of the ticks since the last frame, for the frame to play.
     heard: Vec<Noise>,
+    /// What was done to the water in the ticks since the last frame, for
+    /// the frame to show.
+    marks: Vec<WaterMark>,
+    /// Where the snow was pressed down in the ticks since the last frame,
+    /// for the frame to show.
+    treads: Vec<lore_render::Tread>,
+    /// Whether the rumble of being under water is playing.
+    under: bool,
+    /// How loud each of the weather's own sounds was last said to be, if
+    /// it is playing: the rain, the wind and the roar of a tornado.
+    weather_heard: [Option<f32>; 3],
+    /// Where the roar of the tornado was last said to come from.
+    roar_from: [f32; 3],
 }
+
+/// The most marks on the water kept for a frame to show.
+const MOST_MARKS: usize = 64;
+
+/// What the rumble heard with the head under water is known by, so that
+/// it can be stopped: no script's sound has this number.
+const UNDER_WATER: lore_script::SoundId = lore_script::SoundId(u64::MAX);
+
+/// What the weather's own sounds are known by: the rain, the wind, and the
+/// roar of a tornado. Each plays for as long as there is any of it.
+const WEATHER_SOUNDS: [lore_script::SoundId; 3] = [
+    lore_script::SoundId(u64::MAX - 1),
+    lore_script::SoundId(u64::MAX - 2),
+    lore_script::SoundId(u64::MAX - 3),
+];
+
+/// How far off a tornado is heard at its loudest, and how far off at all,
+/// in metres: its roar carries for kilometres.
+const TORNADO_HEARD: lore_audio::Range = lore_audio::Range {
+    near: 120.0,
+    far: 4_000.0,
+};
 
 /// The most noises kept for a frame to play. With more than this in a
 /// quarter of a second the newest are left out: nobody could tell them
@@ -468,6 +753,11 @@ impl Playing {
             eye,
             before: None,
             heard: Vec::with_capacity(MOST_HEARD),
+            marks: Vec::with_capacity(MOST_MARKS),
+            treads: Vec::with_capacity(MOST_MARKS),
+            under: false,
+            weather_heard: [None; 3],
+            roar_from: [0.0; 3],
         }
     }
 
@@ -527,6 +817,149 @@ impl Playing {
     }
 }
 
+impl Playing {
+    /// Shows and sounds what the player is doing to the water: the marks
+    /// of the ticks since the last frame, the rings and wake of a body
+    /// that is in it now, and the hush of a head that is under it.
+    fn show_water(&mut self, frame: &mut Frame, eye: [f32; 3]) {
+        for mark in self.marks.drain(..) {
+            match mark {
+                WaterMark::Splash {
+                    place,
+                    moving,
+                    wide,
+                } => frame.splash(lore_render::Splash {
+                    place,
+                    moving,
+                    wide,
+                }),
+                WaterMark::Bubbles { place, count } => frame.bubbles(place, count),
+            }
+        }
+        let player = *self.world.player();
+        let [along_x, _, along_z] = player.velocity;
+        let speed = along_x.hypot(along_z);
+        // Someone standing or swimming in the water moves it as they move:
+        // legs are narrower than a body, and one well under the surface
+        // does not trouble it at all.
+        let eyes_under = self
+            .world
+            .ground
+            .level
+            .water_around(eye)
+            .map_or(0.0, |surface| surface - eye[1]);
+        if player.submerged > 0.0 && eyes_under < 0.5 {
+            let stir = if player.swimming {
+                lore_render::Stir {
+                    place: [eye[0], eye[2]],
+                    wide: 0.3,
+                    lift: 0.0,
+                    moving: [along_x, along_z],
+                    body: 0.025,
+                    churn: (speed / 3.0).min(1.0) * 0.12,
+                }
+            } else {
+                let deep = player.submerged.min(1.0);
+                lore_render::Stir {
+                    place: [eye[0], eye[2]],
+                    wide: 0.16 + 0.14 * deep,
+                    lift: 0.0,
+                    moving: [along_x, along_z],
+                    body: 0.02 + 0.04 * deep,
+                    churn: (speed / 4.0).min(1.0) * 0.3 * (deep * 4.0).min(1.0),
+                }
+            };
+            frame.stir(stir);
+        }
+        self.hear_weather(frame);
+        let player = *self.world.player();
+        // With the ears under, everything is muffled and the water hums.
+        frame.hear_under_water(player.head_under);
+        if player.head_under != self.under {
+            self.under = player.head_under;
+            if self.under {
+                if let Some(rumble) = self.world.game.sounds_mut().take("underwater", 0) {
+                    frame.sound(SoundAsk::Play(UNDER_WATER, rumble.looping()));
+                }
+            } else {
+                frame.sound(SoundAsk::Stop(UNDER_WATER));
+            }
+        }
+    }
+}
+
+impl Playing {
+    /// Lets the weather be heard: rain as loud as it falls on the player
+    /// (hail and sleet rattle louder than they fall; snow is silent), wind
+    /// as loud as the air moves where they stand, which under a storm is
+    /// three times the wind, and the roar of a tornado from where it is.
+    /// Each sound starts when there is some of it and stops when there is
+    /// none.
+    fn hear_weather(&mut self, frame: &mut Frame) {
+        let climate = &self.world.climate;
+        let falling = climate.falling();
+        let rain = falling.rain.max(0.8 * falling.sleet).max(falling.hail);
+        let eye = self.world.player().eye_position();
+        let seconds = self.world.sky_seconds();
+        let [along_x, _, along_z] = climate.weather().wind_at(eye, seconds);
+        let wind = along_x.hypot(along_z);
+        let tornado = climate.weather().tornado;
+        // How loud each is, from 0 to 1.
+        let ease = |low: f32, high: f32, value: f32| {
+            let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+            share * share * (3.0 - 2.0 * share)
+        };
+        let loud = [
+            if rain > 0.01 { 0.12 + 0.88 * rain } else { 0.0 },
+            // The breeze of a fair day is not heard.
+            ease(6.0, 30.0, wind),
+            tornado.map_or(0.0, |tornado| ease(0.0, 0.3, tornado.strength)),
+        ];
+        let names = ["rain", "wind", "wind"];
+        for which in 0..3 {
+            // A tornado is louder than any wind.
+            let loud = loud[which] * if which == 2 { 1.6 } else { 1.0 };
+            let id = WEATHER_SOUNDS[which];
+            let said = &mut self.weather_heard[which];
+            if loud <= 0.004 {
+                if said.take().is_some() {
+                    frame.sound(SoundAsk::Stop(id));
+                }
+                continue;
+            }
+            if said.is_none() {
+                let Some(mut play) = self.world.game.sounds_mut().take(names[which], 0) else {
+                    continue;
+                };
+                if let (2, Some(tornado)) = (which, tornado) {
+                    // A tornado roars: the wind, an octave down, from
+                    // where it stands.
+                    play.place = lore_audio::Place::At(tornado.place);
+                    play.range = TORNADO_HEARD;
+                    play.pitch = 0.5;
+                }
+                frame.sound(SoundAsk::Play(id, play.volume(loud).looping()));
+                *said = Some(loud);
+                if let Some(tornado) = tornado {
+                    self.roar_from = tornado.place;
+                }
+            } else if said.is_some_and(|said| (said - loud).abs() > 0.01) {
+                // Said again only when it has changed enough to hear: a
+                // frame in steady rain asks for nothing.
+                frame.sound(SoundAsk::Loud(id, loud));
+                *said = Some(loud);
+            }
+            // The roar goes with the tornado, a stride at a time.
+            if let (2, Some(tornado)) = (which, tornado)
+                && (0..3).any(|axis| (tornado.place[axis] - self.roar_from[axis]).abs() > 1.0)
+            {
+                frame.sound(SoundAsk::Move(id, tornado.place));
+                self.roar_from = tornado.place;
+            }
+        }
+    }
+}
+
 impl Game for Playing {
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
@@ -545,6 +978,14 @@ impl Game for Playing {
         let noises = self.world.noises();
         self.heard
             .extend_from_slice(&noises[..noises.len().min(room)]);
+        let room = MOST_MARKS.saturating_sub(self.marks.len());
+        let marks = self.world.water_marks();
+        self.marks
+            .extend_from_slice(&marks[..marks.len().min(room)]);
+        let room = MOST_MARKS.saturating_sub(self.treads.len());
+        let treads = self.world.treads();
+        self.treads
+            .extend_from_slice(&treads[..treads.len().min(room)]);
     }
 
     /// Looks from the player's eyes and plays what was heard since the
@@ -573,6 +1014,10 @@ impl Game for Playing {
         });
         let seen = self.seen_at(frame.alpha(), turn);
         frame.look_from(seen.eye, seen.yaw, seen.pitch);
+        self.show_water(frame, seen.eye);
+        for tread in self.treads.drain(..) {
+            frame.tread(tread);
+        }
     }
 }
 
@@ -580,12 +1025,165 @@ impl Game for Playing {
 mod heard;
 #[cfg(test)]
 mod rates;
+#[cfg(test)]
+mod wetted;
 
 #[cfg(test)]
 mod tests {
     use std::f32::consts::TAU;
 
     use super::*;
+
+    #[test]
+    fn lightning_a_script_asks_for_is_seen_at_once_and_heard_when_its_thunder_arrives() {
+        use lore_input::Input;
+
+        let actions = ActionMap::default_fps();
+        // On its first tick, a stroke 343 metres from the player: a second
+        // off, as sound goes.
+        let script = ScriptGame::from_source(
+            r#"local struck = false
+            game.onTick(function()
+                if not struck then
+                    struck = true
+                    game.weather.strike(game.player.position + vector.create(343, 0, 0))
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = Input::new(actions);
+        let (mut seen_at, mut heard_at) = (None, None);
+        for tick in 1..=80_u32 {
+            let stood = game.world.player.player.position;
+            game.tick(input.tick(), 1.0 / 60.0);
+            let mut frame = Frame::new(0.0);
+            game.frame(&mut frame);
+            if let Some(stroke) = frame.take_strikes().first()
+                && seen_at.is_none()
+            {
+                seen_at = Some(tick);
+                // It comes down out of the clouds onto the place asked for.
+                assert!((stroke.to[0] - stood[0] - 343.0).abs() < 0.5, "{stroke:?}");
+                assert!(stroke.from[1] > stroke.to[1] + 1_000.0, "{stroke:?}");
+            }
+            let thunder = (game.world.noises().iter())
+                .any(|noise| noise.kind == crate::noise::NoiseKind::Thunder);
+            if thunder && heard_at.is_none() {
+                heard_at = Some(tick);
+            }
+        }
+        // It is seen in the frame after the tick that asked for it, and the
+        // thunder is a second behind the flash.
+        assert_eq!(seen_at, Some(1));
+        assert!(matches!(heard_at, Some(60..=62)), "{heard_at:?}");
+    }
+
+    #[test]
+    fn a_stormy_world_is_the_same_world_whether_or_not_it_is_drawn() {
+        use lore_input::Input;
+
+        // Two minutes of a sky full of storms, one drawn after every tick
+        // and one never drawn: more bolts fall than a frame could show.
+        let lived = |drawn: bool| {
+            let actions = ActionMap::default_fps();
+            let script = ScriptGame::from_source(r#"game.weather.set("storm", 0)"#, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = Input::new(actions);
+            let mut heard = Vec::new();
+            for tick in 0..7200_u32 {
+                game.tick(input.tick(), 1.0 / 60.0);
+                for noise in game.world.noises() {
+                    heard.push((tick, noise.kind, noise.position.map(f32::to_bits)));
+                }
+                if drawn {
+                    game.frame(&mut Frame::new(0.0));
+                }
+            }
+            (game.world.dice, heard)
+        };
+        let (dice, heard) = lived(true);
+        assert!(heard.len() > 8, "{}", heard.len());
+        assert_eq!(lived(false), (dice, heard));
+    }
+
+    #[test]
+    fn whoever_comes_down_on_snow_leaves_a_mark_in_it_and_on_bare_ground_none() {
+        use lore_input::Input;
+
+        let marks = |script: &str| {
+            let actions = ActionMap::default_fps();
+            let script = ScriptGame::from_source(script, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = Input::new(actions);
+            let mut treads = Vec::new();
+            for _ in 0..120 {
+                game.tick(input.tick(), 1.0 / 60.0);
+                let mut frame = Frame::new(0.0);
+                game.frame(&mut frame);
+                treads.extend(frame.take_treads());
+            }
+            assert!(game.world.player().grounded);
+            (treads, game.world.player().position)
+        };
+        let (treads, feet) = marks(
+            "game.weather.setTemperature(-5, 0)
+            game.weather.setSnowDepth(0.3)",
+        );
+        // Where they came down, and nothing more while they stand there.
+        assert!((1..=4).contains(&treads.len()), "{treads:?}");
+        for tread in &treads {
+            assert!((tread.place[0] - feet[0]).hypot(tread.place[1] - feet[2]) < 0.3);
+        }
+        assert!(marks("").0.is_empty());
+    }
+
+    #[test]
+    fn a_bolt_asked_for_in_a_sky_full_of_storms_is_always_seen_and_heard() {
+        use lore_input::Input;
+
+        let actions = ActionMap::default_fps();
+        // Two minutes into a sky that is all storm, when thunder from far
+        // strokes is on its way from all round, a stroke a hundred metres
+        // off every two seconds.
+        let script = ScriptGame::from_source(
+            r#"local ticks = 0
+            game.weather.set("storm", 0)
+            game.onTick(function()
+                ticks += 1
+                if ticks > 7200 and ticks % 120 == 0 then
+                    game.weather.strike(game.player.position + vector.create(100, 0, 0))
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = Input::new(actions);
+        let (mut seen, mut heard, mut of_its_own) = (0, 0, 0);
+        for _ in 1..=8460_u32 {
+            let stood = game.world.player.player.position;
+            game.tick(input.tick(), 1.0 / 60.0);
+            let mut frame = Frame::new(0.0);
+            game.frame(&mut frame);
+            for stroke in frame.take_strikes() {
+                if (stroke.to[0] - stood[0] - 100.0).abs() < 0.5
+                    && (stroke.to[2] - stood[2]).abs() < 0.5
+                {
+                    seen += 1;
+                } else {
+                    of_its_own += 1;
+                }
+            }
+            heard += (game.world.noises().iter())
+                .filter(|noise| noise.kind == crate::noise::NoiseKind::Thunder)
+                .count();
+            assert!(game.world.thunder.len() <= MOST_THUNDER);
+        }
+        // The storm sent plenty of its own all the while.
+        assert!(of_its_own > 20, "{of_its_own}");
+        assert_eq!(seen, 10);
+        assert!(heard >= 10, "{heard}");
+    }
 
     #[test]
     fn a_script_played_alone_rumbles_the_players_gamepad() {

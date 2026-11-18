@@ -617,3 +617,91 @@ fn a_picture_that_cannot_be_used_is_left_out_and_the_rest_is_drawn() {
 
     finish(gpu);
 }
+
+#[test]
+fn what_stands_between_a_surface_and_the_sun_shadows_it() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    // A sun that shines down and towards +X: a shadow falls to the right
+    // of what casts it, by as much as the caster is high.
+    let mut scene = floor(Material::default());
+    scene.lights.push(sun([1.0, -1.0, 0.0], [1.0, 1.0, 1.0]));
+    // Where the floor is at x = -0.2 and at x = 0.5, half way down.
+    let (shaded, open) = ((26, MIDDLE.1), (48, MIDDLE.1));
+    let lights = |scene: &Scene| {
+        let picture = draw(&gpu, scene, &above(), 0.0);
+        [shaded, open].map(|(x, y)| light(pixel(&picture, x, y)))
+    };
+    let [before, beside] = lights(&scene);
+    assert!(before.abs_diff(beside) <= 6, "an open floor is evenly lit");
+
+    // A strip 0.3 m over the floor, from x = -0.9 to -0.3: its shadow
+    // lies from -0.6 to 0, and the camera sees past the strip from -0.43.
+    scene.instances.push(Instance {
+        mesh: 0,
+        transform: placed(-0.6, 0.3, 0.0, 0.3),
+        mirrored: false,
+        name: None,
+        extras: None,
+    });
+    let [under, beside_now] = lights(&scene);
+    assert!(
+        under + 120 < before,
+        "in shadow: {under} against {before} in the sun"
+    );
+    assert!(
+        under > 60,
+        "the sky still lights what the sun does not: {under}"
+    );
+    assert!(
+        beside_now.abs_diff(beside) <= 6,
+        "and the floor beside the shadow is as it was: {beside_now} against {beside}"
+    );
+
+    // A sun on the other side throws the shadow the other way, off this spot.
+    scene.lights[0] = sun([-1.0, -1.0, 0.0], [1.0, 1.0, 1.0]);
+    let [other_way, _] = lights(&scene);
+    assert!(
+        other_way.abs_diff(before) <= 6,
+        "{other_way} against {before}"
+    );
+
+    finish(gpu);
+}
+
+#[test]
+fn a_cut_out_surface_casts_a_shadow_only_where_it_is_not_cut_away() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut scene = floor(Material::default());
+    scene.lights.push(sun([1.0, -1.0, 0.0], [1.0, 1.0, 1.0]));
+    // The same strip as above, of a material whose alpha cuts all of it away.
+    let mut strip = scene.meshes[0].clone();
+    strip.parts[0].material = 1;
+    scene.meshes.push(strip);
+    scene.materials.push(Material {
+        base_color: [1.0, 1.0, 1.0, 0.2],
+        alpha_mode: AlphaMode::Mask { cutoff: 0.5 },
+        ..Material::default()
+    });
+    scene.instances.push(Instance {
+        mesh: 1,
+        transform: placed(-0.6, 0.3, 0.0, 0.3),
+        mirrored: false,
+        name: None,
+        extras: None,
+    });
+    let under = |scene: &Scene| light(pixel(&draw(&gpu, scene, &above(), 0.0), 26, MIDDLE.1));
+    let cut_away = under(&scene);
+    // Kept, it shadows the floor.
+    scene.materials[1].base_color[3] = 0.9;
+    let kept = under(&scene);
+    assert!(
+        kept + 120 < cut_away,
+        "{kept} under the strip against {cut_away} under nothing"
+    );
+
+    finish(gpu);
+}

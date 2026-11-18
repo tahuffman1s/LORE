@@ -9,7 +9,9 @@ use lore_assets::Scene;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::bolt::Lightning;
 use crate::camera::Camera;
+use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
 use crate::font::Font;
 use crate::gpu::Gpu;
@@ -17,9 +19,12 @@ use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
 use crate::swapchain::Swapchain;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
+use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
+use crate::water::Stir;
+use crate::weather::Weather;
 
 /// How many frames can be in progress on the graphics card at once.
 ///
@@ -156,10 +161,14 @@ pub struct Renderer {
     mesh: Option<MeshPipeline>,
     /// The level's meshes on the graphics card; `None` until a scene is set.
     meshes: Option<Meshes>,
+    /// What a splash threw up, and what is stirring the water.
+    effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
     /// Where the scene is seen from.
     camera: Camera,
+    /// The time the sky's clock shows, if the game says it.
+    sky_clock: Option<f64>,
     /// What the scene is drawn into and upscaled by; its finished picture
     /// is the size of the swapchain's images.
     view: Option<SceneView>,
@@ -228,8 +237,10 @@ impl Renderer {
             tonemap: None,
             mesh: None,
             meshes: None,
+            effects: Effects::new(),
             grid: false,
             camera: Camera::default(),
+            sky_clock: None,
             view: None,
             view_for: (vk::Extent2D::default(), config.upscaling),
             last_frame: None,
@@ -264,8 +275,10 @@ impl Renderer {
     /// The scene is lit by the first sun among its lights, in the units the
     /// file gives, and by the sky. A scene with no sun gets one of the
     /// engine's own, under which a matte surface facing up shows exactly
-    /// its material's colour. Lamps are not drawn yet and nothing casts a
-    /// shadow.
+    /// its material's colour. Everything but a see-through surface casts
+    /// a shadow from the sun, out to 216 metres from the eye. Behind it
+    /// all is the sky that sun makes, with clouds that drift and shade the
+    /// ground. Lamps are not drawn yet.
     ///
     /// A picture the graphics card cannot take (one that is too large, or
     /// whose size does not match its bytes) is left out with a warning that
@@ -295,6 +308,8 @@ impl Renderer {
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        // Nothing that flew in the old level is in the new one.
+        self.effects.clear();
         // Nothing of the old level belongs in the new one's first frame.
         if let Some(view) = &mut self.view {
             view.cut();
@@ -330,6 +345,104 @@ impl Renderer {
         if let Some(view) = &mut self.view {
             view.cut();
         }
+    }
+
+    /// Says that something went into the water, or is pushing through it:
+    /// drops fly up from where it did, spray hangs for a moment, bubbles
+    /// are dragged under, and rings run out across the water.
+    ///
+    /// Call it once for each thing, when it happens. See [`Splash`].
+    pub fn splash(&mut self, splash: Splash) {
+        self.effects.splash(splash);
+    }
+
+    /// Lets a stroke of lightning go from one place to another: a crooked,
+    /// forked bolt made by rule from its `seed`, which comes down, lights
+    /// up, flickers and is gone in two thirds of a second, and lights the
+    /// clouds and the land round it while it lasts. Storms in the sky send
+    /// their own. See [`Lightning`].
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.effects.strike(lightning);
+    }
+
+    /// Says how stormy the sky is, from 0, fair weather with the odd storm
+    /// passing, to 1, storms over most of it. Under a storm it rains, and
+    /// hails in its core; the wind blows harder, the ground gets wet and
+    /// lightning strikes. Anything that is not a number from 0 to 1 is
+    /// taken as the nearest that is.
+    pub fn set_storminess(&mut self, storminess: f32) {
+        self.effects.set_storminess(storminess);
+    }
+
+    /// Says what the weather is: how much cloud, how stormy, how hard it
+    /// rains or snows, how warm the air is, the wind, the fog, the snow
+    /// that lies and the ice on the water, and the tornado if there is
+    /// one. See [`Weather`]. The picture is drawn in it from the next
+    /// frame on; numbers out of their range are brought into it.
+    pub fn set_weather(&mut self, weather: Weather) {
+        self.effects.set_weather(weather);
+    }
+
+    /// The weather it was last said to be: fair, until something is said.
+    #[must_use]
+    pub fn weather(&self) -> Weather {
+        *self.effects.said()
+    }
+
+    /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
+    /// midnight, and hours past 24 run on into the next day, which moves
+    /// the moon a day further round its month. The sun and the moon stand
+    /// where that hour has them, dusk and night fall, the stars come out
+    /// and the moon lights the land. With `None`, which is how a level
+    /// starts, the level's own light is the light and it is always day.
+    pub fn set_hour(&mut self, hour: Option<f64>) {
+        self.effects.set_hour(hour);
+    }
+
+    /// Says whether storms send their own bolts to the ground, as they do
+    /// until told otherwise. A game that sends them itself with
+    /// [`strike`](Self::strike), so that it knows where each fell and can
+    /// let its thunder be heard, says `false`. Flashes that stay inside
+    /// the cloud are the storm's own either way.
+    pub fn set_storm_bolts(&mut self, own: bool) {
+        self.effects.set_bolts_of_its_own(own);
+    }
+
+    /// Says how far rain has raised the level's still water, in metres:
+    /// every lake and pond is drawn that much higher, and over whatever
+    /// ground beside it is lower than that. The game's rules decide it
+    /// (`Level::set_water_rise` in the physics); this shows it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.effects.set_rise(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds: the game's own
+    /// time, so that clouds, storms and rain are where the game's rules
+    /// have them and a saved game finds the same sky. With `None`, which
+    /// is how it starts, the clock is how long the picture has been drawn.
+    pub fn set_sky_clock(&mut self, clock: Option<f64>) {
+        self.sky_clock = clock;
+    }
+
+    /// Says that something is in the water during the next frame drawn: a
+    /// leg wading, a body swimming. Rings run out from it, and it trails
+    /// a wake as it moves. Call it every frame for as long as it is there.
+    pub fn stir(&mut self, stir: Stir) {
+        self.effects.stir(stir);
+    }
+
+    /// Presses the snow down at a place: a foot coming down in it, or a
+    /// body wading through. The track stays, and is carved out of the snow
+    /// wherever it is drawn within twenty-five metres of the eye, until
+    /// new snow has filled it in. Nothing is seen of it where no snow lies.
+    pub fn tread(&mut self, tread: Tread) {
+        self.effects.tread(tread);
+    }
+
+    /// Lets `count` bubbles go at `place`, under water: breath, or the air
+    /// a hand drags down with it. They rise and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.effects.bubbles(place, count);
     }
 
     /// Draws the editor's ground grid over the level, or stops drawing it,
@@ -543,6 +656,14 @@ impl Renderer {
             (now - last).as_secs_f32().min(LONGEST_FRAME_SECONDS)
         });
         self.last_frame = Some(now);
+        view.set_clock(self.sky_clock);
+        self.effects.storms(view.seconds(), self.camera.position);
+        // What flies moves on by as long as the last frame took.
+        self.effects.step(
+            seconds,
+            self.meshes.as_ref().map_or(&[][..], Meshes::waters),
+        );
+        let weather = self.effects.air(view.seconds());
 
         // SAFETY: every handle used here belongs to `self.gpu`'s device and
         // is alive; the fence wait makes sure this slot's command buffer and
@@ -588,13 +709,24 @@ impl Renderer {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
+            // Only now is this frame sure to be drawn: what it hands the
+            // graphics card of the tracks in the snow is asked for once,
+            // and a frame given up before this would have lost it.
+            let tracks = self.effects.take_tracks();
             view.record(
                 slot.commands,
                 self.next,
                 mesh,
                 Contents {
                     meshes: self.meshes.as_ref(),
+                    sky: true,
                     grid: self.grid,
+                    stirs: self.effects.stirs(),
+                    bits: self.effects.bytes(),
+                    flashes: self.effects.flashes(),
+                    weather,
+                    day: self.effects.day(),
+                    tracks: self.effects.tracks(tracks),
                 },
                 &self.camera,
                 seconds,

@@ -70,6 +70,9 @@ pub struct Settings {
     pub rumble: f32,
     /// How big the HUD and menus are, in percent, from 75 to 150.
     pub ui_size: f32,
+    /// Whether the frame meter is shown: frames a second and a graph of
+    /// how long each frame took, in the top-right corner.
+    pub frame_meter: bool,
 }
 
 impl Default for Settings {
@@ -84,6 +87,7 @@ impl Default for Settings {
             invert_look: false,
             rumble: 100.0,
             ui_size: 100.0,
+            frame_meter: false,
         }
     }
 }
@@ -195,6 +199,15 @@ impl Settings {
                 "sensitivity" => number(name, value, Self::SENSITIVITY, &mut settings.sensitivity),
                 "rumble" => number(name, value, Self::RUMBLE, &mut settings.rumble),
                 "ui_size" => number(name, value, Self::UI_SIZE, &mut settings.ui_size),
+                "frame_meter" => match value {
+                    DeValue::Boolean(flag) => {
+                        settings.frame_meter = *flag;
+                        None
+                    }
+                    _ => {
+                        Some("`frame_meter` must be `true` or `false`, so it stays `false`.".into())
+                    }
+                },
                 "invert_look" => match value {
                     DeValue::Boolean(flag) => {
                         settings.invert_look = *flag;
@@ -207,7 +220,7 @@ impl Settings {
                 _ => Some(format!(
                     "`{name}` is not a setting, so the line was skipped. The settings are \
                      `volume`, `music_volume`, `effects_volume`, `sensitivity`, \
-                     `invert_look`, `rumble` and `ui_size`."
+                     `invert_look`, `rumble`, `ui_size` and `frame_meter`."
                 )),
             };
             if let Some(said) = said {
@@ -264,8 +277,14 @@ impl Settings {
         );
         let _ = writeln!(
             text,
-            "# How big the HUD and menus are, in percent, from 75 to 150.\nui_size = {}",
+            "# How big the HUD and menus are, in percent, from 75 to 150.\nui_size = {}\n",
             self.ui_size.round()
+        );
+        let _ = writeln!(
+            text,
+            "# true shows frames a second and a graph of frame times in the corner.\n\
+             frame_meter = {}",
+            self.frame_meter
         );
         text
     }
@@ -383,6 +402,7 @@ mod tests {
             invert_look: true,
             rumble: 40.0,
             ui_size: 125.0,
+            frame_meter: true,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -431,7 +451,7 @@ mod tests {
                 "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
-                 `rumble` and `ui_size`.",
+                 `rumble`, `ui_size` and `frame_meter`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
             ]
         );

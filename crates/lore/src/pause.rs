@@ -19,6 +19,7 @@ use lore_input::{
 use lore_ui::{ButtonNames, ScreenId, Ui, UiEvent, UiInput, Value, WidgetId};
 
 use crate::game::{Frame, Game};
+use crate::meter::FrameMeter;
 use crate::settings::{self, Settings};
 
 /// The most menu events handled in one frame; the UI makes no more.
@@ -32,6 +33,11 @@ pub(crate) struct PauseMenu<G> {
     menu: Option<Menu>,
     /// The HUD size the player chose, for a game with no menu to change it.
     ui_scale: f32,
+    /// Frames a second and a graph of frame times, for a player who asked
+    /// for them; and whether one with no menu to ask in did, in their
+    /// settings file.
+    meter: FrameMeter,
+    meter_shown: bool,
 }
 
 impl<G: Game> PauseMenu<G> {
@@ -61,6 +67,8 @@ impl<G: Game> PauseMenu<G> {
             game,
             menu,
             ui_scale: settings.ui_scale(),
+            meter: FrameMeter::new(),
+            meter_shown: settings.frame_meter,
         }
     }
 
@@ -71,6 +79,8 @@ impl<G: Game> PauseMenu<G> {
             game,
             menu: None,
             ui_scale: settings.ui_scale(),
+            meter: FrameMeter::new(),
+            meter_shown: settings.frame_meter,
         }
     }
 }
@@ -89,6 +99,7 @@ impl<G: Game> Game for PauseMenu<G> {
         let Some(menu) = &mut self.menu else {
             frame.set_ui_scale(self.ui_scale);
             self.game.frame(frame);
+            self.meter.show(frame, self.meter_shown);
             return;
         };
         frame.set_ui_scale(menu.shown_scale);
@@ -96,6 +107,8 @@ impl<G: Game> Game for PauseMenu<G> {
             menu.hints = Hints::of(controls, &menu.actions);
         }
         self.game.frame(frame);
+        // Under the menu and over the game's own HUD.
+        self.meter.show(frame, menu.settings.frame_meter);
         // Drawn after the game's own HUD, so on top of it.
         menu.show(frame);
     }
@@ -300,6 +313,7 @@ struct Widgets {
     invert_look: WidgetId,
     rumble: WidgetId,
     ui_size: WidgetId,
+    frame_meter: WidgetId,
     reset: WidgetId,
     done: WidgetId,
     /// The screen that asks whether to quit.
@@ -360,6 +374,7 @@ impl Widgets {
                         Settings::UI_SIZE,
                         settings.ui_size,
                     ),
+                    screen.toggle("Show frame rate", settings.frame_meter),
                     screen.button("Reset to defaults"),
                     screen.button("Back"),
                 ]);
@@ -373,6 +388,7 @@ impl Widgets {
             invert_look,
             rumble,
             ui_size,
+            frame_meter,
             reset,
             done,
         ] = sliders?;
@@ -401,6 +417,7 @@ impl Widgets {
             invert_look,
             rumble,
             ui_size,
+            frame_meter,
             reset,
             done,
             leaving,
@@ -569,6 +586,7 @@ impl Menu {
                     let _ = (self.ui).set_toggle(widgets.invert_look, self.settings.invert_look);
                     let _ = self.ui.set_slider(widgets.rumble, self.settings.rumble);
                     let _ = self.ui.set_slider(widgets.ui_size, self.settings.ui_size);
+                    let _ = (self.ui).set_toggle(widgets.frame_meter, self.settings.frame_meter);
                 } else {
                     return false;
                 }
@@ -597,6 +615,9 @@ impl Menu {
                     }
                     Value::Slider(number) if widget == widgets.ui_size => {
                         self.settings.ui_size = number;
+                    }
+                    Value::Toggle(on) if widget == widgets.frame_meter => {
+                        self.settings.frame_meter = on;
                     }
                     Value::Toggle(on) if widget == widgets.invert_look => {
                         self.settings.invert_look = on;

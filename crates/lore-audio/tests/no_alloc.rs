@@ -92,6 +92,8 @@ fn playing_and_mixing_never_allocate() {
             mixer.move_to(playing, enemy);
             mixer.stop(playing);
         }
+        // The player's head goes under water and comes up, over and over.
+        mixer.set_underwater(if tick % 300 < 150 { 1.0 } else { 0.0 });
         mixer.mix(&mut buffer);
         heard = heard.max(buffer[0].abs());
     }

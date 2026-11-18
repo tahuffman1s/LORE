@@ -714,9 +714,56 @@ impl<G: Game> App<G> {
             }
             self.last_view = Some(view.position);
         }
+        // What was done to the water since the last frame is shown.
+        let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
+        let bubbles = frame.take_bubbles();
+        let treads = frame.take_treads();
+        let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
+        let hour = frame.take_hour();
+        let (water_rise, sky_clock) = frame.take_water();
+        let storm_bolts = frame.take_storm_bolts();
+        let weather = frame.take_weather();
+        if let Some(renderer) = &mut self.renderer {
+            for splash in splashes {
+                renderer.splash(splash);
+            }
+            for stir in stirs {
+                renderer.stir(stir);
+            }
+            for (place, count) in bubbles {
+                renderer.bubbles(place, count);
+            }
+            for tread in treads {
+                renderer.tread(tread);
+            }
+            for strike in strikes {
+                renderer.strike(strike);
+            }
+            if let Some(storminess) = storminess {
+                renderer.set_storminess(storminess);
+            }
+            if let Some(weather) = weather {
+                renderer.set_weather(weather);
+            }
+            if hour.is_some() {
+                renderer.set_hour(hour);
+            }
+            if let Some(rise) = water_rise {
+                renderer.set_water_rise(rise);
+            }
+            if sky_clock.is_some() {
+                renderer.set_sky_clock(sky_clock);
+            }
+            if let Some(own) = storm_bolts {
+                renderer.set_storm_bolts(own);
+            }
+        }
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);
+        }
+        if let Some(under) = frame.under_water() {
+            self.sound.set_underwater(if under { 1.0 } else { 0.0 });
         }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);

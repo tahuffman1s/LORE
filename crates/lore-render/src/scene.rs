@@ -135,6 +135,11 @@ pub(crate) struct SceneTarget {
     pub(crate) colour: Picture,
     pub(crate) depth: Picture,
     pub(crate) motion: Picture,
+    /// A copy of the colour and of the depth as they were before anything
+    /// see-through was drawn, for water to look through: what is under the
+    /// surface, and how far under. Only filled in a frame that has water.
+    pub(crate) behind: Picture,
+    pub(crate) behind_depth: Picture,
     pub(crate) extent: vk::Extent2D,
 }
 
@@ -172,6 +177,8 @@ impl SceneTarget {
             colour: Picture::null(),
             depth: Picture::null(),
             motion: Picture::null(),
+            behind: Picture::null(),
+            behind_depth: Picture::null(),
             extent,
         };
         // Dropping `target` cleans up whatever was created.
@@ -179,7 +186,9 @@ impl SceneTarget {
             gpu,
             extent,
             Self::FORMAT,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
             COLOUR,
             DOING,
         )?;
@@ -188,7 +197,25 @@ impl SceneTarget {
             gpu,
             extent,
             Self::DEPTH_FORMAT,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+            DEPTH,
+            DOING,
+        )?;
+        target.behind.create(
+            gpu,
+            extent,
+            Self::FORMAT,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            COLOUR,
+            DOING,
+        )?;
+        target.behind_depth.create(
+            gpu,
+            extent,
+            Self::DEPTH_FORMAT,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             DEPTH,
             DOING,
         )?;
@@ -215,6 +242,8 @@ impl Drop for SceneTarget {
             self.colour.destroy(&self.gpu);
             self.depth.destroy(&self.gpu);
             self.motion.destroy(&self.gpu);
+            self.behind.destroy(&self.gpu);
+            self.behind_depth.destroy(&self.gpu);
         }
     }
 }

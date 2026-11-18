@@ -36,5 +36,5 @@ pub use load::LoadOptions;
 pub use scene::{
     AlphaMode, Animation, Bounds, Filter, Image, Instance, Interpolation, Joint, Keys, Light,
     LightKind, MAX_JOINTS, Marker, Material, Mesh, MeshPart, Node, Pose, Sampler, Scene, Skin,
-    Texture, TextureRef, TextureTransform, Track, Transform, Wrap,
+    Texture, TextureRef, TextureTransform, Track, Transform, Water, Wrap,
 };

@@ -12,8 +12,11 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod bolt;
 mod buffer;
 mod camera;
+mod clouds;
+mod effects;
 mod error;
 mod font;
 mod gpu;
@@ -30,14 +33,22 @@ mod renderer;
 mod scene;
 #[cfg(test)]
 mod shading;
+mod shadow;
+mod sky;
 mod swapchain;
 mod texture;
 mod tonemap;
+mod tracks;
 mod ui_pass;
 mod upscale;
 mod view;
+mod water;
+mod waves;
+mod weather;
 
+pub use bolt::Lightning;
 pub use camera::Camera;
+pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use font::Font;
 pub use gpu::{Gpu, validation_errors};
@@ -45,4 +56,7 @@ pub use headless::{FrameTime, Headless};
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};
+pub use tracks::Tread;
 pub use upscale::Upscaling;
+pub use water::Stir;
+pub use weather::{Falling, Tornado, Weather};

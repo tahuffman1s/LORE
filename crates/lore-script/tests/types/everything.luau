@@ -66,6 +66,7 @@ local music = game.audio.play("music", { volume = 0.4, pitch = 1, loop = true })
 music:stop()
 game.audio.playAt("gunshot", vector.create(10, 1, -4))
 local alarm = game.audio.playAt("alarm", vector.create(0, 3, 0), { volume = 1, pitch = 2, range = 80, loop = true })
+alarm:moveTo(game.player.position)
 alarm:stop()
 
 local speed = 5
@@ -86,6 +87,7 @@ game.input.rumble(0.2, 0.6, 0.1)
 game.input.rumble(0, 0)
 game.input.useSet("menu")
 local inSet: string = game.input.currentSet()
+print(inSet)
 
 -- Weapons: every setting, and none of them.
 game.weapon("smg", {
@@ -194,4 +196,47 @@ game.after(60, function()
     count:remove()
     health:remove()
     dot:remove()
+end)
+
+game.weather.set("storm")
+game.weather.set("blizzard", 60)
+game.weather.setStorminess(0.8)
+if game.weather.storminess() > 0.5 then
+    game.weather.strike(game.player.position + vector.create(0, 0, -200))
+end
+game.weather.setCloudCover(0.9, 30)
+game.weather.setRain(0.6, 20)
+game.weather.setTemperature(-8, 60)
+game.weather.setWind(vector.create(12, 0, 0), 10)
+game.weather.setGusts(1)
+game.weather.setFog(0.7, 30)
+game.weather.setSnowDepth(0.3)
+game.weather.setIce(0.2)
+local cloudy: number = game.weather.cloudCover() + game.weather.rain() + game.weather.fog()
+local cold: boolean = game.weather.temperature() < 0 and game.weather.gusts() > 0.5
+local blowing: number = vector.magnitude(game.weather.wind())
+local lying: number = game.weather.snowDepth() + game.weather.ice()
+local what: string, hard: number = game.weather.falling()
+print(cloudy, cold, blowing, lying, what, hard)
+game.weather.onLightning(function(at: vector)
+    print("Lightning struck", at)
+end)
+game.weather.startTornado(game.player.position + vector.create(0, 0, -300))
+game.weather.startTornado(vector.create(0, 0, 0), {
+    strength = 0.9,
+    heading = vector.create(1, 0, 0),
+    speed = 12,
+    lasts = 180,
+})
+local twister: vector? = game.weather.tornado()
+if twister then
+    game.weather.stopTornado()
+end
+
+game.sky.setHour(18.5)
+game.sky.setDayLength(24)
+game.onTick(function()
+    if game.sky.dayLength() == 0 then
+        game.sky.setHour((game.sky.hour() or 12) + 1 / 600)
+    end
 end)
