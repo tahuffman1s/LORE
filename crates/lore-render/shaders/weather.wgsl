@@ -30,11 +30,14 @@ fn misted() -> f32 {
 fn fog_hides(thick: f32, direction: vec3<f32>, far: f32) -> f32 {
     let thins = view.fog.y;
     // An eye far below the fog's own height is in fog as thick as it gets.
-    let at_eye = thick * exp(min((view.fog.z - view.eye.y) * thins, 3.0));
+    let at_eye = min((view.fog.z - view.eye.y) * thins, 3.0);
     let climbs = direction.y * thins;
-    var crossed = at_eye * far;
+    var crossed = thick * exp(at_eye) * far;
     if abs(climbs) > 0.00001 {
-        crossed = at_eye * (1.0 - exp(-min(climbs * far, 60.0))) / climbs;
+        // How thick it is at the eye less how thick at the far end, over
+        // how fast it changes; both kept within what an f32 holds, so that
+        // an eye high above the fog looking far down gets a number.
+        crossed = thick * (exp(at_eye) - exp(clamp(at_eye - climbs * far, -80.0, 80.0))) / climbs;
     }
     return 1.0 - exp(-max(crossed, 0.0));
 }
@@ -51,6 +54,24 @@ fn cell_dice(cell: vec3<f32>) -> vec4<f32> {
     return fract((mixed.xxyz + mixed.yzzw) * mixed.zywx);
 }
 
+// Whether anything is over a place in the air, from 1 for nothing to 0:
+// nothing falls in a room, or under a porch or a roof, so what is seen of
+// the storm from in there is outside. Asked of the picture from above as
+// `rained_on` asks it for a surface, at the one place.
+fn open_above(world: vec3<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+    if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.04 {
+        return 1.0;
+    }
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    let held = textureLoad(shadow_map, vec2<i32>(uv * size), 4, 0);
+    return 1.0 - smoothstep(0.35, 0.9, (above.z - held) * view.shadow_reach[4].y);
+}
+
 // How much of a line of sight is covered by what is falling: drops of
 // rain, hailstones, pellets of sleet or flakes of snow.
 //
@@ -64,7 +85,8 @@ fn cell_dice(cell: vec3<f32>) -> vec4<f32> {
 // streak along the way it moves if it is quick, as an eye that takes
 // `blink` seconds to see it would have it. Because they are places in the
 // world and not on the picture, they pass by as the eye moves through
-// them, and what stands in front of them hides them.
+// them, what stands in front of them hides them, and none is where
+// something is over it (`open_above`).
 //
 // What is drawn out thin is fainter for it, as a flake of snow is. A drop
 // of water is not: it is a lens that gathers the light of the whole sky,
@@ -79,9 +101,10 @@ fn falling(
     let fallen = fract(fall * seconds / high) * high;
     let origin = (view.eye.xyz - vec3<f32>(view.weather[5].z, -fallen, view.weather[5].w)) / cell;
     let limit = min(far, reach) / cell;
-    // The way it moves across the line of sight, and how far in a blink.
-    // Under a storm the wind that drives it is three times as hard.
-    let driven = view.wind.xy * view.wind.z * (1.0 + 2.0 * view.weather[0].w);
+    // The way it moves across the line of sight, and how far in a blink:
+    // with the wind the grid goes with, so that each streak leans the way
+    // its drop is seen to go.
+    let driven = view.wind.xy * view.wind.z;
     let moving = vec3<f32>(driven.x, -fall, driven.y);
     let across = moving - direction * dot(moving, direction);
     let speed = length(across);
@@ -124,7 +147,12 @@ fn falling(
                 // What is right in front of the eye is out of its focus.
                 let ends = (1.0 - smoothstep(0.7 * reach, reach, along * cell))
                     * smoothstep(0.45, 0.9, along * cell);
-                cover = max(cover, smoothstep(wide, wide * 0.3, gap) * faint * ends);
+                let seen = smoothstep(wide, wide * 0.3, gap) * faint * ends;
+                // Whether something is over it is only asked of what
+                // this pixel would show.
+                if seen > cover {
+                    cover = max(cover, seen * open_above(view.eye.xyz + (middle - origin) * cell));
+                }
             }
         }
         // On to the cell the line of sight comes to next.
