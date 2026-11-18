@@ -9,6 +9,16 @@ graffiti, posters and rust run down the walls; potholes with rain water in
 them, and drains that the ground slopes to, so that whatever is spilt has
 somewhere to run.
 
+It is a lane in use, and its mess lies where mess would: paper, wrappers,
+leaves and cigarette ends drift into the yard's corners and along the feet
+of the walls and kerbs, and wheels keep the middle clearer; bags that did
+not fit are heaped by the dumpsters; kegs, gas bottles and a grease bin
+stand by the kitchen door, builder's waste in the workshop's corner, a
+wrapped pallet at the loading bay; a fridge and a television were dumped
+under the fire escape; the walls carry conduit, meters, vents, cables,
+notices, stickers and pigeon streaks; a washing line and a pair of shoes
+hang overhead.
+
 Each street runs a short way left and right and is closed by road works:
 concrete barriers, a "Road closed" sign and a hoarding, with a building
 across the street behind it. There is no edge of the world to find: from
@@ -26,9 +36,13 @@ lore run
 
 `build.py` needs Python 3 and Pillow (`pip install pillow`), which paints
 the pictures that are made here: the court's lines, the posters, the signs
-and some of the graffiti. It is split into four files beside it:
-`build.py` lays the level out, `kit.py` builds shapes, `props.py` models
-the props no free scan provides, and `pictures.py` paints. What it
+and some of the graffiti. It is split into files beside it:
+`build.py` lays the level out (the clutter in `strew`), `kit.py` builds
+shapes, `props.py`, `props_trade.py` (trade waste and dumped things),
+`props_small.py` (bags, cups, bottles, glass, butts, washing) and
+`props_wall.py` (conduit, meters, vents, cables) model the props no free
+scan provides, and `pictures.py` paints, among the rest three atlases from
+which every scrap of litter, ground mark, sticker and notice is cut. What it
 downloads is kept in `.cache`, so the next run is quick and works offline.
 It also writes `places.luau`, where the named places are (see below).
 
@@ -68,13 +82,17 @@ plain at hand height, for whatever is sprayed on them.
 
 ## What it asks of a computer
 
-About 820 thousand triangles in a few dozen things to draw, merged by
-material, of which 43 thousand are solid; the file is about 300 MB, most
-of it pictures. It draws in about 5 thousandths of a second a frame at
-1280 by 720 on a Radeon RX 7800 XT.
+About 940 thousand triangles in a few dozen things to draw, merged by
+material, of which 43 thousand are solid; the file is about 340 MB, most
+of it its 373 pictures. It draws in about 3 thousandths of a second a
+frame at 2560 by 1440 on a Radeon RX 7800 XT.
 
 Only plain boxes are solid: the buildings, the ground, the kerbs, the
-dumpsters, bins, barriers and the hoardings. The detail drawn on them,
+dumpsters, bins, barriers and the hoardings, and of the clutter only what
+you would walk into: kegs, gas bottles, the grease bin, the dumped
+fridge, the wrapped pallet, the builder's bag and the stack of tyres, none
+of it higher than 1.3 m. Litter, bags and boxes you would kick aside are
+not solid. The detail drawn on them,
 from window sills to rain-water pipes, is walked past, not into. The
 boxes that stand for a wall are drawn as nothing, flat on the wall they
 stand for, so what is thrown at a wall lands on its face.
@@ -116,6 +134,9 @@ nothing to credit. Here it is anyway.
   `propane_tank`, `metal_jerrycan`, `hand_truck`, `plastic_bottle_gallon`,
   `can_rusted`, `spray_paint_bottles`, `cement_bag`, `old_tyre`,
   `WetFloorSign_01`, `dirty_football`, `street_rat`,
+  `plastic_monobloc_chair_01`, `Television_01`, `small_lpg_tank`,
+  `multi_cleaner_5_litre`, `plastic_broom`, `potted_plant_04`,
+  `planter_pot_clay`,
   `modular_street_seating`, `ladder_sectioned_01`, `grass_medium_01`,
   `dandelion_01`
 
@@ -131,5 +152,6 @@ and patches; the kerbs and road markings; the court's lines; the dumpster,
 the hoop with its backboard and chain net, the ball, the wheelie bins,
 pallets, hoardings, plastic barriers, mesh fences, cones, back doors,
 bollards, drains, the mattress, the signs and the litter; the cables
-overhead; and every poster, sign face, graffiti piece and stencil, with
-fictional names on them.
+overhead; the clutter in the three `props_*.py` files; the litter, ground
+and wall atlases; and every poster, sign face, graffiti piece, sticker and
+notice, with fictional names on them.
