@@ -10,7 +10,7 @@ local fluids = require("./fluids")
 
 local debugMenu = {}
 
--- Kept, so a save of the script does not change it.
+-- game.keep holds it while the script is saved and loaded again.
 local kept = game.keep("debug menu", { readout = false })
 
 -- The speeds of time, by name.
@@ -96,7 +96,7 @@ local rows = {
         set = function(metresPerSecond)
             game.player:setFlySpeed(metresPerSecond)
         end,
-        show = function(metresPerSecond)
+        format = function(metresPerSecond)
             return string.format("%d m/s", math.floor(metresPerSecond + 0.5))
         end,
     }),
@@ -135,7 +135,7 @@ for _, place in jumps do
                 end
                 game.player:teleport(place.at, place.facing)
             end,
-            show = function()
+            text = function()
                 return if place.flying then "go there, flying" else "go there"
             end,
         })
@@ -143,13 +143,13 @@ for _, place in jumps do
 end
 table.insert(rows, menu.button("Clear all fluids", { press = fluids.clear }))
 for _, line in {
-    menu.info("Position", position),
-    menu.info("Speed", speed),
-    menu.info("Looking", looking),
-    menu.info("Feet", footing),
-    menu.info("Hour", hour),
-    menu.info("Falling", falling),
-    menu.info("Fluids", fluids.amounts),
+    menu.info("Position", { text = position }),
+    menu.info("Speed", { text = speed }),
+    menu.info("Looking", { text = looking }),
+    menu.info("Feet", { text = footing }),
+    menu.info("Hour", { text = hour }),
+    menu.info("Falling", { text = falling }),
+    menu.info("Fluids", { text = fluids.amounts }),
 } do
     table.insert(rows, line)
 end

@@ -26,9 +26,8 @@ function hints.draw(shown: boolean)
     end
     local label = game.input.label
     if onGamepad() then
-        -- A gamepad has one button free for the menus: it opens the
-        -- weather, and the bumpers go across to the debug menu, where the
-        -- frame meter is too.
+        -- On a gamepad Select opens the menus, at the weather; the
+        -- bumpers go across to the debug menu, where the frame meter is.
         line.text = string.format(
             "%s menus (%s %s tabs)     %s clear fluids     %s change fluid     %s spray",
             label("weather_menu"),

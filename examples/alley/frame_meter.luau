@@ -16,7 +16,7 @@ local meter = {}
 
 meter.modes = { "off", "compact", "full" }
 
--- Kept, so a save of the script does not change it.
+-- game.keep holds it while the script is saved and loaded again.
 local kept = game.keep("frame meter", { mode = "off" })
 
 local GOOD, FAIR, POOR = "#7ee08a", "#ffd25a", "#ff6a5a"

@@ -6,8 +6,8 @@ local fluids = require("./fluids")
 
 local gun = {}
 
--- Which of fluids.list is in hand. Kept, so a save of the script does not
--- change it.
+-- Which of fluids.list is in hand. game.keep holds it while the script
+-- is saved and loaded again.
 local kept = game.keep("fluid gun", { fluid = 1 })
 
 -- The crosshair: a dot with four short lines round it.

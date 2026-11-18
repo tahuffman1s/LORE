@@ -11,13 +11,16 @@
 --   F7   the debug menu: walk, fly or noclip, the speed of time, jumps to
 --        places, and what the player is doing
 --   F12  the frame meter: off, one line, or numbers with a graph
---   F8   clear away every fluid
+--   F8   clear away every fluid (while no menu is open)
 --   E    change the fluid the gun shoots; the fire button shoots it
 --
--- A gamepad has two buttons LORE leaves free for a game. Select opens the
--- menus, the weather first, and the bumpers go across to the debug menu,
--- which also turns the frame meter round; the left bumper clears the
--- fluids. Y changes the fluid and the right trigger shoots it.
+-- A gamepad has only two buttons LORE leaves free for a game, Select and
+-- the left bumper, so the two menus are tabs of one panel. Select opens
+-- it at the weather; while it is open the bumpers go from tab to tab and
+-- B closes it. The frame meter is a row of the debug menu. The left
+-- bumper clears the fluids while no menu is open. Y changes the fluid and
+-- the right trigger shoots it. F1 or F7 with the other menu open goes
+-- across to its own.
 --
 -- Each part is a file beside this one: menu.luau makes menus (copy it into
 -- your own game), and the others use it.
@@ -63,7 +66,7 @@ game.onTick(function()
 end)
 
 game.onDraw(function()
-    local playing = not panel.isOpen
+    local playing = not panel.isOpen -- no menu is open
     panel:draw()
     meter.draw()
     debugMenu.draw(playing)

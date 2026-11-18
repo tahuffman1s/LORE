@@ -12,7 +12,8 @@
 -- A row does not keep its own value: it reads it with `get` and changes it
 -- with `set`, so it always shows what the game really is. A panel shows
 -- one or more menus as tabs, opens and closes them, and frees the pointer
--- while it is open. Make it all once, at the top of the file:
+-- while it is open. Make it all once, at the top of the file, rows first,
+-- then the menus, then the panel: a menu's rows are fixed when it is made.
 --
 --     local menu = require("./menu")
 --     local volume = 0.8
@@ -21,7 +22,7 @@
 --             min = 0, max = 1, step = 0.1,
 --             get = function() return volume end,
 --             set = function(value) volume = value end,
---             show = menu.percent,
+--             format = menu.percent,
 --         }),
 --         menu.button("Quiet", { press = function() volume = 0 end }),
 --     })
@@ -33,6 +34,18 @@
 --         panel:update()
 --     end)
 --     game.onDraw(function() panel:draw() end)
+--
+-- `panel:update()` hears the player and changes the game, so it goes in
+-- game.onTick, which runs at the same pace on every computer. `panel:draw()`
+-- only shows what is there, and reads the keys the player has bound, which
+-- can only be read while drawing, so it goes in game.onDraw.
+--
+-- While the panel is open the game is in the engine's "menu" set of
+-- actions (see game.input.useSet): the player's own controls wait, the
+-- mouse is a pointer, and the menu hears the engine's "menu_move",
+-- "menu_confirm", "menu_click", "menu_back", "menu_previous_tab" and
+-- "menu_next_tab". An action the game made with game.input.bind, such as
+-- "sound_menu" above, is heard in every set, so the same key closes it.
 --
 -- What the player does in it:
 --   choose a row:  up and down (arrow keys, W and S, the d-pad or the left
@@ -73,7 +86,10 @@ export type Row = {
     get: (() -> any)?,
     set: ((any) -> ())?,
     press: (() -> ())?,
-    show: ((any) -> string)?,
+    -- Turns the value of a slider or a choice into words.
+    format: ((any) -> string)?,
+    -- The words beside a button or an info line.
+    text: (() -> string)?,
     min: number,
     max: number,
     step: number,
@@ -81,7 +97,7 @@ export type Row = {
     options: { string },
     color: string?,
     box: HudBox?,
-    name: HudText?,
+    name: HudText?, -- shows `label`
     value: HudText?,
     bar: HudBar?,
     knob: HudBox?,
@@ -96,10 +112,11 @@ local function newRow(kind: string, label: string): Row
     return { kind = kind, label = label, min = 0, max = 1, step = 1, wraps = false, options = {}, pieces = {} }
 end
 
--- A number between `min` and `max`, changed `step` at a time by a key and
--- set anywhere between by the bar. `wraps` makes it go round, as an hour
--- or a compass does. `show` turns the number into the words beside the bar.
--- Example: menu.slider("Fog", { get = game.weather.fog, set = game.weather.setFog, show = menu.percent })
+-- A number between `min` and `max` (0 and 1 if left out), changed `step`
+-- at a time by a key (a twentieth of the way if left out) and set anywhere
+-- between by the bar. `wraps` makes it go round, as an hour or a compass
+-- does. `format` turns the number into the words beside the bar.
+-- Example: menu.slider("Fog", { get = game.weather.fog, set = game.weather.setFog, format = menu.percent })
 function menu.slider(
     label: string,
     settings: {
@@ -109,12 +126,12 @@ function menu.slider(
         max: number?,
         step: number?,
         wraps: boolean?,
-        show: ((number) -> string)?,
+        format: ((number) -> string)?,
         color: string?,
     }
 ): Row
     local row = newRow("slider", label)
-    row.get, row.set, row.show, row.color = settings.get, settings.set, settings.show, settings.color
+    row.get, row.set, row.format, row.color = settings.get, settings.set, settings.format, settings.color
     row.min, row.max = settings.min or 0, settings.max or 1
     row.step = settings.step or (row.max - row.min) / 20
     row.wraps = settings.wraps or false
@@ -126,10 +143,10 @@ end
 -- Example: menu.choice("Size", { options = { "small", "large" }, get = function() return size end, set = function(word) size = word end })
 function menu.choice(
     label: string,
-    settings: { options: { string }, get: () -> string, set: (string) -> (), show: ((string) -> string)? }
+    settings: { options: { string }, get: () -> string, set: (string) -> (), format: ((string) -> string)? }
 ): Row
     local row = newRow("choice", label)
-    row.get, row.set, row.show, row.options = settings.get, settings.set, settings.show, settings.options
+    row.get, row.set, row.format, row.options = settings.get, settings.set, settings.format, settings.options
     return row
 end
 
@@ -141,25 +158,27 @@ function menu.toggle(label: string, settings: { get: () -> boolean, set: (boolea
     return row
 end
 
--- Something that happens when the row is pressed. `show`, if given, says
+-- Something that happens when the row is pressed. `text`, if given, says
 -- more beside the name, and can change as the game does.
 -- Example: menu.button("Lightning", { press = function() game.weather.strike(game.player.position) end })
-function menu.button(label: string, settings: { press: () -> (), show: (() -> string)? }): Row
+function menu.button(label: string, settings: { press: () -> (), text: (() -> string)? }): Row
     local row = newRow("button", label)
-    row.press, row.show = settings.press, settings.show
+    row.press, row.text = settings.press, settings.text
     return row
 end
 
 -- A line that tells something, such as where the player is. It is read
 -- again for every picture while the menu is open, and cannot be chosen.
--- Example: menu.info("Speed", function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end)
-function menu.info(label: string, show: () -> string): Row
+-- Example: menu.info("Speed", { text = function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end })
+function menu.info(label: string, settings: { text: () -> string }): Row
     local row = newRow("info", label)
-    row.show = show
+    row.text = settings.text
     return row
 end
 
--- A share from 0 to 1 as a percentage: 0.25 is "25%".
+-- A share from 0 to 1 as a percentage: 0.25 is "25%". For a slider's
+-- `format`.
+-- Example: menu.slider("Rain", { get = game.weather.rain, set = game.weather.setRain, format = menu.percent })
 function menu.percent(share: number): string
     return string.format("%d%%", math.floor(share * 100 + 0.5))
 end
@@ -175,20 +194,23 @@ export type Menu = typeof(setmetatable(
         dragging: Row?,
         right: number,
         down: number,
-        wide: number,
-        tall: number,
+        width: number,
+        height: number,
         back: HudBox,
     },
     Menu
 ))
 
--- Makes a menu and its HUD pieces, hidden until a panel shows it. Options,
--- all of which can be left out: `right` and `down` (where its top left
--- corner is, from the top left of the screen: 40, 40) and `width` (820).
+-- Makes a menu and its HUD pieces, hidden until a panel shows it. Its rows
+-- are fixed from then on: a row added to the list afterwards is not shown.
+-- Options, all of which can be left out: `right` and `down` (how far its
+-- top left corner is from the top left of the screen: 40 and 40) and
+-- `width` (820). It is as tall as its rows need.
+-- Example: local sound = menu.new("Sound", { menu.toggle("Music", { get = musicOn, set = setMusic }) })
 function menu.new(title: string, rows: { Row }, options: { right: number?, down: number?, width: number? }?): Menu
     local right = options and options.right or 40
     local down = options and options.down or 40
-    local wide = options and options.width or 820
+    local width = options and options.width or 820
     local self = setmetatable({
         title = title,
         rows = rows,
@@ -196,9 +218,9 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         dragging = nil :: Row?,
         right = right,
         down = down,
-        wide = wide,
-        tall = TOP + #rows * ROW + FOOT,
-        back = game.hud.box({ right = right, down = down, width = wide, height = TOP + #rows * ROW + FOOT, color = BACK }),
+        width = width,
+        height = TOP + #rows * ROW + FOOT,
+        back = game.hud.box({ right = right, down = down, width = width, height = TOP + #rows * ROW + FOOT, color = BACK }),
     }, Menu)
     self.back.visible = false
     for number, row in rows do
@@ -207,12 +229,12 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         -- The box behind the row shows which is chosen, and catches the
         -- pointer anywhere along the row.
         if row.kind ~= "info" then
-            row.box = game.hud.box({ right = left, down = top, width = wide - 24, height = ROW - 2, color = NOT_CHOSEN })
+            row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN })
         end
         row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = WORDS })
         row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = WORDS })
         if row.kind == "slider" then
-            local barLeft = right + wide - 24 - BAR_WIDE
+            local barLeft = right + width - 24 - BAR_WIDE
             row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or "#6fa8ff" })
             row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = "white" })
         end
@@ -267,16 +289,19 @@ function Menu.move(self: Menu, by: number)
     self.chosen = at
 end
 
--- Sets a slider, held between its ends (or taken round them, if it wraps)
--- and on a whole number of steps.
-local function setSlider(row: Row, value: number)
+-- Sets a slider, held between its ends, or taken round them if it wraps
+-- and `goRound` is true (a key goes round; a drag stops at the end).
+local function setSlider(row: Row, value: number, goRound: boolean)
     local set = row.set
-    if not set then
+    local span = row.max - row.min
+    if not set or span <= 0 then
         return
     end
-    local span = row.max - row.min
-    if row.wraps then
+    if row.wraps and goRound then
         value = row.min + (value - row.min) % span
+    elseif row.wraps then
+        -- The far end of a slider that wraps is its near end again.
+        value = math.clamp(value, row.min, row.max - row.step)
     else
         value = math.clamp(value, row.min, row.max)
     end
@@ -291,7 +316,7 @@ local function change(row: Row, way: number)
     end
     if row.kind == "slider" then
         local steps = math.floor((get() - row.min) / row.step + 0.5) + way
-        setSlider(row, row.min + steps * row.step)
+        setSlider(row, row.min + steps * row.step, true)
     elseif row.kind == "choice" then
         local now = table.find(row.options, get()) or 1
         set(row.options[(now - 1 + way) % #row.options + 1])
@@ -309,9 +334,42 @@ local function press(row: Row)
     end
 end
 
--- Hears the player. Call it every tick while the menu is shown, with
--- whether the pointer moved since the last tick.
+-- What a row's value says: its own `format` or `text`, or plain words
+-- for its kind.
+local function words(row: Row): string
+    if row.kind == "info" or row.kind == "button" then
+        local text = row.text
+        return if text then text() else ""
+    end
+    local get = row.get
+    if not get then
+        return ""
+    end
+    local now = get()
+    if row.kind == "toggle" then
+        return if now then "on" else "off"
+    end
+    local format = row.format
+    local said = if format then format(now)
+        elseif type(now) == "number" then string.format("%g", math.floor(now * 1000 + 0.5) / 1000)
+        else tostring(now)
+    if row.kind == "choice" then
+        return "<  " .. said .. "  >"
+    end
+    return said
+end
+
+-- Hears the player: the panel calls it every tick while this menu is in
+-- front, with whether the pointer moved since the last tick.
 function Menu.update(self: Menu, pointerMoved: boolean)
+    -- A choice's words are set here too, not only while drawing, so that
+    -- a click can tell its "<" from its ">".
+    for _, row in self.rows do
+        local value = row.value
+        if row.kind == "choice" and value then
+            value.text = words(row)
+        end
+    end
     local x, y = game.input.stepped("menu_move")
     if y ~= 0 then
         self:move(-y)
@@ -339,8 +397,10 @@ function Menu.update(self: Menu, pointerMoved: boolean)
         for number, clicked in self.rows do
             if clicked.kind ~= "info" and hovered(clicked) then
                 self.chosen = number
-                local bar, knob, value = clicked.bar, clicked.knob, clicked.value
-                if bar and knob and (bar.hovered or knob.hovered) then
+                local bar, value = clicked.bar, clicked.value
+                local along = if bar then bar:pointerAt() else -1
+                if bar and along >= -0.03 and along <= 1.03 then
+                    -- Anywhere over the bar or its knob starts a drag.
                     self.dragging = clicked
                 elseif clicked.kind == "choice" and value and value.hovered then
                     -- The left half of "< word >" goes back, the right on.
@@ -358,31 +418,10 @@ function Menu.update(self: Menu, pointerMoved: boolean)
     if dragging and dragging.bar and game.input.pressed("menu_click") then
         local across = math.clamp(dragging.bar:pointerAt(), 0, 1)
         local value = dragging.min + across * (dragging.max - dragging.min)
-        setSlider(dragging, dragging.min + math.floor((value - dragging.min) / dragging.step + 0.5) * dragging.step)
+        setSlider(dragging, dragging.min + math.floor((value - dragging.min) / dragging.step + 0.5) * dragging.step, false)
     else
         self.dragging = nil
     end
-end
-
--- What a row's value says: its own `show`, or plain words for its kind.
-local function words(row: Row): string
-    local show = row.show
-    if row.kind == "info" or row.kind == "button" then
-        return if show then show() else ""
-    end
-    local get = row.get
-    if not get then
-        return ""
-    end
-    local now = get()
-    if row.kind == "toggle" then
-        return if now then "on" else "off"
-    end
-    local said = if show then show(now) else tostring(now)
-    if row.kind == "choice" then
-        return "<  " .. said .. "  >"
-    end
-    return said
 end
 
 -- Shows what each row is now. Call it from game.onDraw while the menu is
@@ -403,9 +442,9 @@ function Menu.draw(self: Menu)
         end
         local bar, knob, get = row.bar, row.knob, row.get
         if bar and knob and get then
-            local share = math.clamp((get() - row.min) / (row.max - row.min), 0, 1)
+            local share = math.clamp((get() - row.min) / math.max(row.max - row.min, 1e-6), 0, 1)
             bar.value = share
-            knob.right = self.right + self.wide - 24 - BAR_WIDE + share * BAR_WIDE - 4
+            knob.right = self.right + self.width - 24 - BAR_WIDE + share * BAR_WIDE - 4
         end
     end
 end
@@ -417,12 +456,16 @@ export type Panel = typeof(setmetatable(
     {} :: {
         menus: { Menu },
         current: Menu,
+        -- True while the panel is open: read it, and open and close the
+        -- panel with its functions.
         isOpen: boolean,
         tabs: { HudText },
         marks: { HudBox },
         keys: HudText,
         lastX: number?,
         lastY: number?,
+        -- False until the pointer has been seen once since the panel opened.
+        pointerSeen: boolean,
     },
     Panel
 ))
@@ -436,13 +479,15 @@ local function showPieces(self: Panel, shown: Menu?)
     end
     self.keys.visible = shown ~= nil
     if shown then
-        self.keys.down = shown.down + shown.tall - FOOT + 12
+        self.keys.down = shown.down + shown.height - FOOT + 12
     end
 end
 
--- Shows `menus` as tabs of one panel, the first in front. With one menu
--- its title is shown alone. Make the menus first, so that the tabs are
--- drawn over them.
+-- Shows `menus` as tabs of one panel, the first in front, hidden until it
+-- is opened. With one menu its title is shown alone. Make the menus before
+-- the panel: what is made later is drawn on top, and the tabs go over the
+-- menus.
+-- Example: local panel = menu.panel({ sound, video })
 function menu.panel(menus: { Menu }): Panel
     local first = menus[1]
     local tabs, marks = {}, {}
@@ -454,7 +499,7 @@ function menu.panel(menus: { Menu }): Panel
         tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = QUIET })
         across += wide + 8
     end
-    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.tall - FOOT + 12, size = 24, color = QUIET })
+    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = QUIET })
     local self = setmetatable({
         menus = menus,
         current = first,
@@ -464,45 +509,53 @@ function menu.panel(menus: { Menu }): Panel
         keys = keys,
         lastX = nil :: number?,
         lastY = nil :: number?,
+        pointerSeen = false,
     }, Panel)
     showPieces(self, nil)
     return self
 end
 
--- Shows the panel with `shown` in front (it must be one of its menus),
+-- Opens the panel with `shown` in front (it must be one of its menus),
 -- frees the pointer, and leaves the player's own controls waiting.
-function Panel.show(self: Panel, shown: Menu)
+-- Example: panel:open(sound)
+function Panel.open(self: Panel, shown: Menu)
     self.current = shown
     self.isOpen = true
+    self.pointerSeen = false
     game.input.useSet("menu")
     showPieces(self, shown)
 end
 
--- Hides the panel and gives the mouse back to looking round.
-function Panel.hide(self: Panel)
+-- Closes the panel, gives the mouse back to looking round and the player
+-- their own controls (the "gameplay" set of actions).
+-- Example: panel:close()
+function Panel.close(self: Panel)
     self.isOpen = false
     self.current.dragging = nil
     game.input.useSet("gameplay")
     showPieces(self, nil)
 end
 
--- Shows `shown`, or hides the panel if `shown` is already in front: for
--- the key that opens a menu.
+-- Opens the panel at `shown`, or closes it if `shown` is already in
+-- front: for the key that opens a menu. With another tab in front, it
+-- goes to `shown`.
+-- Example: if game.input.justPressed("sound_menu") then panel:toggle(sound) end
 function Panel.toggle(self: Panel, shown: Menu)
     if self.isOpen and self.current == shown then
-        self:hide()
+        self:close()
     else
-        self:show(shown)
+        self:open(shown)
     end
 end
 
--- Hears the player. Call it every tick from game.onTick.
+-- Hears the player while the panel is open. Call it every tick from
+-- game.onTick.
 function Panel.update(self: Panel)
     if not self.isOpen then
         return
     end
     if game.input.justPressed("menu_back") or game.input.justPressed("menu_close") then
-        self:hide()
+        self:close()
         return
     end
     local count = #self.menus
@@ -521,11 +574,14 @@ function Panel.update(self: Panel)
         end
     end
     if turn ~= 0 then
-        self:show(self.menus[(at - 1 + turn) % count + 1])
+        self:open(self.menus[(at - 1 + turn) % count + 1])
         return
     end
+    -- Where the pointer rests when the panel opens chooses nothing: only
+    -- moving it does.
     local x, y = game.input.pointer()
-    local moved = x ~= nil and (x ~= self.lastX or y ~= self.lastY)
+    local moved = self.pointerSeen and x ~= nil and (x ~= self.lastX or y ~= self.lastY)
+    self.pointerSeen = self.pointerSeen or x ~= nil
     self.lastX, self.lastY = x, y
     self.current:update(moved)
 end
