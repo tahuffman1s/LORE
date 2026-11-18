@@ -220,6 +220,10 @@ impl World {
         for dummy in self.dummies.drain(..) {
             self.game.host_mut().remove_character(dummy.name);
         }
+        // The level's lamps are the script's to find by name and change.
+        self.game
+            .host_mut()
+            .set_level_lamps(&crate::lamps::of_level(level));
         let ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
         Self::on(self.game, ground, None)
     }
@@ -844,11 +848,16 @@ impl Playing {
     /// with.
     #[must_use]
     pub fn start(
-        game: ScriptGame,
+        mut game: ScriptGame,
         level: Option<&Scene>,
         actions: &ActionMap,
         tick_rate: u32,
     ) -> Self {
+        // The level's lamps are the script's to find by name and change.
+        if let Some(level) = level {
+            game.host_mut()
+                .set_level_lamps(&crate::lamps::of_level(level));
+        }
         let ground = Ground::of(level, game.map(), tick_rate);
         Self::enter(World::on(game, ground, None), actions)
     }
@@ -903,6 +912,12 @@ impl Playing {
     #[must_use]
     pub fn world(&self) -> &World {
         &self.world
+    }
+
+    /// The world being played, to change it.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn world_mut(&mut self) -> &mut World {
+        &mut self.world
     }
 
     /// Where the player's eyes were after the newest tick. A frame is drawn

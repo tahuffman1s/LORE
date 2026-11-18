@@ -373,6 +373,22 @@ impl Game for ScriptGame {
         if let Some(hour) = self.host.take_hour() {
             frame.set_hour(hour);
         }
+        if let Some((stops, eye)) = self.host.take_lighting() {
+            frame.set_lighting(
+                stops,
+                lore_render::EyeAdaptation {
+                    opens: eye.opens,
+                    closes: eye.closes,
+                    seconds: eye.seconds,
+                },
+            );
+        }
+        // Once the game knows of any lamp, it says which are lit.
+        if self.host.has_lamps() {
+            let lamps = frame.say_lamps();
+            self.host
+                .lamps(|light| lamps.push(crate::lamps::drawn(light)));
+        }
         // The weather as the script has said it. A world the script
         // plays in says more after this: what has followed from it.
         frame.set_weather(crate::world::said_weather(&self.host.weather()));

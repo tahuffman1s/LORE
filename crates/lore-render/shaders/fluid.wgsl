@@ -777,7 +777,7 @@ fn fluid_clear_air(world: vec3<f32>) -> f32 {
 // (none in its shadow) and from the sky.
 fn fluid_lit(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>, sunlit: f32) -> vec3<f32> {
     let from_sun = view.sun.rgb / PI * max(dot(normal, view.towards_sun.xyz), 0.0) * sunlit;
-    return from_sun + view.sky.rgb * open_sky(world, pixel);
+    return from_sun + view.sky.rgb * open_sky(world, pixel) + lamps_matte(world, normal, pixel);
 }
 
 // How the film's surface runs to the next pixel along `along`, with how
@@ -896,7 +896,8 @@ fn film_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32>)
     var mirrored = fluid_reflected(surface, bounced, pixel, rough);
     mirrored = mix(mirrored, surroundings(bounced), smoothstep(0.3, 0.9, rough));
     let sunlit = sunlight(surface, normal, pixel) * under_clouds(surface);
-    let glint = fluid_glint(normal, to_eye, max(rough, 0.03), f0) * sunlit;
+    let glint = fluid_glint(normal, to_eye, max(rough, 0.03), f0) * sunlit
+        + lamps_glint(surface, normal, to_eye, pixel, max(rough, 0.03), f0);
 
     // What is seen through it: the ground under, moved by the bend of the
     // line of sight into the film, wet, and dimmed by what the film takes
@@ -1020,7 +1021,8 @@ fn stream_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32
     let bounced = reflect(-to_eye, normal);
     var mirrored = fluid_reflected(seen.world, bounced, pixel, rough);
     mirrored = mix(mirrored, surroundings(bounced), smoothstep(0.3, 0.9, rough));
-    let glint = fluid_glint(normal, to_eye, rough, f0) * sunlit;
+    let glint = fluid_glint(normal, to_eye, rough, f0) * sunlit
+        + lamps_glint(seen.world, normal, to_eye, pixel, rough, f0);
     let given = (mirrored * shines + glint) * fluid_clear_air(seen.world)
         + glows * clamp(thick / 0.003, 0.0, 1.0);
     let colour = into * (vec3<f32>(1.0) - shines) + given;

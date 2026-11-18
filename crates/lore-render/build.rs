@@ -11,7 +11,7 @@ use naga::back::spv;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 /// Shader files to compile, by name without the `.wgsl` extension.
-const SHADERS: &[&str] = &["grid", "mesh", "ripples", "tonemap", "ui", "waves"];
+const SHADERS: &[&str] = &["eye", "grid", "mesh", "ripples", "tonemap", "ui", "waves"];
 
 /// A line of a shader file that begins with this names another file in
 /// `shaders/` whose text takes the line's place: what several shaders

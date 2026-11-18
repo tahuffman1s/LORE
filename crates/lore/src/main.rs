@@ -178,7 +178,8 @@ enum Command {
                             lore bench --budget-ms 16.6      Fail if a slow frame took longer \
                             than 16.6 ms\n  \
                             lore bench --json bench.json     Also save the numbers for a program \
-                            to read\n\n\
+                            to read\n  \
+                            lore bench --lamps 256           Light it with 256 lamps as well\n\n\
                       No window opens. The same frames are drawn on every run, so two runs \
                       differ only in how\nfast the computer drew them. Close other programs \
                       first for steadier numbers."
@@ -203,6 +204,9 @@ enum Command {
         /// Also write the numbers to this file as JSON
         #[arg(long, value_name = "FILE")]
         json: Option<PathBuf>,
+        /// Light the scene with this many lamps as well, to measure what lamps cost
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(..=4096))]
+        lamps: u32,
     },
 }
 
@@ -329,6 +333,7 @@ fn command() -> Result<(), String> {
             upscaling,
             budget_ms,
             json,
+            lamps,
         }) => cli::bench(
             &Bench {
                 frames,
@@ -336,6 +341,7 @@ fn command() -> Result<(), String> {
                 width,
                 height,
                 upscaling,
+                lamps,
             },
             budget_ms,
             json.as_deref(),

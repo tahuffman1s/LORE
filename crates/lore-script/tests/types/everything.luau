@@ -340,6 +340,30 @@ honey.washes = false
 print(honey.name, honey.color, honey.clarity, honey.cloudiness, honey.glow, honey.shine, honey.metal, honey.refraction)
 print(honey.viscosity, honey.density, honey.beading, honey.slippery, honey.sticky, honey.bouncy, honey.corrosive, honey.dries, honey.washes, pond)
 
+local porch: Lamp = game.lamp("porch", { from = "lantern", at = vector.create(2, 2.2, 0) })
+local torch = game.lamp("torch", { from = porch, beam = 40, lumens = 300, kelvin = 5000, pointing = vector.create(0, 0, -1), softness = 0.3, range = 20, radius = 0.05, flicker = "torch", on = true, color = "#ffd0a0" })
+game.lamp("candle")
+porch.at = vector.create(2, 2.4, 0)
+porch.on = (game.sky.hour() or 12) > 19
+porch.lumens = 400
+porch.color = "orange"
+porch.kelvin = 2200
+porch.beam = 360
+porch.pointing = vector.create(0, -1, 0)
+porch.softness = 0
+porch.range = 8
+porch.radius = 0.03
+porch.flicker = "mmnmmommommnonmmonqnmmo"
+print(porch.name, porch.at, porch.on, porch.lumens, porch.color, porch.kelvin, porch.beam, porch.pointing)
+print(porch.softness, porch.range, porch.radius, porch.flicker, torch)
+for _, name in game.lamps.names() do
+    game.lamp(name).on = false
+end
+game.lamp("candle"):remove()
+game.lighting.setExposure(-1.5)
+game.lighting.setEyeAdaptation({ opens = 1, closes = 6, seconds = 4 })
+print(game.lighting.exposure(), game.lighting.eyeAdaptation().opens, game.lighting.eyeAdaptation().closes, game.lighting.eyeAdaptation().seconds)
+
 game.onTick(function()
     if game.input.pressed("fire") then
         game.fluids.spray("water", game.player.eye, game.player.aim * 12)

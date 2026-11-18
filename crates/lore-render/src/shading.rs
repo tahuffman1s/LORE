@@ -925,3 +925,85 @@ fn a_material_painted_over_another_meets_it_along_a_ragged_edge() {
     assert!(blue > 3 * red.max(1), "unpainted: {red} red, {blue} blue");
     finish(gpu);
 }
+
+/// A lamp for a scene: `candela` bright at `at`, shining every way, or
+/// down in a cone `outer` radians from the middle to its edge.
+fn lamp(at: [f32; 3], candela: f32, outer: Option<f32>) -> Light {
+    Light {
+        name: None,
+        kind: outer.map_or(LightKind::Point, |outer| LightKind::Spot {
+            inner_angle: outer * 0.8,
+            outer_angle: outer,
+        }),
+        color: [1.0; 3],
+        intensity: candela,
+        range: None,
+        position: at,
+        direction: [0.0, -1.0, 0.0],
+    }
+}
+
+/// The [`floor`] under a sun that gives no light, so that a lamp's light
+/// shows against the sky's alone.
+fn dark_floor() -> Scene {
+    let mut scene = floor(Material::default());
+    scene.lights.push(Light {
+        intensity: 0.0,
+        ..sun([0.0, -1.0, 0.0], [1.0; 3])
+    });
+    scene
+}
+
+#[test]
+fn a_lamp_lights_what_is_under_it_by_the_square_of_how_far_it_is() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let middle = |scene: &Scene| pixel(&draw(&gpu, scene, &above(), 0.0), MIDDLE.0, MIDDLE.1);
+    let mut scene = dark_floor();
+    let unlit = middle(&scene);
+    // A searchlight's worth of candela, since the picture is exposed for
+    // daylight: 40 000 lux on the floor half a metre under it.
+    scene.lights.push(lamp([0.0, 0.5, 0.0], 10_000.0, None));
+    let close = middle(&scene);
+    assert!(
+        light(close) > light(unlit) + 60,
+        "lit {close:?}, unlit {unlit:?}"
+    );
+    // Four times the candela twice as far gives the same light.
+    scene.lights[1] = lamp([0.0, 1.0, 0.0], 40_000.0, None);
+    let far = middle(&scene);
+    assert!(
+        near(close, far, 3),
+        "half a metre {close:?}, a metre {far:?}"
+    );
+    // The same candela twice as far gives less.
+    scene.lights[1] = lamp([0.0, 1.0, 0.0], 10_000.0, None);
+    assert!(light(middle(&scene)) + 30 < light(close));
+    // A lamp under the floor lights only its underside.
+    scene.lights[1] = lamp([0.0, -0.5, 0.0], 10_000.0, None);
+    assert!(near(middle(&scene), unlit, 1));
+    finish(gpu);
+}
+
+#[test]
+fn a_spot_lights_only_what_is_in_its_beam() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut scene = dark_floor();
+    let unlit = draw(&gpu, &scene, &above(), 0.0);
+    // Pointing straight down from half a metre, its beam twenty degrees
+    // either side of the middle: a circle about 36 cm across on the floor.
+    scene
+        .lights
+        .push(lamp([0.0, 0.5, 0.0], 10_000.0, Some(0.35)));
+    let lit = draw(&gpu, &scene, &above(), 0.0);
+    let (middle, edge) = (
+        pixel(&lit, MIDDLE.0, MIDDLE.1),
+        pixel(&lit, SIZE - 4, MIDDLE.1),
+    );
+    assert!(light(middle) > light(pixel(&unlit, MIDDLE.0, MIDDLE.1)) + 60);
+    assert!(near(edge, pixel(&unlit, SIZE - 4, MIDDLE.1), 1), "{edge:?}");
+    finish(gpu);
+}

@@ -93,6 +93,12 @@ pub struct Frame {
     storminess: Option<f32>,
     /// The hour of the day, if the game said it this frame.
     hour: Option<f64>,
+    /// Every lamp lit this frame, if the game said them.
+    lamps: Vec<lore_render::Lamp>,
+    lamps_said: bool,
+    /// The game's own exposure in stops and how the eye adapts, if the
+    /// game said them this frame.
+    lighting: Option<(f32, lore_render::EyeAdaptation)>,
     /// How far rain has raised the water and what the sky's clock shows,
     /// if the game said them this frame.
     water_rise: Option<f32>,
@@ -197,6 +203,9 @@ impl Frame {
             treads: Vec::new(),
             storminess: None,
             hour: None,
+            lamps: Vec::new(),
+            lamps_said: false,
+            lighting: None,
             water_rise: None,
             sky_clock: None,
             storm_bolts: None,
@@ -842,6 +851,58 @@ impl Frame {
     /// The hour of the day, if the game said it this frame.
     pub(crate) fn take_hour(&mut self) -> Option<f64> {
         self.hour.take()
+    }
+
+    /// Says which lamps light the world from this frame on: all of them,
+    /// the level's as the game has left them and its own. Until a game
+    /// says, the level's lamps are lit as its file places them. Each is
+    /// as bright as a real lamp of its [`candela`](lore_render::Lamp::candela)
+    /// against the sun, the sky and the moon of the hour.
+    pub fn set_lamps(&mut self, lamps: &[lore_render::Lamp]) {
+        self.lamps.clear();
+        self.lamps.extend_from_slice(lamps);
+        self.lamps_said = true;
+    }
+
+    /// Says how the picture is exposed for the light from this frame on:
+    /// `stops` brighter (or, below 0, darker) than the eye would see it, on
+    /// top of the player's brightness, and how the eye adapts (see
+    /// [`lore_render::EyeAdaptation`]). Until a game says, it is 0 and
+    /// [`EyeAdaptation::default`](lore_render::EyeAdaptation::default).
+    pub fn set_lighting(&mut self, stops: f32, eye: lore_render::EyeAdaptation) {
+        self.lighting = Some((stops, eye));
+    }
+
+    /// How the picture is exposed, if the game said it this frame.
+    pub fn take_lighting(&mut self) -> Option<(f32, lore_render::EyeAdaptation)> {
+        self.lighting.take()
+    }
+
+    /// Lends the frame the memory of an earlier frame's lamps, so that
+    /// saying them needs no new memory.
+    #[must_use]
+    pub(crate) fn with_lamp_buffer(mut self, mut buffer: Vec<lore_render::Lamp>) -> Self {
+        buffer.clear();
+        self.lamps = buffer;
+        self
+    }
+
+    /// Says which lamps light the world from this frame on, as
+    /// [`set_lamps`](Self::set_lamps) does, by filling the list this gives.
+    pub(crate) fn say_lamps(&mut self) -> &mut Vec<lore_render::Lamp> {
+        self.lamps.clear();
+        self.lamps_said = true;
+        &mut self.lamps
+    }
+
+    /// The memory the lamps were said in, to lend the next frame.
+    pub(crate) fn lamp_buffer(&mut self) -> Vec<lore_render::Lamp> {
+        std::mem::take(&mut self.lamps)
+    }
+
+    /// The lamps, if the game said them this frame.
+    pub fn take_lamps(&mut self) -> Option<&[lore_render::Lamp]> {
+        std::mem::take(&mut self.lamps_said).then_some(self.lamps.as_slice())
     }
 
     /// Says how far rain has raised the level's still water, in metres, so

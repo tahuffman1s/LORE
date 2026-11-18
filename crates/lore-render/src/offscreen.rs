@@ -221,6 +221,11 @@ pub(crate) fn frames(
             device
                 .begin_command_buffer(commands, &vk::CommandBufferBeginInfo::default())
                 .unwrap();
+            let lamps: Vec<crate::Lamp> = scene
+                .lights
+                .iter()
+                .filter_map(crate::Lamp::from_light)
+                .collect();
             scene_view
                 .record(
                     commands,
@@ -237,6 +242,7 @@ pub(crate) fn frames(
                         day: None,
                         tracks: [None; 2],
                         fluid: None,
+                        lamps: &lamps,
                     },
                     camera,
                     1.0 / 60.0,

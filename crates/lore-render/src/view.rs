@@ -63,6 +63,8 @@ pub(crate) struct SceneView {
     stir: f32,
     /// How many sizes larger than usual textures are read; see [`sharper`].
     sharper: f32,
+    /// Whether each frame's picture is measured for the eye to adapt to.
+    pub(crate) measured: bool,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -119,6 +121,7 @@ impl SceneView {
             clock: None,
             eye: None,
             stir: 0.0,
+            measured: false,
         })
     }
 
@@ -259,6 +262,11 @@ impl SceneView {
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`
         // asks for, and the target is this view's own.
         unsafe { mesh.record(commands, frame, &self.target, &view, contents) }?;
+        if self.measured && !keeping {
+            // SAFETY: as for the drawing above, after which the picture is
+            // ready to be read.
+            unsafe { mesh.measure(commands, frame, &self.target) };
+        }
         if self.target.kept.get() {
             self.kept = Some(clip);
         }

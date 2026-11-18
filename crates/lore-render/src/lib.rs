@@ -18,12 +18,14 @@ mod camera;
 mod clouds;
 mod effects;
 mod error;
+mod eye;
 mod fluid;
 mod fluid_pass;
 mod font;
 mod gpu;
 mod grid;
 mod headless;
+mod lamps;
 mod material;
 mod mesh;
 #[cfg(test)]
@@ -52,10 +54,12 @@ pub use bolt::Lightning;
 pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};
+pub use eye::EyeAdaptation;
 pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS};
 pub use font::Font;
 pub use gpu::{Gpu, validation_errors};
 pub use headless::{FrameTime, Headless};
+pub use lamps::{Beam, Lamp, MOST_LAMPS};
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};

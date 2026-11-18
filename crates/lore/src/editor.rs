@@ -392,6 +392,8 @@ struct Editor {
     actions: ActionMap,
     /// The level's solid shapes, as a game played from here walks them.
     ground: Ground,
+    /// The lamps the level places, by name, for a game played from here.
+    level_lamps: Vec<(String, lore_script::LampLight)>,
     /// The level being played, while it is.
     play: Option<Play>,
     /// The "Play from here" button was clicked: the next tick starts.
@@ -448,6 +450,11 @@ impl Editor {
             aiming: false,
             actions: actions.clone(),
             ground,
+            level_lamps: if stand_in {
+                Vec::new()
+            } else {
+                crate::lamps::of_level(level)
+            },
             play: None,
             play_asked: false,
             play_problem: String::new(),
@@ -476,7 +483,12 @@ impl Editor {
             camera.position,
             [camera.yaw, camera.pitch],
         ) {
-            Ok(play) => self.play = Some(play),
+            Ok(mut play) => {
+                // The level's lamps are the script's to find by name and
+                // change.
+                play.set_level_lamps(&self.level_lamps);
+                self.play = Some(play);
+            }
             Err(problem) => {
                 log::error!("{problem}");
                 self.play_problem = problem;

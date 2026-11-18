@@ -1801,18 +1801,13 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let eye_half = clamp(dot(to_eye, halfway), 0.0, 1.0);
 
     // The sun: a matte part and a highlight (GGX, with Smith's
-    // height-correlated visibility and Schlick's Fresnel).
+    // height-correlated visibility and Schlick's Fresnel), with what a
+    // rough highlight loses among its own bumps put back.
     let alpha = roughness * roughness;
-    let alpha2 = alpha * alpha;
-    let spread = n_half * n_half * (alpha2 - 1.0) + 1.0;
-    let density = alpha2 / (PI * spread * spread);
-    let visible = 0.5 / max(
-        n_sun * sqrt(n_eye * n_eye * (1.0 - alpha2) + alpha2)
-            + n_eye * sqrt(n_sun * n_sun * (1.0 - alpha2) + alpha2),
-        1e-5,
-    );
-    let fresnel = mirror + (1.0 - mirror) * pow(1.0 - eye_half, 5.0);
-    let from_sun = ((1.0 - fresnel) * matte / PI + fresnel * density * visible)
+    let kept = energy_kept(mirror, roughness, n_eye);
+    let fresnel_sun = fresnel(mirror, eye_half);
+    let from_sun = ((1.0 - fresnel_sun) * matte / PI
+        + fresnel_sun * kept * highlight(n_half, n_eye, n_sun, alpha))
         * view.sun.rgb * n_sun * sunlit * mix(1.0, banked_sun, snowed);
     // The sun behind a leaf comes through it: the leaf's own colour,
     // yellower and brighter, more the more squarely the sun is behind it.
@@ -1830,7 +1825,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // and the ground; a smooth one mirrors the world itself, found in the
     // picture kept from the frame before: walls in a puddle, the street in
     // a window, the sky in a wet road.
-    let shines = mirrored_share(mirror, roughness, n_eye);
+    let shines = mirrored_share(mirror, roughness, n_eye) * kept;
     let mirrored = surroundings(reflect(-to_eye, normal));
     var mirrors = 0.0;
     var mirrored_world = vec3<f32>(0.0);
@@ -1864,7 +1859,12 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let glints = view.sun.rgb * (sparkle * snowed * n_sun * sunlit * banked_sun * 1.6);
     // The mirrored world is as bright as it was drawn: no shade here dims it.
     let from_world = mirrored_world * shines * mirrors;
-    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints + from_world;
+    // The lamps light it whether or not the sky can see it.
+    let lamplight = from_lamps(
+        corner.world, normal, to_eye, corner.position.xy, matte, mirror, roughness, kept, thin,
+    );
+    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints + from_world
+        + lamplight;
 }
 
 // How far the pixel moved since the last frame.
@@ -2248,3 +2248,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include particles.wgsl
 //!include weather.wgsl
 //!include fluid.wgsl
+//!include lamps.wgsl

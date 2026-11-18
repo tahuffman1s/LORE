@@ -44,6 +44,7 @@ local hints = require("./key_hints")
 local fluids = require("./fluids")
 local gun = require("./fluid_gun")
 local fluidMenu = require("./fluid_menu")
+require("./lamps")
 
 -- The menus are tabs of one panel, so one gamepad button reaches them all.
 local panel = menu.panel({ weatherMenu, debugMenu.menu, fluidMenu })

@@ -265,6 +265,9 @@ pub(crate) struct Day {
     /// The light on the land: the sun's by day and the moon's by night.
     pub(crate) lighting: Lighting,
     pub(crate) sky: Sky,
+    /// How bright a lux of lamplight is drawn at this hour
+    /// ([`per_lux`](crate::lamps::per_lux)).
+    pub(crate) per_lux: f32,
     /// What the shader is told of the heavens, a row each: towards the sun
     /// itself, and how far the night has come from 0 to 1; towards the
     /// moon, and how far the stars have turned, in radians; the pole they
@@ -391,6 +394,7 @@ impl Day {
         Self {
             lighting,
             sky,
+            per_lux: crate::lamps::per_lux(&lighting, sun[1], moon[1], lit, moon_up),
             heavens: [
                 [sun[0], sun[1], sun[2], night],
                 [moon[0], moon[1], moon[2], turn],

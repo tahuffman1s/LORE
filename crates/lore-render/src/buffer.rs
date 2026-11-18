@@ -101,6 +101,10 @@ impl Buffer {
     /// least as long as `bytes`, and the graphics card must not be reading
     /// it: commands that use it must have finished.
     pub(crate) unsafe fn write(&self, bytes: &[u8]) -> Result<(), RenderError> {
+        // Mapping nothing is not allowed, and there is nothing to write.
+        if bytes.is_empty() {
+            return Ok(());
+        }
         let device = self.gpu.device();
         // SAFETY: the caller guarantees the memory can be mapped, is at least
         // `bytes.len()` long and is not in use; it is unmapped straight after.
@@ -170,6 +174,35 @@ impl Buffer {
             device.unmap_memory(self.memory);
             Ok(bytes)
         }
+    }
+
+    /// Fills `bytes` from the start of the buffer, with nothing new made.
+    ///
+    /// # Safety
+    ///
+    /// As for [`read`](Self::read): the buffer must be at least as long as
+    /// `bytes`, and the graphics card must not be writing it.
+    pub(crate) unsafe fn read_into(&self, bytes: &mut [u8]) -> Result<(), RenderError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let device = self.gpu.device();
+        // SAFETY: the caller guarantees the memory can be mapped, is at least
+        // `bytes.len()` long and is not in use; the bytes are copied out
+        // before it is unmapped straight after.
+        unsafe {
+            let mapped = device
+                .map_memory(
+                    self.memory,
+                    0,
+                    bytes.len() as u64,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .map_err(RenderError::driver("reading a picture back"))?;
+            std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), bytes.as_mut_ptr(), bytes.len());
+            device.unmap_memory(self.memory);
+        }
+        Ok(())
     }
 
     /// Makes a buffer of `size` bytes whose contents can be copied to the

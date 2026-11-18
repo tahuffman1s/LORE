@@ -57,6 +57,8 @@ pub struct Bench {
     pub height: u32,
     /// How much smaller the scene is drawn before FSR makes it full size.
     pub upscaling: Upscaling,
+    /// How many lamps light the scene (see [`lamps`]).
+    pub lamps: u32,
 }
 
 impl Default for Bench {
@@ -69,6 +71,7 @@ impl Default for Bench {
             width: 1280,
             height: 720,
             upscaling: Upscaling::default(),
+            lamps: 0,
         }
     }
 }
@@ -127,6 +130,35 @@ pub fn scene() -> Scene {
         }
     }
     scene
+}
+
+/// `count` lamps over the benchmark's blocks: 800-lumen bulbs 3 m up, each
+/// drawn out to 10 m, laid out in a square grid over the middle of the
+/// arena (lamps two blocks apart, as street lamps are), so that the eye's
+/// walk passes under them. The same every time.
+#[must_use]
+pub fn lamps(count: u32) -> Vec<lore_render::Lamp> {
+    let side = (1..=count).find(|side| side * side >= count).unwrap_or(1);
+    // A side of at most 64 lamps: far below where an f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let half = (side as f32 - 1.0) / 2.0;
+    (0..count)
+        .map(|number| {
+            #[allow(clippy::cast_precision_loss)]
+            let (row, column) = ((number / side) as f32, (number % side) as f32);
+            lore_render::Lamp {
+                at: [
+                    (column - half) * SPACING * 2.0 + SPACING / 2.0,
+                    3.0,
+                    (row - half) * SPACING * 2.0 + SPACING / 2.0,
+                ],
+                candela: 800.0 / (4.0 * std::f32::consts::PI),
+                colour: [1.0, 0.85, 0.7],
+                reach: 10.0,
+                ..lore_render::Lamp::default()
+            }
+        })
+        .collect()
 }
 
 /// Where frame number `frame` of the benchmark is seen from: eyes 1.7 m up,
@@ -220,6 +252,12 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     let scene = scene();
     let mut headless = Headless::new(bench.width, bench.height, bench.upscaling)?;
     headless.set_scene(&scene)?;
+    // The eye adapts as a window's does, so measuring the picture for it
+    // is timed too.
+    headless.set_eye_adaptation(lore_render::EyeAdaptation::default());
+    if bench.lamps > 0 {
+        headless.set_lamps(&lamps(bench.lamps));
+    }
     for frame in 0..bench.warmup {
         headless.render(&camera(frame))?;
     }
@@ -275,8 +313,13 @@ impl Report {
             upscaling,
             ..
         } = self.bench;
+        let lamps = match self.bench.lamps {
+            0 => String::new(),
+            1 => ", 1 lamp".to_owned(),
+            many => format!(", {many} lamps"),
+        };
         let mut text = format!(
-            "Drew {frames} frames of the benchmark scene ({} meshes, {} triangles) at \
+            "Drew {frames} frames of the benchmark scene ({} meshes, {} triangles{lamps}) at \
              {width}x{height}",
             self.placed, self.triangles
         );
@@ -341,7 +384,7 @@ impl Report {
             "{{\n  \"lore\": \"{}\",\n  \"graphics_card\": \"{gpu}\",\n  \
              \"frames\": {},\n  \"warmup_frames\": {},\n  \"width\": {},\n  \"height\": {},\n  \
              \"drawn_width\": {},\n  \"drawn_height\": {},\n  \"upscaling\": \"{}\",\n  \
-             \"meshes\": {},\n  \"triangles\": {},\n  \"frame\": {},\n  \"engine\": {},\n  \
+             \"meshes\": {},\n  \"triangles\": {},\n  \"lamps\": {},\n  \"frame\": {},\n  \"engine\": {},\n  \
              \"graphics_card_work\": {},\n  \"budget_ms\": {},\n  \"within_budget\": {}\n}}\n",
             env!("CARGO_PKG_VERSION"),
             self.bench.frames,
@@ -353,6 +396,7 @@ impl Report {
             upscaling_name(self.bench.upscaling),
             self.placed,
             self.triangles,
+            self.bench.lamps,
             times(&self.frame),
             times(&self.recording),
             times(&self.drawing),

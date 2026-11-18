@@ -166,9 +166,10 @@ fn fragment_bit(bit: Bit) -> Mixed {
         let flash = pow(max(dot(bounced, sun), 0.0), 90.0) * 14.0
             + pow(max(dot(refract(-to_eye, normal, 0.75), -sun), 0.0), 40.0) * 3.0;
         let rim = 1.0 - bulge;
+        let lamplit = lamps_matte(bit.world, to_eye, bit.position.xy);
         colour = mix(behind * 0.95, above, mirror) + view.sun.rgb * flash * sunlit
             // A drop in the light is bright against what is behind it.
-            + (view.sky.rgb * 0.3 + view.sun.rgb / PI * 0.22 * sunlit) * (0.25 + 0.75 * rim);
+            + (view.sky.rgb * 0.3 + view.sun.rgb / PI * 0.22 * sunlit + lamplit * 0.5) * (0.25 + 0.75 * rim);
         alpha = smoothstep(1.0, 0.8, out) * (0.45 + 0.55 * rim * rim + min(flash, 1.0));
     } else if kind < 1.5 {
         // Spray: a soft white puff, thick in the middle, lit by the sun
@@ -178,7 +179,8 @@ fn fragment_bit(bit: Bit) -> Mixed {
             vec3<f32>(bit.world.xz * 0.9 + bit.across * 0.22, bit.world.y * 0.9 + left), 0.0,
         ).g;
         colour = (view.sky.rgb * 0.9
-            + view.sun.rgb / PI * (0.55 + 0.45 * max(dot(normal, sun), 0.0)) * sunlit) * 0.7;
+            + view.sun.rgb / PI * (0.55 + 0.45 * max(dot(normal, sun), 0.0)) * sunlit
+            + lamps_matte(bit.world, to_eye, bit.position.xy)) * 0.7;
         let thick = (1.0 - out * out) * (0.55 + 0.9 * lumps);
         // Where it meets something solid it fades into it, with no edge.
         let surface = 1.0 / bit.position.w;
@@ -191,7 +193,8 @@ fn fragment_bit(bit: Bit) -> Mixed {
         // glint of the sky at its top.
         let rim = smoothstep(0.55, 0.96, out) * smoothstep(1.0, 0.9, out);
         let glint = pow(max(dot(normal, normalize(vec3<f32>(0.2, 1.0, 0.1))), 0.0), 18.0);
-        let light = view.sky.rgb * 0.8 + view.sun.rgb / PI * 0.5 * sunlit;
+        let light = view.sky.rgb * 0.8 + view.sun.rgb / PI * 0.5 * sunlit
+            + lamps_matte(bit.world, to_eye, bit.position.xy) * 0.5;
         colour = light * (0.5 + 1.6 * glint);
         alpha = clamp(rim * 0.7 + glint * 0.8 + 0.2 * bulge, 0.0, 1.0) * left;
     }
