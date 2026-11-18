@@ -10,6 +10,92 @@ const WATER_SCATTERS: f32 = 0.06;
 // How much of the light that meets water head on is mirrored.
 const WATER_MIRRORS: f32 = 0.02;
 
+// ------------------------------------------------------------ the look
+
+// Whether the level's game has said how its water looks (`fluid.rs`):
+// lava, slime and the like, instead of the clear water above.
+fn water_has_look() -> bool {
+    return view.water_look[0].w > 0.5;
+}
+
+// How much red, green and blue light a metre of the water takes and
+// scatters away, and so how far light comes through it: `clarity` is how
+// clear the level says its water is, which a look has no use for.
+fn water_passes(through: f32, clarity: f32) -> vec3<f32> {
+    if water_has_look() {
+        return exp(-through * (view.water_look[0].xyz + view.water_look[1].xyz));
+    }
+    // Times one over the clarity, not divided by it: the same sums in the
+    // same order as before looks existed, so a level's water is unchanged.
+    let murk = 1.0 / max(clarity, 0.05);
+    return exp(-through * (WATER_TAKES + WATER_SCATTERS) * murk);
+}
+
+// The colour the water gives back of the light that falls in it: the
+// level's own colour, or what the look scatters as against what it takes.
+fn water_albedo(colour: vec3<f32>) -> vec3<f32> {
+    if water_has_look() {
+        let takes = view.water_look[0].xyz;
+        let scatters = view.water_look[1].xyz;
+        return scatters / max(takes + scatters, vec3<f32>(1e-4));
+    }
+    return colour;
+}
+
+// The light the water gives off itself, which nothing lights or shades;
+// none for clear water.
+fn water_glows() -> vec3<f32> {
+    if water_has_look() {
+        return view.water_look[2].xyz;
+    }
+    return vec3<f32>(0.0);
+}
+
+// How much of a glowing liquid's glow shows at a place, from 0 to 1. One
+// that is rough on top, as lava is, has cooled there into dark plates of
+// crust that drift slowly, and glows through the cracks between them and
+// where they are thin; a smooth one glows all over.
+fn crusted(place: vec2<f32>) -> f32 {
+    let crust = smoothstep(0.2, 0.5, view.water_look[1].w);
+    if crust <= 0.0 {
+        return 1.0;
+    }
+    let drift = view.clouds.y * 0.004;
+    let plates = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 2.3, 0.27 + drift), 0.0,
+    ).g;
+    let small = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 0.7 + 0.3, 0.64 + drift * 1.7), 0.0,
+    ).g;
+    let warm = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(place / 9.0, 0.45), 0.0,
+    ).r;
+    // The cracks are the walls between the packed cells.
+    let cracks = max(smoothstep(0.66, 0.88, 1.0 - plates), 0.6 * smoothstep(0.74, 0.92, 1.0 - small));
+    let glowing = clamp(cracks + 0.18 * smoothstep(0.5, 0.8, warm), 0.0, 1.0);
+    return mix(1.0, 0.06 + 0.94 * glowing, crust);
+}
+
+// How much of the light that meets the surface head on is mirrored: from
+// how much the liquid bends light, if it has a look.
+fn water_mirrors() -> f32 {
+    if water_has_look() {
+        let bends = max(view.water_look[2].w, 1.0);
+        let off = (bends - 1.0) / (bends + 1.0);
+        return off * off;
+    }
+    return WATER_MIRRORS;
+}
+
+// How widely the surface spreads what it mirrors, given what its waves
+// make of it: a look's own roughness is never smoother than that.
+fn water_roughness(waves: f32) -> f32 {
+    if water_has_look() {
+        return max(waves, view.water_look[1].w);
+    }
+    return waves;
+}
+
 // ------------------------------------------------------------ the waves
 
 // What the wind's waves do to the water at a place.
@@ -207,11 +293,21 @@ fn sight_starts_under(world: vec3<f32>) -> bool {
     return under_water(eye + line * (view.lens.x * 1.05 / ahead));
 }
 
+// How strongly a great depth of water seen from inside it takes the colour
+// of what it scatters, as against the clear water's `clear` tint.
+fn water_tint(clear: vec3<f32>) -> vec3<f32> {
+    if water_has_look() {
+        return water_albedo(clear) * 0.2;
+    }
+    return clear;
+}
+
 // The colour of a great depth of water seen from inside it: the light from
 // above, scattered about in it.
 fn water_glow() -> vec3<f32> {
-    return vec3<f32>(0.035, 0.16, 0.13)
-        * (view.sky.rgb + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 0.5);
+    return water_tint(vec3<f32>(0.035, 0.16, 0.13))
+        * (view.sky.rgb + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 0.5)
+        + water_glows();
 }
 
 // Whether the sun reaches a point of the world, asked once of the nearest
@@ -288,15 +384,14 @@ fn light_in_water(world: vec3<f32>) -> f32 {
 // is the light in it: the sky's, everywhere, and the sun's where it gets in.
 fn through_water(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let far = length(world - view.eye.xyz);
-    let murk = 1.0 / max(view.water.w, 0.05);
-    let passes = exp(-far * (WATER_TAKES + WATER_SCATTERS) * murk);
-    let tint = vec3<f32>(0.035, 0.16, 0.13);
+    let passes = water_passes(far, view.water.w);
+    let tint = water_tint(vec3<f32>(0.035, 0.16, 0.13));
     // Deeper down there is less light of either kind.
     let down = exp(-max(view.water.x - view.eye.y, 0.0) * 0.08);
     let glow = tint * down
         * (view.sky.rgb * 0.8
             + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 1.3 * light_in_water(world));
-    return colour * passes + glow * (1.0 - passes);
+    return colour * passes + (glow + water_glows()) * (1.0 - passes);
 }
 
 // How much brighter or dimmer the sun is on something under still water:
@@ -367,10 +462,31 @@ fn shore_wet(world: vec3<f32>) -> f32 {
     if deep < -0.35 {
         return 0.0;
     }
+    // Only ground near the water's own edge is wet, not all ground as low
+    // as the water inside the square its grid covers: how far away the
+    // edge is along the ground is how far the ground stands over the water
+    // divided by how steeply it rises, read from the grid either side.
+    // Flat ground beside a pothole is then dry a little way out, and a
+    // shore is wet as far up as it ever was.
+    let step = view.water.y;
+    let rises = vec2<f32>(
+        grid_depth(world.xz - vec2<f32>(step, 0.0)) - grid_depth(world.xz + vec2<f32>(step, 0.0)),
+        grid_depth(world.xz - vec2<f32>(0.0, step)) - grid_depth(world.xz + vec2<f32>(0.0, step)),
+    ) / (2.0 * step);
+    let to_edge = max(over, 0.0) / max(length(rises), 0.001);
+    let near_edge = 1.0 - smoothstep(0.25, 1.5, to_edge);
     // Soaked at the waterline, damp a hand's width above it, in a line
     // that is not ruled.
     let uneven = textureSampleLevel(cloud_volume, cloud_sampler, vec3<f32>(world.xz / 3.1, 0.3), 0.0).r;
-    return 1.0 - smoothstep(0.01, 0.03 + 0.06 * uneven, over);
+    return (1.0 - smoothstep(0.01, 0.03 + 0.06 * uneven, over)) * near_edge;
+}
+
+// The depth the grid of the still water nearest the eye holds at a place,
+// read at its nearest edge for a place past it, so that a slope is never
+// made up where the grid ends.
+fn grid_depth(place: vec2<f32>) -> f32 {
+    let uv = ((place - view.water_box.xy) / view.water.y + 0.5) / view.water_box.zw;
+    return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r;
 }
 
 // ------------------------------------------------------- what it mirrors
@@ -554,9 +670,9 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     );
     // How widely the waves too small to draw spread what the water mirrors;
     // ice is smooth, but not as a mirror is, and white ice is matte.
-    let rough = mix(
+    let rough = water_roughness(mix(
         clamp(sqrt(2.0 * max(waves.unseen, 0.0)), 0.015, 0.5), 0.07 + 0.3 * milky, frozen,
-    );
+    ));
 
     let pixel_at = vec2<i32>(corner.position.xy);
     // How far in front of the eye the surface is, and what is behind it:
@@ -588,7 +704,8 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
             // Nearly all gets out straight up; less and less towards the
             // window's rim.
             let lost = pow(1.0 - squarely, 5.0);
-            mirror = clamp(WATER_MIRRORS + (1.0 - WATER_MIRRORS) * lost, 0.0, 1.0);
+            let own = water_mirrors();
+            mirror = clamp(own + (1.0 - own) * lost, 0.0, 1.0);
             let upward = normalize(vec3<f32>(through.x, max(through.y, 0.02), through.z));
             out = sky_colour(upward);
             if view.clouds.x > 0.0 {
@@ -669,7 +786,8 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
             + n_eye * sqrt(n_sun * n_sun * (1.0 - alpha2) + alpha2),
         1e-5,
     );
-    let shines = WATER_MIRRORS + (1.0 - WATER_MIRRORS) * pow(1.0 - eye_half, 5.0);
+    let own_mirror = water_mirrors();
+    let shines = own_mirror + (1.0 - own_mirror) * pow(1.0 - eye_half, 5.0);
     // Never brighter than the sun's disc is itself.
     let glitter = view.sun.rgb * min(density * visible * shines * n_sun, 60.0) * sunlit;
 
@@ -678,8 +796,8 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // Rough water turns fewer of its faces to a low line of sight, so it
     // mirrors a little less of the horizon.
     let facing = max(dot(normal, to_eye), 0.0);
-    let mirror = WATER_MIRRORS
-        + (1.0 - WATER_MIRRORS) * pow(1.0 - facing, 5.0) * (1.0 - 0.45 * rough / 0.5);
+    let mirror = own_mirror
+        + (1.0 - own_mirror) * pow(1.0 - facing, 5.0) * (1.0 - 0.45 * rough / 0.5);
 
     // What is under the surface is seen where the waves bend the line of
     // sight to: a little to one side, more where the water is deeper. The
@@ -718,12 +836,13 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
 
     // The water itself: light from above is scattered back up in the
     // water's own colour, more of it the more water there is to do it.
-    let murk = 1.0 / max(wet.colour.a, 0.05);
-    let passes = exp(-through * (WATER_TAKES + WATER_SCATTERS) * murk);
+    let passes = water_passes(through, wet.colour.a);
     let open = open_sky(corner.world, corner.position.xy);
-    let body = wet.colour.rgb
+    let body = water_albedo(wet.colour.rgb)
         * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
-    var seen = bottom * passes + body * (1.0 - passes);
+    // What the liquid gives off itself is added after the light, so that
+    // shade does not darken it.
+    var seen = bottom * passes + (body + water_glows() * crusted(wet.rest)) * (1.0 - passes);
     var mirrors = mirror;
     if frozen > 0.0 {
         // Ice. Where it is clear the water shows through it, darker and

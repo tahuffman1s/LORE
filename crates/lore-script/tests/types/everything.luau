@@ -246,3 +246,120 @@ game.onTick(function()
         game.sky.setHour((game.sky.hour() or 12) + 1 / 600)
     end
 end)
+
+-- A button of the game's own, the pointer and the wheel, and stepping
+-- through a menu.
+game.input.bind("open_map", { "F1", "GamepadSelect" })
+local mapShown = false
+local selected = 1
+local scroll = 0
+game.onTick(function()
+    if game.input.justPressed("open_map") then
+        mapShown = not mapShown
+    end
+    local px, py = game.input.pointer()
+    if px and py then
+        print(px + py)
+    end
+    scroll += game.input.wheel()
+    local sx, sy = game.input.stepped("menu_move")
+    if sy ~= 0 then
+        selected = (selected - sy - 1) % 4 + 1
+    end
+    selected += sx
+end)
+
+-- What is drawn: how the frames are going, what a key is called, and the
+-- pieces under the pointer.
+local fps = game.hud.text("", { at = "top left" })
+local hint = game.hud.text("", { at = "bottom" })
+local slider = game.hud.bar(0.5, { at = "center", width = 300 })
+local graph = game.hud.frameGraph({ at = "top right", down = 100, width = 300, height = 100, frames = 500 })
+local plain = game.hud.frameGraph()
+game.onDraw(function()
+    fps.text = math.floor(game.frames.rate()) .. " fps, " .. string.format("%.1f ms", game.frames.lastTime() * 1000)
+    fps.text ..= " slowest " .. string.format("%.1f ms", game.frames.slowestTime() * 1000) .. " low " .. game.frames.lowRate()
+    hint.text = "Press " .. game.input.label("interact") .. " to open"
+    if slider.pressed then
+        slider.value = math.clamp(slider:pointerAt(), 0, 1)
+    end
+    local across: number, down: number = graph:pointerAt()
+    graph.visible = not plain.hovered and not plain.pressed
+    print(across, down, fps.hovered, fps.pressed, hint.pressed)
+end)
+graph:remove()
+
+-- Seeing and moving the player.
+game.onTick(function()
+    local pace: number = vector.magnitude(game.player.velocity)
+    local eyes: vector = game.player.eye
+    local looking: vector = game.player.aim
+    local mode: string = game.player.movement
+    print(pace, eyes, looking, mode, game.player.grounded, game.player.flySpeed)
+    if game.input.justPressed("map") then
+        game.player:teleport(vector.create(0, 2, 0))
+        game.player:teleport(game.player.position + vector.create(10, 0, 0), vector.create(0, 0, -1))
+        game.player:setMovement("fly")
+        game.player:setMovement("noclip")
+        game.player:setMovement("walk")
+        game.player:setFlySpeed(30)
+    end
+end)
+
+-- The speed of time.
+game.onTick(function(step)
+    if game.input.justPressed("open_map") and game.timeSpeed() > 0 then
+        game.setTimeSpeed(0)
+    elseif step == 0 and game.input.justPressed("menu_back") then
+        game.setTimeSpeed(1)
+    end
+    game.setTimeSpeed(0.25)
+end)
+
+-- Fluids: kinds, letting them out, and what a character stands in.
+local honey: Fluid = game.fluid("honey")
+local goo: Fluid = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
+local pond = game.fluid("pond", { from = goo, color = "#203040", clarity = 2, cloudiness = 0.3, shine = 0.9, metal = 0, refraction = 1.34, viscosity = 0.1, density = 1, beading = 0.4, slippery = 0.5, sticky = 0, bouncy = 0, corrosive = 0, dries = 120, washes = true })
+game.fluid("blob", { from = "water", color = "red" })
+honey.viscosity = 0.6
+honey.color = "#f6bf59"
+honey.clarity = 0.02
+honey.cloudiness = 0.4
+honey.glow = 0
+honey.shine = 0.9
+honey.metal = 0
+honey.refraction = 1.5
+honey.density = 1.4
+honey.beading = 0.3
+honey.slippery = 0.1
+honey.sticky = 0.6
+honey.bouncy = 0
+honey.corrosive = 0
+honey.dries = 0
+honey.washes = false
+print(honey.name, honey.color, honey.clarity, honey.cloudiness, honey.glow, honey.shine, honey.metal, honey.refraction)
+print(honey.viscosity, honey.density, honey.beading, honey.slippery, honey.sticky, honey.bouncy, honey.corrosive, honey.dries, honey.washes, pond)
+
+game.onTick(function()
+    if game.input.pressed("fire") then
+        game.fluids.spray("water", game.player.eye, game.player.aim * 12)
+        game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litresPerSecond = 1.5, spread = 10 })
+    end
+    if game.fluids.amount() > 100 or game.fluids.amount("water") > 50 then
+        game.fluids.clear("oil")
+        game.fluids.clear(goo)
+        game.fluids.clear()
+    end
+    local wet = game.fluids.under(game.player)
+    if wet then
+        print(wet.seconds)
+    end
+end)
+
+game.fluids.onTouch(function(touch)
+    local who: Character = touch.character
+    local kind: Fluid = touch.fluid
+    if kind == game.fluid("acid") and who == game.player then
+        print(touch.harm * 20, touch.cover, touch.depth, touch.seconds)
+    end
+end)

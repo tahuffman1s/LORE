@@ -1,7 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
 use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
-use lore_render::{Lightning, Splash, Stir, Tread};
+use lore_render::{FluidDrop, FluidLook, Lightning, Splash, Stir, Tread};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -63,6 +63,8 @@ pub struct Frame {
     controls: Option<ActionMap>,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
+    /// How fast game time runs, if the game said this frame.
+    time_speed: Option<f32>,
     /// The player's settings to put into effect, when they have changed.
     settings: Option<Settings>,
     ui: DrawBuffer,
@@ -98,6 +100,9 @@ pub struct Frame {
     weather: Option<lore_render::Weather>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
+    /// The fluid to draw, if the game said it this frame, the looks of its
+    /// kinds and of the level's water, when they changed.
+    fluid: FluidFrame,
     /// The editor's panels: what they are made with, and what was made.
     #[cfg(feature = "editor")]
     panels: Option<PanelFrame>,
@@ -168,6 +173,7 @@ impl Frame {
             gamepad_style: GamepadStyle::Xbox,
             controls: None,
             ui_scale: 1.0,
+            time_speed: None,
             settings: None,
             ui: DrawBuffer::default(),
             title: None,
@@ -188,6 +194,7 @@ impl Frame {
             storm_bolts: None,
             weather: None,
             under_water: None,
+            fluid: FluidFrame::default(),
             #[cfg(feature = "editor")]
             panels: None,
             #[cfg(feature = "editor")]
@@ -477,6 +484,17 @@ impl Frame {
     /// Sets the player's own size for the HUD and menus, for the game to read.
     pub(crate) fn set_ui_scale(&mut self, scale: f32) {
         self.ui_scale = scale;
+    }
+
+    /// Says how fast game time runs from now on: the window's clock runs
+    /// that many ticks for each one real time asks for.
+    pub(crate) fn set_time_speed(&mut self, speed: f32) {
+        self.time_speed = Some(speed);
+    }
+
+    /// How fast the game said time runs, if it said this frame.
+    pub(crate) fn time_speed(&self) -> Option<f32> {
+        self.time_speed
     }
 
     /// Puts the player's settings into effect: how loud the speakers are
@@ -819,6 +837,70 @@ impl Frame {
     pub(crate) fn take_title(&mut self) -> Option<String> {
         self.title.take()
     }
+
+    /// Lends the frame `buffer` to gather the fluid's drops in: the last
+    /// frame's, from [`take_fluid`](Self::take_fluid), so its memory is used
+    /// again and drawing fluid allocates nothing once it has grown.
+    #[must_use]
+    pub fn with_fluid_buffer(mut self, mut buffer: Vec<FluidDrop>) -> Self {
+        buffer.clear();
+        self.fluid.drops = buffer;
+        self
+    }
+
+    /// Says which drops of fluid are drawn, until it is said again: every
+    /// drop in the world, flying and lying. An empty list draws none.
+    pub fn set_fluid(&mut self, drops: impl IntoIterator<Item = FluidDrop>) {
+        self.fluid.drops.clear();
+        self.fluid.drops.extend(drops);
+        self.fluid.said = true;
+    }
+
+    /// Says how each kind of fluid looks: the place in the list is the kind.
+    /// Say it when it changes; the picture keeps it until then.
+    /// Kinds past the 32 the picture draws are left out.
+    pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {
+        let mut all = [FluidLook::default(); lore_render::MOST_FLUID_KINDS];
+        for (slot, look) in all.iter_mut().zip(looks) {
+            *slot = *look;
+        }
+        // Kept in the frame itself: a script that changes a colour on
+        // every tick costs no memory.
+        self.fluid.looks = Some(all);
+    }
+
+    /// Says how the level's own lakes and creeks are drawn: as `look`, or
+    /// with `None` as the level says. Say it when it changes.
+    pub fn set_water_look(&mut self, look: Option<FluidLook>) {
+        self.fluid.water_look = Some(look);
+    }
+
+    /// What the game said of the fluid this frame, with the buffer it was
+    /// lent back. Hand the buffer to the next frame with
+    /// [`with_fluid_buffer`](Self::with_fluid_buffer).
+    pub fn take_fluid(&mut self) -> FluidFrame {
+        std::mem::take(&mut self.fluid)
+    }
+}
+
+/// What a game said of the fluid in one frame, for whoever draws it.
+///
+/// Hand it to the picture in this order: the looks, the water's look, then
+/// the drops, so that new drops are never drawn with an old look.
+#[derive(Debug, Default)]
+pub struct FluidFrame {
+    /// The drops to draw, when [`said`](Self::said); otherwise the empty
+    /// buffer, to lend to the next frame all the same.
+    pub drops: Vec<FluidDrop>,
+    /// Whether the drops were said this frame. When not, draw what was
+    /// drawn before.
+    pub said: bool,
+    /// How each kind looks, by kind, if that changed: all 32, water's
+    /// look for kinds the game has not made.
+    pub looks: Option<[FluidLook; lore_render::MOST_FLUID_KINDS]>,
+    /// How the level's water is drawn, if that changed: `Some(None)` is as
+    /// the level says.
+    pub water_look: Option<Option<FluidLook>>,
 }
 
 #[cfg(test)]

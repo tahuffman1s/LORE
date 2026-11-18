@@ -111,6 +111,12 @@ struct View {
     // sun's own disc, and 1 if there is a moon and stars at all; the light
     // of the night sky, and how bright the stars are.
     heavens: array<vec4<f32>, 5>,
+    // How the level's water looks, if its game has said (`fluid.rs`), as
+    // three rows. What a metre of it takes of red, green and blue light,
+    // and 1 if it has a look at all (else the row and the two after are
+    // zero). What a metre of it scatters, and how rough its surface is.
+    // What it glows, and how much it bends light.
+    water_look: array<vec4<f32>, 3>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -902,6 +908,9 @@ fn under_clouds(world: vec3<f32>) -> f32 {
 const SHADOW_PICTURES: i32 = 4;
 // How many places round a point are asked whether something is overhead.
 const CANOPY_LOOKS: i32 = 8;
+// How much of the sunlight that falls into a street between buildings is
+// thrown back off its sides onto what stands in shade there.
+const SIDES_GIVE_BACK: f32 = 0.3;
 // How many places round a pixel are looked at to find what casts on it, and
 // how many to smooth the shadow's edge.
 const CASTER_LOOKS: i32 = 6;
@@ -1020,20 +1029,33 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
 // differently for every pixel and frame so that the upscaler makes a
 // smooth shade of them.
 fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    return sky_and_slot(world, pixel).x;
+}
+
+// The same, and with it how much the point stands in a slot: open to the
+// sky straight above and shut in at the sides, as the foot of a street
+// between tall buildings is, and the floor under a forest is not. Sunlight
+// comes down a slot and is thrown about between its sides, so what stands
+// in one is lit by its sides where it cannot see the sky.
+fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec2<f32> {
     if view.shadows.x < 0.5 {
-        return 1.0;
+        return vec2<f32>(1.0, 0.0);
     }
     let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
     if inside < 0.04 {
-        return 1.0;
+        return vec2<f32>(1.0, 0.0);
     }
     let metres_a_pixel = view.shadow_reach[4].x;
     let depth_metres = view.shadow_reach[4].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     let turn = scattered(pixel + view.shadows.w * vec2<f32>(1.618034, 4.236068)) * 6.2831853;
     var open = 0.0;
+    // The same looks again, the nearest counting most: how open it is
+    // straight above.
+    var overhead = 0.0;
+    var counted = 0.0;
     for (var look = 0; look < CANOPY_LOOKS; look++) {
         // From straight up out to nine metres away.
         let beside = on_disc(look, CANOPY_LOOKS, turn) * 9.0;
@@ -1043,11 +1065,20 @@ fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
         let over = (above.z - held) * depth_metres;
         // Cover counts if it is higher than it is far off: a bush beside
         // the point hides little sky, a crown over it hides a lot.
-        open += 1.0 - smoothstep(0.6, 2.2, over - 0.45 * length(beside));
+        let far = length(beside);
+        let clear = 1.0 - smoothstep(0.6, 2.2, over - 0.45 * far);
+        open += clear;
+        let near = 1.0 - far / 9.0;
+        overhead += clear * near;
+        counted += near;
     }
     let seen = open / f32(CANOPY_LOOKS);
+    let edge = clamp((inside - 0.04) / 0.08, 0.0, 1.0);
     // Light still finds its way in under the thickest cover.
-    return mix(1.0, 0.22 + 0.78 * seen, clamp((inside - 0.04) / 0.08, 0.0, 1.0));
+    return vec2<f32>(
+        mix(1.0, 0.22 + 0.78 * seen, edge),
+        (overhead / max(counted, 0.0001)) * (1.0 - seen) * edge,
+    );
 }
 
 // How far from the eye tracks in the snow are drawn, in metres, how far
@@ -1145,7 +1176,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
         * shade.x
         * light_through_water(corner.world);
-    let open = open_sky(corner.world, corner.position.xy);
+    let sky = sky_and_slot(corner.world, corner.position.xy);
+    let open = sky.x;
     let sky_seen = open * shade.y;
     if has(NORMAL) {
         let sample = textureSampleBias(
@@ -1284,7 +1316,12 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
             emissive_texture, emissive_sampler, placed(EMISSIVE, corner), view.eye.w,
         ).rgb;
     }
-    return from_sun + from_behind + from_around * sky_seen + glow;
+    // In a slot between tall things the sides are lit by the sun and light
+    // what stands in their shade: about a third of what falls on a wall of
+    // brick or a road comes back off it. Less comes down the lower the sun.
+    let from_sides = matte / PI * view.sun.rgb * shade.x
+        * (SIDES_GIVE_BACK * sky.y * sqrt(max(view.towards_sun.y, 0.0)));
+    return from_sun + from_behind + from_around * sky_seen + from_sides + glow;
 }
 
 // How far the pixel moved since the last frame.
@@ -1661,3 +1698,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include water.wgsl
 //!include particles.wgsl
 //!include weather.wgsl
+//!include fluid.wgsl

@@ -347,7 +347,9 @@ fn mistakes_with_the_player_say_what_to_write() {
     assert_eq!(
         spawn_error("print(game.player.health)"),
         "game.player.health does not exist. It has: name, position, weapon, ammo, reserve, \
-         and the functions game.player:giveWeapon, game.player:takeWeapon."
+         velocity, eye, aim, grounded, movement, flySpeed, and the functions \
+         game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
+         game.player:setMovement, game.player:setFlySpeed."
     );
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),
@@ -369,7 +371,8 @@ fn mistakes_with_the_player_say_what_to_write() {
     assert_eq!(
         spawn_error("game.player.position = vector.create(0, 0, 0)"),
         "game.player.position cannot be set. The engine moves characters: the player by \
-         what they press. A script cannot put one somewhere yet."
+         what they press. To put the player somewhere, write: \
+         game.player:teleport(vector.create(0, 2, 0))"
     );
     assert_eq!(
         spawn_error("game.player = nil"),

@@ -58,6 +58,8 @@ pub(crate) struct Action {
     /// What the action's direction and mouse movement are multiplied by:
     /// sideways, then up and down.
     pub(crate) sensitivity: [f32; 2],
+    /// Whether a game added the action for itself: it is live in every set.
+    pub(crate) own: bool,
 }
 
 /// Named actions and the keys, buttons and sticks that drive them.
@@ -228,7 +230,10 @@ impl ActionMap {
     /// left bumper and Select are left for a game's own actions.
     ///
     /// A second set, `"menu"`, holds the actions menus are worked with. The
-    /// mouse points in it, and a click needs no action. `pause` opens the
+    /// mouse points in it. `menu_click` is a click on a script's menu, and a
+    /// button held down to drag a slider; the right trigger is its gamepad
+    /// twin, though a gamepad has no pointer, so it only matters where a
+    /// script treats it so. `pause` opens the
     /// engine's own pause menu, which makes this set live; a game with its
     /// own menus switches to it with `Frame::use_action_set`.
     ///
@@ -236,6 +241,7 @@ impl ActionMap {
     /// | --- | --- | --- |
     /// | `menu_move` | arrow keys or WASD | d-pad or left stick |
     /// | `menu_confirm` | Enter or Space | south button |
+    /// | `menu_click` | left mouse button | right trigger |
     /// | `menu_back` | Escape | east button |
     /// | `menu_previous_tab` | Q | left bumper |
     /// | `menu_next_tab` | E | right bumper |
@@ -292,6 +298,7 @@ impl ActionMap {
         let _ = map.add_set("menu", MouseMode::Pointer);
         let _ = map.axis2d("menu_move", ["ArrowKeys", "WASD", "Dpad", "LeftStick"]);
         let _ = map.button("menu_confirm", ["Enter", "Space", "GamepadSouth"]);
+        let _ = map.button("menu_click", ["MouseLeft", "RightTrigger"]);
         for (name, bindings) in MENU_BUTTONS {
             let _ = map.button(name, bindings);
         }
@@ -314,7 +321,39 @@ impl ActionMap {
     where
         I: IntoIterator<Item: AsRef<str>>,
     {
-        self.add_named(name, ActionKind::Button, bindings)
+        self.add_named(name, ActionKind::Button, bindings, false)
+    }
+
+    /// Adds a button action a game makes for itself, such as a key that
+    /// opens its own menu.
+    ///
+    /// It is checked exactly like [`button`](Self::button). What differs is
+    /// that it is live whichever action set is live, so the key that opens a
+    /// menu also closes it. It belongs to [`GAMEPLAY`](Self::GAMEPLAY) for
+    /// [`set_of`](Self::set_of), and the bindings file keeps it in a table of
+    /// its own, `[game_bindings]`, so that a player's changes to it stay with
+    /// the game that made it.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the name is taken or empty, or if a binding is misspelled or is
+    /// not a button.
+    pub fn own_button<I>(&mut self, name: &str, bindings: I) -> Result<ActionId, MapError>
+    where
+        I: IntoIterator<Item: AsRef<str>>,
+    {
+        let before = self.adding_to;
+        self.adding_to = Self::GAMEPLAY;
+        let made = self.add_named(name, ActionKind::Button, bindings, true);
+        self.adding_to = before;
+        made
+    }
+
+    /// Whether a game added the action for itself with
+    /// [`own_button`](Self::own_button). False for an id from a different map.
+    #[must_use]
+    pub fn is_own(&self, action: ActionId) -> bool {
+        self.actions.get(action.0).is_some_and(|a| a.own)
     }
 
     /// Adds a 1D axis action, a number from -1 to 1, such as lean.
@@ -331,7 +370,7 @@ impl ActionMap {
     where
         I: IntoIterator<Item: AsRef<str>>,
     {
-        self.add_named(name, ActionKind::Axis1D, bindings)
+        self.add_named(name, ActionKind::Axis1D, bindings, false)
     }
 
     /// Adds a 2D axis action, a direction, such as move or look.
@@ -348,7 +387,7 @@ impl ActionMap {
     where
         I: IntoIterator<Item: AsRef<str>>,
     {
-        self.add_named(name, ActionKind::Axis2D, bindings)
+        self.add_named(name, ActionKind::Axis2D, bindings, false)
     }
 
     /// Parses binding names, then adds the action.
@@ -357,6 +396,7 @@ impl ActionMap {
         name: &str,
         kind: ActionKind,
         bindings: I,
+        own: bool,
     ) -> Result<ActionId, MapError>
     where
         I: IntoIterator<Item: AsRef<str>>,
@@ -374,7 +414,7 @@ impl ActionMap {
                 }
             }
         }
-        self.finish_action(name, kind, start)
+        self.finish_action(name, kind, start, own)
     }
 
     /// Adds an action from already-built [`Binding`] values.
@@ -396,7 +436,7 @@ impl ActionMap {
     {
         let start = self.bindings.len();
         self.bindings.extend(bindings);
-        self.finish_action(name, kind, start)
+        self.finish_action(name, kind, start, false)
     }
 
     /// Validates the action whose bindings start at `start`, and records it.
@@ -407,6 +447,7 @@ impl ActionMap {
         name: &str,
         kind: ActionKind,
         start: usize,
+        own: bool,
     ) -> Result<ActionId, MapError> {
         let problem = if name.trim().is_empty() {
             Some(MapError::EmptyName)
@@ -435,6 +476,7 @@ impl ActionMap {
             bindings: start..self.bindings.len(),
             stick_curve: 1.0,
             sensitivity: [1.0, 1.0],
+            own,
         });
         Ok(ActionId(self.actions.len() - 1))
     }
@@ -587,7 +629,9 @@ impl ActionMap {
 
     /// Lists every key, button or stick that two different actions in the
     /// same set both use. Actions in different sets are never live together,
-    /// so they share inputs freely.
+    /// so they share inputs freely. The exception is an action a game made
+    /// for itself with [`own_button`](Self::own_button): it is live in every
+    /// set, so it is checked against all of them.
     ///
     /// Sharing is allowed, and sometimes wanted, so this never stops anything:
     /// each [`Conflict`] prints as a sentence to show the player. An empty
@@ -597,7 +641,7 @@ impl ActionMap {
         let mut found: Vec<Conflict> = Vec::new();
         for (index, first) in self.actions.iter().enumerate() {
             for second in &self.actions[index + 1..] {
-                if second.set != first.set {
+                if second.set != first.set && !first.own && !second.own {
                     continue;
                 }
                 for ours in &self.bindings[first.bindings.clone()] {
@@ -953,7 +997,7 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::standard();
-        assert_eq!(map.len(), 22);
+        assert_eq!(map.len(), 23);
         // No scores are kept, so nothing shows them; Select is free for a
         // game to use.
         assert!(map.action("scoreboard").is_err());
@@ -1227,6 +1271,7 @@ mod tests {
             [
                 "menu_move",
                 "menu_confirm",
+                "menu_click",
                 "menu_back",
                 "menu_previous_tab",
                 "menu_next_tab",
@@ -1299,5 +1344,28 @@ mod tests {
             (&*conflicts[0].first, &*conflicts[0].second),
             ("back", "close")
         );
+    }
+
+    #[test]
+    fn an_own_button_is_in_gameplay_and_clashes_with_every_set() {
+        let mut map = ActionMap::standard();
+        let menu_key = map.own_button("weather menu", ["F1", "DpadUp"]).unwrap();
+        assert!(map.is_own(menu_key));
+        assert!(!map.is_own(map.action("jump").unwrap()));
+        assert_eq!(map.set_of(menu_key), Some(ActionMap::GAMEPLAY));
+        assert!(map.own_button("weather menu", ["F2"]).is_err());
+        assert!(map.own_button("bad", ["Nonsense"]).is_err());
+
+        // Up on the d-pad is `map` in gameplay and `menu_move` in the menu.
+        let said: Vec<String> = map.conflicts().iter().map(ToString::to_string).collect();
+        assert_eq!(map.conflicts().len(), 2, "{said:?}");
+        assert!(
+            said.iter()
+                .any(|c| c.contains("weather menu") && c.contains("map"))
+        );
+        assert!(said.iter().any(|c| c.contains("menu_move")));
+        // What the map made for itself is still the standard's own, and
+        // later actions still join gameplay.
+        assert!(!map.is_own(map.action("menu_click").unwrap()));
     }
 }

@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use parry3d::shape::Capsule;
 
 use crate::level::{Level, Vector};
-use crate::settings::{MoveInput, MoveSettings, positive};
+use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
 use crate::slide::{SKIN, Slid, slide, unstick};
 
 /// How far below the feet counts as standing on something when landing.
@@ -261,6 +261,10 @@ impl Player {
             return;
         }
         let input = input.cleaned();
+        if input.mode != MoveMode::Walk {
+            self.fly(level, settings, &input, dt);
+            return;
+        }
         let before = *self;
 
         // Whether they stand on ice, which is slippery.
@@ -268,10 +272,11 @@ impl Player {
             && level
                 .ice_around(feet.to_array())
                 .is_some_and(|ice| (feet.y - ice).abs() <= 2.0 * ICE_REACH);
+        let footing = input.footing.cleaned();
         let (grip, push_off) = if on_ice {
-            (ICE_GRIP, ICE_PUSH)
+            (ICE_GRIP * footing.grip, ICE_PUSH * footing.grip)
         } else {
-            (1.0, 1.0)
+            (footing.grip, footing.grip)
         };
 
         // The water the player is in, and whether it carries them.
@@ -324,8 +329,9 @@ impl Player {
             self.grounded = false;
         }
 
-        if input.jump && !self.jump_held && self.grounded && !self.crouched {
-            velocity.y = settings.jump_speed();
+        if input.jump && !self.jump_held && self.grounded && !self.crouched && footing.jump() > 0.0
+        {
+            velocity.y = settings.jump_speed() * footing.jump();
             self.grounded = false;
         }
         self.jump_held = input.jump;
@@ -352,7 +358,7 @@ impl Player {
         // Water round the legs slows a walker, more the deeper it is.
         let waded = (depth / floats.depth).min(1.0);
         let top_speed = top_speed * (1.0 - WADING_DRAG * waded * waded);
-        let wish_speed = top_speed * push;
+        let wish_speed = top_speed * push * footing.top_speed();
 
         let mut ground = Vector::from_array(self.ground_normal);
         if self.hoist > 0.0 {
@@ -403,6 +409,9 @@ impl Player {
                 settings.ground_acceleration * push_off,
                 dt,
             );
+            if push == 0.0 {
+                velocity = footing.held(velocity, dt);
+            }
 
             // Follow the ground's tilt at full speed, up ramps and down:
             // same compass heading, tipped to lie along the surface.
@@ -527,6 +536,7 @@ impl Player {
             let part = wet(middle.y - body.to_feet);
             velocity = water.flow + posture.slowed(velocity - water.flow, part, dt / 2.0);
             velocity += pushed(part) * (dt / 2.0);
+            let falling = velocity.y;
             let moved = slide(level, &body.shape, middle, velocity, dt, body.steep, false);
             middle = moved.position;
             velocity = moved.velocity;
@@ -547,6 +557,10 @@ impl Player {
                 velocity.y = 0.0;
                 ground = found.normal;
                 self.grounded = true;
+                if !self.swimming && footing.rebound(-falling) > 0.0 {
+                    velocity.y = footing.rebound(-falling);
+                    self.grounded = false;
+                }
             }
         }
 

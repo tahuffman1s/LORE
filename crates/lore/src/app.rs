@@ -27,6 +27,12 @@ use crate::translate;
 /// standing player's, in metres.
 const STANDING_EYE: f32 = 1.6;
 
+/// How tall the screen is in the HUD's own units, whatever its size in pixels.
+const HUD_HEIGHT: f32 = 1080.0;
+
+/// The smallest and largest size a `Ui` lays the HUD out at.
+const UI_SCALES: (f32, f32) = (0.75, 1.5);
+
 /// A view that moves further than this in one frame, in metres, has jumped
 /// rather than moved. Falling at terminal speed at 20 frames a second is
 /// under 3 m a frame.
@@ -317,7 +323,10 @@ fn start(
         look,
         rumble_share: config.settings.rumble_share(),
         controls,
-        new_controls: None,
+        // The game is told the controls once, so the first label it draws
+        // is right: with no bindings file they are the config's own.
+        new_controls: Some(config.actions.clone()),
+        ui_scale: config.settings.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1),
         pointer: None,
         pointer_down: false,
         pointer_tapped: false,
@@ -336,6 +345,7 @@ fn start(
         last_frame: Instant::now(),
         last_view: None,
         ui: lore_ui::DrawBuffer::default(),
+        fluid_drops: Vec::new(),
         unseen: InputFrame::default(),
         sound,
         #[cfg(feature = "editor")]
@@ -364,6 +374,9 @@ struct App<G> {
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
     new_controls: Option<ActionMap>,
+    /// The size the player chose for the HUD, for turning the pointer's
+    /// pixels into HUD units.
+    ui_scale: f32,
     /// Where the mouse pointer is over the window, in pixels from its
     /// top-left corner.
     pointer: Option<[f32; 2]>,
@@ -400,6 +413,9 @@ struct App<G> {
     /// The HUD and menus the game asked for this frame. Kept from frame to
     /// frame so that gathering them stops asking for memory.
     ui: lore_ui::DrawBuffer,
+    /// The fluid's drops the game asked for this frame. Kept from frame to
+    /// frame for the same reason.
+    fluid_drops: Vec<lore_render::FluidDrop>,
     /// What the player did that no tick has seen yet, read again for every
     /// frame. Kept from frame to frame for the same reason.
     unseen: InputFrame,
@@ -561,6 +577,8 @@ impl<G: Game> App<G> {
             // A menu scrolls by parts of a notch too, so a touchpad is smooth.
             self.wheel =
                 (self.wheel + notches).clamp(-MOST_NOTCHES_PER_EVENT, MOST_NOTCHES_PER_EVENT);
+            // A script reads the wheel over the free pointer as well.
+            self.input.roll_wheel(notches);
         }
         self.scroll += notches;
         // A faulty device can report absurd distances. Without a limit, a
@@ -628,6 +646,30 @@ impl<G: Game> App<G> {
         log::info!("Your controls were saved, so they were read again and are in use.");
     }
 
+    /// Tells the input where the free pointer is, in the HUD's own units,
+    /// so what a tick reads of it matches what is drawn: the same scale as
+    /// the HUD is laid out with. A captured mouse points at nothing.
+    fn point_input(&mut self) {
+        let Some(window) = &self.window else {
+            self.input.set_pointer(None, [0.0, 0.0]);
+            return;
+        };
+        let size = window.inner_size();
+        #[allow(clippy::cast_precision_loss)]
+        let (width, height) = (size.width as f32, size.height.max(1) as f32);
+        let scale = height / HUD_HEIGHT * self.ui_scale;
+        if !(scale.is_finite() && scale > 0.0) {
+            self.input.set_pointer(None, [0.0, 0.0]);
+            return;
+        }
+        let at = if self.captured {
+            None
+        } else {
+            self.pointer.map(|[x, y]| [x / scale, y / scale])
+        };
+        self.input.set_pointer(at, [width / scale, height / scale]);
+    }
+
     /// Runs the ticks that are due and lets the game prepare the next frame.
     /// Returns whether the game asked to end.
     fn update(&mut self) -> bool {
@@ -638,6 +680,7 @@ impl<G: Game> App<G> {
         self.follow_controls();
 
         self.gamepads.poll(&mut self.input, self.focused);
+        self.point_input();
         let step = self.clock.step().as_secs_f32();
         let due = tick::run_due(
             &mut self.clock,
@@ -668,6 +711,7 @@ impl<G: Game> App<G> {
         let mut frame = Frame::new(self.clock.alpha())
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
+            .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
@@ -723,7 +767,18 @@ impl<G: Game> App<G> {
         let (water_rise, sky_clock) = frame.take_water();
         let storm_bolts = frame.take_storm_bolts();
         let weather = frame.take_weather();
+        let fluid = frame.take_fluid();
         if let Some(renderer) = &mut self.renderer {
+            // The looks first, so that new drops are never drawn in an old one.
+            if let Some(looks) = &fluid.looks {
+                renderer.set_fluid_looks(looks);
+            }
+            if let Some(look) = fluid.water_look {
+                renderer.set_water_look(look);
+            }
+            if fluid.said {
+                renderer.set_fluid(&fluid.drops);
+            }
             for splash in splashes {
                 renderer.splash(splash);
             }
@@ -758,12 +813,23 @@ impl<G: Game> App<G> {
                 renderer.set_storm_bolts(own);
             }
         }
+        self.fluid_drops = fluid.drops;
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);
         }
         if let Some(under) = frame.under_water() {
             self.sound.set_underwater(if under { 1.0 } else { 0.0 });
+        }
+        // The size the HUD was just laid out at: a `Ui` keeps its size
+        // between these, so the pointer's units are the same.
+        self.ui_scale = if frame.ui_scale().is_finite() {
+            frame.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1)
+        } else {
+            1.0
+        };
+        if let Some(speed) = frame.time_speed() {
+            self.clock.set_speed(speed);
         }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);

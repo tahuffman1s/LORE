@@ -1438,6 +1438,7 @@ dependencies = [
  "log",
  "lore-assets",
  "lore-audio",
+ "lore-fluid",
  "lore-input",
  "lore-pack",
  "lore-physics",
@@ -1470,6 +1471,14 @@ dependencies = [
  "lewton",
  "log",
  "rtrb",
+]
+
+[[package]]
+name = "lore-fluid"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-physics",
 ]
 
 [[package]]
@@ -1522,7 +1531,9 @@ dependencies = [
 name = "lore-script"
 version = "0.0.0"
 dependencies = [
+ "libm",
  "log",
+ "lore-fluid",
  "lore-input",
  "lore-ui",
  "lore-weapons",

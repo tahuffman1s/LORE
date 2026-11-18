@@ -41,21 +41,25 @@ mod api;
 mod audio;
 mod character_api;
 mod error;
+mod fluid_api;
 mod host;
 mod hud;
 mod keep;
 mod limit;
 mod modules;
 mod time_api;
+mod tools_api;
 mod weapon_api;
 mod weather_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
 pub use character_api::CharacterId;
 pub use error::{OpenError, ScriptError};
+pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lore_weapons as weapons;
+pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 

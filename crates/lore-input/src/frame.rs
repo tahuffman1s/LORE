@@ -21,17 +21,41 @@ pub struct ActionState {
 ///
 /// This is plain data. The simulation reads it, and it is also what gets
 /// recorded for replays.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct InputFrame {
     /// Which tick this is. The first tick is 1; 0 means no tick has run yet.
     pub tick: u64,
+    /// Where the pointer is, from the top-left corner of the screen, right and
+    /// down, in whatever units the window layer reports (LORE's engine reports
+    /// HUD units: pixels on a screen 1080 high). `None` when there is no free
+    /// pointer: the mouse looks around, it is outside the window, or there is
+    /// no window.
+    pub pointer: Option<[f32; 2]>,
+    /// The size of the screen in the same units as `pointer`.
+    /// `[1920.0, 1080.0]` when nobody said.
+    pub screen: [f32; 2],
+    /// Notches the wheel rolled over the free pointer since the previous tick.
+    /// Above zero is away from the player. A touchpad gives parts of a notch.
+    pub wheel: f32,
     pub(crate) actions: Vec<ActionState>,
+}
+
+/// The screen size a frame reports until the window layer says otherwise.
+pub(crate) const DEFAULT_SCREEN: [f32; 2] = [1920.0, 1080.0];
+
+impl Default for InputFrame {
+    fn default() -> Self {
+        Self::idle(0)
+    }
 }
 
 impl Clone for InputFrame {
     fn clone(&self) -> Self {
         Self {
             tick: self.tick,
+            pointer: self.pointer,
+            screen: self.screen,
+            wheel: self.wheel,
             actions: self.actions.clone(),
         }
     }
@@ -40,6 +64,9 @@ impl Clone for InputFrame {
     /// refreshed every tick this way does not allocate.
     fn clone_from(&mut self, source: &Self) {
         self.tick = source.tick;
+        self.pointer = source.pointer;
+        self.screen = source.screen;
+        self.wheel = source.wheel;
         self.actions.clone_from(&source.actions);
     }
 }
@@ -49,6 +76,9 @@ impl InputFrame {
     pub(crate) fn idle(actions: usize) -> Self {
         Self {
             tick: 0,
+            pointer: None,
+            screen: DEFAULT_SCREEN,
+            wheel: 0.0,
             actions: vec![ActionState::default(); actions],
         }
     }

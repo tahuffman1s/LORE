@@ -12,6 +12,7 @@ use crate::buffer::Buffer;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
+use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
@@ -300,6 +301,26 @@ impl Headless {
         self.effects.set_rise(rise);
     }
 
+    /// Says how each kind of fluid looks, by its number: the first look is
+    /// kind 0. Up to 32; kinds not given look like clear water.
+    pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {
+        self.effects.fluid_mut().set_looks(looks);
+    }
+
+    /// Says which drops of fluid are drawn, from now on until said again.
+    /// Drops of one kind that touch are drawn as one surface. With none,
+    /// drawing fluid costs nothing.
+    pub fn set_fluid(&mut self, drops: &[FluidDrop]) {
+        self.effects.fluid_mut().set_drops(drops);
+    }
+
+    /// Says what every lake and creek of the level is drawn as: with
+    /// `Some`, that look in place of the level's own water colour, seen
+    /// from above and from under it alike; with `None`, as the level says.
+    pub fn set_water_look(&mut self, look: Option<FluidLook>) {
+        self.effects.fluid_mut().set_water(look);
+    }
+
     /// Says what time the sky's clock shows, in seconds: the game's own
     /// time, so that clouds, storms and rain are where the game's rules
     /// have them and a saved game finds the same sky. With `None`, which
@@ -395,6 +416,7 @@ impl Headless {
                     weather,
                     day: self.effects.day(),
                     tracks: self.effects.tracks(tracks),
+                    fluid: Some(self.effects.fluid()),
                 },
                 camera,
                 FRAME_SECONDS,
@@ -1171,6 +1193,303 @@ mod tests {
         headless.set_scene(&scene(None)).unwrap();
         let moved = wanders(&mut headless);
         assert!(moved < 0.01, "a stiff leaf moved {moved} pixels");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// What the fluid tests draw: a grey floor, and with `ceiling` a
+    /// solid sheet two metres over it; with `water` also a sheet of water
+    /// two metres deep over the floor (the floor is then at -2).
+    fn fluid_scene(ceiling: bool, water: bool) -> Scene {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        let square = |height: f32, material: u32| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * 500.0, height, z * 500.0])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let placed = |mesh: u32, extras: Option<&str>| Instance {
+            mesh,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: extras.map(str::to_owned),
+        };
+        let mut scene = Scene::default();
+        // A grey floor, so that milk, which is no brighter than white, can
+        // be seen to be lighter than it.
+        scene.materials.push(Material {
+            base_color: [0.25, 0.25, 0.25, 1.0],
+            ..Material::default()
+        });
+        scene.materials.push(Material {
+            base_color: [0.02, 0.07, 0.08, 1.0],
+            ..Material::default()
+        });
+        scene.meshes.push(square(if water { -2.0 } else { 0.0 }, 0));
+        scene.instances.push(placed(0, None));
+        if ceiling {
+            scene.meshes.push(square(2.0, 0));
+            scene.instances.push(placed(1, None));
+        }
+        if water {
+            scene.meshes.push(square(0.0, 1));
+            let mesh = scene.meshes.len() as u32 - 1;
+            scene
+                .instances
+                .push(placed(mesh, Some(r#"{"water": true}"#)));
+        }
+        scene
+    }
+
+    /// Four metres up, looking straight down.
+    fn looking_down() -> Camera {
+        Camera {
+            position: [0.0, 4.0, 0.0],
+            pitch: -1.5,
+            ..Camera::default()
+        }
+    }
+
+    /// A round puddle about a metre and a half across, lying on the floor
+    /// under the camera, of drops of `kind`.
+    fn puddle(kind: u8) -> Vec<FluidDrop> {
+        let mut drops = Vec::new();
+        for x in -3..=3 {
+            for z in -3..=3 {
+                let place = [x as f32 * 0.25, 0.0, z as f32 * 0.25];
+                if place[0].hypot(place[2]) < 0.8 {
+                    drops.push(FluidDrop {
+                        place,
+                        radius: 0.4,
+                        facing: [0.0, 1.0, 0.0],
+                        flat: 1.0,
+                        long: 1.0,
+                        thick: 0.05,
+                        kind,
+                    });
+                }
+            }
+        }
+        drops
+    }
+
+    fn milk() -> FluidLook {
+        FluidLook {
+            absorbs: [0.1; 3],
+            scatters: [40.0; 3],
+            roughness: 0.4,
+            ..FluidLook::default()
+        }
+    }
+
+    fn tar() -> FluidLook {
+        FluidLook {
+            absorbs: [500.0; 3],
+            scatters: [0.0; 3],
+            roughness: 0.3,
+            ..FluidLook::default()
+        }
+    }
+
+    /// The brightness of the pixel at `x`, `y` of a 128 by 72 picture.
+    fn fluid_light(picture: &[u8], [x, y]: [usize; 2]) -> i32 {
+        let at = (y * 128 + x) * 4;
+        i32::from(picture[at]) + i32::from(picture[at + 1]) + i32::from(picture[at + 2])
+    }
+
+    #[test]
+    fn no_fluid_changes_nothing_even_after_some_was_drawn_and_cleared() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let never = headless.screenshot(&camera).unwrap();
+        headless.set_fluid(&[]);
+        assert!(headless.screenshot(&camera).unwrap() == never);
+        headless.set_fluid(&puddle(0));
+        let drawn = headless.screenshot(&camera).unwrap();
+        assert!(drawn != never, "the puddle is not drawn at all");
+        headless.set_fluid(&[]);
+        assert!(headless.screenshot(&camera).unwrap() == never);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_puddle_changes_the_pixels_where_it_lies_and_no_others() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        headless.set_fluid(&puddle(0));
+        let wet = headless.screenshot(&camera).unwrap();
+        let differ = |[x, y]: [usize; 2]| fluid_light(&bare, [x, y]) != fluid_light(&wet, [x, y]);
+        assert!(differ([64, 36]), "nothing changed under the puddle");
+        for corner in [[2, 2], [125, 2], [2, 69], [125, 69], [4, 36], [123, 36]] {
+            assert!(!differ(corner), "{corner:?} changed, far from the puddle");
+        }
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_puddle_behind_a_solid_sheet_is_not_seen() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(true, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        headless.set_fluid(&puddle(0));
+        assert!(headless.screenshot(&camera).unwrap() == bare);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn milk_is_lighter_than_the_floor_and_tar_is_darker() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = fluid_light(&headless.screenshot(&camera).unwrap(), [64, 36]);
+        headless.set_fluid_looks(&[milk(), tar()]);
+        headless.set_fluid(&puddle(0));
+        let white = fluid_light(&headless.screenshot(&camera).unwrap(), [64, 36]);
+        headless.set_fluid(&puddle(1));
+        let black = fluid_light(&headless.screenshot(&camera).unwrap(), [64, 36]);
+        assert!(
+            black < bare && bare < white,
+            "tar {black}, floor {bare}, milk {white}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// A lying drop of tar of `radius` metres at `x` on the floor.
+    fn lying_at(x: f32, radius: f32) -> FluidDrop {
+        FluidDrop {
+            place: [x, 0.0, 0.0],
+            radius,
+            facing: [0.0, 1.0, 0.0],
+            flat: 1.0,
+            long: 1.0,
+            thick: 0.004,
+            kind: 0,
+        }
+    }
+
+    #[test]
+    fn lying_drops_near_each_other_melt_into_one_film_and_far_ones_do_not() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        // Two drops 1.6 radii apart: the ground between them is covered.
+        headless.set_fluid(&[lying_at(-0.24, 0.3), lying_at(0.24, 0.3)]);
+        let near = headless.screenshot(&camera).unwrap();
+        assert!(
+            fluid_light(&near, [64, 36]) < fluid_light(&bare, [64, 36]),
+            "the film does not join two drops close together"
+        );
+        // Six radii apart: each is its own drop, and the floor between is
+        // dry.
+        headless.set_fluid(&[lying_at(-0.9, 0.3), lying_at(0.9, 0.3)]);
+        let far = headless.screenshot(&camera).unwrap();
+        assert_eq!(fluid_light(&far, [64, 36]), fluid_light(&bare, [64, 36]));
+        assert!(far != bare, "the drops far apart are not drawn");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_stream_thinner_than_a_pixel_is_still_seen() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        // Two millimetres across, two metres under the eye, where a pixel
+        // is centimetres wide.
+        let stream: Vec<FluidDrop> = (-40..=40)
+            .map(|step| FluidDrop {
+                place: [step as f32 * 0.002, 2.0, 0.0],
+                radius: 0.001,
+                facing: [1.0, 0.0, 0.0],
+                flat: 0.0,
+                long: 2.0,
+                thick: 0.0,
+                kind: 0,
+            })
+            .collect();
+        headless.set_fluid(&stream);
+        let seen = headless.screenshot(&camera).unwrap();
+        assert!(seen != bare, "a hair-thin stream vanishes");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn no_water_look_is_the_same_as_never_having_set_one() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, true)).unwrap();
+        let camera = looking_down();
+        let never = headless.screenshot(&camera).unwrap();
+        headless.set_water_look(Some(tar()));
+        let black = headless.screenshot(&camera).unwrap();
+        assert!(black != never, "the water look changed nothing");
+        headless.set_water_look(None);
+        assert!(headless.screenshot(&camera).unwrap() == never);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn the_same_drops_are_drawn_the_same_every_time() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        headless.set_fluid_looks(&[milk()]);
+        headless.set_fluid(&puddle(0));
+        let first = headless.screenshot(&camera).unwrap();
+        assert!(headless.screenshot(&camera).unwrap() == first);
+        headless.set_fluid(&puddle(0));
+        assert!(headless.screenshot(&camera).unwrap() == first);
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

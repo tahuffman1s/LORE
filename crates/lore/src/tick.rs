@@ -18,6 +18,15 @@ const LONGEST_FRAME: Duration = Duration::from_millis(250);
 /// make every frame slower than the last.
 const MOST_TICKS_PER_FRAME: u32 = 5;
 
+/// The fastest game time may run, as many seconds as pass in one real second.
+const MOST_SPEED: f32 = 8.0;
+
+/// `time` made `scale` times as long, without a panic for a length too
+/// big to hold.
+fn scaled(time: Duration, scale: f64) -> Duration {
+    Duration::try_from_secs_f64(time.as_secs_f64() * scale).unwrap_or(Duration::MAX)
+}
+
 /// How long after saying that ticks were skipped nothing more is said about
 /// it. A game too slow for its tick rate skips ticks on every frame, and one
 /// line now and then says as much as a line a frame.
@@ -28,10 +37,12 @@ const QUIET_AFTER_HITCH: Duration = Duration::from_secs(5);
 /// The simulation always advances in steps of the same length, which keeps it
 /// deterministic. Frames arrive at uneven intervals, so the clock banks the
 /// elapsed time and pays it out in whole ticks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TickClock {
     step: Duration,
     banked: Duration,
+    /// How many seconds of game time pass in a second of real time.
+    speed: f32,
 }
 
 /// What [`TickClock::advance_counting`] decided for one pass of the loop.
@@ -50,7 +61,30 @@ impl TickClock {
         Self {
             step: Duration::from_secs(1) / rate.max(1),
             banked: Duration::ZERO,
+            speed: 1.0,
         }
+    }
+
+    /// Sets how fast game time runs: 1 is real time, 0.25 runs a quarter
+    /// of the ticks and 4 runs four times as many. A speed that is not a
+    /// number is taken as 1, and one outside 0 to 8 is brought into it.
+    /// Ticks themselves stay the same length; only how many run changes.
+    ///
+    /// At 0 the clock still runs ticks at the usual rate: the game's
+    /// script hears the player in them, and holds the world still itself.
+    pub(crate) fn set_speed(&mut self, speed: f32) {
+        self.speed = if speed.is_finite() {
+            speed.clamp(0.0, MOST_SPEED)
+        } else {
+            1.0
+        };
+    }
+
+    /// How fast game time runs, as [`set_speed`](Self::set_speed) says.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn speed(&self) -> f32 {
+        self.speed
     }
 
     /// The length of one tick.
@@ -68,18 +102,33 @@ impl TickClock {
     /// given up because the caller was too far behind to catch up.
     pub(crate) fn advance_counting(&mut self, elapsed: Duration) -> Due {
         let step = self.step.as_nanos().max(1);
+        // Game time is what is banked: a fast game owes more of it for the
+        // same real time, and a still one (speed 0) keeps its ticks coming.
+        let pace = if self.speed == 0.0 { 1.0 } else { self.speed };
+        let (elapsed, counted) = if pace == 1.0 {
+            (elapsed, elapsed.min(LONGEST_FRAME))
+        } else {
+            let scale = f64::from(pace);
+            (
+                scaled(elapsed, scale),
+                scaled(elapsed.min(LONGEST_FRAME), scale),
+            )
+        };
         // What would be due if nothing were ever given up.
         let owed = self.banked.saturating_add(elapsed).as_nanos() / step;
-        self.banked += elapsed.min(LONGEST_FRAME);
+        self.banked += counted;
+        // A fast game may run more ticks in a frame before it is too far
+        // behind: 5 at ordinary speed, and more as it goes faster.
+        let most = self.most_ticks();
         let ticks = match u32::try_from(self.banked.as_nanos() / step) {
-            Ok(ticks) if ticks <= MOST_TICKS_PER_FRAME => {
+            Ok(ticks) if ticks <= most => {
                 self.banked -= self.step * ticks;
                 ticks
             }
             // Too far behind: run the limit and forget the rest.
             _ => {
                 self.banked = Duration::ZERO;
-                MOST_TICKS_PER_FRAME
+                most
             }
         };
         Due {
@@ -88,6 +137,16 @@ impl TickClock {
                 .unwrap_or(u64::MAX)
                 .saturating_sub(u64::from(ticks)),
         }
+    }
+
+    /// The most ticks one frame may run: [`MOST_TICKS_PER_FRAME`] at
+    /// ordinary speed, and five for every whole speed above it.
+    fn most_ticks(&self) -> u32 {
+        // The speed is between 0 and 8, so this is at most 40.
+        let scaled = (f64::from(self.speed) * f64::from(MOST_TICKS_PER_FRAME)).ceil();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let scaled = scaled as u32;
+        scaled.max(MOST_TICKS_PER_FRAME)
     }
 
     /// How far the present moment is between the last tick and the next, from 0 to 1.
@@ -255,6 +314,61 @@ mod tests {
                 skipped: 0
             }
         );
+    }
+
+    #[test]
+    fn a_slow_game_runs_fewer_ticks_and_a_fast_one_more() {
+        let mut slow = TickClock::new(60);
+        slow.set_speed(0.25);
+        let mut fast = TickClock::new(60);
+        fast.set_speed(4.0);
+        let frame = Duration::from_secs(1) / 100;
+        let (mut slow_ticks, mut fast_ticks) = (0, 0);
+        for _ in 0..1_000 {
+            slow_ticks += slow.advance(frame);
+            let due = fast.advance_counting(frame);
+            assert_eq!(
+                due.skipped, 0,
+                "a fast game is not behind at 100 frames a second"
+            );
+            fast_ticks += due.ticks;
+        }
+        // Ten seconds of real time at 60 ticks a second.
+        assert!((149..=150).contains(&slow_ticks), "{slow_ticks}");
+        assert!((2399..=2400).contains(&fast_ticks), "{fast_ticks}");
+    }
+
+    #[test]
+    fn a_fast_game_may_run_more_ticks_in_a_frame_before_it_gives_up() {
+        let mut clock = TickClock::new(60);
+        clock.set_speed(4.0);
+        // 100 ms at four times is 24 ticks, over the limit of 20: 20 run
+        // and the rest are given up.
+        let due = clock.advance_counting(100 * MS);
+        assert_eq!(due.ticks, 20);
+        assert_eq!(due.skipped, 4);
+        // At ordinary speed the limit is still 5.
+        clock.set_speed(1.0);
+        assert_eq!(clock.advance(Duration::from_secs(1)), MOST_TICKS_PER_FRAME);
+    }
+
+    #[test]
+    fn a_still_game_keeps_its_ticks_coming_at_the_usual_rate() {
+        let mut clock = TickClock::new(60);
+        clock.set_speed(0.0);
+        let mut ticks = 0;
+        for _ in 0..60 {
+            ticks += clock.advance(Duration::from_secs(1) / 60);
+        }
+        assert!((59..=60).contains(&ticks), "{ticks}");
+        assert_eq!(clock.speed(), 0.0);
+        // Nonsense is brought back to something that runs.
+        clock.set_speed(f32::NAN);
+        assert_eq!(clock.speed(), 1.0);
+        clock.set_speed(100.0);
+        assert_eq!(clock.speed(), 8.0);
+        clock.set_speed(-1.0);
+        assert_eq!(clock.speed(), 0.0);
     }
 
     #[test]

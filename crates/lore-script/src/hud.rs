@@ -23,19 +23,26 @@ use crate::api::{Shared, describe, fail};
 use crate::error::closest;
 
 /// Every function on `game.hud`.
-pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box"];
+pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph"];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
-pub(crate) const TEXT_FIELDS: &[&str] = &["text", "color", "visible", "right", "down"];
-pub(crate) const BAR_FIELDS: &[&str] = &["value", "color", "visible", "right", "down"];
-pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down"];
+pub(crate) const TEXT_FIELDS: &[&str] = &[
+    "text", "color", "visible", "right", "down", "hovered", "pressed",
+];
+pub(crate) const BAR_FIELDS: &[&str] = &[
+    "value", "color", "visible", "right", "down", "hovered", "pressed",
+];
+pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down", "hovered", "pressed"];
+pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered", "pressed"];
 #[cfg(test)]
-pub(crate) const PIECE_METHODS: &[&str] = &["remove"];
+pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
 
-/// The most pieces a HUD holds. Far more than a game shows at once:
-/// reaching it means pieces are being made over and over by mistake.
-const MAX_PIECES: usize = 256;
+/// The most pieces a HUD holds. Far more than a game shows at once, with
+/// room for a few menus of rows that are made once and hidden until they
+/// are opened: reaching it means pieces are being made over and over by
+/// mistake.
+const MAX_PIECES: usize = 1024;
 
 /// The most characters of a piece of text that are kept. Scripts write
 /// their own, so one can be any length.
@@ -51,6 +58,13 @@ const TALLEST_TEXT: f32 = 400.0;
 const TEXT_SIZE: f32 = 28.0;
 const BAR_SIZE: [f32; 2] = [300.0, 24.0];
 const BOX_SIZE: [f32; 2] = [100.0, 100.0];
+const GRAPH_SIZE: [f32; 2] = [240.0, 80.0];
+
+/// How many frames a graph shows when the script does not say, and the
+/// fewest and most it can.
+const GRAPH_FRAMES: u16 = 240;
+const GRAPH_FRAMES_FROM: u16 = 10;
+const GRAPH_FRAMES_TO: u16 = 1000;
 
 /// The places a piece can be pinned, as a script writes them.
 const PLACES: [(&str, Anchor); 9] = [
@@ -102,6 +116,14 @@ pub enum HudShape {
         /// The box's `[width, height]`.
         size: [f32; 2],
     },
+    /// A graph of the last frame times, drawn against lines at 60 and 30
+    /// frames a second. The engine fills it in itself.
+    Graph {
+        /// The graph's `[width, height]`.
+        size: [f32; 2],
+        /// How many of the newest frames it shows.
+        frames: u16,
+    },
 }
 
 /// One piece of the HUD a script made with `game.hud`.
@@ -126,6 +148,7 @@ enum Kind {
     Text,
     Bar,
     Box,
+    Graph,
 }
 
 impl Kind {
@@ -135,6 +158,7 @@ impl Kind {
             Self::Text => "game.hud.text",
             Self::Bar => "game.hud.bar",
             Self::Box => "game.hud.box",
+            Self::Graph => "game.hud.frameGraph",
         }
     }
 
@@ -145,6 +169,7 @@ impl Kind {
             Self::Text => "ammo",
             Self::Bar => "health",
             Self::Box => "dot",
+            Self::Graph => "graph",
         }
     }
 
@@ -154,6 +179,7 @@ impl Kind {
             Self::Text => "a HUD text",
             Self::Bar => "a HUD bar",
             Self::Box => "a HUD box",
+            Self::Graph => "a HUD graph",
         }
     }
 
@@ -162,6 +188,7 @@ impl Kind {
             Self::Text => TEXT_FIELDS,
             Self::Bar => BAR_FIELDS,
             Self::Box => BOX_FIELDS,
+            Self::Graph => GRAPH_FIELDS,
         }
     }
 
@@ -169,6 +196,7 @@ impl Kind {
         match self {
             Self::Text => &["at", "right", "down", "size", "color"],
             Self::Bar | Self::Box => &["at", "right", "down", "width", "height", "color"],
+            Self::Graph => &["at", "right", "down", "width", "height", "frames"],
         }
     }
 
@@ -180,6 +208,7 @@ impl Kind {
                 "local health = game.hud.bar(1, { at = \"bottom left\", color = \"red\" })"
             }
             Self::Box => "local dot = game.hud.box({ at = \"center\", width = 6, height = 6 })",
+            Self::Graph => "local graph = game.hud.frameGraph({ at = \"top right\" })",
         }
     }
 }
@@ -195,6 +224,53 @@ struct Entry {
     color: String,
     /// Whether it has changed since whoever draws it last looked.
     changed: bool,
+    /// What the rules last left of the piece, for finding where the pointer
+    /// is: `game.onDraw` changes what is shown but not what is hovered.
+    ruled: Ruled,
+}
+
+/// The parts of a piece that decide where it is hit, as the rules last
+/// left them, not as `game.onDraw` changed them for a picture.
+#[derive(Debug)]
+struct Ruled {
+    /// The words of a text, empty for any other piece.
+    text: String,
+    visible: bool,
+    offset: [f32; 2],
+}
+
+impl Ruled {
+    fn of(piece: &HudPiece) -> Self {
+        let mut ruled = Self {
+            text: String::new(),
+            visible: piece.visible,
+            offset: piece.offset,
+        };
+        ruled.copy(piece);
+        ruled
+    }
+
+    /// Takes over what `piece` is now.
+    fn copy(&mut self, piece: &HudPiece) {
+        self.visible = piece.visible;
+        self.offset = piece.offset;
+        if let HudShape::Text { text, .. } = &piece.shape
+            && self.text != *text
+        {
+            self.text.clear();
+            self.text.push_str(text);
+        }
+    }
+}
+
+impl Entry {
+    /// Notes the piece as the rules left it, unless a picture is being
+    /// drawn.
+    fn settle(&mut self, shared: &Shared) {
+        if !shared.clock.is_drawing() {
+            self.ruled.copy(&self.piece);
+        }
+    }
 }
 
 /// The HUD one version of a script has made.
@@ -206,6 +282,8 @@ pub(crate) struct HudState {
     layout: Cell<u32>,
     /// Whether any piece has changed since the last look.
     changed: Cell<bool>,
+    /// The piece the pointer is holding down, if any: its id.
+    pressed: Cell<Option<u64>>,
 }
 
 impl HudState {
@@ -251,6 +329,7 @@ impl HudState {
         self.next.set(id + 1);
         pieces.push(Entry {
             id,
+            ruled: Ruled::of(&piece),
             piece,
             color,
             changed: false,
@@ -264,6 +343,9 @@ impl HudState {
         let mut pieces = self.pieces.borrow_mut();
         if let Ok(place) = pieces.binary_search_by_key(&id, |entry| entry.id) {
             pieces.remove(place);
+            if self.pressed.get() == Some(id) {
+                self.pressed.set(None);
+            }
             self.bump_layout();
         }
     }
@@ -323,11 +405,11 @@ fn no_such_field(lua: &Lua, kind: Kind, key: &str) -> mlua::Error {
     let word = kind.word();
     let mut message = format!("{} has nothing called `{key}`.", capitalised(kind.name()));
     let fields = kind.fields();
-    match closest(key, fields.iter().copied().chain(["remove"])) {
-        Some("remove") => {
+    match closest(key, fields.iter().copied().chain(["remove", "pointerAt"])) {
+        Some(method @ ("remove" | "pointerAt")) => {
             let _ = write!(
                 message,
-                " Did you mean `remove`? Write it with a colon: {word}:remove()"
+                " Did you mean `{method}`? Write it with a colon: {word}:{method}()"
             );
         }
         Some(near) => {
@@ -336,7 +418,8 @@ fn no_such_field(lua: &Lua, kind: Kind, key: &str) -> mlua::Error {
         None => {
             let _ = write!(
                 message,
-                " It has: {}, and {word}:remove() takes it off the screen.",
+                " It has: {}, {word}:pointerAt() says where the pointer is across it, and \
+                 {word}:remove() takes it off the screen.",
                 fields.join(", ")
             );
             match (kind, key) {
@@ -390,6 +473,25 @@ impl UserData for PieceRef {
             hud_of(lua)?.hud.remove(piece.id);
             Ok(())
         });
+        methods.add_function("pointerAt", |lua, this: Value| {
+            let piece = match &this {
+                Value::UserData(this) => this.borrow::<Self>().ok().map(|this| *this),
+                _ => None,
+            };
+            let Some(piece) = piece else {
+                return Err(fail(
+                    lua,
+                    "pointerAt needs a colon, not a dot, because it acts on one piece of the \
+                     HUD. Write it like this: slider:pointerAt()",
+                ));
+            };
+            let shared = hud_of(lua)?;
+            let [x, y] = shared
+                .hud
+                .with(piece.id, |entry| (pointer_across(&shared, entry), false))
+                .ok_or_else(|| removed(lua, piece.kind))?;
+            Ok((f64::from(x), f64::from(y)))
+        });
         methods.add_meta_function(MetaMethod::ToString, |_, this: AnyUserData| {
             Ok(this.borrow::<Self>()?.kind.name())
         });
@@ -414,6 +516,12 @@ impl UserData for PieceRef {
                         ("visible", _) => Ok(Value::Boolean(entry.piece.visible)),
                         ("right", _) => Ok(Value::Number(f64::from(entry.piece.offset[0]))),
                         ("down", _) => Ok(Value::Number(f64::from(entry.piece.offset[1]))),
+                        ("hovered", _) => Ok(Value::Boolean(
+                            entry.ruled.visible && under_pointer(&shared, entry),
+                        )),
+                        ("pressed", _) => Ok(Value::Boolean(
+                            entry.ruled.visible && shared.hud.pressed.get() == Some(entry.id),
+                        )),
                         _ => Ok(Value::Nil),
                     };
                     (value, false)
@@ -437,6 +545,7 @@ impl UserData for PieceRef {
                                 // Kept in the memory the text already has.
                                 text.clear();
                                 text.push_str(&new);
+                                entry.settle(&shared);
                                 ((), true)
                             }
                             _ => ((), false),
@@ -456,7 +565,29 @@ impl UserData for PieceRef {
                             _ => ((), false),
                         })
                     }
-                    "color" => {
+                    "hovered" => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "{}'s `hovered` only says whether the pointer is over it, so \
+                                 it cannot be set. To act on it, write: if {word}.hovered then \
+                                 ... end",
+                                capitalised(kind.name())
+                            ),
+                        ));
+                    }
+                    "pressed" => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "{}'s `pressed` only says whether the pointer is holding it \
+                                 down, so it cannot be set. To act on it, write: if \
+                                 {word}.pressed then ... end",
+                                capitalised(kind.name())
+                            ),
+                        ));
+                    }
+                    "color" if kind != Kind::Graph => {
                         let (new, written) = color_of(
                             lua,
                             &format!("{}'s `color`", capitalised(kind.name())),
@@ -486,6 +617,7 @@ impl UserData for PieceRef {
                         shared.hud.with(id, |entry| {
                             let changed = entry.piece.visible != new;
                             entry.piece.visible = new;
+                            entry.settle(&shared);
                             ((), changed)
                         })
                     }
@@ -495,6 +627,7 @@ impl UserData for PieceRef {
                         shared.hud.with(id, |entry| {
                             let changed = entry.piece.offset[axis] != new;
                             entry.piece.offset[axis] = new;
+                            entry.settle(&shared);
                             ((), changed)
                         })
                     }
@@ -504,6 +637,71 @@ impl UserData for PieceRef {
             },
         );
     }
+}
+
+/// Where `entry` is on the screen as the last tick's input saw it, and as
+/// the rules last left it: `[x, y, width, height]` in pixels on a screen
+/// 1080 high.
+fn area(shared: &Shared, entry: &Entry) -> [f32; 4] {
+    let screen = shared.input.borrow().screen;
+    let piece = &entry.piece;
+    let size = match &piece.shape {
+        HudShape::Text { size, .. } => shared.tools.text_size(&entry.ruled.text, *size),
+        HudShape::Bar { size, .. } | HudShape::Box { size } | HudShape::Graph { size, .. } => *size,
+    };
+    lore_ui::hud_area(piece.anchor, entry.ruled.offset, size, screen)
+}
+
+/// Whether the pointer of the last tick is inside `entry`.
+fn under_pointer(shared: &Shared, entry: &Entry) -> bool {
+    let Some([px, py]) = shared.input.borrow().pointer else {
+        return false;
+    };
+    let [x, y, w, h] = area(shared, entry);
+    px >= x && px < x + w && py >= y && py < y + h
+}
+
+/// Which piece the pointer holds down as of this tick, kept for
+/// `piece.pressed`. A press begins on the tick `click` is first pressed with
+/// the pointer over a piece (the last made of those, as it is drawn on top)
+/// and lasts until `click` is let go, wherever the pointer goes. With no
+/// `click` action, nothing is ever pressed.
+pub(crate) fn update_pressed(shared: &Shared, click: Option<lore_input::ActionId>) {
+    let state = click.map(|action| shared.input.borrow().get(action));
+    let Some(state) = state.filter(|state| state.pressed) else {
+        shared.hud.pressed.set(None);
+        return;
+    };
+    if !state.just_pressed {
+        return;
+    }
+    let top = shared
+        .hud
+        .pieces
+        .borrow()
+        .iter()
+        .rev()
+        .find(|entry| entry.ruled.visible && under_pointer(shared, entry))
+        .map(|entry| entry.id);
+    shared.hud.pressed.set(top);
+}
+
+/// Where the pointer is across `entry`, from 0 at its left and top edge to
+/// 1 at its right and bottom edge, and past them outside. Both are 0 when
+/// there is no pointer.
+fn pointer_across(shared: &Shared, entry: &Entry) -> [f32; 2] {
+    let Some([px, py]) = shared.input.borrow().pointer else {
+        return [0.0, 0.0];
+    };
+    let [x, y, w, h] = area(shared, entry);
+    let fraction = |at: f32, from: f32, length: f32| {
+        if length > 0.0 {
+            (at - from) / length
+        } else {
+            0.0
+        }
+    };
+    [fraction(px, x, w), fraction(py, y, h)]
 }
 
 /// Text as it can be drawn on one line: line breaks, tabs and other
@@ -602,7 +800,7 @@ fn fraction(lua: &Lua, what: &str, value: &Value) -> mlua::Result<f32> {
 }
 
 /// A colour from its name or its hex code, with the text to read back.
-fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Color, String)> {
+pub(crate) fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Color, String)> {
     let Value::String(written) = value else {
         return Err(fail(
             lua,
@@ -725,6 +923,8 @@ struct Options {
     size: [f32; 2],
     color: Color,
     color_text: String,
+    /// How many frames a graph shows.
+    frames: u16,
 }
 
 /// Reads the table of options for a new piece of `kind`.
@@ -737,9 +937,11 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
             Kind::Text => [0.0, TEXT_SIZE],
             Kind::Bar => BAR_SIZE,
             Kind::Box => BOX_SIZE,
+            Kind::Graph => GRAPH_SIZE,
         },
         color: Color::WHITE,
         color_text: "white".to_owned(),
+        frames: GRAPH_FRAMES,
     };
     let options = match options {
         Value::Nil => return Ok(read),
@@ -817,7 +1019,31 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
                 }
                 read.size[usize::from(key == "height")] = side.min(FURTHEST);
             }
-            "color" => {
+            "frames" if kind == Kind::Graph => {
+                let wanted = number(
+                    "how many of the newest frames it shows, from 10 to 1000",
+                    "240",
+                )?;
+                if wanted.fract() != 0.0
+                    || !(f32::from(GRAPH_FRAMES_FROM)..=f32::from(GRAPH_FRAMES_TO))
+                        .contains(&wanted)
+                {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{function} needs a whole number from {GRAPH_FRAMES_FROM} to \
+                             {GRAPH_FRAMES_TO} for `frames`, but it was given {wanted}. Write \
+                             it like this: {{ frames = 240 }}"
+                        ),
+                    ));
+                }
+                // Whole and in range, so it fits.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    read.frames = wanted as u16;
+                }
+            }
+            "color" if kind != Kind::Graph => {
                 (read.color, read.color_text) =
                     color_of(lua, &format!("{function}'s `color`"), &value)?;
             }
@@ -862,6 +1088,7 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     hud.set("text", function(lua, shared, Kind::Text)?)?;
     hud.set("bar", function(lua, shared, Kind::Bar)?)?;
     hud.set("box", function(lua, shared, Kind::Box)?)?;
+    hud.set("frameGraph", function(lua, shared, Kind::Graph)?)?;
     Ok(hud)
 }
 
@@ -874,7 +1101,7 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
         let function = kind.function();
         let more_than_options = !second.is_nil() || !extra.is_nil();
         let (first, options) = match kind {
-            Kind::Box => (Value::Nil, first),
+            Kind::Box | Kind::Graph => (Value::Nil, first),
             // The options alone: the words or the number were left out.
             Kind::Text | Kind::Bar if matches!(first, Value::Table(_)) && second.is_nil() => {
                 let missing = match kind {
@@ -901,18 +1128,25 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 value: fraction(lua, function, &first)?,
                 size: [0.0; 2],
             },
-            Kind::Box => {
+            Kind::Box | Kind::Graph => {
                 if more_than_options {
                     return Err(fail(
                         lua,
                         format!(
-                            "game.hud.box takes only its options, in one table. Write it \
+                            "{function} takes only its options, in one table. Write it \
                              like this: {}",
                             kind.example()
                         ),
                     ));
                 }
-                HudShape::Box { size: [0.0; 2] }
+                if kind == Kind::Graph {
+                    HudShape::Graph {
+                        size: [0.0; 2],
+                        frames: GRAPH_FRAMES,
+                    }
+                } else {
+                    HudShape::Box { size: [0.0; 2] }
+                }
             }
         };
         let read = read_options(lua, kind, &options)?;
@@ -926,6 +1160,10 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 size: read.size,
             },
             HudShape::Box { .. } => HudShape::Box { size: read.size },
+            HudShape::Graph { .. } => HudShape::Graph {
+                size: read.size,
+                frames: read.frames,
+            },
         };
         let piece = HudPiece {
             shape,

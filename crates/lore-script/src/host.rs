@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use lore_input::{ActionMap, ActionSetId, InputFrame, Rumble};
+use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
 use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
@@ -20,11 +20,13 @@ use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
-use crate::hud::{HudPiece, HudState};
+use crate::fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder};
+use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
 use crate::time_api::Clock;
+use crate::tools_api::{Motion, Movement, Teleport, Tools};
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 use crate::weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 
@@ -131,7 +133,9 @@ pub struct ScriptHost {
     /// Where the game's scripts are read from.
     files: Rc<Files>,
     file: String,
-    actions: Rc<ActionMap>,
+    /// The actions the script reads by name, and the ones it made with
+    /// `game.input.bind`.
+    actions: Rc<RefCell<ActionMap>>,
     running: Option<Version>,
     /// Whether the `onStart` functions have been called.
     started: bool,
@@ -167,8 +171,14 @@ pub struct ScriptHost {
     live_set: Rc<LiveSet>,
     /// What the script said of the weather; it outlives a reload too.
     weather: Rc<crate::weather_api::Climate>,
+    /// The kinds of fluid the script made and what it asked of them; they
+    /// outlive a reload too.
+    fluids: Rc<crate::fluid_api::FluidState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
+    /// What the engine feeds the script about the screen, the frames and
+    /// the player, and what the script asks of the player.
+    tools: Rc<Tools>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -257,7 +267,7 @@ impl ScriptHost {
         let mut host = Self {
             files: Rc::new(files),
             file: ENTRY_SCRIPT.to_owned(),
-            actions: Rc::new(actions),
+            actions: Rc::new(RefCell::new(actions)),
             running: None,
             started: false,
             paused: false,
@@ -274,7 +284,9 @@ impl ScriptHost {
             clock: Rc::default(),
             live_set: Rc::default(),
             weather: Rc::default(),
+            fluids: Rc::default(),
             versions: 0,
+            tools: Rc::default(),
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -311,18 +323,42 @@ impl ScriptHost {
     pub fn tick(&mut self, input: &InputFrame, step: f32) {
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
+            // Which piece is held down, from this tick's pointer and click.
+            let click = {
+                let map = self.actions.borrow();
+                map.actions().find(|id| map.name(*id) == "menu_click")
+            };
+            hud::update_pressed(&version.shared, click);
         }
         self.clock.begin_tick(step);
+        // A held direction counts its ticks whether or not the script asks.
+        self.tools.advance_steps(
+            &self.actions.borrow(),
+            input,
+            self.clock.rate(),
+            self.clock.speed(),
+        );
+        // While time is stopped the ticks still run, so that input reaches
+        // the script (it could never start time again otherwise), but the
+        // game's time does not move: no weather, no timers, no seconds, and
+        // `game.onTick` is handed a step of 0.
+        let stopped = self.clock.speed() <= 0.0;
         // The weather moves on towards what was asked for before the
         // script's functions run, so that what they read is this tick's.
-        self.weather.step(step);
+        if !stopped {
+            self.weather.step(step);
+        }
         self.start();
         if std::mem::take(&mut self.spawn_due) {
             self.call_all(|handlers| &handlers.spawn, ());
         }
-        self.run_timers();
-        self.call_all(|handlers| &handlers.tick, step);
-        self.clock.end_tick();
+        if !stopped {
+            self.run_timers();
+        }
+        self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
+        if !stopped {
+            self.clock.end_tick();
+        }
     }
 
     /// Calls the script's `game.onDraw` functions for one picture, drawn
@@ -438,6 +474,22 @@ impl ScriptHost {
         self.clock.done()
     }
 
+    /// How fast the script wants the game to run, from 0 to 8: 1 is usual,
+    /// 0 is stopped. The script sets it with `game.setTimeSpeed`.
+    ///
+    /// The engine runs more or fewer ticks a second to match. At 0 it
+    /// should still run ticks at the usual rate: the script hears the
+    /// player in them, and could never start time again otherwise. Those
+    /// ticks do not move the game's time, its timers or its weather, and
+    /// `game.onTick` is called with a step of 0.
+    #[must_use]
+    pub fn time_speed(&self) -> f32 {
+        // A speed is from 0 to 8, which an f32 holds.
+        #[allow(clippy::cast_possible_truncation)]
+        let speed = self.clock.speed() as f32;
+        speed
+    }
+
     /// The seconds of game time that have been run: the number of ticks
     /// times the length of one. It is what `game.time()` gives a script.
     #[must_use]
@@ -521,6 +573,62 @@ impl ScriptHost {
         self.call_all(|handlers| &handlers.lightning, mlua::Vector::new(x, y, z));
     }
 
+    /// If any kind of fluid was made or changed since this was last called,
+    /// calls `see` with EVERY kind the script has (its number and what it
+    /// is, kind 0 "water" included) and gives true; otherwise calls nothing
+    /// and gives false. True on the very first call, so the engine always
+    /// learns water.
+    pub fn take_fluid_kinds(&mut self, see: impl FnMut(u8, &FluidKind)) -> bool {
+        self.fluids.take_kinds(see)
+    }
+
+    /// The look the level's own lakes and creeks are to be drawn with:
+    /// `None` while water's look is exactly the ready-made water's (the
+    /// level draws its water as it always has), `Some` once the script has
+    /// made water look otherwise (and `None` again if it puts it back
+    /// exactly).
+    #[must_use]
+    pub fn water_look(&self) -> Option<FluidLook> {
+        self.fluids.water_look()
+    }
+
+    /// Calls `see` with each thing asked of the fluids since this was last
+    /// called, oldest first, and forgets them. Allocates nothing.
+    pub fn take_fluid_asks(&mut self, see: impl FnMut(FluidAsk)) {
+        self.fluids.take_asks(see);
+    }
+
+    /// Says how many litres of each kind there now are (the index is the
+    /// kind): what `game.fluids.amount` reads. Until said, every amount is 0.
+    pub fn set_fluid_litres(&mut self, litres: &[f32; lore_fluid::MOST_KINDS]) {
+        self.fluids.set_litres(litres);
+    }
+
+    /// Says what `who` stands in after a tick of `step` seconds, `None` for
+    /// nothing. Kept for `game.fluids.under(character)`; counts how long
+    /// they have stood in fluid without a break (reset by a `None`); and
+    /// when `Some`, calls the `game.fluids.onTouch` functions with the
+    /// touch. A step that is not a number or not above 0 counts as 0.
+    pub fn stand_in_fluid(&mut self, who: CharacterId, under: Option<FluidUnder>, step: f32) {
+        let step = if step.is_finite() && step > 0.0 {
+            step
+        } else {
+            0.0
+        };
+        let Some(standing) = self.fluids.stand(who, under, step) else {
+            return;
+        };
+        let Some(version) = &self.running else { return };
+        if version.shared.handlers.borrow().fluid_touch.is_empty() || !self.characters.has(who) {
+            return;
+        }
+        let Ok(table) = crate::fluid_api::touch_table(&version.vm, &version.shared, who, &standing)
+        else {
+            return;
+        };
+        self.call_all(|handlers| &handlers.fluid_touch, table);
+    }
+
     /// The action set the script made live with `game.input.useSet` since
     /// this was last called, for whoever owns the input to switch to
     /// ([`Input::set_active_set`](lore_input::Input::set_active_set)). When
@@ -592,6 +700,84 @@ impl ScriptHost {
             version.shared.handles.forget(character);
         }
         self.weapons.take(character);
+    }
+
+    /// Says how a character is moving: what the script reads as `velocity`,
+    /// `eye`, `aim` and `grounded`. Call it every tick for the player.
+    pub fn set_motion(&mut self, character: CharacterId, motion: Motion) {
+        self.characters.set_motion(character, motion);
+    }
+
+    /// The move the script asked for with `game.player:teleport` since this
+    /// was last called; the latest when it asked more than once. The player
+    /// is to be put there, still, facing as asked. The position the script
+    /// reads is already the new one.
+    pub fn take_teleport(&mut self) -> Option<Teleport> {
+        self.tools.take_teleport()
+    }
+
+    /// How the script wants the player to move: `game.player:setMovement`.
+    /// It stays when the script is saved.
+    #[must_use]
+    pub fn movement(&self) -> Movement {
+        self.tools.movement()
+    }
+
+    /// How fast the player flies, in metres a second:
+    /// `game.player:setFlySpeed`. It stays when the script is saved.
+    #[must_use]
+    pub fn fly_speed(&self) -> f32 {
+        self.tools.fly_speed()
+    }
+
+    /// The game's actions with the ones the script made with
+    /// `game.input.bind`: a copy of the map the script reads.
+    ///
+    /// The engine must start its input from this map, after opening the
+    /// host and before the first tick, so that every action has the same
+    /// id for the engine as for the script. An action a later version of
+    /// the script adds is not in the engine's copy: it is heard again once
+    /// the game is started again.
+    #[must_use]
+    pub fn actions(&self) -> ActionMap {
+        self.tools.hand_out();
+        self.actions.borrow().clone()
+    }
+
+    /// Gives the script the player's own bindings as they now are, so that
+    /// `game.input.label` can say which key does what. Call it whenever
+    /// the player changes them. The script's own map, which its rules read
+    /// the input through, is not replaced.
+    pub fn set_controls(&mut self, controls: &ActionMap) {
+        self.tools.set_controls(controls);
+    }
+
+    /// Says which device the player used last and, for a gamepad, whose
+    /// letters are on it, so that `game.input.label` names the right
+    /// buttons.
+    pub fn set_device(&mut self, device: Device, style: GamepadStyle) {
+        self.tools.set_device(device, style);
+    }
+
+    /// Records that a picture took `seconds` to draw: what
+    /// `game.frames` reads, and the engine's frame graph shows. The last
+    /// 1000 are kept. A time that is not a number, or below 0, is ignored.
+    pub fn frame_drawn(&mut self, seconds: f32) {
+        self.tools.frame_drawn(seconds);
+    }
+
+    /// Calls `see` with the newest `newest` frame times in seconds, oldest
+    /// first, for drawing a graph of them.
+    pub fn each_frame_time(&self, newest: usize, see: impl FnMut(f32)) {
+        self.tools.each_frame_time(newest, see);
+    }
+
+    /// Gives the script the font the HUD is drawn with, to measure text
+    /// by. What `piece.hovered` and `piece:pointerAt()` say of a text then
+    /// matches what the player sees. Until it is called the width of text is
+    /// a guess ([`EstimatedText`](lore_ui::EstimatedText)).
+    pub fn set_text_measure(&mut self, measure: Box<dyn lore_ui::TextMeasure>) {
+        self.tools.set_measure(measure);
     }
 
     /// Says where a character's feet are, in metres, for the script to
@@ -866,6 +1052,9 @@ impl ScriptHost {
     fn build(&self) -> (Touched, Result<Version, ScriptError>) {
         let shared = Rc::new(Shared {
             actions: Rc::clone(&self.actions),
+            bound: RefCell::new(Vec::new()),
+            reloading: self.running.is_some(),
+            tools: Rc::clone(&self.tools),
             handlers: RefCell::new(Handlers::default()),
             input: RefCell::new(InputFrame::default()),
             deadline: Cell::new(None),
@@ -878,6 +1067,7 @@ impl ScriptHost {
             rumble: Cell::new(None),
             live_set: Rc::clone(&self.live_set),
             weather: Rc::clone(&self.weather),
+            fluids: Rc::clone(&self.fluids),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

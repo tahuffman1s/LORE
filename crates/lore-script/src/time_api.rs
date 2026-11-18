@@ -41,7 +41,6 @@ const LONGEST: f64 = 1.0e9;
 
 /// The game's time. It is kept by the host, outside the script's VM, so
 /// saving the script does not start it again.
-#[derive(Default)]
 pub(crate) struct Clock {
     /// How many ticks have been run to their end.
     ticks: Cell<u64>,
@@ -53,7 +52,25 @@ pub(crate) struct Clock {
     /// Everything the script's rules have done so far, boiled down to one
     /// number: see [`note`](Self::note).
     done: Cell<u64>,
+    /// How fast the game runs, set by `game.setTimeSpeed`: 1 is usual and 0
+    /// is stopped. It is the engine that runs more or fewer ticks a second.
+    speed: Cell<f64>,
 }
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            ticks: Cell::new(0),
+            rate: Cell::new(0.0),
+            drawing: Cell::new(None),
+            done: Cell::new(0),
+            speed: Cell::new(1.0),
+        }
+    }
+}
+
+/// The fastest the game can be run: eight times the usual speed.
+const FASTEST: f64 = 8.0;
 
 /// What [`Clock::note`] multiplies by: the FNV-1a hash's prime.
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -97,6 +114,16 @@ impl Clock {
     /// One number for everything [`note`](Self::note) was told, in order.
     pub fn done(&self) -> u64 {
         self.done.get()
+    }
+
+    /// How fast the game is to run: 1 is usual, 0 is stopped.
+    pub fn speed(&self) -> f64 {
+        self.speed.get()
+    }
+
+    /// Sets how fast the game is to run.
+    pub fn set_speed(&self, speed: f64) {
+        self.speed.set(speed);
     }
 
     /// The tick being run, counted from 0, or about to be.
@@ -161,7 +188,12 @@ impl Clock {
         let ticks = self.ticks.get() as f64;
         let ticks = match self.drawing.get() {
             // The picture is drawn between the last two ticks, like the view.
-            Some(alpha) => (ticks - 1.0 + alpha).max(0.0),
+            // While time is stopped nothing moves between them, so the
+            // picture shows the last tick, not a time that swings back.
+            Some(alpha) => {
+                let alpha = if self.speed.get() == 0.0 { 1.0 } else { alpha };
+                (ticks - 1.0 + alpha).max(0.0)
+            }
             None => ticks,
         };
         ticks / rate
@@ -554,6 +586,48 @@ fn tween_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     })
 }
 
+/// `game.setTimeSpeed(speed)`.
+fn set_time_speed(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    const EXAMPLE: &str = "game.setTimeSpeed(0.25)";
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, value: Value| {
+        // Whole numbers a script writes are small enough to be exact.
+        #[allow(clippy::cast_precision_loss)]
+        let speed = match &value {
+            Value::Number(speed) => *speed,
+            Value::Integer(speed) => *speed as f64,
+            other => {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.setTimeSpeed needs a number, but it was given {}. It takes how \
+                         fast the game runs: 1 is usual, 0 stops it, 0.25 is slow and 4 is \
+                         fast. Write it like this: {EXAMPLE}",
+                        describe(other)
+                    ),
+                ));
+            }
+        };
+        if !speed.is_finite() {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.setTimeSpeed was given a number with no size: infinity, or the \
+                     answer to a sum such as 0 / 0. It takes a speed from 0 to {FASTEST} \
+                     (numbers outside that are taken as the nearest end): 1 is usual, 0 \
+                     stops the game, 0.25 is slow and 4 is fast. Write it like this: \
+                     {EXAMPLE}"
+                ),
+            ));
+        }
+        let speed = speed.clamp(0.0, FASTEST);
+        rules_only(lua, &shared, "game.setTimeSpeed")?;
+        shared.clock.note(&speed.to_string());
+        shared.clock.set_speed(speed);
+        Ok(())
+    })
+}
+
 /// Puts `time`, `after`, `every` and `tween` on `game`, and takes the
 /// computer's clock away from the script.
 pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Result<()> {
@@ -562,6 +636,12 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
     game.set("after", timer_function(lua, shared, false)?)?;
     game.set("every", timer_function(lua, shared, true)?)?;
     game.set("tween", tween_function(lua, shared)?)?;
+    game.set("setTimeSpeed", set_time_speed(lua, shared)?)?;
+    let speed = Rc::clone(&shared.clock);
+    game.set(
+        "timeSpeed",
+        lua.create_function(move |_, ()| Ok(speed.speed()))?,
+    )?;
 
     // Luau's `os` holds nothing but the computer's clock and calendar. A
     // rule that read them would play out differently on every computer and
@@ -653,6 +733,16 @@ mod tests {
         let clock = clock_at(0, 0.5);
         clock.set_drawing(Some(0.25));
         assert!(clock.now().abs() < 1e-12);
+    }
+
+    #[test]
+    fn stopped_time_shows_the_last_tick_in_a_picture() {
+        let clock = clock_at(10, 0.5);
+        clock.set_speed(0.0);
+        for alpha in [0.0, 0.3, 1.0] {
+            clock.set_drawing(Some(alpha));
+            assert!((clock.now() - 5.0).abs() < 1e-12);
+        }
     }
 
     #[test]

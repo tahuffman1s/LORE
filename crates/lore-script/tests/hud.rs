@@ -291,16 +291,16 @@ fn the_hud_can_be_changed_while_a_picture_is_drawn() {
 #[test]
 fn a_piece_made_on_every_tick_is_stopped_and_explained() {
     let mut host = running(r#"game.onTick(function() game.hud.text("Score: 0") end)"#);
-    for _ in 0..300 {
+    for _ in 0..1100 {
         tick(&mut host);
     }
     let error = host.last_error().expect("too many pieces");
     assert!(
-        error.message.contains("already has 256 pieces")
+        error.message.contains("already has 1024 pieces")
             && error.message.contains("at the top of the file"),
         "{error}"
     );
-    assert_eq!(pieces(&host).len(), 256);
+    assert_eq!(pieces(&host).len(), 1024);
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn mistakes_in_making_a_piece_say_what_to_write() {
         ),
         (
             "game.hud.label(\"Hi\")",
-            "game.hud.label does not exist. game.hud has: text, bar, box.",
+            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph.",
         ),
         (
             "game.hud.txet(\"Hi\")",
@@ -429,7 +429,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -462,7 +462,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",

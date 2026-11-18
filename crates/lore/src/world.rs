@@ -10,8 +10,8 @@
 
 use lore_assets::Scene;
 use lore_input::{ActionId, ActionMap, InputFrame};
-use lore_physics::{MoveInput, Player};
-use lore_script::CharacterId;
+use lore_physics::{MoveInput, MoveMode, MoveSettings, Player};
+use lore_script::{CharacterId, Motion, Movement};
 
 use crate::blend;
 use crate::game::{Frame, Game};
@@ -23,6 +23,7 @@ use crate::sound_output::SoundAsk;
 
 mod bodies;
 mod climate;
+mod fluids;
 mod ground;
 mod spawn;
 mod trail;
@@ -87,6 +88,53 @@ pub struct World {
     dice: u32,
     strokes: Vec<lore_render::Lightning>,
     thunder: Vec<(u32, [f32; 3], f32)>,
+    /// Whether the script put the player somewhere since this was last
+    /// taken, and the way it said to face there, if it said: yaw, then
+    /// pitch. [`Playing`] turns the view to match.
+    teleported: Option<Option<(f32, f32)>>,
+    /// Every drop of fluid in the world, and what the script said of them.
+    fluids: fluids::WorldFluids,
+}
+
+/// The unit vector the eyes look along at `yaw` and `pitch`, as the
+/// player physics has it: yaw 0 looks along -Z and turns left as it grows.
+fn aim_of(yaw: f32, pitch: f32) -> [f32; 3] {
+    let (sin, cos) = (libm::sinf(yaw), libm::cosf(yaw));
+    let (sin_pitch, cos_pitch) = (libm::sinf(pitch), libm::cosf(pitch));
+    [-sin * cos_pitch, sin_pitch, -cos * cos_pitch]
+}
+
+/// The yaw and pitch that look along `facing`: the other way round from
+/// [`aim_of`]. Looking straight up or down has no side to face, so the
+/// player's `yaw` stays; the pitch is held to what the view allows.
+fn facing_of(facing: [f32; 3], yaw: f32) -> (f32, f32) {
+    let [x, y, z] = facing;
+    let across = libm::hypotf(x, z);
+    let yaw = if across < 1e-6 {
+        yaw
+    } else {
+        libm::atan2f(-x, -z)
+    };
+    crate::look::turned(yaw, libm::atan2f(y, across), [0.0; 2])
+}
+
+/// How the script reads that `player` is moving, looking along `aim`.
+fn motion_of(player: &Player, aim: [f32; 3]) -> Motion {
+    Motion {
+        velocity: player.velocity,
+        eye: player.eye_position(),
+        aim,
+        grounded: player.grounded,
+    }
+}
+
+/// The way of moving the script asked for, as the physics knows it.
+fn mode_of(movement: Movement) -> MoveMode {
+    match movement {
+        Movement::Walk => MoveMode::Walk,
+        Movement::Fly => MoveMode::Fly,
+        Movement::Noclip => MoveMode::Noclip,
+    }
 }
 
 /// How fast sound goes, in metres a second.
@@ -124,6 +172,9 @@ impl World {
         asked.movement.yaw = ground.facing_at(game.map(), player.position).unwrap_or(0.0);
         game.host_mut()
             .set_position(CharacterId::PLAYER, player.position);
+        let aim = aim_of(asked.movement.yaw, 0.0);
+        game.host_mut()
+            .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
         Self {
             game,
             ground,
@@ -143,6 +194,8 @@ impl World {
             dice: 0x2F6E_2B1D,
             strokes: Vec::with_capacity(MOST_STROKES),
             thunder: Vec::with_capacity(MOST_THUNDER),
+            teleported: None,
+            fluids: fluids::WorldFluids::default(),
         }
     }
 
@@ -400,6 +453,40 @@ impl World {
         // Being put somewhere is not a step taken or a fall ended.
         self.walking = Walking::default();
     }
+
+    /// Puts the player where the script moved them with
+    /// `game.player:teleport`, if it did since the last tick: still, and
+    /// facing as it said. The script reads the new place at once, and
+    /// [`Playing`] is told to turn the view.
+    fn teleport(&mut self) {
+        let Some(teleport) = self.game.host_mut().take_teleport() else {
+            return;
+        };
+        let Body { player, asked } = &mut self.player;
+        player.position = teleport.position;
+        player.velocity = [0.0; 3];
+        // Being put somewhere is not a step taken or a fall ended.
+        self.walking = Walking::default();
+        let facing = teleport
+            .facing
+            .map(|way| facing_of(way, asked.movement.yaw));
+        if let Some((yaw, pitch)) = facing {
+            asked.movement.yaw = yaw;
+            asked.movement.pitch = pitch;
+            asked.pitch = pitch;
+        }
+        let aim = aim_of(asked.movement.yaw, asked.pitch);
+        let host = self.game.host_mut();
+        host.set_position(CharacterId::PLAYER, player.position);
+        host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
+        self.teleported = Some(facing);
+    }
+
+    /// Whether the script put the player somewhere since this was last
+    /// asked, and the yaw and pitch it said to face there, if it said.
+    pub(crate) fn take_teleported(&mut self) -> Option<Option<(f32, f32)>> {
+        self.teleported.take()
+    }
 }
 
 impl Game for World {
@@ -407,6 +494,20 @@ impl Game for World {
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
     fn tick(&mut self, input: &InputFrame, step: f32) {
+        // Time stood still: only the script runs, so that it hears the
+        // player and can start time again. Nothing in the world moves,
+        // and what the last tick made is not made again.
+        if self.game.host().time_speed() == 0.0 {
+            self.noises.clear();
+            self.marks.clear();
+            self.treads.clear();
+            self.game.tick(input, step);
+            self.teleport();
+            // What the script asked of the fluids is done, but nothing
+            // moves: a clear still clears, and a spray hangs in the air.
+            self.fluids.hear(self.game.host_mut());
+            return;
+        }
         // A player who died since the last tick is back at a spawn point
         // before they move.
         self.respawn();
@@ -424,6 +525,14 @@ impl Game for World {
             self.ground.step,
         );
         self.storm();
+        // The fluids move, with what the script asked of them in its last
+        // tick, and what is now under the player's feet is found.
+        self.fluids.hear(self.game.host_mut());
+        self.fluids.step(
+            &self.ground.level,
+            self.ground.step,
+            self.player.player.position,
+        );
         let Ground {
             level,
             rules,
@@ -431,22 +540,42 @@ impl Game for World {
             ..
         } = &self.ground;
         let Body { player, asked } = &mut self.player;
-        // A gale pushes the player, a tornado takes them off their feet,
-        // and deep snow is slow to walk through.
-        self.climate.blow(player, rules.gravity, seconds, *tick);
+        // How the script wants the player to move, and how fast it flies.
         let mut moving = asked.movement;
-        if player.grounded {
-            let slowed = self.climate.snow_slows();
-            moving.forward *= slowed;
-            moving.right *= slowed;
+        moving.mode = mode_of(self.game.host().movement());
+        let settings = MoveSettings {
+            fly_speed: self.game.host().fly_speed(),
+            ..*rules
+        };
+        let rules = &settings;
+        if moving.mode == MoveMode::Walk {
+            // A gale pushes the player, a tornado takes them off their feet,
+            // and deep snow is slow to walk through. None of it reaches
+            // someone who flies.
+            self.climate.blow(player, rules.gravity, seconds, *tick);
+            if player.grounded {
+                let slowed = self.climate.snow_slows();
+                moving.forward *= slowed;
+                moving.right *= slowed;
+            }
+            // Fluid underfoot: oil slides, honey drags, glue holds, slime
+            // bounces.
+            moving.footing = self.fluids.footing();
+            // A lake the script made thicker than water is slow to wade
+            // and swim through.
+            let waded = self.fluids.wading(player.submerged);
+            moving.forward *= waded;
+            moving.right *= waded;
         }
         let before = *player;
+        let walking = moving.mode == MoveMode::Walk;
         player.step(level, rules, &moving, *tick);
         // The script reads where the player is as of this tick, in what it
-        // is told of below and in its own tick.
-        self.game
-            .host_mut()
-            .set_position(CharacterId::PLAYER, player.position);
+        // is told of below and in its own tick, and how they are moving.
+        let host = self.game.host_mut();
+        host.set_position(CharacterId::PLAYER, player.position);
+        let aim = aim_of(asked.movement.yaw, asked.pitch);
+        host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
         // What was heard of the tick just run: when a foot came down, and
         // below, what the weapon did.
         self.noises.clear();
@@ -504,7 +633,14 @@ impl Game for World {
             self.game.host_mut(),
             &mut self.noises,
         );
+        // The script hears how much fluid there is and what the player
+        // stands in, before its own tick. Only someone walking with their
+        // feet down stands in anything.
+        let standing = self.player.player.grounded && walking;
+        self.fluids.tell(self.game.host_mut(), *tick, standing);
         self.game.tick(input, step);
+        // The script may have put the player somewhere.
+        self.teleport();
         // Lightning the script asked for in this tick falls where it asked,
         // on whatever is highest there: taken here, before a frame can show
         // it with no thunder to follow.
@@ -527,6 +663,7 @@ impl Game for World {
         for stroke in self.strokes.drain(..) {
             frame.strike(stroke);
         }
+        self.fluids.frame(frame);
         self.game.frame(frame);
         // After the script's own frame, which says the weather as it
         // asked for it: this is the weather with what followed from it.
@@ -584,6 +721,7 @@ impl Controls {
                 crouch: held(self.crouch),
                 sprint: held(self.sprint),
                 pitch: *pitch,
+                ..MoveInput::default()
             },
             pitch: *pitch,
             fire: held(self.fire),
@@ -968,8 +1106,14 @@ impl Game for Playing {
             .asked(input, step, &mut self.yaw, &mut self.pitch);
         self.world.ask(asked);
         self.world.tick(input, step);
+        // A script that put the player somewhere may have turned them too.
+        let teleported = self.world.take_teleported();
+        if let Some((yaw, pitch)) = teleported.flatten() {
+            (self.yaw, self.pitch) = look::turned(yaw, pitch, [0.0; 2]);
+        }
         self.eye = self.world.player().eye_position();
-        self.before = (!cut(before, self.eye)).then_some(before);
+        // A move by the script is a cut, not a glide.
+        self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises
         // always have room.
         let (now, tick_rate) = (self.world.tick, self.world.ground.tick_rate);
@@ -1025,6 +1169,8 @@ impl Game for Playing {
 mod heard;
 #[cfg(test)]
 mod rates;
+#[cfg(test)]
+mod tools;
 #[cfg(test)]
 mod wetted;
 

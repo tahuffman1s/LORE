@@ -32,6 +32,9 @@ lore-audio = { path = "../lore-audio" }
 # The HUD and menus a game hands over each frame. No dependencies of its own.
 lore-ui = { path = "../lore-ui" }
 lore-render = { path = "../lore-render" }
+# Sprays, splashes and puddles that run down walls, and what they do
+# underfoot.
+lore-fluid = { path = "../lore-fluid" }
 # Sines and cosines that come out the same on every computer, for what the
 # game's rules count, such as the path of a tornado.
 libm = "0.2"
