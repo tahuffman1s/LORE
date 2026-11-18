@@ -45,6 +45,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "setTimeSpeed",
     "timeSpeed",
     "fluid",
+    "lamp",
     "pause",
     "resume",
     "paused",
@@ -153,6 +154,11 @@ pub(crate) struct Shared {
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
+    /// The lamps of the game. It outlives this version of the script.
+    pub lamps: Rc<crate::lamp_api::LampState>,
+    /// What the script said of the picture's exposure. It outlives this
+    /// version of the script.
+    pub lighting: Rc<crate::lighting_api::LightingState>,
     /// The HUD this version has made with `game.hud`.
     pub hud: HudState,
     /// The script files this version has read, and what `require` gave for each.
@@ -302,6 +308,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
     fluid_api::install(lua, shared, &game)?;
+    crate::lamp_api::install(lua, shared, &game)?;
     settings_api::install(lua, shared, &game)?;
 
     let input = lua.create_table()?;
@@ -349,6 +356,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set("input", input)?;
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("weather", weather_api::weather(lua, shared)?)?;
 
     let frames = tools_api::frames(lua, shared)?;
@@ -796,7 +804,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 30] = [
+        let groups: [(&str, &[&str]); 34] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -827,6 +835,10 @@ mod tests {
             ("game.fluids.", crate::fluid_api::FLUIDS_FUNCTIONS),
             ("Fluid.", crate::fluid_api::FLUID_FIELDS),
             ("FluidTouch.", crate::fluid_api::TOUCH_FIELDS),
+            ("game.lamps.", crate::lamp_api::LAMPS_FUNCTIONS),
+            ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
+            ("Lamp.", crate::lamp_api::LAMP_FIELDS),
+            ("Lamp:", &["remove"]),
         ];
         let mut real: Vec<String> = groups
             .iter()

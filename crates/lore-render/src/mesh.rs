@@ -15,10 +15,12 @@ use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
 use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
 use crate::error::RenderError;
+use crate::eye::EyePass;
 use crate::fluid::FluidScene;
 use crate::fluid_pass::FluidWorks;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
+use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
@@ -354,6 +356,8 @@ pub(crate) struct Contents<'a> {
     /// liquid over the solid world, and nothing at all when there are no
     /// drops.
     pub(crate) fluid: Option<&'a FluidScene>,
+    /// The lamps lit this frame.
+    pub(crate) lamps: &'a [Lamp],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -558,17 +562,6 @@ impl Meshes {
             .iter()
             .position(|draw| draw.surface >= Surface::SeeThrough)
             .unwrap_or(draws.len());
-
-        if scene
-            .lights
-            .iter()
-            .any(|light| light.kind != LightKind::Sun)
-        {
-            log::warn!(
-                "The level has lamps (point or spot lights), which are not drawn yet; only \
-                 its first sun lights it. Nothing needs changing in the file."
-            );
-        }
 
         let buffers = if draws.is_empty() {
             None
@@ -782,6 +775,15 @@ pub(crate) struct MeshPipeline {
     /// The copy of the picture each of those sets was last pointed at:
     /// a window that changes size gets a new one.
     behind: RefCell<Vec<vk::ImageView>>,
+    /// Measures each frame's picture for the eye to adapt to: `None` only
+    /// while the pipeline is being built.
+    eye: Option<EyePass>,
+    /// The lamps of each frame that can be in progress at once, as the
+    /// shader's `Lamps` takes them.
+    lamp_buffers: Vec<Buffer>,
+    /// The lamps of the frame being recorded, sorted into the grid of the
+    /// view: kept between frames so that it needs no new memory.
+    lamp_frame: RefCell<LampFrame>,
     /// The see-through parts of the frame being recorded, farthest first:
     /// how far each is from the eye, squared, and which it is. Kept between
     /// frames so that putting them in order needs no new memory.
@@ -816,6 +818,9 @@ impl MeshPipeline {
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
             behind: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            eye: None,
+            lamp_buffers: Vec::with_capacity(frames.max(1)),
+            lamp_frame: RefCell::new(LampFrame::new()),
             order: RefCell::new(Vec::new()),
         };
         // Dropping `mesh` cleans up whatever was created; destroying a null handle is allowed.
@@ -910,16 +915,24 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The lamps, and the grid of the view they are sorted into.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(14)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::STORAGE_BUFFER,
             vk::DescriptorType::SAMPLED_IMAGE,
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, nine pictures and four readers.
+            // Each frame's set has one view, one list of lamps, nine
+            // pictures and four readers.
             let each = match kind {
-                vk::DescriptorType::UNIFORM_BUFFER => 1,
+                vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => 1,
                 vk::DescriptorType::SAMPLED_IMAGE => 9,
                 _ => 4,
             };
@@ -980,6 +993,15 @@ impl MeshPipeline {
                 let buffers = [vk::DescriptorBufferInfo::default()
                     .buffer(buffer.handle)
                     .range(VIEW_BYTES as u64)];
+                let lamp_buffer = Buffer::writable(
+                    gpu,
+                    lamps::BYTES as u64,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    doing,
+                )?;
+                let lamp_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(lamp_buffer.handle)
+                    .range(lamps::BYTES as u64)];
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -1035,9 +1057,15 @@ impl MeshPipeline {
                         .dst_binding(4)
                         .descriptor_type(vk::DescriptorType::SAMPLER)
                         .image_info(&volume_samplers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(14)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&lamp_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 mesh.views.push((buffer, set));
+                mesh.lamp_buffers.push(lamp_buffer);
             }
         }
         let layout = mesh.layout;
@@ -1408,7 +1436,47 @@ impl MeshPipeline {
         }
         mesh.fluid = fluid.transpose()?;
         mesh.grid = grid::pipeline(gpu, layout)?;
+        mesh.eye = Some(EyePass::new(gpu, frames)?);
         Ok(mesh)
+    }
+
+    /// Records measuring how bright `target`'s picture is, for the eye.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), after which this is recorded.
+    pub(crate) unsafe fn measure(
+        &self,
+        commands: vk::CommandBuffer,
+        frame: usize,
+        target: &SceneTarget,
+    ) {
+        if let Some(eye) = &self.eye {
+            // SAFETY: the caller's guarantees are the pass's.
+            unsafe { eye.record(commands, frame, target) };
+        }
+    }
+
+    /// The measuring of frame `frame`'s picture, into `bytes`, if one was
+    /// recorded and not yet taken.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the driver cannot show the bytes.
+    ///
+    /// # Safety
+    ///
+    /// The commands last recorded for frame `frame` must have finished.
+    pub(crate) unsafe fn measured(
+        &self,
+        frame: usize,
+        bytes: &mut Vec<u8>,
+    ) -> Result<bool, RenderError> {
+        match &self.eye {
+            // SAFETY: the caller's guarantee is the pass's.
+            Some(eye) => unsafe { eye.take(frame, bytes) },
+            None => Ok(false),
+        }
     }
 
     /// Records clearing `target` and drawing `meshes` into it as seen
@@ -1449,6 +1517,7 @@ impl MeshPipeline {
             day,
             tracks,
             fluid,
+            lamps,
         } = contents;
         // How wet rain has made the ground, from 0 to 1.
         let wet_ground = weather.rows[0][2];
@@ -1627,6 +1696,25 @@ impl MeshPipeline {
                 },
             ))
         }?;
+        // The lamps, sorted into the grid of this view, each drawn as bright
+        // as the hour draws a lux.
+        let per_lux = day.map_or(lamps::DAYLIGHT_PER_LUX, |day| day.per_lux);
+        let [forward, right, up] = view.rays.map(|[x, y, z, _]| [x, y, z]);
+        let seen = Seen {
+            eye: view.eye,
+            rays: [forward, right, up],
+            size: [target.extent.width, target.extent.height],
+        };
+        if let (Some(buffer), Ok(mut packed)) = (
+            self.lamp_buffers
+                .get(frame % self.lamp_buffers.len().max(1)),
+            self.lamp_frame.try_borrow_mut(),
+        ) {
+            // SAFETY: the buffer was made writable and `lamps::BYTES` long,
+            // and the caller guarantees the commands that read it last have
+            // finished.
+            unsafe { buffer.write(packed.pack(lamps, &seen, per_lux)) }?;
+        }
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         let area = vk::Rect2D {

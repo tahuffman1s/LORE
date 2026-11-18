@@ -821,6 +821,13 @@ impl<G: Game> App<G> {
         let treads = frame.take_treads();
         let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
         let hour = frame.take_hour();
+        if let (Some(renderer), Some(lamps)) = (&mut self.renderer, frame.take_lamps()) {
+            renderer.set_lamps(lamps);
+        }
+        if let (Some(renderer), Some((stops, eye))) = (&mut self.renderer, frame.take_lighting()) {
+            renderer.set_game_exposure(stops);
+            renderer.set_eye_adaptation(eye);
+        }
         let (water_rise, sky_clock) = frame.take_water();
         let storm_bolts = frame.take_storm_bolts();
         let weather = frame.take_weather();

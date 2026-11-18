@@ -12,9 +12,11 @@ use crate::buffer::Buffer;
 use crate::camera::Camera;
 use crate::effects::{Air, Effects, Splash};
 use crate::error::RenderError;
+use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
+use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
 use crate::swapchain::COLOUR;
@@ -84,6 +86,12 @@ pub struct Headless {
     effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
+    /// The lamps lit: the level's own, or what was said last.
+    lamps: Vec<Lamp>,
+    /// What the eye has got used to, and the last measuring of the picture
+    /// it took in. It does not adapt unless told to.
+    eye: Eye,
+    measuring: Vec<u8>,
     /// Whether wet ground, puddles and polished things mirror the world.
     reflections: bool,
     view: SceneView,
@@ -184,6 +192,9 @@ impl Headless {
             meshes: None,
             effects: Effects::new(),
             grid: false,
+            lamps: Vec::new(),
+            eye: Eye::new(EyeAdaptation::FIXED),
+            measuring: Vec::new(),
             reflections: true,
             view,
             extent,
@@ -222,9 +233,35 @@ impl Headless {
         // Every frame is waited for, so the old meshes are not in use.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        self.lamps.clear();
+        self.lamps
+            .extend(scene.lights.iter().filter_map(Lamp::from_light));
         // Nothing that flew in the old level is in the new one.
         self.effects.clear();
         Ok(())
+    }
+
+    /// Draws these lamps from now on, in place of the level's own (which
+    /// [`set_scene`](Self::set_scene) draws until this is called) or those
+    /// given before. Give the whole list each time anything about them
+    /// changes: a picture of a torch carried calls this before each frame.
+    ///
+    /// Each lamp's brightness is real ([`Lamp::candela`]), and is drawn
+    /// against the sun, the sky and the moon as a real lamp is seen: faint
+    /// by day, and by night far brighter than the moon. Past
+    /// [`MOST_LAMPS`](crate::MOST_LAMPS) in view, the nearest are drawn.
+    pub fn set_lamps(&mut self, lamps: &[Lamp]) {
+        self.lamps.clear();
+        self.lamps.extend_from_slice(lamps);
+    }
+
+    /// Says how the picture follows the light, as
+    /// [`Renderer::set_eye_adaptation`](crate::Renderer::set_eye_adaptation)
+    /// does. Unlike a window's, a picture drawn here does not adapt until
+    /// told to: [`EyeAdaptation::FIXED`] is the usual. While time is held
+    /// still the eye gets used to each picture at once, for the next.
+    pub fn set_eye_adaptation(&mut self, adaptation: EyeAdaptation) {
+        self.eye.adaptation = adaptation.sound();
     }
 
     /// Says how wet the ground is, from 0 for dry to 1 for soaked: rain
@@ -460,6 +497,7 @@ impl Headless {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
+            self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.record(
                 self.commands,
                 0,
@@ -475,6 +513,7 @@ impl Headless {
                     day: self.effects.day(),
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
+                    lamps: &self.lamps,
                 },
                 camera,
                 FRAME_SECONDS,
@@ -488,7 +527,7 @@ impl Headless {
                         view: self.image_view,
                         extent: self.extent,
                     },
-                    1.0,
+                    self.eye.multiplier(),
                     Over {
                         ui: Some(&self.ui),
                         #[cfg(feature = "panels")]
@@ -515,6 +554,17 @@ impl Headless {
             device
                 .wait_for_fences(&[self.finished], true, u64::MAX)
                 .map_err(RenderError::driver("waiting for the graphics card"))?;
+            // The eye takes in this picture for the next: all at once while
+            // time is held still, so that the same camera gives the same
+            // picture.
+            if self.mesh.measured(0, &mut self.measuring)? {
+                let per_lux = self
+                    .effects
+                    .day()
+                    .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux);
+                self.eye
+                    .see(&self.measuring, per_lux, FRAME_SECONDS, self.view.still);
+            }
             handed_over
         };
         Ok(FrameTime {

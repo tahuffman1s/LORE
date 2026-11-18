@@ -23,6 +23,7 @@ use crate::error::{OpenError, ScriptError, is_time_limit};
 use crate::fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder};
 use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
+use crate::lamp_api::LampLight;
 use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
 use crate::settings_api::{Setting, SettingValue, SettingsState};
@@ -175,6 +176,8 @@ pub struct ScriptHost {
     /// The kinds of fluid the script made and what it asked of them; they
     /// outlive a reload too.
     fluids: Rc<crate::fluid_api::FluidState>,
+    lamps: Rc<crate::lamp_api::LampState>,
+    lighting: Rc<crate::lighting_api::LightingState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -328,6 +331,8 @@ impl ScriptHost {
             live_set: Rc::default(),
             weather: Rc::default(),
             fluids: Rc::default(),
+            lamps: Rc::default(),
+            lighting: Rc::default(),
             versions: 0,
             tools: Rc::default(),
             settings: Rc::new(SettingsState::new(settings)),
@@ -705,6 +710,36 @@ impl ScriptHost {
     #[must_use]
     pub fn water_look(&self) -> Option<FluidLook> {
         self.fluids.water_look()
+    }
+
+    /// Calls `see` with every lamp that is lit (the level's, as the script
+    /// has left them, and the script's own), as it is now: its flicker is
+    /// that of this moment of the game. Allocates nothing.
+    pub fn lamps(&self, see: impl FnMut(&LampLight)) {
+        self.lamps.lights(self.clock.now(), see);
+    }
+
+    /// The game's own exposure in stops and how the eye adapts, if the
+    /// script said either since this was last asked
+    /// (`game.lighting.setExposure`, `game.lighting.setEyeAdaptation`).
+    pub fn take_lighting(&mut self) -> Option<(f32, crate::lighting_api::EyeSaid)> {
+        self.lighting.take()
+    }
+
+    /// Whether the game has said anything of lamps: made one, or been told
+    /// the level's ([`set_level_lamps`](Self::set_level_lamps)). Until it
+    /// has, the renderer draws the level's lamps as the file places them.
+    #[must_use]
+    pub fn has_lamps(&self) -> bool {
+        self.lamps.any()
+    }
+
+    /// Says what lamps the level places, by their names in the file, in
+    /// place of the last level's: `game.lamp(name)` finds them, and they
+    /// are drawn as the file says until the script changes them. The lamps
+    /// the script made itself are kept.
+    pub fn set_level_lamps(&mut self, lamps: &[(String, LampLight)]) {
+        self.lamps.set_level(lamps);
     }
 
     /// Calls `see` with each thing asked of the fluids since this was last
@@ -1190,6 +1225,8 @@ impl ScriptHost {
             live_set: Rc::clone(&self.live_set),
             weather: Rc::clone(&self.weather),
             fluids: Rc::clone(&self.fluids),
+            lamps: Rc::clone(&self.lamps),
+            lighting: Rc::clone(&self.lighting),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

@@ -220,6 +220,10 @@ impl World {
         for dummy in self.dummies.drain(..) {
             self.game.host_mut().remove_character(dummy.name);
         }
+        // The level's lamps are the script's to find by name and change.
+        self.game
+            .host_mut()
+            .set_level_lamps(&crate::lamps::of_level(level));
         let ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
         Self::on(self.game, ground, None)
     }

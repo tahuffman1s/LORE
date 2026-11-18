@@ -13,9 +13,11 @@ use crate::bolt::Lightning;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
+use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
+use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
 use crate::swapchain::Swapchain;
@@ -177,8 +179,16 @@ pub struct Renderer {
     view_for: (vk::Extent2D, Upscaling),
     /// When the last frame was drawn.
     last_frame: Option<Instant>,
-    /// What the scene's light is multiplied by before tone mapping.
+    /// What the scene's light is multiplied by before tone mapping: the
+    /// player's brightness, and the game's own.
     exposure: f32,
+    game_exposure: f32,
+    /// The lamps lit: the level's own, or what the game said last.
+    lamps: Vec<Lamp>,
+    /// What the eye has got used to, and the last measuring of the picture
+    /// it took in, kept so that taking one needs no new memory.
+    eye: Eye,
+    measuring: Vec<u8>,
     /// Whether wet ground, puddles and polished things mirror the world.
     reflections: bool,
     /// `None` while the window has no area to draw into.
@@ -248,6 +258,10 @@ impl Renderer {
             view_for: (vk::Extent2D::default(), config.upscaling),
             last_frame: None,
             exposure: 1.0,
+            game_exposure: 1.0,
+            lamps: Vec::new(),
+            eye: Eye::new(EyeAdaptation::default()),
+            measuring: Vec::new(),
             reflections: true,
             swapchain: None,
             size: (width, height),
@@ -282,7 +296,9 @@ impl Renderer {
     /// its material's colour. Everything but a see-through surface casts
     /// a shadow from the sun, out to 216 metres from the eye. Behind it
     /// all is the sky that sun makes, with clouds that drift and shade the
-    /// ground. Lamps are not drawn yet.
+    /// ground. Its lamps (point and spot lights) light it too, in the
+    /// candela the file gives, until [`set_lamps`](Self::set_lamps) says
+    /// otherwise.
     ///
     /// A picture the graphics card cannot take (one that is too large, or
     /// whose size does not match its bytes) is left out with a warning that
@@ -312,6 +328,9 @@ impl Renderer {
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        self.lamps.clear();
+        self.lamps
+            .extend(scene.lights.iter().filter_map(Lamp::from_light));
         // Nothing that flew in the old level is in the new one.
         self.effects.clear();
         // Nothing of the old level belongs in the new one's first frame.
@@ -319,6 +338,45 @@ impl Renderer {
             view.cut();
         }
         Ok(())
+    }
+
+    /// Draws these lamps from now on, in place of the level's own (which
+    /// [`set_scene`](Self::set_scene) draws until this is called) or those
+    /// given before. Give the whole list each time anything about them
+    /// changes: a game that moves a torch about calls this every frame.
+    ///
+    /// Each lamp's brightness is real ([`Lamp::candela`]), and is drawn
+    /// against the sun, the sky and the moon as a real lamp is seen: faint
+    /// by day, and by night far brighter than the moon. Past
+    /// [`MOST_LAMPS`](crate::MOST_LAMPS) in view, the nearest are drawn.
+    pub fn set_lamps(&mut self, lamps: &[Lamp]) {
+        self.lamps.clear();
+        self.lamps.extend_from_slice(lamps);
+    }
+
+    /// Makes the whole picture brighter or darker, in camera stops, for the
+    /// game's own reasons (a flashback, a blinding light), on top of the
+    /// player's brightness ([`set_exposure`](Self::set_exposure)) and of
+    /// what the eye does. Values beyond 16 stops either way are taken as
+    /// 16, and one that is not a number is ignored.
+    pub fn set_game_exposure(&mut self, stops: f32) {
+        if stops.is_finite() {
+            self.game_exposure = exposure_scale(stops.clamp(-16.0, 16.0));
+        }
+    }
+
+    /// Says how the picture follows the light, as an eye gets used to the
+    /// dark and to bright light: how far it may open where the view is
+    /// darker than open ground under the sky, how far it may close where it
+    /// is brighter, and how quickly. The sky of each hour is already drawn
+    /// as an eye used to it would see it, so this only changes views that
+    /// are darker or brighter than that: a street in shade, a day all
+    /// cloud, a street under lamps at night. [`EyeAdaptation::FIXED`] draws
+    /// every view as the sky would have it; the usual is
+    /// [`EyeAdaptation::default`]. [`set_exposure`](Self::set_exposure)
+    /// brightens or darkens the picture on top.
+    pub fn set_eye_adaptation(&mut self, adaptation: EyeAdaptation) {
+        self.eye.adaptation = adaptation.sound();
     }
 
     /// Sets where the scene is seen from, from the next frame on.
@@ -719,6 +777,16 @@ impl Renderer {
             device
                 .wait_for_fences(&[slot.finished], true, u64::MAX)
                 .map_err(RenderError::driver("waiting for the graphics card"))?;
+            // The picture this slot drew last is measured by now: the eye
+            // takes it in, against the light on open ground there is now.
+            if mesh.measured(self.next, &mut self.measuring)? {
+                let per_lux = self
+                    .effects
+                    .day()
+                    .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux);
+                self.eye.see(&self.measuring, per_lux, seconds, false);
+            }
+            view.measured = self.eye.adaptation.adapts();
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,
@@ -780,6 +848,7 @@ impl Renderer {
                     day: self.effects.day(),
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
+                    lamps: &self.lamps,
                 },
                 &self.camera,
                 seconds,
@@ -792,7 +861,7 @@ impl Renderer {
                     view: target.view,
                     extent: swapchain.extent,
                 },
-                self.exposure,
+                self.exposure * self.game_exposure * self.eye.multiplier(),
                 Over {
                     ui: Some(ui),
                     #[cfg(feature = "panels")]

@@ -58,6 +58,9 @@ pub struct ScriptGame {
     /// not kept here to be put into effect: whoever runs the game has the
     /// settings in force, and is handed only what the script changes.
     told: Settings,
+    /// The lamps of the frame being drawn, kept so that listing them needs
+    /// no new memory.
+    lamps: Vec<lore_render::Lamp>,
 }
 
 /// Said after a mistake in a map file, by what the game does about it.
@@ -87,6 +90,7 @@ impl ScriptGame {
             map_file: None,
             map_error: None,
             told: settings,
+            lamps: Vec::new(),
         };
         game.name_sounds();
         game
@@ -220,6 +224,7 @@ impl ScriptGame {
             map_file: Some(map_file),
             map_error,
             told: settings,
+            lamps: Vec::new(),
         };
         game.name_sounds();
         Ok(game)
@@ -372,6 +377,23 @@ impl Game for ScriptGame {
         }
         if let Some(hour) = self.host.take_hour() {
             frame.set_hour(hour);
+        }
+        if let Some((stops, eye)) = self.host.take_lighting() {
+            frame.set_lighting(
+                stops,
+                lore_render::EyeAdaptation {
+                    opens: eye.opens,
+                    closes: eye.closes,
+                    seconds: eye.seconds,
+                },
+            );
+        }
+        // Once the game knows of any lamp, it says which are lit.
+        if self.host.has_lamps() {
+            self.lamps.clear();
+            self.host
+                .lamps(|light| self.lamps.push(crate::lamps::drawn(light)));
+            frame.set_lamps(&self.lamps);
         }
         // The weather as the script has said it. A world the script
         // plays in says more after this: what has followed from it.

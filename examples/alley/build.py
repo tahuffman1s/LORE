@@ -455,6 +455,9 @@ class Level:
         self.triangles = 0
         self.solid_triangles = 0
         self.transformed = False
+        # The lamps: (name, where, light) with light as KHR_lights_punctual
+        # writes it, and for a spot the way it points.
+        self.lamps = []
 
     def view(self, data, target=None):
         while len(self.blob) % 4:
@@ -651,6 +654,23 @@ class Level:
                 "rotation": [0.0, math.sin(facing / 2), 0.0, math.cos(facing / 2)],
             }
         )
+        lights = [{"type": "directional", "color": list(sun_light[:3]), "intensity": sun_light[3]}]
+        for name, at, light, pointing in self.lamps:
+            node = {"name": name, "translation": list(at), "extensions": {"KHR_lights_punctual": {"light": len(lights)}}}
+            if pointing is not None:
+                # A spot shines along its node's -Z: the turn that takes -Z
+                # to `pointing`, about the axis square to both.
+                x, y, z = pointing
+                axis = (y, -x, 0.0)
+                along = math.sqrt(axis[0] ** 2 + axis[1] ** 2)
+                angle = math.acos(max(-1.0, min(1.0, -z)))
+                if along > 1e-6:
+                    half = math.sin(angle / 2) / along
+                    node["rotation"] = [axis[0] * half, axis[1] * half, 0.0, math.cos(angle / 2)]
+                elif z > 0:
+                    node["rotation"] = [0.0, 1.0, 0.0, 0.0]
+            self.nodes.append(node)
+            lights.append({"name": name, **light})
         while len(self.blob) % 4:
             self.blob.append(0)
         used = ["KHR_lights_punctual"]
@@ -675,17 +695,7 @@ class Level:
             "bufferViews": self.views,
             "buffers": [{"byteLength": len(self.blob)}],
             "extensionsUsed": used,
-            "extensions": {
-                "KHR_lights_punctual": {
-                    "lights": [
-                        {
-                            "type": "directional",
-                            "color": list(sun_light[:3]),
-                            "intensity": sun_light[3],
-                        }
-                    ]
-                }
-            },
+            "extensions": {"KHR_lights_punctual": {"lights": lights}},
         }
         text = json.dumps(document, separators=(",", ":")).encode()
         text += b" " * (-len(text) % 4)
@@ -727,6 +737,64 @@ HOARDING = 21.0      # the road works in front of that building
 # shadow along it. This is where the engine's sun is at that hour.
 HOUR = 9.5  # what README.md and main.luau start the day at
 SUN = (-0.158, 0.610, 0.776)
+
+
+def kelvin(t):
+    """The colour of light from a glowing body at `t` kelvin, in linear
+    light, as bright as white (Kim et al.'s fit to the Planckian locus, as
+    the engine's `kelvin` setting works it out)."""
+    if t <= 4000:
+        x = -0.2661239e9 / t**3 - 0.2343589e6 / t**2 + 0.8776956e3 / t + 0.179910
+    else:
+        x = -3.0258469e9 / t**3 + 2.1070379e6 / t**2 + 0.2226347e3 / t + 0.240390
+    if t <= 2222:
+        y = -1.1063814 * x**3 - 1.34811020 * x**2 + 2.18555832 * x - 0.20219683
+    elif t <= 4000:
+        y = -0.9549476 * x**3 - 1.37418593 * x**2 + 2.09137015 * x - 0.16748867
+    else:
+        y = 3.0817580 * x**3 - 5.87338670 * x**2 + 3.75112997 * x - 0.37001483
+    big_x, big_z = x / y, (1 - x - y) / y
+    rgb = [max(0.0, v) for v in (3.2404542 * big_x - 1.5371385 - 0.4985314 * big_z,
+                                 -0.9692660 * big_x + 1.8760108 + 0.0415560 * big_z,
+                                 0.0556434 * big_x - 0.2040259 + 1.0572252 * big_z)]
+    bright = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+    return [round(v / bright, 4) for v in rgb]
+
+
+def light_of(kind, lumens_per_steradian, temperature):
+    """A light of KHR_lights_punctual: its colour kept within 0 to 1, as the
+    format asks, and its intensity in candela raised to make up for it."""
+    colour = kelvin(temperature)
+    most = max(colour)
+    return {"type": kind, "color": [round(v / most, 4) for v in colour], "intensity": round(lumens_per_steradian * most, 2)}
+
+
+def point_lamp(lumens, temperature):
+    """A lamp that shines every way: lumens over the whole sphere are its
+    candela."""
+    return light_of("point", lumens / (4 * math.pi), temperature), None
+
+
+def spot_lamp(lumens, temperature, inner, outer, pointing):
+    """A lamp that shines in a cone, `outer` degrees from its middle to its
+    edge, towards `pointing` in the model's own frame."""
+    solid = 2 * math.pi * (1 - math.cos(math.radians(outer)))
+    long = math.sqrt(sum(v * v for v in pointing))
+    light = light_of("spot", lumens / solid, temperature)
+    light["spot"] = {"innerConeAngle": math.radians(inner), "outerConeAngle": math.radians(outer)}
+    return light, tuple(v / long for v in pointing)
+
+
+# The alley's lamps, in real light. The lamps on posts in the streets have
+# LED lamps of 4000 lumens behind their glass, a warm 3000 K; the lanterns
+# over the yard's back doors a 60 W bulb's 800 lumens at 2700 K; the
+# security lights a 1500-lumen LED floodlight at 4000 K, aimed down and out
+# from the wall.
+LAMPS = {
+    "street lamp": point_lamp(4000, 3000),
+    "lantern": point_lamp(800, 2700),
+    "security light": spot_lamp(1500, 4000, 35, 60, (0.0, -1.0, 0.7)),
+}
 
 # Where the ground is lowest: the drains, and the potholes that hold water.
 DRAINS = [(0.0, -20.0), (0.0, 21.0), (-STREET + 6.25, -KERB - 0.25), (9.25, -KERB - 0.25),
@@ -2007,6 +2075,7 @@ class Props:
 
     def __init__(self, solids):
         self.parts, self.solids = [], solids
+        self.lamps = []
 
     def add(self, parts, at, turn=0.0, shift=(0.0, 0.0, 0.0), scale=1.0, tint=None):
         """Stands `parts` at `at`, turned `turn`, after moving them by
@@ -2024,12 +2093,15 @@ class Props:
                 part = copy
             self.parts.append(placed(part, at, turn, scale, tint))
 
-    def model(self, name, at, turn=0.0, nodes=None, most=None, scale=1.0, tint=None, sit=True, size=SIZE, wall=False):
+    def model(self, name, at, turn=0.0, nodes=None, most=None, scale=1.0, tint=None, sit=True, size=SIZE, wall=False, lamp=None):
         """Stands a Poly Haven model (or the named nodes of it) on `at`:
         its footprint's middle there and, with `sit`, its lowest point on
         it. With `wall` it is fixed to a wall instead: `at` is a point on
         the wall's face and the model's back is put against it, so nothing
-        of it is inside the wall. Returns its size."""
+        of it is inside the wall. Returns its size.
+
+        A `lamp` (a name and one of LAMPS) puts a light in its bulb: the
+        middle of its parts whose material's name ends in "_bulb"."""
         pieces = kit_pieces(name, size)
         chosen = [node for node in pieces if nodes is None or node in nodes]
         parts = []
@@ -2040,6 +2112,16 @@ class Props:
         low, high = box_of(parts)
         shift = (-(low[0] + high[0]) / 2, -low[1] if sit else 0.0, -low[2] if wall else -(low[2] + high[2]) / 2)
         self.add(parts, at, turn, shift, scale, tint)
+        if lamp:
+            lamp_name, (light, pointing) = lamp
+            bulbs = [part for part in parts if part.material["name"].endswith("_bulb")]
+            if not bulbs:
+                raise SystemExit(f"{name} has no bulb to put the lamp {lamp_name} in")
+            b_low, b_high = box_of(bulbs)
+            middle = [((b_low[k] + b_high[k]) / 2 + shift[k]) * scale for k in range(3)]
+            x, y, z = turned(middle, turn)
+            way = turned(pointing, turn) if pointing else None
+            self.lamps.append((lamp_name, (x + at[0], y + at[1], z + at[2]), light, way))
         return tuple((high[k] - low[k]) * scale for k in range(3))
 
     def solid(self, at, turn, size, lift=0.0):
@@ -2221,12 +2303,14 @@ def furnish(level, solids, fronts):
     # A lantern over each of the yard's back doors. (The other back doors
     # have a security light: the one at E -13 is under the fire escape,
     # where a lantern would stand up through the landing.)
-    for wall, along, up in (("EY", -5.5, 2.85), ("YN", -4.6, 2.85)):
+    for number, (wall, along, up) in enumerate((("EY", -5.5, 2.85), ("YN", -4.6, 2.85)), 1):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("street_lamp_02", (x, y, z), turn, sit=False, most=4000, wall=True)
-    for wall, along, up in (("W", -26.4, 2.7), ("E", 26.0, 2.7), ("W", 17.0, 2.7), ("EY", 6.5, 3.4), ("E", -13.0, 2.7)):
+        props.model("street_lamp_02", (x, y, z), turn, sit=False, most=4000, wall=True,
+                    lamp=(f"lantern {number}", LAMPS["lantern"]))
+    for number, (wall, along, up) in enumerate((("W", -26.4, 2.7), ("E", 26.0, 2.7), ("W", 17.0, 2.7), ("EY", 6.5, 3.4), ("E", -13.0, 2.7)), 1):
         (x, y, z), turn = on_wall(wall, along, up)
-        props.model("security_light", (x, y, z), turn, sit=False, most=1500, wall=True)
+        props.model("security_light", (x, y, z), turn, sit=False, most=1500, wall=True,
+                    lamp=(f"security light {number}", LAMPS["security light"]))
     for wall, along, up in (("W", -29.0, 3.4), ("E", 29.0, 3.4), ("EY", -8.2, 4.5)):
         (x, y, z), turn = on_wall(wall, along, up)
         props.model("security_camera_02", (x, y, z), turn, sit=False, most=2500, wall=True)
@@ -2283,9 +2367,9 @@ def furnish(level, solids, fronts):
     props_pen(props, chooser)
 
     # ---- on the ground: rubbish, crates, barrels, tyres
-    def lay(name, x, z, turn=None, nodes=None, most=None, scale=1.0, solid=False, tint=None, lift=0.0):
+    def lay(name, x, z, turn=None, nodes=None, most=None, scale=1.0, solid=False, tint=None, lift=0.0, lamp=None):
         turn = chooser.uniform(0, math.tau) if turn is None else turn
-        size = props.model(name, (x, height(x, z) - 0.01 + lift, z), turn, nodes=nodes, most=most, scale=scale, tint=tint)
+        size = props.model(name, (x, height(x, z) - 0.01 + lift, z), turn, nodes=nodes, most=most, scale=scale, tint=tint, lamp=lamp)
         if solid:
             props.solid((x, height(x, z), z), turn, size)
         return size
@@ -2370,7 +2454,9 @@ def furnish(level, solids, fronts):
     # ---- on the streets: lamps, a hydrant, bollards, manholes, parked cars
     for x, z in ((-12.5, -(KERB - 0.5)), (11.0, -(KERB - 0.5)), (-3.5, -(FAR_KERB + 0.5)), (15.0, -(FAR_KERB + 0.5)),
                  (-11.0, KERB - 0.5), (12.5, KERB - 0.5), (-15.5, FAR_KERB + 0.5), (5.0, FAR_KERB + 0.5)):
-        lay("street_lamp_01", x, z, 0.0 if z < 0 else math.pi, most=6000, scale=1.55, solid=False)
+        number = sum(1 for lamp in props.lamps if lamp[0].startswith("street lamp")) + 1
+        lay("street_lamp_01", x, z, 0.0 if z < 0 else math.pi, most=6000, scale=1.55, solid=False,
+            lamp=(f"street lamp {number}", LAMPS["street lamp"]))
         props.solid((x, height(x, z), z), 0.0, (0.25, 6.0, 0.25))
     hydrant = kit_pieces("fire_hydrant")
     lay("fire_hydrant", 6.0, -(KERB - 0.55), 0.0, nodes=[n for n in hydrant if "aged" in n.lower()] or None, most=4000, solid=True)
@@ -2403,6 +2489,7 @@ def furnish(level, solids, fronts):
         hooks(level, props, fronts, chooser)
 
     level.place("props", level.mesh("props", merged(props.parts)), solid=False)
+    level.lamps = props.lamps
 
 
 def made_props(level, props, fronts, chooser):

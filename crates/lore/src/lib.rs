@@ -36,6 +36,7 @@ pub mod editor;
 mod error_overlay;
 mod game;
 mod gamepad;
+mod lamps;
 pub mod level;
 mod look;
 pub mod map;
