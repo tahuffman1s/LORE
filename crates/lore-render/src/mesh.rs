@@ -653,6 +653,20 @@ fn unorm8(value: f32) -> u8 {
     packed
 }
 
+/// A share of light from 0 to 1 as a byte, on the curve a screen uses
+/// (sRGB): even steps of the byte look like even steps of brightness, so
+/// dark colours keep as many steps as light ones, where steps of light
+/// itself would band in the dark. The shader's `vertex` takes it back.
+fn srgb8(value: f32) -> u8 {
+    let light = value.clamp(0.0, 1.0);
+    let seen = if light <= 0.003_130_8 {
+        light * 12.92
+    } else {
+        1.055 * light.powf(1.0 / 2.4) - 0.055
+    };
+    unorm8(seen)
+}
+
 /// A direction folded flat onto a square (octahedral encoding), which takes
 /// two numbers instead of three and loses nothing a screen can show.
 ///
@@ -720,11 +734,11 @@ fn append(part: &MeshPart, vertices: &mut Vec<u8>, indices: &mut Vec<u8>) -> Pla
             .map_or([0.0, 0.0, 0.0, 1.0], |tangents| tangents[number]);
         vertices.extend(tangent.map(|value| snorm8(value).to_ne_bytes()[0]));
         // A point with no colour of its own is white, so the material's shows.
-        let colour = part
+        let [red, green, blue, alpha] = part
             .colors
             .as_ref()
             .map_or([1.0; 4], |colours| colours[number]);
-        vertices.extend(colour.map(unorm8));
+        vertices.extend([srgb8(red), srgb8(green), srgb8(blue), unorm8(alpha)]);
         for value in each(&part.uv0).iter().chain(&each(&part.uv1)) {
             vertices.extend_from_slice(&value.to_ne_bytes());
         }
@@ -2537,16 +2551,12 @@ impl MeshPipeline {
                         &[],
                     );
                 }
-                let placed = Draw {
-                    world: multiply(clip, &draw.world),
-                    ..*draw
-                };
                 device.cmd_push_constants(
                     commands,
                     self.layout,
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
-                    &draw_bytes(&placed),
+                    &casting_bytes(&multiply(clip, &draw.world), &draw.world),
                 );
                 device.cmd_draw_indexed(
                     commands,
@@ -3126,6 +3136,22 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYT
     bytes
 }
 
+/// How many bytes the shader's `Casting` takes: a matrix and three rows.
+const CASTING_BYTES: usize = 16 * 4 + 16 * 3;
+
+/// The shader's `Casting` for one mesh part drawn into a shadow picture:
+/// `picture` takes its points to the picture, and `world` to where they
+/// stand, of which the first three rows are kept.
+fn casting_bytes(picture: &Mat4, world: &Mat4) -> [u8; CASTING_BYTES] {
+    let rows = [0, 1, 2].map(|row| world.map(|column| column[row]));
+    let numbers = picture.iter().chain(&rows).flatten();
+    let mut bytes = [0_u8; CASTING_BYTES];
+    for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(numbers) {
+        *slot = number.to_ne_bytes();
+    }
+    bytes
+}
+
 /// The shader's `Draw` for one mesh part.
 fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     // A mirrored mesh has its normal map's sideways direction turned around.
@@ -3254,10 +3280,35 @@ mod tests {
             "a normal along +Z folds to the middle"
         );
         assert_eq!(second[16..20], [127, 0, 0, 129]);
-        // A colour brighter than white is white.
-        assert_eq!(second[20..24], [255, 128, 0, 255]);
+        // A colour brighter than white is white; red, green and blue are
+        // on the screen's curve, where half the light is 188, and alpha,
+        // which is a share and not a light, is not.
+        assert_eq!(second[20..24], [255, 188, 0, 255]);
         assert_eq!(second[24..28], 0.25_f32.to_ne_bytes());
         assert_eq!(second[36..40], 3.0_f32.to_ne_bytes());
+    }
+
+    #[test]
+    fn dark_point_colours_keep_their_steps() {
+        // The darkest hundredth of light has two dozen steps of the byte,
+        // where as light itself it would have three.
+        assert!(srgb8(0.01) >= 25 && unorm8(0.01) <= 3);
+        // Each byte is the one its own light comes back to, so nothing is
+        // lost on the way there and back.
+        let mut before = 0;
+        for byte in 0..=255_u8 {
+            let light = f32::from(byte) / 255.0;
+            // As the shader takes it back.
+            let back = if light <= 0.040_45 {
+                light / 12.92
+            } else {
+                ((light + 0.055) / 1.055).powf(2.4)
+            };
+            assert_eq!(srgb8(back), byte, "{byte} came back as {}", srgb8(back));
+            assert!(byte == 0 || srgb8(back) > before);
+            before = srgb8(back);
+        }
+        assert_eq!((srgb8(-1.0), srgb8(f32::NAN), srgb8(2.0)), (0, 0, 255));
     }
 
     #[test]
@@ -3335,6 +3386,28 @@ mod tests {
             0.5,
             "and how far the wind moves it"
         );
+    }
+
+    #[test]
+    fn a_caster_says_where_it_stands_in_the_world_by_rows() {
+        let mut picture = [[0.0; 4]; 4];
+        picture[3][3] = 2.0;
+        let mut world = [[0.0; 4]; 4];
+        for (axis, column) in world.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        // Moved to 5, 6, 7 and half as wide along x.
+        world[0][0] = 0.5;
+        world[3] = [5.0, 6.0, 7.0, 1.0];
+        let bytes = casting_bytes(&picture, &world);
+        assert!(bytes.len() <= DRAW_BYTES, "it fits where a draw does");
+        assert_eq!(number(&bytes, 15), 2.0, "the picture's matrix comes first");
+        // Then each row: a point's x is the first row against (x, y, z, 1).
+        assert_eq!(
+            [16, 19, 20, 23, 24, 27].map(|at| number(&bytes, at)),
+            [0.5, 5.0, 0.0, 6.0, 0.0, 7.0]
+        );
+        assert_eq!(number(&bytes, 21), 1.0);
     }
 
     #[test]

@@ -383,6 +383,9 @@ fn read_meshes(
 ) -> Result<(), AssetError> {
     // Shapes with no material share one, added the first time it is needed.
     let mut fallback: Option<u32> = None;
+    let bumps: Vec<Option<u8>> = (0..scene.materials.len())
+        .map(|own| bumps_along(&scene.materials, own))
+        .collect();
     for source in document.meshes() {
         let name = source.name().map(str::to_owned);
         let shown = name
@@ -390,18 +393,17 @@ fn read_meshes(
             .unwrap_or_else(|| format!("number {}", source.index() + 1));
         let mut parts = Vec::new();
         for primitive in source.primitives() {
-            let gltf_material = primitive.material();
-            let material = match gltf_material.index() {
+            let own = primitive.material().index();
+            let material = match own {
                 Some(index) => number(index),
                 None => *fallback.get_or_insert_with(|| {
                     scene.materials.push(Material::default());
                     number(scene.materials.len() - 1)
                 }),
             };
-            let tangent_uv = gltf_material
-                .normal_texture()
-                .filter(|_| tangents)
-                .map(|normal| u8::from(normal.tex_coord() == 1));
+            let tangent_uv = own
+                .and_then(|index| bumps.get(index).copied().flatten())
+                .filter(|_| tangents);
             let context = PartContext {
                 file,
                 mesh: &shown,
@@ -416,6 +418,27 @@ fn read_meshes(
         scene.meshes.push(Mesh { name, parts });
     }
     Ok(())
+}
+
+/// Which UV map a part drawn with material `own` of `materials` has its
+/// surface bent along, if any: its own normal map's, or else the normal
+/// map's of the material painted over it ([`Material::paint`]), which is
+/// found as the renderer finds it: the first material with that name,
+/// unless that is itself. The part needs tangents along that map.
+fn bumps_along(materials: &[Material], own: usize) -> Option<u8> {
+    let material = materials.get(own)?;
+    let normal = match &material.normal_texture {
+        Some(normal) => normal,
+        None => {
+            let wanted = material.paint()?.with;
+            let over = materials
+                .iter()
+                .position(|other| other.name.as_deref() == Some(wanted.as_str()))
+                .filter(|found| *found != own)?;
+            materials.get(over)?.normal_texture.as_ref()?
+        }
+    };
+    Some(u8::from(normal.uv_set == 1))
 }
 
 /// Walks the scene's objects and records where each mesh, light and marker stands.
