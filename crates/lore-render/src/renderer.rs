@@ -814,7 +814,11 @@ impl Renderer {
                     .effects
                     .day()
                     .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux);
-                self.eye.see(&self.measuring, per_lux, seconds, false);
+                let said = self.effects.said();
+                let [x, _, z] = self.camera.position;
+                let weather =
+                    crate::eye::weather_darker(said, said.storm_at([x, z], view.seconds()));
+                self.eye.see(&self.measuring, per_lux, seconds, false, weather);
             }
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;

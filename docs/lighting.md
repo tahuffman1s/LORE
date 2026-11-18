@@ -146,6 +146,11 @@ out. So the picture adapts as an eye does.
   compensation curve.
 - A shaded alley, an overcast day and dusk open up; a lamplit street
   closes; a moonlit night is drawn as the sky draws it.
+- Weather keeps its mood (#405): the eye does not open a dull sky all the
+  way back to a clear day's. A grey sky is drawn 0.6 stops darker, steady
+  rain 0.6 more, and a storm overhead 3 stops darker (an eighth as bright),
+  as a photographer keeps a storm dark. Lightning, which is added light,
+  is as bright as ever against it.
 - Opening takes about 1.5 s, closing a third as long, within ±8 stops by
   default.
 - `game.lighting.setEyeAdaptation` and `setExposure` change it from Luau.

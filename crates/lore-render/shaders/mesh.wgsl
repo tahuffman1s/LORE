@@ -2027,6 +2027,13 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     }
     // The stars and the moon are behind everything else in the sky.
     colour = night_sky(colour, direction, speck);
+    // Under a sky said to be all cloud there is no clear sky to be seen
+    // anywhere: where the clouds thin away with distance, and along the
+    // horizon below them, what shows is more of the cloud's grey.
+    if view.clouds.x > 0.6 && view.clouds.w > 0.5 {
+        let shut = smoothstep(0.6, 1.0, view.clouds.x) * (1.0 - smoothstep(0.0, 0.1, -direction.y));
+        colour = mix(colour, storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z))), shut);
+    }
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
     // The sun itself, as wide as it is seen from the Earth (just over half

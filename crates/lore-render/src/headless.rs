@@ -586,8 +586,17 @@ impl Headless {
                     .effects
                     .day()
                     .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux);
-                self.eye
-                    .see(&self.measuring, per_lux, FRAME_SECONDS, self.view.still);
+                let said = self.effects.said();
+                let [x, _, z] = camera.position;
+                let weather =
+                    crate::eye::weather_darker(said, said.storm_at([x, z], self.view.seconds()));
+                self.eye.see(
+                    &self.measuring,
+                    per_lux,
+                    FRAME_SECONDS,
+                    self.view.still,
+                    weather,
+                );
             }
             handed_over
         };
