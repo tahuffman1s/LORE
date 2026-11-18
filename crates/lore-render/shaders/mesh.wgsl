@@ -1513,9 +1513,24 @@ fn snow_on(world: vec3<f32>, faces_up: f32, open: f32) -> vec3<f32> {
     // The snow's top is not ruled: it stands higher here and lower there.
     let buried = snow_buries(world, view.weather[6].x * (0.7 + 0.6 * patches));
     // Only what is out of the water is snowed on.
-    let out = smoothstep(-0.02, 0.0, world.y - view.water.x);
-    let amount = mix(own, max(own, level), buried) * smoothstep(0.0, 0.12, lies) * out;
+    let amount = mix(own, max(own, level), buried) * smoothstep(0.0, 0.12, lies) * out_of_water(world);
     return vec3<f32>(amount, patches, small);
+}
+
+// How far out of the still water nearest the eye a point of the world is,
+// from 0 under its surface to 1 in the air. Lower than the water is not
+// in it: not where the water does not reach, and not under its bed (a
+// valley beside a lake, or a cellar under one, is dry).
+fn out_of_water(world: vec3<f32>) -> f32 {
+    let over = world.y - view.water.x;
+    if view.water.z < 0.5 || over >= 0.0 {
+        return 1.0;
+    }
+    let deep = near_depth(world.xz);
+    if deep <= 0.0 || over < -deep - 0.5 {
+        return 1.0;
+    }
+    return smoothstep(-0.02, 0.0, over);
 }
 
 // How far from the eye tracks in the snow are drawn, in metres, how far
@@ -1697,7 +1712,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
 
     // Only what is out of the water shines, and only that is snowed on:
     // under it there is no air for the wet to be a mirror against.
-    let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
+    let out = out_of_water(corner.world);
     // Snow lies on what faces up under an open sky and buries what is in
     // it (see `snow_on`). It is white, matte, and hides the fine shape of
     // what it lies on.
