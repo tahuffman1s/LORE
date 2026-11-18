@@ -46,7 +46,7 @@ mod waves;
 
 pub use bolt::Lightning;
 pub use camera::Camera;
-pub use effects::{Splash, rain_at};
+pub use effects::{Splash, rain_at, storm_at};
 pub use error::{RenderError, Version};
 pub use font::Font;
 pub use gpu::{Gpu, validation_errors};

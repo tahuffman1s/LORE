@@ -72,7 +72,20 @@ pub struct World {
     /// How far the rain that has fallen has raised the level's still
     /// water, in metres.
     rise: f32,
+    /// Lightning: when the sky is next looked over for a storm to strike
+    /// from (a tick), the dice it is looked over with, the strokes that
+    /// have fallen since the last frame, and the thunder still on its way:
+    /// the tick it arrives, where the stroke fell and how far off that is.
+    looks_at: u32,
+    dice: u32,
+    strokes: Vec<lore_render::Lightning>,
+    thunder: Vec<(u32, [f32; 3], f32)>,
 }
+
+/// How fast sound goes, in metres a second.
+const SOUND: f32 = 343.0;
+/// The most strokes kept for one frame, and the most thunder on its way.
+const MOST_STROKES: usize = 8;
 
 /// How fast a downpour raises the still water, and how fast it falls back
 /// when the rain stops, in metres a second; and the most it rises. Far
@@ -125,6 +138,10 @@ impl World {
             marks: Vec::new(),
             spawned,
             rise: 0.0,
+            looks_at: 60,
+            dice: 0x2F6E_2B1D,
+            strokes: Vec::with_capacity(MOST_STROKES),
+            thunder: Vec::with_capacity(MOST_STROKES),
         }
     }
 
@@ -162,6 +179,72 @@ impl World {
     /// The game being played, to change it.
     pub fn game_mut(&mut self) -> &mut ScriptGame {
         &mut self.game
+    }
+
+    /// A number from 0 to 1, different each time and the same on every
+    /// run.
+    fn dealt(&mut self) -> f32 {
+        self.dice ^= self.dice << 13;
+        self.dice ^= self.dice >> 17;
+        self.dice ^= self.dice << 5;
+        // The top 24 bits are exact as an f32.
+        #[allow(clippy::cast_precision_loss)]
+        let share = (self.dice >> 8) as f32 / 16_777_216.0;
+        share
+    }
+
+    /// Lets lightning fall at `place`, a place on the ground: the bolt is
+    /// seen in the next frame, and its thunder is heard when the sound has
+    /// come from there.
+    fn strike(&mut self, place: [f32; 3]) {
+        if self.strokes.len() == MOST_STROKES || self.thunder.len() == MOST_STROKES {
+            return;
+        }
+        let seed = self.dice;
+        self.dealt();
+        self.strokes
+            .push(lore_render::Lightning::down_to(place, seed));
+        let eye = self.player.player.position;
+        let away = (0..3)
+            .map(|axis| (place[axis] - eye[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        // Whole ticks: sound takes three seconds a kilometre.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ticks = (away / SOUND / self.ground.step.max(1e-4)).min(1e6) as u32;
+        (self.thunder).push((self.tick.saturating_add(ticks), place, away));
+    }
+
+    /// Lightning: every few seconds a few places within thirty kilometres of the player are
+    /// looked at, and the first with a thunder cloud over it is struck,
+    /// on whatever ground is under it.
+    fn storm(&mut self) {
+        if self.tick < self.looks_at {
+            return;
+        }
+        let step = self.ground.step.max(1e-4);
+        // Truncation is the point: whole ticks.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let wait = ((1.6 + 2.4 * self.dealt()) / step) as u32;
+        self.looks_at = self.tick.saturating_add(wait.max(1));
+        let (seconds, storminess) = (self.sky_seconds(), self.game.host().storminess());
+        let [x, _, z] = self.player.player.position;
+        for _ in 0..4 {
+            let spot = [
+                x + (self.dealt() - 0.5) * 60_000.0,
+                z + (self.dealt() - 0.5) * 60_000.0,
+            ];
+            if lore_render::storm_at(spot, seconds, storminess) <= 0.5 {
+                continue;
+            }
+            // The ground under it, or a little under where levels are
+            // built if the level does not reach so far.
+            let ground = (self.ground.level)
+                .raycast([spot[0], 4_000.0, spot[1]], [0.0, -1.0, 0.0], 8_000.0)
+                .map_or([spot[0], -20.0, spot[1]], |hit| hit.point);
+            self.strike(ground);
+            return;
+        }
     }
 
     /// How long the world has run, in seconds of its own time: what the
@@ -299,6 +382,7 @@ impl Game for World {
         let rain = lore_render::rain_at([x, z], self.sky_seconds(), self.game.host().storminess());
         self.rise = risen(self.rise, rain, self.ground.step);
         self.ground.level.set_water_rise(self.rise);
+        self.storm();
         let Ground {
             level,
             rules,
@@ -318,6 +402,25 @@ impl Game for World {
         self.noises.clear();
         self.walking
             .tick(player, self.tick, *tick, &mut self.noises);
+        // Thunder that has got here from a stroke that fell a while ago.
+        let (now, noises) = (self.tick, &mut self.noises);
+        self.thunder.retain(|(arrives, position, away)| {
+            if *arrives > now {
+                return true;
+            }
+            noises.push(Noise {
+                kind: if *away < 1_500.0 {
+                    crate::noise::NoiseKind::Thunder
+                } else {
+                    crate::noise::NoiseKind::FarThunder
+                },
+                position: *position,
+                loudness: 1.0,
+                delay: 0.0,
+                tick: now,
+            });
+            false
+        });
         // What they did to the water, if they are in any: seen and heard.
         self.marks.clear();
         wet::tick(
@@ -342,6 +445,11 @@ impl Game for World {
             &mut self.noises,
         );
         self.game.tick(input, step);
+        // Lightning the script asked for in this tick falls where it asked:
+        // taken here, before a frame can show it with no thunder to follow.
+        for (place, _) in self.game.host_mut().take_strikes() {
+            self.strike(place);
+        }
     }
 
     /// The script's own presenting, such as its HUD and its rumble.
@@ -349,6 +457,11 @@ impl Game for World {
         // The sky and the water are drawn where the rules have them.
         frame.set_sky_clock(self.sky_seconds());
         frame.set_water_rise(self.rise);
+        // The world sends the bolts, so that it knows where each fell.
+        frame.set_storm_bolts(false);
+        for stroke in self.strokes.drain(..) {
+            frame.strike(stroke);
+        }
         self.game.frame(frame);
     }
 }
@@ -765,6 +878,51 @@ mod tests {
             rise = risen(rise, 0.0, 1.0 / 60.0);
         }
         assert_eq!(rise, 0.0);
+    }
+
+    #[test]
+    fn lightning_a_script_asks_for_is_seen_at_once_and_heard_when_its_thunder_arrives() {
+        use lore_input::Input;
+
+        let actions = ActionMap::default_fps();
+        // On its first tick, a stroke 343 metres from the player: a second
+        // off, as sound goes.
+        let script = ScriptGame::from_source(
+            r#"local struck = false
+            game.onTick(function()
+                if not struck then
+                    struck = true
+                    game.weather.strike(game.player.position + vector.create(343, 0, 0))
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = Input::new(actions);
+        let (mut seen_at, mut heard_at) = (None, None);
+        for tick in 1..=80_u32 {
+            let stood = game.world.player.player.position;
+            game.tick(input.tick(), 1.0 / 60.0);
+            let mut frame = Frame::new(0.0);
+            game.frame(&mut frame);
+            if let Some(stroke) = frame.take_strikes().first()
+                && seen_at.is_none()
+            {
+                seen_at = Some(tick);
+                // It comes down out of the clouds onto the place asked for.
+                assert!((stroke.to[0] - stood[0] - 343.0).abs() < 0.5, "{stroke:?}");
+                assert!(stroke.from[1] > stroke.to[1] + 1_000.0, "{stroke:?}");
+            }
+            let thunder = (game.world.noises().iter())
+                .any(|noise| noise.kind == crate::noise::NoiseKind::Thunder);
+            if thunder && heard_at.is_none() {
+                heard_at = Some(tick);
+            }
+        }
+        // It is seen in the frame after the tick that asked for it, and the
+        // thunder is a second behind the flash.
+        assert_eq!(seen_at, Some(1));
+        assert!(matches!(heard_at, Some(60..=62)), "{heard_at:?}");
     }
 
     #[test]

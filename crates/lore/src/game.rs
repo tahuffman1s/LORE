@@ -90,6 +90,8 @@ pub struct Frame {
     /// if the game said them this frame.
     water_rise: Option<f32>,
     sky_clock: Option<f64>,
+    /// Whether storms send their own bolts, if the game said this frame.
+    storm_bolts: Option<bool>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
@@ -178,6 +180,7 @@ impl Frame {
             hour: None,
             water_rise: None,
             sky_clock: None,
+            storm_bolts: None,
             under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
@@ -730,6 +733,18 @@ impl Frame {
     /// them.
     pub fn set_sky_clock(&mut self, seconds: f64) {
         self.sky_clock = Some(seconds);
+    }
+
+    /// Says whether storms send their own bolts of lightning to the ground
+    /// (as they do until told otherwise) or the game sends each itself with
+    /// [`strike`](Self::strike), knowing where it falls.
+    pub fn set_storm_bolts(&mut self, own: bool) {
+        self.storm_bolts = Some(own);
+    }
+
+    /// Whether storms send their own bolts, if the game said this frame.
+    pub(crate) fn take_storm_bolts(&mut self) -> Option<bool> {
+        self.storm_bolts.take()
     }
 
     /// How far rain has raised the water and what the sky's clock shows,

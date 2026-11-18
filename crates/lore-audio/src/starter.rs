@@ -6,15 +6,18 @@
 //!
 //! Besides feet and guns there is water: [`splashes`], [`small_splashes`],
 //! [`wading`], [`swim_strokes`], [`surfacing`], [`bubbles`], [`drips`] and
-//! the [`underwater`] rumble to loop while the head is under.
+//! the [`underwater`] rumble to loop while the head is under; and there is
+//! [`thunder`], close by and [`far_thunder`] far off.
 
 use std::f32::consts::TAU;
 
 use crate::vary::scramble;
 use crate::{Sound, SoundSet};
 
+mod storm;
 mod water;
 
+pub use storm::{far_thunder, thunder};
 pub use water::{
     bubbles, drips, small_splashes, splashes, surfacing, swim_strokes, underwater, wading,
 };

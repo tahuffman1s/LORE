@@ -521,8 +521,9 @@ declare game: {
 
         --- Lets lightning strike the ground at a place: a forked bolt
         --- comes down from the clouds over it, flickers and is gone in
-        --- under a second, lighting the land round it. It is seen, not
-        --- yet heard, and hurts nobody.
+        --- under a second, lighting the land round it. Its thunder is
+        --- heard when the sound has come from there, three seconds for
+        --- each kilometre. It hurts nobody.
         --- Example: game.weather.strike(game.player.position + vector.create(0, 0, -200))
         strike: (at: vector) -> (),
     },

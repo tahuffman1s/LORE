@@ -24,7 +24,7 @@ use lore_script::SoundRequest;
 pub const SOUNDS_FOLDER: &str = "sounds";
 
 /// The sounds every game has without a file of its own, in order.
-pub const STARTER_SOUNDS: [&str; 13] = [
+pub const STARTER_SOUNDS: [&str; 15] = [
     "bubbles",
     "drip",
     "dry-fire",
@@ -36,6 +36,8 @@ pub const STARTER_SOUNDS: [&str; 13] = [
     "splash-small",
     "surface",
     "swim-stroke",
+    "thunder",
+    "thunder-far",
     "underwater",
     "wade",
 ];
@@ -466,6 +468,27 @@ fn starters() -> BTreeMap<String, Entry> {
             takes(starter::small_splashes(), Range::FOOTSTEP),
         ),
         ("wade", takes(starter::wading(), Range::FOOTSTEP)),
+        // Thunder is heard for miles.
+        (
+            "thunder",
+            takes(
+                starter::thunder(),
+                Range {
+                    near: 400.0,
+                    far: 16_000.0,
+                },
+            ),
+        ),
+        (
+            "thunder-far",
+            takes(
+                starter::far_thunder(),
+                Range {
+                    near: 3_000.0,
+                    far: 30_000.0,
+                },
+            ),
+        ),
         (
             "swim-stroke",
             takes(starter::swim_strokes(), Range::FOOTSTEP),

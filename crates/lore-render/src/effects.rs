@@ -98,6 +98,23 @@ pub(crate) fn storm_over(x: f32, z: f32, time: f64, storminess: f32) -> f32 {
     eased(0.55 - more, 0.69 - more, place) * eased(0.38 - more, 0.6 - more, kind)
 }
 
+/// How much of a storm is over a place (its x and z, in metres), from 0 to
+/// 1, `seconds` after the clouds set off under a sky as stormy as
+/// `storminess` says: over a half, lightning strikes there. What is no
+/// number gives no storm.
+#[must_use]
+pub fn storm_at(place: [f32; 2], seconds: f64, storminess: f32) -> f32 {
+    if !(place[0].is_finite() && place[1].is_finite() && seconds.is_finite()) {
+        return 0.0;
+    }
+    let storminess = if storminess.is_finite() {
+        storminess
+    } else {
+        0.0
+    };
+    storm_over(place[0], place[1], seconds, storminess)
+}
+
 /// How hard it rains at a place (its x and z, in metres), from 0 to 1,
 /// `seconds` after the clouds set off under a sky as stormy as
 /// `storminess` says: it rains under a thunder cloud. The same place, time
@@ -165,6 +182,9 @@ pub(crate) struct Effects {
     day: Option<(f64, Day)>,
     /// How far rain has raised the still water, in metres.
     rise: f32,
+    /// Whether storms send their own bolts to the ground: not when the
+    /// game does, so that it can hear them and know where they fell.
+    bolts_of_its_own: bool,
 }
 
 impl Default for Effects {
@@ -190,6 +210,7 @@ impl Effects {
             here: [0.0; 4],
             day: None,
             rise: 0.0,
+            bolts_of_its_own: true,
         }
     }
 
@@ -581,6 +602,12 @@ impl Effects {
         };
     }
 
+    /// Says whether storms send their own bolts to the ground. Flashes
+    /// inside the cloud are always the storm's own.
+    pub(crate) fn set_bolts_of_its_own(&mut self, own: bool) {
+        self.bolts_of_its_own = own;
+    }
+
     /// Says how far rain has raised the still water, in metres.
     pub(crate) fn set_rise(&mut self, rise: f32) {
         self.rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
@@ -645,6 +672,9 @@ impl Effects {
             if kind < 0.7 {
                 let place = [spot[0], base + self.between(1200.0, 3500.0), spot[1]];
                 self.free_bolt().glimmer(place, seed);
+                return;
+            }
+            if !self.bolts_of_its_own {
                 return;
             }
             // It starts up in the cloud, which hides it until it comes

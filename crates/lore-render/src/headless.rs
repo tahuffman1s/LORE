@@ -266,6 +266,15 @@ impl Headless {
         self.effects.set_hour(hour);
     }
 
+    /// Says whether storms send their own bolts to the ground, as they do
+    /// until told otherwise. A game that sends them itself with
+    /// [`strike`](Self::strike), so that it knows where each fell and can
+    /// let its thunder be heard, says `false`. Flashes that stay inside
+    /// the cloud are the storm's own either way.
+    pub fn set_storm_bolts(&mut self, own: bool) {
+        self.effects.set_bolts_of_its_own(own);
+    }
+
     /// Says how far rain has raised the level's still water, in metres:
     /// every lake and pond is drawn that much higher, and over whatever
     /// ground beside it is lower than that. The game's rules decide it

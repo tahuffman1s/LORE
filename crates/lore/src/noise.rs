@@ -36,6 +36,11 @@ pub enum NoiseKind {
     Surface,
     /// Air let go under water.
     Bubbles,
+    /// Thunder from a stroke of lightning close enough for its crack to
+    /// be heard.
+    Thunder,
+    /// Thunder from far off: the rumble alone.
+    FarThunder,
 }
 
 impl NoiseKind {
@@ -56,6 +61,8 @@ impl NoiseKind {
             Self::SwimStroke => "swim-stroke",
             Self::Surface => "surface",
             Self::Bubbles => "bubbles",
+            Self::Thunder => "thunder",
+            Self::FarThunder => "thunder-far",
         }
     }
 
@@ -85,6 +92,15 @@ impl NoiseKind {
                 far: 15.0,
             },
             Self::Gunshot => Range::GUNFIRE,
+            // Thunder is heard a long way off: ten miles, on a still night.
+            Self::Thunder => Range {
+                near: 400.0,
+                far: 16_000.0,
+            },
+            Self::FarThunder => Range {
+                near: 3_000.0,
+                far: 30_000.0,
+            },
             Self::DryFire | Self::Reload => Range {
                 near: 1.0,
                 far: 50.0,
