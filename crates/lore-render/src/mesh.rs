@@ -1842,7 +1842,12 @@ impl MeshPipeline {
                     frame,
                     view.eye,
                     (view.exact, view.elapsed),
-                    (near, meshes.is_some_and(|meshes| meshes.has_water)),
+                    (
+                        near,
+                        meshes.is_some_and(|meshes| meshes.has_water),
+                        meshes.map_or(f32::NAN, |meshes| meshes.bodies.fetch()),
+                        rise,
+                    ),
                     (stirs, weather.wind),
                 )
             }?;
