@@ -78,6 +78,13 @@ pub const MOST_DROPS: usize = 6000;
 
 /// The most drops one call to [`Fluids::spray`] makes.
 const MOST_PER_SPRAY: usize = 12;
+/// The most drops one spray may make when it splits a big volume so that no
+/// drop is wider than a puddle tile; beyond it drops are larger and the
+/// spread cap holds their patch.
+const MOST_SPLIT: usize = 64;
+/// The fastest a spray may leave, m/s: far beyond any nozzle (a fire hose is
+/// about 30 m/s), and it keeps the sweep of a drop in one tick sane.
+const MOST_SPRAY_SPEED: f32 = 200.0;
 /// How big a drop of thin fluid is when it leaves a spray, metres.
 const THIN_RADIUS: f32 = 0.0025;
 /// How big a drop of thread-forming fluid is when it leaves a spray, metres.
@@ -201,7 +208,7 @@ impl Fluids {
     /// either side of it.
     ///
     /// Thin fluids leave as a stream of small drops, thick ones (honey,
-    /// tar) as a thread of longer ones. Up to 12 drops are made, spaced
+    /// tar) as a thread of longer ones. Up to 12 drops are made (up to 64 for a big spray, so that none is wider than a puddle can be), spaced
     /// along the way they travel this tick. Nothing is made for a kind of
     /// [`MOST_KINDS`] or more, for no litres, or for numbers that are not
     /// numbers. When the store is full the oldest lying drops are replaced;
@@ -233,12 +240,26 @@ impl Fluids {
         let r0 = if thread { THREAD_RADIUS } else { THIN_RADIUS };
         let ball = 4.0 / 3.0 * PI * r0 * r0 * r0;
         let most_for_volume = (volume / MIN_VOLUME) as usize;
+        // What a puddle tile of R_MAX holds at its thinnest: no drop need
+        // be bigger, so a big spray is cut into drops that fit.
+        let tile = PI * R_MAX * R_MAX * phys.h_eq;
+        let for_tile = if tile > 0.0 {
+            libm::ceilf(volume / tile) as usize
+        } else {
+            1
+        };
         let n = (libm::ceilf(volume / ball) as usize)
             .clamp(1, MOST_PER_SPRAY)
+            .max(for_tile)
+            .min(MOST_SPLIT)
             .min(most_for_volume.max(1));
         let each = volume / n as f32;
         let r = ball_radius(each);
         let speed = length(velocity);
+        if !speed.is_finite() {
+            return;
+        }
+        let speed = speed.min(MOST_SPRAY_SPEED);
         let heading = normalize(velocity);
         let (u, v) = frame(heading.unwrap_or([0.0, 1.0, 0.0]));
         let cone = 1.0 - libm::cosf(spread);
@@ -248,6 +269,7 @@ impl Fluids {
         } else {
             1.0
         };
+        let mut replaced = false;
         for i in 0..n {
             // Rolled in a fixed order whether or not the drop is made.
             let (a, b, c) = (self.rolls.next(), self.rolls.next(), self.rolls.next());
@@ -274,12 +296,17 @@ impl Fluids {
             } else if let Some(oldest) = self.oldest_lying() {
                 if let Some(slot) = self.parts.get_mut(oldest) {
                     *slot = drop;
+                    replaced = true;
                 }
             } else {
                 break;
             }
         }
-        self.grid.build(&self.parts);
+        // Pushed drops are in flight and not in the grid; only an
+        // overwritten lying drop makes the grid wrong.
+        if replaced {
+            self.grid.build(&self.parts);
+        }
         self.publish();
     }
 

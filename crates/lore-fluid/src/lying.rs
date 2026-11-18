@@ -109,15 +109,17 @@ impl Fluids {
                 }
                 q.still = 0;
                 q.calm = false;
-                if washes {
-                    q.dead = true;
-                    return;
-                }
                 // The part of the older patch the new one covers: the
-                // overlap of two discs, approximated.
+                // overlap of two discs, approximated. Covering hides that
+                // share; washing also carries off the thin rim around it,
+                // so it takes twice the share (a modelling choice, not a
+                // measured number). The rest of the drop stays.
                 let small = radius.min(rq);
-                let share = ((radius + rq - d) / (2.0 * small)).clamp(0.0, 1.0)
+                let mut share = ((radius + rq - d) / (2.0 * small)).clamp(0.0, 1.0)
                     * (small * small / (rq * rq));
+                if washes {
+                    share = (2.0 * share).min(1.0);
+                }
                 q.volume *= 1.0 - share;
                 if q.volume < MIN_VOLUME {
                     q.dead = true;
@@ -158,7 +160,8 @@ impl Fluids {
                 continue;
             }
             let r = p.patch();
-            let r2 = r + phys.spread_speed(p.h, r) * dt;
+            // Never wider than R_MAX: a big drop settles thick, not wide.
+            let r2 = (r + phys.spread_speed(p.h, r) * dt).min(R_MAX);
             p.h = (p.volume / (PI * r2 * r2)).max(phys.h_eq);
             // Thickness is compared with where it last counted as changed,
             // so a slow spread still keeps a drop awake now and then.
@@ -194,11 +197,13 @@ impl Fluids {
             let lo = [a.pos[0] - reach, a.pos[1] - reach, a.pos[2] - reach];
             let hi = [a.pos[0] + reach, a.pos[1] + reach, a.pos[2] + reach];
             grid.near(lo, hi, &mut |j| {
-                if j != i && !a.dead && meet(parts, physics, &a, i, j, dt) {
-                    // Something changed `a` (a merge): read it again.
-                    if let Some(now) = parts.get(i) {
-                        a = *now;
-                    }
+                // Read drop `i` afresh each time: an earlier meeting may have
+                // pushed it or merged into it.
+                if let Some(now) = parts.get(i) {
+                    a = *now;
+                }
+                if j != i && !a.dead {
+                    meet(parts, physics, &a, i, j, dt);
                 }
             });
         }

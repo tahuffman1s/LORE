@@ -115,7 +115,6 @@ fn bad_input_is_ignored_and_the_same_seed_gives_the_same_drops() {
     a.spray(40, [0.0; 3], [0.0, -1.0, 0.0], 1.0, 0.0);
     a.spray(0, [f32::NAN, 0.0, 0.0], [0.0, -1.0, 0.0], 1.0, 0.0);
     a.spray(0, [0.0; 3], [0.0, -1.0, 0.0], -1.0, 0.0);
-    assert!(a.drops().is_empty());
     for fluids in [&mut a, &mut b] {
         fluids.spray(0, [0.0, 1.0, 0.0], [1.0, -2.0, 0.0], 0.1, 0.3);
         for _ in 0..90 {
@@ -125,6 +124,17 @@ fn bad_input_is_ignored_and_the_same_seed_gives_the_same_drops() {
     assert_eq!(a.drops(), b.drops());
     a.clear(Some(0));
     assert!(a.drops().is_empty());
+}
+
+#[test]
+fn a_spray_speed_that_overflows_is_refused_and_a_huge_one_is_held() {
+    let mut f = Fluids::new(3);
+    f.spray(0, [0.0; 3], [1.0e30; 3], 1.0, 0.0);
+    assert!(f.drops().is_empty());
+    // A very fast one is held to the most a nozzle could do.
+    f.spray(0, [0.0; 3], [1.0e10, 0.0, 0.0], 0.01, 0.0);
+    assert!(!f.drops().is_empty());
+    assert!(f.drops().iter().all(|d| d.place[0].is_finite()));
 }
 
 /// Timing with the store full in a closed box room.

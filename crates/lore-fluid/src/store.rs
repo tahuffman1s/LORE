@@ -1,5 +1,6 @@
 //! The drops themselves, one record each.
 
+use crate::lying::R_MAX;
 use crate::math::V3;
 use core::f32::consts::PI;
 
@@ -88,7 +89,9 @@ impl Particle {
 
     /// A drop lying on a surface at `pos` facing `normal`, `h` thick.
     pub(crate) fn lying(kind: u8, pos: V3, normal: V3, volume: f32, h: f32, born: u64) -> Self {
-        let h = h.max(1.0e-6);
+        // No patch is wider than R_MAX: every neighbour search relies on it,
+        // so a big drop lies thick instead of wide.
+        let h = h.max(1.0e-6).max(volume / (PI * R_MAX * R_MAX));
         Self {
             normal,
             h,

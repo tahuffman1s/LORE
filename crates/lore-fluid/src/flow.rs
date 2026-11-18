@@ -39,8 +39,9 @@ const F_PUSH: f32 = 300.0;
 /// that is not a number is replaced by water's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Flow {
-    /// How thick it is, 0 to 1, on a scale where each step is a hundred
-    /// thousand times thicker (`mu = 10^(-3 + 8 v)` pascal seconds). 0 is
+    /// How thick it is, 0 to 1, on a scale where the whole range is a hundred
+    /// million times thicker and each 0.1 is about 6.3 times thicker
+    /// (`mu = 10^(-3 + 8 v)` pascal seconds). 0 is
     /// water, about 0.22 olive oil, 0.4 glycerin, 0.5 honey, 0.85 tar, the
     /// thickest that still moves. Thin fluids splash and run; thick ones
     /// creep, mound and do not splash.
@@ -131,7 +132,8 @@ pub(crate) struct Physics {
     /// Dynamic viscosity, Pa·s: `10^(-3 + 8 v)`, which runs from water
     /// (1 mPa·s) to the thickest thing that still flows. The scale is the
     /// plan's research: olive oil 56 mPa·s, glycerin 1.4 Pa·s, honey 2 to
-    /// 10 Pa·s, pitch about 2×10^11.
+    /// 10 Pa·s. The scale stops at 10^5 Pa·s (v = 1); pitch, about 2×10^11,
+    /// is beyond it.
     pub mu: f32,
     /// Density, kg/m³.
     pub rho: f32,
@@ -232,7 +234,9 @@ impl Physics {
     /// How fast a lying drop of `volume` m³, `h` thick and `radius` wide
     /// runs down a surface whose slope has sine `sin_alpha`, m/s.
     ///
-    /// Nusselt's film `rho g sin(a) h^2 / (3 mu)`, times how far gravity
+    /// Nusselt's film `rho g sin(a) h^2 / (3 mu)`, which is the film's mean
+    /// speed (its surface runs 1.5 times faster); the mean is used for a
+    /// drop. It is multiplied by how far gravity
     /// beats the pinning, capped at 2 m/s. It does not move at all until
     /// gravity along the surface beats the pinning.
     pub(crate) fn film_speed(&self, sin_alpha: f32, h: f32, radius: f32, volume: f32) -> f32 {

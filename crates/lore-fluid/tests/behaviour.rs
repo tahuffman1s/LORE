@@ -522,3 +522,22 @@ fn drops_on_a_wall_are_not_underfoot() {
     let feet = [drop.place[0], drop.place[1], drop.place[2] + 0.05];
     assert_eq!(fluids.underfoot(feet, 0.3), Underfoot::default());
 }
+
+#[test]
+fn a_big_spray_makes_patches_no_wider_than_a_puddle_tile_and_is_felt_underfoot() {
+    // Checks every neighbour search can rely on a patch being at most 12 cm:
+    // 10 litres in one call still lies as small patches that underfoot finds.
+    let level = floor();
+    let mut fluids = Fluids::new(21);
+    fluids.spray(0, [0.0, 0.3, 0.0], [0.0, -0.5, 0.0], 10.0, 0.3);
+    run(&mut fluids, &level, 600);
+    let patches = lying(&fluids);
+    assert!(!patches.is_empty());
+    for d in &patches {
+        assert!(d.radius <= 0.12 + 1.0e-3, "a patch {} m wide", d.radius);
+    }
+    for d in patches.iter().step_by((patches.len() / 5).max(1)) {
+        let under = fluids.underfoot([d.place[0], 0.0, d.place[2]], 0.05);
+        assert!(under.cover > 0.5, "cover {} at {:?}", under.cover, d.place);
+    }
+}
