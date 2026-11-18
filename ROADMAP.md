@@ -150,6 +150,7 @@ One continuous world you can see across and walk into: land, sky, water and grow
 - Big worlds load as you walk: no loading screen between their pieces (#83)
 - Day, night and weather: the sun follows the clock, and rain is one word (#130)
 - Fluids a script controls: thirteen kinds that fly, splash, pool and change how the player walks (#375)
+- An example to show fluids off: a city alley with a basketball court, a fluid gun, and menus for the weather and for debugging (#377)
 - Editor: outdoor ground shaped with a few brushes, and painted by slope and height (#186)
 - A world is one place: a game's land is a grid of pieces on disk that the engine joins up (#281)
 - The whole world to the horizon: far land draws as stand-ins the engine makes by itself (#282)
@@ -279,6 +280,7 @@ A graphical editor for levels and what lives in them: fly around, place things a
 
 Tools that make scripting and tuning easy. Not a general IDE: your own editor stays first-class, and the built-in panels do what only the engine can.
 
+- A script's own keys, a mouse in its menus, and tools to look round a level: flight, walking through walls, frame times (#376)
 - A local link to the running game: logs, live values and reload over one channel (#187)
 - AI assistants can ask the running game: docs, errors and state (#188)
 - Script debugger: pause on a line and look at the values (#189)

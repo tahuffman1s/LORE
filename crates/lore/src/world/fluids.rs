@@ -155,10 +155,12 @@ impl WorldFluids {
 
     /// Tells the script how much of each kind there is and what the player
     /// stood in over a tick of `step` seconds, which calls its
-    /// `game.fluids.onTouch` functions when that is something.
-    pub(crate) fn tell(&self, host: &mut ScriptHost, step: f32) {
+    /// `game.fluids.onTouch` functions when that is something. `standing`
+    /// is whether the player's feet are on the ground: someone who jumps
+    /// a puddle or flies over one stands in nothing, whatever lies below.
+    pub(crate) fn tell(&self, host: &mut ScriptHost, step: f32, standing: bool) {
         host.set_fluid_litres(&self.fluids.litres_by_kind());
-        let under = self.under.kind.map(|kind| FluidUnder {
+        let under = self.under.kind.filter(|_| standing).map(|kind| FluidUnder {
             kind,
             cover: self.under.cover,
             depth: self.under.depth,

@@ -88,6 +88,10 @@
   .card h3 { margin: 0 0 6px; font-size: 18px; }
   .card p { margin: 0; color: var(--muted); font-size: 15.5px; }
   .card .n { color: var(--accent); font-size: 13px; margin-bottom: 10px; display: block; }
+  .shots { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  figure.card { margin: 0; padding: 0; overflow: hidden; }
+  figure.card img { display: block; width: 100%; height: auto; }
+  figure.card figcaption { padding: 18px 22px 22px; }
 
   .split { display: grid; gap: 32px; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; }
   @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } .orbit { display: none; } nav ul li.hide { display: none; } pre { font-size: 12px; padding: 14px; } }
@@ -169,6 +173,18 @@
  talk      what they say    <span class="later">planned</span>
  quests    what to do       <span class="later">planned</span></pre>
         <p class="note">The planned names are a sketch and will change as each piece is designed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="today">
+    <div class="wrap">
+      <h2>What it draws today</h2>
+      <p class="sub">Two example games come with the engine: a jungle with a creek and a lake, and a city alley. These pictures are the alley, as <span class="mono">lore run</span> draws it. Its menus, its frame meter and its fluid gun are a few hundred lines of Luau.</p>
+      <div class="grid shots">
+        <figure class="card"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."><figcaption><span class="tag now">Runs today</span><h3>Fluids a script controls</h3><p>Water is the first; honey, oil, tar, acid, lava and mercury are water with a few numbers changed. They fly, splash, run down walls, pool, and change how you walk.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-fluid-menu.jpg" width="1280" height="720" loading="lazy" alt="A menu over the alley with three tabs, Weather, Debug and Fluid. The Fluid tab lists slime's colour, how far you see into it, how thick, slippery, sticky and bouncy it is, each with a slider."><figcaption><span class="tag now">Runs today</span><h3>Changed while it lies there</h3><p>Every row is one field of a kind of fluid. Drag one and every drop of it in the world changes. Keys, mouse and gamepad all work the menu.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."><figcaption><span class="tag now">Runs today</span><h3>Tools written in the game's own script</h3><p>Fly, walk through walls, slow time, jump to a place, read a frame meter. A script binds its own keys and draws its own menus.</p></figcaption></figure>
       </div>
     </div>
   </section>

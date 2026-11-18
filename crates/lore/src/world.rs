@@ -568,6 +568,7 @@ impl Game for World {
             moving.right *= waded;
         }
         let before = *player;
+        let walking = moving.mode == MoveMode::Walk;
         player.step(level, rules, &moving, *tick);
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick, and how they are moving.
@@ -633,8 +634,10 @@ impl Game for World {
             &mut self.noises,
         );
         // The script hears how much fluid there is and what the player
-        // stands in, before its own tick.
-        self.fluids.tell(self.game.host_mut(), *tick);
+        // stands in, before its own tick. Only someone walking with their
+        // feet down stands in anything.
+        let standing = self.player.player.grounded && walking;
+        self.fluids.tell(self.game.host_mut(), *tick, standing);
         self.game.tick(input, step);
         // The script may have put the player somewhere.
         self.teleport();

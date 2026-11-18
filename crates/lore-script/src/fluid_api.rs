@@ -198,6 +198,12 @@ macro_rules! ready {
     };
 }
 
+/// How bright a glow of 1 is, as a multiple of the fluid's own colour in the
+/// scene's units. Enough to stand out in daylight and light a night, and
+/// no more: the picture's tone mapping turns anything much brighter pale,
+/// and lava that glows at 4 came out the colour of a peach.
+const GLOW_AT_MOST: f32 = 1.5;
+
 /// The kinds a script can ask for by name and get something sensible.
 /// Kind 0, water, is the first.
 const READY: [Ready; 13] = [
@@ -331,7 +337,7 @@ fn look_of(spec: &Spec) -> FluidLook {
     FluidLook {
         absorbs,
         scatters,
-        glows: lin.map(|c| c * spec.glow * 4.0),
+        glows: lin.map(|c| c * spec.glow * GLOW_AT_MOST),
         roughness: 0.02 + 0.98 * (1.0 - spec.shine),
         metal: spec.metal,
         bends: spec.refraction,
@@ -1489,7 +1495,7 @@ mod tests {
         // 0.002 * 10^3 = 2 of the colour, then half way to the colour.
         assert!(near(look.scatters[0], 0.5 * 2.0 + (0.5 - 1.0) * 0.5));
         assert!(near(look.scatters[2], 0.0));
-        assert!(near(look.glows[0], 0.5 * 0.5 * 4.0));
+        assert!(near(look.glows[0], 0.5 * 0.5 * GLOW_AT_MOST));
         assert!(near(look.roughness, 0.02 + 0.98 * 0.25));
         assert!(near(look.metal, 0.5));
         assert!(near(look.bends, 1.4));

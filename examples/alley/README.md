@@ -76,8 +76,14 @@ Each part is a file of its own, `require`d by `main.luau`:
 | `fluids.luau` | the fluids the gun shoots, and where spraying and clearing them go |
 | `fluid_gun.luau` | the gun's crosshair and the fluid in hand |
 
-The gun does not shoot yet: LORE's script API for fluids is still being
-built, and `fluids.luau` is the one file that changes when it comes.
+The gun shoots fifteen fluids. Twelve are LORE's own, asked for by name
+(`game.fluid("honey")`), and three are made in `fluids.luau` from one of
+those with a few things changed (`game.fluid("glue", { from = "honey",
+sticky = 1, ... })`). F2 opens the fluid menu, whose rows are the fields of
+the kind in hand: drag one and every drop of that fluid in the alley
+changes with it. Acid and lava burn: LORE has no health yet, so
+`fluids.luau` keeps its own count and puts a burnt-out player back at the
+start.
 
 ## The hour and the weather
 
