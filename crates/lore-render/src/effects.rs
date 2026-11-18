@@ -495,6 +495,15 @@ impl Effects {
         }
     }
 
+    /// Says how wet the ground is, from 0 for dry to 1 for soaked, as if
+    /// it had rained so long: for a picture of wet ground that has not the
+    /// half minute of rain it takes to soak it.
+    pub(crate) fn soak(&mut self, wet: f32) {
+        if wet.is_finite() {
+            self.here[2] = wet.clamp(0.0, 1.0);
+        }
+    }
+
     /// Moves everything on by `seconds`, over the still water `water`.
     pub(crate) fn step<S: Surface + ?Sized>(&mut self, seconds: f32, water: &S) {
         self.stirs.clear();

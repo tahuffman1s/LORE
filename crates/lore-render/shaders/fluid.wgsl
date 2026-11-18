@@ -541,7 +541,16 @@ fn fluid_depth(world: vec3<f32>) -> f32 {
 // Where a point of the world is on the picture, from 0 to 1 across and
 // down; past that if it is off the picture, and below 0 behind the eye.
 fn fluid_on_picture(world: vec3<f32>) -> vec3<f32> {
-    let clip = view.clip_from_world * vec4<f32>(world, 1.0);
+    return on_picture(world, false);
+}
+
+// The same; with `earlier`, where the point is on the picture kept from
+// the frame before for solid things to mirror.
+fn on_picture(world: vec3<f32>, earlier: bool) -> vec3<f32> {
+    var clip = view.clip_from_world * vec4<f32>(world, 1.0);
+    if earlier {
+        clip = view.kept_from_world * vec4<f32>(world, 1.0);
+    }
     if clip.w <= 0.0001 {
         return vec3<f32>(-1.0);
     }
@@ -610,26 +619,38 @@ fn fluid_reaches_sky(start: vec3<f32>, way: vec3<f32>) -> f32 {
     return open;
 }
 
-// What a surface at `origin` mirrors along `bounced`: the line is walked
-// through the picture of the solid world in growing steps until it passes
-// behind something, which is then what is seen. A line that leaves the
-// picture, as most do from a puddle looked down on, goes on to the sky if
-// nothing stands in its way outside the picture, and that is what makes a
-// puddle bright on a dark road; if something does, it sees what is at the
-// picture's edge, which is most often more of the wall it was rising past.
-// Rough surfaces blur it, more the farther what is mirrored.
-fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
+// What a line of sight bounced off a surface strikes in a picture of the
+// solid world: the colour there and how sure that is, 0 if it struck
+// nothing the picture shows and 1 if it did; the last place on the picture
+// it passed over, with x below 0 if there was none; and where it stopped.
+struct Struck {
+    colour: vec3<f32>,
+    sure: f32,
+    last: vec3<f32>,
+    end: vec3<f32>,
+}
+
+// The line from `origin` along `bounced` is walked through the picture in
+// growing steps until it passes behind something, which is then what is
+// seen. Fluid and water are drawn after the solid world and read this
+// frame's picture of it; a solid thing is drawn into that picture, so with
+// `earlier` it reads the one kept from the frame before, where every point
+// of the world is looked for where it was drawn then. Rough surfaces blur
+// what they mirror, more the farther it is. `start`, from 0 to 1, is how
+// far into its first step the walk begins.
+fn mirror_walk(
+    origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, rough: f32, earlier: bool, start: f32,
+) -> Struck {
     let size = vec2<f32>(textureDimensions(behind_colour));
-    let sky = fluid_sky(origin, bounced);
+    var struck = Struck(vec3<f32>(0.0), 0.0, vec3<f32>(-1.0), origin);
     var stride = 0.03;
-    var at = origin + bounced * (0.004 + stride * scattered(pixel));
+    var at = origin + bounced * (0.004 + stride * start);
     var before = at;
-    var last = vec3<f32>(-1.0);
     for (var number = 0; number < 44; number++) {
         before = at;
         at += bounced * stride;
         stride *= 1.15;
-        let seen = fluid_on_picture(at);
+        let seen = on_picture(at, earlier);
         if seen.z < 0.0 || any(seen.xy < vec2<f32>(0.0)) || any(seen.xy >= vec2<f32>(1.0)) {
             break;
         }
@@ -644,7 +665,7 @@ fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, roug
                 var high = at;
                 for (var halving = 0; halving < 5; halving++) {
                     let middle = (low + high) * 0.5;
-                    let there = fluid_on_picture(middle);
+                    let there = on_picture(middle, earlier);
                     let deep = textureLoad(
                         behind_depth,
                         vec2<i32>(clamp(there.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size),
@@ -656,7 +677,7 @@ fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, roug
                         low = middle;
                     }
                 }
-                let found = fluid_on_picture(high);
+                let found = on_picture(high, earlier);
                 var colour = fluid_behind(found.xy);
                 // Rough: a few more looks round the place found, as far
                 // apart as the roughness spreads a line over the distance
@@ -664,29 +685,49 @@ fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, roug
                 let spread = rough * rough * 3.0 * length(high - origin)
                     * fluid_focal() / max(length(high - view.eye.xyz), 0.01) / size;
                 if spread.y > 0.6 / size.y {
-                    let turn = scattered(pixel.yx) * 6.2831853;
+                    // Turned anew every frame for a solid thing, whose
+                    // frames the upscaler blends.
+                    let turn = scattered(pixel.yx + select(0.0, view.shadows.w, earlier) * vec2<f32>(2.645751, 1.732051))
+                        * 6.2831853;
                     for (var tap = 0; tap < 4; tap++) {
                         let angle = turn + f32(tap) * 1.5707963;
                         colour += fluid_behind(found.xy + vec2<f32>(cos(angle), sin(angle)) * spread);
                     }
                     colour *= 0.2;
                 }
-                return colour;
+                return Struck(colour, 1.0, found, high);
             }
         }
-        last = seen;
+        struck.last = seen;
     }
-    let open = fluid_reaches_sky(at, bounced);
-    if last.x < 0.0 {
+    struck.end = at;
+    return struck;
+}
+
+// What a fluid's surface at `origin` mirrors along `bounced`. A line that
+// leaves the picture, as most do from a puddle looked down on, goes on to
+// the sky if nothing stands in its way outside the picture, and that is
+// what makes a puddle bright on a dark road; if something does, it sees
+// what is at the picture's edge, which is most often more of the wall it
+// was rising past.
+fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
+    let struck = mirror_walk(origin, bounced, pixel, rough, false, scattered(pixel));
+    if struck.sure > 0.0 {
+        return struck.colour;
+    }
+    let sky = fluid_sky(origin, bounced);
+    let open = fluid_reaches_sky(struck.end, bounced);
+    if struck.last.x < 0.0 {
         // It was never in the picture: what stands in its way is as dim as
         // the shade it stands in.
         return mix(surroundings(bounced) * 0.35, sky, open);
     }
-    let edge = vec2<i32>(clamp(last.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size);
+    let size = vec2<f32>(textureDimensions(behind_colour));
+    let edge = vec2<i32>(clamp(struck.last.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size);
     if textureLoad(behind_depth, edge, 0) <= 0.0 {
         return sky;
     }
-    return mix(fluid_behind(last.xy), sky, open);
+    return mix(fluid_behind(struck.last.xy), sky, open);
 }
 
 // The sun's glint (GGX, with Smith's visibility): light sent to the eye

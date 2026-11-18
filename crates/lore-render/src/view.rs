@@ -11,6 +11,25 @@ use crate::mesh::{Contents, MeshPipeline, View};
 use crate::scene::SceneTarget;
 use crate::upscale::{Drawn, Upscale, Upscaling};
 
+/// What a frame does with the picture that smooth things mirror: wet
+/// ground, puddles and polished things show the world in the picture drawn
+/// the frame before, which is kept for them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mirroring {
+    /// Nothing mirrors the world; smooth things mirror only the light of
+    /// the sky and the ground.
+    Off,
+    /// Each frame mirrors the picture kept from the frame before and keeps
+    /// its own for the next: a game drawn frame after frame.
+    Running,
+    /// This frame mirrors nothing, and keeps its picture for the next.
+    Keeping,
+    /// This frame mirrors the picture kept from the frame before and keeps
+    /// nothing: after a frame that kept its picture from the same camera,
+    /// it can be drawn again and come out the same.
+    Reading,
+}
+
 /// Everything between the camera and the picture that is tone mapped: the
 /// images the scene is drawn into, the upscaler, and what has to be
 /// remembered from one frame to the next.
@@ -30,6 +49,12 @@ pub(crate) struct SceneView {
     /// gives the same picture every time: for pictures drawn with no
     /// window, which tests compare.
     pub(crate) still: bool,
+    /// What the next frame does with the picture smooth things mirror.
+    pub(crate) mirroring: Mirroring,
+    /// Where each point of the world was drawn in the picture the last
+    /// frame kept for smooth things to mirror; `None` if it kept none, and
+    /// after a cut.
+    kept: Option<Mat4>,
     /// The time the clouds' clock shows, if the game says it.
     clock: Option<f64>,
     /// Where the eye was in the last frame, and how much its walking is
@@ -89,6 +114,8 @@ impl SceneView {
             frame: 0,
             seconds: 0.0,
             still: false,
+            mirroring: Mirroring::Running,
+            kept: None,
             clock: None,
             eye: None,
             stir: 0.0,
@@ -123,6 +150,7 @@ impl SceneView {
     /// Forgets the frames before: the next one is not blended with them.
     pub(crate) fn cut(&mut self) {
         self.before = None;
+        self.kept = None;
     }
 
     /// Records drawing `contents` as `camera` sees them, and upscaling the result.
@@ -160,9 +188,13 @@ impl SceneView {
         let (width, height) = (size.width as f32, size.height as f32);
         let [forward, right, up] = camera.rays(size.width, size.height);
         let (across, upwards) = (2.0 * jitter.0 / width, -2.0 * jitter.1 / height);
+        // A picture kept only to be mirrored is drawn as if it had not
+        // been: nothing that is remembered from frame to frame moves on.
+        let keeping = self.mirroring == Mirroring::Keeping;
         // How fast the eye is moving over the ground, eased so that rings
         // die away after it stops and do not jump when it starts.
-        if let Some(was) = self.eye
+        if !keeping
+            && let Some(was) = self.eye
             && seconds.is_finite()
             && seconds > 0.0001
         {
@@ -174,17 +206,24 @@ impl SceneView {
             let ease = (seconds * 2.5).clamp(0.0, 1.0);
             self.stir += (wanted - self.stir) * ease;
         }
-        self.eye = Some(camera.position);
         let mut elapsed = 0.0;
-        if !self.still && seconds.is_finite() {
-            elapsed = seconds.clamp(0.0, 1.0);
-            self.seconds += f64::from(elapsed);
+        if !keeping {
+            self.eye = Some(camera.position);
+            if !self.still && seconds.is_finite() {
+                elapsed = seconds.clamp(0.0, 1.0);
+                self.seconds += f64::from(elapsed);
+            }
         }
+        let clip = shifted(&steady, across, upwards);
+        // Only the picture the last frame kept is of where the eye is: not
+        // one from before a cut, nor one from before a while when nothing
+        // mirrored and nothing was kept.
+        let kept = self.kept.take();
         let view = View {
             // The picture is 2 wide and 2 high with y running up, and the
             // shift is in pixels with y running down. The direction is the
             // FSR manual's; the offscreen test fails with either sign turned.
-            clip: shifted(&steady, across, upwards),
+            clip,
             steady,
             before: self.before.unwrap_or(steady),
             eye: camera.position,
@@ -209,14 +248,26 @@ impl SceneView {
                 0.0
             },
             near: camera.near_metres(),
+            reflecting: self.mirroring != Mirroring::Off,
+            mirrors: kept.is_some()
+                && matches!(self.mirroring, Mirroring::Running | Mirroring::Reading),
+            kept: kept.unwrap_or(steady),
+            keeps: matches!(self.mirroring, Mirroring::Running | Mirroring::Keeping),
+            copied: false,
         };
-        let cut = self.before.is_none();
-        self.before = Some(steady);
-        self.frame = self.frame.wrapping_add(1);
-
+        self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`
         // asks for, and the target is this view's own.
         unsafe { mesh.record(commands, frame, &self.target, &view, contents) }?;
+        if self.target.kept.get() {
+            self.kept = Some(clip);
+        }
+        if keeping {
+            return Ok(());
+        }
+        let cut = self.before.is_none();
+        self.before = Some(steady);
+        self.frame = self.frame.wrapping_add(1);
         if let Some(upscale) = &mut self.upscale {
             let drawn = Drawn {
                 jitter,

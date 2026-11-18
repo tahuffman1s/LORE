@@ -10,7 +10,7 @@ use lore_ui::DrawList;
 use crate::bolt::Lightning;
 use crate::buffer::Buffer;
 use crate::camera::Camera;
-use crate::effects::{Effects, Splash};
+use crate::effects::{Air, Effects, Splash};
 use crate::error::RenderError;
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
@@ -22,7 +22,7 @@ use crate::tonemap::{Canvas, Over, Then, TonemapPipeline};
 use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
-use crate::view::SceneView;
+use crate::view::{Mirroring, SceneView};
 use crate::water::Stir;
 use crate::weather::Weather;
 
@@ -84,6 +84,8 @@ pub struct Headless {
     effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
+    /// Whether wet ground, puddles and polished things mirror the world.
+    reflections: bool,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -182,6 +184,7 @@ impl Headless {
             meshes: None,
             effects: Effects::new(),
             grid: false,
+            reflections: true,
             view,
             extent,
             image,
@@ -222,6 +225,13 @@ impl Headless {
         // Nothing that flew in the old level is in the new one.
         self.effects.clear();
         Ok(())
+    }
+
+    /// Says how wet the ground is, from 0 for dry to 1 for soaked: rain
+    /// takes half a minute to soak it, and a picture of a wet street
+    /// should not have to wait.
+    pub fn set_wet_ground(&mut self, wet: f32) {
+        self.effects.soak(wet);
     }
 
     /// Lets time pass between pictures, or holds it still again. It is held
@@ -356,6 +366,14 @@ impl Headless {
         self.grid = shown;
     }
 
+    /// Lets wet ground, puddles and polished things mirror the world, or
+    /// only the light of the sky, as
+    /// [`Renderer::set_reflections`](crate::Renderer::set_reflections)
+    /// does. They do to begin with.
+    pub fn set_reflections(&mut self, on: bool) {
+        self.reflections = on;
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -372,6 +390,11 @@ impl Headless {
     /// Draws one frame as `camera` sees it, waits until the graphics card
     /// has finished it, and says how long each half took.
     ///
+    /// While time is held still and anything in the scene mirrors the
+    /// world, the frame is drawn twice: first a picture for it to mirror,
+    /// from the same camera, so that the same camera gives the same
+    /// picture. The time given is for both.
+    ///
     /// # Errors
     ///
     /// Fails if the graphics driver or the upscaler reports a failure; this
@@ -379,8 +402,6 @@ impl Headless {
     pub fn render(&mut self, camera: &Camera) -> Result<FrameTime, RenderError> {
         #[cfg(feature = "panels")]
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
-        let device = self.gpu.device();
-        let start = Instant::now();
         // What flies moves on by a frame, unless time is held still.
         let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
         self.effects.storms(self.view.seconds(), camera.position);
@@ -388,6 +409,43 @@ impl Headless {
             .step(passed, self.meshes.as_ref().map_or(&[][..], Meshes::waters));
         let weather = self.effects.air(self.view.seconds());
         let tracks = self.effects.take_tracks();
+        let mirrors = self.reflections
+            && (weather.rows[0][2] > 0.0 || self.meshes.as_ref().is_some_and(Meshes::glossy));
+        // Held still, the same camera gives the same picture: what smooth
+        // things mirror is a picture drawn just before from the same camera,
+        // which mirrors nothing itself, and not the last picture, which may
+        // be of anywhere.
+        if self.view.still && mirrors {
+            self.view.mirroring = Mirroring::Keeping;
+            let first = self.draw(camera, weather, tracks, false)?;
+            self.view.mirroring = Mirroring::Reading;
+            let second = self.draw(camera, weather, None, true)?;
+            return Ok(FrameTime {
+                recording: first.recording + second.recording,
+                drawing: first.drawing + second.drawing,
+            });
+        }
+        self.view.mirroring = if self.reflections {
+            Mirroring::Running
+        } else {
+            Mirroring::Off
+        };
+        self.draw(camera, weather, tracks, true)
+    }
+
+    /// Draws one frame in `weather`, with `tracks` the rows of tracks that
+    /// changed, waits for it, and says how long each half took. Unless it
+    /// is `finished`, only the scene is drawn: it is a picture for the
+    /// next to mirror, and nothing is shown.
+    fn draw(
+        &mut self,
+        camera: &Camera,
+        weather: Air,
+        tracks: Option<(u32, u32)>,
+        finished: bool,
+    ) -> Result<FrameTime, RenderError> {
+        let device = self.gpu.device();
+        let start = Instant::now();
         // SAFETY: every handle belongs to `self.gpu`'s device and is alive;
         // the last frame was waited for, so nothing here is still in use,
         // and this frame is waited for before anything can be destroyed.
@@ -421,22 +479,24 @@ impl Headless {
                 camera,
                 FRAME_SECONDS,
             )?;
-            self.ui.prepare(self.commands, 0, &mut self.overlay)?;
-            self.tonemap.record(
-                self.commands,
-                Canvas {
-                    image: self.image,
-                    view: self.image_view,
-                    extent: self.extent,
-                },
-                1.0,
-                Over {
-                    ui: Some(&self.ui),
-                    #[cfg(feature = "panels")]
-                    panels: Some(&mut self.panels),
-                },
-                Then::Copy,
-            )?;
+            if finished {
+                self.ui.prepare(self.commands, 0, &mut self.overlay)?;
+                self.tonemap.record(
+                    self.commands,
+                    Canvas {
+                        image: self.image,
+                        view: self.image_view,
+                        extent: self.extent,
+                    },
+                    1.0,
+                    Over {
+                        ui: Some(&self.ui),
+                        #[cfg(feature = "panels")]
+                        panels: Some(&mut self.panels),
+                    },
+                    Then::Copy,
+                )?;
+            }
             device
                 .end_command_buffer(self.commands)
                 .map_err(RenderError::driver("recording a frame"))?;
@@ -1307,6 +1367,105 @@ mod tests {
     fn fluid_light(picture: &[u8], [x, y]: [usize; 2]) -> i32 {
         let at = (y * 128 + x) * 4;
         i32::from(picture[at]) + i32::from(picture[at + 1]) + i32::from(picture[at + 2])
+    }
+
+    /// A floor of `roughness`, and a wall glowing red standing on it ten
+    /// metres off, across the way the camera looks.
+    fn floor_and_wall(roughness: f32) -> Scene {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        let quad = |corners: [[f32; 3]; 4], normal: [f32; 3], material: u32| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: corners.to_vec(),
+                normals: vec![normal; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let mut scene = Scene::default();
+        scene.materials.push(Material {
+            base_color: [0.05, 0.05, 0.05, 1.0],
+            roughness,
+            ..Material::default()
+        });
+        scene.materials.push(Material {
+            base_color: [0.0, 0.0, 0.0, 1.0],
+            emissive: [1.0, 0.0, 0.0],
+            emissive_strength: 8.0,
+            double_sided: true,
+            ..Material::default()
+        });
+        scene.meshes.push(quad(
+            [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                .map(|[x, z]| [x * 100.0, 0.0, z * 100.0]),
+            [0.0, 1.0, 0.0],
+            0,
+        ));
+        scene.meshes.push(quad(
+            [[-30.0, 0.0], [30.0, 0.0], [30.0, 12.0], [-30.0, 12.0]].map(|[x, y]| [x, y, -10.0]),
+            [0.0, 0.0, 1.0],
+            1,
+        ));
+        for mesh in 0..2 {
+            scene.instances.push(Instance {
+                mesh,
+                transform,
+                mirrored: false,
+                name: None,
+                extras: None,
+            });
+        }
+        scene
+    }
+
+    #[test]
+    fn a_smooth_floor_mirrors_the_wall_before_it_and_a_rough_one_does_not() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = Camera {
+            position: [0.0, 1.5, 10.0],
+            pitch: -0.15,
+            ..Camera::default()
+        };
+        // How much redder than green the lower half of the picture is,
+        // where only the floor is.
+        let red = |picture: &[u8]| -> i64 {
+            picture
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .skip(128 * 40)
+                .map(|pixel| i64::from(pixel[0]) - i64::from(pixel[1]))
+                .sum()
+        };
+        headless.set_scene(&floor_and_wall(0.05)).unwrap();
+        let mirrored = headless.screenshot(&camera).unwrap();
+        // What it mirrors is drawn from the same camera, so the picture
+        // does not change from one to the next.
+        assert!(headless.screenshot(&camera).unwrap() == mirrored);
+        headless.set_reflections(false);
+        let unmirrored = headless.screenshot(&camera).unwrap();
+        let (with, without) = (red(&mirrored), red(&unmirrored));
+        assert!(
+            with > without + 128 * 32 * 20,
+            "the floor is no redder for mirroring the wall: {with} against {without}"
+        );
+        // A rough floor mirrors only the sky's light, so it looks the same
+        // either way.
+        headless.set_scene(&floor_and_wall(1.0)).unwrap();
+        let rough = headless.screenshot(&camera).unwrap();
+        headless.set_reflections(true);
+        assert!(headless.screenshot(&camera).unwrap() == rough);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
     }
 
     #[test]
