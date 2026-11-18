@@ -760,6 +760,8 @@ struct FilmSeen {
     colour: vec3<f32>,
     // Where its surface is, or the ground's where it does not cover.
     world: vec3<f32>,
+    // Which way what it lies on faces.
+    lies_on: vec3<f32>,
 }
 
 // A film of liquid lying on the ground seen at the pixel `at`, over
@@ -775,6 +777,7 @@ fn film_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32>)
     let across = film_run(at, size, ground, film.a, vec2<i32>(1, 0));
     let down = film_run(at, size, ground, film.a, vec2<i32>(0, 1));
     let lies_on = fluid_facing(across.xyz, down.xyz, to_eye);
+    seen.lies_on = lies_on;
     // Which way the sum of bumps grows along the ground, from how it
     // changes towards the two neighbours (a basis and its dual).
     let crossed = cross(across.xyz, down.xyz);
@@ -1004,9 +1007,18 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
     var depth = held;
     if films {
         let seen = film_seen(at, size, position.xy, colour);
-        colour = seen.colour;
-        world = seen.world;
-        depth = fluid_depth(world);
+        // Snow lies over what lies on the ground: a film is under it as
+        // the ground it is on is, and what was drawn there, which is the
+        // snow, is what is seen.
+        var hidden = 0.0;
+        if view.weather[2].x > 0.0 {
+            hidden = snow_on(world, seen.lies_on.y, open_sky(world, position.xy)).x;
+        }
+        colour = mix(seen.colour, colour, hidden);
+        if hidden < 0.5 {
+            world = seen.world;
+            depth = fluid_depth(world);
+        }
     }
     if streams {
         let seen = stream_seen(at, size, position.xy, colour);
