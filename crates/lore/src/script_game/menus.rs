@@ -263,6 +263,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             vsync: false,
             frame_rate_limit: 390.0,
             reflections: false,
+            light_shafts: false,
         }
     );
     assert!((chosen.sensitivity - 0.9).abs() < 1e-6);

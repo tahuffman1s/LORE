@@ -65,6 +65,9 @@ pub(crate) struct SceneView {
     sharper: f32,
     /// Whether each frame's picture is measured for the eye to adapt to.
     pub(crate) measured: bool,
+    /// Whether the air is lit: beams where the sun reaches it, the glow of
+    /// lamps in it.
+    pub(crate) shafts: bool,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -122,6 +125,7 @@ impl SceneView {
             eye: None,
             stir: 0.0,
             measured: false,
+            shafts: true,
         })
     }
 
@@ -257,6 +261,7 @@ impl SceneView {
             kept: kept.unwrap_or(steady),
             keeps: matches!(self.mirroring, Mirroring::Running | Mirroring::Keeping),
             copied: false,
+            shafts: self.shafts,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`

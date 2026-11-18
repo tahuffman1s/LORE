@@ -94,6 +94,8 @@ pub struct Headless {
     measuring: Vec<u8>,
     /// Whether wet ground, puddles and polished things mirror the world.
     reflections: bool,
+    /// Whether the air is lit, as for a window.
+    light_shafts: bool,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -196,6 +198,7 @@ impl Headless {
             eye: Eye::new(EyeAdaptation::FIXED),
             measuring: Vec::new(),
             reflections: true,
+            light_shafts: true,
             view,
             extent,
             image,
@@ -413,6 +416,13 @@ impl Headless {
         self.reflections = on;
     }
 
+    /// Lights the air, or leaves it as the fog alone has it, as
+    /// [`Renderer::set_light_shafts`](crate::Renderer::set_light_shafts)
+    /// does. On to begin with.
+    pub fn set_light_shafts(&mut self, on: bool) {
+        self.light_shafts = on;
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -500,6 +510,7 @@ impl Headless {
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
             self.view.measured = finished && self.eye.adaptation.adapts();
+            self.view.shafts = self.light_shafts;
             self.view.record(
                 self.commands,
                 0,
@@ -1521,6 +1532,79 @@ mod tests {
         let rough = headless.screenshot(&camera).unwrap();
         headless.set_reflections(true);
         assert!(headless.screenshot(&camera).unwrap() == rough);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn air_in_the_shade_of_a_roof_does_not_glow_with_the_sun() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A roof forty metres across, four metres up, at noon in mist:
+        // looking out from under it, the first twenty metres of air are in
+        // its shadow, and the sun lights the air beyond.
+        let mut scene = fluid_scene(false, false);
+        // The sun's shadows span the level's bounds, which a loaded level
+        // knows: these are made here, so they are said here.
+        scene.meshes[0].parts[0].bounds = lore_assets::Bounds {
+            min: [-500.0, 0.0, -500.0],
+            max: [500.0, 0.0, 500.0],
+        };
+        let roof = lore_assets::Mesh {
+            name: None,
+            parts: vec![lore_assets::MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * 20.0, 4.0, z * 20.0])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                bounds: lore_assets::Bounds {
+                    min: [-20.0, 4.0, -20.0],
+                    max: [20.0, 4.0, 20.0],
+                },
+                ..lore_assets::MeshPart::default()
+            }],
+        };
+        scene.meshes.push(roof);
+        let mut placed = scene.instances[0].clone();
+        placed.mesh = 1;
+        scene.instances.push(placed);
+        headless.set_scene(&scene).unwrap();
+        headless.set_hour(Some(12.0));
+        headless.set_weather(Weather {
+            cloud_cover: 0.0,
+            fog: 0.6,
+            ..Weather::default()
+        });
+        // Facing the sun's side: mist sends most of the sun's light on, so
+        // that is where its share of the fog's light is greatest.
+        let camera = Camera {
+            position: [0.0, 1.5, 0.0],
+            yaw: -2.47,
+            ..Camera::default()
+        };
+        let light = |picture: &[u8]| -> i64 {
+            picture
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .skip(128 * 30)
+                .take(128 * 12)
+                .map(|pixel| i64::from(pixel[0]) + i64::from(pixel[1]) + i64::from(pixel[2]))
+                .sum()
+        };
+        let lit = headless.screenshot(&camera).unwrap();
+        // The same camera gives the same picture.
+        assert!(headless.screenshot(&camera).unwrap() == lit);
+        headless.set_light_shafts(false);
+        let unlit = headless.screenshot(&camera).unwrap();
+        let (shaded, glowing) = (light(&lit), light(&unlit));
+        assert!(
+            shaded + 128 * 12 * 3 < glowing,
+            "the air under the roof glows as if it were in the sun: {shaded} against {glowing}"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

@@ -124,6 +124,9 @@ pub(crate) struct View {
     /// see-through is drawn, which then mirrors that copy and not the
     /// frame before's: [`MeshPipeline::record`] works it out.
     pub(crate) copied: bool,
+    /// Whether the air is lit once the picture is drawn: beams where the
+    /// sun reaches it, the glow of lamps in it.
+    pub(crate) shafts: bool,
 }
 
 impl View {
@@ -764,6 +767,9 @@ pub(crate) struct MeshPipeline {
     fluid: Option<FluidWorks>,
     /// Draws the sky behind everything.
     sky: vk::Pipeline,
+    /// Lays the light in the air over the finished picture: beams where the
+    /// sun reaches the air, and the glow of lamps in it.
+    air: vk::Pipeline,
     /// The sky of a scene that sets no light of its own.
     usual_sky: Sky,
     /// Draws the editor's ground grid, with the same layout and view.
@@ -813,6 +819,7 @@ impl MeshPipeline {
             clouds: None,
             fluid: None,
             sky: vk::Pipeline::null(),
+            air: vk::Pipeline::null(),
             usual_sky: Sky::of(&Lighting::default()),
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
@@ -926,6 +933,12 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The picture's depth, for the light in the air once it is drawn.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(16)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -939,7 +952,7 @@ impl MeshPipeline {
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 2,
-                vk::DescriptorType::SAMPLED_IMAGE => 9,
+                vk::DescriptorType::SAMPLED_IMAGE => 10,
                 _ => 4,
             };
             vk::DescriptorPoolSize::default()
@@ -1443,6 +1456,64 @@ impl MeshPipeline {
                 }
             }
         }
+        // The light in the air: one triangle over the finished picture,
+        // which adds the glow of lamps and takes away the sun's light from
+        // air in shadow. Its colour may be below zero, so it is added as it
+        // is; it never takes away more than the fog gave.
+        if failed.is_none() {
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(c"vertex_air"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(c"fragment_air"),
+            ];
+            let no_points = vk::PipelineVertexInputStateCreateInfo::default();
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::ONE)
+                .dst_color_blend_factor(vk::BlendFactor::ONE)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD)
+                .color_write_mask(
+                    vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B,
+                )];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let colour_only = [SceneTarget::FORMAT];
+            let mut rendering =
+                vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&colour_only);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&no_points)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
+            // SAFETY: as for the pipelines above.
+            let created = unsafe {
+                device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&info),
+                    None,
+                )
+            };
+            match created {
+                Ok(pipelines) if !pipelines.is_empty() => mesh.air = pipelines[0],
+                other => {
+                    failed =
+                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                }
+            }
+        }
         let fluid = if failed.is_none() {
             let sets = [mesh.set_layout, mesh.material_layout, mesh.body_layout];
             Some(FluidWorks::new(gpu, frames, module, sets, &ranges))
@@ -1582,15 +1653,22 @@ impl MeshPipeline {
             && let Some(bound) = behind.get_mut(frame % self.views.len().max(1))
             && *bound != target.behind.view
         {
-            let pictures = [target.behind.view, target.behind_depth.view].map(|view| {
+            let pictures = [
+                target.behind.view,
+                target.behind_depth.view,
+                target.depth.view,
+            ]
+            .map(|view| {
                 [vk::DescriptorImageInfo::default()
                     .image_view(view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
             });
-            let writes = [0_usize, 1].map(|picture| {
+            // The copies water looks through, and the depth itself, which
+            // the light in the air reads once the picture is drawn.
+            let writes = [(5, 0_usize), (6, 1), (16, 2)].map(|(binding, picture)| {
                 vk::WriteDescriptorSet::default()
                     .dst_set(*view_set)
-                    .dst_binding(5 + picture as u32)
+                    .dst_binding(binding)
                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(&pictures[picture])
             });
@@ -2013,10 +2091,59 @@ impl MeshPipeline {
                 device.cmd_draw(commands, 6, 1, 0, 0);
             }
             device.cmd_end_rendering(commands);
-            device.cmd_pipeline_barrier2(
-                commands,
-                &vk::DependencyInfo::default().image_memory_barriers(&to_finish),
-            );
+            if view.shafts && sky.is_some() {
+                // The light in the air reads the finished depth and is
+                // added over the colour, which stays to be drawn into.
+                let [colour_done, motion_done, depth_done] = to_finish;
+                let colour_again = vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .dst_access_mask(
+                        vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    )
+                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(target.colour.image)
+                    .subresource_range(COLOUR);
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&[depth_done, colour_again]),
+                );
+                let colour = [attachments[0].load_op(vk::AttachmentLoadOp::LOAD)];
+                let over = vk::RenderingInfo::default()
+                    .render_area(area)
+                    .layer_count(1)
+                    .color_attachments(&colour);
+                device.cmd_begin_rendering(commands, &over);
+                device.cmd_set_viewport(commands, 0, &[viewport]);
+                device.cmd_set_scissor(commands, 0, &[area]);
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, self.air);
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    0,
+                    &[*view_set],
+                    &[],
+                );
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                device.cmd_draw(commands, 3, 1, 0, 0);
+                device.cmd_end_rendering(commands);
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&[colour_done, motion_done]),
+                );
+            } else {
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_finish),
+                );
+            }
         }
         Ok(())
     }
@@ -2395,6 +2522,7 @@ impl Drop for MeshPipeline {
             device.destroy_pipeline(self.body_pipeline, None);
             device.destroy_pipeline(self.bit_pipeline, None);
             device.destroy_pipeline(self.sky, None);
+            device.destroy_pipeline(self.air, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
@@ -2605,6 +2733,7 @@ mod tests {
             },
             keeps: true,
             copied: true,
+            shafts: false,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
