@@ -83,6 +83,16 @@ impl Play {
         })
     }
 
+    /// Says what lamps the level places, by name, for the script to find
+    /// and change. Call it before the first tick.
+    pub(super) fn set_level_lamps(&mut self, lamps: &[(String, lore_script::LampLight)]) {
+        self.game
+            .world_mut()
+            .game_mut()
+            .host_mut()
+            .set_level_lamps(lamps);
+    }
+
     /// The action set the game's script has chosen: `gameplay` unless it
     /// said otherwise.
     pub(super) fn action_set(&self) -> lore_input::ActionSetId {

@@ -554,7 +554,7 @@ declare extern type Lamp with
     --- Example: print(game.lamp("porch").name)
     name: string
 
-    --- Where it is, in metres. Set it every tick to carry it about.
+    --- Where it is, in metres, y up. Set it every tick to carry it about.
     --- Example: torch.at = game.player.eye + vector.create(0.3, -0.2, 0)
     at: vector
 
@@ -569,10 +569,11 @@ declare extern type Lamp with
     --- Example: porch.lumens = 400
     lumens: number
 
-    --- The colour of its light: a name or "#rrggbb". Setting it sets
-    --- `kelvin` to 0; reading gives "#rrggbb" whichever said the colour.
-    --- How bright it is stays `lumens`: the colour says only what colour.
-    --- Example: game.lamp("magic").color = "#60a0ff"
+    --- The colour of its light: a name or "#rrggbb", read back as
+    --- "#rrggbb" as written. Setting it sets `kelvin` to 0. How bright it
+    --- is stays `lumens`: the colour says only what colour, so "#406080"
+    --- and "#80c0ff" give the same light.
+    --- Example: game.lamp("magic", {}).color = "#60a0ff"
     color: string
 
     --- The colour of its light as a temperature, in kelvin, from 1000 to
@@ -596,11 +597,11 @@ declare extern type Lamp with
     --- Example: torch.softness = 0.3
     softness: number
 
-    --- How far its light is drawn, in metres, up to 1000. 0 (as made) works
-    --- it out from how bright it is: where its light falls to a tenth of a
-    --- full moon's. Set it smaller to keep a bright lamp in its room.
-    --- Example: porch.reach = 8
-    reach: number
+    --- How far its light is drawn, in metres, up to 1000; 0 (as made)
+    --- works it out from how bright it is, where its light falls to a tenth
+    --- of a full moon's. Set it smaller to keep a bright lamp in its room.
+    --- Example: porch.range = 8
+    range: number
 
     --- How large what glows is: its radius in metres, from 0.001 to 10. A
     --- larger lamp gives softer light and a broader shine on wet and
@@ -609,10 +610,11 @@ declare extern type Lamp with
     radius: number
 
     --- How it flickers: "none", "candle", "fire", "torch", "faulty" (a
-    --- failing tube) or "pulse". Or your own as two or more letters from a
-    --- (dark) to z (twice as bright), m being as bright as `lumens` says,
-    --- read ten a second and blended from one to the next, as Quake's light
-    --- styles are. Two lamps that flicker alike start at different places.
+    --- failing tube) or "pulse". Or your own: eight or more letters, each
+    --- how bright it is for a tenth of a second, from a (dark) through m
+    --- (as bright as `lumens` says) to z (twice as bright), blended from
+    --- one to the next, as Quake's light styles are. Two lamps that flicker
+    --- alike start at different places.
     --- Example: game.lamp("torch").flicker = "torch"
     --- Example: game.lamp("alarm").flicker = "mmmmmmaaaaaa"
     flicker: string
@@ -625,9 +627,10 @@ end
 --- What `game.lamp` takes to make or change a lamp. `from` is a lamp to
 --- start from: a ready-made one ("candle", "lantern", "torch", "campfire",
 --- "bulb", "street lamp", "floodlight"), a lamp the game has, or a `Lamp`.
---- Each other setting replaces one thing, and is also a field of `Lamp`.
+--- Each other setting replaces one thing, and is also a field of `Lamp`;
+--- a beam points straight down unless `pointing` says otherwise.
 --- Example: game.lamp("gate", { from = "street lamp", at = vector.create(0, 6, -12) })
-type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens: number?, color: string?, kelvin: number?, beam: number?, pointing: vector?, softness: number?, reach: number?, radius: number?, flicker: string? }
+type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens: number?, color: string?, kelvin: number?, beam: number?, pointing: vector?, softness: number?, range: number?, radius: number?, flicker: string? }
 
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.
@@ -793,19 +796,21 @@ declare game: {
     --- Example: local goo = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
     fluid: (name: string, settings: FluidSettings?) -> Fluid,
 
-    --- The lamp called `name`. With no settings: the lamp of that name
-    --- that the game has (a lamp the level places has the name its light
-    --- has in the file), or else a new one made from the ready-made lamp of
-    --- that name ("candle", "lantern", "torch", "campfire", "bulb", "street
-    --- lamp", "floodlight") or, if there is none, an 800-lumen bulb at the
-    --- middle of the world. With a table of settings the lamp becomes
-    --- exactly that: it starts from `from` (or the ready-made of the same
-    --- name, or the lamp of that name the game has) and each setting given
-    --- replaces one thing. Put the call at the top of the file and a save
-    --- updates the lamp in place. A game can have 4096 lamps; the nearest
-    --- 256 in view are drawn.
+    --- The lamp called `name`. With no settings: the lamp of that name that
+    --- the game has (a lamp the level places has the name its light has in
+    --- the file), or one made from the ready-made lamp of that name
+    --- ("candle", "lantern", "torch", "campfire", "bulb", "street lamp",
+    --- "floodlight") at the middle of the world; any other name is a
+    --- mistake that says the nearest. With a table of settings the lamp
+    --- becomes exactly that, made or changed: it starts from `from` (or the
+    --- level's lamp of that name, as its file says it, or the ready-made of
+    --- that name, or an 800-lumen bulb) and each setting given replaces one
+    --- thing. Put the call at the top of the file and a save updates the
+    --- lamp in place. A game can have 4096 lamps; the nearest 256 in view
+    --- are drawn.
     --- Example: local porch = game.lamp("porch", { from = "lantern", at = vector.create(2, 2.2, 0) })
-    --- Example: local torch = game.lamp("torch", { beam = 40, lumens = 300, kelvin = 5000 })
+    --- Example: local flashlight = game.lamp("flashlight", { beam = 40, lumens = 300, kelvin = 5000 })
+    --- Example: game.lamp("street lamp 1").on = false
     lamp: (name: string, settings: LampSettings?) -> Lamp,
 
     --- How the picture is exposed for the light there is. Light in a game
@@ -814,6 +819,9 @@ declare game: {
     --- brighter than that (a street in shade, a day all cloud, a street
     --- under lamps at night) adapted to, as an eye gets used to the dark
     --- and to bright light. The player's brightness setting is on top.
+    --- Brightness is counted in stops, as cameras count it: one stop
+    --- brighter is twice as bright, two stops four times, one stop darker
+    --- half.
     lighting: {
         --- Draws the whole picture brighter or darker, in camera stops, on
         --- top of what the eye does: 1 is twice as bright, -1 half as
@@ -834,10 +842,10 @@ declare game: {
         --- `opens` is the most stops brighter a view may be drawn than the
         --- sky alone would draw it (8 as made), `closes` the most stops
         --- darker (8), and `seconds` about how long the eye takes to get
-        --- used to the dark (1.5), bright light taking a third as long.
-        --- Each from 0. `opens = 1` keeps a cave dark; 0 and 0 draw every
-        --- view as the sky alone would. Settings not given stay as they
-        --- were.
+        --- used to the dark (1.5; more is slower), bright light taking a
+        --- third as long. Each from 0. `opens = 1` keeps a cave dark for a
+        --- horror game; 0 and 0 draw every view as the sky alone would.
+        --- Settings not given stay as they were.
         --- Example: game.lighting.setEyeAdaptation({ opens = 1, seconds = 6 })
         --- Example: game.lighting.setEyeAdaptation({ opens = 0, closes = 0 })
         setEyeAdaptation: (settings: { opens: number?, closes: number?, seconds: number? }) -> (),

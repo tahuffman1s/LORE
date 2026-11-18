@@ -190,8 +190,16 @@ fn mistakes_say_what_to_write() {
     assert!(message.contains("Did you mean \"fire\"?"), "{message}");
     let message = load_mistake(r#"game.lamp("porch", { at = 3 })"#);
     assert!(message.contains("needs a vector"), "{message}");
-    let message = load_mistake(r#"game.lamp("porch").beem = 3"#);
+    let message = load_mistake(r#"game.lamp("porch", {}).beem = 3"#);
     assert!(message.contains("Did you mean lamp.beam?"), "{message}");
+    // A name that is no lamp and no ready-made one is a mistake, not a new
+    // bulb at the middle of the world.
+    let message = load_mistake(r#"game.lamp("porch", {}) game.lamp("porh").on = false"#);
+    assert!(message.contains("Did you mean \"porch\"?"), "{message}");
+    assert!(message.contains("from = \"bulb\""), "{message}");
+    // A short word is no flicker of one's own.
+    let message = load_mistake(r#"game.lamp("porch", { flicker = "sparkle" })"#);
+    assert!(message.contains("not a flicker"), "{message}");
     let message = load_mistake(r#"game.lamp(3)"#);
     assert!(message.contains("name in quotes"), "{message}");
     let message = load_mistake(r#"game.lamp("porch", { pointing = vector.create(0, 0, 0) })"#);
@@ -228,7 +236,9 @@ impl Drop for GameFolder {
 
 #[test]
 fn a_reload_keeps_the_lamps_and_changes_one_in_place() {
-    let folder = GameFolder::new(r#"game.lamp("porch", { lumens = 100 }) game.lamp("hall")"#);
+    let folder = GameFolder::new(
+        r#"game.lamp("porch", { lumens = 100 }) game.lamp("hall", { from = "bulb" })"#,
+    );
     let mut host = ScriptHost::open(&folder.0, ActionMap::standard()).unwrap();
     assert_eq!(lit(&host).len(), 2);
     folder.write(r#"game.lamp("porch", { lumens = 400 })"#);
@@ -265,4 +275,37 @@ fn the_eye_s_settings_say_what_to_write() {
     assert!(message.contains("settings in a table"), "{message}");
     let message = load_mistake(r#"game.lighting.setExposure("bright")"#);
     assert!(message.contains("needs a number"), "{message}");
+}
+
+#[test]
+fn a_colour_reads_back_as_it_was_written_and_a_level_lamp_is_described_from_its_file() {
+    let mut host = game(
+        r##"
+        game.onTick(function()
+            local lamp = game.lamp("lantern 1", { lumens = 50 })
+            assert(lamp.color == "#406080", lamp.color)
+            assert(lamp.at == vector.create(1, 2, 3), tostring(lamp.at))
+            lamp.color = "#204060"
+            assert(lamp.color == "#204060", lamp.color)
+            assert(lamp.kelvin == 0)
+            assert(lamp.range == 9, lamp.range)
+        end)
+    "##,
+    );
+    let light = LampLight {
+        at: [1.0, 2.0, 3.0],
+        candela: 10.0,
+        colour: [0.051, 0.117, 0.216],
+        reach: 9.0,
+        radius: 0.03,
+        beam: None,
+    };
+    host.set_level_lamps(&[("Lantern 1".to_owned(), light)]);
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let lamps = lit(&host);
+    assert_eq!(lamps.len(), 1);
+    // The file's place is kept; only the light changed.
+    assert_eq!(lamps[0].at, [1.0, 2.0, 3.0]);
+    assert!((lamps[0].candela - 50.0 / (4.0 * PI)).abs() < 1e-3);
 }

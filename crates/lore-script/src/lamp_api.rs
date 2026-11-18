@@ -32,13 +32,13 @@ use crate::weather_api::number;
 /// What can be read from a lamp. The type definitions are tested against
 /// it.
 pub(crate) const LAMP_FIELDS: &[&str] = &[
-    "name", "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "reach",
+    "name", "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range",
     "radius", "flicker",
 ];
 
 /// What can be set on a lamp, or given when one is made.
 const SETTINGS: &[&str] = &[
-    "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "reach", "radius",
+    "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range", "radius",
     "flicker",
 ];
 
@@ -169,7 +169,7 @@ fn flicker_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<Flicker> {
         Some(letters) => letters,
         // Letters of one's own, unless they are a flicker's name mistyped.
         None if name.chars().all(|c| c.is_ascii_lowercase())
-            && name.len() >= 2
+            && name.len() >= 8
             && closest(&name, FLICKERS.iter().map(|(known, _)| *known)).is_none() =>
         {
             name.clone()
@@ -183,7 +183,7 @@ fn flicker_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<Flicker> {
                 None => {
                     let _ = write!(
                         message,
-                        " The flickers are: {}, and \"none\". Or write your own as two or \
+                        " The flickers are: {}, and \"none\". Or write your own as eight or \
                          more letters from a (dark) to z (twice as bright), m being as bright \
                          as the lamp is, read ten a second: \"mmnmmommommnonmmonqnmmo\".",
                         flicker_names()
@@ -309,8 +309,10 @@ struct Spec {
     at: [f32; 3],
     on: bool,
     lumens: f32,
-    /// Its colour in linear light, as written; used when `kelvin` is 0.
+    /// Its colour in linear light, as written, and as the script wrote it
+    /// (`#rrggbb`); used when `kelvin` is 0.
     color: [f32; 3],
+    color_said: String,
     /// Its colour as a temperature, or 0 when `color` says it.
     kelvin: f32,
     /// How wide the beam is, in degrees from edge to edge; 360 for every
@@ -336,6 +338,7 @@ impl Spec {
             on: true,
             lumens: ready.lumens,
             color: [1.0; 3],
+            color_said: "#ffffff".to_owned(),
             kelvin: ready.kelvin,
             beam: ready.beam,
             pointing: [0.0, -1.0, 0.0],
@@ -374,6 +377,10 @@ impl Spec {
             on: true,
             lumens: 0.0,
             color: light.colour,
+            color_said: {
+                let [red, green, blue] = light.colour.map(|part| byte_of(to_srgb(part)));
+                format!("#{red:02x}{green:02x}{blue:02x}")
+            },
             kelvin: 0.0,
             beam,
             pointing,
@@ -491,6 +498,14 @@ fn to_linear(c: f32) -> f32 {
     }
 }
 
+/// A colour part from 0 to 1 as a byte.
+fn byte_of(part: f32) -> u8 {
+    // Rounded and brought into 0 to 255 first.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let byte = (part.clamp(0.0, 1.0) * 255.0).round() as u8;
+    byte
+}
+
 /// The text `#rrggbb` for a light's colour, its brightest part made full.
 fn hex_of(linear: [f32; 3]) -> String {
     let most = linear.iter().fold(0.0_f32, |most, part| most.max(*part));
@@ -518,6 +533,9 @@ struct Named {
     start: f64,
     /// Taken away with `lamp:remove()`; a handle to it then says so.
     removed: bool,
+    /// For a lamp the level places, the lamp as its file says it: what a
+    /// description of it in the script starts from.
+    level: Option<Spec>,
 }
 
 /// The lamps of the game. It outlives a version of the script.
@@ -546,16 +564,18 @@ impl LampState {
             let spec = Spec::from_light(light);
             match all.iter_mut().find(|named| named.name == name) {
                 Some(named) => {
-                    named.spec = spec;
+                    named.spec = spec.clone();
                     named.removed = false;
+                    named.level = Some(spec);
                 }
                 None => {
                     let start = start_of(&name);
                     all.push(Named {
                         name,
-                        spec,
+                        spec: spec.clone(),
                         start,
                         removed: false,
+                        level: Some(spec),
                     });
                 }
             }
@@ -572,6 +592,15 @@ impl LampState {
             .borrow()
             .iter()
             .position(|named| named.name == name)
+    }
+
+    /// The lamp of the level called `name`, as its file says it.
+    fn level_spec(&self, name: &str) -> Option<Spec> {
+        self.lamps
+            .borrow()
+            .iter()
+            .find(|named| named.name == name)
+            .and_then(|named| named.level.clone())
     }
 
     fn spec(&self, lamp: usize) -> Option<Spec> {
@@ -623,6 +652,7 @@ impl LampState {
             spec,
             start: start_of(name),
             removed: false,
+            level: None,
         });
         Ok(lamps.len() - 1)
     }
@@ -718,6 +748,12 @@ fn apply(lua: &Lua, spec: &mut Spec, key: &str, value: &Value, label: &str) -> m
         "color" => {
             let (color, _) = color_of(lua, label, value)?;
             spec.color = [color.r, color.g, color.b].map(to_linear);
+            spec.color_said = format!(
+                "#{:02x}{:02x}{:02x}",
+                byte_of(color.r),
+                byte_of(color.g),
+                byte_of(color.b)
+            );
             spec.kelvin = 0.0;
         }
         "kelvin" => {
@@ -744,9 +780,10 @@ fn apply(lua: &Lua, spec: &mut Spec, key: &str, value: &Value, label: &str) -> m
             )?
             .clamp(0.0, 1.0);
         }
-        "reach" => {
+        "range" => {
             spec.reach = amount(
-                "how far its light is drawn, in metres, or 0 for as far as it can be seen",
+                "how far its light is drawn, in metres, or 0 to work it out from how bright it \
+                 is",
                 "12",
             )?
             .clamp(0.0, 1000.0);
@@ -804,15 +841,16 @@ fn unknown_setting(lua: &Lua, what: &str, key: &str) -> mlua::Error {
     fail(lua, message)
 }
 
-/// What a lamp named `name` starts from: `from`, or the ready-made of the
-/// same name, or the lamp of that name the game has, or a bulb.
+/// What a lamp named `name` starts from: `from`, or the level's lamp of
+/// that name as its file says it, or the ready-made of the same name, or a
+/// bulb at the middle of the world.
 fn start_from(lua: &Lua, state: &LampState, name: &str, from: &Value) -> mlua::Result<Spec> {
     const EXAMPLE: &str =
         "game.lamp(\"porch\", { from = \"lantern\", at = vector.create(2, 2.2, 0) })";
     match from {
-        Value::Nil => Ok(ready_named(name)
-            .map(Spec::of)
-            .or_else(|| state.index_of(name).and_then(|lamp| state.spec(lamp)))
+        Value::Nil => Ok(state
+            .level_spec(name)
+            .or_else(|| ready_named(name).map(Spec::of))
             .unwrap_or_else(Spec::usual)),
         Value::String(written) => {
             let from = tidy(&written.to_string_lossy());
@@ -865,6 +903,24 @@ fn start_from(lua: &Lua, state: &LampState, name: &str, from: &Value) -> mlua::R
     }
 }
 
+/// The error for `game.lamp(name)` with a name that is no lamp the game
+/// has and no ready-made one.
+fn unknown_lamp(lua: &Lua, state: &LampState, name: &str) -> mlua::Error {
+    let mut names = state.names();
+    names.extend(READY.iter().map(|ready| ready.name.to_owned()));
+    let mut message = format!("There is no lamp called \"{name}\".");
+    if let Some(near) = closest(name, names.iter().map(String::as_str)) {
+        let _ = write!(message, " Did you mean \"{near}\"?");
+    }
+    let _ = write!(
+        message,
+        " To make it, say where it is and what it starts from: game.lamp(\"{name}\", {{ from \
+         = \"bulb\", at = vector.create(0, 2.5, 0) }}). game.lamps.names() lists the lamps \
+         the game has."
+    );
+    fail(lua, message)
+}
+
 /// `game.lamp(name, settings)`.
 fn lamp_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function> {
     const EXAMPLE: &str =
@@ -890,12 +946,10 @@ fn lamp_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function>
         }
         let state = &shared.lamps;
         let lamp = match settings {
-            Value::Nil => match state.index_of(&name) {
-                Some(lamp) if !state.removed(lamp) => lamp,
-                _ => {
-                    let spec = ready_named(&name).map_or_else(Spec::usual, Spec::of);
-                    state.put(lua, &name, spec)?
-                }
+            Value::Nil => match (state.index_of(&name), ready_named(&name)) {
+                (Some(lamp), _) if !state.removed(lamp) => lamp,
+                (_, Some(ready)) => state.put(lua, &name, Spec::of(ready))?,
+                _ => return Err(unknown_lamp(lua, state, &name)),
             },
             Value::Table(settings) => {
                 let spec = specified(lua, state, &name, &settings)?;
@@ -1016,11 +1070,15 @@ impl UserData for LampRef {
                     "pointing" => vector(spec.pointing),
                     "on" => Value::Boolean(spec.on),
                     "lumens" => number(spec.lumens),
-                    "color" => Value::String(lua.create_string(hex_of(spec.colour()))?),
+                    "color" => Value::String(lua.create_string(if spec.kelvin > 0.0 {
+                        hex_of(spec.colour())
+                    } else {
+                        spec.color_said.clone()
+                    })?),
                     "kelvin" => number(spec.kelvin),
                     "beam" => number(spec.beam),
                     "softness" => number(spec.softness),
-                    "reach" => number(spec.reach),
+                    "range" => number(spec.reach),
                     "radius" => number(spec.radius),
                     "flicker" => Value::String(lua.create_string(&spec.flicker.said)?),
                     _ => {
