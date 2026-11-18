@@ -25,7 +25,10 @@ fn water_passes(through: f32, clarity: f32) -> vec3<f32> {
     if water_has_look() {
         return exp(-through * (view.water_look[0].xyz + view.water_look[1].xyz));
     }
-    return exp(-through * (WATER_TAKES + WATER_SCATTERS) / max(clarity, 0.05));
+    // Times one over the clarity, not divided by it: the same sums in the
+    // same order as before looks existed, so a level's water is unchanged.
+    let murk = 1.0 / max(clarity, 0.05);
+    return exp(-through * (WATER_TAKES + WATER_SCATTERS) * murk);
 }
 
 // The colour the water gives back of the light that falls in it: the
@@ -459,10 +462,31 @@ fn shore_wet(world: vec3<f32>) -> f32 {
     if deep < -0.35 {
         return 0.0;
     }
+    // Only ground near the water's own edge is wet, not all ground as low
+    // as the water inside the square its grid covers: how far away the
+    // edge is along the ground is how far the ground stands over the water
+    // divided by how steeply it rises, read from the grid either side.
+    // Flat ground beside a pothole is then dry a little way out, and a
+    // shore is wet as far up as it ever was.
+    let step = view.water.y;
+    let rises = vec2<f32>(
+        grid_depth(world.xz - vec2<f32>(step, 0.0)) - grid_depth(world.xz + vec2<f32>(step, 0.0)),
+        grid_depth(world.xz - vec2<f32>(0.0, step)) - grid_depth(world.xz + vec2<f32>(0.0, step)),
+    ) / (2.0 * step);
+    let to_edge = max(over, 0.0) / max(length(rises), 0.001);
+    let near_edge = 1.0 - smoothstep(0.25, 1.5, to_edge);
     // Soaked at the waterline, damp a hand's width above it, in a line
     // that is not ruled.
     let uneven = textureSampleLevel(cloud_volume, cloud_sampler, vec3<f32>(world.xz / 3.1, 0.3), 0.0).r;
-    return 1.0 - smoothstep(0.01, 0.03 + 0.06 * uneven, over);
+    return (1.0 - smoothstep(0.01, 0.03 + 0.06 * uneven, over)) * near_edge;
+}
+
+// The depth the grid of the still water nearest the eye holds at a place,
+// read at its nearest edge for a place past it, so that a slope is never
+// made up where the grid ends.
+fn grid_depth(place: vec2<f32>) -> f32 {
+    let uv = ((place - view.water_box.xy) / view.water.y + 0.5) / view.water_box.zw;
+    return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r;
 }
 
 // ------------------------------------------------------- what it mirrors

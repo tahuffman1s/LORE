@@ -14,6 +14,9 @@ pub const MOST_FLUID_DROPS: usize = 8192;
 /// How many bytes one drop takes as the graphics card is handed it: three
 /// rows of four numbers.
 pub(crate) const DROP_BYTES: usize = 48;
+/// A drop at least this flat lies on a surface and is drawn as part of a
+/// film; a rounder one is in flight.
+pub(crate) const LYING: f32 = 0.5;
 /// How many bytes the looks of every kind take: three rows of four numbers
 /// for each.
 pub(crate) const LOOKS_BYTES: usize = MOST_FLUID_KINDS * 48;
@@ -110,6 +113,8 @@ pub(crate) struct FluidScene {
     /// way it faces and how flat it is; how drawn out it is, how thick, and
     /// its kind.
     drops: Vec<u8>,
+    /// How many of `drops`, at the start, lie on a surface.
+    lying: usize,
     /// The look of each kind, three rows of four numbers each.
     looks: [u8; LOOKS_BYTES],
     /// What every lake and creek of the level is drawn as, if not as the
@@ -128,6 +133,7 @@ impl FluidScene {
     pub(crate) fn new() -> Self {
         let mut scene = Self {
             drops: Vec::with_capacity(MOST_FLUID_DROPS * DROP_BYTES),
+            lying: 0,
             looks: [0; LOOKS_BYTES],
             water: None,
         };
@@ -154,30 +160,49 @@ impl FluidScene {
     /// Says which drops are drawn from now on, in place of those before.
     pub(crate) fn set_drops(&mut self, drops: &[FluidDrop]) {
         self.drops.clear();
-        for drop in drops.iter().take(MOST_FLUID_DROPS) {
-            let numbers = [
-                drop.place[0],
-                drop.place[1],
-                drop.place[2],
-                drop.radius,
-                drop.facing[0],
-                drop.facing[1],
-                drop.facing[2],
-                drop.flat,
-                drop.long,
-                drop.thick,
-                f32::from(drop.kind.min((MOST_FLUID_KINDS - 1) as u8)),
-                0.0,
-            ];
-            // A drop with a number that is not a number, or no size, is
-            // not drawn rather than drawn wrong.
-            if numbers.iter().any(|number| !number.is_finite()) || drop.radius <= 0.0 {
-                continue;
+        // Drops lying on a surface first, then drops in flight: the two are
+        // drawn by different passes, each over its own run of the list.
+        for lying in [true, false] {
+            for drop in drops {
+                if self.drops.len() >= MOST_FLUID_DROPS * DROP_BYTES {
+                    break;
+                }
+                if (drop.flat >= LYING) != lying {
+                    continue;
+                }
+                let numbers = [
+                    drop.place[0],
+                    drop.place[1],
+                    drop.place[2],
+                    drop.radius,
+                    drop.facing[0],
+                    drop.facing[1],
+                    drop.facing[2],
+                    drop.flat,
+                    drop.long,
+                    drop.thick,
+                    f32::from(drop.kind.min((MOST_FLUID_KINDS - 1) as u8)),
+                    0.0,
+                ];
+                // A drop with a number that is not a number, or no size, is
+                // not drawn rather than drawn wrong, and takes no room.
+                if numbers.iter().any(|number| !number.is_finite()) || drop.radius <= 0.0 {
+                    continue;
+                }
+                for number in numbers {
+                    self.drops.extend_from_slice(&number.to_ne_bytes());
+                }
             }
-            for number in numbers {
-                self.drops.extend_from_slice(&number.to_ne_bytes());
+            if lying {
+                self.lying = self.drops.len() / DROP_BYTES;
             }
         }
+    }
+
+    /// How many of the drops, at the start of [`drops`](Self::drops), lie
+    /// on a surface; the rest are in flight.
+    pub(crate) fn lying(&self) -> usize {
+        self.lying
     }
 
     /// Says what the level's water is drawn as: `None` as the level says.
@@ -253,6 +278,26 @@ mod tests {
         empty.radius = 0.0;
         scene.set_drops(&[broken, empty, drop_at(1.0)]);
         assert_eq!(scene.drops().len(), DROP_BYTES);
+    }
+
+    #[test]
+    fn lying_drops_come_first_and_broken_ones_take_no_room() {
+        let mut scene = FluidScene::new();
+        let mut flying = drop_at(5.0);
+        flying.flat = 0.0;
+        let mut broken = drop_at(0.0);
+        broken.radius = f32::NAN;
+        let mut many = vec![broken; MOST_FLUID_DROPS];
+        many.extend([flying, drop_at(1.0)]);
+        scene.set_drops(&many);
+        assert_eq!(scene.lying(), 1);
+        assert_eq!(scene.drops().len(), 2 * DROP_BYTES);
+        let mut four = [0; 4];
+        four.copy_from_slice(&scene.drops()[DROP_BYTES..DROP_BYTES + 4]);
+        assert!(
+            (f32::from_ne_bytes(four) - 5.0).abs() < 1e-6,
+            "the flying drop is second"
+        );
     }
 
     #[test]

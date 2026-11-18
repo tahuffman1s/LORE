@@ -1,17 +1,25 @@
 // Fluids a game pours about: rain puddles, honey on a wall, a stream of
-// milk. Each drop is a small ellipsoid, and all of them are drawn as one
-// liquid in three steps (see `fluid_pass.rs`), each reading only what the
-// step before wrote:
+// milk. Drops come in two sorts, drawn differently (see `fluid_pass.rs`),
+// and each step reads only what the steps before it wrote:
 //
-// 1. Every drop is drawn as a box, and the line of sight through each pixel
-//    of the box is tested against the drop's ellipsoid. Two things are
-//    kept: which kind is nearest and how far away it is, and (added up over
-//    every drop the line crosses) how many metres of fluid the line goes
-//    through, with how much light that takes away and sends back.
-// 2. The distance to the nearest surface is smoothed, so that a heap of
-//    little balls reads as one smooth liquid (Truong and Yuksel, "A
-//    Narrow-Range Filter for Screen-Space Fluid Rendering", 2018).
-// 3. The liquid is shaded over the picture drawn so far: what is behind it,
+// 1. Drops in flight are small ellipsoids. Each is drawn as a box, and the
+//    line of sight through each pixel of the box is tested against the
+//    ellipsoid. Two things are kept: which kind is nearest and how far
+//    away it is, and (added up over every drop the line crosses) how many
+//    metres of fluid the line goes through, what that takes from light and
+//    sends back, and which way the surfaces face. The distance is then
+//    smoothed, so that a string of drops reads as one stream (Truong and
+//    Yuksel, "A Narrow-Range Filter for Screen-Space Fluid Rendering",
+//    2018), and the facings added up make it round.
+// 2. Drops lying on a surface are not drawn as shapes at all. Each adds a
+//    smooth bump, highest at its middle and nothing at its reach, to a sum
+//    over the ground under the pixel; where the sum of all of them passes
+//    one half is liquid. Drops that overlap so melt into one body with a
+//    smooth edge, as metaballs do (Blinn, "A Generalization of Algebraic
+//    Surface Drawing", 1982), only in the plane of the surface. How far in
+//    from that edge a pixel is says how high the film stands there: flat
+//    inside, curving down to the ground at the rim.
+// 3. All of it is shaded over the picture drawn so far: what is behind it,
 //    seen through it, and what it mirrors.
 //
 // What each entry point reads is kept apart on purpose: the graphics card
@@ -22,40 +30,61 @@
 // from light and how rough it is, what it scatters and how metallic it is,
 // and what it glows and how much it bends light.
 @group(3) @binding(0) var<uniform> fluid_looks: array<vec4<f32>, 96>;
-// The distance of the nearest drop's surface, in the picture's own depth.
+// The distance of the nearest drop in flight, in the picture's own depth.
 @group(3) @binding(1) var fluid_near: texture_depth_2d;
-// Which kind is nearest, plus one; 0 where there is no fluid.
+// Which kind is nearest, plus one; 0 where there is no drop in flight.
 @group(3) @binding(2) var fluid_kind_map: texture_2d<u32>;
-// How much light the fluid on the line of sight takes away (red, green,
-// blue), and how many metres of it there are.
+// How much light the drops in flight on the line of sight take away (red,
+// green, blue), and how many metres of them there are.
 @group(3) @binding(3) var fluid_amount_map: texture_2d<f32>;
-// How much light it scatters (red, green, blue), and how wet the ground
-// under the rim of a drop lying on it is.
+// How much light they scatter (red, green, blue).
 @group(3) @binding(4) var fluid_light_map: texture_2d<f32>;
-// How far in front of the eye the fluid is, smoothed across and then down.
+// How far in front of the eye they are, smoothed across and then down.
 @group(3) @binding(5) var fluid_across_map: texture_2d<f32>;
 @group(3) @binding(6) var fluid_down_map: texture_2d<f32>;
-// Which way the surfaces under lying drops face, added up weighted by how
-// much of each drop's dome is over the pixel, and that weight.
-@group(3) @binding(7) var fluid_lie_map: texture_2d<f32>;
+// Which way their surfaces face, added up, and how much of the pixel
+// they cover.
+@group(3) @binding(7) var fluid_round_map: texture_2d<f32>;
+// The film of drops lying on surfaces, each number added up weighted by
+// each drop's bump: what it takes from light (as the logarithm of one more
+// than it, so that tar and water can be added) and the sum of the bumps;
+// what it scatters and its thickness; its glow and roughness; how metallic
+// it is, how much more than air it bends light, and the drops' radius.
+@group(3) @binding(8) var fluid_film_map: texture_2d<f32>;
+@group(3) @binding(9) var fluid_film_light_map: texture_2d<f32>;
+@group(3) @binding(10) var fluid_film_glow_map: texture_2d<f32>;
+@group(3) @binding(11) var fluid_film_kind_map: texture_2d<f32>;
 
-// Fluid is blended no nearer to a solid than this, in metres, so that a
-// drop lying on the ground is not hidden by the ground it lies on.
-const FLUID_SLACK: f32 = 0.0003;
 // How far the smoothing reaches, as the width in metres of what it
 // averages, and how far apart in distance two surfaces can be and still be
 // averaged together.
 const FLUID_SMOOTH: f32 = 0.035;
 const FLUID_RANGE: f32 = 0.06;
+// Where the bumps of lying drops add up to this, the film begins.
+const FILM_EDGE: f32 = 0.5;
+// How far a lying drop's bump reaches, in its radii: a lone drop's film
+// then ends at its radius, and two drops two radii apart are joined.
+const FILM_REACH: f32 = 2.2;
+// How far the ground round a film is darkened by its wet, as a share of
+// the film's edge: the ground is damp a little way out.
+const FILM_DAMP: f32 = 0.3;
+// Drops in flight are drawn no narrower than this many pixels across:
+// thinner, they are drawn this wide and fainter, so that a fine stream
+// does not break into dots.
+const FLUID_THINNEST: f32 = 1.5;
 
 struct FluidCorner {
     @builtin(position) position: vec4<f32>,
     // Where this corner of the drop's box is.
     @location(0) world: vec3<f32>,
-    // The drop itself, as it was handed over.
+    // The drop itself, as it was handed over, but with the radius it is
+    // drawn at.
     @location(1) @interpolate(flat) first: vec4<f32>,
     @location(2) @interpolate(flat) second: vec4<f32>,
     @location(3) @interpolate(flat) third: vec4<f32>,
+    // How much of what it is drawn as is really there: less than 1 for a
+    // drop widened to be seen.
+    @location(4) @interpolate(flat) cover: f32,
 }
 
 // The way a drop stands: three unit directions that are its sides and its
@@ -73,25 +102,20 @@ fn fluid_axes(facing: vec3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(u, v, w);
 }
 
-// How far a drop reaches across it, and along its facing, in metres: a ball
-// stretched along its flight, or a dome lying on a surface.
-fn fluid_size(first: vec4<f32>, second: vec4<f32>, third: vec4<f32>) -> vec2<f32> {
-    let radius = first.w;
-    let flat_ness = second.w;
-    let along = mix(radius * max(third.x, 1.0), max(third.y, 0.0005), flat_ness);
-    return vec2<f32>(radius, along);
+// How far a drop in flight reaches across it, and along its flight, in
+// metres.
+fn fluid_size(first: vec4<f32>, third: vec4<f32>) -> vec2<f32> {
+    return vec2<f32>(first.w, first.w * max(third.x, 1.0));
 }
 
-// One drop is drawn as a box round it, a corner at a time, with 36 corners
-// for the twelve triangles. The box is wider than the drop where it lies,
-// to leave room for the wet ring round it.
-@vertex
-fn vertex_fluid(
-    @builtin(vertex_index) number: u32,
-    @location(0) first: vec4<f32>,
-    @location(1) second: vec4<f32>,
-    @location(2) third: vec4<f32>,
-) -> FluidCorner {
+// How many pixels one metre covers one metre in front of the eye.
+fn fluid_focal() -> f32 {
+    return view.sky_rays[0].w / (2.0 * length(view.sky_rays[2].xyz));
+}
+
+// The corner `number` of the 36 that draw a box's twelve triangles, as -1
+// or 1 along each of its sides, every face with its front outwards.
+fn box_corner(number: u32) -> vec3<f32> {
     let face = number / 6u;
     let step = number % 6u;
     // Two triangles make a face: its corners 0, 1, 2 and 0, 2, 3.
@@ -101,23 +125,38 @@ fn vertex_fluid(
     let b = select(-1.0, 1.0, corner >= 2u);
     let axis = face / 2u;
     let side = f32(face % 2u) * 2.0 - 1.0;
-    // Which way round the corners go flips with the side, so that every
-    // face has its front outwards.
+    // Which way round the corners go flips with the side.
     var local = vec3<f32>(0.0);
     local[axis] = side;
     local[(axis + 1u) % 3u] = a * side;
     local[(axis + 2u) % 3u] = b;
-    let reach = fluid_size(first, second, third);
-    let flat_ness = second.w;
-    let wide = reach.x * (1.0 + 0.35 * flat_ness);
-    let half_size = vec3<f32>(wide, wide, max(reach.y, 0.03 * flat_ness));
-    let world = first.xyz + fluid_axes(second.xyz) * (local * half_size);
+    return local;
+}
+
+// A drop in flight is drawn as a box round it. One too thin to cover a
+// pixel and a half is drawn that wide, and says how much of that is real.
+@vertex
+fn vertex_fluid(
+    @builtin(vertex_index) number: u32,
+    @location(0) first: vec4<f32>,
+    @location(1) second: vec4<f32>,
+    @location(2) third: vec4<f32>,
+) -> FluidCorner {
+    let ahead = max(dot(first.xyz - view.eye.xyz, view.sky_rays[0].xyz), view.lens.x);
+    let thinnest = 0.5 * FLUID_THINNEST * ahead / fluid_focal();
+    let radius = max(first.w, thinnest);
+    var drawn = first;
+    drawn.w = radius;
+    let reach = fluid_size(drawn, third);
+    let world = first.xyz
+        + fluid_axes(second.xyz) * (box_corner(number) * vec3<f32>(reach.x, reach.x, reach.y));
     var out: FluidCorner;
     out.position = view.clip_from_world * vec4<f32>(world, 1.0);
     out.world = world;
-    out.first = first;
+    out.first = drawn;
     out.second = second;
     out.third = third;
+    out.cover = first.w / radius;
     return out;
 }
 
@@ -129,9 +168,18 @@ struct FluidTrace {
     leaves: f32,
     scene: f32,
     direction: vec3<f32>,
-    // Where the line enters the drop, in the drop's own frame scaled so
-    // that the drop is a ball of radius one.
-    entry: vec3<f32>,
+    // Which way the drop's surface faces where the line enters it.
+    normal: vec3<f32>,
+}
+
+// How far the solid world is along the line from the eye through `world`,
+// drawn at the pixel `pixel`; very far where there is only sky.
+fn solid_along(direction: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    // The depth is the nearest distance drawn divided by the distance in
+    // front of the eye.
+    let ahead = max(dot(direction, view.sky_rays[0].xyz), 0.0001);
+    let held = textureLoad(behind_depth, vec2<i32>(pixel), 0);
+    return select(1.0e9, view.lens.x / held / ahead, held > 0.0);
 }
 
 fn fluid_trace(corner: FluidCorner) -> FluidTrace {
@@ -140,8 +188,9 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     let origin = view.eye.xyz;
     let direction = normalize(corner.world - origin);
     trace.direction = direction;
+    trace.scene = solid_along(direction, corner.position.xy);
     let place = corner.first.xyz;
-    let reach = fluid_size(corner.first, corner.second, corner.third);
+    let reach = fluid_size(corner.first, corner.third);
     let axes = fluid_axes(corner.second.xyz);
     // How far off the eye is, which can be a hundred times the drop's size:
     // the line is measured from where it passes nearest the drop's middle,
@@ -154,12 +203,6 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     let going = (transpose(axes) * direction) * scale;
     let quad = dot(going, going);
     let half_b = dot(start, going);
-    // How far away the solid world is along this line: the depth is the
-    // nearest distance drawn divided by the distance in front of the eye.
-    // Asked even where the line misses the drop, for the wet ground round it.
-    let ahead = max(dot(direction, view.sky_rays[0].xyz), 0.0001);
-    let held = textureLoad(behind_depth, vec2<i32>(corner.position.xy), 0);
-    trace.scene = select(1.0e9, view.lens.x / held / ahead, held > 0.0);
     let cut = half_b * half_b - quad * (dot(start, start) - 1.0);
     if cut <= 0.0 {
         return trace;
@@ -167,7 +210,10 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     let root = sqrt(cut);
     trace.enters = nearest + (-half_b - root) / quad;
     trace.leaves = nearest + (-half_b + root) / quad;
-    trace.entry = start + going * ((-half_b - root) / quad);
+    // On a ball of radius one the facing is where the line enters; it is
+    // stretched back by the drop's own sizes.
+    let entry = start + going * ((-half_b - root) / quad);
+    trace.normal = normalize(axes * (entry * scale));
     trace.hit = trace.leaves > 0.0;
     return trace;
 }
@@ -182,7 +228,7 @@ struct FluidFront {
 @fragment
 fn fragment_fluid_front(corner: FluidCorner) -> FluidFront {
     let trace = fluid_trace(corner);
-    if !trace.hit || trace.enters > trace.scene + FLUID_SLACK {
+    if !trace.hit || trace.enters > trace.scene {
         discard;
     }
     // An eye inside the drop sees its inside, from just past the near
@@ -202,47 +248,101 @@ fn fragment_fluid_front(corner: FluidCorner) -> FluidFront {
 struct FluidSums {
     @location(0) amount: vec4<f32>,
     @location(1) light: vec4<f32>,
-    @location(2) lie: vec4<f32>,
+    @location(2) round: vec4<f32>,
 }
 
-// Adds up what each drop does along the line of sight: the metres of it
-// the line goes through, and what they take and scatter. And, for a drop
-// lying on a surface, how wet the surface is at its rim.
+// Adds up what each drop in flight does along the line of sight: the
+// metres of it the line goes through, what they take and scatter, and
+// which way its surface faces there.
 @fragment
 fn fragment_fluid_amount(corner: FluidCorner) -> FluidSums {
     let trace = fluid_trace(corner);
+    let chord = select(0.0, max(min(trace.leaves, trace.scene) - max(trace.enters, 0.0), 0.0), trace.hit);
+    if chord <= 0.0 {
+        discard;
+    }
     let kind = u32(corner.third.z + 0.5);
     let absorbs = fluid_looks[kind * 3u].rgb;
     let scatters = fluid_looks[kind * 3u + 1u].rgb;
-    let chord = select(0.0, max(min(trace.leaves, trace.scene) - max(trace.enters, 0.0), 0.0), trace.hit);
-    // The solid world's point here, as the drop sees it: the ground under a
-    // lying drop is wet out to a little past its edge, and most under it.
-    var wet = 0.0;
-    let reach = fluid_size(corner.first, corner.second, corner.third);
-    if corner.second.w > 0.5 && trace.scene < 1.0e8 {
-        let axes = fluid_axes(corner.second.xyz);
-        let found = view.eye.xyz + trace.direction * trace.scene - corner.first.xyz;
-        let height = dot(found, axes[2]);
-        let across = length(found - axes[2] * height);
-        if abs(height) < 0.005 + reach.y && across < 1.35 * reach.x {
-            wet = corner.second.w * (1.0 - smoothstep(reach.x, 1.35 * reach.x, across));
-        }
-    }
-    if chord <= 0.0 && wet <= 0.0 {
-        discard;
-    }
+    // A widened drop is that much less there.
+    let real = chord * corner.cover;
     var sums: FluidSums;
     // No drop adds more than takes all the light (e to the -40 is none),
     // so that the half-size numbers added up never overflow.
-    sums.amount = vec4<f32>(min(absorbs * chord, vec3<f32>(40.0)), chord);
-    sums.light = vec4<f32>(min(scatters * chord, vec3<f32>(40.0)), wet);
-    // A film lying on a surface lies as flat as the surface, except at its
-    // rim: how much of the dome is over this pixel says how much it counts.
-    // A thick mound keeps the round shape of its drops.
-    let rise = sqrt(max(1.0 - dot(trace.entry.xy, trace.entry.xy), 0.0));
-    let lies = corner.second.w * (1.0 - smoothstep(0.15, 0.5, reach.y / reach.x))
-        * select(0.0, rise, chord > 0.0);
-    sums.lie = vec4<f32>(fluid_axes(corner.second.xyz)[2] * lies, lies);
+    sums.amount = vec4<f32>(min(absorbs * real, vec3<f32>(40.0)), min(real, 4.0));
+    sums.light = vec4<f32>(min(scatters * real, vec3<f32>(40.0)), 0.0);
+    // The middle of a drop says more about which way the stream faces than
+    // its edge, where it meets the next drop.
+    let facing = max(dot(trace.normal, -trace.direction), 0.0);
+    sums.round = vec4<f32>(trace.normal * corner.cover * (0.15 + facing), corner.cover);
+    return sums;
+}
+
+// A drop lying on a surface is drawn as a flat box round its bump, as
+// thick as the ground under it may be off the drop's own surface and
+// still be counted as under it.
+fn film_slack(thick: f32) -> f32 {
+    return 0.012 + 1.5 * max(thick, 0.0);
+}
+
+@vertex
+fn vertex_film(
+    @builtin(vertex_index) number: u32,
+    @location(0) first: vec4<f32>,
+    @location(1) second: vec4<f32>,
+    @location(2) third: vec4<f32>,
+) -> FluidCorner {
+    let reach = FILM_REACH * first.w;
+    let half_size = vec3<f32>(reach, reach, film_slack(third.y));
+    let world = first.xyz + fluid_axes(second.xyz) * (box_corner(number) * half_size);
+    var out: FluidCorner;
+    out.position = view.clip_from_world * vec4<f32>(world, 1.0);
+    out.world = world;
+    out.first = first;
+    out.second = second;
+    out.third = third;
+    out.cover = 1.0;
+    return out;
+}
+
+struct FilmSums {
+    @location(0) film: vec4<f32>,
+    @location(1) light: vec4<f32>,
+    @location(2) glow: vec4<f32>,
+    @location(3) kind: vec4<f32>,
+}
+
+// Adds a lying drop's bump to the film over the ground seen at this
+// pixel: nothing if that ground is not the surface the drop lies on
+// (something standing in the puddle, or a wall behind it).
+@fragment
+fn fragment_film(corner: FluidCorner) -> FilmSums {
+    let direction = normalize(corner.world - view.eye.xyz);
+    let along = solid_along(direction, corner.position.xy);
+    if along > 1.0e8 {
+        discard;
+    }
+    let found = view.eye.xyz + direction * along - corner.first.xyz;
+    let up = fluid_axes(corner.second.xyz)[2];
+    let height = abs(dot(found, up));
+    let slack = film_slack(corner.third.y);
+    let reach = FILM_REACH * corner.first.w;
+    let flat_part = found - up * dot(found, up);
+    let out = dot(flat_part, flat_part) / (reach * reach);
+    if height > slack || out >= 1.0 {
+        discard;
+    }
+    let left = 1.0 - out;
+    let bump = left * left * left * (1.0 - smoothstep(0.5 * slack, slack, height));
+    let kind = u32(corner.third.z + 0.5);
+    let takes = fluid_looks[kind * 3u];
+    let gives = fluid_looks[kind * 3u + 1u];
+    let glows = fluid_looks[kind * 3u + 2u];
+    var sums: FilmSums;
+    sums.film = vec4<f32>(log2(vec3<f32>(1.0) + takes.rgb), 1.0) * bump;
+    sums.light = vec4<f32>(log2(vec3<f32>(1.0) + gives.rgb), max(corner.third.y, 0.0)) * bump;
+    sums.glow = vec4<f32>(log2(vec3<f32>(1.0) + glows.rgb), takes.w) * bump;
+    sums.kind = vec4<f32>(gives.w, glows.w - 1.0, corner.first.w, 0.0) * bump;
     return sums;
 }
 
@@ -438,154 +538,110 @@ fn fluid_depth(world: vec3<f32>) -> f32 {
     return clip.z / max(clip.w, 0.0001);
 }
 
-// How much light of the colour `f0` a surface mirrors when the eye looks
-// at it with `facing` as the cosine of the angle from straight on
+// Where a point of the world is on the picture, from 0 to 1 across and
+// down; past that if it is off the picture, and below 0 behind the eye.
+fn fluid_on_picture(world: vec3<f32>) -> vec3<f32> {
+    let clip = view.clip_from_world * vec4<f32>(world, 1.0);
+    if clip.w <= 0.0001 {
+        return vec3<f32>(-1.0);
+    }
+    let across = clip.xy / clip.w;
+    return vec3<f32>(across.x * 0.5 + 0.5, 0.5 - across.y * 0.5, clip.z / clip.w);
+}
+
+// How much of the light of the colour `f0` a surface mirrors when the eye
+// looks at it with `facing` as the cosine of the angle from straight on
 // (Schlick's Fresnel).
 fn fluid_mirrors(f0: vec3<f32>, facing: f32) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - clamp(facing, 0.0, 1.0), 5.0);
 }
 
-// The ground under the rim of a drop lying on it: darker, and shining a
-// little, as wet ground does.
-fn fluid_wet_ground(at: vec2<i32>, size: vec2<i32>, wet: f32) -> FluidSeen {
-    var seen: FluidSeen;
-    let held = textureLoad(behind_depth, at, 0);
-    if held <= 0.0 {
-        discard;
-    }
-    let ground = solid_point(at, size);
-    let ray = fluid_ray(at, size);
-    let to_eye = -normalize(ray);
-    let normal = fluid_facing(
-        solid_run(at, size, ground.xyz, ground.w, vec2<i32>(1, 0)),
-        solid_run(at, size, ground.xyz, ground.w, vec2<i32>(0, 1)),
-        to_eye,
-    );
-    let behind = textureLoad(behind_colour, at, 0).rgb * mix(1.0, 0.6, wet);
-    var bounced = reflect(-to_eye, normal);
-    bounced.y = abs(bounced.y) + 0.012;
-    let sky = through_fog(sky_colour(normalize(bounced)), ground.xyz);
-    let shine = fluid_mirrors(vec3<f32>(0.02), dot(normal, to_eye)).x * wet;
-    seen.colour = vec4<f32>(mix(behind, sky, shine), 1.0);
-    seen.motion = fluid_motion(ground.xyz);
-    // Nothing nearer than the ground was drawn here: it stays as it was.
-    seen.depth = held;
-    return seen;
+// The picture drawn before the fluid at `uv`, from 0 to 1, blended
+// between pixels.
+fn fluid_behind(uv: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(behind_colour, clamp_sampler, uv, 0.0).rgb;
 }
 
-// The fluid over the picture: what is seen through it, what it mirrors, and
-// the sun's glint on it.
-@fragment
-fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
-    let at = vec2<i32>(position.xy);
-    let size = vec2<i32>(textureDimensions(fluid_down_map));
-    let kind_plus = textureLoad(fluid_kind_map, at, 0).r;
-    let light = textureLoad(fluid_light_map, at, 0);
-    let smoothed = textureLoad(fluid_down_map, at, 0).r;
-    let wet = clamp(light.a, 0.0, 1.0);
-    if kind_plus == 0u || smoothed <= 0.0 {
-        if wet <= 0.0 {
-            discard;
+// What a surface at `origin` mirrors along `bounced`: the line is walked
+// through the picture of the solid world in growing steps until it passes
+// behind something, which is then what is seen; the sky if it never does.
+// Rough surfaces blur it, more the farther what is mirrored. A line that
+// leaves the picture sees what is at its edge, which is most often more of
+// the wall or trees it was rising past.
+fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
+    let size = vec2<f32>(textureDimensions(behind_colour));
+    let sky = sky_colour(bounced);
+    var stride = 0.03;
+    var at = origin + bounced * (0.004 + stride * scattered(pixel));
+    var before = at;
+    var last = vec3<f32>(-1.0);
+    for (var number = 0; number < 44; number++) {
+        before = at;
+        at += bounced * stride;
+        stride *= 1.15;
+        let seen = fluid_on_picture(at);
+        if seen.z < 0.0 || any(seen.xy < vec2<f32>(0.0)) || any(seen.xy >= vec2<f32>(1.0)) {
+            break;
         }
-        return fluid_wet_ground(at, size, wet);
+        let held = textureLoad(behind_depth, vec2<i32>(seen.xy * size), 0);
+        if held > seen.z && held > 0.0 {
+            // How far in front of the line what is drawn there stands: a
+            // thing far in front is passed behind, not struck.
+            let ahead = view.lens.x / seen.z;
+            let in_front = ahead - view.lens.x / held;
+            if in_front < max(3.0 * stride, 0.2) {
+                var low = before;
+                var high = at;
+                for (var halving = 0; halving < 5; halving++) {
+                    let middle = (low + high) * 0.5;
+                    let there = fluid_on_picture(middle);
+                    let deep = textureLoad(
+                        behind_depth,
+                        vec2<i32>(clamp(there.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size),
+                        0,
+                    );
+                    if deep > there.z {
+                        high = middle;
+                    } else {
+                        low = middle;
+                    }
+                }
+                let found = fluid_on_picture(high);
+                var colour = fluid_behind(found.xy);
+                // Rough: a few more looks round the place found, as far
+                // apart as the roughness spreads a line over the distance
+                // it went.
+                let spread = rough * rough * 3.0 * length(high - origin)
+                    * fluid_focal() / max(length(high - view.eye.xyz), 0.01) / size;
+                if spread.y > 0.6 / size.y {
+                    let turn = scattered(pixel.yx) * 6.2831853;
+                    for (var tap = 0; tap < 4; tap++) {
+                        let angle = turn + f32(tap) * 1.5707963;
+                        colour += fluid_behind(found.xy + vec2<f32>(cos(angle), sin(angle)) * spread);
+                    }
+                    colour *= 0.2;
+                }
+                return colour;
+            }
+        }
+        last = seen;
     }
-
-    // Where the surface is, as the drops drew it: the smoothed distance
-    // only turns the surface, and does not move it, or seen from low down
-    // a puddle would be pulled under the ground it lies on.
-    let ray = fluid_ray(at, size);
-    let away = fluid_distance(textureLoad(fluid_near, at, 0));
-    let world = view.eye.xyz + ray * select(smoothed, away, away > 0.0);
-    let to_eye = -normalize(ray);
-    let smooth_world = view.eye.xyz + ray * smoothed;
-    var normal = fluid_facing(
-        fluid_run(at, size, smooth_world, smoothed, vec2<i32>(1, 0)),
-        fluid_run(at, size, smooth_world, smoothed, vec2<i32>(0, 1)),
-        to_eye,
-    );
-    // Inside a puddle, where the domes of several drops overlap, the
-    // surface is as flat as the ground under it; at its rim it curves down
-    // as the smoothed depth says.
-    let lie = textureLoad(fluid_lie_map, at, 0);
-    if lie.a > 0.0 && length(lie.rgb) > 0.0001 {
-        var flat_normal = normalize(lie.rgb);
-        flat_normal = select(-flat_normal, flat_normal, dot(flat_normal, to_eye) >= 0.0);
-        normal = normalize(mix(normal, flat_normal, smoothstep(0.3, 1.2, lie.a)));
+    if last.x < 0.0 {
+        return sky;
     }
-
-    // How thick the fluid is: no more than lies between its surface and
-    // the solid world behind it. Drops that overlap are counted once for
-    // each, and the ground under a puddle only once.
-    let sums = textureLoad(fluid_amount_map, at, 0);
-    let held = textureLoad(behind_depth, at, 0);
-    let solid_away = select(1.0e9, view.lens.x / held, held > 0.0);
-    let room = max(solid_away - length(world - view.eye.xyz) / length(ray), 0.0) * length(ray);
-    let thick = min(sums.a, room);
-    let share = select(0.0, thick / max(sums.a, 0.000001), sums.a > 0.0);
-    let takes = select(vec3<f32>(0.0), min(sums.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
-    let scatters_sum = select(vec3<f32>(0.0), min(light.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
-
-    // The look of the nearest drop's kind.
-    let first = (kind_plus - 1u) * 3u;
-    let rough = fluid_looks[first].w;
-    let scatter_colour = fluid_looks[first + 1u].rgb;
-    let metal = fluid_looks[first + 1u].w;
-    let glows = fluid_looks[first + 2u].rgb;
-    let bends = fluid_looks[first + 2u].w;
-
-    // What is behind: bent aside where the surface is tilted, and more of it
-    // the thicker the fluid, unless that would show something that is in
-    // front of the fluid, or off the picture.
-    let right = normalize(view.sky_rays[1].xyz);
-    let up = normalize(view.sky_rays[2].xyz);
-    let tilt = vec2<f32>(dot(normal, right), -dot(normal, up));
-    let bend = 0.03 * clamp(thick / 0.05, 0.0, 1.0) * (bends - 1.0) / 0.333;
-    var seen_at = at + vec2<i32>(round(tilt * bend * f32(size.y)));
-    let off = any(seen_at < vec2<i32>(0)) || any(seen_at >= size);
-    if off || textureLoad(behind_depth, seen_at, 0) > view.lens.x / away {
-        seen_at = at;
+    let edge = vec2<i32>(clamp(last.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size);
+    if textureLoad(behind_depth, edge, 0) <= 0.0 {
+        return sky;
     }
-    var behind = textureLoad(behind_colour, seen_at, 0).rgb;
-    // Ground under fluid is wet, so darker.
-    // Only what the fluid lies on is wet: not a wall far behind a stream.
-    let lying_on = 1.0 - smoothstep(0.01, 0.04, room - thick);
-    behind *= mix(1.0, mix(1.0, 0.6, clamp(thick / 0.002, 0.0, 1.0) * lying_on), 1.0 - metal);
+    return fluid_behind(last.xy);
+}
 
-    // The light that reaches the fluid, and the share of it that is sent
-    // back to the eye in the fluid's own colour.
-    let sunlit = sunlight(world, normal, position.xy) * under_clouds(world);
-    let from_sun = view.sun.rgb / PI * max(dot(normal, view.towards_sun.xyz), 0.0) * sunlit;
-    let from_sky = view.sky.rgb * open_sky(world, position.xy);
-    let passes = exp(-(takes + scatters_sum));
-    let body = (scatters_sum / max(takes + scatters_sum, vec3<f32>(0.0001)))
-        * (from_sun + from_sky) * (vec3<f32>(1.0) - passes);
-    let into = (behind * passes + body) * (1.0 - metal);
-
-    // What it mirrors: the sky, and the land where the bounced line of
-    // sight meets it in the picture. Rough fluid mirrors the light from all
-    // round instead.
-    var bounced = reflect(-to_eye, normal);
-    if normal.y > 0.7 {
-        bounced.y = abs(bounced.y) + 0.012;
-    }
-    bounced = normalize(bounced);
-    let land = mirrored_land(world, bounced, position.xy);
-    var mirrored = mix(sky_colour(bounced), land.rgb, max(land.a, 0.0));
-    mirrored = mix(mirrored, surroundings(normal), clamp(rough, 0.0, 1.0));
-
-    // How much is mirrored: more the lower the line of sight. A metal is
-    // its own colour; the very edge of a puddle mirrors nothing, so that it
-    // does not end in a bright line.
-    let facing = max(dot(normal, to_eye), 0.0);
-    let glass = ((bends - 1.0) / (bends + 1.0)) * ((bends - 1.0) / (bends + 1.0));
-    let f0 = mix(vec3<f32>(glass), min(scatter_colour, vec3<f32>(1.0)), metal);
-    let edge = clamp(thick / 0.0003, 0.0, 1.0);
-    let shines = fluid_mirrors(f0, facing) * edge;
-
-    // The sun's glint (GGX, with Smith's visibility), none in shadow.
+// The sun's glint (GGX, with Smith's visibility): light sent to the eye
+// from a surface facing `normal`, for each unit of sunlight.
+fn fluid_glint(normal: vec3<f32>, to_eye: vec3<f32>, rough: f32, f0: vec3<f32>) -> vec3<f32> {
     let sun = view.towards_sun.xyz;
     let halfway = normalize(to_eye + sun);
-    let n_eye = max(facing, 0.02);
+    let n_eye = max(dot(normal, to_eye), 0.02);
     let n_sun = clamp(dot(normal, sun), 0.0, 1.0);
     let n_half = clamp(dot(normal, halfway), 0.0, 1.0);
     let eye_half = clamp(dot(to_eye, halfway), 0.0, 1.0);
@@ -598,16 +654,306 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
             + n_eye * sqrt(n_sun * n_sun * (1.0 - alpha2) + alpha2),
         1e-5,
     );
-    let glint = view.sun.rgb * min(density * visible * n_sun, 60.0)
-        * fluid_mirrors(f0, eye_half) * edge * sunlit;
+    return view.sun.rgb * min(density * visible * n_sun, 60.0) * fluid_mirrors(f0, eye_half);
+}
 
-    var colour = into * (vec3<f32>(1.0) - shines) + mirrored * shines + glint
-        + glows * clamp(thick / 0.003, 0.0, 1.0);
-    colour = through_fog(colour, world);
+// Ground seen through `share` of a film of water: darker and deeper in
+// colour, because light that enters it is mostly mirrored back down into
+// it by the water's underside and taken by the ground again. Squaring the
+// colour, kept as bright as before, deepens it; then it is darkened.
+fn fluid_wetted(colour: vec3<f32>, share: f32) -> vec3<f32> {
+    let bright = max(dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722)), 1.0e-5);
+    let deep = colour * colour / bright;
+    return mix(colour, deep * 0.62, clamp(share, 0.0, 1.0));
+}
 
-    var seen: FluidSeen;
-    seen.colour = vec4<f32>(colour, 1.0);
-    seen.motion = fluid_motion(world);
-    seen.depth = fluid_depth(world);
+// How much of what is added at `world` the air in between keeps: the rest
+// is mist. Only for light the fluid sends, since what is seen through it
+// has had its mist already.
+fn fluid_clear_air(world: vec3<f32>) -> f32 {
+    if view.fog.x <= 0.0 {
+        return 1.0;
+    }
+    let line = world - view.eye.xyz;
+    let far = max(length(line), 0.001);
+    return 1.0 - fog_hides(fog_thick(), line / far, far);
+}
+
+// The light falling on a surface facing `normal` at `world`, from the sun
+// (none in its shadow) and from the sky.
+fn fluid_lit(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>, sunlit: f32) -> vec3<f32> {
+    let from_sun = view.sun.rgb / PI * max(dot(normal, view.towards_sun.xyz), 0.0) * sunlit;
+    return from_sun + view.sky.rgb * open_sky(world, pixel);
+}
+
+// How the film's surface runs to the next pixel along `along`, with how
+// much the sum of bumps changes on the way: the side whose ground is
+// nearest in distance to this pixel's is used, so that an edge of the
+// solid world does not bend the film.
+fn film_run(at: vec2<i32>, size: vec2<i32>, ground: vec4<f32>, here: f32, along: vec2<i32>) -> vec4<f32> {
+    let back = solid_point(at - along, size);
+    let onward = solid_point(at + along, size);
+    let onward_better = onward.w > 0.0 && (back.w <= 0.0 || abs(onward.w - ground.w) < abs(ground.w - back.w));
+    if onward_better {
+        return vec4<f32>(onward.xyz - ground.xyz, textureLoad(fluid_film_map, at + along, 0).a - here);
+    }
+    if back.w > 0.0 {
+        return vec4<f32>(ground.xyz - back.xyz, here - textureLoad(fluid_film_map, at - along, 0).a);
+    }
+    return vec4<f32>(0.0);
+}
+
+struct FilmSeen {
+    colour: vec3<f32>,
+    // Where its surface is, or the ground's where it does not cover.
+    world: vec3<f32>,
+}
+
+// A film of liquid lying on the ground seen at the pixel `at`, over
+// `under`, the picture there.
+fn film_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32>) -> FilmSeen {
+    var seen: FilmSeen;
+    let film = textureLoad(fluid_film_map, at, 0);
+    let ground = solid_point(at, size);
+    seen.colour = under;
+    seen.world = ground.xyz;
+    let ray = fluid_ray(at, size);
+    let to_eye = -normalize(ray);
+    let across = film_run(at, size, ground, film.a, vec2<i32>(1, 0));
+    let down = film_run(at, size, ground, film.a, vec2<i32>(0, 1));
+    let lies_on = fluid_facing(across.xyz, down.xyz, to_eye);
+    // Which way the sum of bumps grows along the ground, from how it
+    // changes towards the two neighbours (a basis and its dual).
+    let crossed = cross(across.xyz, down.xyz);
+    let square = dot(crossed, crossed);
+    var grows = vec3<f32>(0.0);
+    if square > 1.0e-16 {
+        grows = (across.w * cross(down.xyz, crossed) + down.w * cross(crossed, across.xyz)) / square;
+    }
+    grows -= lies_on * dot(grows, lies_on);
+    let steep = max(length(grows), 0.5);
+    let inward = grows / steep;
+    // How far in from the edge this is, in metres, and how big a pixel is
+    // on the ground here.
+    let kind = textureLoad(fluid_film_kind_map, at, 0);
+    let radius = max(kind.b / max(film.a, 1.0e-4), 0.001);
+    // How far in from the edge this is, in metres: near the edge, the sum
+    // over how steeply it grows; deep inside, where many bumps overlap and
+    // that says little, the sum itself, a drop's bump passing the edge at
+    // a third of its reach and twice the edge lying about a radius in. The
+    // two are blended without a crease, and so is how fast the blend grows
+    // along the ground, which tilts the surface.
+    let over = max(film.a - FILM_EDGE, 0.0);
+    let near_edge = over / steep;
+    let deep_in = over * 2.0 * radius;
+    let inside_both = sqrt(near_edge * near_edge + deep_in * deep_in);
+    let inside = select(min(film.a - FILM_EDGE, 0.0) / steep, inside_both, over > 0.0);
+    let gain = (near_edge + deep_in * 2.0 * radius * steep) / max(inside_both, 1.0e-6);
+    let distance = length(ground.xyz - view.eye.xyz);
+    let pixel_size = distance / fluid_focal() / max(abs(dot(lies_on, to_eye)), 0.25);
+    let cover = clamp(inside / pixel_size + 0.5, 0.0, 1.0);
+
+    // What the drops under the pixel are made of, as their bumps weigh.
+    let light = textureLoad(fluid_film_light_map, at, 0);
+    let glow = textureLoad(fluid_film_glow_map, at, 0);
+    let each = 1.0 / max(film.a, 1.0e-4);
+    let takes = exp2(film.rgb * each) - vec3<f32>(1.0);
+    let scatters = exp2(light.rgb * each) - vec3<f32>(1.0);
+    let glows = exp2(glow.rgb * each) - vec3<f32>(1.0);
+    let thick = max(light.a * each, 0.0002);
+    let rough = clamp(glow.a * each, 0.02, 1.0);
+    let metal = clamp(kind.r * each, 0.0, 1.0);
+    let bends = 1.0 + max(kind.g * each, 0.0);
+
+    // Damp ground a little way past the edge.
+    let damp = smoothstep(FILM_EDGE * FILM_DAMP, FILM_EDGE, film.a) * (1.0 - metal);
+    let round_it = fluid_wetted(under, 0.5 * damp);
+    if cover <= 0.0 {
+        seen.colour = round_it;
+        return seen;
+    }
+
+    // How high it stands: a thin film rises over a rim three times its
+    // thickness and is flat inside, as a puddle is; a thick one rounds
+    // over a rim not much wider than it is high, into a mound; a metal
+    // beads, its rim a quarter circle. The surface tilts outwards as
+    // steeply as it rises.
+    let rim = mix(clamp(3.0 * thick, 0.003, 0.05), max(thick, 0.002), metal);
+    let rise = clamp(inside / rim, 0.0, 1.0);
+    let left = 1.0 - rise;
+    let circle = sqrt(max(1.0 - left * left, 0.0));
+    let high = thick * mix(1.0 - left * left, circle, metal);
+    let slope = min(thick / rim * mix(2.0 * left, left / max(circle, 0.2), metal) * gain, 5.0);
+    let normal = normalize(lies_on - inward * slope);
+    let surface = ground.xyz + lies_on * high;
+    let facing = clamp(dot(normal, to_eye), 0.02, 1.0);
+
+    // What it mirrors, by Fresnel: little straight down, most at a glance.
+    // A metal mirrors in its own colour.
+    let glass = ((bends - 1.0) / (bends + 1.0)) * ((bends - 1.0) / (bends + 1.0));
+    let f0 = mix(vec3<f32>(glass), min(scatters, vec3<f32>(1.0)), metal);
+    let shines = fluid_mirrors(f0, facing);
+    var bounced = reflect(-to_eye, normal);
+    let off_ground = dot(bounced, lies_on);
+    bounced = normalize(bounced + lies_on * max(0.02 - off_ground, 0.0));
+    var mirrored = fluid_reflected(surface, bounced, pixel, rough);
+    mirrored = mix(mirrored, surroundings(bounced), smoothstep(0.3, 0.9, rough));
+    let sunlit = sunlight(surface, normal, pixel) * under_clouds(surface);
+    let glint = fluid_glint(normal, to_eye, max(rough, 0.03), f0) * sunlit;
+
+    // What is seen through it: the ground under, moved by the bend of the
+    // line of sight into the film, wet, and dimmed by what the film takes
+    // on the way down and back up.
+    let bent = refract(-to_eye, normal, 1.0 / bends);
+    let down_path = high / max(dot(-bent, lies_on), 0.1);
+    let floor_seen = fluid_on_picture(surface + bent * down_path);
+    var ground_seen = under;
+    if all(floor_seen.xy > vec2<f32>(0.0)) && all(floor_seen.xy < vec2<f32>(1.0)) {
+        ground_seen = fluid_behind(floor_seen.xy);
+    }
+    let path = down_path + high * 1.3;
+    let passes = exp(-(takes + scatters) * path);
+    // What it sends back of the light falling on it: a liquid that
+    // scatters (milk, paint) is a soft matte surface, as thick as it is.
+    let albedo = scatters / max(takes + scatters, vec3<f32>(1.0e-4));
+    let body = albedo * fluid_lit(surface, normal, pixel, sunlit)
+        * (vec3<f32>(1.0) - exp(-(takes + scatters) * high * 2.0));
+    // Right at the edge the water's curve sends the eye's line down into
+    // the ground at a slant, and the rim reads as a faint dark line.
+    let contact = 1.0 - 0.3 * (1.0 - smoothstep(0.0, 0.35 * rim, inside)) * (1.0 - metal);
+    let into = (fluid_wetted(ground_seen, 1.0) * passes + body) * (1.0 - metal) * contact;
+    let given = (mirrored * shines + glint) * fluid_clear_air(surface)
+        + glows * (1.0 - exp(-high / 0.003));
+    let colour = into * (vec3<f32>(1.0) - shines) + given;
+    seen.colour = mix(round_it, colour, cover);
+    seen.world = mix(ground.xyz, surface, cover);
     return seen;
+}
+
+struct StreamSeen {
+    colour: vec3<f32>,
+    world: vec3<f32>,
+    cover: f32,
+}
+
+// The drops in flight at the pixel `at`, over `under`, the picture there
+// with any film shaded on it.
+fn stream_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32>) -> StreamSeen {
+    var seen: StreamSeen;
+    let kind_plus = textureLoad(fluid_kind_map, at, 0).r;
+    let smoothed = textureLoad(fluid_down_map, at, 0).r;
+    let round = textureLoad(fluid_round_map, at, 0);
+    let ray = fluid_ray(at, size);
+    let to_eye = -normalize(ray);
+    let away = fluid_distance(textureLoad(fluid_near, at, 0));
+    seen.world = view.eye.xyz + ray * select(smoothed, away, away > 0.0);
+    seen.colour = under;
+    seen.cover = clamp(round.a, 0.0, 1.0);
+
+    // Which way it faces: the facings of the drops over the pixel, added
+    // up, which round a string of them into a tube.
+    var normal = to_eye;
+    if length(round.rgb) > 1.0e-5 {
+        normal = normalize(round.rgb);
+    }
+    normal = normalize(normal + to_eye * max(0.05 - dot(normal, to_eye), 0.0));
+    let facing = clamp(dot(normal, to_eye), 0.02, 1.0);
+
+    // How thick the fluid is: no more than lies between its surface and
+    // the solid world behind it.
+    let sums = textureLoad(fluid_amount_map, at, 0);
+    let light = textureLoad(fluid_light_map, at, 0);
+    let held = textureLoad(behind_depth, at, 0);
+    let ahead = select(smoothed, away, away > 0.0);
+    let solid_ahead = select(1.0e9, view.lens.x / held, held > 0.0);
+    let room = max(solid_ahead - ahead, 0.0) * length(ray);
+    let thick = min(sums.a, room);
+    let share = select(0.0, thick / max(sums.a, 1.0e-6), sums.a > 0.0);
+    let takes = select(vec3<f32>(0.0), min(sums.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
+    let scatters = select(vec3<f32>(0.0), min(light.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
+
+    let first = (kind_plus - 1u) * 3u;
+    let rough = max(fluid_looks[first].w, 0.06);
+    let scatter_colour = fluid_looks[first + 1u].rgb;
+    let metal = fluid_looks[first + 1u].w;
+    let glows = fluid_looks[first + 2u].rgb;
+    let bends = fluid_looks[first + 2u].w;
+
+    // What is behind, seen through a round stream: a lens, so the line of
+    // sight through its side is turned across it and what is behind shows
+    // squeezed and the wrong way round, the more the farther behind it is.
+    let right = normalize(view.sky_rays[1].xyz);
+    let up = normalize(view.sky_rays[2].xyz);
+    let tilt = vec2<f32>(dot(normal, right), -dot(normal, up));
+    let lean = clamp(length(tilt), 0.0, 0.999);
+    let turned = 2.0 * (asin(lean) - asin(lean / bends));
+    let gap = clamp(room, 0.0, 2.0);
+    let shift = -normalize(tilt + vec2<f32>(1.0e-6, 0.0)) * turned * gap * fluid_focal()
+        / max(solid_ahead, 0.01);
+    let picture = vec2<f32>(size);
+    var look_at = (vec2<f32>(at) + 0.5 + shift) / picture;
+    look_at = clamp(look_at, vec2<f32>(0.0), vec2<f32>(1.0));
+    let there = textureLoad(behind_depth, vec2<i32>(look_at * picture), 0);
+    if away > 0.0 && there > view.lens.x / away {
+        look_at = (vec2<f32>(at) + 0.5) / picture;
+    }
+    let behind = fluid_behind(look_at);
+
+    let passes = exp(-(takes + scatters));
+    let sunlit = sunlight(seen.world, normal, pixel) * under_clouds(seen.world);
+    let body = (scatters / max(takes + scatters, vec3<f32>(1.0e-4)))
+        * fluid_lit(seen.world, normal, pixel, sunlit) * (vec3<f32>(1.0) - passes);
+    let into = (behind * passes + body) * (1.0 - metal);
+
+    let glass = ((bends - 1.0) / (bends + 1.0)) * ((bends - 1.0) / (bends + 1.0));
+    let f0 = mix(vec3<f32>(glass), min(scatter_colour, vec3<f32>(1.0)), metal);
+    let shines = fluid_mirrors(f0, facing);
+    let bounced = reflect(-to_eye, normal);
+    var mirrored = fluid_reflected(seen.world, bounced, pixel, rough);
+    mirrored = mix(mirrored, surroundings(bounced), smoothstep(0.3, 0.9, rough));
+    let glint = fluid_glint(normal, to_eye, rough, f0) * sunlit;
+    let given = (mirrored * shines + glint) * fluid_clear_air(seen.world)
+        + glows * clamp(thick / 0.003, 0.0, 1.0);
+    let colour = into * (vec3<f32>(1.0) - shines) + given;
+    seen.colour = mix(under, colour, seen.cover);
+    return seen;
+}
+
+// The fluid over the picture: films on the ground, then drops in flight
+// in front of them.
+@fragment
+fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
+    let at = vec2<i32>(position.xy);
+    let size = vec2<i32>(textureDimensions(fluid_down_map));
+    let film = textureLoad(fluid_film_map, at, 0).a;
+    let streams = textureLoad(fluid_kind_map, at, 0).r > 0u
+        && textureLoad(fluid_down_map, at, 0).r > 0.0
+        && textureLoad(fluid_round_map, at, 0).a > 0.0;
+    let held = textureLoad(behind_depth, at, 0);
+    let films = film > FILM_EDGE * FILM_DAMP && held > 0.0;
+    if !films && !streams {
+        discard;
+    }
+    var colour = textureLoad(behind_colour, at, 0).rgb;
+    var world = solid_point(at, size).xyz;
+    var depth = held;
+    if films {
+        let seen = film_seen(at, size, position.xy, colour);
+        colour = seen.colour;
+        world = seen.world;
+        depth = fluid_depth(world);
+    }
+    if streams {
+        let seen = stream_seen(at, size, position.xy, colour);
+        colour = seen.colour;
+        if seen.cover > 0.5 || !films {
+            world = seen.world;
+            depth = select(held, fluid_depth(world), seen.cover > 0.5);
+        }
+    }
+    var out: FluidSeen;
+    out.colour = vec4<f32>(colour, 1.0);
+    out.motion = fluid_motion(world);
+    out.depth = depth;
+    return out;
 }
