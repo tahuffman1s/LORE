@@ -248,10 +248,12 @@ impl SceneView {
                 0.0
             },
             near: camera.near_metres(),
+            reflecting: self.mirroring != Mirroring::Off,
             mirrors: kept.is_some()
                 && matches!(self.mirroring, Mirroring::Running | Mirroring::Reading),
             kept: kept.unwrap_or(steady),
             keeps: matches!(self.mirroring, Mirroring::Running | Mirroring::Keeping),
+            copied: false,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`

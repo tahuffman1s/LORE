@@ -106,6 +106,9 @@ pub(crate) struct View {
     pub(crate) noise: f32,
     /// How near to the eye the nearest thing drawn can be, in metres.
     pub(crate) near: f32,
+    /// Whether smooth things mirror the world at all, or only the light of
+    /// the sky and the ground.
+    pub(crate) reflecting: bool,
     /// Whether the picture kept from the last frame is there to be
     /// mirrored: wet ground, puddles and polished things show the world
     /// in it. Not after a cut, when that picture is of somewhere else.
@@ -115,6 +118,10 @@ pub(crate) struct View {
     /// Whether this frame's picture is to be kept for the next frame to
     /// mirror, when there is anything in the scene that would.
     pub(crate) keeps: bool,
+    /// Whether this frame's picture is copied aside before what is
+    /// see-through is drawn, which then mirrors that copy and not the
+    /// frame before's: [`MeshPipeline::record`] works it out.
+    pub(crate) copied: bool,
 }
 
 impl View {
@@ -210,7 +217,16 @@ impl View {
                 .chain(scattered.iter().flatten())
                 .chain(&fog)
                 .chain(&wind)
-                .chain(&[self.stir, if self.mirrors { 1.0 } else { 0.0 }, 0.0, 0.0])
+                .chain(&[
+                    self.stir,
+                    match (self.reflecting, self.mirrors) {
+                        (false, _) => 0.0,
+                        (true, false) => 0.5,
+                        (true, true) => 1.0,
+                    },
+                    if self.copied { 1.0 } else { 0.0 },
+                    0.0,
+                ])
                 .chain(water.iter().flatten())
                 .chain(above.flashes.iter().flatten())
                 .chain(above.weather.rows.iter().flatten())
@@ -1580,6 +1596,21 @@ impl MeshPipeline {
                 *bound = id;
             }
         }
+        // Water sees what is under it: the picture so far is copied aside
+        // for it to read, after what is solid is drawn, and drawing carries
+        // on over the same picture. So do wet ground, puddles and polished
+        // things, a frame late: what they mirror is this picture, read
+        // while the next is drawn.
+        let mirrored =
+            view.keeps && (wet_ground > 0.0 || meshes.is_some_and(|meshes| meshes.glossy));
+        let copies = meshes.is_some_and(|meshes| meshes.has_water)
+            || !bits.is_empty()
+            || fluid.is_some()
+            || mirrored;
+        let view = &View {
+            copied: copies,
+            ..*view
+        };
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
         // caller guarantees the commands that read it last have finished.
         unsafe {
@@ -1746,19 +1777,7 @@ impl MeshPipeline {
                 device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
                 device.cmd_draw(commands, 3, 1, 0, 0);
             }
-            // Water sees what is under it: the picture so far is copied
-            // aside for it to read, and drawing carries on over the same
-            // picture.
-            // So do wet ground, puddles and polished things, a frame late:
-            // what they mirror is this picture, read while the next is
-            // drawn.
-            let mirrored =
-                view.keeps && (wet_ground > 0.0 || meshes.is_some_and(|meshes| meshes.glossy));
-            if meshes.is_some_and(|meshes| meshes.has_water)
-                || !bits.is_empty()
-                || fluid.is_some()
-                || mirrored
-            {
+            if copies {
                 device.cmd_end_rendering(commands);
                 Self::keep_behind(device, commands, target);
                 target.kept.set(true);
@@ -2464,6 +2483,7 @@ mod tests {
             stir: 0.5,
             noise: 9.0,
             near: 0.05,
+            reflecting: true,
             mirrors: true,
             kept: {
                 let mut kept = [[0.0; 4]; 4];
@@ -2471,6 +2491,7 @@ mod tests {
                 kept
             },
             keeps: true,
+            copied: true,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
@@ -2581,6 +2602,11 @@ mod tests {
             number(&bytes, 389),
             1.0,
             "and that smooth things mirror the world"
+        );
+        assert_eq!(
+            number(&bytes, 390),
+            1.0,
+            "this frame's picture too, once copied"
         );
         assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
         assert_eq!(number(&bytes, 399), 6.0, "and how many points its grid has");

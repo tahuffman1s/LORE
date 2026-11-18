@@ -64,9 +64,13 @@ struct View {
     // second, and how many seconds ago the last frame was drawn.
     wind: vec4<f32>,
     // Whoever walks: in the first number, how much they are stirring what
-    // they walk through, from 0 standing still to 1 at a run. The second is
-    // 1 if smooth things mirror the world in the picture kept from the frame
-    // before, and 0 if they mirror only the light of the sky.
+    // they walk through, from 0 standing still to 1 at a run. The second
+    // says what smooth things mirror: 0 only the light of the sky and the
+    // ground; 0.5 the sky, or the shade of what stands in the way, for
+    // there is no picture of the world to mirror this frame; 1 the world,
+    // in the picture kept from the frame before. The third is 1 if this
+    // frame's picture is copied before what is see-through is drawn, which
+    // then mirrors that.
     walker: vec4<f32>,
     // The still water the eye is in or nearest: how high its surface is,
     // how far apart the points of its grid of depths are, 1 if there is
@@ -1347,16 +1351,23 @@ const MIRRORS_WELL: f32 = 0.28;
 const FILM_ROUGHNESS: f32 = 0.3;
 
 // What a smooth solid surface at `origin` mirrors along `bounced`: the
-// world, where the picture kept from the frame before shows it, and where
-// it does not, the sky, or the shade of what stands in the way if
-// something does. What is found near the picture's edge fades into that,
-// so no edge is seen to move; so does what a line heading back towards the
-// eye strikes, which is seen in the picture from its other side. Each
-// pixel starts its walk a different part of a step in, every frame, and
-// the upscaler blends the frames.
-fn solid_mirrored(origin: vec3<f32>, bounced: vec3<f32>, to_eye: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
-    let start = scattered(pixel + view.shadows.w * vec2<f32>(3.605551, 2.236068));
-    let struck = mirror_walk(origin, bounced, pixel, rough, true, start);
+// world, where a picture of it shows it, and where it does not, the sky,
+// or the shade of what stands in the way if something does. What is found
+// near the picture's edge fades into that, so no edge is seen to move; so
+// does what a line heading back towards the eye strikes, which is seen in
+// the picture from its other side. Each pixel starts its walk a different
+// part of a step in, every frame, and the upscaler blends the frames. With
+// `walk` false there is no picture, and with `earlier` the picture is the
+// one kept from the frame before, not this frame's.
+fn solid_mirrored(
+    origin: vec3<f32>, bounced: vec3<f32>, to_eye: vec3<f32>, pixel: vec2<f32>, rough: f32, walk: bool,
+    earlier: bool,
+) -> vec3<f32> {
+    var struck = Struck(vec3<f32>(0.0), 0.0, vec3<f32>(-1.0), origin);
+    if walk {
+        let start = scattered(pixel + view.shadows.w * vec2<f32>(3.605551, 2.236068));
+        struck = mirror_walk(origin, bounced, pixel, rough, earlier, start);
+    }
     let edge = min(min(struck.last.x, struck.last.y), 1.0 - max(struck.last.x, struck.last.y));
     let sure = struck.sure * smoothstep(0.0, 0.07, edge)
         * (1.0 - smoothstep(0.15, 0.6, dot(bounced, to_eye)));
@@ -1569,7 +1580,9 @@ fn snow_tracks(place: vec3<f32>, upright: vec3<f32>, ragged: vec2<f32>) -> vec3<
 }
 
 // The light the surface sends to the eye.
-fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: Painted) -> vec3<f32> {
+// `see_through` is true for what is drawn over the solid world, after
+// this frame's picture of it is copied.
+fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: Painted, see_through: bool) -> vec3<f32> {
     var normal = normalize(corner.normal);
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
@@ -1821,13 +1834,18 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let mirrored = surroundings(reflect(-to_eye, normal));
     var mirrors = 0.0;
     var mirrored_world = vec3<f32>(0.0);
-    if view.walker.y > 0.5 && roughness < MIRRORS_BELOW {
+    if view.walker.y > 0.25 && roughness < MIRRORS_BELOW {
         mirrors = 1.0 - smoothstep(MIRRORS_WELL, MIRRORS_BELOW, roughness);
         // A normal map can turn the mirrored line into the surface: it
         // leaves on the side the surface is built to face.
         var bounced = reflect(-to_eye, normal);
         bounced = normalize(bounced + built * max(0.03 - dot(bounced, built), 0.0));
-        mirrored_world = solid_mirrored(corner.world, bounced, to_eye, corner.position.xy, roughness);
+        // What is see-through is drawn after this frame's picture is
+        // copied, if it is, and mirrors that.
+        let now = see_through && view.walker.z > 0.5;
+        mirrored_world = solid_mirrored(
+            corner.world, bounced, to_eye, corner.position.xy, roughness, now || view.walker.y > 0.75, !now,
+        );
     }
     // Snow fills the crevices it lies on.
     from_around = (from_around + mirrored * shines * (1.0 - mirrors)) * mix(reaches, banked_sky, snowed);
@@ -1867,7 +1885,7 @@ fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
     pixel.motion = motion(corner);
     return pixel;
 }
@@ -1880,7 +1898,7 @@ fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel 
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
     pixel.motion = motion(corner);
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
@@ -1906,7 +1924,7 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), base.a);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, true), corner.world), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }

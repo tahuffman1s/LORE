@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::buffer::once;
 use crate::error::RenderError;
 use crate::fluid_pass::FluidPictures;
 use crate::gpu::Gpu;
@@ -229,6 +230,34 @@ impl SceneTarget {
             DEPTH,
             DOING,
         )?;
+        // Every surface that could mirror the world is drawn with the
+        // copies at hand, in frames before any has been filled too: they
+        // are made ready to be read from the start, holding nothing yet.
+        let ready = [
+            (target.behind.image, COLOUR),
+            (target.behind_depth.image, DEPTH),
+        ]
+        .map(|(image, range)| {
+            vk::ImageMemoryBarrier2::default()
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(range)
+        });
+        // SAFETY: the images were made on `gpu` just now and nothing else
+        // uses them yet; `once` waits until the commands have run.
+        unsafe {
+            once(gpu, DOING, |commands| {
+                gpu.device().cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&ready),
+                );
+            })
+        }?;
         // Copied out by the tests, which check the numbers.
         target.motion.create(
             gpu,

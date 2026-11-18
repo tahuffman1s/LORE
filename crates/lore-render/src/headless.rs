@@ -390,6 +390,11 @@ impl Headless {
     /// Draws one frame as `camera` sees it, waits until the graphics card
     /// has finished it, and says how long each half took.
     ///
+    /// While time is held still and anything in the scene mirrors the
+    /// world, the frame is drawn twice: first a picture for it to mirror,
+    /// from the same camera, so that the same camera gives the same
+    /// picture. The time given is for both.
+    ///
     /// # Errors
     ///
     /// Fails if the graphics driver or the upscaler reports a failure; this
@@ -412,9 +417,13 @@ impl Headless {
         // be of anywhere.
         if self.view.still && mirrors {
             self.view.mirroring = Mirroring::Keeping;
-            self.draw(camera, weather, tracks, false)?;
+            let first = self.draw(camera, weather, tracks, false)?;
             self.view.mirroring = Mirroring::Reading;
-            return self.draw(camera, weather, None, true);
+            let second = self.draw(camera, weather, None, true)?;
+            return Ok(FrameTime {
+                recording: first.recording + second.recording,
+                drawing: first.drawing + second.drawing,
+            });
         }
         self.view.mirroring = if self.reflections {
             Mirroring::Running
