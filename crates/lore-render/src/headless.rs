@@ -1388,6 +1388,76 @@ mod tests {
         assert_eq!(validation_errors(), 0);
     }
 
+    /// A lying drop of tar of `radius` metres at `x` on the floor.
+    fn lying_at(x: f32, radius: f32) -> FluidDrop {
+        FluidDrop {
+            place: [x, 0.0, 0.0],
+            radius,
+            facing: [0.0, 1.0, 0.0],
+            flat: 1.0,
+            long: 1.0,
+            thick: 0.004,
+            kind: 0,
+        }
+    }
+
+    #[test]
+    fn lying_drops_near_each_other_melt_into_one_film_and_far_ones_do_not() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        // Two drops 1.6 radii apart: the ground between them is covered.
+        headless.set_fluid(&[lying_at(-0.24, 0.3), lying_at(0.24, 0.3)]);
+        let near = headless.screenshot(&camera).unwrap();
+        assert!(
+            fluid_light(&near, [64, 36]) < fluid_light(&bare, [64, 36]),
+            "the film does not join two drops close together"
+        );
+        // Six radii apart: each is its own drop, and the floor between is
+        // dry.
+        headless.set_fluid(&[lying_at(-0.9, 0.3), lying_at(0.9, 0.3)]);
+        let far = headless.screenshot(&camera).unwrap();
+        assert_eq!(fluid_light(&far, [64, 36]), fluid_light(&bare, [64, 36]));
+        assert!(far != bare, "the drops far apart are not drawn");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_stream_thinner_than_a_pixel_is_still_seen() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        let camera = looking_down();
+        let bare = headless.screenshot(&camera).unwrap();
+        headless.set_fluid_looks(&[tar()]);
+        // Two millimetres across, two metres under the eye, where a pixel
+        // is centimetres wide.
+        let stream: Vec<FluidDrop> = (-40..=40)
+            .map(|step| FluidDrop {
+                place: [step as f32 * 0.002, 2.0, 0.0],
+                radius: 0.001,
+                facing: [1.0, 0.0, 0.0],
+                flat: 0.0,
+                long: 2.0,
+                thick: 0.0,
+                kind: 0,
+            })
+            .collect();
+        headless.set_fluid(&stream);
+        let seen = headless.screenshot(&camera).unwrap();
+        assert!(seen != bare, "a hair-thin stream vanishes");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
     #[test]
     fn no_water_look_is_the_same_as_never_having_set_one() {
         let Some(mut headless) = headless(128, 72) else {

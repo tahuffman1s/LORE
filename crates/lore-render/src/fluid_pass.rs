@@ -33,6 +33,9 @@ const SUMS_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 /// How far away the fluid is, smoothed, in metres.
 const DISTANCE_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 
+/// How many fluid pictures the shaders read.
+const PICTURES: u32 = 11;
+
 /// How many corners the box round one drop is drawn with.
 const BOX_CORNERS: u32 = 36;
 
@@ -49,10 +52,19 @@ pub(crate) struct FluidPictures {
     amount: Picture,
     /// The light the fluid scatters, and how wet the ground at a rim is.
     light: Picture,
-    /// Which way the surfaces under lying drops face, added up weighted by
-    /// how much of each drop is over the pixel, and that weight: inside a
-    /// puddle the liquid lies as flat as what it lies on.
-    lie: Picture,
+    /// Which way the surfaces of drops in flight face, added up, and how
+    /// much of the pixel they cover.
+    round: Picture,
+    /// The films that drops lying on a surface make together (`fluid.wgsl`):
+    /// what they take from light and how much film there is; what they
+    /// scatter and how thick they are; their glow and roughness; how
+    /// metallic they are, how much they bend light and how large the drops
+    /// are. Each is added up
+    /// weighted by how much of each drop is under the pixel.
+    film: Picture,
+    film_light: Picture,
+    film_glow: Picture,
+    film_kind: Picture,
     /// How far away the fluid is, smoothed across and then down.
     across: Picture,
     down: Picture,
@@ -73,7 +85,11 @@ impl FluidPictures {
             kind: Picture::null(),
             amount: Picture::null(),
             light: Picture::null(),
-            lie: Picture::null(),
+            round: Picture::null(),
+            film: Picture::null(),
+            film_light: Picture::null(),
+            film_glow: Picture::null(),
+            film_kind: Picture::null(),
             across: Picture::null(),
             down: Picture::null(),
             id: NEXT_PICTURES.fetch_add(1, Ordering::Relaxed),
@@ -92,7 +108,11 @@ impl FluidPictures {
             (&mut pictures.kind, KIND_FORMAT),
             (&mut pictures.amount, SUMS_FORMAT),
             (&mut pictures.light, SUMS_FORMAT),
-            (&mut pictures.lie, SUMS_FORMAT),
+            (&mut pictures.round, SUMS_FORMAT),
+            (&mut pictures.film, SUMS_FORMAT),
+            (&mut pictures.film_light, SUMS_FORMAT),
+            (&mut pictures.film_glow, SUMS_FORMAT),
+            (&mut pictures.film_kind, SUMS_FORMAT),
             (&mut pictures.across, DISTANCE_FORMAT),
             (&mut pictures.down, DISTANCE_FORMAT),
         ] {
@@ -113,7 +133,11 @@ impl Drop for FluidPictures {
                 &self.kind,
                 &self.amount,
                 &self.light,
-                &self.lie,
+                &self.round,
+                &self.film,
+                &self.film_light,
+                &self.film_glow,
+                &self.film_kind,
                 &self.across,
                 &self.down,
             ] {
@@ -144,8 +168,10 @@ pub(crate) struct FluidWorks {
     pointed: RefCell<Vec<u64>>,
     /// Draws the nearest surface of each drop.
     front: vk::Pipeline,
-    /// Adds up what each drop takes from the line of sight.
+    /// Adds up what each drop in flight takes from the line of sight.
     amount: vk::Pipeline,
+    /// Adds up the film that the drops lying on surfaces make.
+    film: vk::Pipeline,
     /// Smooths the distance across, and then down.
     smooth: [vk::Pipeline; 2],
     /// Shades the liquid over the picture.
@@ -159,7 +185,10 @@ pub(crate) struct FluidFrame<'a> {
     pictures: &'a FluidPictures,
     set: vk::DescriptorSet,
     drops: vk::Buffer,
+    /// How many drops there are, and how many of them, at the start, lie
+    /// on a surface.
     count: u32,
+    lying: u32,
     extent: vk::Extent2D,
 }
 
@@ -199,6 +228,7 @@ impl FluidWorks {
             pointed: RefCell::new(vec![0; frames]),
             front: vk::Pipeline::null(),
             amount: vk::Pipeline::null(),
+            film: vk::Pipeline::null(),
             smooth: [vk::Pipeline::null(); 2],
             shade: vk::Pipeline::null(),
         };
@@ -224,6 +254,10 @@ impl FluidWorks {
             picture_binding(5),
             picture_binding(6),
             picture_binding(7),
+            picture_binding(8),
+            picture_binding(9),
+            picture_binding(10),
+            picture_binding(11),
         ];
         let sizes = [
             vk::DescriptorPoolSize::default()
@@ -231,7 +265,7 @@ impl FluidWorks {
                 .descriptor_count(count),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(count * 7),
+                .descriptor_count(count * PICTURES),
         ];
         for _ in 0..frames {
             works.looks.push(Buffer::writable(
@@ -304,7 +338,7 @@ impl FluidWorks {
         Ok(works)
     }
 
-    /// Makes the five pipelines. Each draws with a dynamic viewport and
+    /// Makes the six pipelines. Each draws with a dynamic viewport and
     /// scissor, so that a resized window needs no new ones.
     fn build_pipelines(&mut self, module: vk::ShaderModule) -> Result<(), RenderError> {
         let none = vk::PipelineColorBlendAttachmentState::default();
@@ -346,6 +380,7 @@ impl FluidWorks {
         // all able to mix each picture of one pass differently.
         let kinds = [KIND_FORMAT];
         let sums = [SUMS_FORMAT; 3];
+        let films = [SUMS_FORMAT; 4];
         let front = self.pipeline(
             module,
             &Stage {
@@ -370,6 +405,19 @@ impl FluidWorks {
                 depth_format: vk::Format::UNDEFINED,
                 depth: &no_depth,
                 blends: &[added; 3],
+            },
+        )?;
+        // The drops lying on surfaces add up into films, over four more.
+        self.film = self.pipeline(
+            module,
+            &Stage {
+                vertex: c"vertex_film",
+                fragment: c"fragment_film",
+                input: &per_drop,
+                colours: &films,
+                depth_format: vk::Format::UNDEFINED,
+                depth: &no_depth,
+                blends: &[added; 4],
             },
         )?;
         // Pass 2: one number a pixel, over the whole picture.
@@ -512,6 +560,7 @@ impl FluidWorks {
     ) -> Result<Option<FluidFrame<'a>>, RenderError> {
         let bytes = scene.drops();
         let count = (bytes.len() / DROP_BYTES).min(MOST_FLUID_DROPS);
+        let lying = scene.lying().min(count);
         if count == 0 {
             return Ok(None);
         }
@@ -549,20 +598,25 @@ impl FluidWorks {
                 pictures.light.view,
                 pictures.across.view,
                 pictures.down.view,
-                pictures.lie.view,
+                pictures.round.view,
+                pictures.film.view,
+                pictures.film_light.view,
+                pictures.film_glow.view,
+                pictures.film_kind.view,
             ];
             let infos = views.map(|view| {
                 [vk::DescriptorImageInfo::default()
                     .image_view(view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
             });
-            let writes: [vk::WriteDescriptorSet; 7] = std::array::from_fn(|picture| {
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1 + picture as u32)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(&infos[picture])
-            });
+            let writes: [vk::WriteDescriptorSet; PICTURES as usize] =
+                std::array::from_fn(|picture| {
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1 + picture as u32)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&infos[picture])
+                });
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { self.gpu.device().update_descriptor_sets(&writes, &[]) };
@@ -570,13 +624,14 @@ impl FluidWorks {
         }
         // At most `MOST_FLUID_DROPS`, which is far below `u32::MAX`.
         #[allow(clippy::cast_possible_truncation)]
-        let count = count as u32;
+        let (count, lying) = (count as u32, lying as u32);
         Ok(Some(FluidFrame {
             works: self,
             pictures,
             set,
             drops: drops.handle,
             count,
+            lying,
             extent: target.extent,
         }))
     }
@@ -650,7 +705,11 @@ impl FluidFrame<'_> {
             to_draw(pictures.kind.image),
             to_draw(pictures.amount.image),
             to_draw(pictures.light.image),
-            to_draw(pictures.lie.image),
+            to_draw(pictures.round.image),
+            to_draw(pictures.film.image),
+            to_draw(pictures.film_light.image),
+            to_draw(pictures.film_glow.image),
+            to_draw(pictures.film_kind.image),
             to_draw(pictures.across.image),
             to_draw(pictures.down.image),
             barrier(pictures.near.image, DEPTH)
@@ -677,7 +736,11 @@ impl FluidFrame<'_> {
             colour_to_read(pictures.kind.image),
             colour_to_read(pictures.amount.image),
             colour_to_read(pictures.light.image),
-            colour_to_read(pictures.lie.image),
+            colour_to_read(pictures.round.image),
+            colour_to_read(pictures.film.image),
+            colour_to_read(pictures.film_light.image),
+            colour_to_read(pictures.film_glow.image),
+            colour_to_read(pictures.film_kind.image),
             barrier(pictures.near.image, DEPTH)
                 .src_stage_mask(depth_stages)
                 .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
@@ -703,7 +766,13 @@ impl FluidFrame<'_> {
         let added = [
             clear(pictures.amount.view, zero),
             clear(pictures.light.view, zero),
-            clear(pictures.lie.view, zero),
+            clear(pictures.round.view, zero),
+        ];
+        let films = [
+            clear(pictures.film.view, zero),
+            clear(pictures.film_light.view, zero),
+            clear(pictures.film_glow.view, zero),
+            clear(pictures.film_kind.view, zero),
         ];
         // Nothing drawn is as far as can be.
         let depth = vk::RenderingAttachmentInfo::default()
@@ -726,6 +795,14 @@ impl FluidFrame<'_> {
             .render_area(area)
             .layer_count(1)
             .color_attachments(&added);
+        let film_pass = vk::RenderingInfo::default()
+            .render_area(area)
+            .layer_count(1)
+            .color_attachments(&films);
+        // Drops lying on surfaces come first in the list, then those in
+        // flight. A pass with none of its drops still clears its pictures,
+        // which the shade reads either way.
+        let flying = self.count.saturating_sub(self.lying);
         let across = [clear(pictures.across.view, zero)];
         let second_pass = vk::RenderingInfo::default()
             .render_area(area)
@@ -756,13 +833,24 @@ impl FluidFrame<'_> {
             device.cmd_set_cull_mode(commands, vk::CullModeFlags::FRONT);
             device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
             device.cmd_bind_vertex_buffers(commands, 0, &[self.drops], &[0]);
-            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.front);
-            device.cmd_draw(commands, BOX_CORNERS, self.count, 0, 0);
+            if flying > 0 {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.front);
+                device.cmd_draw(commands, BOX_CORNERS, flying, 0, self.lying);
+            }
             device.cmd_end_rendering(commands);
-            // What every drop adds up to, over other pictures.
+            // What every drop in flight adds up to, over other pictures.
             device.cmd_begin_rendering(commands, &sums_pass);
-            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.amount);
-            device.cmd_draw(commands, BOX_CORNERS, self.count, 0, 0);
+            if flying > 0 {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.amount);
+                device.cmd_draw(commands, BOX_CORNERS, flying, 0, self.lying);
+            }
+            device.cmd_end_rendering(commands);
+            // And the films the lying ones make, over four more.
+            device.cmd_begin_rendering(commands, &film_pass);
+            if self.lying > 0 {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.film);
+                device.cmd_draw(commands, BOX_CORNERS, self.lying, 0, 0);
+            }
             device.cmd_end_rendering(commands);
             device.cmd_pipeline_barrier2(commands, &dependency(&after_drops));
 
@@ -771,7 +859,9 @@ impl FluidFrame<'_> {
             device.cmd_set_viewport(commands, 0, &[viewport]);
             device.cmd_set_scissor(commands, 0, &[area]);
             self.bind_sets(commands, view_set);
-            self.draw_screen(commands, works.smooth[0]);
+            if flying > 0 {
+                self.draw_screen(commands, works.smooth[0]);
+            }
             device.cmd_end_rendering(commands);
             device.cmd_pipeline_barrier2(commands, &dependency(&after_across));
 
@@ -780,7 +870,9 @@ impl FluidFrame<'_> {
             device.cmd_set_viewport(commands, 0, &[viewport]);
             device.cmd_set_scissor(commands, 0, &[area]);
             self.bind_sets(commands, view_set);
-            self.draw_screen(commands, works.smooth[1]);
+            if flying > 0 {
+                self.draw_screen(commands, works.smooth[1]);
+            }
             device.cmd_end_rendering(commands);
             device.cmd_pipeline_barrier2(commands, &dependency(&after_down));
         }
@@ -865,7 +957,7 @@ impl Drop for FluidWorks {
         // pool frees its sets.
         unsafe {
             let device = self.gpu.device();
-            for pipeline in [self.front, self.amount, self.shade]
+            for pipeline in [self.front, self.amount, self.film, self.shade]
                 .into_iter()
                 .chain(self.smooth)
             {
