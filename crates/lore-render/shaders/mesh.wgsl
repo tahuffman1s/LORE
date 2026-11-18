@@ -1282,6 +1282,14 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
     return 1.0;
 }
 
+// The depth the picture from above holds at `at` (from 0 to 1 across it),
+// `size` pixels across: the nearest pixel, and at the edge for a place
+// beyond it.
+fn overhead_at(at: vec2<f32>, size: vec2<f32>) -> f32 {
+    let pixel = clamp(vec2<i32>(at * size), vec2<i32>(0), vec2<i32>(size) - 1);
+    return textureLoad(shadow_map, pixel, 4, 0);
+}
+
 // How much of the sky a point of the world can see, from a little (under
 // thick cover) to 1 (in the open).
 //
@@ -1325,7 +1333,7 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
         // From straight up out to nine metres away.
         let beside = on_disc(look, CANOPY_LOOKS, turn) * 9.0;
         let at = uv + beside / metres_a_pixel / size;
-        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        let held = overhead_at(at, size);
         // How far over the point's own height the highest thing there is.
         let over = (above.z - held) * depth_metres;
         // Cover counts if it is higher than it is far off: a bush beside
@@ -1370,7 +1378,7 @@ fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
     var open = 0.0;
     for (var look = 0; look < 2; look++) {
         let at = uv + beside * (f32(look) * 2.0 - 1.0) / metres_a_pixel / size;
-        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        let held = overhead_at(at, size);
         open += 1.0 - smoothstep(0.35, 0.9, (above.z - held) * depth_metres);
     }
     return open * 0.5;
@@ -1480,7 +1488,7 @@ fn snow_buries(world: vec3<f32>, deep: f32) -> f32 {
     var beyond = 1.0e9;
     for (var look = 0; look < 11; look++) {
         let at = uv + SNOW_GROUND_LOOKS[look] / metres_a_pixel / size;
-        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        let held = overhead_at(at, size);
         // Where the picture holds nothing (off the level's edge, or in a
         // building it shows no roof of) there is no ground, and nothing
         // is learnt.
