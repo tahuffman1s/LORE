@@ -64,7 +64,9 @@ struct View {
     // second, and how many seconds ago the last frame was drawn.
     wind: vec4<f32>,
     // Whoever walks: in the first number, how much they are stirring what
-    // they walk through, from 0 standing still to 1 at a run.
+    // they walk through, from 0 standing still to 1 at a run. The second is
+    // 1 if smooth things mirror the world in the picture kept from the frame
+    // before, and 0 if they mirror only the light of the sky.
     walker: vec4<f32>,
     // The still water the eye is in or nearest: how high its surface is,
     // how far apart the points of its grid of depths are, 1 if there is
@@ -117,6 +119,9 @@ struct View {
     // zero). What a metre of it scatters, and how rough its surface is.
     // What it glows, and how much it bends light.
     water_look: array<vec4<f32>, 3>,
+    // Where each point of the world was drawn in the picture kept for
+    // smooth things to mirror (`walker.y` says whether there is one).
+    kept_from_world: mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -1303,6 +1308,97 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec2<f32> {
     );
 }
 
+// How much of the rain reaches a point, from 0 (something is over it) to 1.
+// Rain falls nearly straight, so what matters is what is right overhead,
+// not how much of the whole sky is seen: the floor of a street between
+// tall buildings sees little sky and is rained on all the same.
+fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+    if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.04 {
+        return 1.0;
+    }
+    let metres_a_pixel = view.shadow_reach[4].x;
+    let depth_metres = view.shadow_reach[4].y;
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    // Two looks a hand apart, turned for every pixel and frame, so that
+    // the edge of what is dry under a ledge is soft.
+    let turn = scattered(pixel + view.shadows.w * vec2<f32>(4.236068, 1.618034)) * 6.2831853;
+    let beside = vec2<f32>(cos(turn), sin(turn)) * 0.18;
+    var open = 0.0;
+    for (var look = 0; look < 2; look++) {
+        let at = uv + beside * (f32(look) * 2.0 - 1.0) / metres_a_pixel / size;
+        let held = textureLoad(shadow_map, vec2<i32>(at * size), 4, 0);
+        open += 1.0 - smoothstep(0.35, 0.9, (above.z - held) * depth_metres);
+    }
+    return open * 0.5;
+}
+
+// How rough a surface can be and still mirror the world round it, and how
+// rough it is when it mirrors it as clearly as it ever will: between the
+// two the mirrored world fades into the plain light of the sky.
+const MIRRORS_BELOW: f32 = 0.5;
+const MIRRORS_WELL: f32 = 0.28;
+// How rough a film of rain water lying on the ground is: smooth enough to
+// mirror the street, blurred.
+const FILM_ROUGHNESS: f32 = 0.3;
+
+// What a smooth solid surface at `origin` mirrors along `bounced`: the
+// world, where the picture kept from the frame before shows it, and where
+// it does not, the sky, or the shade of what stands in the way if
+// something does. What is found near the picture's edge fades into that,
+// so no edge is seen to move; so does what a line heading back towards the
+// eye strikes, which is seen in the picture from its other side. Each
+// pixel starts its walk a different part of a step in, every frame, and
+// the upscaler blends the frames.
+fn solid_mirrored(origin: vec3<f32>, bounced: vec3<f32>, to_eye: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
+    let start = scattered(pixel + view.shadows.w * vec2<f32>(3.605551, 2.236068));
+    let struck = mirror_walk(origin, bounced, pixel, rough, true, start);
+    let edge = min(min(struck.last.x, struck.last.y), 1.0 - max(struck.last.x, struck.last.y));
+    let sure = struck.sure * smoothstep(0.0, 0.07, edge)
+        * (1.0 - smoothstep(0.15, 0.6, dot(bounced, to_eye)));
+    if sure > 0.999 {
+        return struck.colour;
+    }
+    let open = fluid_reaches_sky(origin, bounced);
+    let elsewhere = mix(surroundings(bounced) * 0.35, fluid_sky(origin, bounced), open);
+    return mix(elsewhere, struck.colour, sure);
+}
+
+// Rain water lying on level ground at a point: how much of the point a
+// puddle covers, from 0 to 1, and how much a film of water too thin to be
+// a puddle covers, round the puddles and, the wetter it is, over more of
+// the ground.
+//
+// Where water lies is smooth noise of the place, in patches a few metres
+// across: the dips every road has, which no level's maker builds. The
+// material's own crevices, where its shading says the light reaches least,
+// fill first, so a puddle's edge follows the cracks of the asphalt and the
+// joints between stones. `wetness` is how wet the rain has made the
+// ground, from 0 to 1: the first puddles are in the deepest dips, and after
+// long rain a good part of level ground is under water. `crevice` is how
+// deep in a crevice the point is, from 0 to 1.
+fn puddle_at(world: vec3<f32>, wetness: f32, crevice: f32) -> vec2<f32> {
+    let wide = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(world.x * 0.045, 0.61, world.z * 0.045), 0.0,
+    ).r;
+    let broad = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(world.x * 0.17, 0.37, world.z * 0.17), 0.0,
+    ).r;
+    let fine = textureSampleLevel(
+        cloud_volume, cloud_sampler, vec3<f32>(world.x * 1.1, 0.11, world.z * 1.1), 0.0,
+    ).g;
+    // How deep the water stands over the point, in metres.
+    let dip = (wide * 0.6 + broad * 0.4 - PUDDLES_FROM) * 0.05;
+    let deep = dip + (fine - 0.5) * 0.004 + crevice * 0.004 - (1.0 - wetness) * 0.012;
+    return vec2<f32>(smoothstep(0.0, 0.0025, deep), smoothstep(-0.01, 0.0, deep));
+}
+// Where the noise of `puddle_at` has to be for water to lie there.
+const PUDDLES_FROM: f32 = 0.55;
+
 // How much of a point is under the snow that lies round it, from 0 (it
 // stands clear of it, or is under cover) to 1 (it is `deep` or less over
 // the ground beside it).
@@ -1547,6 +1643,26 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, SMOOTHEST, 1.0);
+    // How much of the light from all round reaches into the surface's
+    // crevices: each material's own shading, mixed as the two are.
+    var reaches = 1.0;
+    if has(OCCLUSION) {
+        let shadowing = pictured(
+            occlusion_texture, occlusion_sampler, placed(OCCLUSION, corner), mixing,
+        ).r;
+        reaches = 1.0 + material.factors.w * (shadowing - 1.0);
+    }
+    if painted.share > 0.0 {
+        var over_reaches = 1.0;
+        if over_has(OCCLUSION) {
+            let shadowing = pictured(
+                over_occlusion_texture, over_occlusion_sampler, over_placed(OCCLUSION, corner),
+                painted.mixing,
+            ).r;
+            over_reaches = 1.0 + material.over_factors.w * (shadowing - 1.0);
+        }
+        reaches = mix(reaches, over_reaches, painted.share);
+    }
 
     // Only what is out of the water shines, and only that is snowed on:
     // under it there is no air for the wet to be a mirror against.
@@ -1619,20 +1735,49 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         normal = normalize(normal + tilt * snowed);
     }
 
-    // What the water laps at is soaked: darker, because light gets into
-    // wet ground and less of it out again, and smooth enough to shine.
-    // So is what the rain falls on: whatever faces up under an open sky,
-    // and has no snow on it.
-    let wet = max(
-        shore_wet(corner.world),
-        view.weather[0].z * smoothstep(0.2, 0.7, normal.y) * sky_seen,
-    ) * (1.0 - snowed);
-    roughness = mix(roughness, min(roughness, 0.4), wet * out);
+    // What the water laps at is soaked, and so is what the rain falls on:
+    // whatever faces up with nothing over it, and has no snow on it.
+    let built = normalize(corner.normal) * side;
+    var rained = view.weather[0].z * smoothstep(0.2, 0.7, built.y) * (1.0 - snowed);
+    if rained > 0.0 {
+        rained *= rained_on(corner.world, corner.position.xy);
+    }
+    let wet = max(shore_wet(corner.world) * (1.0 - snowed), rained);
+    // Water fills the pores of what has them, which is what is rough
+    // (Lagarde, "Water drop 3b", 2013): that is darker, because light gets
+    // into it and less comes out again, and smoother. A smooth thing has no
+    // pores and is only wet on top.
+    let porous = clamp(2.5 * roughness - 1.25, 0.0, 1.0);
+    let darker = mix(1.0, 0.3, porous);
+    roughness *= mix(1.0, darker, 0.5 * wet * out);
     roughness = mix(roughness, max(roughness, 0.9), wet * (1.0 - out));
+    // Rain water lies on what is level: puddles, a sheet of water over the
+    // ground, flat whatever the ground's own bumps and ringed by the drops
+    // that fall in it, and round them and over more of the ground the
+    // longer it rains, a film too thin to hide the bumps but smooth enough
+    // to mirror the street.
+    var puddle = 0.0;
+    var film = 0.0;
+    if rained > 0.01 && built.y > 0.9 && draw.sway == 0.0 {
+        let found = puddle_at(corner.world, smoothstep(0.1, 1.0, view.weather[0].z), 1.0 - reaches);
+        let level = smoothstep(0.93, 0.985, built.y) * smoothstep(0.0, 0.5, rained) * out;
+        puddle = found.x * level;
+        film = found.y * level;
+    }
+    if film > 0.0 {
+        roughness = mix(roughness, min(roughness, FILM_ROUGHNESS), film);
+        normal = normalize(mix(normal, built, film * 0.85));
+    }
+    if puddle > 0.0 {
+        let rings = rain_rings(corner.world.xz);
+        normal = normalize(mix(normal, normalize(vec3<f32>(-rings.x, 1.0, -rings.y)), puddle));
+        roughness = mix(roughness, 0.03, puddle);
+        metallic *= 1.0 - puddle;
+    }
     // Metal mirrors light in its own colour and has no matte colour;
-    // anything else mirrors a little white light.
-    let matte = base_seen * (1.0 - metallic) * mix(1.0, 0.55, wet);
-    let mirror = mix(vec3<f32>(0.04), base_seen, metallic);
+    // anything else mirrors a little white light, and water less.
+    let matte = base_seen * (1.0 - metallic) * mix(1.0, darker, wet);
+    let mirror = mix(mix(vec3<f32>(0.04), vec3<f32>(0.02), puddle), base_seen, metallic);
 
     let to_eye = normalize(view.eye.xyz - corner.world);
     let to_sun = view.towards_sun.xyz;
@@ -1667,30 +1812,25 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
-    var from_around = matte * surroundings(normal)
-        + surroundings(reflect(-to_eye, normal)) * mirrored_share(mirror, roughness, n_eye);
-    // How much of the light from all round reaches into the surface's
-    // crevices: each material's own shading, mixed as the two are.
-    var reaches = 1.0;
-    if has(OCCLUSION) {
-        let shadowing = pictured(
-            occlusion_texture, occlusion_sampler, placed(OCCLUSION, corner), mixing,
-        ).r;
-        reaches = 1.0 + material.factors.w * (shadowing - 1.0);
-    }
-    if painted.share > 0.0 {
-        var over_reaches = 1.0;
-        if over_has(OCCLUSION) {
-            let shadowing = pictured(
-                over_occlusion_texture, over_occlusion_sampler, over_placed(OCCLUSION, corner),
-                painted.mixing,
-            ).r;
-            over_reaches = 1.0 + material.over_factors.w * (shadowing - 1.0);
-        }
-        reaches = mix(reaches, over_reaches, painted.share);
+    var from_around = matte * surroundings(normal);
+    // What it mirrors. A rough surface mirrors only the light of the sky
+    // and the ground; a smooth one mirrors the world itself, found in the
+    // picture kept from the frame before: walls in a puddle, the street in
+    // a window, the sky in a wet road.
+    let shines = mirrored_share(mirror, roughness, n_eye);
+    let mirrored = surroundings(reflect(-to_eye, normal));
+    var mirrors = 0.0;
+    var mirrored_world = vec3<f32>(0.0);
+    if view.walker.y > 0.5 && roughness < MIRRORS_BELOW {
+        mirrors = 1.0 - smoothstep(MIRRORS_WELL, MIRRORS_BELOW, roughness);
+        // A normal map can turn the mirrored line into the surface: it
+        // leaves on the side the surface is built to face.
+        var bounced = reflect(-to_eye, normal);
+        bounced = normalize(bounced + built * max(0.03 - dot(bounced, built), 0.0));
+        mirrored_world = solid_mirrored(corner.world, bounced, to_eye, corner.position.xy, roughness);
     }
     // Snow fills the crevices it lies on.
-    from_around *= mix(reaches, banked_sky, snowed);
+    from_around = (from_around + mirrored * shines * (1.0 - mirrors)) * mix(reaches, banked_sky, snowed);
 
     var glow = material.emissive.rgb;
     if has(EMISSIVE) {
@@ -1704,7 +1844,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let from_sides = matte / PI * view.sun.rgb * shade.x
         * (SIDES_GIVE_BACK * sky.y * sqrt(max(view.towards_sun.y, 0.0)));
     let glints = view.sun.rgb * (sparkle * snowed * n_sun * sunlit * banked_sun * 1.6);
-    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints;
+    // The mirrored world is as bright as it was drawn: no shade here dims it.
+    let from_world = mirrored_world * shines * mirrors;
+    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints + from_world;
 }
 
 // How far the pixel moved since the last frame.

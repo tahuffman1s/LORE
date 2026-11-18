@@ -1,6 +1,6 @@
 //! The images the scene is drawn into before it is tone mapped for the display.
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::sync::Arc;
 
 use ash::vk;
@@ -142,6 +142,9 @@ pub(crate) struct SceneTarget {
     /// surface, and how far under. Only filled in a frame that has water.
     pub(crate) behind: Picture,
     pub(crate) behind_depth: Picture,
+    /// Whether those copies were filled in the frame last drawn: in the
+    /// next, smooth things may mirror what they hold.
+    pub(crate) kept: Cell<bool>,
     /// What fluids are worked out in: made the first frame that has any,
     /// and kept for as long as the target is.
     pub(crate) fluid: OnceCell<FluidPictures>,
@@ -184,6 +187,7 @@ impl SceneTarget {
             motion: Picture::null(),
             behind: Picture::null(),
             behind_depth: Picture::null(),
+            kept: Cell::new(false),
             fluid: OnceCell::new(),
             extent,
         };

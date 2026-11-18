@@ -23,7 +23,7 @@ use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
 use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
-use crate::view::SceneView;
+use crate::view::{Mirroring, SceneView};
 use crate::water::Stir;
 use crate::weather::Weather;
 
@@ -179,6 +179,8 @@ pub struct Renderer {
     last_frame: Option<Instant>,
     /// What the scene's light is multiplied by before tone mapping.
     exposure: f32,
+    /// Whether wet ground, puddles and polished things mirror the world.
+    reflections: bool,
     /// `None` while the window has no area to draw into.
     swapchain: Option<Swapchain>,
     /// The window size in pixels, as last reported.
@@ -246,6 +248,7 @@ impl Renderer {
             view_for: (vk::Extent2D::default(), config.upscaling),
             last_frame: None,
             exposure: 1.0,
+            reflections: true,
             swapchain: None,
             size: (width, height),
             stale: true,
@@ -503,6 +506,18 @@ impl Renderer {
         }
     }
 
+    /// Lets wet ground, puddles and polished things mirror the world round
+    /// them, or only the light of the sky.
+    ///
+    /// On (the default), a smooth surface shows what is on the screen
+    /// where it would see it: walls in a puddle, the street in a wet road,
+    /// the sky in a window. It costs the most where much of the picture is
+    /// smooth, as a street is in the rain. Off, it shows the colours of the
+    /// sky and the ground, which costs next to nothing.
+    pub fn set_reflections(&mut self, on: bool) {
+        self.reflections = on;
+    }
+
     /// Draws `list` over the game from the next frame on, in place of any
     /// list given before: the boxes and text of a HUD or a menu, as
     /// `lore_ui::Ui::draw` gives them.
@@ -734,6 +749,11 @@ impl Renderer {
             // graphics card of the tracks in the snow is asked for once,
             // and a frame given up before this would have lost it.
             let tracks = self.effects.take_tracks();
+            view.mirroring = if self.reflections {
+                Mirroring::Running
+            } else {
+                Mirroring::Off
+            };
             view.record(
                 slot.commands,
                 self.next,

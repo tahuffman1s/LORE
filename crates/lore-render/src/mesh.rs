@@ -50,7 +50,7 @@ const DRAW_BYTES: usize = 128;
 /// rows of four numbers, then for the shadows one row, a row for each
 /// shadow picture (the sun's four and the one from above) and a 4 by 4
 /// matrix for each.
-const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
+const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
@@ -61,6 +61,10 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
 const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5 + 3);
+
+/// How rough a material can be and still mirror the world round it: the
+/// shader's `MIRRORS_BELOW`.
+const GLOSSY_BELOW: f32 = 0.5;
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -102,6 +106,15 @@ pub(crate) struct View {
     pub(crate) noise: f32,
     /// How near to the eye the nearest thing drawn can be, in metres.
     pub(crate) near: f32,
+    /// Whether the picture kept from the last frame is there to be
+    /// mirrored: wet ground, puddles and polished things show the world
+    /// in it. Not after a cut, when that picture is of somewhere else.
+    pub(crate) mirrors: bool,
+    /// Where each point of the world was drawn in that picture.
+    pub(crate) kept: Mat4,
+    /// Whether this frame's picture is to be kept for the next frame to
+    /// mirror, when there is anything in the scene that would.
+    pub(crate) keeps: bool,
 }
 
 impl View {
@@ -197,12 +210,13 @@ impl View {
                 .chain(scattered.iter().flatten())
                 .chain(&fog)
                 .chain(&wind)
-                .chain(&[self.stir, 0.0, 0.0, 0.0])
+                .chain(&[self.stir, if self.mirrors { 1.0 } else { 0.0 }, 0.0, 0.0])
                 .chain(water.iter().flatten())
                 .chain(above.flashes.iter().flatten())
                 .chain(above.weather.rows.iter().flatten())
                 .chain(above.heavens.iter().flatten())
-                .chain(above.water_look.iter().flatten()),
+                .chain(above.water_look.iter().flatten())
+                .chain(self.kept.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -396,6 +410,9 @@ pub(crate) struct Meshes {
     /// Whether any of them is water, which looks through a copy of the
     /// picture behind it.
     has_water: bool,
+    /// Whether any material is smooth enough to mirror the world round
+    /// it, which it does in the picture kept from the frame before.
+    glossy: bool,
     /// The still water in the scene, lakes and ponds, each in the shape it
     /// took when it filled its hollow.
     bodies: Bodies,
@@ -557,6 +574,10 @@ impl Meshes {
             buffers,
             has_water: !scene.waters.is_empty()
                 || draws.iter().any(|draw| draw.surface == Surface::Water),
+            // A picture of roughness can make any of it smooth.
+            glossy: scene.materials.iter().any(|material| {
+                material.roughness < GLOSSY_BELOW || material.metallic_roughness_texture.is_some()
+            }),
             bodies: Bodies::new(gpu, scene)?,
             waters: scene.waters.clone(),
             draws,
@@ -574,6 +595,11 @@ impl Meshes {
     /// The still water of the scene, each body in the shape it took.
     pub(crate) fn waters(&self) -> &[Water] {
         &self.waters
+    }
+
+    /// Whether any material is smooth enough to mirror the world round it.
+    pub(crate) fn glossy(&self) -> bool {
+        self.glossy
     }
 }
 
@@ -1408,6 +1434,8 @@ impl MeshPipeline {
             tracks,
             fluid,
         } = contents;
+        // How wet rain has made the ground, from 0 to 1.
+        let wet_ground = weather.rows[0][2];
         // How the level's water looks, if its game has said: the first
         // row's last number is 1 when it has, and all is zero when not.
         let water_look = fluid
@@ -1721,10 +1749,19 @@ impl MeshPipeline {
             // Water sees what is under it: the picture so far is copied
             // aside for it to read, and drawing carries on over the same
             // picture.
-            if meshes.is_some_and(|meshes| meshes.has_water) || !bits.is_empty() || fluid.is_some()
+            // So do wet ground, puddles and polished things, a frame late:
+            // what they mirror is this picture, read while the next is
+            // drawn.
+            let mirrored =
+                view.keeps && (wet_ground > 0.0 || meshes.is_some_and(|meshes| meshes.glossy));
+            if meshes.is_some_and(|meshes| meshes.has_water)
+                || !bits.is_empty()
+                || fluid.is_some()
+                || mirrored
             {
                 device.cmd_end_rendering(commands);
                 Self::keep_behind(device, commands, target);
+                target.kept.set(true);
                 if let Some(fluid) = &fluid {
                     fluid.record_passes(commands, *view_set);
                 }
@@ -2427,6 +2464,13 @@ mod tests {
             stir: 0.5,
             noise: 9.0,
             near: 0.05,
+            mirrors: true,
+            kept: {
+                let mut kept = [[0.0; 4]; 4];
+                kept[3][3] = 11.0;
+                kept
+            },
+            keeps: true,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],
@@ -2477,7 +2521,7 @@ mod tests {
             1.0,
             "the last number of the last matrix"
         );
-        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES);
+        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES + 64);
 
         // Then the sky: the lines of sight, the clouds, and the light the
         // air and the haze scatter, a row for each height.
@@ -2533,6 +2577,11 @@ mod tests {
         assert_eq!(number(&bytes, 386), 9.0);
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
         assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
+        assert_eq!(
+            number(&bytes, 389),
+            1.0,
+            "and that smooth things mirror the world"
+        );
         assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
         assert_eq!(number(&bytes, 399), 6.0, "and how many points its grid has");
         assert_eq!(number(&bytes, 404), 5.4, "the first layer of waves");
@@ -2547,7 +2596,12 @@ mod tests {
         assert_eq!(number(&bytes, 464), 9.0, "the sun, the moon and the stars");
         assert_eq!(number(&bytes, 484), 0.5, "the look of the water");
         assert_eq!(number(&bytes, 495), 0.75, "and how much it bends light");
-        assert_eq!(bytes.len(), 496 * 4);
+        assert_eq!(
+            number(&bytes, 511),
+            11.0,
+            "last, the matrix of the picture kept for them to mirror"
+        );
+        assert_eq!(bytes.len(), 512 * 4);
     }
 
     #[test]
