@@ -32,19 +32,49 @@ the props no free scan provides, and `pictures.py` paints. What it
 downloads is kept in `.cache`, so the next run is quick and works offline.
 It also writes `places.luau`, where the named places are (see below).
 
-`main.luau` here is a placeholder that sets the hour and the weather; the
-demo that goes with this level replaces it.
+## What the game does
+
+| key | gamepad | what it does |
+|---|---|---|
+| F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the moon, snow, ice, lightning and a tornado |
+| F7 | Select, then a bumper | the debug menu: walk, fly or noclip, fly speed, the speed of time, a jump to each named place, and what the player is doing |
+| F12 | in the debug menu | the frame meter: off, one line, or numbers with a graph |
+| F8 | left bumper | clear away every fluid |
+| E | Y | change the fluid the gun shoots |
+| left click | right trigger | shoot it |
+
+A gamepad has two buttons LORE leaves free for a game, so the two menus
+are tabs of one panel: Select opens it at the weather, the bumpers (or Q
+and E) go from tab to tab, and B or Escape closes it. In a menu, up and
+down (or the pointer) choose a row, left and right (the wheel, a click, or
+a drag on a slider's bar) change it, and Enter or A presses it. The line
+at the bottom of the screen names the keys as they are bound.
+
+Each part is a file of its own, `require`d by `main.luau`:
+
+| file | what is in it |
+|---|---|
+| `menu.luau` | menus of rows (sliders, choices, toggles, buttons, lines that tell) and a panel of tabs: copy it into your own game |
+| `weather_menu.luau` | the weather menu, a row for each thing `game.weather` and `game.sky` can say |
+| `debug_menu.luau` | the debug menu, and the readout it can leave on screen |
+| `frame_meter.luau` | the frame meter |
+| `key_hints.luau` | the line of keys at the bottom |
+| `fluids.luau` | the fluids the gun shoots, and where spraying and clearing them go |
+| `fluid_gun.luau` | the gun's crosshair and the fluid in hand |
+
+The gun does not shoot yet: LORE's script API for fluids is still being
+built, and `fluids.luau` is the one file that changes when it comes.
 
 ## The hour and the weather
 
-Start it at **half past nine in the morning** (`game.sky.setHour(9.5)`),
-in **fair** weather (`game.weather.set("fair")`). At that hour the sun is
-in the south, 38 degrees up and a little to the west, so it shines down
-the length of the alley: the east wall and a strip of floor are in sun,
-everything across the alley throws a long shadow along it, and looking
-north out of the alley you see the sunlit front of the building across
-the street. Rain suits it too: the potholes fill and the ground runs to
-the drains.
+The game starts at **one in the afternoon** (`game.sky.setHour(13)`)
+under an **overcast** sky (`game.weather.set("overcast", 0)`): the soft
+light reaches the floor of the alley and the walls on both sides. In
+clear weather the walls in shadow are nearly black. At half past nine in
+a fair sky the sun shines down the length of the alley instead: the east
+wall and a strip of floor are in sun and everything across the alley
+throws a long shadow along it. Rain suits it too: the potholes fill and
+the ground runs to the drains.
 
 ## Named places
 
