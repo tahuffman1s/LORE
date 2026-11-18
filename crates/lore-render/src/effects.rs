@@ -14,6 +14,7 @@
 //! what happened is shown, worked out afresh on each computer.
 
 use crate::bolt::{Bolt, Lightning};
+use crate::fluid::FluidScene;
 use crate::sky;
 use crate::sky::Day;
 use crate::tracks::{Tracks, Tread};
@@ -236,6 +237,8 @@ pub(crate) struct Effects {
     /// since the eye's place was last known, which wait until it is.
     tracks: Tracks,
     treads: Vec<Tread>,
+    /// The fluids the game has poured, and how each kind looks.
+    fluid: FluidScene,
 }
 
 impl Default for Effects {
@@ -265,6 +268,7 @@ impl Effects {
             bolts_of_its_own: true,
             tracks: Tracks::new(),
             treads: Vec::with_capacity(MOST_TREADS),
+            fluid: FluidScene::new(),
         }
     }
 
@@ -836,6 +840,16 @@ impl Effects {
     /// of it is left, from nearly 1 down to 0.
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// The fluids the game has poured, and how each kind looks.
+    pub(crate) fn fluid(&self) -> &FluidScene {
+        &self.fluid
+    }
+
+    /// The same, to be told what changed.
+    pub(crate) fn fluid_mut(&mut self) -> &mut FluidScene {
+        &mut self.fluid
     }
 
     /// Writes the bits down for the graphics card.

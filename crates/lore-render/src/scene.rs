@@ -1,10 +1,12 @@
 //! The images the scene is drawn into before it is tone mapped for the display.
 
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use ash::vk;
 
 use crate::error::RenderError;
+use crate::fluid_pass::FluidPictures;
 use crate::gpu::Gpu;
 use crate::swapchain::COLOUR;
 
@@ -140,6 +142,9 @@ pub(crate) struct SceneTarget {
     /// surface, and how far under. Only filled in a frame that has water.
     pub(crate) behind: Picture,
     pub(crate) behind_depth: Picture,
+    /// What fluids are worked out in: made the first frame that has any,
+    /// and kept for as long as the target is.
+    pub(crate) fluid: OnceCell<FluidPictures>,
     pub(crate) extent: vk::Extent2D,
 }
 
@@ -179,6 +184,7 @@ impl SceneTarget {
             motion: Picture::null(),
             behind: Picture::null(),
             behind_depth: Picture::null(),
+            fluid: OnceCell::new(),
             extent,
         };
         // Dropping `target` cleans up whatever was created.
