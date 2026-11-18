@@ -79,7 +79,9 @@ struct View {
     // The x and z of the first point of that grid, and how many points it
     // has along x and along z.
     water_box: vec4<f32>,
-    // The colour of that water itself.
+    // The colour of that water itself, and in w how high the wind's waves
+    // can stand above or sink below its level, in metres, before gusts
+    // and storms (`water.wgsl`).
     water_colour: vec4<f32>,
     // The wind's waves, a row for each layer of them: the side of the
     // square the layer repeats in, how steep its waves make the water on
