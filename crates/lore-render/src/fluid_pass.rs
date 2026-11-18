@@ -2,11 +2,14 @@
 //! pictures it is worked out in, the pipelines that work it out, and the
 //! passes that record them. What the shaders do is told in `fluid.wgsl`.
 //!
-//! A frame with no drops records nothing and asks for no memory here.
+//! A frame with no drops records nothing; the pictures are only made the
+//! first time there are drops, and the room for drops and looks once, at
+//! the start.
 
 use std::cell::RefCell;
 use std::ffi::CStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 
@@ -53,7 +56,13 @@ pub(crate) struct FluidPictures {
     /// How far away the fluid is, smoothed across and then down.
     across: Picture,
     down: Picture,
+    /// Which pictures these are, never the same for two sets of them: a
+    /// new set can be given the same handles as one destroyed before it.
+    pub(crate) id: u64,
 }
+
+/// The number the next set of pictures is known by.
+static NEXT_PICTURES: AtomicU64 = AtomicU64::new(1);
 
 impl FluidPictures {
     /// Makes the pictures, `extent` pixels each.
@@ -67,6 +76,7 @@ impl FluidPictures {
             lie: Picture::null(),
             across: Picture::null(),
             down: Picture::null(),
+            id: NEXT_PICTURES.fetch_add(1, Ordering::Relaxed),
         };
         // Dropping `pictures` cleans up whatever was created.
         let drawn_and_read = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
@@ -131,7 +141,7 @@ pub(crate) struct FluidWorks {
     drops: Vec<Buffer>,
     /// The picture each frame's set was last pointed at: a window that
     /// changes size gets new ones.
-    pointed: RefCell<Vec<vk::ImageView>>,
+    pointed: RefCell<Vec<u64>>,
     /// Draws the nearest surface of each drop.
     front: vk::Pipeline,
     /// Adds up what each drop takes from the line of sight.
@@ -186,7 +196,7 @@ impl FluidWorks {
             sets: Vec::with_capacity(frames),
             looks: Vec::with_capacity(frames),
             drops: Vec::with_capacity(frames),
-            pointed: RefCell::new(vec![vk::ImageView::null(); frames]),
+            pointed: RefCell::new(vec![0; frames]),
             front: vk::Pipeline::null(),
             amount: vk::Pipeline::null(),
             smooth: [vk::Pipeline::null(); 2],
@@ -299,7 +309,6 @@ impl FluidWorks {
     fn build_pipelines(&mut self, module: vk::ShaderModule) -> Result<(), RenderError> {
         let none = vk::PipelineColorBlendAttachmentState::default();
         let everything = none.color_write_mask(vk::ColorComponentFlags::RGBA);
-        let nothing = none.color_write_mask(vk::ColorComponentFlags::empty());
         let added = everything
             .blend_enable(true)
             .src_color_blend_factor(vk::BlendFactor::ONE)
@@ -332,17 +341,21 @@ impl FluidWorks {
             .depth_test_enable(true)
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::GREATER);
-        let drawn = [KIND_FORMAT, SUMS_FORMAT, SUMS_FORMAT, SUMS_FORMAT];
+        // The two are drawn over different pictures, so that every picture
+        // a pipeline draws is mixed the same way: graphics cards are not
+        // all able to mix each picture of one pass differently.
+        let kinds = [KIND_FORMAT];
+        let sums = [SUMS_FORMAT; 3];
         let front = self.pipeline(
             module,
             &Stage {
                 vertex: c"vertex_fluid",
                 fragment: c"fragment_fluid_front",
                 input: &per_drop,
-                colours: &drawn,
+                colours: &kinds,
                 depth_format: SceneTarget::DEPTH_FORMAT,
                 depth: &nearest,
-                blends: &[everything, nothing, nothing, nothing],
+                blends: &[everything],
             },
         )?;
         self.front = front;
@@ -353,10 +366,10 @@ impl FluidWorks {
                 vertex: c"vertex_fluid",
                 fragment: c"fragment_fluid_amount",
                 input: &per_drop,
-                colours: &drawn,
-                depth_format: SceneTarget::DEPTH_FORMAT,
+                colours: &sums,
+                depth_format: vk::Format::UNDEFINED,
                 depth: &no_depth,
-                blends: &[nothing, added, added, added],
+                blends: &[added; 3],
             },
         )?;
         // Pass 2: one number a pixel, over the whole picture.
@@ -527,7 +540,7 @@ impl FluidWorks {
         }
         if let Ok(mut pointed) = self.pointed.try_borrow_mut()
             && let Some(bound) = pointed.get_mut(slot)
-            && *bound != pictures.near.view
+            && *bound != pictures.id
         {
             let views = [
                 pictures.near.view,
@@ -553,7 +566,7 @@ impl FluidWorks {
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { self.gpu.device().update_descriptor_sets(&writes, &[]) };
-            *bound = pictures.near.view;
+            *bound = pictures.id;
         }
         // At most `MOST_FLUID_DROPS`, which is far below `u32::MAX`.
         #[allow(clippy::cast_possible_truncation)]
@@ -686,8 +699,8 @@ impl FluidFrame<'_> {
         };
         let zero = vk::ClearColorValue { float32: [0.0; 4] };
         let no_kind = vk::ClearColorValue { uint32: [0; 4] };
-        let drawn = [
-            clear(pictures.kind.view, no_kind),
+        let nearest = [clear(pictures.kind.view, no_kind)];
+        let added = [
             clear(pictures.amount.view, zero),
             clear(pictures.light.view, zero),
             clear(pictures.lie.view, zero),
@@ -707,8 +720,12 @@ impl FluidFrame<'_> {
         let first_pass = vk::RenderingInfo::default()
             .render_area(area)
             .layer_count(1)
-            .color_attachments(&drawn)
+            .color_attachments(&nearest)
             .depth_attachment(&depth);
+        let sums_pass = vk::RenderingInfo::default()
+            .render_area(area)
+            .layer_count(1)
+            .color_attachments(&added);
         let across = [clear(pictures.across.view, zero)];
         let second_pass = vk::RenderingInfo::default()
             .render_area(area)
@@ -739,10 +756,13 @@ impl FluidFrame<'_> {
             device.cmd_set_cull_mode(commands, vk::CullModeFlags::FRONT);
             device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
             device.cmd_bind_vertex_buffers(commands, 0, &[self.drops], &[0]);
-            for pipeline in [works.front, works.amount] {
-                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
-                device.cmd_draw(commands, BOX_CORNERS, self.count, 0, 0);
-            }
+            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.front);
+            device.cmd_draw(commands, BOX_CORNERS, self.count, 0, 0);
+            device.cmd_end_rendering(commands);
+            // What every drop adds up to, over other pictures.
+            device.cmd_begin_rendering(commands, &sums_pass);
+            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.amount);
+            device.cmd_draw(commands, BOX_CORNERS, self.count, 0, 0);
             device.cmd_end_rendering(commands);
             device.cmd_pipeline_barrier2(commands, &dependency(&after_drops));
 

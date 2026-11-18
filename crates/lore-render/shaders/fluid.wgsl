@@ -154,6 +154,12 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     let going = (transpose(axes) * direction) * scale;
     let quad = dot(going, going);
     let half_b = dot(start, going);
+    // How far away the solid world is along this line: the depth is the
+    // nearest distance drawn divided by the distance in front of the eye.
+    // Asked even where the line misses the drop, for the wet ground round it.
+    let ahead = max(dot(direction, view.sky_rays[0].xyz), 0.0001);
+    let held = textureLoad(behind_depth, vec2<i32>(corner.position.xy), 0);
+    trace.scene = select(1.0e9, view.lens.x / held / ahead, held > 0.0);
     let cut = half_b * half_b - quad * (dot(start, start) - 1.0);
     if cut <= 0.0 {
         return trace;
@@ -162,11 +168,6 @@ fn fluid_trace(corner: FluidCorner) -> FluidTrace {
     trace.enters = nearest + (-half_b - root) / quad;
     trace.leaves = nearest + (-half_b + root) / quad;
     trace.entry = start + going * ((-half_b - root) / quad);
-    // How far away the solid world is along this line: the depth is the
-    // nearest distance drawn divided by the distance in front of the eye.
-    let ahead = max(dot(direction, view.sky_rays[0].xyz), 0.0001);
-    let held = textureLoad(behind_depth, vec2<i32>(corner.position.xy), 0);
-    trace.scene = select(1.0e9, view.lens.x / held / ahead, held > 0.0);
     trace.hit = trace.leaves > 0.0;
     return trace;
 }
@@ -199,9 +200,9 @@ fn fragment_fluid_front(corner: FluidCorner) -> FluidFront {
 }
 
 struct FluidSums {
-    @location(1) amount: vec4<f32>,
-    @location(2) light: vec4<f32>,
-    @location(3) lie: vec4<f32>,
+    @location(0) amount: vec4<f32>,
+    @location(1) light: vec4<f32>,
+    @location(2) lie: vec4<f32>,
 }
 
 // Adds up what each drop does along the line of sight: the metres of it
@@ -210,13 +211,10 @@ struct FluidSums {
 @fragment
 fn fragment_fluid_amount(corner: FluidCorner) -> FluidSums {
     let trace = fluid_trace(corner);
-    if !trace.hit {
-        discard;
-    }
     let kind = u32(corner.third.z + 0.5);
     let absorbs = fluid_looks[kind * 3u].rgb;
     let scatters = fluid_looks[kind * 3u + 1u].rgb;
-    let chord = max(min(trace.leaves, trace.scene) - max(trace.enters, 0.0), 0.0);
+    let chord = select(0.0, max(min(trace.leaves, trace.scene) - max(trace.enters, 0.0), 0.0), trace.hit);
     // The solid world's point here, as the drop sees it: the ground under a
     // lying drop is wet out to a little past its edge, and most under it.
     var wet = 0.0;
@@ -234,8 +232,10 @@ fn fragment_fluid_amount(corner: FluidCorner) -> FluidSums {
         discard;
     }
     var sums: FluidSums;
-    sums.amount = vec4<f32>(absorbs * chord, chord);
-    sums.light = vec4<f32>(scatters * chord, wet);
+    // No drop adds more than takes all the light (e to the -40 is none),
+    // so that the half-size numbers added up never overflow.
+    sums.amount = vec4<f32>(min(absorbs * chord, vec3<f32>(40.0)), chord);
+    sums.light = vec4<f32>(min(scatters * chord, vec3<f32>(40.0)), wet);
     // A film lying on a surface lies as flat as the surface, except at its
     // rim: how much of the dome is over this pixel says how much it counts.
     // A thick mound keeps the round shape of its drops.
@@ -521,9 +521,9 @@ fn fragment_fluid_shade(@builtin(position) position: vec4<f32>) -> FluidSeen {
     let solid_away = select(1.0e9, view.lens.x / held, held > 0.0);
     let room = max(solid_away - length(world - view.eye.xyz) / length(ray), 0.0) * length(ray);
     let thick = min(sums.a, room);
-    let share = thick / max(sums.a, 0.000001);
-    let takes = sums.rgb * share;
-    let scatters_sum = light.rgb * share;
+    let share = select(0.0, thick / max(sums.a, 0.000001), sums.a > 0.0);
+    let takes = select(vec3<f32>(0.0), min(sums.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
+    let scatters_sum = select(vec3<f32>(0.0), min(light.rgb, vec3<f32>(6.0e4)) * share, share > 0.0);
 
     // The look of the nearest drop's kind.
     let first = (kind_plus - 1u) * 3u;
