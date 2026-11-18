@@ -28,6 +28,9 @@ struct Bounce {
     // How many probes trace this frame, how many of those are their turn
     // (the rest are new), how many rays each sends, and the frame.
     counts: vec4<u32>,
+    // Where `probe_origin` was the frame before. A probe new to the grid
+    // holds, until its rays are traced, what its slot's last probe saw.
+    probe_was: vec4<i32>,
     // Each ray's direction this frame.
     ways: array<vec4<f32>, 128>,
     // The probes that trace, by slot; the top bit says one is new.
@@ -63,7 +66,8 @@ const PROBES: vec3<i32> = vec3<i32>(24, 12, 24);
 const PROBE_TILE: u32 = 10u;
 const PROBE_TILES_ACROSS: u32 = 96u;
 // How far a ray goes, at most, in metres, and the farthest distance a
-// probe keeps.
+// probe keeps. A ray that goes this far, or out of the copy, without
+// striking anything sees the sky only if it is open over where it stopped.
 const RAY_REACH: f32 = 40.0;
 const PROBE_FARTHEST: f32 = 4.0;
 // How many blocks a ray crosses, at most: enough to cross the whole copy
@@ -154,6 +158,13 @@ fn probe_grid_inside(world: vec3<f32>) -> f32 {
 // `to_eye` moves the point the probes are asked from a little towards the
 // eye and off the surface, so that it is not shadowed by itself.
 fn probe_light(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec4<f32> {
+    return probe_light_known(world, normal, to_eye, false);
+}
+
+// The same, leaving out while `tracing` the probes new to the grid this
+// frame: their rays are being traced, and their slots still hold what
+// probes on the far side of the grid saw.
+fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tracing: bool) -> vec4<f32> {
     if bounce.probe.z < 0.5 {
         return vec4<f32>(0.0);
     }
@@ -180,6 +191,10 @@ fn probe_light(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec4<f
         let step = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
         let cell = base + step;
         if any(cell < origin) || any(cell >= origin + PROBES) {
+            continue;
+        }
+        let was = bounce.probe_was.xyz;
+        if tracing && (any(cell < was) || any(cell >= was + PROBES)) {
             continue;
         }
         // Nearer probes count for more; one that would count for almost
@@ -256,11 +271,13 @@ fn block_plane(kept: f32) -> f32 {
 // alpha, or alpha below 0 for a ray that strikes nothing. `face` is the
 // way the surface there faces (the side of the block the ray went in by,
 // where the block does not say), and `back` whether the ray struck the
-// back of it.
+// back of it. `went` is how far a ray that struck nothing went, in metres,
+// before it left the copy or went as far as a ray may.
 struct RayEnd {
     colour: vec4<f32>,
     face: vec3<f32>,
     back: bool,
+    went: f32,
 }
 
 fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
@@ -268,6 +285,7 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
     struck.colour = vec4<f32>(0.0, 0.0, 0.0, -1.0);
     struck.face = -way;
     struck.back = false;
+    struck.went = 0.0;
     let size = bounce.voxel.w;
     let dims = vec3<i32>(bounce.voxel_dims.xyz);
     let at = (start - bounce.voxel.xyz) / size;
@@ -282,6 +300,7 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
     let reach = RAY_REACH / size;
     for (var number = 0; number < RAY_STEPS; number++) {
         if any(cell < vec3<i32>(0)) || any(cell >= dims) || gone > reach {
+            struck.went = min(gone, reach) * size;
             return struck;
         }
         let block = textureLoad(voxels, cell, 0);
@@ -344,6 +363,29 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
     // Out of steps inside the copy: something too far to see, not the sky.
     struck.colour = vec4<f32>(0.0, 0.0, 0.0, gone * size);
     return struck;
+}
+
+// How open to the sky a point is straight above it, from 0 under a roof to
+// 1 in the open: one look into the picture from above, as `open_sky` takes
+// round a surface. Asked where a ray that struck nothing stopped, which
+// is in the open air, or under the roof of a hall or a cave too large for
+// the copy of the level; there a ray would go on to strike a wall or the
+// floor, not the sky. Over the many rays of the probes round about, it
+// lets through as much of the sky as a canopy has gaps.
+fn open_above(world: vec3<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+    if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) <= 0.0 {
+        return 1.0;
+    }
+    let size = vec2<i32>(textureDimensions(shadow_map));
+    let held = textureLoad(shadow_map, min(vec2<i32>(uv * vec2<f32>(size)), size - 1), 4, 0);
+    // How far over the point the highest thing there is, in metres.
+    let over = (above.z - held) * view.shadow_reach[4].y;
+    return 1.0 - smoothstep(0.1, 0.6, over);
 }
 
 // Ray `number`'s direction this frame: spread evenly over the sphere and
@@ -466,8 +508,10 @@ fn fragment_trace(whole: Whole) -> @location(0) vec4<f32> {
     // The sky's light, dimmed under cloud as the sky lights the ground.
     let sky = sky_dimmed(start);
     if struck.colour.a < 0.0 {
-        // Nothing struck: the sky, or the ground beyond the copy.
-        return vec4<f32>(surroundings(way) * sky, RAY_REACH);
+        // Nothing struck: the sky, or the ground beyond the copy, where it
+        // is open over the place the ray stopped.
+        let open = open_above(start + way * struck.went);
+        return vec4<f32>(surroundings(way) * sky * open, RAY_REACH);
     }
     let far = struck.colour.a;
     // The back of a surface: the probe is inside something, or under a
@@ -485,7 +529,7 @@ fn fragment_trace(whole: Whole) -> @location(0) vec4<f32> {
     // Beyond the probes, what falls on it from all round is guessed from
     // the sky as surfaces beyond them are lit; among them it is theirs
     // alone, so that light found nowhere (in a shut room) is not made up.
-    let before = probe_light(at, normal, -way);
+    let before = probe_light_known(at, normal, -way, true);
     let beyond = 1.0 - clamp(probe_grid_inside(at) / 1.5, 0.0, 1.0);
     let falls = sun + lamps_anywhere(at, normal) + before.rgb * before.a
         + surroundings(normal) * sky * open_sky(at, vec2<f32>(0.0)) * beyond;

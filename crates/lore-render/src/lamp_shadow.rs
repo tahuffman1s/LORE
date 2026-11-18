@@ -12,11 +12,17 @@
 //! move (#337).
 //!
 //! Which lamps cast shadows is worked out here, on the processor, so it is
-//! the same on every card and can be tested without one: the lamps in view
-//! whose light reaches farthest for how far they are from the eye, with a
-//! lamp that already has a shadow kept unless another matters clearly more,
-//! so that shadows do not come and go as the eye moves. A shadow fades in
-//! and out over a quarter of a second rather than appearing at once.
+//! the same on every card and can be tested without one: of the lamps the
+//! frame is given (those that light what is seen, and with bounce light
+//! those near enough to light the probes round the eye wherever it looks),
+//! those whose light reaches farthest for how far they are from the eye,
+//! with a lamp that already has a shadow kept unless another matters
+//! clearly more, so that shadows do not come and go as the eye moves or
+//! turns. A shadow fades in and out over a quarter of a second rather than
+//! appearing at once. A lamp is known from one frame to the next by where
+//! it is, and one that has moved by its place in the list of lamps (which
+//! a game keeps from frame to frame) and the slot nearest it that no lamp
+//! still standing there holds.
 //!
 //! Each face is drawn a little wider than a quarter turn, so the soft edge
 //! of a shadow that falls near the border of one face is read whole from
@@ -79,6 +85,23 @@ const MOVED: f32 = 1.0;
 /// lamps are chosen, so that two lamps that matter about as much do not
 /// take a shadow from each other in turn as the eye moves.
 const KEEP: f32 = 1.5;
+
+/// How long a slot keeps its shadow whole, for no other lamp, while its
+/// lamp is missing from the frame, in seconds: a lamp whose flicker goes
+/// dark for a moment (Quake's "faulty" does for a fifth of a second), or
+/// that is out of reach of the view for a moment, has it back as it was.
+const GRACE: f32 = 0.5;
+
+/// How long a slot takes to forget how far its lamp's light reached at its
+/// brightest, in seconds: longer than a flicker's dark spells, so that a
+/// flickering lamp is ranked, and its pictures drawn, as it is at its
+/// brightest.
+const FORGET: f32 = 4.0;
+
+/// How far a spot may have turned, as the cosine of the angle (about six
+/// degrees), for the pictures drawn along its beam before it turned to
+/// stand in for its own until they are drawn again.
+const TURNED: f32 = 0.995;
 
 /// How many lamps cast shadows, and how sharp the shadows are: a player's
 /// setting.
@@ -158,6 +181,12 @@ struct Held {
     far: f32,
     beam: Option<Beam>,
     level: u64,
+    /// How far the lamp's light has reached lately, at its brightest, in
+    /// metres: a flicker that dims it changes neither how much it matters
+    /// nor its pictures.
+    reached: f32,
+    /// Its place in the frame's list of lamps, last it was seen.
+    number: usize,
 }
 
 impl Held {
@@ -168,7 +197,24 @@ impl Held {
             && self.at == lamp.at
             && self.beam == lamp.beam
             && reach <= self.far
-            && self.far <= reach * 4.0
+            && self.far <= self.reached.max(reach) * 4.0
+    }
+
+    /// Whether these pictures, drawn for `lamp` a moment ago, can stand in
+    /// for its own until they are drawn again: it has moved (no farther
+    /// than [`MOVED`]), or reaches a little farther, but shines as it did,
+    /// or a spot has turned only a little.
+    fn stands_in(&self, lamp: &Lamp, level: u64) -> bool {
+        self.level == level
+            && match (self.beam, lamp.beam) {
+                (None, None) => true,
+                (Some(was), Some(now)) => {
+                    was.inner == now.inner
+                        && was.outer == now.outer
+                        && dot(unit(was.pointing), unit(now.pointing)) >= TURNED
+                }
+                _ => false,
+            }
     }
 }
 
@@ -180,6 +226,21 @@ struct Slot {
     strength: f32,
     /// Whether one of this frame's chosen lamps has it.
     chosen: bool,
+    /// How long its lamp has been missing from the frame, in seconds, up
+    /// to [`GRACE`].
+    missing: f32,
+    /// The frame its pictures were last drawn in.
+    drawn: u64,
+}
+
+impl Slot {
+    const EMPTY: Self = Self {
+        held: None,
+        strength: 0.0,
+        chosen: false,
+        missing: 0.0,
+        drawn: 0,
+    };
 }
 
 /// What [`ShadowSlots::choose`] needs to know of a frame besides its lamps.
@@ -212,10 +273,19 @@ pub(crate) struct ShadowSlots {
     /// The lamps that might cast: how much each matters, and which it is.
     /// Kept between frames so that choosing needs no new memory.
     candidates: Vec<(f32, usize)>,
+    /// For each of the frame's lamps, the slot that holds its pictures,
+    /// kept likewise.
+    own: Vec<Option<usize>>,
     /// The chosen lamps that have no pictures yet, kept likewise.
     wanting: Vec<usize>,
+    /// The chosen lamps whose pictures have to be drawn again (it moved,
+    /// turned or reaches farther): when its pictures were last drawn, how
+    /// much it matters among the chosen, and which it is. Kept likewise.
+    redrawing: Vec<(u64, usize, usize)>,
     /// The pictures to draw this frame.
     faces: Vec<Face>,
+    /// How many frames have been chosen for.
+    frame: u64,
 }
 
 /// A lamp's shadow as the shader takes it, in three of its numbers: the
@@ -245,14 +315,18 @@ impl Shadow {
 impl ShadowSlots {
     /// Chooses which of the lamps `near` (how far each is from the eye, and
     /// which of `lamps` it is, nearest first) cast shadows this frame, and
-    /// gives in `shadows` each one's numbers, in the same order. Only a
-    /// lamp `viewed` says lights what is seen is given a new shadow. The
-    /// pictures that have to be drawn first are then [`faces`](Self::faces).
+    /// gives in `shadows` each one's numbers, in the same order. The
+    /// pictures that have to be drawn first are then
+    /// [`faces`](Self::faces).
+    ///
+    /// At most [`FACES_A_FRAME`] pictures are drawn in a frame: a lamp's
+    /// first pictures before those of lamps that moved, and of those the
+    /// ones drawn longest ago first, so that many torches carried at once
+    /// take turns. A lamp whose pictures wait uses those it had.
     pub(crate) fn choose(
         &mut self,
         lamps: &[Lamp],
         near: &[(f32, usize)],
-        viewed: &[bool],
         how: &Shadowing,
         shadows: &mut Vec<Shadow>,
     ) {
@@ -264,124 +338,141 @@ impl ShadowSlots {
             ..*how
         };
         if self.slots.len() != how.slots {
-            self.slots = vec![
-                Slot {
-                    held: None,
-                    strength: 0.0,
-                    chosen: false,
-                };
-                how.slots
-            ];
+            self.slots = vec![Slot::EMPTY; how.slots];
         }
         if how.slots == 0 {
             return;
         }
+        self.frame += 1;
         // A frame long after the one before (the first, or after a pause)
         // shows each shadow as it should be at once.
         let fresh = !(how.elapsed > 0.0 && how.elapsed < 0.25);
         let step = if fresh { 1.0 } else { how.elapsed / FADE };
+        let forget = if fresh {
+            1.0
+        } else {
+            (how.elapsed / FORGET).min(1.0)
+        };
 
-        // How much each lamp in view that casts a shadow matters: how far
-        // its light reaches for how far it is from the eye.
+        // Each lamp's own slot, and each slot's lamp; how long a slot's
+        // lamp has been missing, and how far its light has reached lately.
+        let mut owner = self.find_own(lamps, near, how.level);
+        for (slot, place) in self.slots.iter_mut().zip(owner) {
+            slot.chosen = false;
+            let Some(held) = &mut slot.held else {
+                continue;
+            };
+            match place {
+                Some(place) => {
+                    slot.missing = 0.0;
+                    held.number = near[place].1;
+                    let reach = lamps[near[place].1].reach();
+                    held.reached = if reach >= held.reached {
+                        reach
+                    } else {
+                        held.reached + (reach - held.reached) * forget
+                    };
+                }
+                // Another level's lamp is not coming back.
+                None if fresh || held.level != how.level => slot.missing = GRACE,
+                None => slot.missing = (slot.missing + how.elapsed).min(GRACE),
+            }
+        }
+
+        // How much each lamp that casts shadows matters: how far its light
+        // reaches for how far it is from the eye; for a lamp with a slot,
+        // as far as it has reached lately, and more.
         self.candidates.clear();
         for (place, &(far, number)) in near.iter().enumerate() {
             let lamp = &lamps[number];
-            if !lamp.casts_shadows || !viewed.get(number).copied().unwrap_or(false) {
+            if !lamp.casts_shadows {
                 continue;
             }
-            let reach = lamp.reach();
-            let mut matters = reach / far.max(0.5);
-            if self.held_by(lamp, reach, how.level).is_some() {
-                matters *= KEEP;
-            }
-            self.candidates.push((matters, place));
+            let held = self.own[place].and_then(|slot| self.slots[slot].held);
+            let (reach, keep) = match held {
+                Some(held) => (lamp.reach().max(held.reached), KEEP),
+                None => (lamp.reach(), 1.0),
+            };
+            self.candidates.push((reach / far.max(0.5) * keep, place));
         }
         self.candidates
             .sort_unstable_by(|one, other| other.0.total_cmp(&one.0).then(one.1.cmp(&other.1)));
         self.candidates.truncate(how.slots);
 
-        for slot in &mut self.slots {
-            slot.chosen = false;
-        }
-        // Lamps whose pictures are drawn already keep them; the rest are
-        // given the slot that is drawing least, and its pictures are drawn,
-        // as many as fit in this frame.
+        // Lamps with a slot keep it, and those whose pictures no longer
+        // show them as they are are drawn again; the rest are given the
+        // slot that is drawing least.
         self.wanting.clear();
-        for index in 0..self.candidates.len() {
-            let place = self.candidates[index].1;
+        self.redrawing.clear();
+        for (order, &(_, place)) in self.candidates.iter().enumerate() {
             let lamp = &lamps[near[place].1];
-            match self.held_by(lamp, lamp.reach(), how.level) {
-                Some(slot) => self.slots[slot].chosen = true,
-                None => self.wanting.push(place),
-            }
-        }
-        // The slots whose shadows can be seen: those of the lamps in view.
-        // A slot of a lamp out of view, or of another level, shows nothing
-        // and may be taken at once.
-        let mut shown = [false; MOST_SLOTS];
-        for &(_, number) in near {
-            let lamp = &lamps[number];
-            if lamp.casts_shadows
-                && let Some(slot) = self.held_by(lamp, lamp.reach(), how.level)
-                && let Some(shown) = shown.get_mut(slot)
+            let Some(slot) = self.own[place] else {
+                self.wanting.push(place);
+                continue;
+            };
+            let slot = &mut self.slots[slot];
+            slot.chosen = true;
+            if !slot
+                .held
+                .is_some_and(|held| held.fits(lamp, lamp.reach(), how.level))
             {
-                *shown = true;
+                self.redrawing.push((slot.drawn, order, place));
             }
         }
         for index in 0..self.wanting.len() {
             let place = self.wanting[index];
             let lamp = &lamps[near[place].1];
-            let faces = faces_of(lamp);
-            if self.faces.len() + faces.iter().filter(|face| **face).count() > FACES_A_FRAME {
+            if !self.fits_this_frame(lamp) {
                 continue;
             }
-            // The same lamp moved (carried, swung) or reaching farther or
-            // less far keeps its own slot, and as much of its shadow as it
-            // had. Any other takes a slot whose shadow has faded out, the
-            // empty first: a shadow still fading is not cut off, and the
-            // new lamp waits for it.
-            let own = self.moved_from(lamp, how.level);
-            let free = || {
-                (0..self.slots.len())
-                    .filter(|slot| {
-                        let seen = shown.get(*slot).copied().unwrap_or(false);
-                        let slot = &self.slots[*slot];
-                        !slot.chosen && (fresh || slot.strength <= 0.0 || !seen)
-                    })
-                    .min_by_key(|slot| self.slots[*slot].held.is_some())
-            };
-            let Some(slot) = own.or_else(free) else {
+            // A slot whose shadow has faded out, or whose lamp has been
+            // missing from the frame for a while and so shows nothing, the
+            // empty first. A shadow still fading is not cut off, nor one
+            // whose lamp is dark a moment: the new lamp waits for it.
+            let free = (0..self.slots.len())
+                .filter(|&slot| {
+                    let found = &self.slots[slot];
+                    let gone = owner[slot].is_none() && found.missing >= GRACE;
+                    !found.chosen && (fresh || found.strength <= 0.0 || gone)
+                })
+                .min_by_key(|&slot| self.slots[slot].held.is_some());
+            let Some(slot) = free else {
                 continue;
             };
-            let strength = if own.is_some() {
-                self.slots[slot].strength
-            } else if fresh {
-                1.0
-            } else {
-                0.0
-            };
+            // The lamp that had it, now in the frame but not chosen, has
+            // no pictures any more.
+            if let Some(had) = owner[slot] {
+                self.own[had] = None;
+            }
+            owner[slot] = Some(place);
+            self.own[place] = Some(slot);
             let reach = lamp.reach();
-            let held = Held {
-                at: lamp.at,
-                far: far_for(reach),
-                beam: lamp.beam,
-                level: how.level,
+            self.draw((lamp, near[place].1), slot, reach, how.level);
+            self.slots[slot].strength = if fresh { 1.0 } else { 0.0 };
+        }
+        // Those that moved, the longest waiting first.
+        self.redrawing.sort_unstable();
+        for index in 0..self.redrawing.len() {
+            let (_, _, place) = self.redrawing[index];
+            let lamp = &lamps[near[place].1];
+            let Some(slot) = self.own[place] else {
+                continue;
             };
-            let numbers = pictured(lamp, held.far);
-            for (face, drawn) in faces.into_iter().enumerate() {
-                if drawn {
-                    self.faces
-                        .push(numbers.face(slot * FACES + face, face, held.far));
-                }
+            if !self.fits_this_frame(lamp) {
+                continue;
             }
-            self.slots[slot] = Slot {
-                held: Some(held),
-                strength,
-                chosen: true,
-            };
+            let reach = self.slots[slot]
+                .held
+                .map_or(0.0, |held| held.reached)
+                .max(lamp.reach());
+            self.draw((lamp, near[place].1), slot, reach, how.level);
         }
 
-        for slot in &mut self.slots {
+        for (slot, place) in self.slots.iter_mut().zip(owner) {
+            // A lamp missing a moment finds its shadow as it left it.
+            if !slot.chosen && place.is_none() && slot.held.is_some() && slot.missing < GRACE {
+                continue;
+            }
             let aim = if slot.chosen { 1.0 } else { 0.0 };
             slot.strength = if slot.strength < aim {
                 (slot.strength + step).min(aim)
@@ -389,21 +480,28 @@ impl ShadowSlots {
                 (slot.strength - step).max(aim)
             };
         }
-        // Every lamp in view whose pictures are drawn, chosen or fading,
-        // casts as much shadow as its slot's strength.
-        for (shadow, &(_, number)) in shadows.iter_mut().zip(near) {
+        // Every lamp whose pictures are drawn, chosen or fading, casts as
+        // much shadow as its slot's strength; one whose pictures wait to be
+        // drawn again uses those it had meanwhile.
+        for (place, (shadow, &(_, number))) in shadows.iter_mut().zip(near).enumerate() {
             let lamp = &lamps[number];
-            if !lamp.casts_shadows {
-                continue;
-            }
-            let Some(slot) = self.held_by(lamp, lamp.reach(), how.level) else {
+            let Some(slot) = self.own[place] else {
                 continue;
             };
             let strength = self.slots[slot].strength;
-            let Some(held) = self.slots[slot].held.filter(|_| strength > 0.0) else {
+            let Some(held) = self.slots[slot].held.filter(|held| {
+                strength > 0.0
+                    && (held.fits(lamp, lamp.reach(), how.level) || held.stands_in(lamp, how.level))
+            }) else {
                 continue;
             };
-            let numbers = pictured(lamp, held.far);
+            let numbers = pictured(
+                &Lamp {
+                    beam: held.beam,
+                    ..*lamp
+                },
+                held.far,
+            );
             #[allow(clippy::cast_precision_loss)]
             let first = (slot * FACES) as f32;
             *shadow = Shadow {
@@ -414,34 +512,94 @@ impl ShadowSlots {
         }
     }
 
-    /// The slot whose pictures `lamp` can use as they are.
-    fn held_by(&self, lamp: &Lamp, reach: f32, level: u64) -> Option<usize> {
-        self.slots
-            .iter()
-            .position(|slot| slot.held.is_some_and(|held| held.fits(lamp, reach, level)))
+    /// Finds each lamp's own slot (in `own`, by its place in `near`) and
+    /// gives each slot's lamp: the slot drawn for a lamp standing where it
+    /// stands, or else, for a lamp that has moved (carried, swung), the
+    /// nearest within [`MOVED`] drawn for a lamp at the same place in the
+    /// list that shone the same way (every way, or in a beam), in the same
+    /// level, and that no lamp still standing there holds. A lamp lit
+    /// beside another, or a torch carried past one, is not taken for it.
+    fn find_own(
+        &mut self,
+        lamps: &[Lamp],
+        near: &[(f32, usize)],
+        level: u64,
+    ) -> [Option<usize>; MOST_SLOTS] {
+        let mut owner = [None; MOST_SLOTS];
+        self.own.clear();
+        self.own.resize(near.len(), None);
+        let same_kind = |held: &Held, lamp: &Lamp| {
+            held.level == level && held.beam.is_some() == lamp.beam.is_some()
+        };
+        for (place, &(_, number)) in near.iter().enumerate() {
+            let lamp = &lamps[number];
+            if !lamp.casts_shadows {
+                continue;
+            }
+            let found = (0..self.slots.len()).find(|&slot| {
+                owner[slot].is_none()
+                    && self.slots[slot]
+                        .held
+                        .is_some_and(|held| same_kind(&held, lamp) && held.at == lamp.at)
+            });
+            if let Some(slot) = found {
+                owner[slot] = Some(place);
+                self.own[place] = Some(slot);
+            }
+        }
+        for (place, &(_, number)) in near.iter().enumerate() {
+            let lamp = &lamps[number];
+            if !lamp.casts_shadows || self.own[place].is_some() {
+                continue;
+            }
+            let found = (0..self.slots.len())
+                .filter_map(|slot| {
+                    let held = self.slots[slot].held.filter(|held| {
+                        owner[slot].is_none() && held.number == number && same_kind(held, lamp)
+                    })?;
+                    let off = minus(held.at, lamp.at);
+                    let apart = dot(off, off);
+                    (apart <= MOVED * MOVED).then_some((apart, slot))
+                })
+                .min_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
+            if let Some((_, slot)) = found {
+                owner[slot] = Some(place);
+                self.own[place] = Some(slot);
+            }
+        }
+        owner
     }
 
-    /// The slot not yet chosen this frame that most likely held `lamp`
-    /// before it moved: the nearest within [`MOVED`] whose lamp shone the
-    /// same way (every way, or in a beam), in the same level.
-    fn moved_from(&self, lamp: &Lamp, level: u64) -> Option<usize> {
-        let apart = |held: &Held| {
-            let off = minus(held.at, lamp.at);
-            dot(off, off)
+    /// Whether `lamp`'s pictures fit in what is left of this frame's.
+    fn fits_this_frame(&self, lamp: &Lamp) -> bool {
+        let count = faces_of(lamp).iter().filter(|face| **face).count();
+        self.faces.len() + count <= FACES_A_FRAME
+    }
+
+    /// Draws the pictures of `lamp`, number `number` of the frame's lamps,
+    /// out to where its light reaches at its brightest lately, `reach`,
+    /// into `slot`, which it has chosen.
+    fn draw(&mut self, (lamp, number): (&Lamp, usize), slot: usize, reach: f32, level: u64) {
+        let held = Held {
+            at: lamp.at,
+            far: far_for(reach),
+            beam: lamp.beam,
+            level,
+            reached: reach,
+            number,
         };
-        (0..self.slots.len())
-            .filter_map(|slot| {
-                let found = &self.slots[slot];
-                let held = found.held.filter(|held| {
-                    !found.chosen
-                        && held.level == level
-                        && held.beam.is_some() == lamp.beam.is_some()
-                        && apart(held) <= MOVED * MOVED
-                })?;
-                Some((apart(&held), slot))
-            })
-            .min_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)))
-            .map(|(_, slot)| slot)
+        let numbers = pictured(lamp, held.far);
+        for (face, drawn) in faces_of(lamp).into_iter().enumerate() {
+            if drawn {
+                self.faces
+                    .push(numbers.face(slot * FACES + face, face, held.far));
+            }
+        }
+        let found = &mut self.slots[slot];
+        found.held = Some(held);
+        found.chosen = true;
+        found.missing = 0.0;
+        found.drawn = self.frame;
     }
 
     /// The pictures [`choose`](Self::choose) found have to be drawn.
@@ -787,14 +945,27 @@ mod tests {
         eye: [f32; 3],
         how: &Shadowing,
     ) -> Vec<Shadow> {
+        choose_some(slots, lamps, |_| true, eye, how)
+    }
+
+    /// As [`choose`], with only the lamps `given` says in the frame (a lamp
+    /// whose flicker is dark is left out of it).
+    fn choose_some(
+        slots: &mut ShadowSlots,
+        lamps: &[Lamp],
+        given: impl Fn(usize) -> bool,
+        eye: [f32; 3],
+        how: &Shadowing,
+    ) -> Vec<Shadow> {
         let mut near: Vec<(f32, usize)> = lamps
             .iter()
             .enumerate()
+            .filter(|(number, _)| given(*number))
             .map(|(number, lamp)| (dot(minus(lamp.at, eye), minus(lamp.at, eye)).sqrt(), number))
             .collect();
         near.sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         let mut shadows = Vec::new();
-        slots.choose(lamps, &near, &vec![true; lamps.len()], how, &mut shadows);
+        slots.choose(lamps, &near, how, &mut shadows);
         // Back in the lamps' own order.
         let mut ordered = vec![Shadow::NONE; lamps.len()];
         for (shadow, (_, number)) in shadows.into_iter().zip(near) {
@@ -957,5 +1128,179 @@ mod tests {
             choose(&mut slots, &lamps, [0.0, 1.7, 1.0], &how);
             assert!(slots.faces().is_empty(), "{flicker}");
         }
+    }
+
+    /// Which slot each lamp's shadow is in, or `None` for no shadow.
+    fn slot_of(shadow: &Shadow) -> Option<usize> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        (shadow.row[0] >= 0.0).then(|| shadow.row[0] as usize / FACES)
+    }
+
+    #[test]
+    fn many_carried_torches_take_turns_and_a_new_lamp_is_not_kept_waiting() {
+        // Five torches carried along at once, each a cube of six pictures:
+        // more than one frame draws.
+        #[allow(clippy::cast_precision_loss)]
+        let mut lamps: Vec<Lamp> = (0..5)
+            .map(|number| bulb([number as f32 * 2.0, 2.0, -3.0]))
+            .collect();
+        let mut slots = ShadowSlots::default();
+        let eye = [4.0, 1.7, 0.0];
+        let how = Shadowing {
+            slots: 8,
+            level: 1,
+            elapsed: 0.0,
+        };
+        choose(&mut slots, &lamps, eye, &how);
+        let how = Shadowing {
+            elapsed: 1.0 / 60.0,
+            ..how
+        };
+        let mut last_drawn = [0_u32; 5];
+        for frame in 1..=12 {
+            for lamp in &mut lamps {
+                lamp.at[2] -= 0.05;
+            }
+            let shadows = choose(&mut slots, &lamps, eye, &how);
+            assert!(slots.faces().len() <= FACES_A_FRAME);
+            let drawn: Vec<usize> = slots
+                .faces()
+                .iter()
+                .map(|face| face.layer / FACES)
+                .collect();
+            for (number, shadow) in shadows.iter().enumerate() {
+                // Every torch keeps a shadow, its pictures of a frame or
+                // two ago standing in while it waits its turn.
+                let slot = slot_of(shadow);
+                assert!(
+                    slot.is_some(),
+                    "torch {number} lost its shadow in frame {frame}"
+                );
+                if slot.is_some_and(|slot| drawn.contains(&slot)) {
+                    last_drawn[number] = frame;
+                }
+                assert!(
+                    frame - last_drawn[number] <= 2,
+                    "torch {number} last drawn in frame {} of {frame}",
+                    last_drawn[number]
+                );
+            }
+        }
+        // A lamp standing in the street they walk past has its pictures
+        // drawn at once, before the torches' turns.
+        lamps.push(bulb([4.0, 3.0, -2.0]));
+        for lamp in lamps.iter_mut().take(5) {
+            lamp.at[2] -= 0.05;
+        }
+        let shadows = choose(&mut slots, &lamps, eye, &how);
+        let new = slot_of(&shadows[5]).expect("the new lamp has a slot");
+        assert!(slots.faces().iter().any(|face| face.layer / FACES == new));
+    }
+
+    #[test]
+    fn a_lamp_dark_for_a_moment_of_its_flicker_keeps_its_shadow_whole() {
+        // Two lamps and one slot, their light reaching as far as it is
+        // bright: the first matters a little more.
+        let lamps = [-3.0, -4.0].map(|z| Lamp {
+            reach: 0.0,
+            ..bulb([0.0, 2.0, z])
+        });
+        let eye = [0.0, 2.0, 0.0];
+        let mut slots = ShadowSlots::default();
+        let how = Shadowing {
+            slots: 1,
+            level: 1,
+            elapsed: 0.0,
+        };
+        let first = choose(&mut slots, &lamps, eye, &how);
+        assert_eq!(first[0].strength, 1.0);
+        let how = Shadowing {
+            elapsed: 1.0 / 60.0,
+            ..how
+        };
+        // Its flicker goes dark for a fifth of a second (Quake's "faulty"),
+        // and with no light it is left out of the frame: the other lamp
+        // does not take its slot meanwhile.
+        for _ in 0..12 {
+            let dark = choose_some(&mut slots, &lamps, |number| number == 1, eye, &how);
+            assert_eq!(dark[0], Shadow::NONE);
+            assert!(slots.faces().is_empty());
+        }
+        // Lit again, its shadow is whole at once, and not drawn again.
+        let lit = choose(&mut slots, &lamps, eye, &how);
+        assert_eq!(lit, first);
+        assert!(slots.faces().is_empty());
+
+        // Dimmed to a twelfth by its flicker, its light reaches less far,
+        // but it keeps its place and its pictures.
+        let mut dim = lamps;
+        dim[0].candela /= 12.0;
+        for _ in 0..30 {
+            let shadows = choose(&mut slots, &dim, eye, &how);
+            assert_eq!(shadows[0].strength, 1.0);
+            assert!(slots.faces().is_empty());
+        }
+        // Gone for good, its slot is in time another's.
+        let mut frames = 0;
+        while choose_some(&mut slots, &lamps, |number| number == 1, eye, &how)[1].strength < 1.0 {
+            frames += 1;
+            assert!(frames < 120, "the slot never came free");
+        }
+    }
+
+    #[test]
+    fn a_lamp_is_known_after_it_moves_and_does_not_take_a_neighbour_s_slot() {
+        // A torch carried past a lamp standing a metre off, which matters
+        // a little more for itself, but not half again as much.
+        let standing = bulb([0.0, 2.0, -5.0]);
+        let mut torch = bulb([0.9, 2.0, -5.3]);
+        let eye = [0.0, 2.0, 0.0];
+        let mut slots = ShadowSlots::default();
+        let how = Shadowing {
+            slots: 1,
+            level: 1,
+            elapsed: 0.0,
+        };
+        let first = choose_some(
+            &mut slots,
+            &[standing, torch],
+            |number| number == 1,
+            eye,
+            &how,
+        );
+        assert_eq!(first[1].strength, 1.0);
+        let how = Shadowing {
+            elapsed: 1.0 / 60.0,
+            ..how
+        };
+        // The standing lamp comes into the frame (it is lit): the torch is
+        // still known as the lamp that has the slot as it moves, and keeps
+        // it.
+        for _ in 0..20 {
+            torch.at[0] -= 0.02;
+            let shadows = choose(&mut slots, &[standing, torch], eye, &how);
+            assert_eq!(shadows[1].strength, 1.0);
+            assert_eq!(slot_of(&shadows[0]), None);
+        }
+        // A brighter lamp lit beside the standing one, within a metre,
+        // does not take its pictures as its own: the standing lamp's
+        // shadow fades out first.
+        let mut slots = ShadowSlots::default();
+        let how = Shadowing {
+            elapsed: 0.0,
+            ..how
+        };
+        choose(&mut slots, &[standing], eye, &how);
+        let how = Shadowing {
+            elapsed: 1.0 / 60.0,
+            ..how
+        };
+        let bright = Lamp {
+            reach: 100.0,
+            ..bulb([0.5, 2.0, -5.0])
+        };
+        let next = choose(&mut slots, &[standing, bright], eye, &how);
+        assert!(next[0].strength > 0.0 && next[0].strength < 1.0);
+        assert_eq!(slot_of(&next[1]), None);
     }
 }
