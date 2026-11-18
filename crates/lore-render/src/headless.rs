@@ -259,7 +259,9 @@ impl Headless {
     /// [`Renderer::set_eye_adaptation`](crate::Renderer::set_eye_adaptation)
     /// does. Unlike a window's, a picture drawn here does not adapt until
     /// told to: [`EyeAdaptation::FIXED`] is the usual. While time is held
-    /// still the eye gets used to each picture at once, for the next.
+    /// still the eye gets used to each picture at once, for the next, and
+    /// [`screenshot`](Self::screenshot) draws one first for it to see, so
+    /// that the same camera gives the same picture.
     pub fn set_eye_adaptation(&mut self, adaptation: EyeAdaptation) {
         self.eye.adaptation = adaptation.sound();
     }
@@ -554,9 +556,8 @@ impl Headless {
             device
                 .wait_for_fences(&[self.finished], true, u64::MAX)
                 .map_err(RenderError::driver("waiting for the graphics card"))?;
-            // The eye takes in this picture for the next: all at once while
-            // time is held still, so that the same camera gives the same
-            // picture.
+            // The eye takes in this picture for the next, as a window's does:
+            // all at once while time is held still.
             if self.mesh.measured(0, &mut self.measuring)? {
                 let per_lux = self
                     .effects
@@ -587,6 +588,12 @@ impl Headless {
     /// there is no memory for the picture.
     pub fn screenshot(&mut self, camera: &Camera) -> Result<Vec<u8>, RenderError> {
         let doing = "reading a picture back";
+        // While time is held still the eye gets used to a picture at once,
+        // but only for the next: one is drawn first for it to see, so that
+        // the same camera gives the same picture whatever was drawn before.
+        if self.view.still && self.eye.adaptation.adapts() {
+            self.render(camera)?;
+        }
         self.render(camera)?;
         let length = self.extent.width as usize * self.extent.height as usize * 4;
         let pixels = Buffer::writable(

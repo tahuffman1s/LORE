@@ -92,14 +92,24 @@ into more candela, as focusing a torch does.
 - A lamp has a size. Its highlight is taken from the point of the sphere
   nearest the mirrored line of sight, with its energy kept (Karis eq. 11
   and 14), so a wet street shows a lamp and not a pin-prick.
+- Lamps light solid surfaces, water, fluids and splashes: water and fluid
+  surfaces mirror each lamp's highlight, and their bodies scatter its
+  light. Rain drawn across the view is not lit by them yet; that is lit air
+  (#106).
 - The sun and the lamps share one BRDF, with the energy that rough
   highlights lose put back. The share kept was measured for GGX at eight
   roughnesses and eleven angles and fitted to within about 5% (`energy_kept`
   in `lamps.wgsl`).
 - Each frame the lamps that reach the view are sorted on the CPU into
   16 × 9 × 24 cells (slices deeper each step away), one bit per lamp in each
-  cell. Past 256 in view, the nearest are drawn. The CPU sort is the same on
-  every card and is unit-tested.
+  cell, in as many 32-bit words as the frame's lamps need. Past 256 in
+  view, the nearest are drawn. The CPU sort is the same on every card and
+  is unit-tested. Only what is used is uploaded: a 32-byte head when no
+  lamp is in view.
+- A script's description of a level's lamp is kept as the settings it gave,
+  and worked out again over the file's lamp whenever the level says its
+  lamps, so it does not matter whether the script or the level comes
+  first.
 
 **One scale for all light.** The engine's own sky is drawn in its own units:
 a matte white surface under the noon sky shows exactly white. That is
@@ -113,7 +123,9 @@ outshines the moon by as much as a real one does.
 
 Cost: lavapipe 36.5 ms with no lamps, 38.7 with 16, 39.6 with 64 and 40.7
 with 256 (`lore bench --lamps N`); the RX 7800 XT 1.06, 1.14 and 1.21 ms
-for 0, 64 and 256. A scene with no lamps costs what it did.
+for 0, 64 and 256. A scene with no lamps costs what it did (main 36.0 ms,
+this 36.6 ms with the eye's measuring included, within the spread of
+runs).
 
 ### The eye (#381)
 

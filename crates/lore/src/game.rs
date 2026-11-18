@@ -878,6 +878,28 @@ impl Frame {
         self.lighting.take()
     }
 
+    /// Lends the frame the memory of an earlier frame's lamps, so that
+    /// saying them needs no new memory.
+    #[must_use]
+    pub(crate) fn with_lamp_buffer(mut self, mut buffer: Vec<lore_render::Lamp>) -> Self {
+        buffer.clear();
+        self.lamps = buffer;
+        self
+    }
+
+    /// Says which lamps light the world from this frame on, as
+    /// [`set_lamps`](Self::set_lamps) does, by filling the list this gives.
+    pub(crate) fn say_lamps(&mut self) -> &mut Vec<lore_render::Lamp> {
+        self.lamps.clear();
+        self.lamps_said = true;
+        &mut self.lamps
+    }
+
+    /// The memory the lamps were said in, to lend the next frame.
+    pub(crate) fn lamp_buffer(&mut self) -> Vec<lore_render::Lamp> {
+        std::mem::take(&mut self.lamps)
+    }
+
     /// The lamps, if the game said them this frame.
     pub fn take_lamps(&mut self) -> Option<&[lore_render::Lamp]> {
         std::mem::take(&mut self.lamps_said).then_some(self.lamps.as_slice())

@@ -252,6 +252,9 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     let scene = scene();
     let mut headless = Headless::new(bench.width, bench.height, bench.upscaling)?;
     headless.set_scene(&scene)?;
+    // The eye adapts as a window's does, so measuring the picture for it
+    // is timed too.
+    headless.set_eye_adaptation(lore_render::EyeAdaptation::default());
     if bench.lamps > 0 {
         headless.set_lamps(&lamps(bench.lamps));
     }

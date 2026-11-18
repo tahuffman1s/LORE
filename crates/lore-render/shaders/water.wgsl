@@ -789,7 +789,8 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     let own_mirror = water_mirrors();
     let shines = own_mirror + (1.0 - own_mirror) * pow(1.0 - eye_half, 5.0);
     // Never brighter than the sun's disc is itself.
-    let glitter = view.sun.rgb * min(density * visible * shines * n_sun, 60.0) * sunlit;
+    let glitter = view.sun.rgb * min(density * visible * shines * n_sun, 60.0) * sunlit
+        + lamps_glint(corner.world, normal, to_eye, corner.position.xy, rough, vec3<f32>(own_mirror));
 
     // How much is mirrored and how much is seen into: nearly all mirror
     // when looked along, nearly none straight down (Schlick's Fresnel).
@@ -839,7 +840,8 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     let passes = water_passes(through, wet.colour.a);
     let open = open_sky(corner.world, corner.position.xy);
     let body = water_albedo(wet.colour.rgb)
-        * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
+        * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6
+            + lamps_matte(corner.world, vec3<f32>(0.0, 1.0, 0.0), corner.position.xy) * 0.6);
     // What the liquid gives off itself is added after the light, so that
     // shade does not darken it.
     var seen = bottom * passes + (body + water_glows() * crusted(wet.rest)) * (1.0 - passes);

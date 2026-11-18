@@ -295,6 +295,9 @@ fn start(
         game,
         editing,
         renderer: None,
+        lighting: None,
+        lighting_given: false,
+        lamps: Vec::new(),
         window: None,
         occluded: false,
         draw_after: Instant::now(),
@@ -359,6 +362,13 @@ struct App<G> {
     gamepads: Gamepads,
     /// Draws into the window. Declared before it so it is dropped first.
     renderer: Option<Renderer>,
+    /// The game's own exposure and how the eye adapts, as the game last said
+    /// them, and whether the renderer has them: kept for a renderer made
+    /// later, or made again.
+    lighting: Option<(f32, lore_render::EyeAdaptation)>,
+    lighting_given: bool,
+    /// The memory the last frame's lamps were said in, lent to the next.
+    lamps: Vec<lore_render::Lamp>,
     /// Created once the window system is ready for it.
     window: Option<Rc<Window>>,
     /// Whether the window is completely hidden, so drawing would be wasted.
@@ -772,6 +782,7 @@ impl<G: Game> App<G> {
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
             .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
+            .with_lamp_buffer(std::mem::take(&mut self.lamps))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
@@ -824,9 +835,17 @@ impl<G: Game> App<G> {
         if let (Some(renderer), Some(lamps)) = (&mut self.renderer, frame.take_lamps()) {
             renderer.set_lamps(lamps);
         }
-        if let (Some(renderer), Some((stops, eye))) = (&mut self.renderer, frame.take_lighting()) {
+        self.lamps = frame.lamp_buffer();
+        if let Some(said) = frame.take_lighting() {
+            self.lighting = Some(said);
+            self.lighting_given = false;
+        }
+        if let (Some(renderer), Some((stops, eye)), false) =
+            (&mut self.renderer, self.lighting, self.lighting_given)
+        {
             renderer.set_game_exposure(stops);
             renderer.set_eye_adaptation(eye);
+            self.lighting_given = true;
         }
         let (water_rise, sky_clock) = frame.take_water();
         let storm_bolts = frame.take_storm_bolts();
@@ -946,7 +965,11 @@ impl<G: Game> ApplicationHandler for App<G> {
                         Ok(renderer)
                     });
                 match renderer {
-                    Ok(renderer) => self.renderer = Some(renderer),
+                    Ok(renderer) => {
+                        self.renderer = Some(renderer);
+                        // A new renderer has not heard the game's lighting.
+                        self.lighting_given = false;
+                    }
                     Err(error) => {
                         self.error = Some(AppError::Render(error));
                         event_loop.exit();

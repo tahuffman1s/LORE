@@ -22,20 +22,36 @@ pub(crate) fn drawn(light: &LampLight) -> Lamp {
     }
 }
 
-/// The lamps `level` places, each by the name of its light in the file
-/// (or "lamp 1", "lamp 2" and so on for one with none), as the script
-/// takes them.
+/// The lamps `level` places, each by the name of its light in the file, as
+/// the script takes them. Names are told apart as the script tells them
+/// (without case or spaces at either end), and glTF does not ask for them
+/// to differ, so a name used before gets " 2", " 3" and so on, and a light
+/// with none is "lamp 1", "lamp 2" and so on: no light of the file is lost.
 pub(crate) fn of_level(level: &Scene) -> Vec<(String, LampLight)> {
+    let mut taken = std::collections::HashSet::new();
     let mut unnamed = 0;
+    let mut unique = |name: Option<&str>| {
+        let base = match name.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => name.to_owned(),
+            None => {
+                unnamed += 1;
+                format!("lamp {unnamed}")
+            }
+        };
+        let mut name = base.clone();
+        let mut again = 1;
+        while !taken.insert(name.to_lowercase()) {
+            again += 1;
+            name = format!("{base} {again}");
+        }
+        name
+    };
     level
         .lights
         .iter()
         .filter_map(|light| {
             let lamp = Lamp::from_light(light)?;
-            let name = light.name.clone().unwrap_or_else(|| {
-                unnamed += 1;
-                format!("lamp {unnamed}")
-            });
+            let name = unique(light.name.as_deref());
             let said = LampLight {
                 at: lamp.at,
                 candela: lamp.candela,
@@ -84,6 +100,13 @@ mod tests {
         let lamps = of_level(&level);
         let names: Vec<&str> = lamps.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, ["Lantern", "lamp 1"]);
+        // Names that the script would take for one are told apart.
+        level.lights.extend([
+            light(Some("lantern "), LightKind::Point),
+            light(Some("Lamp 1"), LightKind::Point),
+        ]);
+        let names: Vec<String> = of_level(&level).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, ["Lantern", "lamp 1", "lantern 2", "Lamp 1 2"]);
         let back = drawn(&lamps[1].1);
         assert_eq!(back, Lamp::from_light(&level.lights[2]).unwrap());
     }

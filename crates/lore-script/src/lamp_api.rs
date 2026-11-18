@@ -324,16 +324,26 @@ struct Spec {
     reach: f32,
     radius: f32,
     flicker: Flicker,
+    /// Its colour as bright as white, and its candela before the flicker:
+    /// worked out when anything changes (`settle`), not every frame.
+    colour_drawn: [f32; 3],
+    candela_drawn: f32,
 }
 
 impl Spec {
+    /// Works out again what is drawn of it, after a change.
+    fn settle(&mut self) {
+        self.colour_drawn = self.colour();
+        self.candela_drawn = self.lumens / self.solid_angle();
+    }
+
     /// A bulb, at the middle of the world.
     fn usual() -> Self {
         Self::of(&READY[4])
     }
 
     fn of(ready: &Ready) -> Self {
-        Self {
+        let mut spec = Self {
             at: [0.0; 3],
             on: true,
             lumens: ready.lumens,
@@ -355,7 +365,11 @@ impl Spec {
                         .map(|l| f32::from(l - b'a') / 12.0)
                         .collect(),
                 }),
-        }
+            colour_drawn: [1.0; 3],
+            candela_drawn: 0.0,
+        };
+        spec.settle();
+        spec
     }
 
     /// The lamp a level's light stands for, in the script's terms.
@@ -388,8 +402,11 @@ impl Spec {
             reach: light.reach,
             radius: light.radius,
             flicker: Flicker::steady(),
+            colour_drawn: [1.0; 3],
+            candela_drawn: 0.0,
         };
         spec.lumens = light.candela * spec.solid_angle() * luminance(light.colour);
+        spec.settle();
         spec
     }
 
@@ -435,8 +452,8 @@ impl Spec {
         });
         Some(LampLight {
             at: self.at,
-            candela: self.lumens / self.solid_angle() * self.flicker.at(seconds, start),
-            colour: self.colour(),
+            candela: self.candela_drawn * self.flicker.at(seconds, start),
+            colour: self.colour_drawn,
             reach: self.reach,
             radius: self.radius,
             beam,
@@ -524,6 +541,49 @@ fn hex_of(linear: [f32; 3]) -> String {
     )
 }
 
+impl Spec {
+    /// `self` with the setting `key` as `other` has it.
+    fn take_setting(&mut self, other: &Self, key: &str) {
+        match key {
+            "at" => self.at = other.at,
+            "on" => self.on = other.on,
+            "lumens" => self.lumens = other.lumens,
+            "color" | "kelvin" => {
+                self.color = other.color;
+                self.color_said.clone_from(&other.color_said);
+                self.kelvin = other.kelvin;
+            }
+            "beam" => self.beam = other.beam,
+            "pointing" => self.pointing = other.pointing,
+            "softness" => self.softness = other.softness,
+            "range" => self.reach = other.reach,
+            "radius" => self.radius = other.radius,
+            "flicker" => self.flicker = other.flicker.clone(),
+            _ => {}
+        }
+        self.settle();
+    }
+}
+
+/// What the script said of a lamp: whether it said all of it (from a
+/// `from`, or a ready-made one), so that it owes nothing to the level, and
+/// which settings it gave.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Said {
+    whole: bool,
+    keys: Vec<&'static str>,
+}
+
+impl Said {
+    fn add(&mut self, key: &str) {
+        if let Some(known) = SETTINGS.iter().find(|known| **known == key)
+            && !self.keys.contains(known)
+        {
+            self.keys.push(known);
+        }
+    }
+}
+
 /// One lamp the game has.
 struct Named {
     name: String,
@@ -536,49 +596,105 @@ struct Named {
     /// For a lamp the level places, the lamp as its file says it: what a
     /// description of it in the script starts from.
     level: Option<Spec>,
+    /// What the script said of it, if anything: kept so that it can be said
+    /// again over the level's lamp when the level comes after the script.
+    said: Option<Said>,
+    /// Asked for by name before any level was known: not drawn until the
+    /// level says what it is.
+    waiting: bool,
 }
 
 /// The lamps of the game. It outlives a version of the script.
 #[derive(Default)]
 pub(crate) struct LampState {
     lamps: RefCell<Vec<Named>>,
+    /// Whether a level has said its lamps yet.
+    level_known: std::cell::Cell<bool>,
 }
 
 impl LampState {
     /// Calls `see` with each lamp that is lit, as it is `seconds` into the
     /// game.
     pub(crate) fn lights(&self, seconds: f64, mut see: impl FnMut(&LampLight)) {
-        for named in self.lamps.borrow().iter().filter(|named| !named.removed) {
+        for named in self
+            .lamps
+            .borrow()
+            .iter()
+            .filter(|named| !named.removed && !named.waiting)
+        {
             if let Some(light) = named.spec.light(seconds, named.start) {
                 see(&light);
             }
         }
     }
 
-    /// Puts the level's lamps in place of the last level's: those the
-    /// script made itself are kept.
+    /// Puts the level's lamps in place of the last level's. Those the
+    /// script made itself are kept; one the script described, or asked for
+    /// before the level was known, is the level's lamp with what the script
+    /// said of it over it. A last level's lamp the script said nothing of
+    /// is gone.
     pub(crate) fn set_level(&self, lamps: &[(String, LampLight)]) {
+        self.level_known.set(true);
         let mut all = self.lamps.borrow_mut();
-        for (name, light) in lamps {
-            let name = tidy(name);
-            let spec = Spec::from_light(light);
+        let names: Vec<String> = lamps.iter().map(|(name, _)| tidy(name)).collect();
+        for named in all.iter_mut() {
+            if named.level.is_some() && !names.contains(&named.name) {
+                named.level = None;
+                named.removed |= named.said.is_none();
+            }
+        }
+        for (name, (_, light)) in names.into_iter().zip(lamps) {
+            let file = Spec::from_light(light);
             match all.iter_mut().find(|named| named.name == name) {
                 Some(named) => {
-                    named.spec = spec.clone();
+                    named.spec = match &named.said {
+                        Some(said) if said.whole => named.spec.clone(),
+                        Some(said) => {
+                            let mut spec = file.clone();
+                            for key in &said.keys {
+                                spec.take_setting(&named.spec, key);
+                            }
+                            spec
+                        }
+                        None => file.clone(),
+                    };
+                    named.level = Some(file);
                     named.removed = false;
-                    named.level = Some(spec);
+                    named.waiting = false;
                 }
                 None => {
                     let start = start_of(&name);
                     all.push(Named {
                         name,
-                        spec: spec.clone(),
+                        spec: file.clone(),
                         start,
                         removed: false,
-                        level: Some(spec),
+                        level: Some(file),
+                        said: None,
+                        waiting: false,
                     });
                 }
             }
+        }
+        // Asked for by a name the level does not have: a mistake, said here
+        // since it could not be said when it was asked.
+        let known: Vec<String> = all
+            .iter()
+            .filter(|named| !named.waiting && !named.removed)
+            .map(|named| named.name.clone())
+            .collect();
+        for named in all.iter_mut().filter(|named| named.waiting) {
+            named.waiting = false;
+            named.removed = true;
+            let mut message = format!(
+                "The script asked for the lamp \"{}\", which the level does not place, so it \
+                 is not drawn.",
+                named.name
+            );
+            if let Some(near) = closest(&named.name, known.iter().map(String::as_str)) {
+                let _ = write!(message, " Did you mean \"{near}\"?");
+            }
+            log::warn!("{message}");
         }
     }
 
@@ -626,12 +742,14 @@ impl LampState {
     }
 
     /// Makes the lamp called `name`, or makes it again if it was removed,
-    /// or changes it.
-    fn put(&self, lua: &Lua, name: &str, spec: Spec) -> mlua::Result<usize> {
+    /// or changes it, as the script said it.
+    fn put(&self, lua: &Lua, name: &str, spec: Spec, said: Said) -> mlua::Result<usize> {
         if let Some(lamp) = self.index_of(name) {
             if let Some(named) = self.lamps.borrow_mut().get_mut(lamp) {
                 named.spec = spec;
                 named.removed = false;
+                named.waiting = false;
+                named.said = Some(said);
             }
             return Ok(lamp);
         }
@@ -653,14 +771,28 @@ impl LampState {
             start: start_of(name),
             removed: false,
             level: None,
+            said: Some(said),
+            waiting: false,
         });
         Ok(lamps.len() - 1)
     }
 
-    fn replace(&self, lamp: usize, spec: Spec) {
+    /// Changes one setting of a lamp, which the script said.
+    fn replace(&self, lamp: usize, spec: Spec, key: &str) {
         if let Some(named) = self.lamps.borrow_mut().get_mut(lamp) {
             named.spec = spec;
+            named.said.get_or_insert_with(Said::default).add(key);
         }
+    }
+
+    /// A lamp asked for by name before any level was known, which the
+    /// level may place: not drawn until it says.
+    fn wait_for(&self, lua: &Lua, name: &str) -> mlua::Result<usize> {
+        let lamp = self.put(lua, name, Spec::usual(), Said::default())?;
+        if let Some(named) = self.lamps.borrow_mut().get_mut(lamp) {
+            named.waiting = true;
+        }
+        Ok(lamp)
     }
 
     fn remove(&self, lamp: usize) {
@@ -673,7 +805,7 @@ impl LampState {
         self.lamps
             .borrow()
             .iter()
-            .filter(|named| !named.removed)
+            .filter(|named| !named.removed && !named.waiting)
             .map(|named| named.name.clone())
             .collect()
     }
@@ -799,6 +931,7 @@ fn apply(lua: &Lua, spec: &mut Spec, key: &str, value: &Value, label: &str) -> m
         "flicker" => spec.flicker = flicker_of(lua, label, value)?,
         _ => {}
     }
+    spec.settle();
     Ok(())
 }
 
@@ -948,12 +1081,22 @@ fn lamp_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function>
         let lamp = match settings {
             Value::Nil => match (state.index_of(&name), ready_named(&name)) {
                 (Some(lamp), _) if !state.removed(lamp) => lamp,
-                (_, Some(ready)) => state.put(lua, &name, Spec::of(ready))?,
+                (_, Some(ready)) => state.put(
+                    lua,
+                    &name,
+                    Spec::of(ready),
+                    Said {
+                        whole: true,
+                        keys: Vec::new(),
+                    },
+                )?,
+                // The level may place it, and has not said yet.
+                _ if !state.level_known.get() => state.wait_for(lua, &name)?,
                 _ => return Err(unknown_lamp(lua, state, &name)),
             },
             Value::Table(settings) => {
-                let spec = specified(lua, state, &name, &settings)?;
-                state.put(lua, &name, spec)?
+                let (spec, said) = specified(lua, state, &name, &settings)?;
+                state.put(lua, &name, spec, said)?
             }
             other => {
                 return Err(fail(
@@ -971,8 +1114,18 @@ fn lamp_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function>
 }
 
 /// What a table of settings makes of the lamp called `name`.
-fn specified(lua: &Lua, state: &LampState, name: &str, settings: &Table) -> mlua::Result<Spec> {
-    let mut spec = start_from(lua, state, name, &settings.raw_get::<Value>("from")?)?;
+fn specified(
+    lua: &Lua,
+    state: &LampState,
+    name: &str,
+    settings: &Table,
+) -> mlua::Result<(Spec, Said)> {
+    let from = settings.raw_get::<Value>("from")?;
+    let mut said = Said {
+        whole: !from.is_nil(),
+        keys: Vec::new(),
+    };
+    let mut spec = start_from(lua, state, name, &from)?;
     // The colour is said last, so that `color` and `kelvin` together mean
     // the same in any order: the colour wins.
     let mut color = None;
@@ -995,6 +1148,7 @@ fn specified(lua: &Lua, state: &LampState, name: &str, settings: &Table) -> mlua
         if !SETTINGS.contains(&key.as_str()) {
             return Err(unknown_setting(lua, "game.lamp", &key));
         }
+        said.add(&key);
         if key == "color" {
             color = Some(value);
             continue;
@@ -1010,7 +1164,7 @@ fn specified(lua: &Lua, state: &LampState, name: &str, settings: &Table) -> mlua
     if let Some(color) = color {
         apply(lua, &mut spec, "color", &color, "game.lamp's `color`")?;
     }
-    Ok(spec)
+    Ok((spec, said))
 }
 
 /// The key a script wrote, as text.
@@ -1128,7 +1282,7 @@ impl UserData for LampRef {
                 }
                 let mut spec = state.spec(lamp).unwrap_or_else(Spec::usual);
                 apply(lua, &mut spec, &key, &value, &format!("lamp.{key}"))?;
-                state.replace(lamp, spec);
+                state.replace(lamp, spec, &key);
                 Ok(())
             },
         );
@@ -1173,12 +1327,15 @@ mod tests {
     fn a_narrower_beam_puts_the_same_lumens_into_more_candela() {
         let mut lamp = Spec::usual();
         lamp.beam = 40.0;
+        lamp.settle();
         let narrow = lamp.light(0.0, 0.0).unwrap();
         lamp.beam = 120.0;
+        lamp.settle();
         let wide = lamp.light(0.0, 0.0).unwrap();
         assert!(narrow.candela > wide.candela * 5.0);
         // A beam of 360 degrees is every way: lumens over 4 pi.
         lamp.beam = 360.0;
+        lamp.settle();
         let every = lamp.light(0.0, 0.0).unwrap();
         assert!((every.candela - 800.0 / (4.0 * PI)).abs() < 1e-3);
         assert!(every.beam.is_none());

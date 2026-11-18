@@ -780,7 +780,7 @@ pub(crate) struct MeshPipeline {
     eye: Option<EyePass>,
     /// The lamps of each frame that can be in progress at once, as the
     /// shader's `Lamps` takes them.
-    lamp_buffers: Vec<Buffer>,
+    lamp_buffers: Vec<(Buffer, Buffer)>,
     /// The lamps of the frame being recorded, sorted into the grid of the
     /// view: kept between frames so that it needs no new memory.
     lamp_frame: RefCell<LampFrame>,
@@ -921,6 +921,11 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(15)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -929,10 +934,11 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, one list of lamps, nine
-            // pictures and four readers.
+            // Each frame's set has one view, the lamps and their grid,
+            // nine pictures and four readers.
             let each = match kind {
-                vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => 1,
+                vk::DescriptorType::UNIFORM_BUFFER => 1,
+                vk::DescriptorType::STORAGE_BUFFER => 2,
                 vk::DescriptorType::SAMPLED_IMAGE => 9,
                 _ => 4,
             };
@@ -995,13 +1001,22 @@ impl MeshPipeline {
                     .range(VIEW_BYTES as u64)];
                 let lamp_buffer = Buffer::writable(
                     gpu,
-                    lamps::BYTES as u64,
+                    lamps::LAMP_BUFFER_BYTES as u64,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    doing,
+                )?;
+                let cell_buffer = Buffer::writable(
+                    gpu,
+                    lamps::CELL_BUFFER_BYTES as u64,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     doing,
                 )?;
                 let lamp_info = [vk::DescriptorBufferInfo::default()
                     .buffer(lamp_buffer.handle)
-                    .range(lamps::BYTES as u64)];
+                    .range(lamps::LAMP_BUFFER_BYTES as u64)];
+                let cell_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(cell_buffer.handle)
+                    .range(lamps::CELL_BUFFER_BYTES as u64)];
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -1062,10 +1077,15 @@ impl MeshPipeline {
                         .dst_binding(14)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&lamp_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(15)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&cell_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 mesh.views.push((buffer, set));
-                mesh.lamp_buffers.push(lamp_buffer);
+                mesh.lamp_buffers.push((lamp_buffer, cell_buffer));
             }
         }
         let layout = mesh.layout;
@@ -1705,15 +1725,20 @@ impl MeshPipeline {
             rays: [forward, right, up],
             size: [target.extent.width, target.extent.height],
         };
-        if let (Some(buffer), Ok(mut packed)) = (
+        if let (Some((lamp_buffer, cell_buffer)), Ok(mut frame_lamps)) = (
             self.lamp_buffers
                 .get(frame % self.lamp_buffers.len().max(1)),
             self.lamp_frame.try_borrow_mut(),
         ) {
-            // SAFETY: the buffer was made writable and `lamps::BYTES` long,
-            // and the caller guarantees the commands that read it last have
-            // finished.
-            unsafe { buffer.write(packed.pack(lamps, &seen, per_lux)) }?;
+            let packed = frame_lamps.pack(lamps, &seen, per_lux);
+            // SAFETY: the buffers were made writable and as long as the most
+            // `pack` gives, and the caller guarantees the commands that read
+            // them last have finished. With no lamp in view the cells are
+            // not read, and are left as they were.
+            unsafe {
+                lamp_buffer.write(packed.lamps)?;
+                cell_buffer.write(packed.cells)?;
+            }
         }
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;

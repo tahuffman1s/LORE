@@ -192,9 +192,13 @@ fn mistakes_say_what_to_write() {
     assert!(message.contains("needs a vector"), "{message}");
     let message = load_mistake(r#"game.lamp("porch", {}).beem = 3"#);
     assert!(message.contains("Did you mean lamp.beam?"), "{message}");
-    // A name that is no lamp and no ready-made one is a mistake, not a new
-    // bulb at the middle of the world.
-    let message = load_mistake(r#"game.lamp("porch", {}) game.lamp("porh").on = false"#);
+    // Once the level is known, a name that is no lamp and no ready-made one
+    // is a mistake, not a new bulb at the middle of the world.
+    let mut host =
+        game(r#"game.lamp("porch", {}) game.onTick(function() game.lamp("porh").on = false end)"#);
+    host.set_level_lamps(&[]);
+    run(&mut host, 1);
+    let message = &host.last_error().expect("a mistake").message;
     assert!(message.contains("Did you mean \"porch\"?"), "{message}");
     assert!(message.contains("from = \"bulb\""), "{message}");
     // A short word is no flicker of one's own.
@@ -308,4 +312,71 @@ fn a_colour_reads_back_as_it_was_written_and_a_level_lamp_is_described_from_its_
     // The file's place is kept; only the light changed.
     assert_eq!(lamps[0].at, [1.0, 2.0, 3.0]);
     assert!((lamps[0].candela - 50.0 / (4.0 * PI)).abs() < 1e-3);
+}
+
+/// A level lamp as a level file would place it.
+fn file_lamp(at: [f32; 3], candela: f32) -> LampLight {
+    LampLight {
+        at,
+        candela,
+        colour: [1.0, 1.0, 1.0],
+        reach: 0.0,
+        radius: 0.03,
+        beam: None,
+    }
+}
+
+#[test]
+fn a_description_at_the_top_of_the_file_is_kept_when_the_level_comes_after() {
+    // The script runs before the level is loaded, as `lore run` does.
+    let mut host = game(r#"game.lamp("street lamp 1", { lumens = 50, flicker = "faulty" })"#);
+    host.set_level_lamps(&[(
+        "Street Lamp 1".to_owned(),
+        file_lamp([4.0, 5.0, 6.0], 300.0),
+    )]);
+    let lamps = lit(&host);
+    assert_eq!(lamps.len(), 1, "one lamp, not a bulb and the file's");
+    // Where the file put it, as bright as the script said.
+    assert_eq!(lamps[0].at, [4.0, 5.0, 6.0]);
+    let candela = 50.0 / (4.0 * PI);
+    assert!(lamps[0].candela <= candela * 2.1, "{}", lamps[0].candela);
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn a_lamp_asked_for_before_the_level_is_known_waits_for_it() {
+    let mut host = game(
+        r#"
+        local lamp = game.lamp("lantern 2")
+        lamp.lumens = 30
+        local typo = game.lamp("lantren 2")
+        "#,
+    );
+    // Nothing is drawn until the level says what they are.
+    assert!(lit(&host).is_empty());
+    host.set_level_lamps(&[("lantern 2".to_owned(), file_lamp([1.0, 2.5, 0.0], 64.0))]);
+    let lamps = lit(&host);
+    // The lantern is the level's, with what the script said of it; the
+    // misspelled one is not drawn (and a warning says the nearest name).
+    assert_eq!(lamps.len(), 1);
+    assert_eq!(lamps[0].at, [1.0, 2.5, 0.0]);
+    assert!((lamps[0].candela - 30.0 / (4.0 * PI)).abs() < 1e-3);
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn a_new_level_takes_away_the_last_level_s_lamps_and_keeps_the_script_s() {
+    let host = game(r#"game.lamp("porch", { from = "lantern" })"#);
+    host_levels(host);
+}
+
+fn host_levels(mut host: ScriptHost) {
+    host.set_level_lamps(&[("torch 3".to_owned(), file_lamp([0.0, 1.0, 0.0], 10.0))]);
+    assert_eq!(lit(&host).len(), 2);
+    host.set_level_lamps(&[("brazier".to_owned(), file_lamp([9.0, 1.0, 0.0], 10.0))]);
+    let lamps = lit(&host);
+    assert_eq!(lamps.len(), 2, "the porch and the brazier, not the torch");
+    assert!(lamps.iter().all(|lamp| lamp.at != [0.0, 1.0, 0.0]));
 }

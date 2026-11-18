@@ -33,15 +33,19 @@ struct Lamps {
     // Cells across, cells up, slices deep, and how many lamps there are.
     counts: vec4<u32>,
     lamps: array<Lamp, 256>,
-    // Eight words for each cell of the grid, a bit for each lamp that
-    // reaches into it: across first, then up from the top, then deep.
-    cells: array<u32>,
 }
 
 // The lamps of this frame.
 @group(0) @binding(14) var<storage, read> lamps: Lamps;
+// For each cell of the grid, a bit for each lamp that reaches into it, in
+// as many words as the lamps need (`lamp_words`): across first, then up
+// from the top, then deep.
+@group(0) @binding(15) var<storage, read> lamp_cells: array<u32>;
 
-const LAMP_WORDS: u32 = 8u;
+// How many words each cell has this frame: one for each 32 lamps.
+fn lamp_words() -> u32 {
+    return (lamps.counts.w + 31u) / 32u;
+}
 
 // The microfacet highlight (GGX, with Smith's height-correlated
 // visibility): how much of the light that falls on a surface from a
@@ -114,13 +118,14 @@ fn from_lamps(
     if lamps.counts.w == 0u {
         return vec3<f32>(0.0);
     }
-    let cell = lamp_cell(world, pixel) * LAMP_WORDS;
+    let words = lamp_words();
+    let cell = lamp_cell(world, pixel) * words;
     let n_eye = max(dot(normal, to_eye), 1e-4);
     let alpha = roughness * roughness;
     let bounced = reflect(-to_eye, normal);
     var sum = vec3<f32>(0.0);
-    for (var word = 0u; word < LAMP_WORDS; word++) {
-        var bits = lamps.cells[cell + word];
+    for (var word = 0u; word < words; word++) {
+        var bits = lamp_cells[cell + word];
         while bits != 0u {
             let lamp = lamps.lamps[word * 32u + firstTrailingBit(bits)];
             bits &= bits - 1u;
@@ -182,4 +187,93 @@ fn one_lamp(
     let shine = fresnel_here * kept * highlight(n_half, n_eye, n_shine, alpha) * kept_bright * n_shine;
     let scatter = (1.0 - fresnel_here) * matte / PI * n_light;
     return (scatter + shine) * falls;
+}
+
+// How bright a lamp's light is on a surface square to it at `world`: its
+// light over the square of the distance, cut at its reach and outside its
+// beam, and the way to it (length one) in `towards`. Nothing beyond.
+struct LampFall {
+    light: vec3<f32>,
+    towards: vec3<f32>,
+    far: f32,
+}
+
+fn lamp_falls(lamp: Lamp, world: vec3<f32>) -> LampFall {
+    var fall: LampFall;
+    let to = lamp.at.xyz - world;
+    let far2 = dot(to, to);
+    let reach = lamp.at.w;
+    let share = far2 / (reach * reach);
+    let window = max(1.0 - share * share, 0.0);
+    fall.far = sqrt(far2);
+    fall.towards = to / max(fall.far, 1e-6);
+    let beam = clamp(dot(-fall.towards, lamp.pointing.xyz) * lamp.cone.x + lamp.cone.y, 0.0, 1.0);
+    let radius = lamp.light.w;
+    fall.light = lamp.light.rgb * (window * window * beam * beam / max(far2, radius * radius + 1e-4));
+    return fall;
+}
+
+// The lamps' light as a matte white surface facing `normal` at `world` sends
+// it to the eye: what the sky and the sun give `fluid_lit` and the like,
+// for the lamps.
+fn lamps_matte(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    if lamps.counts.w == 0u {
+        return vec3<f32>(0.0);
+    }
+    let words = lamp_words();
+    let cell = lamp_cell(world, pixel) * words;
+    var sum = vec3<f32>(0.0);
+    for (var word = 0u; word < words; word++) {
+        var bits = lamp_cells[cell + word];
+        while bits != 0u {
+            let lamp = lamps.lamps[word * 32u + firstTrailingBit(bits)];
+            bits &= bits - 1u;
+            let fall = lamp_falls(lamp, world);
+            sum += fall.light * max(dot(normal, fall.towards), 0.0);
+        }
+    }
+    return sum / PI;
+}
+
+// What a smooth surface (water, a pool of fluid) facing `normal` at `world`
+// mirrors of the lamps towards the eye: each lamp's highlight from the
+// point of it nearest the mirrored line of sight, `f0` mirrored straight
+// on.
+fn lamps_glint(
+    world: vec3<f32>,
+    normal: vec3<f32>,
+    to_eye: vec3<f32>,
+    pixel: vec2<f32>,
+    rough: f32,
+    f0: vec3<f32>,
+) -> vec3<f32> {
+    if lamps.counts.w == 0u {
+        return vec3<f32>(0.0);
+    }
+    let words = lamp_words();
+    let cell = lamp_cell(world, pixel) * words;
+    let n_eye = max(dot(normal, to_eye), 0.02);
+    let alpha = rough * rough + 0.0006;
+    let bounced = reflect(-to_eye, normal);
+    var sum = vec3<f32>(0.0);
+    for (var word = 0u; word < words; word++) {
+        var bits = lamp_cells[cell + word];
+        while bits != 0u {
+            let lamp = lamps.lamps[word * 32u + firstTrailingBit(bits)];
+            bits &= bits - 1u;
+            let fall = lamp_falls(lamp, world);
+            let towards = lamp.at.xyz - world;
+            let radius = lamp.light.w;
+            let aside = dot(towards, bounced) * bounced - towards;
+            let to_shine = normalize(towards + aside * clamp(radius / max(length(aside), 1e-6), 0.0, 1.0));
+            let wider = clamp(alpha + radius / (3.0 * max(fall.far, 1e-4)), 0.0, 1.0);
+            let kept_bright = (alpha / wider) * (alpha / wider);
+            let halfway = normalize(to_eye + to_shine);
+            let n_shine = clamp(dot(normal, to_shine), 0.0, 1.0);
+            let n_half = clamp(dot(normal, halfway), 0.0, 1.0);
+            sum += fall.light * fresnel(f0, clamp(dot(to_eye, halfway), 0.0, 1.0))
+                * highlight(n_half, n_eye, n_shine, alpha) * kept_bright * n_shine;
+        }
+    }
+    return sum;
 }

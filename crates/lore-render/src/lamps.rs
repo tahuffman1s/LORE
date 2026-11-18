@@ -35,7 +35,8 @@ const ACROSS: usize = 16;
 const UP: usize = 9;
 const SLICES: usize = 24;
 const CELLS: usize = ACROSS * UP * SLICES;
-/// The 32-bit words of each cell's bits, one bit a lamp.
+/// The most 32-bit words of each cell's bits, one bit a lamp. A frame with
+/// fewer lamps gives each cell only as many words as its lamps need.
 const WORDS: usize = MOST_LAMPS / 32;
 
 /// The nearest slice holds everything nearer the eye than this, in metres,
@@ -50,9 +51,11 @@ const LAMP_BYTES: usize = 64;
 /// The bytes before the lamps: the size of the picture and how the grid
 /// is laid over it.
 const HEAD_BYTES: usize = 32;
-/// The bytes the shader's `Lamps` takes: the head, every lamp there can
-/// be, and every cell's bits.
-pub(crate) const BYTES: usize = HEAD_BYTES + MOST_LAMPS * LAMP_BYTES + CELLS * WORDS * 4;
+/// The bytes the shader's `Lamps` takes: the head and every lamp there can
+/// be.
+pub(crate) const LAMP_BUFFER_BYTES: usize = HEAD_BYTES + MOST_LAMPS * LAMP_BYTES;
+/// The most bytes the shader's `lamp_cells` takes: every cell's bits.
+pub(crate) const CELL_BUFFER_BYTES: usize = CELLS * WORDS * 4;
 
 /// How faint, in lux, a lamp's light is where it is cut off when its maker
 /// gives no reach: a tenth of what a full moon gives the ground. Fainter
@@ -286,7 +289,9 @@ impl Lamp {
         let Some(beam) = self.beam else {
             return [0.0, 1.0];
         };
-        let outer = beam.outer.clamp(0.0, std::f32::consts::FRAC_PI_2);
+        // Up to a half turn: a beam wider than a hemisphere is a lamp shaded
+        // only at its back.
+        let outer = beam.outer.clamp(0.0, std::f32::consts::PI);
         let inner = beam.inner.clamp(0.0, outer);
         let edge = outer.cos();
         let scale = 1.0 / (inner.cos() - edge).max(1e-4);
@@ -310,23 +315,36 @@ pub(crate) struct Seen {
 /// The lamps of one frame as the shader takes them, made again each frame
 /// in the same memory.
 pub(crate) struct LampFrame {
-    bytes: Vec<u8>,
+    /// The shader's `Lamps`: as much of it as this frame uses.
+    lamps: Vec<u8>,
+    /// The shader's `lamp_cells`: the same.
+    cells: Vec<u8>,
     /// The lamps that light what is seen: how far each is, and which it is.
     near: Vec<(f32, usize)>,
+}
+
+/// What [`LampFrame::pack`] made: the bytes of the two buffers the shader
+/// reads, each only as long as this frame needs. With no lamp in view the
+/// cells are empty and nothing need be written to them.
+pub(crate) struct Packed<'a> {
+    pub(crate) lamps: &'a [u8],
+    pub(crate) cells: &'a [u8],
 }
 
 impl LampFrame {
     pub(crate) fn new() -> Self {
         Self {
-            bytes: vec![0; BYTES],
+            lamps: Vec::with_capacity(LAMP_BUFFER_BYTES),
+            cells: Vec::with_capacity(CELL_BUFFER_BYTES),
             near: Vec::with_capacity(MOST_LAMPS),
         }
     }
 
-    /// The shader's `Lamps` for `lamps` seen as `seen` says, each drawn
-    /// `per_lux` times as bright as the lux it gives. Lamps that light
-    /// nothing in view are left out, and past [`MOST_LAMPS`] the farthest.
-    pub(crate) fn pack(&mut self, lamps: &[Lamp], seen: &Seen, per_lux: f32) -> &[u8] {
+    /// The shader's `Lamps` and `lamp_cells` for `lamps` seen as `seen`
+    /// says, each drawn `per_lux` times as bright as the lux it gives.
+    /// Lamps that light nothing in view are left out, and past
+    /// [`MOST_LAMPS`] the farthest.
+    pub(crate) fn pack(&mut self, lamps: &[Lamp], seen: &Seen, per_lux: f32) -> Packed<'_> {
         let [forward, right, up] = seen.rays;
         let across = length(right);
         let upward = length(up);
@@ -359,7 +377,12 @@ impl LampFrame {
             .sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         self.near.truncate(MOST_LAMPS);
 
-        self.bytes.fill(0);
+        let count = self.near.len();
+        let words = count.div_ceil(32);
+        self.lamps.clear();
+        self.lamps.resize(HEAD_BYTES + count * LAMP_BYTES, 0);
+        self.cells.clear();
+        self.cells.resize(CELLS * words * 4, 0);
         #[allow(clippy::cast_precision_loss)]
         let head = [
             seen.size[0] as f32,
@@ -368,9 +391,9 @@ impl LampFrame {
             NEAREST,
         ];
         #[allow(clippy::cast_possible_truncation)]
-        let counts = [ACROSS, UP, SLICES, self.near.len()].map(|count| count as u32);
-        put(&mut self.bytes[..16], &head);
-        for (slot, count) in self.bytes[16..HEAD_BYTES]
+        let counts = [ACROSS, UP, SLICES, count].map(|count| count as u32);
+        put(&mut self.lamps[..16], &head);
+        for (slot, count) in self.lamps[16..HEAD_BYTES]
             .as_chunks_mut::<4>()
             .0
             .iter_mut()
@@ -378,9 +401,8 @@ impl LampFrame {
         {
             *slot = count.to_ne_bytes();
         }
-        let cells_from = HEAD_BYTES + MOST_LAMPS * LAMP_BYTES;
-        let (lamp_bytes, cell_bytes) =
-            self.bytes[HEAD_BYTES..].split_at_mut(cells_from - HEAD_BYTES);
+        let lamp_bytes = &mut self.lamps[HEAD_BYTES..];
+        let cell_bytes = &mut self.cells[..];
         for (slot, &(_, number)) in self.near.iter().enumerate() {
             let lamp = &lamps[number];
             let reach = lamp.reach();
@@ -414,7 +436,7 @@ impl LampFrame {
                 for row in rows.clone() {
                     for column in columns.clone() {
                         let cell = (depth * UP + row) * ACROSS + column;
-                        let at = (cell * WORDS + word) * 4;
+                        let at = (cell * words + word) * 4;
                         let mut held = [0; 4];
                         held.copy_from_slice(&cell_bytes[at..at + 4]);
                         let bits = u32::from_ne_bytes(held) | bit;
@@ -423,7 +445,10 @@ impl LampFrame {
                 }
             }
         }
-        &self.bytes
+        Packed {
+            lamps: &self.lamps,
+            cells: &self.cells,
+        }
     }
 
     /// How many lamps the last frame packed.
@@ -546,12 +571,20 @@ mod tests {
         counts
     }
 
+    /// The bytes of both buffers of the frame, one after the other, and how
+    /// many words each cell has.
+    fn packed(frame: &mut LampFrame, lamps: &[Lamp], per_lux: f32) -> (Vec<u8>, Vec<u8>) {
+        let packed = frame.pack(lamps, &seen(), per_lux);
+        (packed.lamps.to_vec(), packed.cells.to_vec())
+    }
+
     /// Which cells lamp `slot` of the frame reaches, as (slice, row, column).
-    fn cells(bytes: &[u8], slot: usize) -> Vec<(usize, usize, usize)> {
-        let from = HEAD_BYTES + MOST_LAMPS * LAMP_BYTES;
+    fn cells(cells: &[u8], slot: usize) -> Vec<(usize, usize, usize)> {
+        let words = cells.len() / 4 / CELLS;
         let mut found = Vec::new();
         for cell in 0..CELLS {
-            let at = from + (cell * WORDS + slot / 32) * 4;
+            let at = (cell * words + slot / 32) * 4;
+            let bytes = cells;
             let bits = u32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
             if bits & (1 << (slot % 32)) != 0 {
                 found.push((cell / (ACROSS * UP), cell / ACROSS % UP, cell % ACROSS));
@@ -567,9 +600,9 @@ mod tests {
             reach: 1.0,
             ..bulb([0.0, 0.0, -10.0])
         };
-        let bytes = frame.pack(&[lamp], &seen(), 1.0).to_vec();
+        let (bytes, cell_bytes) = packed(&mut frame, &[lamp], 1.0);
         assert_eq!(head(&bytes), [16, 9, 24, 1]);
-        let reached = cells(&bytes, 0);
+        let reached = cells(&cell_bytes, 0);
         assert!(!reached.is_empty());
         for (depth, row, column) in &reached {
             assert!((7..=8).contains(column), "column {column}");
@@ -590,8 +623,8 @@ mod tests {
             reach: 0.5,
             ..bulb([15.0, 8.0, -10.0])
         };
-        let bytes = frame.pack(&[lamp], &seen(), 1.0).to_vec();
-        let reached = cells(&bytes, 0);
+        let (_, cell_bytes) = packed(&mut frame, &[lamp], 1.0);
+        let reached = cells(&cell_bytes, 0);
         assert!(!reached.is_empty());
         assert!(reached.iter().all(|cell| cell.1 <= 1), "{reached:?}");
         assert!(reached.iter().all(|cell| cell.2 >= 14), "{reached:?}");
@@ -608,7 +641,7 @@ mod tests {
             reach: 2.0,
             ..bulb([40.0, 0.0, -5.0])
         };
-        let bytes = frame.pack(&[behind, aside], &seen(), 1.0).to_vec();
+        let (bytes, _) = packed(&mut frame, &[behind, aside], 1.0);
         assert_eq!(head(&bytes)[3], 0);
         assert_eq!(frame.count(), 0);
     }
@@ -620,8 +653,8 @@ mod tests {
             reach: 3.0,
             ..bulb([0.0, 0.5, 0.5])
         };
-        let bytes = frame.pack(&[lamp], &seen(), 1.0).to_vec();
-        let reached = cells(&bytes, 0);
+        let (_, cell_bytes) = packed(&mut frame, &[lamp], 1.0);
+        let reached = cells(&cell_bytes, 0);
         for row in 0..UP {
             for column in 0..ACROSS {
                 assert!(reached.contains(&(0, row, column)), "({row}, {column})");
@@ -643,7 +676,7 @@ mod tests {
                 }
             })
             .collect();
-        let bytes = frame.pack(&lamps, &seen(), 1.0).to_vec();
+        let (bytes, _) = packed(&mut frame, &lamps, 1.0);
         assert_eq!(head(&bytes)[3] as usize, MOST_LAMPS);
         // The first drawn is the nearest: the last in the list.
         let at = HEAD_BYTES;
@@ -658,7 +691,7 @@ mod tests {
             colour: [1.0, 0.5, 0.25],
             ..bulb([0.0, 0.0, -5.0])
         };
-        let bytes = frame.pack(&[lamp], &seen(), 0.01).to_vec();
+        let (bytes, _) = packed(&mut frame, &[lamp], 0.01);
         let at = HEAD_BYTES + 16;
         let red = f32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
         let blue =
@@ -735,9 +768,14 @@ mod tests {
     #[test]
     fn the_same_lamps_pack_the_same_bytes() {
         let lamps = [bulb([1.0, 0.0, -4.0]), bulb([-2.0, 1.0, -7.0])];
-        let one = LampFrame::new().pack(&lamps, &seen(), 0.5).to_vec();
-        let other = LampFrame::new().pack(&lamps, &seen(), 0.5).to_vec();
+        let one = packed(&mut LampFrame::new(), &lamps, 0.5);
+        let other = packed(&mut LampFrame::new(), &lamps, 0.5);
         assert_eq!(one, other);
+        // Two lamps need one word a cell; none need no cells at all.
+        assert_eq!(one.1.len(), CELLS * 4);
+        assert_eq!(one.0.len(), HEAD_BYTES + 2 * LAMP_BYTES);
+        let (head_only, no_cells) = packed(&mut LampFrame::new(), &[], 0.5);
+        assert_eq!((head_only.len(), no_cells.len()), (HEAD_BYTES, 0));
     }
 
     #[test]
