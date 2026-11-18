@@ -256,6 +256,16 @@ impl Waves {
         Self { layers }
     }
 
+    /// How far the waves can lift or lower the water from where it rests,
+    /// at the most: every one of them at its crest at once.
+    pub(crate) fn reach(&self) -> f32 {
+        self.layers
+            .iter()
+            .flat_map(|layer| &layer.waves)
+            .map(|wave| wave.height.abs())
+            .sum()
+    }
+
     /// How high the water stands at `x`, `z` after `seconds`, over where it
     /// rests, in metres: every wave added up.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -370,6 +380,21 @@ mod tests {
         );
         // Each layer's square is a quarter of the one before.
         assert!((waves.layers[0].tile / waves.layers[1].tile - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn no_wave_stands_the_water_higher_than_its_reach() {
+        let waves = Waves::new([0.6, 0.8], 12.0, 3000.0);
+        let reach = waves.reach();
+        let mut highest = 0.0_f32;
+        for step in 0..400 {
+            let at = f64::from(step) * 0.37;
+            #[allow(clippy::cast_possible_truncation)]
+            let (x, z) = ((at * 3.1) as f32, (at * -1.7) as f32);
+            highest = highest.max(waves.height_at(x, z, at).abs());
+        }
+        assert!(highest > 0.05, "{highest}");
+        assert!(highest <= reach, "{highest} over {reach}");
     }
 
     #[test]

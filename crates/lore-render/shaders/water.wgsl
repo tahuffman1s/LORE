@@ -242,10 +242,47 @@ fn near_depth(place: vec2<f32>) -> f32 {
     return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
 }
 
+// How far the waves and rings can lift or lower the still water nearest
+// the eye, at the most: every wave at its crest at once, as strong as the
+// wind can stand them up, and the tallest ring. The engine adds up how
+// high the waves stand with the wind at its usual strength
+// (`view.water_colour.w`); a gust and a storm stand them taller.
+fn waves_reach() -> f32 {
+    let gusts = 1.0 + 0.8 * max(view.weather[3].z, 0.0);
+    let blowing = gusts / 0.8 * (1.0 + 1.5 * max(view.weather[0].w, 0.0));
+    return view.water_colour.w * max(blowing, 1.0) + 0.15;
+}
+
+// How far the wind's waves carry the surface at `place`, as `swell` has it,
+// along x, up and along z.
+fn swell_shift(place: vec2<f32>, grain: f32, strength: vec4<f32>) -> vec3<f32> {
+    var shift = vec3<f32>(0.0);
+    for (var layer = 0; layer < 4; layer++) {
+        let seen = layer_seen(layer, grain) * strength[layer];
+        if seen <= 0.001 {
+            continue;
+        }
+        let uv = place / view.waves[layer].x;
+        shift += textureSampleLevel(wave_shift, wave_sampler, uv, layer, 0.0).xyz * seen;
+    }
+    return shift;
+}
+
+// How high the waves and rings stand the still water nearest the eye over
+// `place`, where it is `deep` deep. A wave carries the surface sideways as
+// it lifts it, so what stands over a place rested a little way off, where
+// the waves at the place would have carried it from.
+fn lifted_at(place: vec2<f32>, deep: f32) -> f32 {
+    let strength = wave_strength(place, deep);
+    let rest = place - swell_shift(place, 0.02, strength).xz;
+    return swell_shift(rest, 0.02, strength).y + rings(place).x;
+}
+
 // Whether a point of the world is under the surface of the still water
 // nearest the eye, waves and rings and all.
 fn under_water(point: vec3<f32>) -> bool {
-    if view.water.z < 0.5 || point.y > view.water.x + 0.5 {
+    let reach = waves_reach();
+    if view.water.z < 0.5 || point.y > view.water.x + reach {
         return false;
     }
     let deep = near_depth(point.xz);
@@ -254,11 +291,10 @@ fn under_water(point: vec3<f32>) -> bool {
     if deep <= 0.0 || point.y < view.water.x - deep - 0.5 {
         return false;
     }
-    if point.y < view.water.x - 0.5 {
+    if point.y < view.water.x - reach {
         return true;
     }
-    let lifted = swell(point.xz, 0.02, wave_strength(point.xz, deep)).shift.y + rings(point.xz).x;
-    return point.y < view.water.x + lifted;
+    return point.y < view.water.x + lifted_at(point.xz, deep);
 }
 
 // Whether the line of sight to `world` starts under water. With the eye
@@ -273,18 +309,18 @@ fn sight_starts_under(world: vec3<f32>) -> bool {
     }
     let eye = view.eye.xyz;
     let over = eye.y - view.water.x;
-    if over > 0.5 {
+    let reach = waves_reach();
+    if over > reach {
         return false;
     }
     let deep = near_depth(eye.xz);
     if deep <= 0.0 || over < -deep - 0.5 {
         return false;
     }
-    if over < -0.5 {
+    if over < -reach {
         return true;
     }
-    let lifted = swell(eye.xz, 0.02, wave_strength(eye.xz, deep)).shift.y + rings(eye.xz).x;
-    let clear = over - lifted;
+    let clear = over - lifted_at(eye.xz, deep);
     if abs(clear) > 0.035 {
         return clear < 0.0;
     }

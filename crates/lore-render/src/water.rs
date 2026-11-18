@@ -99,8 +99,9 @@ pub struct Stir {
 }
 
 /// The rows of the shader's `View` that say what water there is: the body
-/// the eye is nearest (three rows), each layer of waves (four), the square
-/// of rings, and one spare.
+/// the eye is nearest (three rows, the last number of the third how far
+/// the waves can lift its surface at the most), each layer of waves
+/// (four), the square of rings, and one spare.
 pub(crate) type WaterRows = [[f32; 4]; 9];
 
 /// A picture of several layers: all of them for a shader to read, and each
@@ -460,7 +461,8 @@ impl Body {
         !hidden
     }
 
-    /// The rows of the shader's `View` that describe this body.
+    /// The rows of the shader's `View` that describe this body; the last
+    /// number is for how far the waves on it reach.
     fn rows(&self) -> [[f32; 4]; 3] {
         // Sizes are far below the point where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
@@ -1226,6 +1228,7 @@ impl WaterWorks {
         let fetch = near.map_or(40.0, |body| {
             (body.size[0].max(body.size[1]) as f32 * body.cell).clamp(10.0, 20_000.0)
         });
+        let mut reach = 0.0;
         if let Ok(mut waves) = self.waves.try_borrow_mut() {
             let wanted = [along_x, along_z, speed, fetch];
             // A different water is a different width for the wind to work on.
@@ -1234,6 +1237,7 @@ impl WaterWorks {
             if (waves.1[3] / fetch).ln().abs() > 0.2 || turned || changed {
                 *waves = (Waves::new([along_x, along_z], speed, fetch), wanted);
             }
+            reach = waves.0.reach();
             for (row, layer) in rows[3..7].iter_mut().zip(&waves.0.layers) {
                 // A layer's waves fit between 8 and 32 times into its square.
                 *row = [
@@ -1340,6 +1344,7 @@ impl WaterWorks {
         if let Some(body) = near {
             rows[..3].copy_from_slice(&body.rows());
         }
+        rows[2][3] = reach;
         let corner = self.corner.get().unwrap_or(wanted);
         rows[7] = [corner[0], corner[1], RING_APART, RING_SIDE as f32];
         Ok(rows)
