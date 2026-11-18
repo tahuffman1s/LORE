@@ -236,6 +236,7 @@ pub(crate) fn frames(
                         weather: crate::effects::Air::default(),
                         day: None,
                         tracks: [None; 2],
+                        fluid: None,
                     },
                     camera,
                     1.0 / 60.0,

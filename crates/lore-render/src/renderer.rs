@@ -13,6 +13,7 @@ use crate::bolt::Lightning;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
+use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
@@ -416,6 +417,26 @@ impl Renderer {
         self.effects.set_rise(rise);
     }
 
+    /// Says how each kind of fluid looks, by its number: the first look is
+    /// kind 0. Up to 32; kinds not given look like clear water.
+    pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {
+        self.effects.fluid_mut().set_looks(looks);
+    }
+
+    /// Says which drops of fluid are drawn, from now on until said again.
+    /// Drops of one kind that touch are drawn as one surface. With none,
+    /// drawing fluid costs nothing.
+    pub fn set_fluid(&mut self, drops: &[FluidDrop]) {
+        self.effects.fluid_mut().set_drops(drops);
+    }
+
+    /// Says what every lake and creek of the level is drawn as: with
+    /// `Some`, that look in place of the level's own water colour, seen
+    /// from above and from under it alike; with `None`, as the level says.
+    pub fn set_water_look(&mut self, look: Option<FluidLook>) {
+        self.effects.fluid_mut().set_water(look);
+    }
+
     /// Says what time the sky's clock shows, in seconds: the game's own
     /// time, so that clouds, storms and rain are where the game's rules
     /// have them and a saved game finds the same sky. With `None`, which
@@ -727,6 +748,7 @@ impl Renderer {
                     weather,
                     day: self.effects.day(),
                     tracks: self.effects.tracks(tracks),
+                    fluid: Some(self.effects.fluid()),
                 },
                 &self.camera,
                 seconds,

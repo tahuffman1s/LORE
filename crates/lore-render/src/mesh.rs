@@ -15,6 +15,7 @@ use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
 use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
 use crate::error::RenderError;
+use crate::fluid::FluidScene;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
@@ -313,6 +314,10 @@ pub(crate) struct Contents<'a> {
     /// The rows of the map of trodden snow that have changed, as
     /// [`Effects::tracks`](crate::effects::Effects::tracks) gives them.
     pub(crate) tracks: [Option<(u32, &'a [u8])>; 2],
+    /// The fluids poured about, and how each kind looks: drawn as one
+    /// liquid over the solid world, and nothing at all when there are no
+    /// drops.
+    pub(crate) fluid: Option<&'a FluidScene>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -1384,7 +1389,10 @@ impl MeshPipeline {
             weather,
             day,
             tracks,
+            fluid,
         } = contents;
+        // Drawn in a later step of this work; read so that the field is used.
+        let _ = fluid;
         // What flies is handed over before anything is recorded.
         let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
         let bits = &bits[..bits.len().min(MOST_BITS * BIT_BYTES)];
