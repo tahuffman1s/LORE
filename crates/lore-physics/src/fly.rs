@@ -54,8 +54,8 @@ impl Player {
                 settings.flattest_wall(),
                 false,
             );
-            // Keep the speed the flyer asked for; sliding only turns the
-            // position, so pushing on a wall does not build up speed.
+            // The velocity is the one left after sliding, so pushing on a
+            // wall keeps only the part along it and builds up no speed.
             (moved.position - to_middle, moved.velocity)
         };
         if feet.is_finite() && velocity.is_finite() {

@@ -232,7 +232,9 @@ declare extern type HudText with
 
     --- True while the pointer (the mouse, free to move because a menu is
     --- open) is over the piece, as this tick saw it. False while the piece
-    --- is hidden or there is no pointer.
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
     --- Example: if ammo.hovered then ammo.color = "yellow" end
     hovered: boolean
 
@@ -284,7 +286,9 @@ declare extern type HudBar with
 
     --- True while the pointer (the mouse, free to move because a menu is
     --- open) is over the piece, as this tick saw it. False while the piece
-    --- is hidden or there is no pointer.
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
     --- Example: if health.hovered then health.color = "yellow" end
     hovered: boolean
 
@@ -330,7 +334,9 @@ declare extern type HudBox with
 
     --- True while the pointer (the mouse, free to move because a menu is
     --- open) is over the piece, as this tick saw it. False while the piece
-    --- is hidden or there is no pointer.
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
     --- Example: if dot.hovered then dot.color = "yellow" end
     hovered: boolean
 
@@ -372,7 +378,9 @@ declare extern type HudGraph with
 
     --- True while the pointer (the mouse, free to move because a menu is
     --- open) is over the piece, as this tick saw it. False while the piece
-    --- is hidden or there is no pointer.
+    --- is hidden or there is no pointer. It goes by the piece as the rules
+    --- left it, so what game.onDraw changes about its text, place or
+    --- visibility is shown but does not change it.
     --- Example: if graph.hovered then graph.visible = false end
     hovered: boolean
 

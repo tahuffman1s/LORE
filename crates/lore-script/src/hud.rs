@@ -222,6 +222,53 @@ struct Entry {
     color: String,
     /// Whether it has changed since whoever draws it last looked.
     changed: bool,
+    /// What the rules last left of the piece, for finding where the pointer
+    /// is: `game.onDraw` changes what is shown but not what is hovered.
+    ruled: Ruled,
+}
+
+/// The parts of a piece that decide where it is hit, as the rules last
+/// left them, not as `game.onDraw` changed them for a picture.
+#[derive(Debug)]
+struct Ruled {
+    /// The words of a text, empty for any other piece.
+    text: String,
+    visible: bool,
+    offset: [f32; 2],
+}
+
+impl Ruled {
+    fn of(piece: &HudPiece) -> Self {
+        let mut ruled = Self {
+            text: String::new(),
+            visible: piece.visible,
+            offset: piece.offset,
+        };
+        ruled.copy(piece);
+        ruled
+    }
+
+    /// Takes over what `piece` is now.
+    fn copy(&mut self, piece: &HudPiece) {
+        self.visible = piece.visible;
+        self.offset = piece.offset;
+        if let HudShape::Text { text, .. } = &piece.shape
+            && self.text != *text
+        {
+            self.text.clear();
+            self.text.push_str(text);
+        }
+    }
+}
+
+impl Entry {
+    /// Notes the piece as the rules left it, unless a picture is being
+    /// drawn.
+    fn settle(&mut self, shared: &Shared) {
+        if !shared.clock.is_drawing() {
+            self.ruled.copy(&self.piece);
+        }
+    }
 }
 
 /// The HUD one version of a script has made.
@@ -280,6 +327,7 @@ impl HudState {
         self.next.set(id + 1);
         pieces.push(Entry {
             id,
+            ruled: Ruled::of(&piece),
             piece,
             color,
             changed: false,
@@ -438,9 +486,7 @@ impl UserData for PieceRef {
             let shared = hud_of(lua)?;
             let [x, y] = shared
                 .hud
-                .with(piece.id, |entry| {
-                    (pointer_across(&shared, &entry.piece), false)
-                })
+                .with(piece.id, |entry| (pointer_across(&shared, entry), false))
                 .ok_or_else(|| removed(lua, piece.kind))?;
             Ok((f64::from(x), f64::from(y)))
         });
@@ -469,10 +515,10 @@ impl UserData for PieceRef {
                         ("right", _) => Ok(Value::Number(f64::from(entry.piece.offset[0]))),
                         ("down", _) => Ok(Value::Number(f64::from(entry.piece.offset[1]))),
                         ("hovered", _) => Ok(Value::Boolean(
-                            entry.piece.visible && under_pointer(&shared, &entry.piece),
+                            entry.ruled.visible && under_pointer(&shared, entry),
                         )),
                         ("pressed", _) => Ok(Value::Boolean(
-                            entry.piece.visible && shared.hud.pressed.get() == Some(entry.id),
+                            entry.ruled.visible && shared.hud.pressed.get() == Some(entry.id),
                         )),
                         _ => Ok(Value::Nil),
                     };
@@ -497,6 +543,7 @@ impl UserData for PieceRef {
                                 // Kept in the memory the text already has.
                                 text.clear();
                                 text.push_str(&new);
+                                entry.settle(&shared);
                                 ((), true)
                             }
                             _ => ((), false),
@@ -568,6 +615,7 @@ impl UserData for PieceRef {
                         shared.hud.with(id, |entry| {
                             let changed = entry.piece.visible != new;
                             entry.piece.visible = new;
+                            entry.settle(&shared);
                             ((), changed)
                         })
                     }
@@ -577,6 +625,7 @@ impl UserData for PieceRef {
                         shared.hud.with(id, |entry| {
                             let changed = entry.piece.offset[axis] != new;
                             entry.piece.offset[axis] = new;
+                            entry.settle(&shared);
                             ((), changed)
                         })
                     }
@@ -588,23 +637,25 @@ impl UserData for PieceRef {
     }
 }
 
-/// Where `piece` is on the screen as the last tick's input saw it:
-/// `[x, y, width, height]` in pixels on a screen 1080 high.
-fn area(shared: &Shared, piece: &HudPiece) -> [f32; 4] {
+/// Where `entry` is on the screen as the last tick's input saw it, and as
+/// the rules last left it: `[x, y, width, height]` in pixels on a screen
+/// 1080 high.
+fn area(shared: &Shared, entry: &Entry) -> [f32; 4] {
     let screen = shared.input.borrow().screen;
+    let piece = &entry.piece;
     let size = match &piece.shape {
-        HudShape::Text { text, size } => shared.tools.text_size(text, *size),
+        HudShape::Text { size, .. } => shared.tools.text_size(&entry.ruled.text, *size),
         HudShape::Bar { size, .. } | HudShape::Box { size } | HudShape::Graph { size, .. } => *size,
     };
-    lore_ui::hud_area(piece.anchor, piece.offset, size, screen)
+    lore_ui::hud_area(piece.anchor, entry.ruled.offset, size, screen)
 }
 
-/// Whether the pointer of the last tick is inside `piece`.
-fn under_pointer(shared: &Shared, piece: &HudPiece) -> bool {
+/// Whether the pointer of the last tick is inside `entry`.
+fn under_pointer(shared: &Shared, entry: &Entry) -> bool {
     let Some([px, py]) = shared.input.borrow().pointer else {
         return false;
     };
-    let [x, y, w, h] = area(shared, piece);
+    let [x, y, w, h] = area(shared, entry);
     px >= x && px < x + w && py >= y && py < y + h
 }
 
@@ -628,19 +679,19 @@ pub(crate) fn update_pressed(shared: &Shared, click: Option<lore_input::ActionId
         .borrow()
         .iter()
         .rev()
-        .find(|entry| entry.piece.visible && under_pointer(shared, &entry.piece))
+        .find(|entry| entry.ruled.visible && under_pointer(shared, entry))
         .map(|entry| entry.id);
     shared.hud.pressed.set(top);
 }
 
-/// Where the pointer is across `piece`, from 0 at its left and top edge to
+/// Where the pointer is across `entry`, from 0 at its left and top edge to
 /// 1 at its right and bottom edge, and past them outside. Both are 0 when
 /// there is no pointer.
-fn pointer_across(shared: &Shared, piece: &HudPiece) -> [f32; 2] {
+fn pointer_across(shared: &Shared, entry: &Entry) -> [f32; 2] {
     let Some([px, py]) = shared.input.borrow().pointer else {
         return [0.0, 0.0];
     };
-    let [x, y, w, h] = area(shared, piece);
+    let [x, y, w, h] = area(shared, entry);
     let fraction = |at: f32, from: f32, length: f32| {
         if length > 0.0 {
             (at - from) / length

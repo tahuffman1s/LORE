@@ -21,6 +21,8 @@ thread_local! {
     static PRINTED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The warnings the engine logged on this test's thread.
     static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The notes the engine logged on this test's thread.
+    static INFOS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Collects `print` output and warnings per thread.
@@ -36,6 +38,8 @@ impl log::Log for Capture {
             PRINTED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         } else if record.level() == log::Level::Warn {
             WARNINGS.with_borrow_mut(|lines| lines.push(record.args().to_string()));
+        } else if record.level() == log::Level::Info {
+            INFOS.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         }
     }
 
@@ -50,11 +54,16 @@ fn warnings() -> Vec<String> {
     WARNINGS.with_borrow_mut(std::mem::take)
 }
 
+fn infos() -> Vec<String> {
+    INFOS.with_borrow_mut(std::mem::take)
+}
+
 fn listen() {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     printed();
     warnings();
+    infos();
 }
 
 const STEP: f32 = 1.0 / 60.0;
@@ -298,6 +307,32 @@ fn a_reload_keeps_the_players_bindings_and_warns_of_a_new_action() {
 }
 
 #[test]
+fn a_reload_with_other_keys_for_an_existing_action_says_they_wait() {
+    let folder = GameFolder::new(OPEN_MAP);
+    let mut host = folder.open();
+    infos();
+    // The same keys in another order say nothing.
+    folder.write(&OPEN_MAP.replace(
+        "{ \"F1\", \"GamepadSelect\" }",
+        "{ \"GamepadSelect\", \"F1\" }",
+    ));
+    host.reload().unwrap();
+    let said = infos();
+    assert!(
+        said.iter().all(|line| !line.contains("open_map")),
+        "{said:?}"
+    );
+    folder.write(&OPEN_MAP.replace("\"F1\"", "\"F6\""));
+    host.reload().unwrap();
+    let said = infos();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("open_map") && line.contains("started again")),
+        "{said:?}"
+    );
+}
+
+#[test]
 fn the_pointer_and_the_wheel_come_from_this_ticks_input() {
     let mut host = game(
         r#"game.onTick(function()
@@ -344,6 +379,31 @@ fn stepping_repeats_after_a_wait_counted_in_ticks() {
 
     let steps = steps_while_held(script, |input| input.press(Key::A), 3);
     assert_eq!(steps, ["0 -1 0"]);
+}
+
+#[test]
+fn stepping_waits_in_real_seconds_whatever_the_speed_of_time() {
+    let script = |speed: &str| {
+        format!(
+            r#"game.setTimeSpeed({speed})
+            local n = 0
+            game.onTick(function()
+                local x, y = game.input.stepped("move")
+                if y ~= 0 then print(n) end
+                n += 1
+            end)"#
+        )
+    };
+    // Ticks at 8 times the speed take 8 times as many for the same wait.
+    let steps = steps_while_held(&script("1"), |input| input.press(Key::W), 40);
+    assert_eq!(steps, ["0", "24", "30", "36"]);
+    let steps = steps_while_held(&script("4"), |input| input.press(Key::W), 150);
+    assert_eq!(steps, ["0", "96", "120", "144"]);
+    let steps = steps_while_held(&script("0.25"), |input| input.press(Key::W), 13);
+    assert_eq!(steps, ["0", "6", "8", "10", "12"]);
+    // Stopped time still has ticks at the usual rate.
+    let steps = steps_while_held(&script("0"), |input| input.press(Key::W), 26);
+    assert_eq!(steps, ["0", "24"]);
 }
 
 #[test]
@@ -666,6 +726,30 @@ fn text_is_measured_with_the_font_the_engine_gave() {
     assert_eq!(printed(), ["true"]);
 }
 
+#[test]
+fn what_the_picture_does_to_a_piece_is_not_what_the_rules_find_hovered() {
+    let script = r#"local words = game.hud.text("Hi", { at = "left", size = 40 })
+        game.onTick(function() print(words.hovered) end)
+        game.onDraw(function() words.text = string.rep("long ", 40) end)"#;
+    let play = |draws: bool| {
+        let mut host = game(script);
+        let mut input = Input::new(host.actions());
+        input.set_pointer(Some([sa() + 500.0, 540.0]), [1920.0, 1080.0]);
+        for _ in 0..5 {
+            host.tick(input.tick(), STEP);
+            if draws {
+                host.draw(1.0);
+                host.draw(1.0);
+            }
+        }
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        let lines = printed();
+        assert!(lines.iter().all(|line| line == "false"), "{lines:?}");
+        host.rules_fingerprint()
+    };
+    assert_eq!(play(false), play(true));
+}
+
 /// The left edge of the safe area on a 1920 wide screen, where a piece
 /// pinned to the left begins.
 fn sa() -> f32 {
@@ -767,6 +851,14 @@ fn teleporting_with_nothing_to_go_to_or_nowhere_to_face_is_a_mistake() {
         (
             "game.player:teleport(vector.create(0 / 0, 0, 0))",
             "no size",
+        ),
+        (
+            "game.player:teleport(vector.create(0, 1e38, 0))",
+            "Keep it inside the level",
+        ),
+        (
+            "game.player:teleport(vector.create(-2000000, 0, 0))",
+            "Keep it inside the level",
         ),
         (
             "game.player:teleport(vector.create(0, 0, 0), \"north\")",

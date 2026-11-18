@@ -112,6 +112,24 @@ fn teleporting_with_the_way_the_player_looks_keeps_the_view_where_it_was() {
 }
 
 #[test]
+fn facing_straight_up_or_down_keeps_the_way_the_player_was_turned() {
+    for (way, pitch) in [("0, 1, 0", 1.0), ("0, -1, 0", -1.0)] {
+        let (mut game, mut input) = played(&format!(
+            "game.onTick(function() game.player:teleport(game.player.position, \
+             vector.create({way})) end)"
+        ));
+        game.yaw = 1.0;
+        run(&mut game, &mut input, 3);
+        assert!((game.yaw - 1.0).abs() < 1e-4, "{way}: {}", game.yaw);
+        assert!(
+            (game.pitch - pitch * std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+            "{way}: {}",
+            game.pitch
+        );
+    }
+}
+
+#[test]
 fn a_flying_player_rises_with_no_gravity_and_hangs_in_the_air() {
     let (mut game, mut input) =
         played(r#"game.onTick(function() game.player:setMovement("fly") end)"#);

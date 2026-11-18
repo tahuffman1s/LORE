@@ -33,8 +33,13 @@ pub(crate) const DEFAULT_FLY_SPEED: f32 = 11.0;
 /// The slowest and fastest the player can be told to fly, in metres a second.
 const FLY_SPEEDS: (f32, f32) = (0.5, 200.0);
 
+/// The furthest from the middle of the world, in metres on each axis, that
+/// `game.player:teleport` goes: past it the physics loses its footing.
+const FURTHEST_PLACE: f32 = 1_000_000.0;
+
 /// How long a direction is held before a menu step repeats, in seconds. The
-/// same as the engine's own menus.
+/// same as the engine's own menus. Seconds as the player lives them, whatever
+/// the speed of time.
 const REPEAT_DELAY: f64 = 0.4;
 
 /// How often a held direction repeats after that, in seconds.
@@ -217,17 +222,26 @@ impl Steps {
         }
     }
 
-    /// Moves every action on by one tick, `rate` ticks to a second.
+    /// Moves every action on by one tick, `rate` ticks to a second, with the
+    /// game running at `speed` times the usual (0 counts as 1: the ticks
+    /// then run at the usual rate). The waits are in seconds the player
+    /// lives, so at a faster speed they take more ticks and at a slower
+    /// speed fewer.
     // Waits are a few dozen ticks.
     #[allow(clippy::cast_possible_truncation)]
-    fn advance(&mut self, map: &ActionMap, input: &InputFrame, rate: f64) {
+    fn advance(&mut self, map: &ActionMap, input: &InputFrame, rate: f64, speed: f64) {
         if self.held.len() != map.len() {
             self.held.resize(map.len(), Held::default());
             self.now.resize(map.len(), [0, 0]);
         }
         let rate = if rate > 0.0 { rate } else { 60.0 };
-        let delay = (REPEAT_DELAY * rate).round().max(1.0) as i32;
-        let every = (REPEAT_EVERY * rate).round().max(1.0) as i32;
+        let speed = if speed.is_finite() && speed > 0.0 {
+            speed
+        } else {
+            1.0
+        };
+        let delay = (REPEAT_DELAY * rate * speed).round().max(1.0) as i32;
+        let every = (REPEAT_EVERY * rate * speed).round().max(1.0) as i32;
         for (place, action) in map.actions().enumerate() {
             let direction = Self::direction(map.kind(action), input, action);
             let held = &mut self.held[place];
@@ -291,8 +305,8 @@ impl Tools {
     }
 
     /// Advances the menu stepping by one tick.
-    pub fn advance_steps(&self, map: &ActionMap, input: &InputFrame, rate: f64) {
-        self.steps.borrow_mut().advance(map, input, rate);
+    pub fn advance_steps(&self, map: &ActionMap, input: &InputFrame, rate: f64, speed: f64) {
+        self.steps.borrow_mut().advance(map, input, rate, speed);
     }
 
     pub fn set_controls(&self, controls: &ActionMap) {
@@ -393,6 +407,16 @@ pub(crate) fn teleport(
             format!(
                 "game.player:teleport was given a place with a number in it that has no size \
                  (infinity, or the answer to 0 / 0). Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    if position.iter().any(|part| part.abs() > FURTHEST_PLACE) {
+        return Err(fail(
+            lua,
+            format!(
+                "game.player:teleport was given a place more than {FURTHEST_PLACE} metres from \
+                 the middle of the world, which the physics cannot work with. Keep it inside \
+                 the level. Write it like this: {EXAMPLE}"
             ),
         ));
     }
@@ -698,7 +722,15 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 ));
             }
             // The player's own bindings for it stay.
-            Ok(_) => {}
+            Ok(id) => {
+                if shared.reloading && !same_buttons(map.bindings(id), &bindings) {
+                    log::info!(
+                        "game.input.bind(\"{name}\") was given different buttons than the \
+                         action has now. The player's bindings (or the buttons first bound) \
+                         stay until the game is started again."
+                    );
+                }
+            }
             Err(_) => {
                 let id = match map.own_button(&name, &bindings) {
                     Ok(id) => id,
@@ -776,6 +808,15 @@ fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<Strin
         ));
     }
     Ok(names)
+}
+
+/// Whether `written` names the same buttons as `bound`, in any order.
+fn same_buttons(bound: &[Binding], written: &[String]) -> bool {
+    let parsed: Vec<Binding> = written
+        .iter()
+        .filter_map(|name| name.parse().ok())
+        .collect();
+    parsed.len() == bound.len() && parsed.iter().all(|binding| bound.contains(binding))
 }
 
 /// The id and place in the map of the action a script named, or the error

@@ -102,10 +102,17 @@ fn aim_of(yaw: f32, pitch: f32) -> [f32; 3] {
 }
 
 /// The yaw and pitch that look along `facing`: the other way round from
-/// [`aim_of`].
-fn facing_of(facing: [f32; 3]) -> (f32, f32) {
+/// [`aim_of`]. Looking straight up or down has no side to face, so the
+/// player's `yaw` stays; the pitch is held to what the view allows.
+fn facing_of(facing: [f32; 3], yaw: f32) -> (f32, f32) {
     let [x, y, z] = facing;
-    (libm::atan2f(-x, -z), libm::atan2f(y, libm::hypotf(x, z)))
+    let across = libm::hypotf(x, z);
+    let yaw = if across < 1e-6 {
+        yaw
+    } else {
+        libm::atan2f(-x, -z)
+    };
+    crate::look::turned(yaw, libm::atan2f(y, across), [0.0; 2])
 }
 
 /// How the script reads that `player` is moving, looking along `aim`.
@@ -456,7 +463,9 @@ impl World {
         player.velocity = [0.0; 3];
         // Being put somewhere is not a step taken or a fall ended.
         self.walking = Walking::default();
-        let facing = teleport.facing.map(facing_of);
+        let facing = teleport
+            .facing
+            .map(|way| facing_of(way, asked.movement.yaw));
         if let Some((yaw, pitch)) = facing {
             asked.movement.yaw = yaw;
             asked.movement.pitch = pitch;

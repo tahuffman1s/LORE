@@ -188,7 +188,12 @@ impl Clock {
         let ticks = self.ticks.get() as f64;
         let ticks = match self.drawing.get() {
             // The picture is drawn between the last two ticks, like the view.
-            Some(alpha) => (ticks - 1.0 + alpha).max(0.0),
+            // While time is stopped nothing moves between them, so the
+            // picture shows the last tick, not a time that swings back.
+            Some(alpha) => {
+                let alpha = if self.speed.get() == 0.0 { 1.0 } else { alpha };
+                (ticks - 1.0 + alpha).max(0.0)
+            }
             None => ticks,
         };
         ticks / rate
@@ -728,6 +733,16 @@ mod tests {
         let clock = clock_at(0, 0.5);
         clock.set_drawing(Some(0.25));
         assert!(clock.now().abs() < 1e-12);
+    }
+
+    #[test]
+    fn stopped_time_shows_the_last_tick_in_a_picture() {
+        let clock = clock_at(10, 0.5);
+        clock.set_speed(0.0);
+        for alpha in [0.0, 0.3, 1.0] {
+            clock.set_drawing(Some(alpha));
+            assert!((clock.now() - 5.0).abs() < 1e-12);
+        }
     }
 
     #[test]

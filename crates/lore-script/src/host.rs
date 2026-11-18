@@ -327,8 +327,12 @@ impl ScriptHost {
         }
         self.clock.begin_tick(step);
         // A held direction counts its ticks whether or not the script asks.
-        self.tools
-            .advance_steps(&self.actions.borrow(), input, self.clock.rate());
+        self.tools.advance_steps(
+            &self.actions.borrow(),
+            input,
+            self.clock.rate(),
+            self.clock.speed(),
+        );
         // While time is stopped the ticks still run, so that input reaches
         // the script (it could never start time again otherwise), but the
         // game's time does not move: no weather, no timers, no seconds, and
