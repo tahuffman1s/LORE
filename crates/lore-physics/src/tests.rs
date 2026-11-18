@@ -274,6 +274,40 @@ fn a_crouched_player_fits_under_a_low_ceiling_and_cannot_stand_there() {
 }
 
 #[test]
+fn a_crouched_player_stands_up_only_where_there_is_room_to_spare() {
+    // A ceiling `over` the floor, over z from -2 to -8, crouched under
+    // and let go of in its middle.
+    let stood_under = |over: f32| {
+        let level = level(&[floor(), block([-3.0, over, -8.0], [3.0, over + 0.5, -2.0])]);
+        let mut player = standing_at(&level, [0.0, 0.0, -5.0]);
+        let crouch = MoveInput {
+            crouch: true,
+            ..MoveInput::default()
+        };
+        run(&mut player, &level, crouch, SECOND / 2);
+        run(&mut player, &level, MoveInput::default(), SECOND / 2);
+        let rest = (player.position, player.eye_height);
+        for _ in 0..SECOND {
+            player.step(&level, &MoveSettings::default(), &MoveInput::default(), DT);
+            assert_eq!(
+                (player.position, player.eye_height),
+                rest,
+                "{over}: {player:?}"
+            );
+        }
+        player
+    };
+    // Standing would leave the head a few millimetres short of the
+    // ceiling, nearer than the gap kept from every surface.
+    let feet = stood_under(2.5).position[1];
+    let tight = stood_under(feet + 1.8 + SKIN / 4.0);
+    assert!(tight.crouched, "{tight:?}");
+    // With a gap to spare, they stand.
+    let roomy = stood_under(feet + 1.8 + 2.0 * SKIN);
+    assert!(!roomy.crouched, "{roomy:?}");
+}
+
+#[test]
 fn a_jump_peaks_at_the_jump_height_and_lands() {
     let level = level(&[floor()]);
     let mut player = standing_at(&level, [0.0, 0.0, 0.0]);

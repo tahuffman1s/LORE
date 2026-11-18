@@ -6,7 +6,7 @@ use parry3d::shape::Capsule;
 
 use crate::level::{Level, Vector};
 use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
-use crate::slide::{SKIN, Slid, slide, unstick};
+use crate::slide::{SKIN, Slid, fits, slide, unstick};
 
 /// How far below the feet counts as standing on something when landing.
 const LANDING_REACH: f32 = 0.02;
@@ -291,7 +291,7 @@ impl Player {
         } else if self.crouched {
             let standing = settings.shape(false);
             let middle = feet + Vector::Y * (settings.height(false) / 2.0);
-            self.crouched = level.overlaps(&standing, middle);
+            self.crouched = !fits(level, &standing, middle);
         }
         let height = settings.height(self.crouched);
         let body = Body {
@@ -599,13 +599,7 @@ impl Player {
             self.grounded = true;
         }
 
-        let eyes = settings.eye_height(self.crouched);
-        let reach = positive(settings.crouch_rate) * dt;
-        self.eye_height = if self.eye_height.is_finite() {
-            self.eye_height + (eyes - self.eye_height).clamp(-reach, reach)
-        } else {
-            eyes
-        };
+        self.ease_eyes(settings, dt);
 
         // What the water is doing to them where they ended up.
         feet = middle - to_middle;
@@ -657,6 +651,18 @@ impl Player {
             floats.depth
         };
         self.swimming = !self.grounded && depth >= from;
+    }
+
+    /// Moves the eyes one tick of `dt` seconds toward the height they
+    /// have in the player's stance.
+    pub(crate) fn ease_eyes(&mut self, settings: &MoveSettings, dt: f32) {
+        let eyes = settings.eye_height(self.crouched);
+        let reach = positive(settings.crouch_rate) * dt;
+        self.eye_height = if self.eye_height.is_finite() {
+            self.eye_height + (eyes - self.eye_height).clamp(-reach, reach)
+        } else {
+            eyes
+        };
     }
 
     /// Ends any stroke and any treading of water at once.

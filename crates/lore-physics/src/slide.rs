@@ -110,17 +110,29 @@ fn along(velocity: Vector, normal: Vector) -> Vector {
     velocity - normal * velocity.dot(normal)
 }
 
+/// How near a surface a shape may be before it is pushed back out to
+/// [`SKIN`]: half of it.
+const TOO_NEAR: f32 = SKIN / 2.0;
+
 /// Moves a shape that is inside something solid, or much nearer to it
 /// than the gap it should keep, back out to that gap. This is what frees a
 /// player who spawned in a floor.
 pub(crate) fn unstick(level: &Level, shape: &Capsule, mut centre: Vector) -> Vector {
     for _ in 0..MOST_PUSHES {
         match level.nearest(shape, centre, SKIN) {
-            Some((normal, distance)) if distance < SKIN / 2.0 => {
+            Some((normal, distance)) if distance < TOO_NEAR => {
                 centre += normal * (SKIN - distance);
             }
             _ => break,
         }
     }
     centre
+}
+
+/// Whether `shape` fits at `centre` with room to spare: no nearer to
+/// anything than [`unstick`] leaves alone. A player stands up only where
+/// this holds; with less room than that the body would be pushed back and
+/// forth between floor and ceiling, a few millimetres each tick.
+pub(crate) fn fits(level: &Level, shape: &Capsule, centre: Vector) -> bool {
+    level.nearest(shape, centre, TOO_NEAR).is_none()
 }
