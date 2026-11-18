@@ -244,12 +244,14 @@ impl Shadow {
 impl ShadowSlots {
     /// Chooses which of the lamps `near` (how far each is from the eye, and
     /// which of `lamps` it is, nearest first) cast shadows this frame, and
-    /// gives in `shadows` each one's numbers, in the same order. The
+    /// gives in `shadows` each one's numbers, in the same order. Only a
+    /// lamp `viewed` says lights what is seen is given a new shadow. The
     /// pictures that have to be drawn first are then [`faces`](Self::faces).
     pub(crate) fn choose(
         &mut self,
         lamps: &[Lamp],
         near: &[(f32, usize)],
+        viewed: &[bool],
         how: &Shadowing,
         shadows: &mut Vec<Shadow>,
     ) {
@@ -283,7 +285,7 @@ impl ShadowSlots {
         self.candidates.clear();
         for (place, &(far, number)) in near.iter().enumerate() {
             let lamp = &lamps[number];
-            if !lamp.casts_shadows {
+            if !lamp.casts_shadows || !viewed.get(number).copied().unwrap_or(false) {
                 continue;
             }
             let reach = lamp.reach();
@@ -770,7 +772,7 @@ mod tests {
             .collect();
         near.sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         let mut shadows = Vec::new();
-        slots.choose(lamps, &near, how, &mut shadows);
+        slots.choose(lamps, &near, &vec![true; lamps.len()], how, &mut shadows);
         // Back in the lamps' own order.
         let mut ordered = vec![Shadow::NONE; lamps.len()];
         for (shadow, (_, number)) in shadows.into_iter().zip(near) {

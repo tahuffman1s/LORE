@@ -1126,9 +1126,27 @@ fn cloud_shade(world: vec3<f32>) -> vec2<f32> {
     let closed = smoothstep(0.6, 1.0, view.clouds.x);
     return vec2<f32>(
         mix(1.0, mix(mix(0.3, 0.04, closed), 0.05, max(storm, 0.7 * heavy)), shaded),
-        (1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z))
-            * (1.0 - 0.2 * heavy * (1.0 - weather.z)),
+        sky_dimmed_by(weather),
     );
+}
+
+// How much of the sky's light reaches the ground under `weather` (as
+// `weather_over` gives it): less under a storm and from a heavy sky.
+fn sky_dimmed_by(weather: vec3<f32>) -> f32 {
+    let heavy = rain_cloud();
+    return (1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z))
+        * (1.0 - 0.2 * heavy * (1.0 - weather.z));
+}
+
+// The same for the sky over a point of the world: `cloud_shade(world).y`,
+// with one look at the weather and none at the clouds.
+fn sky_dimmed(world: vec3<f32>) -> f32 {
+    if view.clouds.x <= 0.0 || view.clouds.w < 0.5 {
+        return 1.0;
+    }
+    let sun = view.towards_sun.xyz;
+    let low = world + sun * ((view.clouds.z + CLOUD_MIDDLE - world.y) / max(sun.y, 0.08));
+    return sky_dimmed_by(weather_over(low.xz));
 }
 
 // How much of the sun gets through the clouds to a point of the world.
@@ -1843,7 +1861,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         );
     }
     // Snow fills the crevices it lies on.
-    from_around = (from_around + mirrored * shines * (1.0 - mirrors)) * mix(reaches, banked_sky, snowed);
+    let crevices = mix(reaches, banked_sky, snowed);
+    let mirrored_around = mirrored * shines * (1.0 - mirrors) * crevices;
+    from_around *= crevices;
 
     var glow = material.emissive.rgb;
     if has(EMISSIVE) {
@@ -1863,8 +1883,19 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let lamplight = from_lamps(
         corner.world, normal, to_eye, corner.position.xy, matte, mirror, roughness, kept, thin,
     );
-    return from_sun + from_behind + from_around * sky_seen + from_sides + glow + glints + from_world
-        + lamplight;
+    // Where the probes are, the light from all round is theirs: the sky's
+    // and the ground's as far as each can be seen from here, and the light
+    // of the sun and the lamps thrown back off everything round about.
+    // Beyond them, and where light does not bounce, it is the sky's and the
+    // ground's dimmed by how much sky is seen, and a guess at what the
+    // sides of a street throw back.
+    var matte_around = from_around * sky_seen + from_sides;
+    let probes = probe_light(corner.world, normal, to_eye);
+    if probes.a > 0.0 {
+        matte_around = mix(matte_around, matte * probes.rgb * crevices, probes.a);
+    }
+    return from_sun + from_behind + matte_around + mirrored_around * sky_seen + glow + glints
+        + from_world + lamplight;
 }
 
 // How far the pixel moved since the last frame.
@@ -2256,4 +2287,5 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include weather.wgsl
 //!include fluid.wgsl
 //!include lamps.wgsl
+//!include bounce.wgsl
 //!include air.wgsl

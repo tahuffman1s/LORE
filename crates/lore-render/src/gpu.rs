@@ -323,6 +323,9 @@ pub struct Gpu {
     can_upscale: bool,
     /// Whether samplers may ask for anisotropic filtering.
     anisotropy: bool,
+    /// Whether a fragment shader may write to a storage image, which
+    /// bounce light needs to copy the level into its grid of blocks.
+    fragment_stores: bool,
     name: String,
     /// Last, so the device above is destroyed first.
     instance: Instance,
@@ -389,12 +392,16 @@ impl Gpu {
         // Textures seen at a slant, as floors always are, stay sharp with
         // this. Without it they are a little blurrier and nothing else changes.
         let anisotropy = offered.sampler_anisotropy == vk::TRUE;
+        // Every desktop card, lavapipe and MoltenVK have this. Without it
+        // light does not bounce, and shade is lit as it was before.
+        let fragment_stores = offered.fragment_stores_and_atomics == vk::TRUE;
         let enabled = if can_upscale {
             wanted
         } else {
             vk::PhysicalDeviceFeatures::default()
         }
-        .sampler_anisotropy(anisotropy);
+        .sampler_anisotropy(anisotropy)
+        .fragment_stores_and_atomics(fragment_stores);
         let info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
             .enabled_extension_names(&extensions)
@@ -420,6 +427,7 @@ impl Gpu {
             queue,
             can_upscale,
             anisotropy,
+            fragment_stores,
             name: candidate.name.clone(),
             instance,
         })
@@ -449,6 +457,12 @@ impl Gpu {
     /// Whether this graphics card can run the upscaler.
     pub(crate) fn can_upscale(&self) -> bool {
         self.can_upscale
+    }
+
+    /// Whether a fragment shader may write to a storage image: whether
+    /// light can bounce.
+    pub(crate) fn fragment_stores(&self) -> bool {
+        self.fragment_stores
     }
 
     /// Whether textures seen at a slant can be kept sharp (anisotropic filtering).

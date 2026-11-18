@@ -23,6 +23,7 @@ use crate::grid::{self, grid_bytes};
 use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
+use crate::bounce::{self, Bounce, BounceWorks, colour_range};
 use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
@@ -130,6 +131,8 @@ pub(crate) struct View {
     pub(crate) shafts: bool,
     /// How many lamps cast shadows, and how sharp.
     pub(crate) lamp_shadows: LampShadows,
+    /// How much light bounces.
+    pub(crate) bounce: Bounce,
 }
 
 impl View {
@@ -762,6 +765,8 @@ pub(crate) struct MeshPipeline {
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
     shadows: Option<ShadowMap>,
+    /// Light that bounces: `None` only while the pipeline is being built.
+    bounce: Option<BounceWorks>,
     /// What the lamps that cast shadows see: made when a lamp first needs
     /// it, and made again when the player's setting changes.
     lamp_atlas: RefCell<Option<LampAtlas>>,
@@ -828,6 +833,7 @@ impl MeshPipeline {
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
+            bounce: None,
             lamp_atlas: RefCell::new(None),
             lamp_bound: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
             lamp_atlas_failed: Cell::new(None),
@@ -876,6 +882,7 @@ impl MeshPipeline {
         let tracks = TrackMap::new(gpu, frames)?;
         let track_view = tracks.view();
         mesh.tracks = Some(tracks);
+        mesh.bounce = Some(BounceWorks::new(gpu, frames)?);
         let both_stages = |binding: u32, kind: vk::DescriptorType| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(binding)
@@ -960,20 +967,61 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // Bounce light: what this frame traces and where the grids are
+            // (read where the level is drawn into its copy and where the
+            // probes' squares are placed), the copy of the level read and
+            // written, the probes' light (whose size places the squares)
+            // and depth, and this frame's rays.
+            both_stages(18, vk::DescriptorType::STORAGE_BUFFER),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(19)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(20)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            both_stages(21, vk::DescriptorType::SAMPLED_IMAGE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(22)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(23)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The way each block of the copy faces, read and written.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(24)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(25)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::STORAGE_IMAGE,
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, the lamps and their grid,
-            // eleven pictures and four readers.
+            // Each frame's set has one view, the lamps, their grid and
+            // bounce light's list, sixteen pictures, two written, and four
+            // readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
-                vk::DescriptorType::STORAGE_BUFFER => 2,
-                vk::DescriptorType::SAMPLED_IMAGE => 11,
+                vk::DescriptorType::STORAGE_BUFFER => 3,
+                vk::DescriptorType::SAMPLED_IMAGE => 16,
+                vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 4,
             };
             vk::DescriptorPoolSize::default()
@@ -1125,6 +1173,10 @@ impl MeshPipeline {
                         .buffer_info(&cell_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
+                if let Some(bounce) = &mesh.bounce {
+                    let infos = bounce.infos(mesh.views.len());
+                    device.update_descriptor_sets(&infos.writes(set), &[]);
+                }
                 mesh.views.push((buffer, set));
                 mesh.lamp_buffers.push((lamp_buffer, cell_buffer));
             }
@@ -1429,6 +1481,25 @@ impl MeshPipeline {
                     failed =
                         Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
                 }
+            }
+        }
+        // Bounce light's: a card that cannot make them draws shade as it was
+        // drawn before, and says so once.
+        if failed.is_none()
+            && let Some(bounce) = &mut mesh.bounce
+        {
+            let shared = bounce::Shared {
+                assembly: &assembly,
+                viewport: &viewport,
+                raster: &raster,
+                multisample: &multisample,
+                dynamic: &dynamic,
+            };
+            // SAFETY: the module and layout are live and hold what
+            // `bounce.wgsl` names.
+            let made = unsafe { bounce.make_pipelines(module, layout, &vertex_input, &shared) };
+            if let Err(code) = made {
+                log::warn!("Light does not bounce: the graphics driver could not make its shaders ({code:?}).");
             }
         }
         // The sky: one triangle with no points of its own, drawn only where
@@ -1839,7 +1910,16 @@ impl MeshPipeline {
                 .get(frame % self.lamp_buffers.len().max(1)),
             self.lamp_frame.try_borrow_mut(),
         ) {
-            let packed = frame_lamps.pack(lamps, &seen, per_lux, &shadowing);
+            // With light bouncing, lamps out of view near the eye light the
+            // probes round it too.
+            let around = if view.bounce != Bounce::Off
+                && self.bounce.as_ref().is_some_and(BounceWorks::works)
+            {
+                bounce::LAMPS_AROUND
+            } else {
+                0.0
+            };
+            let packed = frame_lamps.pack(lamps, &seen, per_lux, &shadowing, around);
             // SAFETY: the buffers were made writable and as long as the most
             // `pack` gives, and the caller guarantees the commands that read
             // them last have finished. With no lamp in view the cells are
@@ -1857,6 +1937,14 @@ impl MeshPipeline {
                 // this pipeline's own, and no pass has been begun yet.
                 unsafe { self.record_lamp_shadows(commands, meshes, atlas, frame_lamps.faces()) };
             }
+        }
+        // Bounce light: the copy of the level, the rays and the probes,
+        // before the picture that reads them.
+        if let Some(works) = &self.bounce {
+            // SAFETY: the caller's guarantees cover this frame's set and
+            // buffer, and bounce light's pictures, which are this
+            // pipeline's own; no pass has been begun yet.
+            unsafe { self.record_bounce(commands, frame, *view_set, works, view, meshes) }?;
         }
         let readers =
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -2454,6 +2542,265 @@ impl MeshPipeline {
         }
     }
 
+    /// Records bounce light's passes for this frame: the probes' light
+    /// forgotten if the eye has jumped, the level drawn into its copy if
+    /// the copy has moved, the rays of the probes whose turn it is traced,
+    /// and what they found folded into the probes.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), before its render pass begins, with
+    /// `set` this frame's set.
+    unsafe fn record_bounce(
+        &self,
+        commands: vk::CommandBuffer,
+        frame: usize,
+        set: vk::DescriptorSet,
+        works: &BounceWorks,
+        view: &View,
+        meshes: Option<&Meshes>,
+    ) -> Result<(), RenderError> {
+        let level = meshes.filter(|meshes| meshes.buffers.is_some());
+        let setting = if works.works() { view.bounce } else { Bounce::Off };
+        let Ok(mut grid) = works.grid.try_borrow_mut() else {
+            return Ok(());
+        };
+        // Held still (time does not pass), the same view is drawn the same.
+        let still = view.elapsed <= 0.0;
+        let plan = grid.plan(view.eye, level.map_or(0, |meshes| meshes.id), setting, still);
+        let Some(buffer) = works.buffers.get(frame % works.buffers.len().max(1)) else {
+            return Ok(());
+        };
+        // SAFETY: the buffer was made writable and as long as the most a
+        // plan gives, and the caller guarantees the commands that read it
+        // last have finished.
+        unsafe { buffer.write(plan.bytes) }?;
+        let (listed, rays, voxelize, clear) = (plan.listed, plan.rays, plan.voxelize, plan.clear);
+        let voxel_box = grid.voxel_box();
+        drop(grid);
+        let (Some(meshes), true) = (level, listed > 0) else {
+            return Ok(());
+        };
+        let device = self.gpu.device();
+        let barrier = |barriers: &[vk::ImageMemoryBarrier2<'_>]| {
+            // SAFETY: the caller guarantees the command buffer is recording
+            // outside a render pass; the images are bounce light's own.
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(barriers),
+                );
+            }
+        };
+        let read = vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER;
+        let drawing = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
+        let readable = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        let atlases = [works.light.image, works.depth.image];
+        // SAFETY: as above; every struct lives until its call returns.
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                commands,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout,
+                0,
+                &[set],
+                &[],
+            );
+            device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+            device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+        }
+        if clear {
+            barrier(&atlases.map(|image| {
+                bounce::whole(image, readable, vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_stage_mask(read)
+                    .dst_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            }));
+            for image in atlases {
+                // SAFETY: as above.
+                unsafe {
+                    device.cmd_clear_color_image(
+                        commands,
+                        image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &vk::ClearColorValue { float32: [0.0; 4] },
+                        &[colour_range()],
+                    );
+                }
+            }
+            barrier(&atlases.map(|image| {
+                bounce::whole(image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, readable)
+                    .src_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(read)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+            }));
+        }
+        let general = vk::ImageLayout::GENERAL;
+        if voxelize && let Some([low, high]) = voxel_box {
+            let blocks = [works.voxels.image, works.normals.image];
+            barrier(&blocks.map(|image| {
+                bounce::whole(image, general, general)
+                    .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            }));
+            for image in blocks {
+                // SAFETY: as above.
+                unsafe {
+                    device.cmd_clear_color_image(
+                        commands,
+                        image,
+                        general,
+                        &vk::ClearColorValue { float32: [0.0; 4] },
+                        &[colour_range()],
+                    );
+                }
+            }
+            barrier(&blocks.map(|image| {
+                bounce::whole(image, general, general)
+                    .src_stage_mask(vk::PipelineStageFlags2::CLEAR)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            }));
+            let side = bounce::VOXEL_PICTURE;
+            // SAFETY: as above; the meshes are live and of this device.
+            unsafe {
+                begin_drawing(device, commands, side, side, &[]);
+                device.cmd_bind_pipeline(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    works.voxel_pipeline,
+                );
+                self.draw_level(commands, meshes, |draw| {
+                    (0..3).all(|axis| {
+                        draw.middle[axis] + draw.radius >= low[axis]
+                            && draw.middle[axis] - draw.radius <= high[axis]
+                    })
+                });
+                device.cmd_end_rendering(commands);
+            }
+            barrier(&blocks.map(|image| {
+                bounce::whole(image, general, general)
+                    .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+            }));
+        }
+
+        // The rays: what was there is thrown away.
+        let rays_layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+        barrier(&[bounce::whole(works.rays.image, vk::ImageLayout::UNDEFINED, rays_layout)
+            .src_stage_mask(read)
+            .dst_stage_mask(drawing)
+            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)]);
+        let rays_wide = rays;
+        let rays = [vk::RenderingAttachmentInfo::default()
+            .image_view(works.rays.view)
+            .image_layout(rays_layout)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)];
+        // SAFETY: as above.
+        unsafe {
+            begin_drawing(device, commands, rays_wide, listed, &rays);
+            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.trace_pipeline);
+            device.cmd_draw(commands, 3, 1, 0, 0);
+            device.cmd_end_rendering(commands);
+        }
+        barrier(&[bounce::whole(works.rays.image, rays_layout, readable)
+            .src_stage_mask(drawing)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ)]);
+
+        // The probes: blended into what they held.
+        barrier(&atlases.map(|image| {
+            bounce::whole(image, readable, rays_layout)
+                .src_stage_mask(read)
+                .dst_stage_mask(drawing)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+        }));
+        let probes = [works.light.view, works.depth.view].map(|view| {
+            vk::RenderingAttachmentInfo::default()
+                .image_view(view)
+                .image_layout(rays_layout)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)
+        });
+        // SAFETY: as above.
+        unsafe {
+            begin_drawing(device, commands, bounce::ATLAS[0], bounce::ATLAS[1], &probes);
+            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.probe_pipeline);
+            device.cmd_draw(commands, 6, listed, 0, 0);
+            device.cmd_end_rendering(commands);
+        }
+        barrier(&atlases.map(|image| {
+            bounce::whole(image, rays_layout, readable)
+                .src_stage_mask(drawing)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(read)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+        }));
+        Ok(())
+    }
+
+    /// Records drawing each solid part of `meshes` that `seen` lets
+    /// through, each three times (the instance says which axis it is seen
+    /// along), placed in the world as it stands, with its material.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), inside a pass, with a pipeline of
+    /// this pipeline's layout bound.
+    unsafe fn draw_level(&self, commands: vk::CommandBuffer, meshes: &Meshes, seen: impl Fn(&Draw) -> bool) {
+        let Some((vertices, indices)) = &meshes.buffers else {
+            return;
+        };
+        let device = self.gpu.device();
+        let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
+        // SAFETY: the caller guarantees the command buffer is recording a
+        // pass and that the meshes are live and of this device; the draws
+        // only name points, triangles and materials that `Meshes::new` made.
+        unsafe {
+            device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+            device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+            let mut last: Option<&Draw> = None;
+            for draw in solid.iter().filter(|draw| seen(draw)) {
+                if last.is_none_or(|last| last.material != draw.material) {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.layout,
+                        1,
+                        &[meshes.materials.set(draw.material)],
+                        &[],
+                    );
+                }
+                device.cmd_push_constants(
+                    commands,
+                    self.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &draw_bytes(draw),
+                );
+                device.cmd_draw_indexed(commands, draw.index_count, 3, draw.first_index, draw.first_vertex, 0);
+                last = Some(draw);
+            }
+        }
+    }
+
+    /// Whether every probe of bounce light has traced since it came into
+    /// the grid: a picture held still is drawn again until it has.
+    pub(crate) fn bounce_settled(&self) -> bool {
+        self.bounce.as_ref().is_none_or(|works| {
+            works.grid.try_borrow().is_ok_and(|grid| grid.settled())
+        })
+    }
+
     /// Makes the lamps' atlas as `view` asks, or frees it, and points this
     /// frame's set at it; then says how this frame's lamps may cast
     /// shadows. Making it waits for the graphics card to finish what it was
@@ -2626,6 +2973,48 @@ impl MeshPipeline {
 }
 
 /// Pointing binding `binding` of `set` at the picture `info` names.
+/// Records the start of drawing into `attachments` over an area `width` by
+/// `height` pixels from the corner, with the viewport and scissor set to it.
+///
+/// # Safety
+///
+/// `commands` must be recording outside a render pass, and the attachments
+/// must be in the layouts they say.
+unsafe fn begin_drawing(
+    device: &ash::Device,
+    commands: vk::CommandBuffer,
+    width: u32,
+    height: u32,
+    attachments: &[vk::RenderingAttachmentInfo<'_>],
+) {
+    let area = vk::Rect2D {
+        offset: vk::Offset2D::default(),
+        extent: vk::Extent2D { width, height },
+    };
+    // Sizes are far below where an f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let viewport = vk::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+    };
+    // SAFETY: the caller guarantees the command buffer and attachments.
+    unsafe {
+        device.cmd_begin_rendering(
+            commands,
+            &vk::RenderingInfo::default()
+                .render_area(area)
+                .layer_count(1)
+                .color_attachments(attachments),
+        );
+        device.cmd_set_viewport(commands, 0, &[viewport]);
+        device.cmd_set_scissor(commands, 0, &[area]);
+    }
+}
+
 fn picture_write(
     set: vk::DescriptorSet,
     binding: u32,
@@ -2921,6 +3310,7 @@ mod tests {
             copied: true,
             shafts: false,
             lamp_shadows: LampShadows::Off,
+            bounce: Bounce::Off,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],

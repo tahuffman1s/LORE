@@ -35,7 +35,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use lore_render::{LampShadows, Upscaling};
+use lore_render::{Bounce, LampShadows, Upscaling};
 use lore_script::{Setting, SettingKind, SettingValue};
 use toml::de::{DeTable, DeValue};
 
@@ -140,6 +140,13 @@ words!(Upscaling, UPSCALING:
     Upscaling::Balanced => "balanced",
     Upscaling::Performance => "performance",
     Upscaling::UltraPerformance => "ultra-performance",
+);
+
+words!(Bounce, BOUNCE:
+    Bounce::Off => "off",
+    Bounce::Low => "low",
+    Bounce::Medium => "medium",
+    Bounce::High => "high",
 );
 
 words!(LampShadows, LAMP_SHADOWS:
@@ -281,6 +288,12 @@ settings! {
     /// many lamps are near.
     lamp_shadows: LampShadows = LampShadows::Medium, Shape::Choice(LAMP_SHADOWS), "Graphics",
         "Lamp shadows";
+    /// How light bounces off what it strikes (global illumination): a sunlit
+    /// wall warms the shade across from it, a lamp lights the ceiling above
+    /// it, and a room with no window stays dark. "off" lights shade from
+    /// the sky alone, which is faster; "low", "medium" and "high" follow a
+    /// change in the light more smoothly, each slower than the one before.
+    bounce: Bounce = Bounce::Medium, Shape::Choice(BOUNCE), "Graphics", "Bounce light";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -843,6 +856,7 @@ mod tests {
             reflections: false,
             light_shafts: false,
             lamp_shadows: LampShadows::High,
+            bounce: Bounce::Low,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -920,7 +934,7 @@ mod tests {
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit`, `reflections`, `light_shafts` and `lamp_shadows`.",
+                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows` and `bounce`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

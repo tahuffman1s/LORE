@@ -13,6 +13,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod bolt;
+mod bounce;
 mod buffer;
 mod camera;
 mod clouds;
@@ -52,6 +53,7 @@ mod waves;
 mod weather;
 
 pub use bolt::Lightning;
+pub use bounce::Bounce;
 pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};

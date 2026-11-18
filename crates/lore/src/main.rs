@@ -213,6 +213,9 @@ enum Command {
         /// How many of those lamps cast shadows: off, low, medium (the game's own default) or high
         #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::lamp_shadows)]
         lamp_shadows: lore_render::LampShadows,
+        /// How light bounces: off, low, medium (the game's own default) or high
+        #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::bounce)]
+        bounce: lore_render::Bounce,
     },
 }
 
@@ -341,6 +344,7 @@ fn command() -> Result<(), String> {
             json,
             lamps,
             lamp_shadows,
+            bounce,
         }) => cli::bench(
             &Bench {
                 frames,
@@ -350,6 +354,7 @@ fn command() -> Result<(), String> {
                 upscaling,
                 lamps,
                 lamp_shadows,
+                bounce,
             },
             budget_ms,
             json.as_deref(),
