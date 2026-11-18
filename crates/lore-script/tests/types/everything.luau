@@ -363,3 +363,37 @@ game.fluids.onTouch(function(touch)
         print(touch.harm * 20, touch.cover, touch.depth, touch.seconds)
     end
 end)
+
+-- The player's settings, and what a pause menu is made of.
+for _, setting: Setting in game.settings.list() do
+    local shown: string = setting.label .. " (" .. setting.group .. "): " .. setting.description
+    if setting.kind == "number" then
+        local low: number?, high: number?, step: number? = setting.min, setting.max, setting.step
+        print(shown, low, high, step)
+    elseif setting.kind == "choice" then
+        local words: { string }? = setting.options
+        print(shown, words)
+    end
+    print(setting.name, setting.value, setting.default)
+end
+
+game.onTick(function()
+    if game.input.justPressed("pause") and not game.paused() then
+        game.pause()
+    elseif game.input.justPressed("menu_back") then
+        game.resume()
+    end
+    local loud: number = game.settings.get("volume")
+    if game.settings.get("invert_look") then
+        game.settings.set("volume", loud - 5)
+        game.settings.set("vsync", false)
+        game.settings.set("upscaling", "performance")
+    end
+    if game.input.justPressed("map") then
+        game.settings.reset("field_of_view")
+        game.settings.reset()
+    end
+    if game.input.justPressed("inventory") then
+        game.quit()
+    end
+end)

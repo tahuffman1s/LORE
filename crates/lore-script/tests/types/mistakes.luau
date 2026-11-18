@@ -76,3 +76,9 @@ game.fluid(5) -- wrong: a kind is named in quotes
 game.fluids.spray("water", game.player.eye) -- wrong: it needs a velocity too
 game.fluids.under("player") -- wrong: it takes a character
 local sticky: string = game.fluid("goo").sticky -- wrong: stickiness is a number
+game.settings.set("volume") -- wrong: it needs what to set it to
+game.settings.set("volume", { 40 }) -- wrong: a number, true or false, or a word
+game.settings.get(5) -- wrong: a setting is named in quotes
+local names: string = game.settings.list() -- wrong: it is a list of settings
+local stopped: number = game.paused() -- wrong: paused is true or false
+game.pause(true) -- wrong: it takes nothing; game.resume() lets the game go on

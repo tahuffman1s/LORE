@@ -4,6 +4,10 @@
 --     lore run
 -- The level (level.glb) and the sounds are made by build.py from scans and
 -- recordings that are free for anyone to use; see README.md.
+--
+-- "interact" (E, or Y on a gamepad) opens a panel to try the weather with.
+-- "pause" (Escape, or Start) opens the pause menu, with the settings and
+-- the way out: it is pause_menu.luau, required on the last line.
 
 -- Where the water is: places along the creek, and the lake. build.py writes
 -- them down when it lays the water out.
@@ -525,3 +529,6 @@ game.onTick(function()
 end)
 
 show()
+
+-- The pause menu: last, so it is drawn over the weather panel's pieces.
+require("./pause_menu")

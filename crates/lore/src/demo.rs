@@ -4,10 +4,6 @@
 //! The actions that are active are written in the top-left corner over a
 //! crosshair, which is also the first HUD the engine draws in a window.
 //!
-//! `pause` (Escape or Start) opens the engine's own pause menu, as it does
-//! in every game: the cursor comes back and no gameplay action hears
-//! anything until the menu is closed.
-//!
 //! `fire` shakes the gamepad like a shot and `melee` like a hit taken, to
 //! feel rumble by hand.
 

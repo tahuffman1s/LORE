@@ -16,6 +16,7 @@ use lore_script::ENTRY_SCRIPT;
 use crate::map::{MAP_FILE, Map, MapError};
 use crate::scaffold::LEVEL_FILE;
 use crate::script_game::ScriptGame;
+use crate::settings::Settings;
 use crate::sounds::Sounds;
 
 /// Where the pack for the program at `program` would be: beside it, with the
@@ -138,7 +139,8 @@ impl From<PackError> for PlayError {
 const SCRIPT_ENDING: &str = ".luau";
 
 /// Opens the game in the pack at `pack`. The script reads input through
-/// `actions`, which should be the same actions the engine is started with.
+/// `actions`, which should be the same actions the engine is started with,
+/// and its `game.settings` are a new player's.
 ///
 /// The level is handed over as bytes and not read here. The pack's `map.toml`, if it
 /// has one, is read and placed in the game.
@@ -149,6 +151,20 @@ const SCRIPT_ENDING: &str = ".luau";
 /// its map file has a mistake: a packaged game has no file to fix and save,
 /// so one that does not load is not worth opening a window for.
 pub fn open(pack: &Path, actions: &ActionMap) -> Result<PackedGame, PlayError> {
+    open_with_settings(pack, actions, Settings::default())
+}
+
+/// Opens the game in the pack at `pack` as [`open`] does, for a player who
+/// has chosen `settings`: what the game's script reads with `game.settings`.
+///
+/// # Errors
+///
+/// Fails as [`open`] does.
+pub fn open_with_settings(
+    pack: &Path,
+    actions: &ActionMap,
+    settings: Settings,
+) -> Result<PackedGame, PlayError> {
     let mut opened = Pack::open(pack)?;
     if !opened.contains(ENTRY_SCRIPT) {
         return Err(PlayError::NoScript {
@@ -166,7 +182,7 @@ pub fn open(pack: &Path, actions: &ActionMap) -> Result<PackedGame, PlayError> {
         let source = opened.read_text(&name)?;
         scripts.push((name, source));
     }
-    let game = ScriptGame::from_sources(scripts, actions);
+    let game = ScriptGame::from_sources_with_settings(scripts, actions, settings);
     // Nothing is played while a script loads, so the sounds can follow it.
     let sounds = Sounds::in_pack(&mut opened);
     for problem in sounds.problems() {

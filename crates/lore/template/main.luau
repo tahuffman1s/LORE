@@ -42,3 +42,9 @@ end)
 game.onReload(function()
     print("main.luau was saved and loaded again. Jumps so far: " .. saved.jumps)
 end)
+
+-- The pause menu: Escape, or Start on a gamepad, stops the game and shows
+-- Resume, Settings and Quit. It is pause_menu.luau, beside this file, and
+-- yours to change. Keep this line last, so the menu is drawn over whatever
+-- else the game puts on the screen.
+require("./pause_menu")

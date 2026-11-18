@@ -40,6 +40,21 @@ impl FramePacer {
         }
     }
 
+    /// Changes the limit to `max_fps` frames per second, as [`new`](Self::new)
+    /// takes it, from the frame after the one that is waited for at `now`:
+    /// a frame already due is not held back by a lower limit.
+    pub(crate) fn set_limit(&mut self, max_fps: u32, now: Instant) {
+        let before = self.interval;
+        *self = Self {
+            due: self.due,
+            ..Self::new(max_fps, now)
+        };
+        // With no limit before, nothing was due at any time worth keeping.
+        if before.is_none() {
+            self.due = now;
+        }
+    }
+
     /// How long from `now` until the next frame may start: zero if it may
     /// start at once.
     pub(crate) fn wait(&self, now: Instant) -> Duration {
@@ -66,6 +81,26 @@ mod tests {
     use super::*;
 
     const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn a_new_limit_holds_from_the_next_frame_on() {
+        let now = Instant::now();
+        let mut pacer = FramePacer::new(100, now);
+        pacer.start(now);
+        assert_eq!(pacer.wait(now), 10 * MS);
+        // The frame already waited for comes when it was due.
+        pacer.set_limit(50, now);
+        assert_eq!(pacer.wait(now), 10 * MS);
+        pacer.start(now + 10 * MS);
+        assert_eq!(pacer.wait(now + 10 * MS), 20 * MS);
+        // Setting the limit it has changes nothing.
+        pacer.set_limit(50, now + 15 * MS);
+        assert_eq!(pacer.wait(now + 10 * MS), 20 * MS);
+        // From no limit, the next frame may start at once.
+        let mut free = FramePacer::new(0, now);
+        free.set_limit(50, now + MS);
+        assert_eq!(free.wait(now + MS), Duration::ZERO);
+    }
 
     #[test]
     fn no_limit_never_waits() {

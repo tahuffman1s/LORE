@@ -47,6 +47,7 @@ mod hud;
 mod keep;
 mod limit;
 mod modules;
+mod settings_api;
 mod time_api;
 mod tools_api;
 mod weapon_api;
@@ -59,6 +60,7 @@ pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS}
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lore_weapons as weapons;
+pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{TornadoAsk, WeatherHere, WeatherSaid};

@@ -1,8 +1,10 @@
 //! Creates a new game folder from the built-in template.
 //!
 //! This is what `lore new` runs. A new game is a `main.luau` that already
-//! plays, a small level to play it in, a short README, the files an editor needs for autocomplete, and a
-//! `CLAUDE.md` so Claude Code knows how to work on the game.
+//! plays, the pause and settings menu it requires (`pause_menu.luau`, made
+//! with `menu.luau`), a small level to play it in, a short README, the files
+//! an editor needs for autocomplete, and a `CLAUDE.md` so Claude Code knows
+//! how to work on the game.
 
 use std::fmt;
 use std::fs;
@@ -21,6 +23,9 @@ const MAX_NAME_LENGTH: usize = 64;
 const NAME_PLACEHOLDER: &str = "{name}";
 
 const MAIN_SCRIPT: &str = include_str!("../template/main.luau");
+/// The pause and settings menu a new game has, and the menus it is made of.
+const PAUSE_MENU: &str = include_str!("../template/pause_menu.luau");
+const MENU_KIT: &str = include_str!("../template/menu.luau");
 const README: &str = include_str!("../template/README.md");
 const EDITOR_SETTINGS: &str = include_str!("../template/vscode-settings.json");
 const CLAUDE_GUIDE: &str = include_str!("../template/CLAUDE.md");
@@ -168,6 +173,8 @@ pub fn new_game(path: &Path) -> Result<NewGame, NewGameError> {
     let named = |text: &str| text.replace(NAME_PLACEHOLDER, &name).into_bytes();
     let files = [
         (folder.join(ENTRY_SCRIPT), named(MAIN_SCRIPT)),
+        (folder.join("pause_menu.luau"), PAUSE_MENU.into()),
+        (folder.join("menu.luau"), MENU_KIT.into()),
         (folder.join(LEVEL_FILE), STARTER_LEVEL.to_vec()),
         (folder.join("README.md"), named(README)),
         (folder.join(TYPES_FILE), TYPE_DEFINITIONS.into()),
@@ -361,6 +368,11 @@ mod tests {
         let script = fs::read_to_string(game.folder.join("main.luau")).unwrap();
         assert!(script.contains("Welcome to my-game!"));
         assert!(!script.contains(NAME_PLACEHOLDER));
+        // The pause menu the script's last line puts in, and what it is made with.
+        assert!(script.contains("require(\"./pause_menu\")"));
+        for (file, text) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
+            assert!(fs::read_to_string(game.folder.join(file)).unwrap() == text);
+        }
         let readme = fs::read_to_string(game.folder.join("README.md")).unwrap();
         assert!(readme.starts_with("# my-game\n") || readme.starts_with("# my-game\r\n"));
         assert_eq!(
@@ -399,6 +411,25 @@ mod tests {
     fn the_example_is_the_template() {
         let example = include_str!("../../../examples/hello/main.luau");
         assert_eq!(MAIN_SCRIPT.replace(NAME_PLACEHOLDER, "hello"), example);
+    }
+
+    /// The menus are copied, not shared: a game is a folder that holds all
+    /// of itself. The copies are kept the same, so a fix to one is a fix to
+    /// all, and what the alley's README says of `menu.luau` is true of the
+    /// one a new game gets.
+    #[test]
+    fn every_game_has_the_same_menus() {
+        let examples = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+        for game in ["hello", "jungle", "alley"] {
+            for (file, template) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
+                let copy = fs::read_to_string(format!("{examples}/{game}/{file}")).unwrap();
+                assert!(
+                    copy == template,
+                    "examples/{game}/{file} is not crates/lore/template/{file}: copy one over \
+                     the other"
+                );
+            }
+        }
     }
 
     #[test]

@@ -55,6 +55,9 @@ pub(crate) struct Clock {
     /// How fast the game runs, set by `game.setTimeSpeed`: 1 is usual and 0
     /// is stopped. It is the engine that runs more or fewer ticks a second.
     speed: Cell<f64>,
+    /// Whether the game is paused with `game.pause`: time stands still
+    /// whatever `speed` is, and runs at `speed` again once it is resumed.
+    paused: Cell<bool>,
 }
 
 impl Default for Clock {
@@ -65,6 +68,7 @@ impl Default for Clock {
             drawing: Cell::new(None),
             done: Cell::new(0),
             speed: Cell::new(1.0),
+            paused: Cell::new(false),
         }
     }
 }
@@ -116,9 +120,30 @@ impl Clock {
         self.done.get()
     }
 
-    /// How fast the game is to run: 1 is usual, 0 is stopped.
+    /// How fast the game is to run: 1 is usual, 0 is stopped. A paused
+    /// game is stopped, whatever speed the script last said.
     pub fn speed(&self) -> f64 {
+        if self.paused.get() {
+            0.0
+        } else {
+            self.speed.get()
+        }
+    }
+
+    /// The speed the script last said with `game.setTimeSpeed`: what the
+    /// game runs at while it is not paused.
+    pub fn said_speed(&self) -> f64 {
         self.speed.get()
+    }
+
+    /// Whether the game is paused.
+    pub fn is_paused(&self) -> bool {
+        self.paused.get()
+    }
+
+    /// Pauses the game or lets it go on.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.set(paused);
     }
 
     /// Sets how fast the game is to run.
@@ -191,7 +216,7 @@ impl Clock {
             // While time is stopped nothing moves between them, so the
             // picture shows the last tick, not a time that swings back.
             Some(alpha) => {
-                let alpha = if self.speed.get() == 0.0 { 1.0 } else { alpha };
+                let alpha = if self.speed() == 0.0 { 1.0 } else { alpha };
                 (ticks - 1.0 + alpha).max(0.0)
             }
             None => ticks,
@@ -640,7 +665,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
     let speed = Rc::clone(&shared.clock);
     game.set(
         "timeSpeed",
-        lua.create_function(move |_, ()| Ok(speed.speed()))?,
+        lua.create_function(move |_, ()| Ok(speed.said_speed()))?,
     )?;
 
     // Luau's `os` holds nothing but the computer's clock and calendar. A

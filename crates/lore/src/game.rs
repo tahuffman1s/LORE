@@ -65,8 +65,11 @@ pub struct Frame {
     ui_scale: f32,
     /// How fast game time runs, if the game said this frame.
     time_speed: Option<f32>,
-    /// The player's settings to put into effect, when they have changed.
+    /// The player's settings in force, if whoever runs the game said them,
+    /// with what the game changed in this frame.
     settings: Option<Settings>,
+    /// Whether the game changed them in this frame.
+    settings_changed: bool,
     ui: DrawBuffer,
     title: Option<String>,
     close: bool,
@@ -149,6 +152,10 @@ pub(crate) struct View {
     pub(crate) position: [f32; 3],
     pub(crate) yaw: f32,
     pub(crate) pitch: f32,
+    /// How much is seen from the bottom of the picture to the top, in
+    /// degrees, when the view has its own: the editor's camera does. With
+    /// `None` it is the player's setting.
+    pub(crate) fov_degrees: Option<f32>,
 }
 
 impl Default for Frame {
@@ -175,6 +182,7 @@ impl Frame {
             ui_scale: 1.0,
             time_speed: None,
             settings: None,
+            settings_changed: false,
             ui: DrawBuffer::default(),
             title: None,
             close: false,
@@ -458,10 +466,10 @@ impl Frame {
         self
     }
 
-    /// The size the player chose for the HUD and menus in the settings
-    /// menu: 1 is the designed size. Give it to
+    /// The size the player chose for the HUD and menus in their settings:
+    /// 1 is the designed size. Give it to
     /// [`Ui::set_ui_scale`] so a game's own HUD grows and shrinks with
-    /// the engine's menus.
+    /// a script's.
     #[must_use]
     pub fn ui_scale(&self) -> f32 {
         self.ui_scale
@@ -497,15 +505,60 @@ impl Frame {
         self.time_speed
     }
 
-    /// Puts the player's settings into effect: how loud the speakers are
-    /// and how the view turns.
-    pub(crate) fn apply_settings(&mut self, settings: Settings) {
+    /// Says the player's settings in force, for the game to read and change.
+    pub(crate) fn with_settings(mut self, settings: Settings) -> Self {
         self.settings = Some(settings);
+        self
     }
 
-    /// The settings to put into effect, if they changed this frame.
-    pub(crate) fn take_settings(&mut self) -> Option<Settings> {
-        self.settings.take()
+    /// The player's settings in force: as the player last chose them, with
+    /// what the game changed earlier in this frame. A settings menu shows
+    /// these. `None` in a frame drawn with no window, unless the game
+    /// changed them in it.
+    #[must_use]
+    pub fn settings(&self) -> Option<&Settings> {
+        self.settings.as_ref()
+    }
+
+    /// Changes the player's settings, as a game's settings menu does:
+    /// `change` is handed the settings in force and changes what the player
+    /// asked for. The engine puts them into effect (how loud the speakers
+    /// are, how the view turns and how the picture is drawn) and saves them
+    /// to the player's file. What `change` leaves alone stays as it is in
+    /// force. In a frame drawn with no window, `change` is handed a new
+    /// player's settings and nothing is put into effect.
+    ///
+    /// ```
+    /// use lore::{Frame, Game, InputFrame};
+    ///
+    /// /// A game whose own menu has a row that turns the music off.
+    /// struct MyGame {
+    ///     /// The player pressed that row in the last tick.
+    ///     music_off: bool,
+    /// }
+    ///
+    /// impl Game for MyGame {
+    ///     fn tick(&mut self, _: &InputFrame, _: f32) {}
+    ///
+    ///     fn frame(&mut self, frame: &mut Frame) {
+    ///         if std::mem::take(&mut self.music_off) {
+    ///             frame.change_settings(|settings| settings.music_volume = 0.0);
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn change_settings(&mut self, change: impl FnOnce(&mut Settings)) {
+        change(self.settings.get_or_insert_with(Settings::default));
+        self.settings_changed = true;
+    }
+
+    /// The settings in force after the game changed them this frame, if it
+    /// did. The engine takes them from the game it runs; this is here for a
+    /// tool that draws a game with no window.
+    pub fn take_settings(&mut self) -> Option<Settings> {
+        std::mem::take(&mut self.settings_changed)
+            .then_some(self.settings)
+            .flatten()
     }
 
     /// The size of the window in pixels, `[width, height]`: what a
@@ -597,6 +650,27 @@ impl Frame {
             position,
             yaw,
             pitch,
+            fov_degrees: None,
+        });
+    }
+
+    /// Draws the world as [`look_from`](Self::look_from) does, seeing
+    /// `fov_degrees` from the bottom of the picture to the top whatever the
+    /// player's field of view: for the editor's camera, which is a tool,
+    /// not the player's eyes.
+    #[cfg(feature = "editor")]
+    pub(crate) fn look_from_with_fov(
+        &mut self,
+        position: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        fov_degrees: f32,
+    ) {
+        self.view = Some(View {
+            position,
+            yaw,
+            pitch,
+            fov_degrees: Some(fov_degrees),
         });
     }
 
@@ -648,6 +722,14 @@ impl Frame {
     /// Whether the game asked to end this frame.
     pub(crate) fn closing(&self) -> bool {
         self.close
+    }
+
+    /// Takes back a [`close`](Self::close): whether the game asked to end
+    /// this frame, which it then has not. The editor does this for the
+    /// game it plays, which ends by going back to editing.
+    #[cfg(feature = "editor")]
+    pub(crate) fn take_close(&mut self) -> bool {
+        std::mem::take(&mut self.close)
     }
 
     /// Where the game asked the world to be seen from this frame, if it did.

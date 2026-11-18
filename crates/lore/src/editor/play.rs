@@ -18,6 +18,7 @@ use lore_input::ActionMap;
 use crate::game::{Frame, Game};
 use crate::map::Map;
 use crate::script_game::ScriptGame;
+use crate::settings::Settings;
 use crate::world::{Ground, Playing};
 
 /// Said on the screen for as long as the level is played.
@@ -32,12 +33,16 @@ pub(super) struct Play {
     game: Playing,
     /// Whether the player started where the camera was.
     from_here: bool,
+    /// The game asked to end (`game.quit`), which here means going back to
+    /// editing.
+    quit: bool,
 }
 
 impl Play {
     /// Starts the game in `folder` (or, with no folder, a game with no
-    /// script) on `ground`, with `map` placed in it, and puts the player's
-    /// eyes at `eye` looking the way `facing` says (yaw, then pitch).
+    /// script) on `ground`, with `map` placed in it, for a player with the
+    /// `settings` in force, and puts the player's eyes at `eye` looking
+    /// the way `facing` says (yaw, then pitch).
     ///
     /// # Errors
     ///
@@ -47,13 +52,18 @@ impl Play {
         map: &Map,
         ground: &Ground,
         actions: &ActionMap,
+        settings: Settings,
         eye: [f32; 3],
         facing: [f32; 2],
     ) -> Result<Self, String> {
         let game = match folder {
-            Some(folder) => ScriptGame::open(folder, actions)
+            Some(folder) => ScriptGame::open_with_settings(folder, actions, settings)
                 .map_err(|error| format!("Could not play: {error}"))?,
-            None => ScriptGame::from_source("", actions),
+            None => ScriptGame::from_sources_with_settings(
+                [(lore_script::ENTRY_SCRIPT.to_owned(), String::new())],
+                actions,
+                settings,
+            ),
         };
         // The editor's controls are fixed, so a game's own actions are not
         // heard here; `lore run` plays with them.
@@ -66,13 +76,22 @@ impl Play {
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
         let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing);
-        Ok(Self { game, from_here })
+        Ok(Self {
+            game,
+            from_here,
+            quit: false,
+        })
     }
 
     /// The action set the game's script has chosen: `gameplay` unless it
     /// said otherwise.
     pub(super) fn action_set(&self) -> lore_input::ActionSetId {
         self.game.action_set()
+    }
+
+    /// Whether the game has asked to end.
+    pub(super) fn quit(&self) -> bool {
+        self.quit
     }
 
     /// Plays one tick.
@@ -84,6 +103,9 @@ impl Play {
     /// back to editing.
     pub(super) fn frame(&mut self, frame: &mut Frame) {
         self.game.frame(frame);
+        // The game asking to end is its player leaving it: back to editing,
+        // not out of the editor.
+        self.quit |= frame.take_close();
         let from_here = self.from_here;
         frame.panels(|ui| {
             // A name being typed when playing began must not go on taking
@@ -119,6 +141,12 @@ impl Play {
     #[cfg(test)]
     pub(super) fn map(&self) -> &Map {
         self.game.world().game().map()
+    }
+
+    /// What runs the game's script.
+    #[cfg(test)]
+    pub(super) fn host(&self) -> &lore_script::ScriptHost {
+        self.game.world().game().host()
     }
 }
 

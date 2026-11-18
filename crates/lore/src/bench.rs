@@ -261,14 +261,7 @@ fn triangles(scene: &Scene) -> usize {
 /// The name `lore bench --upscaling` takes for `upscaling`.
 #[must_use]
 pub fn upscaling_name(upscaling: Upscaling) -> &'static str {
-    match upscaling {
-        Upscaling::Off => "off",
-        Upscaling::Native => "native",
-        Upscaling::Quality => "quality",
-        Upscaling::Balanced => "balanced",
-        Upscaling::Performance => "performance",
-        Upscaling::UltraPerformance => "ultra-performance",
-    }
+    crate::settings::upscaling_name(upscaling)
 }
 
 impl Report {
