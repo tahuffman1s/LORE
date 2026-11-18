@@ -1336,9 +1336,14 @@ impl MeshPipeline {
             let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bindings)
                 .vertex_attribute_descriptions(&attributes);
+            // Its depth is written: what is drawn after it (see-through
+            // things, spray, the light in the air) stops at the surface
+            // as it does at the ground, and the upscaler reads the surface
+            // where it reads the surface's movement. What is under the
+            // water was copied aside for it before.
             let depth = vk::PipelineDepthStencilStateCreateInfo::default()
                 .depth_test_enable(true)
-                .depth_write_enable(false)
+                .depth_write_enable(true)
                 .depth_compare_op(vk::CompareOp::GREATER);
             let attachments = [vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
