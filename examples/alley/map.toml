@@ -1,8 +1,0 @@
-# What is placed in this game's level: spawn points, zones and objectives.
-# `lore edit` writes this file. It can be changed by hand as well: a game
-# that is running, and the editor, pick up a save by themselves.
-#
-# Every entity keeps its id for good. To add one by hand, give it any id no
-# other entity here has.
-
-version = 1
