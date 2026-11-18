@@ -217,10 +217,12 @@ const EMISSIVE: u32 = 4u;
 @group(1) @binding(12) var over_metal_rough_texture: texture_2d<f32>;
 @group(1) @binding(13) var over_normal_texture: texture_2d<f32>;
 @group(1) @binding(14) var over_occlusion_texture: texture_2d<f32>;
+@group(1) @binding(15) var over_emissive_texture: texture_2d<f32>;
 @group(1) @binding(16) var over_base_sampler: sampler;
 @group(1) @binding(17) var over_metal_rough_sampler: sampler;
 @group(1) @binding(18) var over_normal_sampler: sampler;
 @group(1) @binding(19) var over_occlusion_sampler: sampler;
+@group(1) @binding(20) var over_emissive_sampler: sampler;
 
 // How deep the body of still water being drawn is, seen from above.
 @group(2) @binding(0) var body_water: texture_2d<f32>;
@@ -553,8 +555,16 @@ fn pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuff
     // meet the moved place jumps, and a slope worked out across the jump
     // would pick a copy of the picture made for far away.
     let sharper = exp2(view.eye.w);
-    let along = dpdx(uv) * sharper;
-    let down = dpdy(uv) * sharper;
+    return pictured_along(picture, how, uv, dpdx(uv) * sharper, dpdy(uv) * sharper, mixing);
+}
+
+// The same, told how far `uv` changes from one pixel to the next across
+// the picture and down it, for a picture that only some pixels read: one
+// that is read here and not in the pixel beside cannot ask how fast its
+// place changes.
+fn pictured_along(
+    picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, along: vec2<f32>, down: vec2<f32>, mixing: Shuffle,
+) -> vec4<f32> {
     if mixing.share <= 0.0 {
         return textureSampleGrad(picture, how, uv + mixing.first, along, down);
     }
@@ -568,11 +578,39 @@ fn pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuff
     );
 }
 
+// How far the mesh's two UV maps change from one pixel to the next, across
+// the picture and down it.
+struct Slopes {
+    across: vec4<f32>,
+    down: vec4<f32>,
+}
+
+// A picture of the material painted over this one, which is read only
+// where the paint is: `slopes` are the mesh's, worked out where every
+// pixel was still running.
+fn over_pictured(
+    picture: texture_2d<f32>, how: sampler, texture: u32, corner: Corner, mixing: Shuffle, slopes: Slopes,
+) -> vec4<f32> {
+    let placing = material.over_placings[texture];
+    let second = placing.u.w > 0.5;
+    let across = select(slopes.across.xy, slopes.across.zw, second);
+    let down = select(slopes.down.xy, slopes.down.zw, second);
+    let sharper = exp2(view.eye.w);
+    return pictured_along(
+        picture, how, over_placed(texture, corner),
+        vec2<f32>(dot(placing.u.xy, across), dot(placing.v.xy, across)) * sharper,
+        vec2<f32>(dot(placing.u.xy, down), dot(placing.v.xy, down)) * sharper,
+        mixing,
+    );
+}
+
 // How much of the material painted over this one shows at a place, from
-// 0 to 1, and how that material's pictures are moved there.
+// 0 to 1, how that material's pictures are moved there, and how fast the
+// mesh's UV maps change round about, to read them by.
 struct Painted {
     share: f32,
     mixing: Shuffle,
+    slopes: Slopes,
 }
 
 // How wide the islands and inlets of a painted edge are, in metres.
@@ -593,6 +631,8 @@ const PAINT_GRAIN: f32 = 0.42;
 fn paint_of(corner: Corner) -> Painted {
     var painted: Painted;
     painted.share = 0.0;
+    // Before anything that differs from pixel to pixel.
+    painted.slopes = Slopes(dpdx(corner.uv), dpdy(corner.uv));
     if material.paint.x == 0.0 {
         painted.mixing = shuffle_of(corner.world, vec4<u32>(0u));
         return painted;
@@ -629,8 +669,8 @@ fn base_colour(corner: Corner, mixing: Shuffle, painted: Painted) -> vec4<f32> {
     if painted.share > 0.0 {
         var over = material.over_base_colour.rgb * corner.colour.rgb;
         if over_has(BASE) {
-            over *= pictured(
-                over_base_texture, over_base_sampler, over_placed(BASE, corner), painted.mixing,
+            over *= over_pictured(
+                over_base_texture, over_base_sampler, BASE, corner, painted.mixing, painted.slopes,
             ).rgb;
         }
         colour = mix(colour, over * painted.mixing.tone, painted.share);
@@ -1681,8 +1721,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         if painted.share > 0.0 {
             var over = vec3<f32>(0.0, 0.0, 1.0);
             if over_has(NORMAL) {
-                over = pictured(
-                    over_normal_texture, over_normal_sampler, over_placed(NORMAL, corner), painted.mixing,
+                over = over_pictured(
+                    over_normal_texture, over_normal_sampler, NORMAL, corner, painted.mixing, painted.slopes,
                 ).xyz * 2.0 - 1.0;
                 over = vec3<f32>(over.xy * material.over_factors.z, over.z);
             }
@@ -1713,9 +1753,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         var over_metallic = material.over_factors.x;
         var over_roughness = material.over_factors.y;
         if over_has(METAL_ROUGH) {
-            let sample = pictured(
-                over_metal_rough_texture, over_metal_rough_sampler, over_placed(METAL_ROUGH, corner),
-                painted.mixing,
+            let sample = over_pictured(
+                over_metal_rough_texture, over_metal_rough_sampler, METAL_ROUGH, corner, painted.mixing,
+                painted.slopes,
             );
             over_roughness *= sample.g;
             over_metallic *= sample.b;
@@ -1737,9 +1777,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     if painted.share > 0.0 {
         var over_reaches = 1.0;
         if over_has(OCCLUSION) {
-            let shadowing = pictured(
-                over_occlusion_texture, over_occlusion_sampler, over_placed(OCCLUSION, corner),
-                painted.mixing,
+            let shadowing = over_pictured(
+                over_occlusion_texture, over_occlusion_sampler, OCCLUSION, corner, painted.mixing,
+                painted.slopes,
             ).r;
             over_reaches = 1.0 + material.over_factors.w * (shadowing - 1.0);
         }
@@ -1924,12 +1964,23 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let mirrored_around = mirrored * shines * (1.0 - mirrors) * crevices;
     from_around *= crevices;
 
+    // What glows is the material's own, or the paint's where it is
+    // painted over, and snow hides it.
     var glow = material.emissive.rgb;
     if has(EMISSIVE) {
-        glow *= textureSampleBias(
-            emissive_texture, emissive_sampler, placed(EMISSIVE, corner), view.eye.w,
-        ).rgb;
+        glow *= pictured(emissive_texture, emissive_sampler, placed(EMISSIVE, corner), mixing).rgb;
     }
+    if painted.share > 0.0 {
+        var over_glow = material.over_emissive.rgb;
+        if over_has(EMISSIVE) {
+            over_glow *= over_pictured(
+                over_emissive_texture, over_emissive_sampler, EMISSIVE, corner, painted.mixing,
+                painted.slopes,
+            ).rgb;
+        }
+        glow = mix(glow, over_glow, painted.share);
+    }
+    glow *= 1.0 - snowed;
     // In a slot between tall things the sides are lit by the sun and light
     // what stands in their shade: about a third of what falls on a wall of
     // brick or a road comes back off it. Less comes down the lower the sun.
