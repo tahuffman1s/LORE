@@ -62,6 +62,12 @@ impl SoundSet {
         self
     }
 
+    /// Every take, for tests to look at each one.
+    #[cfg(test)]
+    pub(crate) fn takes(&self) -> &[Sound] {
+        &self.sounds
+    }
+
     /// The next take, to play from a point in the world.
     pub fn at(&mut self, position: [f32; 3], seed: u32) -> Play {
         self.next(Place::At(position), seed)

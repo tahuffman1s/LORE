@@ -672,8 +672,8 @@ impl Game for Editor {
 
     fn frame(&mut self, frame: &mut Frame) {
         if let Some(play) = &mut self.play {
-            // The game's own actions are live, and the mouse looks around.
-            frame.use_action_set(ActionMap::GAMEPLAY);
+            // The game's own actions are live, in the set its script chose.
+            frame.use_action_set(play.action_set());
             frame.show_grid(false);
             play.frame(frame);
             return;

@@ -61,6 +61,12 @@ impl Play {
         Ok(Self { game, from_here })
     }
 
+    /// The action set the game's script has chosen: `gameplay` unless it
+    /// said otherwise.
+    pub(super) fn action_set(&self) -> lore_input::ActionSetId {
+        self.game.action_set()
+    }
+
     /// Plays one tick.
     pub(super) fn tick(&mut self, input: &lore_input::InputFrame, step: f32) {
         self.game.tick(input, step);

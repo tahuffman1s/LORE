@@ -1,6 +1,6 @@
 //! Tests for loading, placing, mixing and choosing sounds.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, TAU};
 use std::io::Cursor;
 
 use crate::play::hear;
@@ -519,6 +519,197 @@ fn a_sound_behind_loses_its_high_notes() {
     let ahead = loudest([0.0, 1.6, -1.0]);
     let behind = loudest([0.0, 1.6, 1.0]);
     assert!(behind < ahead * 0.3, "{ahead} {behind}");
+}
+
+// ---- Under water ----
+
+/// One turn of a note of `pitch` hertz at half volume, to play looping.
+/// `pitch` must go into 48,000 a whole number of times.
+fn note(pitch: u32) -> Sound {
+    let turn = RATE / pitch;
+    let samples = (0..turn).map(|at| 0.5 * (TAU * at as f32 / turn as f32).sin());
+    Sound::from_samples(RATE, 1, samples.collect()).unwrap()
+}
+
+/// How loud a mix is on the whole: the root of its mean square.
+fn level(out: &[f32]) -> f32 {
+    (out.iter().map(|sample| sample * sample).sum::<f32>() / out.len() as f32).sqrt()
+}
+
+/// How many decibels quieter `play` is this far under water than in air,
+/// once the change has been made.
+fn lost_under_water(play: &Play, amount: f32) -> f32 {
+    let heard = |amount: f32| {
+        let mut mixer = Mixer::new(RATE);
+        mixer.play(play.clone().looping());
+        mixer.set_underwater(amount);
+        mix(&mut mixer, RATE as usize / 2);
+        level(&mix(&mut mixer, RATE as usize / 2))
+    };
+    20.0 * (heard(0.0) / heard(amount)).log10()
+}
+
+#[test]
+fn under_water_the_high_notes_go_and_the_low_notes_stay() {
+    let low = lost_under_water(&Play::everywhere(note(100)), 1.0);
+    let high = lost_under_water(&Play::everywhere(note(4_000)), 1.0);
+    // Everything is a little quieter, and no more than that down low.
+    assert!((2.0..3.0).contains(&low), "a 100 Hz note lost {low} dB");
+    assert!(high > 30.0, "a 4 kHz note lost {high} dB");
+    // Steeper than the dulling of a sound behind the listener: an octave
+    // further up loses twice as many decibels again.
+    let higher = lost_under_water(&Play::everywhere(note(8_000)), 1.0);
+    assert!(higher > high + 10.0, "{high} then {higher}");
+
+    // Half way under is between the two.
+    let half = lost_under_water(&Play::everywhere(note(4_000)), 0.5);
+    assert!((3.0..10.0).contains(&half), "half under lost {half} dB");
+}
+
+#[test]
+fn under_water_music_and_placed_sounds_are_muffled_too() {
+    let music = lost_under_water(&Play::everywhere(note(4_000)).music(), 1.0);
+    assert!(music > 30.0, "music lost {music} dB");
+    let mut placed = Play::at(note(4_000), [1.0, 0.0, 0.0]);
+    placed.range = Range::GUNFIRE;
+    let placed = lost_under_water(&placed, 1.0);
+    assert!(placed > 30.0, "a sound at a place lost {placed} dB");
+}
+
+#[test]
+fn going_under_takes_a_tenth_of_a_second_and_is_a_little_quieter() {
+    let mut mixer = Mixer::new(RATE);
+    mixer.play(Play::everywhere(steady(64, 0.5)).looping());
+    mix(&mut mixer, 1_000);
+    mixer.set_underwater(1.0);
+    let out = mix(&mut mixer, 9_600);
+    // A steady push is as low as a sound gets, so only the loudness goes:
+    // half way there after a twentieth of a second, and there after a
+    // tenth.
+    let (air, under) = (0.5, 0.5 * 0.72);
+    assert!((out[0] - air).abs() < 0.001, "{}", out[0]);
+    assert!((out[2_400 * 2] - (air + under) / 2.0).abs() < 0.005);
+    assert!(close(out[4_900 * 2], under), "{}", out[4_900 * 2]);
+    assert!(close(out[9_599 * 2], under));
+
+    // And back, and to anywhere between. Nonsense is taken as air.
+    mixer.set_underwater(0.5);
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(out[4_799 * 2], (air + under) / 2.0));
+    for nonsense in [f32::NAN, -3.0, f32::NEG_INFINITY] {
+        mixer.set_underwater(nonsense);
+        let out = mix(&mut mixer, 4_800);
+        assert_eq!(out[4_799 * 2], air);
+    }
+    mixer.set_underwater(7.0);
+    assert!(close(mix(&mut mixer, 9_600)[9_599 * 2], under));
+}
+
+#[test]
+fn under_water_it_is_harder_to_tell_which_side_a_sound_is_on() {
+    // All of it in the left ear.
+    let one_sided = Sound::from_samples(RATE, 2, [0.5, 0.0].repeat(64)).unwrap();
+    let mut mixer = Mixer::new(RATE);
+    mixer.play(Play::everywhere(one_sided).looping());
+    let air = mix(&mut mixer, 1_000);
+    assert_eq!((air[1_998], air[1_999]), (0.5, 0.0));
+    mixer.set_underwater(1.0);
+    let under = mix(&mut mixer, 9_600);
+    let (left, right) = (under[19_198], under[19_199]);
+    // Half of the difference between the ears is left, and still the
+    // right way round.
+    assert!(close(left, 0.375 * 0.72) && close(right, 0.125 * 0.72));
+}
+
+#[test]
+fn going_under_and_coming_up_never_click() {
+    let mut mixer = Mixer::new(RATE);
+    mixer.set_listener(listener());
+    mixer.play(Play::everywhere(note(200)).looping());
+    mixer.play(Play::at(note(1_000), [2.0, 1.6, 0.0]).looping());
+    let mut heard = mix(&mut mixer, 4_800);
+    // The biggest step from one moment to the next that the sounds make
+    // by themselves in air: no change may make a bigger one.
+    let usual = biggest_jump(&heard[4_800..]);
+    // Under, up again before it is all the way under, part of the way,
+    // and up.
+    for (amount, frames) in [
+        (1.0, 9_600),
+        (0.0, 1_700),
+        (1.0, 300),
+        (0.4, 9_600),
+        (0.0, 9_600),
+    ] {
+        mixer.set_underwater(amount);
+        heard.extend(mix(&mut mixer, frames));
+    }
+    let changing = biggest_jump(&heard[4_800..]);
+    assert!(changing <= usual * 1.01, "{usual} in air, {changing}");
+    // It did go under, all the same.
+    assert!(level(&heard[2 * 12_000..2 * 14_000]) < level(&heard[..9_600]) * 0.8);
+}
+
+#[test]
+fn in_air_the_mix_is_exactly_what_it_was() {
+    let scene = || {
+        let mut mixer = Mixer::new(RATE);
+        mixer.set_listener(listener());
+        let stereo = Sound::from_samples(RATE, 2, [0.3, -0.2, 0.1, 0.25].repeat(100)).unwrap();
+        mixer.play(Play::everywhere(stereo).music().looping());
+        mixer.play(Play::at(note(480), [-3.0, 1.6, 2.0]).looping());
+        mixer.play(starter::gunfire().at([4.0, 1.0, -6.0], 3));
+        mixer
+    };
+    let bits = |out: Vec<f32>| -> Vec<u32> { out.into_iter().map(f32::to_bits).collect() };
+
+    // Never told about water, and told there is none: the same numbers,
+    // to the last bit.
+    let mut plain = scene();
+    let mut told = scene();
+    told.set_underwater(0.0);
+    let plain = bits(mix(&mut plain, 30_000));
+    assert_eq!(bits(mix(&mut told, 30_000)), plain);
+
+    // Under and up again: once it is up, the same numbers again.
+    let mut dived = scene();
+    dived.set_underwater(1.0);
+    let under = bits(mix(&mut dived, 10_000));
+    assert_ne!(under[..], plain[..20_000]);
+    dived.set_underwater(0.0);
+    mix(&mut dived, 10_000);
+    assert_eq!(bits(mix(&mut dived, 10_000)), plain[40_000..]);
+}
+
+#[test]
+fn going_under_does_not_depend_on_buffer_size() {
+    let run = |frames: usize| {
+        let mut mixer = Mixer::new(RATE);
+        mixer.set_listener(listener());
+        mixer.play(Play::at(note(480), [-3.0, 1.6, 2.0]).looping());
+        let mut heard = Vec::new();
+        // Under for long enough to be all the way, up for not quite long
+        // enough, and under again.
+        for (amount, moments) in [(1.0, 6_000), (0.0, 3_000), (0.6, 3_000), (0.0, 6_000)] {
+            mixer.set_underwater(amount);
+            for _ in 0..moments / frames {
+                heard.extend(mix(&mut mixer, frames));
+            }
+        }
+        heard
+    };
+    assert_eq!(run(3_000), run(50));
+    assert_eq!(run(1_000), run(8));
+}
+
+#[test]
+fn silence_under_water_is_silence() {
+    let mut mixer = Mixer::new(RATE);
+    mixer.set_underwater(1.0);
+    assert!(mix(&mut mixer, 6_000).iter().all(|sample| *sample == 0.0));
+    // And a sound that has ended leaves nothing behind for long.
+    mixer.play(Play::everywhere(steady(64, 0.5)));
+    mix(&mut mixer, RATE as usize);
+    assert!(mix(&mut mixer, 600).iter().all(|sample| *sample == 0.0));
 }
 
 // ---- Sound sets ----

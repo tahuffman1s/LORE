@@ -115,10 +115,17 @@ pub fn load(folder: &Path) -> Result<Option<Scene>, LevelError> {
 pub fn from_bytes(name: &str, bytes: &[u8]) -> Result<Scene, LevelError> {
     // No folder to look in: a level that needs a second file would play
     // from a folder and then fail once the game is packaged.
-    Scene::from_bytes(name, bytes, None, LoadOptions::default()).map_err(|error| match error {
-        AssetError::NoFolder { file, uri } => LevelError::NotOneFile { file, uses: uri },
-        other => LevelError::Load(other),
-    })
+    let mut scene = Scene::from_bytes(name, bytes, None, LoadOptions::default()).map_err(
+        |error| match error {
+            AssetError::NoFolder { file, uri } => LevelError::NotOneFile { file, uses: uri },
+            other => LevelError::Load(other),
+        },
+    )?;
+    // Still water takes its shape here: each sheet marked as water fills
+    // the hollow it lies over, for the player to swim in and the renderer
+    // to draw.
+    lore_physics::fill(&mut scene);
+    Ok(scene)
 }
 
 /// A line about `level` for the person who made it: how much is in it.

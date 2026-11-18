@@ -13,6 +13,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use crate::controls;
 use crate::game::{Frame, Game};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
@@ -166,6 +167,19 @@ pub struct Config {
     /// Where the pause menu saves the settings the player changes. With
     /// `None` they last until the game is closed.
     pub settings_file: Option<std::path::PathBuf>,
+    /// The player's own bindings file, if the game reads one:
+    /// [`controls::file`](crate::controls::file) says where it is kept.
+    /// It is read over `actions` when the game starts, and again whenever
+    /// it is saved while the game runs, so a player trying a change does
+    /// not have to start again. With `None` the controls are `actions`.
+    ///
+    /// ```
+    /// let config = lore::Config {
+    ///     controls_file: lore::controls::file(),
+    ///     ..lore::Config::default()
+    /// };
+    /// ```
+    pub controls_file: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -186,6 +200,7 @@ impl Default for Config {
             pause_menu: true,
             settings: Settings::default(),
             settings_file: None,
+            controls_file: None,
         }
     }
 }
@@ -250,13 +265,21 @@ impl std::error::Error for AppError {
 /// or no graphics card here can draw with Vulkan 1.3. The error's message says
 /// what to do about it.
 pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
+    // Before the menu reads what its buttons are called.
+    let controls = config.controls_file.take().map(|file| {
+        let (live, said) = controls::Live::start(file, &mut config.actions);
+        for problem in said {
+            log::warn!("{problem}");
+        }
+        live
+    });
     let game = if config.pause_menu {
         let file = config.settings_file.take();
         PauseMenu::over(game, &config.actions, config.settings, file)
     } else {
         PauseMenu::off(game, config.settings)
     };
-    start(config, game, false)
+    start(config, game, controls, false)
 }
 
 /// Runs `game` as [`run`] does, as the editor: a ground grid is drawn over
@@ -264,11 +287,16 @@ pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
 /// around with, whatever the live action set does with it.
 #[cfg(feature = "editor")]
 pub(crate) fn run_editor(config: Config, game: impl Game) -> Result<(), AppError> {
-    start(config, game, true)
+    start(config, game, None, true)
 }
 
 /// Opens the window and runs `game` in it, as the editor if `editing`.
-fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError> {
+fn start(
+    config: Config,
+    game: impl Game,
+    controls: Option<controls::Live>,
+    editing: bool,
+) -> Result<(), AppError> {
     for gap in config.actions.parity_gaps() {
         log::warn!("{gap}");
     }
@@ -287,6 +315,9 @@ fn start(config: Config, game: impl Game, editing: bool) -> Result<(), AppError>
         pacer: FramePacer::new(config.max_fps, Instant::now()),
         input,
         look,
+        rumble_share: config.settings.rumble_share(),
+        controls,
+        new_controls: None,
         pointer: None,
         pointer_down: false,
         pointer_tapped: false,
@@ -325,6 +356,14 @@ struct App<G> {
     /// The action the player's turning speed is applied to, if the game
     /// has one by that name.
     look: Option<lore_input::ActionId>,
+    /// What the strength of every rumble is multiplied by: the player's
+    /// setting, which no game gets round.
+    rumble_share: f32,
+    /// The player's bindings file, watched for saves.
+    controls: Option<controls::Live>,
+    /// Controls read from that file since the last frame, for the game to
+    /// hear of.
+    new_controls: Option<ActionMap>,
     /// Where the mouse pointer is over the window, in pixels from its
     /// top-left corner.
     pointer: Option<[f32; 2]>,
@@ -565,12 +604,38 @@ impl<G: Game> App<G> {
         !self.occluded && Instant::now() >= self.draw_after
     }
 
+    /// Puts the player's bindings file into effect if it was saved since
+    /// it was last read.
+    fn follow_controls(&mut self) {
+        let Some(reread) = self.controls.as_mut().and_then(controls::Live::changed) else {
+            return;
+        };
+        for problem in &reread.said {
+            log::warn!("{problem}");
+        }
+        let Some(mut controls) = reread.controls else {
+            return;
+        };
+        for gap in controls.parity_gaps() {
+            log::warn!("{gap}");
+        }
+        // How fast the view turns is the player's setting, not the file's.
+        if let Some(look) = self.look {
+            controls.set_sensitivity(look, self.input.map().sensitivity(look));
+        }
+        self.input.set_bindings(controls.clone());
+        self.new_controls = Some(controls);
+        log::info!("Your controls were saved, so they were read again and are in use.");
+    }
+
     /// Runs the ticks that are due and lets the game prepare the next frame.
     /// Returns whether the game asked to end.
     fn update(&mut self) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_frame);
         self.last_frame = now;
+
+        self.follow_controls();
 
         self.gamepads.poll(&mut self.input, self.focused);
         let step = self.clock.step().as_secs_f32();
@@ -605,7 +670,8 @@ impl<G: Game> App<G> {
             .for_window(screen, std::mem::take(&mut self.ui))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
-            .with_device(self.input.last_device(), self.gamepads.style());
+            .with_device(self.input.last_device(), self.gamepads.style())
+            .with_controls(self.new_controls.take());
         #[cfg(feature = "editor")]
         if let (Some(panels), Some(window)) = (&mut self.panels, &self.window) {
             let input = panels.state.take_egui_input(window);
@@ -648,12 +714,60 @@ impl<G: Game> App<G> {
             }
             self.last_view = Some(view.position);
         }
+        // What was done to the water since the last frame is shown.
+        let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
+        let bubbles = frame.take_bubbles();
+        let treads = frame.take_treads();
+        let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
+        let hour = frame.take_hour();
+        let (water_rise, sky_clock) = frame.take_water();
+        let storm_bolts = frame.take_storm_bolts();
+        let weather = frame.take_weather();
+        if let Some(renderer) = &mut self.renderer {
+            for splash in splashes {
+                renderer.splash(splash);
+            }
+            for stir in stirs {
+                renderer.stir(stir);
+            }
+            for (place, count) in bubbles {
+                renderer.bubbles(place, count);
+            }
+            for tread in treads {
+                renderer.tread(tread);
+            }
+            for strike in strikes {
+                renderer.strike(strike);
+            }
+            if let Some(storminess) = storminess {
+                renderer.set_storminess(storminess);
+            }
+            if let Some(weather) = weather {
+                renderer.set_weather(weather);
+            }
+            if hour.is_some() {
+                renderer.set_hour(hour);
+            }
+            if let Some(rise) = water_rise {
+                renderer.set_water_rise(rise);
+            }
+            if sky_clock.is_some() {
+                renderer.set_sky_clock(sky_clock);
+            }
+            if let Some(own) = storm_bolts {
+                renderer.set_storm_bolts(own);
+            }
+        }
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);
         }
+        if let Some(under) = frame.under_water() {
+            self.sound.set_underwater(if under { 1.0 } else { 0.0 });
+        }
         if let Some(settings) = frame.take_settings() {
             self.sound.set_volumes(&settings);
+            self.rumble_share = settings.rumble_share();
             if let Some(look) = self.look {
                 self.input.set_sensitivity(look, settings.look());
             }
@@ -666,7 +780,7 @@ impl<G: Game> App<G> {
         if let Some(rumble) = frame.rumble_requested()
             && self.focused
         {
-            self.gamepads.rumble(rumble);
+            self.gamepads.rumble(rumble.scaled(self.rumble_share));
         }
         if let (Some(title), Some(window)) = (frame.take_title(), &self.window) {
             window.set_title(&title);

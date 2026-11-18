@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use lore_input::{ActionMap, InputFrame, Rumble};
+use lore_input::{ActionMap, ActionSetId, InputFrame, Rumble};
 use lore_weapons::Weapon;
 use mlua::{AnyUserData, Function, IntoLuaMulti, Lua};
 
-use crate::api::{self, Handlers, Shared};
+use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
@@ -26,6 +26,7 @@ use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
 use crate::time_api::Clock;
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
+use crate::weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 
 /// The file every game starts from, inside the game's folder.
 pub const ENTRY_SCRIPT: &str = "main.luau";
@@ -162,6 +163,10 @@ pub struct ScriptHost {
     weapons: Rc<WeaponState>,
     /// The game's time. Kept here so a save does not start it again.
     clock: Rc<Clock>,
+    /// The action set the script chose, shared with each version of it.
+    live_set: Rc<LiveSet>,
+    /// What the script said of the weather; it outlives a reload too.
+    weather: Rc<crate::weather_api::Climate>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
 }
@@ -267,6 +272,8 @@ impl ScriptHost {
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
+            live_set: Rc::default(),
+            weather: Rc::default(),
             versions: 0,
         };
         // A script error is already logged and kept in `last_error`.
@@ -306,6 +313,9 @@ impl ScriptHost {
             version.shared.input.borrow_mut().clone_from(input);
         }
         self.clock.begin_tick(step);
+        // The weather moves on towards what was asked for before the
+        // script's functions run, so that what they read is this tick's.
+        self.weather.step(step);
         self.start();
         if std::mem::take(&mut self.spawn_due) {
             self.call_all(|handlers| &handlers.spawn, ());
@@ -440,6 +450,90 @@ impl ScriptHost {
     /// asked more than once, this is the latest.
     pub fn take_rumble(&mut self) -> Option<Rumble> {
         self.running.as_ref()?.shared.rumble.take()
+    }
+
+    /// The hour of the day, if it has changed since this was last called:
+    /// the script said it with `game.sky.setHour`, or the hours pass
+    /// (`game.sky.setDayLength`) and a tick has gone by.
+    pub fn take_hour(&mut self) -> Option<f64> {
+        self.weather.take_hour()
+    }
+
+    /// The hour of the day, if the script has said one.
+    #[must_use]
+    pub fn hour(&self) -> Option<f64> {
+        self.weather.hour()
+    }
+
+    /// The weather as the script has said it and as it now is: on its way,
+    /// tick by tick, to what was last asked for. Until a script says
+    /// otherwise it is a fair, mild day.
+    #[must_use]
+    pub fn weather(&self) -> WeatherSaid {
+        self.weather.said()
+    }
+
+    /// How stormy the sky now is, from 0 to 1.
+    #[must_use]
+    pub fn storminess(&self) -> f32 {
+        self.weather.said().storminess
+    }
+
+    /// Where on the ground the script asked lightning to strike with
+    /// `game.weather.strike` since this was last called, each with a
+    /// number no other strike has.
+    pub fn take_strikes(&mut self) -> Vec<([f32; 3], u32)> {
+        self.weather.take_strikes()
+    }
+
+    /// How deep the script said the snow lies with
+    /// `game.weather.setSnowDepth`, in metres, if it has said so since
+    /// this was last called.
+    pub fn take_snow_depth(&mut self) -> Option<f32> {
+        self.weather.take_snow_depth()
+    }
+
+    /// How thick the script said the ice on still water is with
+    /// `game.weather.setIce`, in metres, if it has said so since this was
+    /// last called.
+    pub fn take_ice(&mut self) -> Option<f32> {
+        self.weather.take_ice()
+    }
+
+    /// What the script asked of the tornado with
+    /// `game.weather.startTornado` and `stopTornado` since this was last
+    /// called, oldest first.
+    pub fn take_tornado(&mut self) -> Vec<TornadoAsk> {
+        self.weather.take_tornado()
+    }
+
+    /// Says what the weather has left where the player is: what the script
+    /// reads with `game.weather.snowDepth`, `ice`, `falling` and `tornado`.
+    /// The world says it every tick.
+    pub fn set_weather_here(&mut self, here: WeatherHere) {
+        self.weather.set_here(here);
+    }
+
+    /// Tells the script that lightning struck the ground at `at`: its
+    /// `game.weather.onLightning` functions.
+    pub fn lightning_struck(&mut self, at: [f32; 3]) {
+        let [x, y, z] = at;
+        self.call_all(|handlers| &handlers.lightning, mlua::Vector::new(x, y, z));
+    }
+
+    /// The action set the script made live with `game.input.useSet` since
+    /// this was last called, for whoever owns the input to switch to
+    /// ([`Input::set_active_set`](lore_input::Input::set_active_set)). When
+    /// the script chose more than once, this is the latest.
+    pub fn take_action_set(&mut self) -> Option<ActionSetId> {
+        (self.live_set.asked.take()).then(|| self.live_set.live.get())
+    }
+
+    /// The action set the script's game is in: `gameplay` until the script
+    /// chooses another. It is what `game.input.currentSet()` gives a script.
+    #[must_use]
+    pub fn action_set(&self) -> ActionSetId {
+        self.live_set.live.get()
     }
 
     /// Tells the script which sounds the game has, by name, so that asking
@@ -674,7 +768,17 @@ impl ScriptHost {
             }
             self.kept.replace(kept);
         }
-        self.install()?;
+        // The new version starts in `gameplay`, as its variables start
+        // again: a shop that was open is closed in both. A version that
+        // fails to load leaves the old one in the set it chose.
+        let before = self.live_set.live.replace(ActionMap::GAMEPLAY);
+        if let Err(error) = self.install() {
+            self.live_set.live.set(before);
+            return Err(error);
+        }
+        if self.live_set.live.get() != before {
+            self.live_set.asked.set(true);
+        }
         if had_version {
             log::info!("{}", reloaded(saved));
         }
@@ -772,6 +876,8 @@ impl ScriptHost {
             handles: Handles::default(),
             loading: Cell::new(true),
             rumble: Cell::new(None),
+            live_set: Rc::clone(&self.live_set),
+            weather: Rc::clone(&self.weather),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

@@ -84,6 +84,22 @@ impl Rumble {
         self.seconds
     }
 
+    /// The same rumble with both motors at `share` of their strength, from
+    /// 0 (still) to 1 (as it is): what a player's rumble setting does to
+    /// the rumble a game asks for. It lasts as long.
+    ///
+    /// ```
+    /// use lore_input::Rumble;
+    ///
+    /// let softer = Rumble::new(1.0, 0.5, 0.2).scaled(0.5);
+    /// assert_eq!((softer.strong(), softer.weak(), softer.seconds()), (0.5, 0.25, 0.2));
+    /// assert!(Rumble::new(1.0, 0.5, 0.2).scaled(0.0).is_still());
+    /// ```
+    #[must_use]
+    pub fn scaled(self, share: f32) -> Self {
+        Self::new(self.strong * share, self.weak * share, self.seconds)
+    }
+
     /// Whether this rumble would not be felt: both motors are off, or it
     /// lasts no time. Playing it only stops the rumble before it.
     #[must_use]

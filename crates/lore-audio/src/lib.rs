@@ -46,6 +46,10 @@
 //! a thread of its own ([`Sound::streamed`]), and played like any other.
 //! Music has its own volume ([`Play::music`], [`Group`]).
 //!
+//! Water is heard too. The [`starter`] sounds have splashes, wading,
+//! swimming strokes, drips and bubbles among them, and with the player's
+//! head under ([`Mixer::set_underwater`]) everything that plays is muffled.
+//!
 //! Everything but [`Speakers`] is plain arithmetic. The mixer fills a
 //! buffer and can be tested with no sound card; while
 //! mixing it never asks for memory, waits or reads a file. [`Footsteps`] and [`SoundSet`] read no
@@ -65,6 +69,7 @@ pub mod starter;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod underwater;
 mod vary;
 
 pub use error::AudioError;

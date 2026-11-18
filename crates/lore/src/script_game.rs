@@ -273,6 +273,21 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(hour) = self.host.take_hour() {
+            frame.set_hour(hour);
+        }
+        // The weather as the script has said it. A world the script
+        // plays in says more after this: what has followed from it.
+        frame.set_weather(crate::world::said_weather(&self.host.weather()));
+        for (at, number) in self.host.take_strikes() {
+            frame.strike(lore_render::Lightning::down_to(
+                at,
+                number.wrapping_mul(0x9E37_79B1),
+            ));
+        }
+        if let Some(set) = self.host.take_action_set() {
+            frame.use_action_set(set);
+        }
         // A frame means someone is here to listen.
         self.load_sounds();
         while let Some(command) = self.host.take_sound() {
@@ -284,6 +299,7 @@ impl Game for ScriptGame {
                 },
                 AudioCommand::Stop(id) => frame.sound(SoundAsk::Stop(id)),
                 AudioCommand::StopAll => frame.sound(SoundAsk::StopAll),
+                AudioCommand::Move(id, place) => frame.sound(SoundAsk::Move(id, place)),
             }
         }
         // After the script has drawn, so what it changed is in this frame.
@@ -492,6 +508,22 @@ mod tests {
         );
         // What the script asked for while drawing is in the same frame.
         assert!(frame.rumble_requested().is_some());
+    }
+
+    #[test]
+    fn the_action_set_a_script_chooses_is_asked_of_the_window_once() {
+        let script = "game.onStart(function() game.input.useSet(\"menu\") end)";
+        let actions = ActionMap::standard();
+        let mut game = ScriptGame::from_source(script, &actions);
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        assert_eq!(frame.action_set(), actions.set("menu").ok());
+
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let mut frame = Frame::new(0.0);
+        game.frame(&mut frame);
+        assert_eq!(frame.action_set(), None, "the window already has it");
     }
 
     /// The script error is drawn for real, with no window, and the picture

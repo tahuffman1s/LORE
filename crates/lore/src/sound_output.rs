@@ -19,7 +19,16 @@ pub(crate) enum SoundAsk {
     Stop(SoundId),
     /// Stop every sound started with an id.
     StopAll,
+    /// Move the sound started with this id to another place in the world.
+    Move(SoundId, [f32; 3]),
+    /// Make the sound started with this id as loud as this, from 0 to 2.
+    Loud(SoundId, f32),
 }
+
+/// The ids from here up are the engine's own sounds, which last as long
+/// as what makes them: the hum under water, the rain, the wind. A script
+/// cannot stop them, and they are not counted among its loops.
+pub(crate) const ENGINE_SOUNDS: u64 = u64::MAX - 15;
 
 /// Playing what was asked for.
 mod output {
@@ -44,11 +53,18 @@ mod output {
     pub(crate) trait Voices {
         fn play(&mut self, play: Play) -> Playing;
         fn stop(&mut self, playing: Playing);
+        /// Moves a sound that is playing in the world; one that is not, or
+        /// has ended, is left alone.
+        fn move_to(&mut self, playing: Playing, position: [f32; 3]);
+        /// Makes a playing sound as loud as `volume` says, from 0 to 2.
+        fn set_loudness(&mut self, playing: Playing, volume: f32);
         fn set_listener(&mut self, listener: Listener);
         /// Sets how loud everything is, from 0 (silent) to 1 (full).
         fn set_volume(&mut self, volume: f32);
         /// Sets how loud music or everything else is, from 0 to 1.
         fn set_group_volume(&mut self, group: Group, volume: f32);
+        /// Says how far under water the ears are, from 0 (in air) to 1.
+        fn set_underwater(&mut self, amount: f32);
     }
 
     impl Voices for Mixer {
@@ -58,6 +74,14 @@ mod output {
 
         fn stop(&mut self, playing: Playing) {
             Mixer::stop(self, playing);
+        }
+
+        fn move_to(&mut self, playing: Playing, position: [f32; 3]) {
+            Mixer::move_to(self, playing, position);
+        }
+
+        fn set_loudness(&mut self, playing: Playing, volume: f32) {
+            Mixer::set_loudness(self, playing, volume);
         }
 
         fn set_listener(&mut self, listener: Listener) {
@@ -70,6 +94,10 @@ mod output {
 
         fn set_group_volume(&mut self, group: Group, volume: f32) {
             Mixer::set_group_volume(self, group, volume);
+        }
+
+        fn set_underwater(&mut self, amount: f32) {
+            Mixer::set_underwater(self, amount);
         }
     }
 
@@ -101,6 +129,16 @@ mod output {
             self.voices.set_listener(Listener { position, yaw });
         }
 
+        /// Says how far under water the ears are: 0 in air, 1 with the
+        /// head fully under, and between the two as it goes through the
+        /// surface. Under water everything that plays is muffled, the
+        /// splash of going in included. Say it every frame, beside
+        /// [`listen_from`](Self::listen_from); the change is eased over a
+        /// tenth of a second, so a plain 0 or 1 does not click.
+        pub(crate) fn set_underwater(&mut self, amount: f32) {
+            self.voices.set_underwater(amount);
+        }
+
         /// Sets how loud everything, music and effects are: the player's
         /// own volume settings.
         pub(crate) fn set_volumes(&mut self, settings: &crate::settings::Settings) {
@@ -116,8 +154,16 @@ mod output {
                     SoundAsk::Play(id, play) => {
                         let looping = play.looping;
                         let playing = self.voices.play(play);
-                        self.playing.insert(id, playing);
-                        if looping {
+                        // One started again under the same id takes the
+                        // place of the one before.
+                        if let Some(before) = self.playing.insert(id, playing)
+                            && id.0 >= super::ENGINE_SOUNDS
+                        {
+                            self.voices.stop(before);
+                        }
+                        if id.0 >= super::ENGINE_SOUNDS {
+                            // The engine's own: it stops them itself.
+                        } else if looping {
                             self.loops.push_back(id);
                             if self.loops.len() > LOOPS
                                 && let Some(oldest) = self.loops.pop_front()
@@ -142,16 +188,36 @@ mod output {
                         // is pushed out: stopping it again does nothing.
                         if let Some(playing) = self.playing.get(&id).copied() {
                             self.voices.stop(playing);
-                            if let Some(place) = self.loops.iter().position(|kept| *kept == id) {
+                            if id.0 >= super::ENGINE_SOUNDS {
+                                self.playing.remove(&id);
+                            } else if let Some(place) =
+                                self.loops.iter().position(|kept| *kept == id)
+                            {
                                 self.loops.remove(place);
                                 self.playing.remove(&id);
                             }
                         }
                     }
-                    SoundAsk::StopAll => {
-                        for (_, playing) in self.playing.drain() {
-                            self.voices.stop(playing);
+                    SoundAsk::Move(id, place) => {
+                        if let Some(playing) = self.playing.get(&id).copied() {
+                            self.voices.move_to(playing, place);
                         }
+                    }
+                    SoundAsk::Loud(id, volume) => {
+                        if let Some(playing) = self.playing.get(&id).copied() {
+                            self.voices.set_loudness(playing, volume);
+                        }
+                    }
+                    SoundAsk::StopAll => {
+                        // Every sound a script started: the rain goes on.
+                        let voices = &mut self.voices;
+                        self.playing.retain(|id, playing| {
+                            let kept = id.0 >= super::ENGINE_SOUNDS;
+                            if !kept {
+                                voices.stop(*playing);
+                            }
+                            kept
+                        });
                         self.once.clear();
                         self.loops.clear();
                     }
@@ -177,6 +243,9 @@ pub(crate) struct LazySpeakers {
     /// How loud the player wants everything, effects and music, to tell
     /// the speakers once they are open.
     volumes: Volumes,
+    /// How far under water the ears are, to tell the speakers once they
+    /// are open.
+    underwater: f32,
     /// When to next try a device that is not working.
     retry_at: Option<std::time::Instant>,
 }
@@ -191,6 +260,7 @@ impl LazySpeakers {
     fn ready(&mut self) -> &mut lore_audio::Speakers {
         let listener = self.listener;
         let volumes = self.volumes;
+        let underwater = self.underwater;
         let now = std::time::Instant::now();
         let retry_at = &mut self.retry_at;
         let speakers = self.speakers.get_or_insert_with(|| {
@@ -198,6 +268,7 @@ impl LazySpeakers {
             let mut speakers = lore_audio::Speakers::open_or_silent();
             speakers.set_listener(listener);
             volumes.tell(&mut speakers);
+            speakers.set_underwater(underwater);
             *retry_at = Some(now + Self::RETRY_EVERY);
             speakers
         });
@@ -207,6 +278,7 @@ impl LazySpeakers {
                 log::info!("Sound is playing again.");
                 speakers.set_listener(listener);
                 volumes.tell(speakers);
+                speakers.set_underwater(underwater);
             }
         }
         speakers
@@ -221,6 +293,18 @@ impl Voices for LazySpeakers {
     fn stop(&mut self, playing: lore_audio::Playing) {
         if let Some(speakers) = &mut self.speakers {
             speakers.stop(playing);
+        }
+    }
+
+    fn move_to(&mut self, playing: lore_audio::Playing, position: [f32; 3]) {
+        if let Some(speakers) = &mut self.speakers {
+            speakers.move_to(playing, position);
+        }
+    }
+
+    fn set_loudness(&mut self, playing: lore_audio::Playing, volume: f32) {
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_loudness(playing, volume);
         }
     }
 
@@ -245,6 +329,13 @@ impl Voices for LazySpeakers {
         }
         if let Some(speakers) = &mut self.speakers {
             speakers.set_group_volume(group, volume);
+        }
+    }
+
+    fn set_underwater(&mut self, amount: f32) {
+        self.underwater = amount;
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_underwater(amount);
         }
     }
 }
@@ -510,6 +601,26 @@ mod tests {
         );
         assert_eq!(played.error(), None);
         let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn with_the_ears_under_water_what_plays_is_muffled() {
+        let mut output = SoundOutput::new(Mixer::new(RATE));
+        // The fastest wobble a sound can hold: nothing but high notes.
+        let hiss = lore_audio::Sound::from_samples(RATE, 1, [0.5, -0.5].repeat(64)).unwrap();
+        output.handle([SoundAsk::Play(SoundId(1), Play::everywhere(hiss).looping())]);
+        let loudest = |output: &mut SoundOutput<Mixer>| {
+            let mut out = vec![0.0; 2 * RATE as usize / 2];
+            output.voices_mut().mix(&mut out);
+            out[out.len() / 2..]
+                .iter()
+                .fold(0.0_f32, |loudest, sample| loudest.max(sample.abs()))
+        };
+        assert_eq!(loudest(&mut output), 0.5);
+        output.set_underwater(1.0);
+        assert!(loudest(&mut output) < 0.01);
+        output.set_underwater(0.0);
+        assert_eq!(loudest(&mut output), 0.5);
     }
 
     #[test]

@@ -261,17 +261,6 @@ fn no_game_in(folder: &Path, command: &str) -> String {
     )
 }
 
-/// Gives `actions` the player's own controls from their bindings file, and
-/// warns about anything in the file that could not be used. A game starts
-/// whatever the file holds.
-pub fn use_player_controls(actions: &mut ActionMap) {
-    if let Some(path) = crate::controls::file() {
-        for problem in crate::controls::load(&path, actions) {
-            log::warn!("{problem}");
-        }
-    }
-}
-
 /// `lore controls`: what the player's controls are and where they are
 /// kept, as text to print. Writes the bindings file if there is none, so
 /// there is something to open and edit.
@@ -333,11 +322,41 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
     }
     said.push_str(&format!(
         "\nThey are kept in {}{}.\nOpen that file in a text editor, change a line and save. \
-         Games read it when they start.\n",
+         Games read it when they start, and a game that is running \
+         reads it again when you save.\n",
         path.display(),
         if created { ", made just now" } else { "" }
     ));
+    let (rumble, unread) = rumble_setting();
+    said.push_str(&rumble);
+    problems.extend(unread);
     Ok((said, problems))
+}
+
+/// What `lore controls` says of how hard the gamepad shakes, which is
+/// the player's setting and not a binding, and what is wrong with the
+/// settings file it was read from.
+fn rumble_setting() -> (String, Vec<String>) {
+    let file = crate::settings::file();
+    let (settings, problems) = file
+        .as_deref()
+        .map_or_else(Default::default, crate::settings::load);
+    let strength = if settings.rumble <= 0.0 {
+        "Gamepad rumble is off".to_owned()
+    } else {
+        format!(
+            "Gamepad rumble is at {}% of what a game asks for",
+            settings.rumble.round()
+        )
+    };
+    let place = file.map_or_else(String::new, |file| {
+        format!(", or the line `rumble = 50` in {}", file.display())
+    });
+    let said = format!(
+        "\n{strength}. To change it, from 0 (off) to 100, use Settings in the menu a game \
+         opens with Escape or Start{place}.\n"
+    );
+    (said, problems)
 }
 
 /// The name of the game in `folder`: the folder's own name.

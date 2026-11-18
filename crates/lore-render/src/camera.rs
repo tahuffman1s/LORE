@@ -76,6 +76,29 @@ impl Camera {
         finite_or(self.near, 0.05).max(0.001)
     }
 
+    /// The way the camera looks, then how far a line of sight leans to its
+    /// right and upwards between the middle of a picture `width` by
+    /// `height` and its edge: the line through a point `x`, `y` of the
+    /// picture (each from -1 to 1, y up) is the first plus `x` times the
+    /// second plus `y` times the third.
+    pub(crate) fn rays(&self, width: u32, height: u32) -> [[f32; 3]; 3] {
+        let [yaw, pitch] = [self.yaw, self.pitch].map(|angle| finite_or(angle, 0.0));
+        let (sin_yaw, cos_yaw) = yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = pitch.sin_cos();
+        let right = [cos_yaw, 0.0, -sin_yaw];
+        let forward = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
+        let up = cross(right, forward);
+        // Picture sizes are far below the point where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let aspect = width.max(1) as f32 / height.max(1) as f32;
+        let reach = (self.fov_radians() / 2.0).tan();
+        [
+            forward,
+            right.map(|part| part * reach * aspect),
+            up.map(|part| part * reach),
+        ]
+    }
+
     /// The matrix that takes a point in the world to where it is from the
     /// eye: x right, y up, and -z ahead.
     fn view(&self) -> Mat4 {

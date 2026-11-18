@@ -23,6 +23,19 @@ pub(crate) struct SceneView {
     before: Option<Mat4>,
     /// How many frames have been drawn, for the camera shift.
     frame: u32,
+    /// How long this view has been drawn for, in seconds: what the clouds
+    /// drift by.
+    seconds: f64,
+    /// Whether the clouds are held where they are, so that the same camera
+    /// gives the same picture every time: for pictures drawn with no
+    /// window, which tests compare.
+    pub(crate) still: bool,
+    /// The time the clouds' clock shows, if the game says it.
+    clock: Option<f64>,
+    /// Where the eye was in the last frame, and how much its walking is
+    /// stirring what it walks through, from 0 to 1.
+    eye: Option<[f32; 3]>,
+    stir: f32,
     /// How many sizes larger than usual textures are read; see [`sharper`].
     sharper: f32,
 }
@@ -41,6 +54,18 @@ fn sharper(render: u32, output: u32) -> f32 {
 }
 
 impl SceneView {
+    /// How long this view has been drawn for, in seconds: the clouds' clock.
+    pub(crate) fn seconds(&self) -> f64 {
+        self.clock.unwrap_or(self.seconds)
+    }
+
+    /// Says what time the clouds' clock shows, in seconds, in place of how
+    /// long this view has been drawn: the game's own time, so that the sky
+    /// is where the game's rules have it. `None` gives it back to the view.
+    pub(crate) fn set_clock(&mut self, clock: Option<f64>) {
+        self.clock = clock.filter(|clock| clock.is_finite());
+    }
+
     /// Makes a view whose finished picture is `output` pixels.
     ///
     /// If `upscaling` cannot be had on this graphics card, the reason is
@@ -62,6 +87,11 @@ impl SceneView {
             upscale,
             before: None,
             frame: 0,
+            seconds: 0.0,
+            still: false,
+            clock: None,
+            eye: None,
+            stir: 0.0,
         })
     }
 
@@ -128,15 +158,57 @@ impl SceneView {
         // Sizes are far below the point where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
         let (width, height) = (size.width as f32, size.height as f32);
+        let [forward, right, up] = camera.rays(size.width, size.height);
+        let (across, upwards) = (2.0 * jitter.0 / width, -2.0 * jitter.1 / height);
+        // How fast the eye is moving over the ground, eased so that rings
+        // die away after it stops and do not jump when it starts.
+        if let Some(was) = self.eye
+            && seconds.is_finite()
+            && seconds > 0.0001
+        {
+            let moved = (camera.position[0] - was[0]).hypot(camera.position[2] - was[2]);
+            // A run is about five metres a second; a cut to somewhere new
+            // is not walking.
+            let speed = if moved < 2.0 { moved / seconds } else { 0.0 };
+            let wanted = (speed / 5.0).clamp(0.0, 1.0);
+            let ease = (seconds * 2.5).clamp(0.0, 1.0);
+            self.stir += (wanted - self.stir) * ease;
+        }
+        self.eye = Some(camera.position);
+        let mut elapsed = 0.0;
+        if !self.still && seconds.is_finite() {
+            elapsed = seconds.clamp(0.0, 1.0);
+            self.seconds += f64::from(elapsed);
+        }
         let view = View {
             // The picture is 2 wide and 2 high with y running up, and the
             // shift is in pixels with y running down. The direction is the
             // FSR manual's; the offscreen test fails with either sign turned.
-            clip: shifted(&steady, 2.0 * jitter.0 / width, -2.0 * jitter.1 / height),
+            clip: shifted(&steady, across, upwards),
             steady,
             before: self.before.unwrap_or(steady),
             eye: camera.position,
             sharper: self.sharper,
+            rays: [
+                [forward[0], forward[1], forward[2], 0.0],
+                [right[0], right[1], right[2], across],
+                [up[0], up[1], up[2], upwards],
+            ],
+            // Clouds need no more of the time than an f32 holds.
+            #[allow(clippy::cast_possible_truncation)]
+            time: self.seconds() as f32,
+            exact: self.seconds(),
+            elapsed,
+            stir: self.stir,
+            // Only an upscaler mixes frames; without one a pattern that
+            // moved every frame would be seen to crawl.
+            #[allow(clippy::cast_precision_loss)]
+            noise: if self.upscale.is_some() {
+                (self.frame % 64) as f32
+            } else {
+                0.0
+            },
+            near: camera.near_metres(),
         };
         let cut = self.before.is_none();
         self.before = Some(steady);
@@ -144,16 +216,7 @@ impl SceneView {
 
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`
         // asks for, and the target is this view's own.
-        unsafe {
-            mesh.record(
-                commands,
-                frame,
-                &self.target,
-                &view,
-                contents.meshes,
-                contents.grid.then_some(camera.position),
-            )
-        }?;
+        unsafe { mesh.record(commands, frame, &self.target, &view, contents) }?;
         if let Some(upscale) = &mut self.upscale {
             let drawn = Drawn {
                 jitter,

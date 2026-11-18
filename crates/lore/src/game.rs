@@ -1,6 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
-use lore_input::{ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
+use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
+use lore_render::{Lightning, Splash, Stir, Tread};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -58,6 +59,8 @@ pub struct Frame {
     /// What the player last used, and whose gamepad it is.
     device: Device,
     gamepad_style: GamepadStyle,
+    /// The controls, in the one frame after they changed.
+    controls: Option<ActionMap>,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
     /// The player's settings to put into effect, when they have changed.
@@ -71,6 +74,30 @@ pub struct Frame {
     /// The sounds to start and stop. Empty, and so without memory of its
     /// own, in a frame that asks for none.
     sounds: Vec<SoundAsk>,
+    /// What went into the water, what is in it, and the bubbles let go
+    /// under it, for the picture. Empty, and so without memory of their
+    /// own, in a frame with none.
+    splashes: Vec<Splash>,
+    stirs: Vec<Stir>,
+    bubbles: Vec<([f32; 3], u32)>,
+    /// The lightning let go this frame, and how stormy the sky was said
+    /// to be, if it was said.
+    strikes: Vec<Lightning>,
+    /// Where the snow was said to be pressed down this frame.
+    treads: Vec<Tread>,
+    storminess: Option<f32>,
+    /// The hour of the day, if the game said it this frame.
+    hour: Option<f64>,
+    /// How far rain has raised the water and what the sky's clock shows,
+    /// if the game said them this frame.
+    water_rise: Option<f32>,
+    sky_clock: Option<f64>,
+    /// Whether storms send their own bolts, if the game said this frame.
+    storm_bolts: Option<bool>,
+    /// The whole of the weather, if the game said it this frame.
+    weather: Option<lore_render::Weather>,
+    /// Whether the ears are under water, if the game said.
+    under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
     #[cfg(feature = "editor")]
     panels: Option<PanelFrame>,
@@ -139,6 +166,7 @@ impl Frame {
             wheel: 0.0,
             device: Device::KeyboardAndMouse,
             gamepad_style: GamepadStyle::Xbox,
+            controls: None,
             ui_scale: 1.0,
             settings: None,
             ui: DrawBuffer::default(),
@@ -148,6 +176,18 @@ impl Frame {
             action_set: None,
             rumble: None,
             sounds: Vec::new(),
+            splashes: Vec::new(),
+            stirs: Vec::new(),
+            bubbles: Vec::new(),
+            strikes: Vec::new(),
+            treads: Vec::new(),
+            storminess: None,
+            hour: None,
+            water_rise: None,
+            sky_clock: None,
+            storm_bolts: None,
+            weather: None,
+            under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
             #[cfg(feature = "editor")]
@@ -376,6 +416,35 @@ impl Frame {
         self
     }
 
+    /// The player's controls as they now are, in the one frame after their
+    /// bindings file was saved and read again while the game runs
+    /// ([`Config::controls_file`](crate::Config)). `None` in every other
+    /// frame.
+    ///
+    /// The engine has already put them into effect, and every
+    /// [`ActionId`](lore_input::ActionId) means what it did. This is for a
+    /// game that shows which key or button does something, to read the
+    /// names again:
+    ///
+    /// ```
+    /// # fn frame(frame: &mut lore::Frame, prompt: &mut String) {
+    /// if let Some(controls) = frame.new_controls() {
+    ///     if let Ok(jump) = controls.action("jump") {
+    ///         *prompt = format!("{:?}", controls.bindings(jump));
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn new_controls(&self) -> Option<&ActionMap> {
+        self.controls.as_ref()
+    }
+
+    pub(crate) fn with_controls(mut self, controls: Option<ActionMap>) -> Self {
+        self.controls = controls;
+        self
+    }
+
     /// Says how far the wheel was rolled over the free pointer.
     pub(crate) fn with_wheel(mut self, notches: f32) -> Self {
         self.wheel = notches;
@@ -476,8 +545,11 @@ impl Frame {
     }
 
     /// Starts the frame for a window of `screen` pixels, if there is one yet, with `buffer` to
-    /// gather the UI in: the last frame's, so its memory is used again.
-    pub(crate) fn for_window(mut self, screen: Option<[u32; 2]>, mut buffer: DrawBuffer) -> Self {
+    /// gather the UI in: the last frame's, so its memory is used again. The
+    /// engine does this for the game it runs; it is here for a tool that
+    /// draws a game's HUD with no window.
+    #[must_use]
+    pub fn for_window(mut self, screen: Option<[u32; 2]>, mut buffer: DrawBuffer) -> Self {
         buffer.clear();
         // A minimised window has no size; a UI still needs one to lay out in.
         self.screen = screen.map_or(NO_WINDOW, |[width, height]| [width.max(1), height.max(1)]);
@@ -486,7 +558,7 @@ impl Frame {
     }
 
     /// Everything the game asked to be drawn over it this frame.
-    pub(crate) fn take_ui(&mut self) -> DrawBuffer {
+    pub fn take_ui(&mut self) -> DrawBuffer {
         std::mem::take(&mut self.ui)
     }
 
@@ -543,7 +615,8 @@ impl Frame {
     /// gamepad has no rumble motors, or on macOS, where rumble is not
     /// supported yet. Never make rumble the only sign of something: show or
     /// play it as well. A game run with no window has no gamepad, so nothing
-    /// happens there.
+    /// happens there. The player's rumble setting scales what is asked for
+    /// here, down to nothing: it is theirs, and no game gets round it.
     pub fn rumble(&mut self, rumble: Rumble) {
         self.rumble = Some(rumble);
     }
@@ -578,6 +651,163 @@ impl Frame {
     /// with no window has no speakers, so nothing happens there.
     pub(crate) fn sound(&mut self, ask: SoundAsk) {
         self.sounds.push(ask);
+    }
+
+    /// Says that something went into the water, or pushed through its
+    /// surface, since the last frame: drops fly up from where it did,
+    /// spray hangs for a moment, bubbles are dragged under, and rings run
+    /// out across the water. The player's own splashes are shown without
+    /// being asked for; this is for whatever else a game drops in.
+    ///
+    /// ```
+    /// use lore::render::Splash;
+    ///
+    /// fn stone_lands(frame: &mut lore::Frame) {
+    ///     frame.splash(Splash {
+    ///         place: [4.0, 0.0, -7.5],
+    ///         moving: [1.0, -6.0, 0.0],
+    ///         wide: 0.08,
+    ///     });
+    /// }
+    /// ```
+    pub fn splash(&mut self, splash: Splash) {
+        self.splashes.push(splash);
+    }
+
+    /// Says that something is in the water during this frame: rings run
+    /// out from it, and it trails a wake as it moves. Say it every frame
+    /// for as long as the thing is there. The player is there already.
+    pub fn stir(&mut self, stir: Stir) {
+        self.stirs.push(stir);
+    }
+
+    /// Presses the snow down at a place: a foot coming down in it, or a
+    /// body wading through. The track stays until new snow has filled it
+    /// in; nothing is seen of it where no snow lies. The player's own
+    /// tracks are made already.
+    pub fn tread(&mut self, tread: Tread) {
+        self.treads.push(tread);
+    }
+
+    /// Lets `count` bubbles go at `place`, which is under water: they rise
+    /// and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.bubbles.push((place, count));
+    }
+
+    /// Says whether the ears are under water this frame: with them under,
+    /// everything that is heard is muffled.
+    pub(crate) fn hear_under_water(&mut self, under: bool) {
+        self.under_water = Some(under);
+    }
+
+    /// Where the snow was said to be pressed down this frame.
+    pub(crate) fn take_treads(&mut self) -> Vec<Tread> {
+        std::mem::take(&mut self.treads)
+    }
+
+    /// The splashes said this frame, in order.
+    pub(crate) fn take_splashes(&mut self) -> Vec<Splash> {
+        std::mem::take(&mut self.splashes)
+    }
+
+    /// What was said to be in the water this frame.
+    pub(crate) fn take_stirs(&mut self) -> Vec<Stir> {
+        std::mem::take(&mut self.stirs)
+    }
+
+    /// Lets a flash of lightning go: a forked bolt made from its seed that
+    /// comes down, flickers and is gone in under a second, lighting the
+    /// clouds and the land. `Lightning::down_to` makes one that strikes a
+    /// place on the ground.
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.strikes.push(lightning);
+    }
+
+    /// Says how stormy the sky is, from 0, fair weather with the odd storm
+    /// passing, to 1, storms over most of it. Under a storm it rains, the
+    /// wind blows harder and lightning strikes by itself.
+    pub fn set_storminess(&mut self, storminess: f32) {
+        self.storminess = Some(storminess);
+    }
+
+    /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
+    /// midnight, and hours past 24 run on into the next day. The sun and
+    /// the moon stand where that hour has them, night falls and the stars
+    /// come out. Until a game says the hour it is always day.
+    pub fn set_hour(&mut self, hour: f64) {
+        self.hour = Some(hour);
+    }
+
+    /// The hour of the day, if the game said it this frame.
+    pub(crate) fn take_hour(&mut self) -> Option<f64> {
+        self.hour.take()
+    }
+
+    /// Says how far rain has raised the level's still water, in metres, so
+    /// that it is drawn as high as the game's rules have it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.water_rise = Some(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds of the game's own
+    /// time: clouds, storms and rain are then where the game's rules have
+    /// them.
+    pub fn set_sky_clock(&mut self, seconds: f64) {
+        self.sky_clock = Some(seconds);
+    }
+
+    /// Says whether storms send their own bolts of lightning to the ground
+    /// (as they do until told otherwise) or the game sends each itself with
+    /// [`strike`](Self::strike), knowing where it falls.
+    pub fn set_storm_bolts(&mut self, own: bool) {
+        self.storm_bolts = Some(own);
+    }
+
+    /// Whether storms send their own bolts, if the game said this frame.
+    pub(crate) fn take_storm_bolts(&mut self) -> Option<bool> {
+        self.storm_bolts.take()
+    }
+
+    /// Says what the weather is, all of it: how much cloud, how stormy,
+    /// how hard it rains or snows, how warm the air is, the wind, the fog,
+    /// the snow that lies and the ice on the water, and the tornado if
+    /// there is one. See [`lore_render::Weather`]. What is said last in a
+    /// frame is what is drawn; it takes the place of
+    /// [`set_storminess`](Self::set_storminess).
+    pub fn set_weather(&mut self, weather: lore_render::Weather) {
+        self.weather = Some(weather);
+    }
+
+    /// The weather, if the game said it this frame.
+    pub(crate) fn take_weather(&mut self) -> Option<lore_render::Weather> {
+        self.weather.take()
+    }
+
+    /// How far rain has raised the water and what the sky's clock shows,
+    /// if the game said them this frame.
+    pub(crate) fn take_water(&mut self) -> (Option<f32>, Option<f64>) {
+        (self.water_rise.take(), self.sky_clock.take())
+    }
+
+    /// The lightning let go this frame.
+    pub(crate) fn take_strikes(&mut self) -> Vec<Lightning> {
+        std::mem::take(&mut self.strikes)
+    }
+
+    /// How stormy the sky was said to be this frame, if it was said.
+    pub(crate) fn take_storminess(&mut self) -> Option<f32> {
+        self.storminess.take()
+    }
+
+    /// The bubbles let go this frame: where, and how many.
+    pub(crate) fn take_bubbles(&mut self) -> Vec<([f32; 3], u32)> {
+        std::mem::take(&mut self.bubbles)
+    }
+
+    /// Whether the ears are under water, if the game said this frame.
+    pub(crate) fn under_water(&self) -> Option<bool> {
+        self.under_water
     }
 
     /// The sounds asked for this frame, in order.

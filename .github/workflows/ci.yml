@@ -72,6 +72,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libasound2-dev libvulkan1 mesa-vulkan-drivers
       - run: cargo build --release -p lore
+      # Tests run debug builds, where this has always worked: a release
+      # build once ended the game on any script mistake (#353).
+      - name: A script mistake is shown, not fatal, in a release build
+        run: |
+          mkdir -p mistake
+          echo 'game.onTik()' > mistake/main.luau
+          ./target/release/lore check mistake > mistake.txt 2>&1 || true
+          cat mistake.txt
+          grep -q 'Did you mean game.onTick' mistake.txt
       # The budget is for a slow frame (99 of 100 are faster) on lavapipe on
       # this kind of machine, with room for a busy one; see docs/decisions.md.
       - name: Benchmark

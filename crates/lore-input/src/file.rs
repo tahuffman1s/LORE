@@ -24,7 +24,8 @@ const TABLE: &str = "bindings";
 
 /// What a written file says before its bindings.
 const HEADER: &str = "\
-# Controls. Change a line, save this file, then start the game again.
+# Controls. Change a line and save this file: a game that is running
+# uses it at once, and every other game when it starts.
 #
 # A line that starts with # is not read: that action keeps the game's own
 # controls. To change one, take away the # and edit the names in its list.

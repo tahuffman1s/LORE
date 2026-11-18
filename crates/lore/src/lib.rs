@@ -39,6 +39,7 @@ mod gamepad;
 pub mod level;
 mod look;
 pub mod map;
+mod meter;
 pub mod noise;
 mod pace;
 #[cfg(feature = "cli")]

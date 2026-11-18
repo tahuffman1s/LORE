@@ -7,8 +7,10 @@ use ash::vk;
 use lore_assets::Scene;
 use lore_ui::DrawList;
 
+use crate::bolt::Lightning;
 use crate::buffer::Buffer;
 use crate::camera::Camera;
+use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
 use crate::font::Font;
 use crate::gpu::Gpu;
@@ -16,9 +18,12 @@ use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
 use crate::swapchain::COLOUR;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline};
+use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
+use crate::water::Stir;
+use crate::weather::Weather;
 
 /// The format of the picture nobody sees: what most windows use, without
 /// the sRGB curve built in.
@@ -74,6 +79,8 @@ pub struct Headless {
     tonemap: TonemapPipeline,
     mesh: MeshPipeline,
     meshes: Option<Meshes>,
+    /// What a splash threw up, and what is stirring the water.
+    effects: Effects,
     /// Whether the editor's ground grid is drawn.
     grid: bool,
     view: SceneView,
@@ -132,7 +139,9 @@ impl Headless {
             width: width.max(1),
             height: height.max(1),
         };
-        let view = SceneView::new(&gpu, extent, upscaling)?;
+        let mut view = SceneView::new(&gpu, extent, upscaling)?;
+        // The same camera gives the same picture, whenever it is drawn.
+        view.still = true;
         let mesh = MeshPipeline::new(&gpu, 1)?;
         let tonemap = TonemapPipeline::new(&gpu, FORMAT)?;
         let ui = UiPass::new(&gpu, FORMAT, 1)?;
@@ -170,6 +179,7 @@ impl Headless {
             tonemap,
             mesh,
             meshes: None,
+            effects: Effects::new(),
             grid: false,
             view,
             extent,
@@ -208,7 +218,115 @@ impl Headless {
         // Every frame is waited for, so the old meshes are not in use.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        // Nothing that flew in the old level is in the new one.
+        self.effects.clear();
         Ok(())
+    }
+
+    /// Lets time pass between pictures, or holds it still again. It is held
+    /// still to begin with, so that the same camera gives the same
+    /// picture; with time passing, each picture is a sixtieth of a second
+    /// after the last, and clouds drift and what bends in the wind moves.
+    pub fn let_time_pass(&mut self, passing: bool) {
+        self.view.still = !passing;
+    }
+
+    /// Says that something went into the water, or is pushing through it:
+    /// drops fly up from where it did, spray hangs for a moment, bubbles
+    /// are dragged under, and rings run out across the water.
+    ///
+    /// Call it once for each thing, when it happens. See [`Splash`].
+    pub fn splash(&mut self, splash: Splash) {
+        self.effects.splash(splash);
+    }
+
+    /// Lets a stroke of lightning go from one place to another: a crooked,
+    /// forked bolt made by rule from its `seed`, which comes down, lights
+    /// up, flickers and is gone in two thirds of a second, and lights the
+    /// clouds and the land round it while it lasts. Storms in the sky send
+    /// their own. See [`Lightning`].
+    pub fn strike(&mut self, lightning: Lightning) {
+        self.effects.strike(lightning);
+    }
+
+    /// Says how stormy the sky is, from 0, fair weather with the odd storm
+    /// passing, to 1, storms over most of it. Under a storm it rains, and
+    /// hails in its core; the wind blows harder, the ground gets wet and
+    /// lightning strikes. Anything that is not a number from 0 to 1 is
+    /// taken as the nearest that is.
+    pub fn set_storminess(&mut self, storminess: f32) {
+        self.effects.set_storminess(storminess);
+    }
+
+    /// Says what the weather is: how much cloud, how stormy, how hard it
+    /// rains or snows, how warm the air is, the wind, the fog, the snow
+    /// that lies and the ice on the water, and the tornado if there is
+    /// one. See [`Weather`]. The picture is drawn in it from the next
+    /// frame on; numbers out of their range are brought into it.
+    pub fn set_weather(&mut self, weather: Weather) {
+        self.effects.set_weather(weather);
+    }
+
+    /// The weather it was last said to be: fair, until something is said.
+    #[must_use]
+    pub fn weather(&self) -> Weather {
+        *self.effects.said()
+    }
+
+    /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
+    /// midnight, and hours past 24 run on into the next day, which moves
+    /// the moon a day further round its month. The sun and the moon stand
+    /// where that hour has them, dusk and night fall, the stars come out
+    /// and the moon lights the land. With `None`, which is how a level
+    /// starts, the level's own light is the light and it is always day.
+    pub fn set_hour(&mut self, hour: Option<f64>) {
+        self.effects.set_hour(hour);
+    }
+
+    /// Says whether storms send their own bolts to the ground, as they do
+    /// until told otherwise. A game that sends them itself with
+    /// [`strike`](Self::strike), so that it knows where each fell and can
+    /// let its thunder be heard, says `false`. Flashes that stay inside
+    /// the cloud are the storm's own either way.
+    pub fn set_storm_bolts(&mut self, own: bool) {
+        self.effects.set_bolts_of_its_own(own);
+    }
+
+    /// Says how far rain has raised the level's still water, in metres:
+    /// every lake and pond is drawn that much higher, and over whatever
+    /// ground beside it is lower than that. The game's rules decide it
+    /// (`Level::set_water_rise` in the physics); this shows it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.effects.set_rise(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds: the game's own
+    /// time, so that clouds, storms and rain are where the game's rules
+    /// have them and a saved game finds the same sky. With `None`, which
+    /// is how it starts, the clock is how long the picture has been drawn.
+    pub fn set_sky_clock(&mut self, clock: Option<f64>) {
+        self.view.set_clock(clock);
+    }
+
+    /// Says that something is in the water during the next frame drawn: a
+    /// leg wading, a body swimming. Rings run out from it, and it trails
+    /// a wake as it moves. Call it every frame for as long as it is there.
+    pub fn stir(&mut self, stir: Stir) {
+        self.effects.stir(stir);
+    }
+
+    /// Presses the snow down at a place: a foot coming down in it, or a
+    /// body wading through. The track stays, and is carved out of the snow
+    /// wherever it is drawn within twenty-five metres of the eye, until
+    /// new snow has filled it in. Nothing is seen of it where no snow lies.
+    pub fn tread(&mut self, tread: Tread) {
+        self.effects.tread(tread);
+    }
+
+    /// Lets `count` bubbles go at `place`, under water: breath, or the air
+    /// a hand drags down with it. They rise and are gone at the surface.
+    pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
+        self.effects.bubbles(place, count);
     }
 
     /// Draws the editor's ground grid or not from now on, as
@@ -242,6 +360,13 @@ impl Headless {
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
         let device = self.gpu.device();
         let start = Instant::now();
+        // What flies moves on by a frame, unless time is held still.
+        let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
+        self.effects.storms(self.view.seconds(), camera.position);
+        self.effects
+            .step(passed, self.meshes.as_ref().map_or(&[][..], Meshes::waters));
+        let weather = self.effects.air(self.view.seconds());
+        let tracks = self.effects.take_tracks();
         // SAFETY: every handle belongs to `self.gpu`'s device and is alive;
         // the last frame was waited for, so nothing here is still in use,
         // and this frame is waited for before anything can be destroyed.
@@ -262,7 +387,14 @@ impl Headless {
                 &self.mesh,
                 Contents {
                     meshes: self.meshes.as_ref(),
+                    sky: true,
                     grid: self.grid,
+                    stirs: self.effects.stirs(),
+                    bits: self.effects.bytes(),
+                    flashes: self.effects.flashes(),
+                    weather,
+                    day: self.effects.day(),
+                    tracks: self.effects.tracks(tracks),
                 },
                 camera,
                 FRAME_SECONDS,
@@ -541,13 +673,15 @@ mod tests {
             let at = (y * SIZE[0] + x) * 4;
             [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
         };
-        // The brightest of the pixels around the place, since a line is a
-        // pixel or two wide.
+        // The most coloured of the pixels around the place, since a line
+        // is a pixel or two wide and what is behind it is grey.
         let near = |x: usize, y: usize| {
+            let coloured =
+                |[red, green, blue]: [i32; 3]| red.max(green).max(blue) - red.min(green).min(blue);
             let mut best = [0; 3];
             for (x, y) in (y - 2..=y + 2).flat_map(|y| (x - 2..=x + 2).map(move |x| (x, y))) {
                 let found = pixel(&with_grid, x, y);
-                if found.iter().sum::<i32>() > best.iter().sum::<i32>() {
+                if coloured(found) > coloured(best) {
                     best = found;
                 }
             }
@@ -555,12 +689,12 @@ mod tests {
         };
         let [red, green, blue] = near(SIZE[0] / 4 + 5, SIZE[1] / 2);
         assert!(
-            red > 2 * green && red > 2 * blue,
+            red > green + 40 && red > blue + 40,
             "X axis: {red} {green} {blue}"
         );
         let [red, green, blue] = near(SIZE[0] / 2, SIZE[1] * 3 / 4 + 3);
         assert!(
-            blue > 2 * red && blue > green,
+            blue > red + 40 && blue > green,
             "Z axis: {red} {green} {blue}"
         );
         // Lines a metre apart, lighter than the background between them.
@@ -573,6 +707,470 @@ mod tests {
         assert_eq!(pixel(&with_grid, 128, 4), pixel(&plain, 128, 4));
         headless.set_grid(false);
         assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn the_sky_is_blue_above_and_brightest_at_the_sun_and_dark_below() {
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let middle = |headless: &mut Headless, yaw: f32, pitch: f32| {
+            let camera = Camera {
+                yaw,
+                pitch,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        // Away from the usual sun, which stands to the right and behind:
+        // well up, the sky or a cloud; either way no redder than blue.
+        let [red, green, blue] = middle(&mut headless, 0.9, 1.0);
+        assert!(blue >= red && blue > 90, "above: {red} {green} {blue}");
+        // Straight at the sun: as bright as the picture goes, unless a
+        // cloud is in the way, and then still bright.
+        let towards = [0.399_44_f32, 0.768_92, 0.499_3];
+        let yaw = (-towards[0]).atan2(-towards[2]);
+        let [red, green, blue] = middle(&mut headless, yaw, towards[1].asin());
+        assert!(red + green + blue > 500, "the sun: {red} {green} {blue}");
+        // Under the horizon there is ground, not more sky.
+        let [red, green, blue] = middle(&mut headless, 0.9, -0.8);
+        assert!(red + green + blue < 150, "below: {red} {green} {blue}");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn far_ground_fades_into_the_colour_of_the_sky() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor four kilometres across.
+        let mut scene = Scene::default();
+        let corners = [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]];
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: corners.map(|[x, z]| [x * 2000.0, 0.0, z * 2000.0]).to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        headless.set_scene(&scene).unwrap();
+        // From sixty metres up, looking a little down: the floor at the
+        // foot of the picture is under a hundred metres off, and just
+        // under the horizon it is more than a kilometre away.
+        let camera = Camera {
+            position: [0.0, 60.0, 0.0],
+            pitch: -0.3,
+            ..Camera::default()
+        };
+        let picture = headless.screenshot(&camera).unwrap();
+        let pixel = |x: usize, y: usize| {
+            let at = (y * SIZE[0] + x) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        // The horizon is between rows 18 and 19 of the picture.
+        let (near, far, sky) = (pixel(48, 62), pixel(48, 21), pixel(48, 16));
+        assert!(
+            (near[0] - near[2]).abs() < 30,
+            "white up close, whatever shades it: {near:?}"
+        );
+        assert!(
+            far[2] - far[0] > near[2] - near[0] + 5,
+            "bluer with distance: {far:?} against {near:?}"
+        );
+        // And it meets the sky without a line.
+        assert!(
+            (0..3).all(|colour| (far[colour] - sky[colour]).abs() < 45),
+            "{far:?} against the sky's {sky:?}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn water_shows_the_bottom_less_the_deeper_it_is_and_the_sky_when_looked_along() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor, and a sheet of dark water over it: how far over
+        // is set below.
+        let square = |wide: f32, height: f32, material: u32| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * wide, height, z * wide])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let placed = |mesh: u32, extras: Option<&str>| Instance {
+            mesh,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: extras.map(str::to_owned),
+        };
+        let scene = |deep: f32| {
+            let mut scene = Scene::default();
+            scene.meshes.push(square(500.0, 0.0, 0));
+            scene.meshes.push(square(500.0, deep, 1));
+            scene.materials.push(Material::default());
+            scene.materials.push(Material {
+                base_color: [0.02, 0.07, 0.08, 1.0],
+                ..Material::default()
+            });
+            scene.instances.push(placed(0, None));
+            scene.instances.push(placed(1, Some(r#"{"water": true}"#)));
+            scene
+        };
+        let middle = |headless: &mut Headless, height: f32, pitch: f32| {
+            let camera = Camera {
+                position: [0.0, height, 0.0],
+                pitch,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        let light = |[red, green, blue]: [i32; 3]| red + green + blue;
+
+        // Straight down into water a hand deep: the white floor, nearly
+        // as it is.
+        headless.set_scene(&scene(0.1)).unwrap();
+        let shallow = middle(&mut headless, 3.0, -1.5);
+        // Into water ten metres deep: its own dark colour, and the red
+        // gone first.
+        headless.set_scene(&scene(10.0)).unwrap();
+        let deep = middle(&mut headless, 13.0, -1.5);
+        assert!(
+            light(shallow) > light(deep) + 250,
+            "shallow {shallow:?}, deep {deep:?}"
+        );
+        assert!(deep[0] < deep[2], "deep water is not red: {deep:?}");
+        // Two metres down the floor still shows, bluer than it is.
+        headless.set_scene(&scene(2.0)).unwrap();
+        let between = middle(&mut headless, 5.0, -1.5);
+        assert!(
+            light(between) > light(deep) + 60 && between[2] > between[0] + 25,
+            "two metres down {between:?}, deep {deep:?}"
+        );
+        // Along deep water: the sky, far brighter than the water itself.
+        headless.set_scene(&scene(10.0)).unwrap();
+        let along = middle(&mut headless, 13.0, -0.05);
+        assert!(
+            light(along) > light(deep) + 200 && along[2] >= along[0],
+            "along {along:?}, down {deep:?}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn still_water_is_drawn_in_the_shape_it_filled_and_a_splash_stirs_it() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart, Water};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor a metre down, and a body of dark water that filled
+        // a round hollow three metres across over the middle of it (the
+        // hollow itself is not drawn: only where the water says it is).
+        let mut scene = Scene::default();
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * 500.0, -1.0, z * 500.0])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        let points = 41_u32;
+        let depths = (0..points * points)
+            .map(|at| {
+                let (x, z) = (
+                    (at % points) as f32 * 0.25 - 5.0,
+                    (at / points) as f32 * 0.25 - 5.0,
+                );
+                if x.hypot(z) < 1.5 { 1.0 } else { Water::DRY }
+            })
+            .collect();
+        scene.waters.push(Water {
+            name: None,
+            // No sheet stands for it.
+            sources: Vec::new(),
+            level: 0.0,
+            origin: [-5.0, -5.0],
+            cell: 0.25,
+            size: [points, points],
+            depths,
+            colour: [0.0, 0.02, 0.02, 0.3],
+        });
+        headless.set_scene(&scene).unwrap();
+        let light = |picture: &[u8], [x, y]: [usize; 2]| {
+            let at = (y * SIZE[0] + x) * 4;
+            i32::from(picture[at]) + i32::from(picture[at + 1]) + i32::from(picture[at + 2])
+        };
+        // From four metres up, straight down: murky water in the middle,
+        // the white floor beside it, and a round shore between.
+        let above = Camera {
+            position: [0.0, 4.0, 0.0],
+            pitch: -1.5,
+            ..Camera::default()
+        };
+        let picture = headless.screenshot(&above).unwrap();
+        // Water takes the red out of what is seen through it first.
+        let red = |picture: &[u8], [x, y]: [usize; 2]| i32::from(picture[(y * SIZE[0] + x) * 4]);
+        let (middle, beside) = (red(&picture, [48, 32]), red(&picture, [6, 32]));
+        assert!(
+            beside > middle + 40,
+            "red in the water {middle}, on the floor {beside}"
+        );
+        assert!(
+            red(&picture, [48, 3]) > middle + 40,
+            "the floor past its far shore"
+        );
+        assert!(light(&picture, [6, 32]) > light(&picture, [48, 32]) + 40);
+        // From under it, looking up, the picture is the water's and not
+        // the bright sky's.
+        let under = Camera {
+            position: [0.0, -0.6, 0.0],
+            pitch: 0.4,
+            ..Camera::default()
+        };
+        let from_below = headless.screenshot(&under).unwrap();
+        let dry = Camera {
+            position: [20.0, -0.6, 0.0],
+            ..under
+        };
+        let from_air = headless.screenshot(&dry).unwrap();
+        assert!(
+            light(&from_air, [48, 8]) > light(&from_below, [48, 8]) + 40,
+            "sky {} against water overhead {}",
+            light(&from_air, [48, 8]),
+            light(&from_below, [48, 8])
+        );
+
+        // Time passes; something drops in; drops fly and rings spread,
+        // and the picture of the water is not what it was.
+        headless.let_time_pass(true);
+        let side = Camera {
+            position: [0.0, 1.2, 3.0],
+            pitch: -0.4,
+            ..Camera::default()
+        };
+        for _ in 0..4 {
+            headless.render(&side).unwrap();
+        }
+        let calm = headless.screenshot(&side).unwrap();
+        headless.splash(crate::Splash {
+            place: [0.0, 0.0, 0.0],
+            moving: [0.0, -7.0, 0.0],
+            wide: 0.5,
+        });
+        headless.stir(crate::Stir {
+            place: [0.4, 0.0],
+            wide: 0.3,
+            moving: [1.0, 0.0],
+            body: 0.1,
+            churn: 0.5,
+            ..crate::Stir::default()
+        });
+        headless.bubbles([0.0, -0.5, 0.0], 12);
+        for _ in 0..12 {
+            headless.render(&side).unwrap();
+        }
+        let stirred = headless.screenshot(&side).unwrap();
+        let changed = calm
+            .iter()
+            .zip(&stirred)
+            .filter(|(before, after)| before.abs_diff(**after) > 24)
+            .count();
+        assert!(changed > 150, "only {changed} bytes of the picture changed");
+        // And it all dies away: nothing is left in the air.
+        for _ in 0..600 {
+            headless.render(&side).unwrap();
+        }
+        assert_eq!(headless.effects.count(), 0);
+        // Something moving through the water, with nothing thrown up,
+        // changes the picture too: that is its rings and its wake.
+        let at_rest = headless.screenshot(&side).unwrap();
+        for frame in 0..40_u8 {
+            headless.stir(crate::Stir {
+                place: [-0.8 + 0.04 * f32::from(frame), 0.2],
+                wide: 0.3,
+                moving: [2.4, 0.0],
+                body: 0.2,
+                ..crate::Stir::default()
+            });
+            headless.render(&side).unwrap();
+        }
+        assert_eq!(headless.effects.count(), 0);
+        let waked = headless.screenshot(&side).unwrap();
+        let changed = at_rest
+            .iter()
+            .zip(&waked)
+            .filter(|(before, after)| before.abs_diff(**after) > 16)
+            .count();
+        assert!(changed > 60, "a wake changed only {changed} bytes");
+        // The level set again is drawn again, water and all, with nothing
+        // left pointing at the old one's pictures.
+        headless.set_scene(&scene).unwrap();
+        headless.render(&side).unwrap();
+        headless.render(&above).unwrap();
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn what_a_level_says_bends_in_the_wind_moves_and_nothing_else_does() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A red leaf a metre across, eight metres over where it is rooted,
+        // above a white floor.
+        let square = |wide: f32, height: f32, material: u32| Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * wide, height, z * wide])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                material,
+                ..MeshPart::default()
+            }],
+        };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let scene = |properties: Option<&str>| {
+            let mut scene = Scene::default();
+            scene.meshes.push(square(200.0, 0.0, 0));
+            scene.meshes.push(square(0.5, 8.0, 1));
+            scene.materials.push(Material::default());
+            scene.materials.push(Material {
+                base_color: [1.0, 0.0, 0.0, 1.0],
+                ..Material::default()
+            });
+            for (mesh, extras) in [(0, None), (1, properties)] {
+                scene.instances.push(Instance {
+                    mesh,
+                    transform,
+                    mirrored: false,
+                    name: None,
+                    extras: extras.map(str::to_owned),
+                });
+            }
+            scene
+        };
+        let camera = Camera {
+            position: [0.0, 14.0, 0.0],
+            pitch: -std::f32::consts::FRAC_PI_2,
+            ..Camera::default()
+        };
+        // Where the leaf is in the picture: the middle of its red pixels.
+        let leaf = |headless: &mut Headless| {
+            let picture = headless.screenshot(&camera).unwrap();
+            let (mut across, mut down, mut count) = (0.0_f32, 0.0_f32, 0.0_f32);
+            for y in 0..SIZE[1] {
+                for x in 0..SIZE[0] {
+                    let at = (y * SIZE[0] + x) * 4;
+                    if picture[at] > 120 && picture[at + 1] < 60 {
+                        #[allow(clippy::cast_precision_loss)]
+                        {
+                            across += x as f32;
+                            down += y as f32;
+                        }
+                        count += 1.0;
+                    }
+                }
+            }
+            assert!(count > 20.0, "the leaf is in the picture: {count} pixels");
+            [across / count, down / count]
+        };
+        // How far the leaf goes in the next two seconds.
+        let wanders = |headless: &mut Headless| {
+            let from = leaf(headless);
+            let mut farthest = 0.0_f32;
+            for _ in 0..12 {
+                for _ in 0..10 {
+                    headless.render(&camera).unwrap();
+                }
+                let now = leaf(headless);
+                farthest = farthest.max((now[0] - from[0]).hypot(now[1] - from[1]));
+            }
+            farthest
+        };
+
+        // Held still, as pictures are to begin with, it stays where it is.
+        headless.set_scene(&scene(Some(r#"{"wind": 1}"#))).unwrap();
+        assert!(wanders(&mut headless) < 0.01);
+        // With time passing it moves.
+        headless.let_time_pass(true);
+        let moved = wanders(&mut headless);
+        assert!(moved > 0.3, "the leaf moved {moved} pixels");
+        // And a leaf nobody said bends does not.
+        headless.set_scene(&scene(None)).unwrap();
+        let moved = wanders(&mut headless);
+        assert!(moved < 0.01, "a stiff leaf moved {moved} pixels");
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

@@ -2,6 +2,10 @@
 
 use parry3d::shape::Capsule;
 
+/// The furthest up or down a look counts, in radians: a little short of
+/// straight up, so that forward always points somewhere.
+const STEEPEST_LOOK: f32 = 1.5;
+
 /// What the player is asking for during one tick.
 ///
 /// This is deliberately not tied to keys or sticks: fill it from actions,
@@ -20,8 +24,13 @@ pub struct MoveInput {
     pub jump: bool,
     /// Crouch is held.
     pub crouch: bool,
-    /// Sprint is held. It only counts while standing and heading forward.
+    /// Sprint is held. It only counts while standing and heading forward,
+    /// or while swimming forward.
     pub sprint: bool,
+    /// How far up (positive) or down the player looks, in radians. It only
+    /// matters to a swimmer: under water forward is the way they look, and
+    /// at the surface looking steeply down dives.
+    pub pitch: f32,
 }
 
 impl MoveInput {
@@ -39,6 +48,11 @@ impl MoveInput {
             forward: axis(self.forward),
             right: axis(self.right),
             yaw: if self.yaw.is_finite() { self.yaw } else { 0.0 },
+            pitch: if self.pitch.is_finite() {
+                self.pitch.clamp(-STEEPEST_LOOK, STEEPEST_LOOK)
+            } else {
+                0.0
+            },
             ..self
         }
     }
@@ -77,6 +91,15 @@ pub struct MoveSettings {
     pub sprint_speed: f32,
     /// Top speed while crouched.
     pub crouch_speed: f32,
+    /// How fast an unhurried swimmer goes along the surface, averaged over
+    /// a stroke: each pull surges ahead of this and each glide falls behind.
+    /// Under water the same strokes go a fifth faster.
+    pub swim_speed: f32,
+    /// How fast a swimmer goes while sprinting, averaged the same way.
+    pub swim_sprint_speed: f32,
+    /// How many seconds a full breath lasts with the head under water. See
+    /// [`Player::breath`](crate::Player::breath).
+    pub breath_time: f32,
     /// How high a jump lifts the feet.
     pub jump_height: f32,
     /// How fast falling speeds up, in metres per second each second.
@@ -113,6 +136,9 @@ impl Default for MoveSettings {
             walk_speed: 4.5,
             sprint_speed: 6.5,
             crouch_speed: 2.0,
+            swim_speed: 1.0,
+            swim_sprint_speed: 1.7,
+            breath_time: 30.0,
             jump_height: 1.1,
             gravity: 20.0,
             fall_speed_limit: 50.0,

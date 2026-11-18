@@ -28,4 +28,7 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# Not `panic = "abort"`: a script error is raised through the engine's own
+# code (Luau throws, and mlua carries it across), which needs unwinding. With
+# abort, every script mistake ended the game instead of being shown.
+panic = "unwind"

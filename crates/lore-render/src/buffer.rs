@@ -119,6 +119,37 @@ impl Buffer {
         Ok(())
     }
 
+    /// Replaces the start of the buffer with `parts`, one after another.
+    ///
+    /// # Safety
+    ///
+    /// As for [`write`](Self::write): the buffer must be at least as long
+    /// as all of `parts` together.
+    pub(crate) unsafe fn write_parts(&self, parts: &[&[u8]]) -> Result<(), RenderError> {
+        let length: usize = parts.iter().map(|part| part.len()).sum();
+        if length == 0 {
+            return Ok(());
+        }
+        let device = self.gpu.device();
+        // SAFETY: the caller guarantees the memory can be mapped, is at
+        // least `length` long and is not in use; each part is written
+        // after the last, inside those `length` bytes, and it is unmapped
+        // straight after.
+        unsafe {
+            let mapped = device
+                .map_memory(self.memory, 0, length as u64, vk::MemoryMapFlags::empty())
+                .map_err(RenderError::driver("drawing a frame"))?
+                .cast::<u8>();
+            let mut written = 0;
+            for part in parts {
+                std::ptr::copy_nonoverlapping(part.as_ptr(), mapped.add(written), part.len());
+                written += part.len();
+            }
+            device.unmap_memory(self.memory);
+        }
+        Ok(())
+    }
+
     /// The first `length` bytes of the buffer.
     ///
     /// # Safety

@@ -847,9 +847,9 @@ fn write_value(into: &mut String, value: &Value) {
 
 /// What a file looked like at one moment: when it was last written and how
 /// long it is.
-type Stamp = (SystemTime, u64);
+pub(crate) type Stamp = (SystemTime, u64);
 
-fn stamp(path: &Path) -> Option<Stamp> {
+pub(crate) fn stamp(path: &Path) -> Option<Stamp> {
     let about = fs::metadata(path).ok()?;
     Some((about.modified().ok()?, about.len()))
 }

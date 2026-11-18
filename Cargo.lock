@@ -1434,6 +1434,7 @@ dependencies = [
  "egui-winit",
  "flate2",
  "gilrs",
+ "libm",
  "log",
  "lore-assets",
  "lore-audio",

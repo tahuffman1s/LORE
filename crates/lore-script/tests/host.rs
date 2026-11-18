@@ -1424,3 +1424,130 @@ fn many_caught_engine_errors_in_one_tick_do_not_use_up_the_time_limit() {
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     assert_eq!(printed(), ["done"]);
 }
+
+#[test]
+fn a_script_switches_action_sets_and_a_saved_script_starts_in_gameplay() {
+    let game = GameFolder::new(
+        r#"
+        print(game.input.currentSet())
+        game.onTick(function()
+            if game.input.justPressed("interact") then
+                game.input.useSet("menu")
+            end
+            if game.input.justPressed("menu_back") then
+                game.input.useSet("gameplay")
+            end
+            if game.input.justPressed("jump") then print("jump") end
+            if game.input.justPressed("menu_confirm") then print("confirm") end
+        end)
+        game.onDraw(function() print("in " .. game.input.currentSet()) end)
+        "#,
+    );
+    let mut host = game.open();
+    let mut input = Input::new(ActionMap::standard());
+    let menu = input.map().set("menu").unwrap();
+    assert_eq!(printed(), ["gameplay"]);
+    host.tick(input.tick(), STEP);
+    assert_eq!(host.take_action_set(), None, "nothing was chosen");
+
+    // What the window does with the set a script chose.
+    let step = |host: &mut ScriptHost, input: &mut Input| {
+        host.tick(input.tick(), STEP);
+        let chosen = host.take_action_set();
+        if let Some(set) = chosen {
+            input.set_active_set(set);
+        }
+        chosen
+    };
+    input.press(Key::E);
+    assert_eq!(step(&mut host, &mut input), Some(menu));
+    assert_eq!(host.action_set(), menu);
+    input.release(Key::E);
+    host.draw(0.5);
+    assert_eq!(printed(), ["in menu"]);
+
+    // Space is jump in one set and confirm in the other.
+    input.press(Key::Space);
+    assert_eq!(step(&mut host, &mut input), None, "taken once");
+    assert_eq!(printed(), ["confirm"]);
+    input.release(Key::Space);
+
+    input.press(Key::Escape);
+    assert_eq!(step(&mut host, &mut input), Some(ActionMap::GAMEPLAY));
+    input.release(Key::Escape);
+    input.press(Key::Space);
+    step(&mut host, &mut input);
+    assert_eq!(printed(), ["jump"]);
+    input.release(Key::Space);
+
+    // A saved script starts again in gameplay, as its variables start
+    // again, and the window is told.
+    input.press(Key::E);
+    assert_eq!(step(&mut host, &mut input), Some(menu));
+    printed();
+    host.reload().unwrap();
+    assert_eq!(printed(), ["gameplay"]);
+    assert_eq!(host.take_action_set(), Some(ActionMap::GAMEPLAY));
+    assert_eq!(host.take_action_set(), None);
+    input.set_active_set(ActionMap::GAMEPLAY);
+
+    // One that does not load leaves the game in the set it was in.
+    input.release(Key::E);
+    step(&mut host, &mut input);
+    input.press(Key::E);
+    assert_eq!(step(&mut host, &mut input), Some(menu));
+    game.write("game.onTick(");
+    assert!(host.reload().is_err());
+    assert_eq!(host.action_set(), menu);
+    assert_eq!(host.take_action_set(), None);
+    errors();
+}
+
+#[test]
+fn a_mistake_with_an_action_set_says_what_to_write() {
+    let game = GameFolder::new(
+        r#"
+        print(select(2, pcall(game.input.useSet, "menus")))
+        print(select(2, pcall(game.input.useSet, "driving")))
+        print(select(2, pcall(game.input.useSet, 3)))
+        game.onDraw(function() game.input.useSet("menu") end)
+        "#,
+    );
+    let mut host = game.open();
+    let said = printed();
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(
+        said[0]
+            .contains("main.luau:2: \"menus\" is not a known action set. Did you mean \"menu\"?"),
+        "{said:?}"
+    );
+    assert!(
+        said[1].contains(
+            "main.luau:3: \"driving\" is not a known action set. The action sets are: \
+             gameplay, menu."
+        ),
+        "{said:?}"
+    );
+    assert!(
+        said[2].contains(
+            "main.luau:4: game.input.useSet needs the name of an action set in quotes, but it \
+             was given a number. Write it like this: game.input.useSet(\"menu\"). The action \
+             sets are \"gameplay\" and \"menu\"."
+        ),
+        "{said:?}"
+    );
+
+    // Which actions hear the player is a rule, not something to draw.
+    host.tick(&idle(), STEP);
+    host.draw(0.5);
+    let error = host
+        .last_error()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    assert!(
+        error
+            .contains("game.input.useSet changes the game, and game.onDraw is only for showing it"),
+        "{error}"
+    );
+    assert_eq!(host.take_action_set(), None);
+}

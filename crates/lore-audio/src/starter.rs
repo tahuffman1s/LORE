@@ -3,11 +3,25 @@
 //! They are made from arithmetic when asked for, not read from files, and
 //! come out the same every time. They are stand-ins: swap in
 //! recorded sounds with [`Sound::load`] when the game has its own.
+//!
+//! Besides feet and guns there is water: [`splashes`], [`small_splashes`],
+//! [`wading`], [`swim_strokes`], [`surfacing`], [`bubbles`], [`drips`] and
+//! the [`underwater`] rumble to loop while the head is under; and there is
+//! weather: [`thunder`] close by and [`far_thunder`] far off, and [`rain`]
+//! and [`wind`] to loop while they last.
 
 use std::f32::consts::TAU;
 
 use crate::vary::scramble;
 use crate::{Sound, SoundSet};
+
+mod storm;
+mod water;
+
+pub use storm::{far_thunder, rain, thunder, wind};
+pub use water::{
+    bubbles, drips, small_splashes, splashes, surfacing, swim_strokes, underwater, wading,
+};
 
 /// Samples a second of every starter sound.
 const RATE: u32 = 48_000;

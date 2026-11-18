@@ -262,6 +262,29 @@ impl Input {
         self.rebound = None;
     }
 
+    /// Gives the same actions other bindings, as when the player's bindings
+    /// file is read again while the game runs. Ids stay as they are.
+    ///
+    /// What is held stays held: an action whose key is still down does not
+    /// report `just_pressed` again, and one whose key no longer presses it
+    /// reports `just_released` on the next tick. A rebind that is listening
+    /// is cancelled.
+    ///
+    /// `map` must have the actions of the map it replaces. One with another
+    /// number of actions is taken as a new map: see [`set_map`](Self::set_map).
+    pub fn set_bindings(&mut self, map: ActionMap) {
+        if map.len() != self.map.len() {
+            self.set_map(map);
+            return;
+        }
+        if map.mouse_mode(self.active).is_none() {
+            self.switch_to(ActionMap::GAMEPLAY);
+        }
+        self.map = map;
+        self.listening = None;
+        self.rebound = None;
+    }
+
     /// Starts listening: the next key or button the player presses replaces
     /// `replacing` in the action's bindings.
     ///
@@ -1428,6 +1451,30 @@ mod tests {
         // A map with only the one set.
         s.input.set_map(ActionMap::new());
         assert_eq!(s.input.active_set(), ActionMap::GAMEPLAY);
+    }
+
+    #[test]
+    fn new_bindings_do_not_press_a_held_action_again_and_let_go_of_one_they_unbind() {
+        let mut input = Input::new(ActionMap::standard());
+        let jump = input.map().action("jump").unwrap();
+        let crouch = input.map().action("crouch").unwrap();
+        input.press(Key::Space);
+        input.press(Key::LeftControl);
+        let frame = input.tick();
+        assert!(frame.just_pressed(jump) && frame.just_pressed(crouch));
+
+        // Jump keeps its key; crouch moves to another.
+        let mut saved = ActionMap::standard();
+        saved
+            .read_bindings("[bindings]\ncrouch = [\"C\", \"GamepadEast\"]")
+            .unwrap();
+        input.set_bindings(saved);
+
+        let frame = input.tick();
+        assert!(frame.pressed(jump) && !frame.just_pressed(jump));
+        assert!(frame.just_released(crouch));
+        input.press(Key::C);
+        assert!(input.tick().just_pressed(crouch));
     }
 
     #[test]

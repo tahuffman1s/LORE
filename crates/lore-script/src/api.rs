@@ -6,7 +6,7 @@ use std::fmt::{Display, Write as _};
 use std::rc::Rc;
 use std::time::Instant;
 
-use lore_input::{ActionKind, ActionMap, ActionState, InputFrame, Rumble};
+use lore_input::{ActionKind, ActionMap, ActionSetId, ActionState, InputFrame, Rumble};
 use mlua::{Function, Lua, Table, Value, Variadic};
 
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
@@ -18,6 +18,7 @@ use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
 use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
+use crate::weather_api::{self, Climate};
 
 /// Every function directly on `game`. The type definitions shipped for editors
 /// are tested against this list.
@@ -50,6 +51,8 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "axis",
     "mouse",
     "rumble",
+    "useSet",
+    "currentSet",
 ];
 
 /// How many functions one event accepts. Far more than a game needs: reaching
@@ -67,6 +70,27 @@ pub(crate) struct Handlers {
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
+    pub lightning: Vec<Function>,
+}
+
+/// The action set the script has made live with `game.input.useSet`. The
+/// host owns it, so it can be asked for whether or not a script is running;
+/// a saved script starts again in `gameplay`.
+#[derive(Debug)]
+pub(crate) struct LiveSet {
+    /// The set the game is in: `gameplay` until the script says otherwise.
+    pub live: Cell<ActionSetId>,
+    /// Whether the script chose a set that the engine has not yet taken.
+    pub asked: Cell<bool>,
+}
+
+impl Default for LiveSet {
+    fn default() -> Self {
+        Self {
+            live: Cell::new(ActionMap::GAMEPLAY),
+            asked: Cell::new(false),
+        }
+    }
 }
 
 /// State the engine and one script VM both reach.
@@ -91,6 +115,10 @@ pub(crate) struct Shared {
     pub loading: Cell<bool>,
     /// The rumble the script asked for and the engine has not yet taken.
     pub rumble: Cell<Option<Rumble>>,
+    /// The action set the script chose.
+    pub live_set: Rc<LiveSet>,
+    /// What the script said of the weather and the hour.
+    pub weather: Rc<Climate>,
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
@@ -268,8 +296,19 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         reader(lua, shared, "mouse", two, |s| (s.delta[0], s.delta[1]))?,
     )?;
     input.set("rumble", rumble(lua, shared)?)?;
+    input.set("useSet", use_set(lua, shared)?)?;
+    let live = Rc::clone(shared);
+    input.set(
+        "currentSet",
+        lua.create_function(move |_, ()| {
+            Ok(live.actions.set_name(live.live_set.live.get()).to_owned())
+        })?,
+    )?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
+
+    game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set("weather", weather_api::weather(lua, shared)?)?;
 
     let sounds = audio::table(lua, shared)?;
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
@@ -284,6 +323,8 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("hud");
     members.push("input");
+    members.push("sky");
+    members.push("weather");
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
@@ -324,7 +365,7 @@ const SPAWN_TAKES_NOTHING: &str = "game.onSpawn's function is not handed a playe
      game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)";
 
 /// `game.onTick` and friends: remember a function to call later.
-fn on_event(
+pub(crate) fn on_event(
     lua: &Lua,
     shared: &Rc<Shared>,
     name: &'static str,
@@ -475,6 +516,50 @@ fn rumble(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
         let [strong, weak, seconds] = numbers;
         shared.rumble.set(Some(Rumble::new(strong, weak, seconds)));
         Ok(())
+    })
+}
+
+/// `game.input.useSet(name)`: make one action set the live one, for the
+/// engine to put into effect before the next tick it runs.
+fn use_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, value: Value| {
+        let Value::String(name) = &value else {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.input.useSet needs the name of an action set in quotes, but it was \
+                     given {}. Write it like this: game.input.useSet(\"menu\"). The action \
+                     sets are \"gameplay\" and \"menu\".",
+                    describe(&value)
+                ),
+            ));
+        };
+        let name = name.to_str()?;
+        // Which actions hear the player is part of the game's rules.
+        time_api::rules_only(lua, &shared, "game.input.useSet")?;
+        match shared.actions.set(&name) {
+            Ok(set) => {
+                shared.clock.note(&name);
+                shared.live_set.live.set(set);
+                shared.live_set.asked.set(true);
+                Ok(())
+            }
+            Err(unknown) => {
+                let mut message = unknown.to_string();
+                if unknown.suggestion.is_none() {
+                    message.push_str(" The action sets are: ");
+                    for (index, set) in shared.actions.sets().enumerate() {
+                        if index > 0 {
+                            message.push_str(", ");
+                        }
+                        message.push_str(shared.actions.set_name(set));
+                    }
+                    message.push('.');
+                }
+                Err(fail(lua, message))
+            }
+        }
     })
 }
 
@@ -643,7 +728,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 20] = [
+        let groups: [(&str, &[&str]); 22] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -656,6 +741,8 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),

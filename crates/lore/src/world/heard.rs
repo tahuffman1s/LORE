@@ -330,3 +330,49 @@ fn a_world_with_nobody_listening_still_lists_what_was_heard() {
     assert_eq!(NoiseKind::Footstep.sound(), "footstep");
     assert!(NoiseKind::Gunshot.range().far > NoiseKind::Footstep.range().far);
 }
+
+#[test]
+fn rain_and_wind_are_heard_for_as_long_as_they_last_and_a_tornado_from_where_it_is() {
+    // A fair day is silent: `Played::script` has checked that already.
+    let mut played = Played::script(
+        r"game.after(1, function()
+            game.weather.setRain(1)
+        end)
+        game.after(3, function()
+            game.weather.setRain(0)
+            game.audio.stopAll()
+        end)
+        game.after(5, function()
+            game.weather.setWind(vector.create(25, 0, 0))
+        end)
+        game.after(7, function()
+            game.weather.setWind(vector.create(0, 0, 0))
+            game.weather.startTornado(game.player.position + vector.create(900, 0, 0), { speed = 0, strength = 0.6 })
+        end)",
+    );
+    // It rains from a second in: heard in both ears alike.
+    played.run(120);
+    let [left, right] = played.loudest;
+    assert!(left > 0.05 && (left - right).abs() < 1e-4, "{left} {right}");
+    // It stops when the rain does, and nothing is left playing.
+    played.run(60);
+    played.loudest = [0.0; 2];
+    played.run(30);
+    assert_eq!(played.loudest, [0.0; 2], "rain goes on after it stopped");
+    // A gale is heard; a script that stops all its own sounds does not
+    // stop the weather's.
+    played.run(100);
+    let [left, right] = played.loudest;
+    assert!(left > 0.05 && (left - right).abs() < 1e-4, "{left} {right}");
+    // The tornado, most of a kilometre off to the right of where the
+    // player faces, roars in the right ear more than the left.
+    played.run(120);
+    played.loudest = [0.0; 2];
+    played.run(900);
+    let [left, right] = played.loudest;
+    assert!(right > 0.005 && right > left * 1.2, "{left} {right}");
+    assert!(
+        played.noises.is_empty(),
+        "the weather makes no noise of the player's"
+    );
+}
