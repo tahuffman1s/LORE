@@ -146,11 +146,7 @@ impl Twister {
         let ground = FOOT_FEELS
             .iter()
             .filter_map(|[off_x, off_z]| {
-                level.raycast(
-                    [x + off_x, y + 150.0, z + off_z],
-                    [0.0, -1.0, 0.0],
-                    600.0,
-                )
+                level.raycast([x + off_x, y + 150.0, z + off_z], [0.0, -1.0, 0.0], 600.0)
             })
             .map(|hit| hit.point[1])
             .reduce(f32::min);
