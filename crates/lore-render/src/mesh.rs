@@ -2524,16 +2524,12 @@ impl MeshPipeline {
                         &[],
                     );
                 }
-                let placed = Draw {
-                    world: multiply(clip, &draw.world),
-                    ..*draw
-                };
                 device.cmd_push_constants(
                     commands,
                     self.layout,
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
-                    &draw_bytes(&placed),
+                    &casting_bytes(&multiply(clip, &draw.world), &draw.world),
                 );
                 device.cmd_draw_indexed(
                     commands,
@@ -3113,6 +3109,22 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYT
     bytes
 }
 
+/// How many bytes the shader's `Casting` takes: a matrix and three rows.
+const CASTING_BYTES: usize = 16 * 4 + 16 * 3;
+
+/// The shader's `Casting` for one mesh part drawn into a shadow picture:
+/// `picture` takes its points to the picture, and `world` to where they
+/// stand, of which the first three rows are kept.
+fn casting_bytes(picture: &Mat4, world: &Mat4) -> [u8; CASTING_BYTES] {
+    let rows = [0, 1, 2].map(|row| world.map(|column| column[row]));
+    let numbers = picture.iter().chain(&rows).flatten();
+    let mut bytes = [0_u8; CASTING_BYTES];
+    for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(numbers) {
+        *slot = number.to_ne_bytes();
+    }
+    bytes
+}
+
 /// The shader's `Draw` for one mesh part.
 fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     // A mirrored mesh has its normal map's sideways direction turned around.
@@ -3322,6 +3334,28 @@ mod tests {
             0.5,
             "and how far the wind moves it"
         );
+    }
+
+    #[test]
+    fn a_caster_says_where_it_stands_in_the_world_by_rows() {
+        let mut picture = [[0.0; 4]; 4];
+        picture[3][3] = 2.0;
+        let mut world = [[0.0; 4]; 4];
+        for (axis, column) in world.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        // Moved to 5, 6, 7 and half as wide along x.
+        world[0][0] = 0.5;
+        world[3] = [5.0, 6.0, 7.0, 1.0];
+        let bytes = casting_bytes(&picture, &world);
+        assert!(bytes.len() <= DRAW_BYTES, "it fits where a draw does");
+        assert_eq!(number(&bytes, 15), 2.0, "the picture's matrix comes first");
+        // Then each row: a point's x is the first row against (x, y, z, 1).
+        assert_eq!(
+            [16, 19, 20, 23, 24, 27].map(|at| number(&bytes, at)),
+            [0.5, 5.0, 0.0, 6.0, 0.0, 7.0]
+        );
+        assert_eq!(number(&bytes, 21), 1.0);
     }
 
     #[test]

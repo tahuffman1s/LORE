@@ -2079,13 +2079,24 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     return pixel;
 }
 
-// What the sun sees of a mesh: only where it is. `draw.world_from_local`
-// here takes a corner point straight to the shadow picture being drawn.
+// What the sun, or a lamp, sees of a mesh: only where it is.
+struct Casting {
+    // Takes a corner point of the mesh straight to the shadow picture
+    // being drawn.
+    picture_from_local: mat4x4<f32>,
+    // The first three rows of what takes it to where it stands in the
+    // world, which says how a shuffled material's pictures are moved.
+    world_rows: array<vec4<f32>, 3>,
+}
+
+var<immediate> casting: Casting;
+
 struct Cast {
     @builtin(position) position: vec4<f32>,
     // The first UV map, then the second, and the corner's own alpha.
     @location(0) uv: vec4<f32>,
     @location(1) alpha: f32,
+    @location(2) world: vec3<f32>,
 }
 
 @vertex
@@ -2096,24 +2107,47 @@ fn vertex_shadow(
     @location(5) uv1: vec2<f32>,
 ) -> Cast {
     var seen: Cast;
-    seen.position = draw.world_from_local * vec4<f32>(position, 1.0);
+    let point = vec4<f32>(position, 1.0);
+    seen.position = casting.picture_from_local * point;
     seen.uv = vec4<f32>(uv0, uv1);
     seen.alpha = colour.a;
+    seen.world = vec3<f32>(
+        dot(casting.world_rows[0], point), dot(casting.world_rows[1], point), dot(casting.world_rows[2], point),
+    );
     return seen;
 }
+
+// How small a copy of a cut-out picture its shadow is read from at the
+// most, as a level of its chain of smaller copies (each half the last).
+// A copy made smaller by averaging loses its holes or fills them in, and
+// one shadow pixel far off covers a great deal of the picture: read from
+// the smallest copies, a leaf's shadow would vanish or go solid. Read from
+// one no smaller than this, each shadow pixel lands on a leaf or a hole,
+// and the soft edge of the shadow blends them as the leaves themselves do.
+const SHADOW_HOLES_LEVEL: f32 = 2.0;
 
 // A surface with holes cut in it casts a shadow with the same holes.
 @fragment
 fn fragment_shadow_cutout(seen: Cast) {
-    var alpha = material.base_colour.a * seen.alpha;
+    // On a painted material the alpha of the mesh's colour is the paint,
+    // not a hole.
+    var alpha = material.base_colour.a * select(seen.alpha, 1.0, material.paint.x != 0.0);
     if has(BASE) {
         let placing = material.placings[BASE];
         let uv = select(seen.uv.xy, seen.uv.zw, placing.u.w > 0.5);
-        alpha *= textureSample(
-            base_texture,
-            base_sampler,
-            vec2<f32>(dot(placing.u.xy, uv) + placing.u.z, dot(placing.v.xy, uv) + placing.v.z),
-        ).a;
+        let at = vec2<f32>(dot(placing.u.xy, uv) + placing.u.z, dot(placing.v.xy, uv) + placing.v.z);
+        let size = vec2<f32>(textureDimensions(base_texture));
+        let spans = max(length(dpdx(at) * size), length(dpdy(at) * size));
+        let level = clamp(log2(max(spans, 1.0)), 0.0, SHADOW_HOLES_LEVEL);
+        // Moved as the surface's own picture is, so the holes match.
+        let mixing = shuffle_of(seen.world, material.flags);
+        var picture = textureSampleLevel(base_texture, base_sampler, at + mixing.first, level).a;
+        if mixing.share > 0.0 {
+            picture = mix(
+                picture, textureSampleLevel(base_texture, base_sampler, at + mixing.second, level).a, mixing.share,
+            );
+        }
+        alpha *= picture;
     }
     if alpha < material.emissive.w {
         discard;
