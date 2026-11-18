@@ -20,7 +20,7 @@ use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
-use crate::hud::{HudPiece, HudState};
+use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
@@ -318,6 +318,12 @@ impl ScriptHost {
     pub fn tick(&mut self, input: &InputFrame, step: f32) {
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
+            // Which piece is held down, from this tick's pointer and click.
+            let click = {
+                let map = self.actions.borrow();
+                map.actions().find(|id| map.name(*id) == "menu_click")
+            };
+            hud::update_pressed(&version.shared, click);
         }
         self.clock.begin_tick(step);
         // A held direction counts its ticks whether or not the script asks.

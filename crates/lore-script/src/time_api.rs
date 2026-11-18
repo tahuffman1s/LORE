@@ -603,16 +603,19 @@ fn set_time_speed(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 ));
             }
         };
-        if !(0.0..=FASTEST).contains(&speed) {
+        if !speed.is_finite() {
             return Err(fail(
                 lua,
                 format!(
-                    "game.setTimeSpeed needs a speed from 0 to {FASTEST}, but it was given \
-                     {speed}. 1 is usual, 0 stops the game, 0.25 is slow and 4 is fast. \
-                     Write it like this: {EXAMPLE}"
+                    "game.setTimeSpeed was given a number with no size: infinity, or the \
+                     answer to a sum such as 0 / 0. It takes a speed from 0 to {FASTEST} \
+                     (numbers outside that are taken as the nearest end): 1 is usual, 0 \
+                     stops the game, 0.25 is slow and 4 is fast. Write it like this: \
+                     {EXAMPLE}"
                 ),
             ));
         }
+        let speed = speed.clamp(0.0, FASTEST);
         rules_only(lua, &shared, "game.setTimeSpeed")?;
         shared.clock.note(&speed.to_string());
         shared.clock.set_speed(speed);

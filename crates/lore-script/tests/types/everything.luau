@@ -249,12 +249,12 @@ end)
 
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
-game.input.bind("open map", { "F1", "GamepadSelect" })
+game.input.bind("open_map", { "F1", "GamepadSelect" })
 local mapShown = false
 local selected = 1
 local scroll = 0
 game.onTick(function()
-    if game.input.justPressed("open map") then
+    if game.input.justPressed("open_map") then
         mapShown = not mapShown
     end
     local px, py = game.input.pointer()
@@ -264,7 +264,7 @@ game.onTick(function()
     scroll += game.input.wheel()
     local sx, sy = game.input.stepped("menu_move")
     if sy ~= 0 then
-        selected = (selected - sy) % 4
+        selected = (selected - sy - 1) % 4 + 1
     end
     selected += sx
 end)
@@ -277,18 +277,15 @@ local slider = game.hud.bar(0.5, { at = "center", width = 300 })
 local graph = game.hud.frameGraph({ at = "top right", down = 100, width = 300, height = 100, frames = 500 })
 local plain = game.hud.frameGraph()
 game.onDraw(function()
-    fps.text = math.floor(game.frames.rate()) .. " fps, " .. game.frames.last() .. " ms"
-    fps.text ..= " slowest " .. game.frames.slowest() .. " low " .. game.frames.low()
+    fps.text = math.floor(game.frames.rate()) .. " fps, " .. string.format("%.1f ms", game.frames.lastTime() * 1000)
+    fps.text ..= " slowest " .. string.format("%.1f ms", game.frames.slowestTime() * 1000) .. " low " .. game.frames.lowRate()
     hint.text = "Press " .. game.input.label("interact") .. " to open"
-    if slider.hovered then
-        local across, down = slider:pointerAt()
-        if across and down then
-            slider.value = math.clamp(across, 0, 1)
-        end
+    if slider.pressed then
+        slider.value = math.clamp(slider:pointerAt(), 0, 1)
     end
-    graph.visible = not plain.hovered
-    local nowhere = graph:pointerAt()
-    print(nowhere, fps.hovered)
+    local across: number, down: number = graph:pointerAt()
+    graph.visible = not plain.hovered and not plain.pressed
+    print(across, down, fps.hovered, fps.pressed, hint.pressed)
 end)
 graph:remove()
 
@@ -311,7 +308,7 @@ end)
 
 -- The speed of time.
 game.onTick(function(step)
-    if game.input.justPressed("pause") and game.timeSpeed() > 0 then
+    if game.input.justPressed("open_map") and game.timeSpeed() > 0 then
         game.setTimeSpeed(0)
     elseif step == 0 and game.input.justPressed("menu_back") then
         game.setTimeSpeed(1)

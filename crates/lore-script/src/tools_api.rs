@@ -22,9 +22,9 @@ use crate::error::closest;
 use crate::time_api::rules_only;
 
 /// Every function on `game.frames`.
-pub(crate) const FRAMES_FUNCTIONS: &[&str] = &["rate", "last", "slowest", "low"];
+pub(crate) const FRAMES_FUNCTIONS: &[&str] = &["rate", "lowRate", "lastTime", "slowestTime"];
 
-/// How many frame times are kept: what `game.frames.slowest` looks back over.
+/// How many frame times are kept: what `game.frames.slowestTime` looks back over.
 pub const FRAME_HISTORY: usize = 1000;
 
 /// How fast the player flies until a script says otherwise, in metres a second.
@@ -474,17 +474,12 @@ pub(crate) fn set_movement(lua: &Lua, shared: &Rc<Shared>, mode: &Value) -> mlua
 pub(crate) fn set_fly_speed(lua: &Lua, shared: &Rc<Shared>, speed: &Value) -> mlua::Result<()> {
     const EXAMPLE: &str = "game.player:setFlySpeed(20)";
     let (slowest, fastest) = FLY_SPEEDS;
-    let takes = format!("metres a second, from {slowest} to {fastest}");
-    let speed = number(lua, "game.player:setFlySpeed", speed, &takes, EXAMPLE)?;
-    if !(slowest..=fastest).contains(&speed) {
-        return Err(fail(
-            lua,
-            format!(
-                "game.player:setFlySpeed needs {takes}, but it was given {speed}. Write it \
-                 like this: {EXAMPLE}"
-            ),
-        ));
-    }
+    let takes = format!(
+        "metres a second, from {slowest} to {fastest} (a number outside that is taken as the \
+         nearest end)"
+    );
+    let speed =
+        number(lua, "game.player:setFlySpeed", speed, &takes, EXAMPLE)?.clamp(slowest, fastest);
     rules_only(lua, shared, "game.player:setFlySpeed")?;
     shared.clock.note(&speed.to_string());
     shared.tools.fly_speed.set(speed);
@@ -513,9 +508,9 @@ pub(crate) fn frames(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     type Read = fn(&Frames) -> f64;
     let reads: [(&'static str, Read); 4] = [
         ("rate", |frames| f64::from(frames.rate())),
-        ("last", |frames| f64::from(frames.last()) * 1000.0),
-        ("slowest", |frames| f64::from(frames.slowest()) * 1000.0),
-        ("low", |frames| f64::from(frames.low())),
+        ("lowRate", |frames| f64::from(frames.low())),
+        ("lastTime", |frames| f64::from(frames.last())),
+        ("slowestTime", |frames| f64::from(frames.slowest())),
     ];
     for (name, read) in reads {
         let shared = Rc::clone(shared);
@@ -566,18 +561,39 @@ fn label_of(map: &ActionMap, action: ActionId, device: Device, style: GamepadSty
     String::new()
 }
 
-/// The names of the actions a game made for itself must be one to forty
-/// plain characters.
+/// The names of the actions a game made for itself are written like the
+/// engine's own ("menu_click"): lower case letters, digits and underscores,
+/// one to forty of them.
 fn name_problem(name: &str) -> Option<&'static str> {
     let characters = name.chars().count();
     if characters == 0 || characters > LONGEST_NAME {
         return Some("a name is from 1 to 40 characters long");
     }
-    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-');
+    let plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_';
     if !name.chars().all(plain) {
-        return Some("a name holds only letters, digits, spaces, _ and -");
+        return Some("a name holds only lower case letters, digits and underscores");
     }
     None
+}
+
+/// `name` written the way an action's name must be: lower case, with
+/// underscores where there were spaces or dashes.
+fn fixed_name(name: &str) -> String {
+    let fixed: String = name
+        .trim()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' | '-' | '_' => Some('_'),
+            c if c.is_ascii_alphanumeric() => Some(c.to_ascii_lowercase()),
+            _ => None,
+        })
+        .take(LONGEST_NAME)
+        .collect();
+    if fixed.is_empty() {
+        "open_map".to_owned()
+    } else {
+        fixed
+    }
 }
 
 /// A gamepad button not yet used by any action, to suggest for one that
@@ -618,7 +634,7 @@ fn check_bindings(name: &str, bindings: &[String]) -> Result<(), MapError> {
 
 /// `game.input.bind(name, bindings)`.
 fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
-    const EXAMPLE: &str = "game.input.bind(\"open map\", { \"F1\", \"GamepadSelect\" })";
+    const EXAMPLE: &str = "game.input.bind(\"open_map\", { \"F1\", \"GamepadSelect\" })";
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, (name, list): (Value, Value)| {
         if !shared.loading.get() {
@@ -627,7 +643,7 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 format!(
                     "game.input.bind adds an action the player can rebind, so it belongs at the \
                      top of the file, outside any function: {EXAMPLE}. Then read it in a \
-                     function with game.input.justPressed(\"open map\")."
+                     function with game.input.justPressed(\"open_map\")."
                 ),
             ));
         }
@@ -643,11 +659,13 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
         };
         let name = name.to_string_lossy();
         if let Some(problem) = name_problem(&name) {
+            let fixed = fixed_name(&name);
             return Err(fail(
                 lua,
                 format!(
-                    "game.input.bind was given the name \"{name}\", but {problem}. Write it \
-                     like this: {EXAMPLE}"
+                    "game.input.bind was given the name \"{name}\", but {problem}, like the \
+                     engine's own \"menu_click\". Write it like this: \
+                     game.input.bind(\"{fixed}\", {{ \"F1\", \"GamepadSelect\" }})"
                 ),
             ));
         }

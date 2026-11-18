@@ -66,6 +66,8 @@ game.player:teleport("home") -- wrong: a place is vector.create(0, 2, 0)
 game.player:setMovement("swim") -- wrong: walk, fly or noclip
 game.player:setFlySpeed("fast") -- wrong: a speed is a number
 game.setTimeSpeed("slow") -- wrong: a speed is a number
-game.input.bind("open map", "F1") -- wrong: the buttons are a list
-game.input.bind("open map") -- wrong: it needs buttons
+game.input.bind("open_map", "F1") -- wrong: the buttons are a list
+game.input.bind("open_map") -- wrong: it needs buttons
 local fast: string = game.frames.rate() -- wrong: a rate is a number
+local slow: number = game.frames.slowest() -- wrong: it is game.frames.slowestTime(), in seconds
+local held: string = health.pressed -- wrong: pressed is true or false

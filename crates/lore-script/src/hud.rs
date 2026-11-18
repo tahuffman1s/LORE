@@ -17,9 +17,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use lore_ui::{Anchor, Color};
-use mlua::{
-    AnyUserData, Function, Lua, MetaMethod, MultiValue, Table, UserData, UserDataMethods, Value,
-};
+use mlua::{AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value};
 
 use crate::api::{Shared, describe, fail};
 use crate::error::closest;
@@ -29,10 +27,14 @@ pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph"];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
-pub(crate) const TEXT_FIELDS: &[&str] = &["text", "color", "visible", "right", "down", "hovered"];
-pub(crate) const BAR_FIELDS: &[&str] = &["value", "color", "visible", "right", "down", "hovered"];
-pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down", "hovered"];
-pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered"];
+pub(crate) const TEXT_FIELDS: &[&str] = &[
+    "text", "color", "visible", "right", "down", "hovered", "pressed",
+];
+pub(crate) const BAR_FIELDS: &[&str] = &[
+    "value", "color", "visible", "right", "down", "hovered", "pressed",
+];
+pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down", "hovered", "pressed"];
+pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered", "pressed"];
 #[cfg(test)]
 pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
 
@@ -231,6 +233,8 @@ pub(crate) struct HudState {
     layout: Cell<u32>,
     /// Whether any piece has changed since the last look.
     changed: Cell<bool>,
+    /// The piece the pointer is holding down, if any: its id.
+    pressed: Cell<Option<u64>>,
 }
 
 impl HudState {
@@ -289,6 +293,9 @@ impl HudState {
         let mut pieces = self.pieces.borrow_mut();
         if let Ok(place) = pieces.binary_search_by_key(&id, |entry| entry.id) {
             pieces.remove(place);
+            if self.pressed.get() == Some(id) {
+                self.pressed.set(None);
+            }
             self.bump_layout();
         }
     }
@@ -429,19 +436,13 @@ impl UserData for PieceRef {
                 ));
             };
             let shared = hud_of(lua)?;
-            let across = shared
+            let [x, y] = shared
                 .hud
                 .with(piece.id, |entry| {
                     (pointer_across(&shared, &entry.piece), false)
                 })
                 .ok_or_else(|| removed(lua, piece.kind))?;
-            Ok(match across {
-                Some([x, y]) => MultiValue::from_iter([
-                    Value::Number(f64::from(x)),
-                    Value::Number(f64::from(y)),
-                ]),
-                None => MultiValue::from_iter([Value::Nil]),
-            })
+            Ok((f64::from(x), f64::from(y)))
         });
         methods.add_meta_function(MetaMethod::ToString, |_, this: AnyUserData| {
             Ok(this.borrow::<Self>()?.kind.name())
@@ -469,6 +470,9 @@ impl UserData for PieceRef {
                         ("down", _) => Ok(Value::Number(f64::from(entry.piece.offset[1]))),
                         ("hovered", _) => Ok(Value::Boolean(
                             entry.piece.visible && under_pointer(&shared, &entry.piece),
+                        )),
+                        ("pressed", _) => Ok(Value::Boolean(
+                            entry.piece.visible && shared.hud.pressed.get() == Some(entry.id),
                         )),
                         _ => Ok(Value::Nil),
                     };
@@ -519,6 +523,17 @@ impl UserData for PieceRef {
                                 "{}'s `hovered` only says whether the pointer is over it, so \
                                  it cannot be set. To act on it, write: if {word}.hovered then \
                                  ... end",
+                                capitalised(kind.name())
+                            ),
+                        ));
+                    }
+                    "pressed" => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "{}'s `pressed` only says whether the pointer is holding it \
+                                 down, so it cannot be set. To act on it, write: if \
+                                 {word}.pressed then ... end",
                                 capitalised(kind.name())
                             ),
                         ));
@@ -593,11 +608,38 @@ fn under_pointer(shared: &Shared, piece: &HudPiece) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
 }
 
+/// Which piece the pointer holds down as of this tick, kept for
+/// `piece.pressed`. A press begins on the tick `click` is first pressed with
+/// the pointer over a piece (the last made of those, as it is drawn on top)
+/// and lasts until `click` is let go, wherever the pointer goes. With no
+/// `click` action, nothing is ever pressed.
+pub(crate) fn update_pressed(shared: &Shared, click: Option<lore_input::ActionId>) {
+    let state = click.map(|action| shared.input.borrow().get(action));
+    let Some(state) = state.filter(|state| state.pressed) else {
+        shared.hud.pressed.set(None);
+        return;
+    };
+    if !state.just_pressed {
+        return;
+    }
+    let top = shared
+        .hud
+        .pieces
+        .borrow()
+        .iter()
+        .rev()
+        .find(|entry| entry.piece.visible && under_pointer(shared, &entry.piece))
+        .map(|entry| entry.id);
+    shared.hud.pressed.set(top);
+}
+
 /// Where the pointer is across `piece`, from 0 at its left and top edge to
-/// 1 at its right and bottom edge, and past them outside. `None` when there
-/// is no pointer.
-fn pointer_across(shared: &Shared, piece: &HudPiece) -> Option<[f32; 2]> {
-    let [px, py] = shared.input.borrow().pointer?;
+/// 1 at its right and bottom edge, and past them outside. Both are 0 when
+/// there is no pointer.
+fn pointer_across(shared: &Shared, piece: &HudPiece) -> [f32; 2] {
+    let Some([px, py]) = shared.input.borrow().pointer else {
+        return [0.0, 0.0];
+    };
     let [x, y, w, h] = area(shared, piece);
     let fraction = |at: f32, from: f32, length: f32| {
         if length > 0.0 {
@@ -606,7 +648,7 @@ fn pointer_across(shared: &Shared, piece: &HudPiece) -> Option<[f32; 2]> {
             0.0
         }
     };
-    Some([fraction(px, x, w), fraction(py, y, h)])
+    [fraction(px, x, w), fraction(py, y, h)]
 }
 
 /// Text as it can be drawn on one line: line breaks, tabs and other

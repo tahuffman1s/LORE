@@ -8,7 +8,9 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lore_input::{ActionMap, Device, GamepadButton, GamepadStyle, Input, InputFrame, Key};
+use lore_input::{
+    ActionMap, Device, GamepadButton, GamepadStyle, Input, InputFrame, Key, MouseButton,
+};
 use lore_script::weapons::Zone;
 use lore_script::{
     CharacterId, ENTRY_SCRIPT, HudShape, Motion, Movement, ScriptHost, Teleport, WeaponHit,
@@ -136,9 +138,9 @@ impl Drop for GameFolder {
 }
 
 const OPEN_MAP: &str = r#"
-game.input.bind("open map", { "F1", "GamepadSelect" })
+game.input.bind("open_map", { "F1", "GamepadSelect" })
 game.onTick(function()
-    if game.input.justPressed("open map") then print("opened") end
+    if game.input.justPressed("open_map") then print("opened") end
 end)
 "#;
 
@@ -169,7 +171,7 @@ fn a_button_of_the_games_own_is_heard_through_the_map_the_host_gives() {
 
 #[test]
 fn binding_from_a_function_says_to_move_it_to_the_top_of_the_file() {
-    let mut host = game(r#"game.onTick(function() game.input.bind("open map", { "F1" }) end)"#);
+    let mut host = game(r#"game.onTick(function() game.input.bind("open_map", { "F1" }) end)"#);
     run(&mut host, 1);
     let message = mistake(&host);
     assert!(
@@ -180,7 +182,7 @@ fn binding_from_a_function_says_to_move_it_to_the_top_of_the_file() {
 
 #[test]
 fn a_misspelt_button_gets_the_suggestion() {
-    let message = load_mistake(r#"game.input.bind("open map", { "Spce" })"#);
+    let message = load_mistake(r#"game.input.bind("open_map", { "Spce" })"#);
     assert!(message.contains("Space"), "{message}");
     assert!(message.contains("Write it like this"), "{message}");
 }
@@ -190,9 +192,9 @@ fn a_bad_name_or_list_says_what_to_write() {
     for script in [
         r#"game.input.bind("", { "F1" })"#,
         r#"game.input.bind("open/map", { "F1" })"#,
-        r#"game.input.bind("open map", {})"#,
-        r#"game.input.bind("open map", "F1")"#,
-        r#"game.input.bind("open map", { "WASD" })"#,
+        r#"game.input.bind("open_map", {})"#,
+        r#"game.input.bind("open_map", "F1")"#,
+        r#"game.input.bind("open_map", { "WASD" })"#,
         r#"game.input.bind(5, { "F1" })"#,
     ] {
         let message = load_mistake(script);
@@ -203,6 +205,23 @@ fn a_bad_name_or_list_says_what_to_write() {
         "a".repeat(41)
     ));
     assert!(message.contains("1 to 40 characters"), "{message}");
+}
+
+#[test]
+fn a_name_with_a_space_or_a_capital_is_fixed_for_the_script_writer() {
+    let message = load_mistake(r#"game.input.bind("Weather menu", { "F1" })"#);
+    assert!(message.contains("\"Weather menu\""), "{message}");
+    assert!(
+        message.contains(r#"Write it like this: game.input.bind("weather_menu", {"#),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("open-map", { "F1" })"#);
+    assert!(
+        message.contains(r#"game.input.bind("open_map","#),
+        "{message}"
+    );
+    // Lower case letters, digits and underscores are fine.
+    let _host = game(r#"game.input.bind("map_2", { "F1", "GamepadSelect" })"#);
 }
 
 #[test]
@@ -218,14 +237,14 @@ fn an_engine_action_cannot_be_bound_again() {
 #[test]
 fn binding_one_name_twice_in_a_version_is_a_mistake() {
     let message = load_mistake(
-        "game.input.bind(\"open map\", { \"F1\" })\ngame.input.bind(\"open map\", { \"F2\" })",
+        "game.input.bind(\"open_map\", { \"F1\" })\ngame.input.bind(\"open_map\", { \"F2\" })",
     );
     assert!(message.contains("twice"), "{message}");
 }
 
 #[test]
 fn a_button_with_no_gamepad_button_or_a_clash_is_a_warning_not_a_failure() {
-    let _host = game(r#"game.input.bind("open map", { "F1" })"#);
+    let _host = game(r#"game.input.bind("open_map", { "F1" })"#);
     let said = warnings();
     assert!(said.iter().any(|w| w.contains("GamepadSelect")), "{said:?}");
 
@@ -244,7 +263,7 @@ fn a_reload_keeps_the_players_bindings_and_warns_of_a_new_action() {
     let mut host = folder.open();
     // The engine takes the map, and the player rebinds the action.
     let mut map = host.actions();
-    let open = map.action("open map").unwrap();
+    let open = map.action("open_map").unwrap();
     map.replace_button(
         open,
         "F1".parse().map(|b: lore_input::Button| b).unwrap(),
@@ -268,7 +287,7 @@ fn a_reload_keeps_the_players_bindings_and_warns_of_a_new_action() {
     let after = host.actions();
     assert!(after.action("zoom").is_ok());
     assert_eq!(
-        after.bindings(after.action("open map").unwrap()).len(),
+        after.bindings(after.action("open_map").unwrap()).len(),
         2,
         "its bindings were not added again"
     );
@@ -417,7 +436,8 @@ fn frame_times_are_read_while_drawing() {
         r#"local shown = game.hud.text("")
         game.onDraw(function()
             shown.text = string.format("%.1f %.1f %.1f %.1f", game.frames.rate(),
-                game.frames.last(), game.frames.slowest(), game.frames.low())
+                game.frames.lastTime() * 1000, game.frames.slowestTime() * 1000,
+                game.frames.lowRate())
         end)"#,
     );
     run(&mut host, 1);
@@ -466,7 +486,7 @@ fn the_frame_times_come_oldest_first_and_only_a_thousand_are_kept() {
 
 #[test]
 fn the_frames_are_not_for_the_rules() {
-    for read in ["rate", "last", "slowest", "low"] {
+    for read in ["rate", "lowRate", "lastTime", "slowestTime"] {
         let mut host = game(&format!(
             "game.onTick(function() print(game.frames.{read}()) end)"
         ));
@@ -544,7 +564,63 @@ fn a_piece_knows_when_the_pointer_is_over_it_and_where() {
         over_center_box(Some([100.0, 100.0])),
         "false false -8.10 -3.90"
     );
-    assert_eq!(over_center_box(None), "false false nil");
+    assert_eq!(over_center_box(None), "false false 0.00 0.00");
+}
+
+/// Two boxes over each other at the middle of the screen and a third beside
+/// them, which print which of them are pressed each tick.
+const PRESS_BOXES: &str = r#"
+local under = game.hud.box({ at = "center", width = 100, height = 100 })
+local over = game.hud.box({ at = "center", width = 100, height = 100 })
+local aside = game.hud.box({ at = "center", right = 300, width = 100, height = 100 })
+game.onTick(function()
+    print(under.pressed, over.pressed, aside.pressed)
+end)
+"#;
+
+#[test]
+fn a_piece_is_pressed_from_the_click_that_began_on_it_until_it_is_let_go() {
+    let mut host = game(PRESS_BOXES);
+    let mut input = Input::new(host.actions());
+    input.set_active_set(host.actions().set("menu").unwrap());
+    let tick = |host: &mut ScriptHost, input: &mut Input| {
+        host.tick(input.tick(), STEP);
+        printed().remove(0)
+    };
+    let screen = [1920.0, 1080.0];
+    input.set_pointer(Some([960.0, 540.0]), screen);
+    assert_eq!(tick(&mut host, &mut input), "false false false");
+    // Only the piece on top is pressed.
+    input.press(MouseButton::MouseLeft);
+    assert_eq!(tick(&mut host, &mut input), "false true false");
+    assert_eq!(tick(&mut host, &mut input), "false true false");
+    // It stays pressed when the pointer leaves it, and nothing else is
+    // pressed by the pointer reaching another piece.
+    input.set_pointer(Some([1260.0, 540.0]), screen);
+    assert_eq!(tick(&mut host, &mut input), "false true false");
+    input.release(MouseButton::MouseLeft);
+    assert_eq!(tick(&mut host, &mut input), "false false false");
+    // A click that begins away from every piece presses none, even when the
+    // pointer is dragged over one.
+    input.set_pointer(Some([100.0, 100.0]), screen);
+    input.press(MouseButton::MouseLeft);
+    tick(&mut host, &mut input);
+    input.set_pointer(Some([1260.0, 540.0]), screen);
+    assert_eq!(tick(&mut host, &mut input), "false false false");
+}
+
+#[test]
+fn a_game_with_no_click_action_never_presses_anything() {
+    listen();
+    // A map with no "menu_click" in it.
+    let mut host = ScriptHost::from_source(PRESS_BOXES, ActionMap::new());
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let mut input = Input::new(host.actions());
+    input.set_pointer(Some([960.0, 540.0]), [1920.0, 1080.0]);
+    for _ in 0..3 {
+        host.tick(input.tick(), STEP);
+    }
+    assert!(printed().iter().all(|line| line == "false false false"));
 }
 
 #[test]
@@ -561,6 +637,9 @@ fn a_hidden_piece_is_never_hovered_and_hovered_cannot_be_set() {
 
     let message = load_mistake("local box = game.hud.box()\nbox.hovered = true");
     assert!(message.contains("hovered"), "{message}");
+    assert!(message.contains("cannot be set"), "{message}");
+    let message = load_mistake("local box = game.hud.box()\nbox.pressed = true");
+    assert!(message.contains("pressed"), "{message}");
     assert!(message.contains("cannot be set"), "{message}");
 }
 
@@ -779,10 +858,9 @@ fn a_bad_way_to_move_or_flying_speed_says_what_is_allowed() {
 
     for call in [
         "setMovement(3)",
-        "setFlySpeed(0.1)",
-        "setFlySpeed(201)",
         "setFlySpeed(\"fast\")",
         "setFlySpeed(0 / 0)",
+        "setFlySpeed(1 / 0)",
     ] {
         let mut host = game(&format!("game.onTick(function() game.player:{call} end)"));
         run(&mut host, 1);
@@ -791,6 +869,26 @@ fn a_bad_way_to_move_or_flying_speed_says_what_is_allowed() {
     let mut host = game("game.onTick(function() game.player:setFlySpeed(200) end)");
     run(&mut host, 1);
     assert_eq!(host.fly_speed(), 200.0);
+}
+
+#[test]
+fn a_fly_speed_or_time_speed_out_of_range_is_taken_as_the_nearest_end() {
+    for (call, fly) in [("0.1", 0.5), ("201", 200.0), ("-5", 0.5), ("30", 30.0)] {
+        let mut host = game(&format!(
+            "game.onTick(function() game.player:setFlySpeed({call}) end)"
+        ));
+        run(&mut host, 1);
+        assert!(host.last_error().is_none(), "{call}");
+        assert_eq!(host.fly_speed(), fly, "{call}");
+    }
+    for (call, speed) in [("-1", 0.0), ("9", 8.0), ("100", 8.0), ("0.5", 0.5)] {
+        let mut host = game(&format!(
+            "game.onTick(function() game.setTimeSpeed({call}) end)"
+        ));
+        run(&mut host, 1);
+        assert!(host.last_error().is_none(), "{call}");
+        assert_eq!(host.time_speed(), speed, "{call}");
+    }
 }
 
 #[test]
@@ -822,9 +920,8 @@ fn time_speed_is_set_read_and_checked() {
     );
 
     for call in [
-        "setTimeSpeed(-1)",
-        "setTimeSpeed(9)",
         "setTimeSpeed(0 / 0)",
+        "setTimeSpeed(1 / 0)",
         "setTimeSpeed(\"slow\")",
     ] {
         let mut host = game(&format!("game.onTick(function() game.{call} end)"));
@@ -881,9 +978,9 @@ fn stopped_time_keeps_the_clock_still_but_the_script_still_hears_the_player() {
 #[test]
 fn the_same_script_and_inputs_give_the_same_fingerprint() {
     let script = r#"
-        game.input.bind("open map", { "F1", "GamepadSelect" })
+        game.input.bind("open_map", { "F1", "GamepadSelect" })
         game.onTick(function()
-            if game.input.justPressed("open map") then
+            if game.input.justPressed("open_map") then
                 game.player:teleport(vector.create(1, 2, 3))
                 game.player:setMovement("fly")
                 game.player:setFlySpeed(20)

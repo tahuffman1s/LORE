@@ -680,9 +680,9 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
 
 /// A script with an action of its own that prints when it is pressed.
 const OWN_ACTION: &str = r#"
-game.input.bind("weather menu", {"F1", "GamepadSelect"})
+game.input.bind("weather_menu", {"F1", "GamepadSelect"})
 game.onTick(function()
-    if game.input.justPressed("weather menu") then
+    if game.input.justPressed("weather_menu") then
         print("the weather menu was pressed")
     end
 end)
@@ -711,6 +711,30 @@ fn check_presses_the_actions_the_script_made_for_itself() {
         "{said}"
     );
     assert!(!said.contains("Not pressed"), "{said}");
+}
+
+#[test]
+fn check_passes_each_of_the_example_scripts() {
+    let scripts = [
+        include_str!("../../lore-script/tests/fixtures/weather_menu.luau"),
+        include_str!("../../lore-script/tests/fixtures/debug_menu.luau"),
+        include_str!("../../lore-script/tests/fixtures/frame_meter.luau"),
+        include_str!("../../lore-script/tests/fixtures/clear_key.luau"),
+        include_str!("../../lore-script/tests/fixtures/spray_aim.luau"),
+    ];
+    for (number, script) in scripts.into_iter().enumerate() {
+        let folder = scratch(&format!("check-example-{number}"));
+        fs::write(folder.join("main.luau"), script).unwrap();
+
+        let output = lore(&folder, &["check"]);
+
+        assert!(output.status.success(), "{number}: {}", stderr(&output));
+        assert!(
+            !stderr(&output).contains("mistake"),
+            "{number}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
@@ -749,20 +773,20 @@ fn controls_given_a_game_lists_its_own_actions_after_the_engines_and_writes_them
     assert!(said.find("  jump  ").unwrap() < own, "{said}");
     assert!(said.contains("[game_bindings]"), "{said}");
     assert!(
-        said[own..].contains("\n  weather menu       F1, GamepadSelect\n"),
+        said[own..].contains("\n  weather_menu       F1, GamepadSelect\n"),
         "{said}"
     );
-    assert!(!said[..own].contains("weather menu"), "{said}");
+    assert!(!said[..own].contains("weather_menu"), "{said}");
     let written = fs::read_to_string(&file).unwrap();
     assert!(written.contains("[game_bindings]"), "{written}");
     assert!(
-        written.contains("# \"weather menu\" = [\"F1\", \"GamepadSelect\"]"),
+        written.contains("# weather_menu = [\"F1\", \"GamepadSelect\"]"),
         "{written}"
     );
 
     // Without a game, only the engine's own are listed.
     let output = lore(&folder, &["controls"]);
-    assert!(!stdout(&output).contains("weather menu"));
+    assert!(!stdout(&output).contains("weather_menu"));
 }
 
 #[test]

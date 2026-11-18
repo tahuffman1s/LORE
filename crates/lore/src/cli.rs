@@ -636,6 +636,47 @@ mod tests {
     }
 
     #[test]
+    fn the_example_scripts_are_the_same_at_any_pace_and_make_no_mistake() {
+        let scripts = [
+            (
+                "weather_menu",
+                include_str!("../../lore-script/tests/fixtures/weather_menu.luau"),
+            ),
+            (
+                "debug_menu",
+                include_str!("../../lore-script/tests/fixtures/debug_menu.luau"),
+            ),
+            (
+                "frame_meter",
+                include_str!("../../lore-script/tests/fixtures/frame_meter.luau"),
+            ),
+            (
+                "clear_key",
+                include_str!("../../lore-script/tests/fixtures/clear_key.luau"),
+            ),
+            (
+                "spray_aim",
+                include_str!("../../lore-script/tests/fixtures/spray_aim.luau"),
+            ),
+        ];
+        for (name, script) in scripts {
+            // The map the game runs with has the script's own actions in it.
+            let host = ScriptGame::from_source(script, &ActionMap::standard());
+            assert!(host.host().last_error().is_none(), "{name}");
+            let actions = host.host().actions();
+            let found = paced(
+                || {
+                    let game = ScriptGame::from_source(script, &actions);
+                    assert!(game.host().last_error().is_none(), "{name}");
+                    Some(game)
+                },
+                &actions,
+            );
+            assert_eq!(found, Some(Paced::Same), "{name}");
+        }
+    }
+
+    #[test]
     fn a_rule_that_reads_what_a_picture_set_is_found_with_its_tick() {
         // A beat prints how many pictures there have been.
         let script = r#"
