@@ -124,11 +124,20 @@ fn fragment_bit(bit: Bit) -> Mixed {
             }
         }
         let through = exp(-hidden * CLOUD_STOPS);
+        // The fog, the rain and the snow in the air hide it as they hide
+        // the land as far off: in a downpour or a blizzard the stroke
+        // itself is lost a little way off and only the flash is seen, and
+        // the bottom of a far one, which is low where the air is thickest,
+        // fades into the murk first.
+        var seen = 1.0;
+        if view.fog.x > 0.0 {
+            seen = 1.0 - fog_hides(fog_thick(), sight, far);
+        }
         var strip: Mixed;
         strip.colour = vec4<f32>(
             flash_light() * tint * 40.0 * (0.25 + 0.75 * left),
             clamp((exp(-from_middle * from_middle) + glow) * min(left * 5.0, 1.0), 0.0, 1.0)
-                * exp(-far / 60000.0) * through,
+                * exp(-far / 60000.0) * through * seen,
         );
         strip.motion = vec4<f32>(0.0);
         return strip;

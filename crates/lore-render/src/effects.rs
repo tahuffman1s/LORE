@@ -742,6 +742,12 @@ impl Effects {
         [self.bolts[0].flash(), self.bolts[1].flash()]
     }
 
+    /// Whether lightning is flashing now: a picture drawn now may be lit
+    /// by it.
+    pub(crate) fn flashing(&self) -> bool {
+        self.bolts.iter().any(Bolt::live)
+    }
+
     /// Lets lightning strike where the sky has a storm: every second or
     /// so a few places within thirty kilometres of `eye` are looked at,
     /// and the first with a thunder cloud over it is struck. `time` is how

@@ -81,6 +81,8 @@ struct FrameSlot {
     acquired: vk::Semaphore,
     /// Signalled when the graphics card has finished this frame.
     finished: vk::Fence,
+    /// Whether lightning lit the picture this slot drew last.
+    flashed: std::cell::Cell<bool>,
 }
 
 impl FrameSlot {
@@ -93,6 +95,7 @@ impl FrameSlot {
             commands: vk::CommandBuffer::null(),
             acquired: vk::Semaphore::null(),
             finished: vk::Fence::null(),
+            flashed: std::cell::Cell::new(false),
         };
         // Dropping `slot` cleans up whatever was created; destroying a null handle is allowed.
 
@@ -835,8 +838,13 @@ impl Renderer {
                 let [x, _, z] = self.camera.position;
                 let weather =
                     crate::eye::weather_darker(said, said.storm_at([x, z], view.seconds()));
-                self.eye
-                    .see(&self.measuring, per_lux, seconds, false, weather);
+                self.eye.see(
+                    &self.measuring,
+                    per_lux,
+                    seconds,
+                    false,
+                    (weather, slot.flashed.get()),
+                );
             }
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
@@ -883,6 +891,7 @@ impl Renderer {
             // graphics card of the tracks in the snow is asked for once,
             // and a frame given up before this would have lost it.
             let tracks = self.effects.take_tracks();
+            slot.flashed.set(self.effects.flashing());
             view.mirroring = if self.reflections {
                 Mirroring::Running
             } else {

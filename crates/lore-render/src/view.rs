@@ -57,8 +57,10 @@ pub(crate) struct SceneView {
     /// frame kept for smooth things to mirror; `None` if it kept none, and
     /// after a cut.
     kept: Option<Mat4>,
-    /// The time the clouds' clock shows, if the game says it.
+    /// The time the clouds' clock shows, if the game says it, and what it
+    /// showed for the last frame drawn.
     clock: Option<f64>,
+    clocked: Option<f64>,
     /// Where the eye was in the last frame, and how much its walking is
     /// stirring what it walks through, from 0 to 1.
     eye: Option<[f32; 3]>,
@@ -87,6 +89,24 @@ fn sharper(render: u32, output: u32) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     let ratio = output.max(1) as f32 / render.max(1) as f32;
     ratio.log2().max(0.0) + 1.0
+}
+
+/// How many seconds of the scene's time have passed since the frame before,
+/// which took `seconds`: none while time is held `still`; as far as the
+/// game's clock went from `was` to `now`, if it keeps one, so that what
+/// sways moves no further than the clouds' clock did (and not at all
+/// while the game is paused); otherwise as long as the frame took. Never
+/// more than a second.
+fn time_passed(seconds: f32, still: bool, (was, now): (Option<f64>, Option<f64>)) -> f32 {
+    if still || !seconds.is_finite() {
+        return 0.0;
+    }
+    match (was, now) {
+        // A second is far below where an f32 stops being exact.
+        #[allow(clippy::cast_possible_truncation)]
+        (Some(was), Some(now)) => (now - was).clamp(0.0, 1.0) as f32,
+        _ => seconds.clamp(0.0, 1.0),
+    }
 }
 
 impl SceneView {
@@ -128,6 +148,7 @@ impl SceneView {
             mirroring: Mirroring::Running,
             kept: None,
             clock: None,
+            clocked: None,
             eye: None,
             stir: 0.0,
             measured: false,
@@ -225,9 +246,10 @@ impl SceneView {
         if !keeping {
             self.eye = Some(camera.position);
             if !self.still && seconds.is_finite() {
-                elapsed = seconds.clamp(0.0, 1.0);
-                self.seconds += f64::from(elapsed);
+                self.seconds += f64::from(seconds.clamp(0.0, 1.0));
             }
+            elapsed = time_passed(seconds, self.still, (self.clocked, self.clock));
+            self.clocked = self.clock;
         }
         let clip = shifted(&steady, across, upwards);
         // Only the picture the last frame kept is of where the eye is: not
@@ -310,7 +332,29 @@ impl SceneView {
 
 #[cfg(test)]
 mod tests {
-    use super::sharper;
+    use super::{sharper, time_passed};
+
+    #[test]
+    fn time_passes_by_the_games_clock_when_it_keeps_one() {
+        // A frame of a 144 Hz screen while the clock moved a third of a
+        // tick of 60.
+        let passed = time_passed(1.0 / 144.0, false, (Some(10.0), Some(10.0 + 1.0 / 180.0)));
+        assert!((passed - 1.0 / 180.0).abs() < 1e-6, "{passed}");
+        // Paused: the clock stands still, and so does what sways.
+        assert_eq!(
+            time_passed(1.0 / 144.0, false, (Some(10.0), Some(10.0))),
+            0.0
+        );
+        // No clock, or none yet: the frame's own time.
+        assert_eq!(time_passed(0.02, false, (None, Some(10.0))), 0.02);
+        assert_eq!(time_passed(0.02, false, (None, None)), 0.02);
+        // A clock put back (a new level) or far on is no long frame.
+        assert_eq!(time_passed(0.02, false, (Some(10.0), Some(2.0))), 0.0);
+        assert_eq!(time_passed(0.02, false, (Some(10.0), Some(900.0))), 1.0);
+        // Held still, nothing passes.
+        assert_eq!(time_passed(0.02, true, (Some(10.0), Some(11.0))), 0.0);
+        assert_eq!(time_passed(f32::NAN, false, (None, None)), 0.0);
+    }
 
     #[test]
     fn a_scene_drawn_smaller_reads_larger_textures() {

@@ -625,7 +625,7 @@ impl Headless {
                     per_lux,
                     FRAME_SECONDS,
                     self.view.still,
-                    weather,
+                    (weather, self.effects.flashing()),
                 );
             }
             handed_over

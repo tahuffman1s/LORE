@@ -197,6 +197,9 @@ pub(crate) struct Climate {
     /// in it.
     weather: Weather,
     falling: Falling,
+    /// The weather of the tick before, which frames are drawn from part of
+    /// the way from.
+    before: Weather,
 }
 
 impl Default for Climate {
@@ -212,6 +215,10 @@ impl Default for Climate {
                 ..Weather::default()
             },
             falling: Falling::default(),
+            before: Weather {
+                drift: Some([0.0; 2]),
+                ..Weather::default()
+            },
         }
     }
 }
@@ -220,6 +227,34 @@ impl Climate {
     /// The weather of the newest tick: what the picture is drawn in.
     pub(crate) fn weather(&self) -> &Weather {
         &self.weather
+    }
+
+    /// The weather a frame drawn `alpha` of the way from the tick before
+    /// the newest to the newest shows, as the view is drawn between the
+    /// two: the air carried, and the tornado moved and turned, that far
+    /// from where the one had them to where the other does. Drawn as the
+    /// newest tick has it, clouds and rain and a tornado would go in steps
+    /// on a screen that shows more frames than there are ticks.
+    pub(crate) fn weather_drawn(&self, alpha: f32) -> Weather {
+        let alpha = if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let mut drawn = self.weather;
+        if let (Some(was), Some(now)) = (self.before.drift, self.weather.drift) {
+            let share = f64::from(alpha);
+            drawn.drift = Some([0, 1].map(|axis| was[axis] + (now[axis] - was[axis]) * share));
+        }
+        if let (Some(was), Some(now)) = (self.before.tornado, self.weather.tornado) {
+            drawn.tornado = Some(Tornado {
+                place: [0, 1, 2]
+                    .map(|axis| was.place[axis] + (now.place[axis] - was.place[axis]) * alpha),
+                turned: was.turned + (now.turned - was.turned) * alpha,
+                ..now
+            });
+        }
+        drawn
     }
 
     /// What was falling on the player in the newest tick.
@@ -251,6 +286,7 @@ impl Climate {
         seconds: f64,
         step: f32,
     ) {
+        self.before = self.weather;
         let asked = host.weather();
         for (far, wind) in self.drift.iter_mut().zip(asked.wind) {
             *far += f64::from(wind) * f64::from(step);

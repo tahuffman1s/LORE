@@ -125,13 +125,28 @@ fn fragment_air(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let fog_light = storm_haze(low);
     let from_sun = view.sun.rgb * sent_towards(AIR_ONWARDS, to_sun) / (4.0 * PI);
     let from_around = (view.sky.rgb + view.ground.rgb) * 0.5;
-    let sun_part = fog_light * from_sun / max(from_sun + from_around, vec3<f32>(1e-6));
+    // Only as much of that is the sun's as `storm_haze` lets it be: under a
+    // sky that is all cloud the fog has no sunlight in it at all, and in a
+    // storm the white of the fog has none. Taken away where it never was,
+    // it would leave a dark blotch towards a sun no one can see.
+    let closed = smoothstep(0.6, 1.0, view.clouds.x);
+    let sun_in_fog = (1.0 - closed) * (1.0 - view.weather[0].w * misted());
+    let sun_part = fog_light * from_sun / max(from_sun + from_around, vec3<f32>(1e-6)) * sun_in_fog;
+
+    // The sky was drawn through only the fog the day's haze and the rain
+    // are not (`fragment_sky`), so only that much of the sun's part is
+    // taken away in front of it. Lamps light all of the air.
+    var sun_thick = thick;
+    if depth <= 0.0 {
+        sun_thick = max(thick - view.fog.w * (1.0 + 4.0 * view.weather[0].x), 0.0);
+    }
+    let sun_share = sun_thick / thick;
 
     // The most the sun's beams could change here: all of the sun's part of
     // the fog's light along this line of sight. Where that is too little to
     // see, as it is on a clear day nearby, and no lamp is near, nothing is
     // walked.
-    let at_most = sun_part * fog_hides(thick, along, far);
+    let at_most = sun_part * fog_hides(sun_thick, along, far);
     if max(at_most.r, max(at_most.g, at_most.b)) < 0.004 && lamps.counts.w == 0u {
         return vec4<f32>(0.0);
     }
@@ -156,15 +171,19 @@ fn fragment_air(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         let piece = here * span;
         // The share of the fog's light that comes from this piece of air.
         let share = exp(-crossed) * (1.0 - exp(-piece));
+        var sun_piece = share;
+        if sun_share < 1.0 {
+            sun_piece = exp(-crossed * sun_share) * (1.0 - exp(-piece * sun_share));
+        }
         crossed += piece;
         if share < 1e-6 {
             continue;
         }
         var sunlit = clouded;
-        if shadows {
+        if shadows && sun_piece > 0.0 {
             sunlit *= sun_reaches_air(place, far * at_share * at_share);
         }
-        shaded += share * (1.0 - sunlit);
+        shaded += sun_piece * (1.0 - sunlit);
         lamplit += share * lamps_in_air(place, along, at.xy);
     }
     return vec4<f32>(AIR_ALBEDO * lamplit - shaded * sun_part, 0.0);
