@@ -537,7 +537,7 @@ impl Player {
             velocity = water.flow + posture.slowed(velocity - water.flow, part, dt / 2.0);
             velocity += pushed(part) * (dt / 2.0);
             let falling = velocity.y;
-            let across = velocity.x.hypot(velocity.z);
+            let across = flat_speed(velocity);
             let moved = slide(level, &body.shape, middle, velocity, dt, body.steep, false);
             middle = moved.position;
             velocity = moved.velocity;
@@ -559,7 +559,7 @@ impl Player {
                 // Coming down onto a slope tips the fall along it; feet that
                 // land stop that, and keep no more speed across the ground
                 // than the body came down with.
-                let now = velocity.x.hypot(velocity.z);
+                let now = flat_speed(velocity);
                 if now > across {
                     let keep = across / now;
                     velocity.x *= keep;
@@ -1041,6 +1041,11 @@ fn sped_up(
 
 /// How far apart two points are, ignoring height.
 fn flat_distance(a: Vector, b: Vector) -> f32 {
-    let (x, z) = (a.x - b.x, a.z - b.z);
-    (x * x + z * z).sqrt()
+    flat_speed(a - b)
+}
+
+/// How long `vector` is, ignoring height. A square root is exact on every
+/// machine; `hypot` is not, and a replay must come out the same anywhere.
+fn flat_speed(vector: Vector) -> f32 {
+    (vector.x * vector.x + vector.z * vector.z).sqrt()
 }

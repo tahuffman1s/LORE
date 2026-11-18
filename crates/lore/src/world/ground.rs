@@ -151,8 +151,11 @@ impl Ground {
     /// Which way a player who has just started at `position` faces, if that
     /// is one of the spawn points: `map`'s if it has any, else the level's.
     pub(super) fn facing_at(&self, map: &Map, position: [f32; 3]) -> Option<f32> {
-        let near =
-            |point: [f32; 3]| (point[0] - position[0]).hypot(point[2] - position[2]) <= AT_SPAWN;
+        // `libm`, not the platform's maths: where the player starts, and
+        // the way they face there, must be the same on every machine.
+        let near = |point: [f32; 3]| {
+            libm::hypotf(point[0] - position[0], point[2] - position[2]) <= AT_SPAWN
+        };
         if map.spawns().next().is_some() {
             return map
                 .spawns()
@@ -276,8 +279,8 @@ fn position_of(marker: &Marker) -> [f32; 3] {
 fn yaw_of(marker: &Marker) -> f32 {
     let [x, _, z, _] = marker.transform[2];
     // The marker's -Z is (-x, -z); yaw is the turn left from -Z to it.
-    if x.is_finite() && z.is_finite() && x.hypot(z) > 1.0e-6 {
-        x.atan2(z).rem_euclid(TAU)
+    if x.is_finite() && z.is_finite() && libm::hypotf(x, z) > 1.0e-6 {
+        libm::atan2f(x, z).rem_euclid(TAU)
     } else {
         0.0
     }
@@ -320,7 +323,7 @@ mod tests {
 
     /// A marker called `name` at `position`, turned `yaw` radians to the left.
     fn marker(name: &str, position: [f32; 3], yaw: f32) -> Marker {
-        let (sin, cos) = yaw.sin_cos();
+        let (sin, cos) = (libm::sinf(yaw), libm::cosf(yaw));
         let [x, y, z] = position;
         Marker {
             name: Some(name.to_owned()),
