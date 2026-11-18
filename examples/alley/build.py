@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Python does not look there by itself.)
 sys.path.insert(0, HERE)
 
-from kit import Part, Shape, merged, placed, plain  # noqa: E402
+from kit import Part, Shape, merged, placed, plain, turned  # noqa: E402
 
 CACHE = os.path.join(HERE, ".cache")
 API = "https://api.polyhaven.com"
@@ -2231,16 +2231,10 @@ def made_props(level, props, fronts, chooser):
         props.add(fence, ground_at(x, z), turn)
         props.solid(ground_at(x, z), turn, (3.5, 2.0, 0.3))
 
-    # ---- litter everywhere a broom has not been
-    for k, (x, z, w, d) in enumerate(((0.0, -24.0, 6.4, 10.0), (0.0, -13.0, 6.4, 8.0), (0.0, 16.0, 6.4, 12.0),
-                                     (0.0, 26.0, 6.0, 7.0), (-5.0, 0.0, 5.0, 16.0), (5.5, 0.0, 4.0, 16.0),
-                                     (0.0, -32.8, 40.0, 0.7), (0.0, 32.8, 40.0, 0.7), (0.0, -41.2, 40.0, 0.6), (0.0, 41.2, 40.0, 0.6))):
-        for part in made.litter_scatter(30 + k, (w, d), int(w * d * 0.3) + 6):
-            dropped = placed(part, (x, 0.0, z), 0.0)
-            # Each bit lies on the ground where it fell.
-            for at in range(0, len(dropped.positions), 3):
-                dropped.positions[at + 1] += height(dropped.positions[at], dropped.positions[at + 2])
-            props.parts.append(dropped)
+    # ---- the mess of a lane in use: litter where wind and water leave it,
+    # what people and trades leave by doors and bins, and what collects on
+    # the walls and overhead (see strew, below)
+    strew(level, props, fronts, tex)
 
 
 def decorate(level, fronts, pictures, made):
@@ -2355,6 +2349,609 @@ def decorate(level, fronts, pictures, made):
         for x in (-12.0, -6.0, 0.0, 6.0, 12.0):
             ground_patch(decals(gum), x + chooser.uniform(-1, 1), side * (END + 1.2), 1.6, 1.6, chooser.uniform(0, 6), lift=0.003)
     level.place("decals", level.mesh("decals", decals.parts()), solid=False)
+
+
+# ================================================================ CLUTTER
+#
+# A lane in use is never clean, and its mess is not spread evenly: wind
+# and rain sort the small stuff into corners and along the feet of walls,
+# kerbs and bins, and wheels sweep the middle; people leave things where
+# they stand (by back doors, round the bins, under the fire escape, round
+# the court); trades leave theirs by their doors; walls gather fittings,
+# notices and stains. `strew` lays all of it. The small things are flat
+# pieces of three painted atlases, so that thousands of them cost three
+# pictures and a few triangles each.
+
+
+def wall_frame(wall):
+    """The turn that faces a wall fitting's front (+Z) out of `wall`, and
+    the sign that turns a distance along the wall into the fitting's own x."""
+    _, turn = on_wall(wall, 0.0, 0.0)
+    ax, _, az = turned((1.0, 0.0, 0.0), turn)
+    axis = WALLS[wall][0]
+    return turn, (az if axis == "x" else ax)
+
+
+def dropped(parts, x, z, turn=0.0, scale=1.0, tint=None, lift=0.0):
+    """Copies of `parts` laid at x, z, each point lifted by the ground's
+    height under it, so that flat things follow the ground's bumps."""
+    out = []
+    for part in parts:
+        p = placed(part, (x, lift, z), turn, scale, tint)
+        for k in range(0, len(p.positions), 3):
+            p.positions[k + 1] += height(p.positions[k], p.positions[k + 2])
+        out.append(p)
+    return out
+
+
+def scrap(shape, cell, x, z, turn, r, scale=1.0, lift=0.005, shade=1.0, curl=0.012):
+    """A piece of the litter atlas lying on the ground at x, z: a sheet the
+    size the picture says, bent a little (crumpled up at its edges), cut in
+    two by two squares (or one for small things)."""
+    u0, v0, u1, v1, w, d = cell
+    w, d = w * scale, d * scale
+    n = 2 if max(w, d) > 0.09 else 1
+    c, s = math.cos(turn), math.sin(turn)
+    first = len(shape.positions) // 3
+    bend = [r.uniform(-1.0, 1.0) for _ in range(9)]
+    k = r.uniform(0.5, 0.9) * shade
+    colour = (k, k, k * 0.97, 1.0)
+    for j in range(n + 1):
+        for i in range(n + 1):
+            u, v = i / n, j / n
+            lx, lz = (u - 0.5) * w, (v - 0.5) * d
+            px, pz = x + lx * c + lz * s, z - lx * s + lz * c
+            edge = max(abs(u - 0.5), abs(v - 0.5)) * 2
+            y = height(px, pz) + lift + curl * edge * (0.5 + 0.5 * bend[(j * 3 + i) % 9]) * min(1.0, max(w, d) / 0.15)
+            shape.point((px, y, pz), (0.0, 1.0, 0.0), (u0 + (u1 - u0) * u, v0 + (v1 - v0) * v), colour)
+    start = len(shape.indices)
+    for j in range(n):
+        for i in range(n):
+            a = first + j * (n + 1) + i
+            shape.indices.extend((a, a + n + 1, a + 1, a + 1, a + n + 1, a + n + 2))
+    fixed_winding(shape, start)
+
+
+def cell_patch(shape, cell, cx, cz, turn=0.0, scale=1.0, lift=0.004, step=0.25, colour=(1.0, 1.0, 1.0, 1.0)):
+    """A piece of a ground atlas laid on the ground like ground_patch: its
+    picture's top edge is towards -z when `turn` is 0, and turning it by
+    atan2(nx, nz) puts the top edge on a wall whose normal is (nx, nz)."""
+    u0, v0, u1, v1, wide, deep = cell
+    wide, deep = wide * scale, deep * scale
+    start = len(shape.indices)
+    across, down = max(int(wide / step), 1), max(int(deep / step), 1)
+    c, s = math.cos(turn), math.sin(turn)
+    first = len(shape.positions) // 3
+    for j in range(down + 1):
+        for i in range(across + 1):
+            u, v = i / across, j / down
+            lx, lz = (u - 0.5) * wide, (v - 0.5) * deep
+            x, z = cx + lx * c + lz * s, cz - lx * s + lz * c
+            shape.point((x, height(x, z) + lift, z), (0.0, 1.0, 0.0), (u0 + (u1 - u0) * u, v0 + (v1 - v0) * v), colour)
+    for j in range(down):
+        for i in range(across):
+            a = first + j * (across + 1) + i
+            b, d = a + 1, a + across + 1
+            shape.indices.extend((a, d, b, b, d, d + 1))
+    fixed_winding(shape, start)
+
+
+def cell_on_wall(shape, cell, wall, along, top, scale=1.0, out=0.007, colour=(1.0, 1.0, 1.0, 1.0)):
+    """A piece of the wall atlas flat on `wall`, the middle of its top edge
+    at `along`, `top` metres up."""
+    u0, v0, u1, v1, wide, tall = cell
+    wide, tall = wide * scale, tall * scale
+    (x, y, z), turn = on_wall(wall, along, top - tall, out)
+    c, s = math.cos(turn), math.sin(turn)
+
+    def p(u, v):
+        return (x + u * c, y + v, z - u * s)
+
+    shape.quad(p(-wide / 2, 0.0), p(wide / 2, 0.0), p(wide / 2, tall), p(-wide / 2, tall),
+               uvs=((u0, v1), (u1, v1), (u1, v0), (u0, v0)), colour=colour)
+
+
+def cell_on_front(shape, cell, at, mid, top, scale=1.0, out=0.007, colour=(1.0, 1.0, 1.0, 1.0)):
+    """A piece of the wall atlas on a building's face, by the face's own
+    `at(u, v, out)`: the middle of its top edge at `mid`, `top` metres up."""
+    u0, v0, u1, v1, wide, tall = cell
+    wide, tall = wide * scale, tall * scale
+    shape.quad(at(mid - wide / 2, top - tall, out), at(mid + wide / 2, top - tall, out), at(mid + wide / 2, top, out),
+               at(mid - wide / 2, top, out), uvs=((u0, v1), (u1, v1), (u1, v0), (u0, v0)), colour=colour)
+
+
+# Where the wind drops what it carries: the yard's inside corners, the
+# lee of each mouth's corners, and round the things standing in the lane.
+CORNERS = [(-YARD, -YARD_END), (-YARD, YARD_END), (YARD, -YARD_END), (YARD, YARD_END),
+           (-ALLEY, -END + 0.2), (ALLEY, -END + 0.2), (-ALLEY, END - 0.2), (ALLEY, END - 0.2)]
+HEAPS = [  # x, z, reach: where litter piles against something or is dropped
+    (DUMPSTER[0] + 0.7, DUMPSTER[1], 1.1), (-2.2, 21.6, 1.1), (-2.6, 12.3, 1.2), (-2.6, -10.9, 0.6),
+    (-2.6, 17.0, 1.0), (2.6, -13.0, 1.2), (2.7, -15.5, 1.1), (-5.6, -8.0, 1.3), (0.0, -20.0, 0.6), (0.0, 21.0, 0.6),
+    (2.6, -27.0, 1.0), (7.0, -8.2, 0.9), (-4.4, 2.6, 1.0), (-2.6, 25.0, 1.0), (2.6, 17.4, 0.8), (2.5, 22.6, 0.8),
+]
+
+
+def mess(x, z):
+    """How likely a bit of litter is to come to rest at x, z: 0 to about 1."""
+    if abs(z) <= END and inner(x, z):
+        near = wall_distance(x, z)
+        if abs(z) > YARD_END - 0.5 and abs(x) > ALLEY:
+            # The yard's short walls either side of the alley's ends.
+            near = min(near, YARD_END - abs(z))
+        d = 0.008 + 1.3 * math.exp(-near / 0.32) + 0.2 * math.exp(-near / 0.7)
+        if abs(z) > YARD_END:
+            # Wheels sweep two tracks; water leaves grit in the channel.
+            track = min(abs(abs(x) - 0.85) / 0.55, 1.0)
+            d *= 0.3 + 0.7 * track
+            d += 0.12 * math.exp(-abs(x) / 0.2)
+        if BASELINE - COURT_LONG - 0.3 < x < BASELINE and abs(z) < COURT_HALF:
+            # Played on: kicked clear but for the odd bit.
+            d *= 0.12
+        for cx, cz in CORNERS:
+            d += 1.4 * math.exp(-math.hypot(x - cx, z - cz) / 0.6)
+        for hx, hz, reach in HEAPS:
+            d += 0.9 * math.exp(-(math.hypot(x - hx, z - hz) / reach) ** 2)
+        # The pen's fence foot.
+        if -YARD < x < -4.7 and abs(z - 2.2) < 0.6:
+            d += 0.6 * math.exp(-abs(z - 2.2) / 0.15)
+        if 2.2 < z < YARD_END and abs(x + 4.7) < 0.6:
+            d += 0.6 * math.exp(-abs(x + 4.7) / 0.15)
+        return min(d, 1.4)
+    out = abs(z)
+    if abs(x) > HOARDING - 0.3 or out > FAR or out < END:
+        return 0.0
+    # The streets: the gutters along both kerbs, the foot of each building
+    # line, and little on the road or the open pavement.
+    d = 0.03
+    for line, side in ((KERB, 1.0), (FAR_KERB, -1.0)):
+        gap = (out - line) * side
+        if gap > 0:
+            d += 1.1 * math.exp(-gap / 0.18)
+    d += 0.5 * math.exp(-(out - END) / 0.3) * (1.0 if abs(x) > ALLEY + 0.3 else 0.0)
+    d += 0.5 * math.exp(-(FAR - out) / 0.3)
+    return min(d, 1.2)
+
+
+def strew(level, props, fronts, tex):
+    """Lays the clutter: see the comment over CLUTTER."""
+    import pictures
+    import props_small as small
+    import props_trade as trade
+    import props_wall as fitting
+
+    r = random.Random(77)
+    made = os.path.join(CACHE, "made")
+    atlases = pictures.clutter(made)
+    litter_mat, litter = atlases["litter"]
+    ground_mat, marks = atlases["ground"]
+    wall_mat, signs = atlases["wall"]
+    paper = Shape(litter_mat)
+    floor = Shape(ground_mat)
+    face = Shape(wall_mat)
+    lifts = iter(0.0032 + 0.00004 * (k % 60) for k in range(100000))
+
+    def add(parts, x, z, turn=None, lift=0.0, scale=1.0, tint=None, follow=False):
+        """A made prop stood (or, with `follow`, laid) on the ground."""
+        turn = r.uniform(0, math.tau) if turn is None else turn
+        if follow:
+            props.parts.extend(dropped(parts, x, z, turn, scale, tint, lift))
+        else:
+            props.add(parts, (x, height(x, z) + lift, z), turn, scale=scale, tint=tint)
+
+    def scan(name, x, z, turn=None, most=1500, scale=1.0, nodes=None, lift=-0.005, tint=None):
+        turn = r.uniform(0, math.tau) if turn is None else turn
+        return props.model(name, (x, height(x, z) + lift, z), turn, nodes=nodes, most=most, scale=scale, tint=tint)
+
+    def solid(x, z, turn, size):
+        props.solid((x, height(x, z), z), turn, size)
+
+    def on_the_wall(parts, wall, along, up, out=0.0):
+        (x, y, z), turn = on_wall(wall, along, up, out)
+        props.add(parts, (x, y, z), turn)
+
+    def run_on_wall(make, wall, points, *args, **more):
+        """A wall fitting along a polyline of (along, up) on `wall`."""
+        (x, y, z), turn = on_wall(wall, 0.0, 0.0)
+        _, sign = wall_frame(wall)
+        props.add(make([(sign * a, *rest) for a, *rest in points], *args, **more), (x, 0.0, z), turn)
+
+    # ------------------------------------------------ litter by wind and rain
+    print("  litter", file=sys.stderr)
+    kinds = [("leaf", 26), ("leaves", 8), ("wrapper", 16), ("receipt", 4), ("ticket", 4), ("napkin", 6),
+             ("newspaper", 3), ("flyer", 4), ("cup", 3), ("pack", 5), ("bag", 2), ("card", 4)]
+    total = sum(w for _, w in kinds)
+    caps = [plain("litter bottle cap blue", (0.1, 0.25, 0.7, 1.0), 0.35, 0.8), plain("litter bottle cap gold", (0.7, 0.55, 0.15, 1.0), 0.35, 0.8)]
+    cans = [plain("litter can silver", (0.7, 0.7, 0.72, 1.0), 0.35, 0.9), plain("litter can red", (0.6, 0.06, 0.05, 1.0), 0.4, 0.7),
+            plain("litter can green", (0.05, 0.25, 0.12, 1.0), 0.4, 0.7)]
+    import props as made_props
+    bits = made_props.Gather()
+    laid = {"alley": 0, "street": 0}
+
+    def litter_at(x, z, street):
+        pick = r.uniform(0, total + 14)
+        if pick < total:
+            for kind, weight in kinds:
+                pick -= weight
+                if pick <= 0:
+                    break
+            cell = r.choice(litter[kind])
+            # Wet and trodden near walls and in the channel: darker.
+            shade = 0.85 if wall_distance(x, z) < 0.3 or (abs(x) < 0.3 and not street) else 1.0
+            scrap(paper, cell, x, z, r.uniform(0, math.tau), r, r.uniform(0.75, 1.15), next(lifts), shade)
+        elif pick < total + 8:
+            add(small.butts(r.randrange(10000), 0.05, r.choice((1, 1, 2, 3))), x, z, follow=True)
+        elif pick < total + 10:
+            made_props._squashed_can(bits(r.choice(cans)), (x, height(x, z), z), r.uniform(0, math.tau),
+                                     (lambda k: (k, k, k, 1.0))(r.uniform(0.5, 1.0)), r)
+        elif pick < total + 12:
+            y = height(x, z)
+            made_props.rod(bits(r.choice(caps)), [(x, y + 0.002, z), (x, y + 0.008, z)], 0.0135, 7, (r.uniform(0.5, 0.9),) * 3 + (1.0,))
+        elif pick < total + 13:
+            add(small.cup(r.randrange(10000), r.choice(("coffee", "soda", "plastic")), r.choice(("lying", "crushed", "crushed"))), x, z, lift=-0.003)
+        else:
+            add(small.takeaway(r.randrange(10000), r.choice(("carton", "chips", "clamshell"))), x, z, lift=-0.002)
+
+    # Candidates thrown evenly over every walkable floor; each is kept as
+    # often as `mess` says, so the mess gathers where it would.
+    for area, x0, x1, z0, z1, count in (("alley", -ALLEY, ALLEY, -END, END, 30000), ("alley", -YARD, YARD, -YARD_END, YARD_END, 22000),
+                                         ("street", -HOARDING, HOARDING, -FAR, -END, 24000), ("street", -HOARDING, HOARDING, END, FAR, 24000)):
+        for _ in range(count):
+            x, z = r.uniform(x0, x1), r.uniform(z0, z1)
+            if area == "alley" and abs(z) <= YARD_END and abs(x) <= ALLEY:
+                continue  # the yard's own throw covers it
+            keep = mess(x, z) * (0.3 if area == "alley" else 0.16)
+            if r.random() < keep and not any(math.hypot(x - dx, z - dz) < 0.3 for dx, dz in DRAINS):
+                litter_at(x, z, area == "street")
+                laid[area] += 1
+    print(f"  {laid['alley']} bits of litter in the alley and the yard, {laid['street']} in the streets", file=sys.stderr)
+
+    # ------------------------------------------- drifts of grit and leaf mould
+    # Laid along the foot of every wall of the alley and the yard, and along
+    # the kerbs and building lines of the streets, top edge to the wall.
+    def drift_along(a, b, normal, odds=0.85, leafy=0.35, inset=0.0):
+        nx, nz = normal
+        turn = math.atan2(nx, nz)
+        length = math.dist(a, b)
+        dx, dz = (b[0] - a[0]) / length, (b[1] - a[1]) / length
+        at = r.uniform(0.0, 0.6)
+        while at < length - 0.4:
+            scale = r.uniform(0.55, 1.0)
+            cell = r.choice(marks["leafmould"] if r.random() < leafy else marks["grit"])
+            reach = cell[4] * scale
+            if r.random() < odds:
+                # Two layers, the second narrower, so that the drift is
+                # thick against the wall and thins out.
+                for layer in range(2):
+                    deep = cell[5] * scale * r.uniform(0.8, 1.3) * (1.0, 0.6)[layer]
+                    mid = at + reach / 2 + r.uniform(-0.2, 0.2) * layer
+                    cx = a[0] + dx * mid + nx * (deep / 2 + inset)
+                    cz = a[1] + dz * mid + nz * (deep / 2 + inset)
+                    u0, v0, u1, v1, w, h = cell
+                    cell_patch(floor, (u0, v0, u1, v1, w * scale, deep), cx, cz, turn, 1.0, next(lifts), 0.5)
+                    cell = r.choice(marks["leafmould"] if r.random() < leafy else marks["grit"])
+            at += reach * r.uniform(0.7, 1.05)
+
+    for wall, a, b in (("W", -END, -YARD_END), ("W", YARD_END, END), ("E", -END, -YARD_END), ("E", YARD_END, END),
+                       ("WY", -YARD_END, YARD_END), ("EY", -YARD_END, YARD_END), ("YN", -YARD, -ALLEY), ("YN", ALLEY, YARD),
+                       ("YS", -YARD, -ALLEY), ("YS", ALLEY, YARD)):
+        axis, plane, sign = WALLS[wall]
+        if axis == "x":
+            drift_along((plane, a), (plane, b), (sign, 0.0), leafy=0.45)
+        else:
+            drift_along((a, plane), (b, plane), (0.0, sign), leafy=0.45)
+    for side in (-1.0, 1.0):
+        for x0, x1 in ((-HOARDING + 0.5, -ALLEY - 0.4), (ALLEY + 0.4, HOARDING - 0.5)):
+            drift_along((x0, side * END), (x1, side * END), (0.0, side), 0.6, 0.25)
+        drift_along((-HOARDING + 0.5, side * KERB), (HOARDING - 0.5, side * KERB), (0.0, side), 0.9, 0.3, 0.0)
+        drift_along((-HOARDING + 0.5, side * FAR_KERB), (HOARDING - 0.5, side * FAR_KERB), (0.0, -side), 0.9, 0.3, 0.0)
+        drift_along((-HOARDING + 0.5, side * FAR), (HOARDING - 0.5, side * FAR), (0.0, -side), 0.6, 0.2)
+    # Leaf mould and grit heaped in the yard's corners and round the drains.
+    for cx, cz in CORNERS[:4]:
+        for _ in range(3):
+            cell = r.choice(marks["leafmould"])
+            sx, sz = (1.0 if cx < 0 else -1.0), (1.0 if cz < 0 else -1.0)
+            cell_patch(floor, cell, cx + sx * r.uniform(0.3, 0.8), cz + sz * r.uniform(0.3, 0.8), math.atan2(sx, sz) + r.uniform(-0.6, 0.6),
+                       r.uniform(0.35, 0.6), next(lifts), 0.4)
+    for dx, dz in DRAINS[:2]:
+        for k in range(3):
+            angle = k * 2.1 + r.uniform(0, 1)
+            cell_patch(floor, r.choice(marks["grit"]), dx + math.cos(angle) * 0.5, dz + math.sin(angle) * 0.5,
+                       math.atan2(-math.cos(angle), -math.sin(angle)), 0.35, next(lifts), 0.3)
+
+    # ------------------------------------------------- marks on the ground
+    def mark(kind, x, z, scale=1.0, turn=None, k=None):
+        cell = marks[kind][k % len(marks[kind])] if k is not None else r.choice(marks[kind])
+        cell_patch(floor, cell, x, z, r.uniform(0, math.tau) if turn is None else turn, scale, next(lifts), 0.3)
+
+    # Oil where vans stand to load: at the loading bay, the kitchen door and
+    # both mouths; scuffs where wheels turn into the alley.
+    for x, z in ((1.6, -27.4), (0.9, -25.8), (-1.2, 17.6), (-0.6, 19.4), (0.5, -29.0), (-0.8, 28.6), (1.2, 22.8),
+                 (-9.5, -38.8), (7.5, -35.4), (12.0, 39.6), (-5.0, 35.2)):
+        mark("oil", x, z, r.uniform(0.8, 1.3))
+    for x, z, turn in ((-2.2, -29.2, 0.6), (2.0, -29.5, -0.7), (-2.4, 29.3, 2.5), (2.3, 29.0, -2.4), (1.0, -26.5, 0.1),
+                       (-1.2, 26.0, 3.0), (-6.0, -33.2, 1.57), (6.5, 34.0, 1.6), (0.0, -36.5, 1.5), (3.0, 38.0, 1.62)):
+        mark("scuff", x, z, r.uniform(0.9, 1.4), turn)
+    # Grease by the kitchen door, paint by the workshop's, rust where drums
+    # stood, gum where people wait, and stains in the corners men use.
+    mark("grease", -2.75, 16.6, 1.2, 1.4, 0)
+    mark("grease", -2.9, 20.4, 0.9, 0.3, 1)
+    mark("paint", 7.1, -6.2, 1.0, 0.4, 0)
+    mark("paint", 6.6, 8.2, 0.8, 2.0, 1)
+    mark("paint", -2.6, -22.8, 0.7, 1.0, 2)
+    for x, z in ((2.85, 16.4), (-7.2, -6.6), (2.9, -11.2), (-3.0, 19.6)):
+        mark("rust", x, z, r.uniform(0.6, 0.9))
+    for x, z in ((2.6, -13.1), (-2.6, 17.1), (2.7, 26.0), (-2.7, -26.5)):
+        mark("gum", x, z, r.uniform(0.7, 1.1))
+    for x, z, k in ((-3.2, -29.3, 2), (3.2, 29.4, 2), (-7.6, 8.6, 2), (3.1, -17.0, 0), (-2.9, 24.0, 1), (7.5, -8.7, 1)):
+        mark("stain", x, z, r.uniform(0.8, 1.2), math.atan2(1.0 if x < 0 else -1.0, 1.0 if z < 0 else -1.0), k)
+    # Pigeon mess under the fire escapes' landings and the busiest wires.
+    for x, z in ((2.7, -15.6), (3.0, -14.2), (-2.8, 24.0), (-2.6, 25.4), (0.4, -18.4), (-1.0, 23.0), (6.0, -6.0)):
+        mark("bird", x, z, r.uniform(0.7, 1.1))
+    # Chalk on the yard's floor off the court, where children play.
+    mark("chalk", -6.3, -3.0, 1.0, 1.57, 0)
+    mark("chalk", -6.0, 0.8, 0.9, 0.2, 1)
+    mark("chalk", 4.5, 8.3, 0.8, 0.0, 2)
+
+    # ---------------------------------------------- the dumpsters and bins
+    print("  by the bins and the doors", file=sys.stderr)
+    # Bags that did not fit, heaped against the wall beside each dumpster,
+    # one split open by a fox, flattened cardboard slumped on the wall.
+    def heap(x, z, count, along=(0.0, 1.0)):
+        """Bin bags heaped against a wall: a row on the ground, and more
+        thrown on top, settled into the gaps."""
+        ax, az = along
+        for k in range(count):
+            row = k % 3 if k < 3 else k - 3
+            t = (row - 1) * 0.42 + r.uniform(-0.08, 0.08)
+            up = 0.0 if k < 3 else 0.3 + r.uniform(0.0, 0.08)
+            t += 0.21 if k >= 3 else 0.0
+            px, pz = x + ax * t, z + az * t
+            if k >= 3:
+                px += (0.12 if x < 0 else -0.12)
+            scan("trashbag", px, pz, most=1500, scale=r.uniform(0.75, 1.15), lift=up - 0.02, tint=(0.9, 0.9, 0.9, 1.0))
+
+    heap(-3.05, -16.2, 5)
+    heap(-3.05, 23.0, 4)
+    heap(2.95, 13.9, 2)
+    scan("trashbag", 2.95, 11.2, most=1500, scale=0.8, tint=(0.9, 0.9, 0.9, 1.0))
+    face_cell = (litter_mat, litter["card"][0][:4])
+    (x, _, z), turn = on_wall("W", -18.4, 0.0, 0.02)
+    add(trade.cardboard_flat(4, 6), x, z, turn)
+    (x, _, z), turn = on_wall("E", -24.0, 0.0, 0.02)
+    add(trade.cardboard_flat(9, 4), x, z, turn)
+    (x, _, z), turn = on_wall("W", 26.9, 0.0, 0.02)
+    add(trade.cardboard_flat(6, 5), x, z, turn)
+    # Pizza boxes and cartons by the bins.
+    for x, z, kind in ((-2.35, -15.3, "pizza"), (-2.1, 13.2, "pizza"), (-2.4, 22.6, "clamshell"), (-2.0, -12.9, "carton")):
+        add(small.takeaway(r.randrange(1000), kind), x, z, lift=-0.002)
+
+    # ------------------------------------------------- the kitchen's door
+    # Its back door is on the west wall at z 17: kegs, gas, the grease bin,
+    # bread trays, a crate to sit on and the butts round it, a mop bucket.
+    for k, z in enumerate((15.25, 15.72)):
+        add(trade.keg(k + 1), -3.18, z)
+        solid(-3.18, z, 0.0, (0.4, 0.6, 0.4))
+    add(trade.keg(7, lying=True), -2.95, 14.65, 0.05)
+    for z in (19.35, 19.8):
+        scan("small_lpg_tank", -3.2, z, most=1200)
+        solid(-3.2, z, 0.0, (0.32, 0.6, 0.32))
+    run_on_wall(trade.chain, "W", [(19.15, 0.5, 0.02), (19.55, 0.42, 0.2), (19.95, 0.42, 0.2), (20.05, 0.5, 0.02)], 3)
+    add(trade.grease_bin(2), -3.12, 20.45)
+    solid(-3.12, 20.45, 0.0, (0.55, 0.85, 0.55))
+    add(trade.bread_trays(4, 4), -3.05, 14.25, math.pi / 2 + 0.05)
+    add(trade.crate_seat(3), -2.7, 16.25, 0.3)
+    add(small.butts(21, 0.55, 45), -2.45, 16.9, follow=True)
+    add(small.butt_bucket(2), -3.27, 17.68)
+    add(small.mop_bucket(3), -2.95, 18.95 + 0.0, math.pi / 2)
+    for k, (x, z) in enumerate(((-2.2, 16.0), (-2.0, 17.6))):
+        add(small.cup(30 + k, "coffee", ("standing", "lying")[k]), x, z)
+    scan("multi_cleaner_5_litre", -3.3, 16.42, most=600)
+    scan("plastic_broom", -3.36, 18.45, math.pi / 2, most=1500, lift=0.0)
+    # On the wall: the extract hood over the kegs, a meter, conduit, a
+    # notice and a sign.
+    on_the_wall(fitting.vent(3, "hood"), "W", 15.5, 2.65)
+    on_the_wall(fitting.meter_cabinet(2, "electric"), "W", 18.25, 0.95)
+    run_on_wall(fitting.conduit, "W", [(18.25, 1.62), (18.25, 2.9), (21.0, 2.9)], 4, "grey")
+    on_the_wall(fitting.junction_box(5), "W", 21.0, 2.9)
+    cell_on_wall(face, signs["notice"][3], "W", 17.85, 1.65, 1.0)
+    cell_on_wall(face, signs["sign"][0], "W", 16.0, 2.3, 1.0, 0.009)
+
+    # --------------------------------------- the smokers' door, opposite
+    # On the east wall at z -13, under the fire escape: a chair, a bucket of
+    # butts, cups and cans, and what was dumped in the escape's shadow.
+    scan("plastic_monobloc_chair_01", 2.7, -13.95, -1.9, most=1500)
+    add(small.butt_bucket(7), 3.28, -14.35)
+    add(small.butts(22, 0.7, 60), 2.55, -13.3, follow=True)
+    for k, (x, z, kind, state) in enumerate(((2.3, -12.6, "coffee", "crushed"), (3.0, -14.9, "soda", "standing"), (2.1, -14.2, "coffee", "lying"))):
+        add(small.cup(40 + k, kind, state), x, z)
+    add(small.bottle(5, "beer", "standing"), 3.25, -13.6)
+    add(trade.fridge(3, lying=True), 2.95, -17.55, math.pi / 2)
+    solid(2.95, -17.55, math.pi / 2, (1.7, 0.66, 0.62))
+    scan("Television_01", 3.0, -16.25, -1.3, most=1500)
+    cell_on_wall(face, signs["notice"][1], "E", -12.25, 1.6, 1.0)
+    on_the_wall(fitting.bell_box(3), "E", -13.9, 3.0)
+    run_on_wall(fitting.conduit, "E", [(-11.7, 0.9), (-11.7, 2.6), (-14.4, 2.6)], 7, "steel")
+    on_the_wall(fitting.junction_box(8, (0.12, 0.12, 0.07)), "E", -11.7, 0.85)
+    # Plants, a bag and a tarp on the fire escape's landings.
+    for floor_y, along, name in ((3.6, -15.9, "potted_plant_04"), (3.6, -14.4, "planter_pot_clay"), (6.65, -15.6, "planter_pot_clay"),
+                                 (6.65, -14.0, "potted_plant_04")):
+        (x, _, z), _ = on_wall("E", along, 0.0, 0.35)
+        props.model(name, (x, floor_y + 0.005, z), r.uniform(0, 6), most=1200)
+    (x, _, z), turn = on_wall("E", -14.6, 0.0, 0.75)
+    props.add(small.tarp(4, 1.0, 0.5, 0.35), (x, 9.7, z), turn)
+    (x, _, z), turn = on_wall("E", -16.3, 0.0, 1.3)
+    props.add(small.carrier_bag(5, "caught"), (x, 4.6, z), turn + math.pi / 2)
+    for along, floor_y in ((-15.4, 3.6), (-14.2, 6.65)):
+        (x, _, z), _ = on_wall("E", along, 0.0, 0.5)
+        props.add(small.bottle(r.randrange(100), r.choice(("beer", "wine")), "standing"), (x, floor_y, z), 0.0)
+
+    # ----------------------------------------- the loading bay, north-east
+    load = trade.wrapped_pallet(tex, 5)
+    add(load, 2.85, -24.75, math.pi / 2)
+    solid(2.85, -24.75, math.pi / 2, (1.2, box_of(load)[1][1], 0.8))
+    scan("hand_truck", 3.05, -23.55, math.pi / 2 + 0.3, most=2500)
+    add(trade.carpet_roll(2), 3.2, -21.6, math.pi / 2 + 0.04)
+    add(small.carrier_bag(8, "flat"), 2.4, -26.0, follow=True)
+
+    # ------------------------------------------------ the workshop's corner
+    # The yard's north-east corner, off the court: builder's waste.
+    add(trade.bulk_bag(2), 5.9, -8.35, 0.08)
+    solid(5.9, -8.35, 0.0, (0.9, 0.85, 0.9))
+    add(trade.bricks(3, 46), 4.45, -8.4, 0.05)
+    add(trade.paint_tins(4, 5), 7.4, -7.95)
+    add(trade.planks(5, 7, tex), 5.4, 8.45, 0.02)
+    add(trade.paint_tins(9, 3), 7.45, 8.5)
+    on_the_wall(fitting.meter_cabinet(6, "gas"), "EY", -6.75, 0.55)
+    on_the_wall(fitting.bell_box(5), "EY", -4.3, 3.4)
+    run_on_wall(fitting.cables, "EY", [(-8.9, 4.3), (-5.5, 4.3), (-5.5, 2.5)], 6, 3, 0.1)
+    on_the_wall(fitting.junction_box(9), "EY", -5.5, 2.45)
+
+    # --------------------------------------------- round the court
+    # Bottles and glass by the bench, a bag and a ball, a crate turned up as
+    # a seat, a tyre stack, a jacket on the pen's fence, a bag caught low on
+    # it, and the shoes slung over the wire above the court.
+    for k, (x, z, kind, state) in enumerate(((-5.9, -8.45, "beer", "standing"), (-6.95, -7.7, "beer", "lying"),
+                                             (-5.4, -8.1, "spirits", "standing"), (-7.6, -6.4, "soda", "lying"),
+                                             (-4.95, -7.0, "beer", "broken"), (-7.4, 1.6, "wine", "lying"))):
+        add(small.bottle(60 + k, kind, state), x, z)
+    add(small.glass_shards(4, 0.45, 50, "brown"), -5.1, -6.7, follow=True)
+    mark("glass", -5.1, -6.7, 0.9, k=0)
+    add(small.holdall(2), -5.15, -8.35, 0.4)
+    add(trade.crate_seat(8), -5.6, -5.4, 0.9)
+    add(small.chalk(2), -6.1, -2.4, follow=True)
+    # The scan stands on its tread: laid flat by turning it a quarter
+    # about x, then stacked.
+    tyre = [p for parts in kit_pieces("old_tyre").values() for p in thin("old_tyre", "flat", parts, 1500)]
+    flat = []
+    for part in tyre:
+        moved = array.array("f", part.positions)
+        normals = array.array("f", part.normals)
+        for k in range(0, len(moved), 3):
+            moved[k + 1], moved[k + 2] = -part.positions[k + 2], part.positions[k + 1]
+            normals[k + 1], normals[k + 2] = -part.normals[k + 2], part.normals[k + 1]
+        copy = Part(moved, normals, part.uvs, part.indices, part.material)
+        copy.colours = part.colours
+        flat.append(copy)
+    (lx, ly, lz), (hx, hy, hz) = box_of(flat)
+    for k in range(3):
+        props.add(flat, (-7.45 + r.uniform(-0.05, 0.05), height(-7.45, -4.6) + (hy - ly) * k, -4.6 + r.uniform(-0.05, 0.05)), r.uniform(0, 6),
+                  (-(lx + hx) / 2, -ly, -(lz + hz) / 2))
+    solid(-7.45, -4.6, 0.0, (hx - lx, (hy - ly) * 3, hz - lz))
+    rail = 2.37
+    props.add(small.jacket_on_rail(3), (-6.1, height(-6.1, 2.2) + rail, 2.2), 0.0)
+    props.add(small.carrier_bag(9, "caught"), (-4.7, height(-4.7, 5.6) + 0.55, 5.62), math.pi / 2)
+    props.add(small.shoes_on_wire(4), (0.795, 7.889, -5.45), math.atan2(-1.0, 15.9))
+    add(small.tape_band(0.09, 2), -2.75, END + 0.45, lift=0.62)
+
+    # --------------------------------------------- the south half
+    add(trade.shopping_trolley(4, tipped=True), -2.55, 23.6, 0.4)
+    (x, _, z), turn = on_wall("E", 10.35, 0.0, 0.05)
+    add(trade.bike_frame(6), x, z, turn)
+    run_on_wall(trade.chain, "E", [(9.5, 0.62, 0.2), (9.8, 0.5, 0.22), (10.1, 0.55, 0.18)], 6)
+    run_on_wall(trade.chain, "W", [(12.6, 1.1, 0.14), (13.2, 1.0, 0.25), (13.7, 1.2, 0.35)], 9)
+    add(small.carrier_bag(11, "flat"), 1.9, 24.9, follow=True)
+    for k, (x, z) in enumerate(((2.75, 26.6), (2.5, 27.1), (-2.65, 26.6))):
+        add(small.bottle(80 + k, r.choice(("beer", "water", "soda")), r.choice(("standing", "lying"))), x, z)
+    add(small.butts(23, 0.5, 30), 2.6, 25.8, follow=True)
+    add(small.butts(24, 0.5, 26), -2.6, -26.3, follow=True)
+    add(small.butts(25, 0.4, 18), 7.4, -5.0, follow=True)
+    add(small.glass_shards(9, 0.35, 30, "green"), 1.1, 9.8, follow=True)
+    mark("glass", 1.1, 9.8, 0.7, k=1)
+    add(small.glass_shards(10, 0.3, 24, "clear"), -0.9, -28.0, follow=True)
+    for x, z, state in ((-1.1, -22.0, "lying"), (0.8, 13.5, "crushed"), (3.15, 20.1, "standing"), (-3.1, -27.4, "lying"), (-7.6, 7.9, "lying")):
+        add(small.cup(r.randrange(1000), r.choice(("coffee", "soda", "plastic")), state), x, z)
+
+    # --------------------------------------------- overhead
+    # A washing line from the west fire escape's second landing to a
+    # window across the alley.
+    props.parts.extend(small.washing_line((-2.15, 7.62, 24.0), (3.42, 7.95, 23.6), 7, 0.3))
+
+    # More wires: telephone and power drops strung across from wall to wall
+    # over the years, some slack, one with a bundle tied on.
+    wires = Shape(plain("cable", (0.03, 0.03, 0.03, 1.0), 0.6))
+    for z0, y0, z1, y1, sag in ((-28.2, 5.2, -26.8, 6.0, 0.5), (-23.6, 7.6, -24.4, 7.1, 0.3), (-16.8, 5.4, -16.2, 5.9, 0.6),
+                                (-11.4, 8.3, -12.0, 8.9, 0.4), (12.4, 5.3, 12.9, 5.0, 0.55), (15.8, 8.1, 16.6, 8.6, 0.35),
+                                (20.4, 5.9, 19.6, 6.4, 0.7), (27.1, 7.7, 27.5, 7.2, 0.3)):
+        for k in range(r.choice((1, 2))):
+            wire(wires, (-ALLEY + 0.05, y0 + 0.1 * k, z0), (ALLEY - 0.05, y1 + 0.08 * k, z1 + 0.1 * k), sag + 0.1 * k, r.choice((0.008, 0.011, 0.014)))
+    for z, y in ((-2.0, 10.4), (6.5, 7.1)):
+        wire(wires, (-YARD + 0.05, y, z), (YARD - 0.05, y + 0.6, z - 1.5), 0.7)
+    props.parts.append(wires.part())
+
+    # ------------------------------------------- on the walls of the lane
+    print("  on the walls", file=sys.stderr)
+    for wall, along, up, kind in (("W", -24.0, 3.1, "louvre"), ("E", -20.0, 2.8, "louvre"), ("W", 11.0, 2.9, "louvre"),
+                                  ("E", 23.5, 3.3, "louvre"), ("W", -27.8, 0.32, "brick"), ("W", -16.9, 0.3, "brick"),
+                                  ("E", 16.6, 0.28, "brick"), ("E", -25.6, 0.33, "brick"), ("W", 27.9, 0.3, "brick"),
+                                  ("E", 19.8, 0.3, "brick"), ("E", 15.4, 2.2, "round"), ("W", -20.8, 2.6, "round"),
+                                  ("YS", 5.0, 3.2, "round"), ("WY", 3.5, 2.7, "louvre")):
+        on_the_wall(fitting.vent(r.randrange(1000), kind), wall, along, up)
+    for wall, points, kind in (("E", [(-23.4, 5.8), (-23.4, 3.4)], "black"), ("W", [(20.6, 4.2), (21.6, 4.2), (21.6, 2.9)], "plastic"),
+                               ("W", [(-12.4, 6.2), (-12.4, 4.3)], "copper")):
+        run_on_wall(fitting.pipe_run, wall, points, r.randrange(1000), 0.035 if kind == "plastic" else 0.022, kind)
+        cell_on_wall(face, r.choice(signs["water"]), wall, points[-1][0], points[-1][1] - 0.05, r.uniform(1.0, 1.5), 0.005)
+    for wall, points in (("W", [(9.4, 2.7), (16.4, 2.75)]), ("E", [(-29.6, 2.6), (-23.8, 2.62), (-23.8, 1.25)]),
+                         ("E", [(9.6, 4.6), (20.8, 4.65)]), ("W", [(-29.4, 4.1), (-20.3, 4.15)]), ("YN", [(4.0, 3.8), (7.9, 3.85)])):
+        run_on_wall(fitting.cables, wall, points, r.randrange(1000), r.choice((2, 3, 4)), 0.12)
+    on_the_wall(fitting.junction_box(12), "E", -23.8, 1.15)
+    for wall, along, up in (("W", 11.8, 7.2), ("E", -27.0, 6.2), ("WY", -2.5, 9.0), ("WY", 4.2, 6.1), ("E", 18.2, 8.4)):
+        on_the_wall(fitting.satellite_dish(r.randrange(1000)), wall, along, up)
+    on_the_wall(fitting.bell_box(9), "W", 23.0, 3.4)
+    on_the_wall(fitting.meter_cabinet(11, "electric"), "E", 25.0, 0.9)
+    on_the_wall(fitting.hanging_basket(2), "W", 18.9, 2.6)
+    for wall, along, up in (("E", -18.8, 7.9), ("W", -9.8, 11.2), ("E", 27.8, 9.6), ("WY", 7.6, 14.0)):
+        on_the_wall(fitting.wall_plant(r.randrange(1000)), wall, along, up)
+    # Old signs, notices, torn posters, stickers and tape by the doors and
+    # mouths; pigeon streaks and spikes on sills; rust under fittings.
+    cell_on_wall(face, signs["sign"][3], "W", -14.0, 2.35, 1.0, 0.009)
+    cell_on_wall(face, signs["sign"][1], "E", -27.6, 3.65, 1.0, 0.009)
+    cell_on_wall(face, signs["sign"][2], "E", 24.9, 2.35, 1.0, 0.009)
+    cell_on_wall(face, signs["notice"][0], "W", -10.2, 1.55, 1.0)
+    cell_on_wall(face, signs["notice"][2], "W", -28.2, 1.6, 1.0)
+    cell_on_wall(face, signs["notice"][4], "EY", -4.8, 1.6, 1.0)
+    for k, (wall, along, top) in enumerate((("W", -29.2, 2.1), ("E", 29.2, 2.0), ("E", -29.0, 2.2), ("W", 29.0, 2.1))):
+        cell_on_wall(face, signs["torn"][k % 3], wall, along, top, r.uniform(0.9, 1.1), 0.0105 + 0.0003 * k)
+    for k, (wall, along, top) in enumerate((("E", -12.4, 1.9), ("W", 17.6, 1.95), ("EY", -5.0, 2.4), ("E", 26.9, 1.3))):
+        cell_on_wall(face, r.choice(signs["tape"]), wall, along, top, 0.8, 0.0085)
+    stick = [("W", -29.0, 1.2, 1.9), ("E", -29.0, 1.2, 1.9), ("W", 28.6, 1.2, 1.9), ("E", 28.8, 1.2, 1.9),
+             ("E", -12.0, 1.3, 1.8), ("W", 17.9, 1.2, 1.9), ("EY", -4.6, 1.3, 1.9), ("W", -26.0, 1.4, 2.0),
+             ("E", 26.7, 1.4, 1.9), ("YN", -5.4, 1.3, 1.8)]
+    for k in range(46):
+        wall, along, low, high = r.choice(stick)
+        cell_on_wall(face, r.choice(signs["sticker"]), wall, along + r.uniform(-0.7, 0.7), r.uniform(low, high), r.uniform(0.9, 1.2),
+                     0.0075 + 0.00005 * k)
+    # Stickers on the downpipes, at hand height, where people lean.
+    for wall, along in (("W", -28.6), ("W", -19.25), ("W", 9.4), ("W", 19.3), ("E", -21.3), ("E", -10.0), ("E", 9.5),
+                        ("E", 21.25), ("E", 29.5)):
+        for k in range(r.choice((1, 2, 3))):
+            u0, v0, u1, v1, w, h = r.choice(signs["sticker"])
+            s = min(1.0, 0.12 / max(w, h))
+            cell_on_wall(face, (u0, v0, u1, v1, w * s, h * s), wall, along - 0.08, r.uniform(1.0, 1.9), 1.0, 0.272 + 0.0005 * k)
+    for wall, along, top in (("E", -11.7, 0.8), ("W", 21.0, 2.8), ("EY", -5.5, 2.35), ("E", -23.8, 1.1), ("W", 15.5, 2.3),
+                             ("E", -27.0, 6.0), ("W", 11.8, 7.0)):
+        cell_on_wall(face, r.choice(signs["rust"]), wall, along, top, r.uniform(0.6, 1.0), 0.0052)
+    print("  on the sills", file=sys.stderr)
+    for building, side, at, along_, normal, length, openings in fronts:
+        if building.name not in ("w1", "w2", "w4", "w5", "e1", "e2", "e4", "e5", "w3"):
+            continue
+        for u0, u1, v0, v1 in openings:
+            if v0 < 3.0:
+                continue
+            roll = r.random()
+            if roll < 0.18:
+                cell_on_front(face, r.choice(signs["bird"]), at, (u0 + u1) / 2 + r.uniform(-0.15, 0.15), v0 - 0.07,
+                              min(1.0, (u1 - u0 + 0.1) / 0.8), 0.0045)
+            elif roll < 0.26:
+                spikes = fitting.bird_spikes(u1 - u0, r.randrange(1000))
+                turn = math.atan2(-along_[2], along_[0])
+                props.add(spikes, at(u0, v0, 0.0), turn)
+
+    # Pigeons' mess on the sills of the yard's windows is in the picture
+    # above; the litter and the drifts are drawn last, over everything.
+    props.parts.extend(bits.parts())
+    level.place("clutter litter", level.mesh("clutter litter", [paper.part()]), solid=False)
+    level.place("clutter ground", level.mesh("clutter ground", [floor.part()]), solid=False)
+    level.place("clutter walls", level.mesh("clutter walls", [face.part()]), solid=False)
 
 
 def props_pen(props, chooser):
