@@ -101,6 +101,10 @@ impl Buffer {
     /// least as long as `bytes`, and the graphics card must not be reading
     /// it: commands that use it must have finished.
     pub(crate) unsafe fn write(&self, bytes: &[u8]) -> Result<(), RenderError> {
+        // Mapping nothing is not allowed, and there is nothing to write.
+        if bytes.is_empty() {
+            return Ok(());
+        }
         let device = self.gpu.device();
         // SAFETY: the caller guarantees the memory can be mapped, is at least
         // `bytes.len()` long and is not in use; it is unmapped straight after.

@@ -344,7 +344,7 @@ local porch: Lamp = game.lamp("porch", { from = "lantern", at = vector.create(2,
 local torch = game.lamp("torch", { from = porch, beam = 40, lumens = 300, kelvin = 5000, pointing = vector.create(0, 0, -1), softness = 0.3, range = 20, radius = 0.05, flicker = "torch", on = true, color = "#ffd0a0" })
 game.lamp("candle")
 porch.at = vector.create(2, 2.4, 0)
-porch.on = game.sky.hour() > 19
+porch.on = (game.sky.hour() or 12) > 19
 porch.lumens = 400
 porch.color = "orange"
 porch.kelvin = 2200
