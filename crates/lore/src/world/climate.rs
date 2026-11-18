@@ -55,6 +55,18 @@ const WIND_FELT: [f32; 2] = [14.0, 24.0];
 const TORNADO_GROWS: f32 = 12.0;
 const TORNADO_DIES: f32 = 10.0;
 
+/// Where a tornado feels for the ground under it, in metres from its
+/// middle along x and z, and how fast its foot climbs or falls to it, in
+/// metres a second.
+const FOOT_FEELS: [[f32; 2]; 5] = [
+    [0.0, 0.0],
+    [18.0, 0.0],
+    [-18.0, 0.0],
+    [0.0, 18.0],
+    [0.0, -18.0],
+];
+const FOOT_CLIMBS: f32 = 6.0;
+
 /// `value` between `low` and `high`, as a share from 0 to 1 that starts
 /// and ends gently.
 fn eased(low: f32, high: f32, value: f32) -> f32 {
@@ -125,10 +137,30 @@ impl Twister {
         let way = [along_x * cos - along_z * sin, along_x * sin + along_z * cos];
         self.place[0] += way[0] * self.speed * step;
         self.place[2] += way[1] * self.speed * step;
-        // The ground under it, if the level reaches so far.
+        // The ground under it, if the level reaches so far: the lowest of
+        // what is under its middle and a few strides to each side, so that
+        // over a town it stands in the street and not on a roof. It climbs
+        // and falls at a pace, as a foot dragged over the land does, and
+        // not at once; where it first comes down it is on the ground.
         let [x, y, z] = self.place;
-        if let Some(hit) = level.raycast([x, y + 150.0, z], [0.0, -1.0, 0.0], 600.0) {
-            self.place[1] = hit.point[1];
+        let ground = FOOT_FEELS
+            .iter()
+            .filter_map(|[off_x, off_z]| {
+                level.raycast(
+                    [x + off_x, y + 150.0, z + off_z],
+                    [0.0, -1.0, 0.0],
+                    600.0,
+                )
+            })
+            .map(|hit| hit.point[1])
+            .reduce(f32::min);
+        if let Some(ground) = ground {
+            let most = if self.age <= step {
+                f32::INFINITY
+            } else {
+                FOOT_CLIMBS * step
+            };
+            self.place[1] += (ground - y).clamp(-most, most);
         }
         self.turned += self.seen().turns() * step;
     }
@@ -513,6 +545,58 @@ mod tests {
             "{tornado:?}"
         );
         assert!(after(stopped, 2460).0.weather().tornado.is_none());
+    }
+
+    /// A flat sheet `high` up from (x0, z0) to (x1, z1), as two triangles.
+    fn sheet(x0: f32, z0: f32, x1: f32, z1: f32, high: f32) -> [[[f32; 3]; 3]; 2] {
+        [
+            [[x0, high, z0], [x0, high, z1], [x1, high, z1]],
+            [[x0, high, z0], [x1, high, z1], [x1, high, z0]],
+        ]
+    }
+
+    #[test]
+    fn a_tornado_stands_in_the_street_and_not_on_a_roof_and_climbs_a_hill_at_a_pace() {
+        // A street, a house 20 m tall and 16 m wide across its way, and
+        // past that a hill as tall that goes on.
+        let mut land = Vec::new();
+        land.extend(sheet(-100.0, -100.0, 300.0, 100.0, 0.0));
+        land.extend(sheet(40.0, -8.0, 56.0, 8.0, 20.0));
+        land.extend(sheet(150.0, -100.0, 300.0, 100.0, 20.0));
+        let level = Level::from_triangles(&land);
+        let mut twister = Twister {
+            place: [0.0, 7.0, 0.0],
+            heading: [1.0, 0.0],
+            speed: 10.0,
+            peak: 0.5,
+            age: 0.0,
+            lasts: 600.0,
+            turned: 0.0,
+        };
+        // Where it comes down it is on the ground at once.
+        twister.step(&level, STEP);
+        assert!(twister.place[1].abs() < 1e-3, "{twister:?}");
+        // Over the house it stays in the street.
+        let mut highest = 0.0_f32;
+        while twister.place[0] < 100.0 {
+            twister.step(&level, STEP);
+            highest = highest.max(twister.place[1]);
+        }
+        assert!(highest < 0.01, "it went up on the roof: {highest}");
+        // Up the hill it climbs at a pace: a second after its middle is
+        // over the hill's edge it is part of the way up, and later on top.
+        while twister.place[0] < 150.0 + 18.0 {
+            twister.step(&level, STEP);
+        }
+        for _ in 0..60 {
+            twister.step(&level, STEP);
+        }
+        let part = twister.place[1];
+        assert!(part > 1.0 && part < 19.0, "{part}");
+        for _ in 0..300 {
+            twister.step(&level, STEP);
+        }
+        assert!((twister.place[1] - 20.0).abs() < 1e-3, "{twister:?}");
     }
 
     #[test]
