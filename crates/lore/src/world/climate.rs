@@ -177,6 +177,11 @@ impl Climate {
         &self.weather
     }
 
+    /// What was falling on the player in the newest tick.
+    pub(crate) fn falling(&self) -> Falling {
+        self.falling
+    }
+
     /// How far the rain that has fallen has raised the level's still
     /// water, in metres.
     pub(crate) fn water_rise(&self) -> f32 {

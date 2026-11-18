@@ -21,7 +21,14 @@ pub(crate) enum SoundAsk {
     StopAll,
     /// Move the sound started with this id to another place in the world.
     Move(SoundId, [f32; 3]),
+    /// Make the sound started with this id as loud as this, from 0 to 2.
+    Loud(SoundId, f32),
 }
+
+/// The ids from here up are the engine's own sounds, which last as long
+/// as what makes them: the hum under water, the rain, the wind. A script
+/// cannot stop them, and they are not counted among its loops.
+pub(crate) const ENGINE_SOUNDS: u64 = u64::MAX - 15;
 
 /// Playing what was asked for.
 mod output {
@@ -49,6 +56,8 @@ mod output {
         /// Moves a sound that is playing in the world; one that is not, or
         /// has ended, is left alone.
         fn move_to(&mut self, playing: Playing, position: [f32; 3]);
+        /// Makes a playing sound as loud as `volume` says, from 0 to 2.
+        fn set_loudness(&mut self, playing: Playing, volume: f32);
         fn set_listener(&mut self, listener: Listener);
         /// Sets how loud everything is, from 0 (silent) to 1 (full).
         fn set_volume(&mut self, volume: f32);
@@ -69,6 +78,10 @@ mod output {
 
         fn move_to(&mut self, playing: Playing, position: [f32; 3]) {
             Mixer::move_to(self, playing, position);
+        }
+
+        fn set_loudness(&mut self, playing: Playing, volume: f32) {
+            Mixer::set_loudness(self, playing, volume);
         }
 
         fn set_listener(&mut self, listener: Listener) {
@@ -141,8 +154,16 @@ mod output {
                     SoundAsk::Play(id, play) => {
                         let looping = play.looping;
                         let playing = self.voices.play(play);
-                        self.playing.insert(id, playing);
-                        if looping {
+                        // One started again under the same id takes the
+                        // place of the one before.
+                        if let Some(before) = self.playing.insert(id, playing)
+                            && id.0 >= super::ENGINE_SOUNDS
+                        {
+                            self.voices.stop(before);
+                        }
+                        if id.0 >= super::ENGINE_SOUNDS {
+                            // The engine's own: it stops them itself.
+                        } else if looping {
                             self.loops.push_back(id);
                             if self.loops.len() > LOOPS
                                 && let Some(oldest) = self.loops.pop_front()
@@ -167,7 +188,11 @@ mod output {
                         // is pushed out: stopping it again does nothing.
                         if let Some(playing) = self.playing.get(&id).copied() {
                             self.voices.stop(playing);
-                            if let Some(place) = self.loops.iter().position(|kept| *kept == id) {
+                            if id.0 >= super::ENGINE_SOUNDS {
+                                self.playing.remove(&id);
+                            } else if let Some(place) =
+                                self.loops.iter().position(|kept| *kept == id)
+                            {
                                 self.loops.remove(place);
                                 self.playing.remove(&id);
                             }
@@ -178,10 +203,21 @@ mod output {
                             self.voices.move_to(playing, place);
                         }
                     }
-                    SoundAsk::StopAll => {
-                        for (_, playing) in self.playing.drain() {
-                            self.voices.stop(playing);
+                    SoundAsk::Loud(id, volume) => {
+                        if let Some(playing) = self.playing.get(&id).copied() {
+                            self.voices.set_loudness(playing, volume);
                         }
+                    }
+                    SoundAsk::StopAll => {
+                        // Every sound a script started: the rain goes on.
+                        let voices = &mut self.voices;
+                        self.playing.retain(|id, playing| {
+                            let kept = id.0 >= super::ENGINE_SOUNDS;
+                            if !kept {
+                                voices.stop(*playing);
+                            }
+                            kept
+                        });
                         self.once.clear();
                         self.loops.clear();
                     }
@@ -263,6 +299,12 @@ impl Voices for LazySpeakers {
     fn move_to(&mut self, playing: lore_audio::Playing, position: [f32; 3]) {
         if let Some(speakers) = &mut self.speakers {
             speakers.move_to(playing, position);
+        }
+    }
+
+    fn set_loudness(&mut self, playing: lore_audio::Playing, volume: f32) {
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_loudness(playing, volume);
         }
     }
 

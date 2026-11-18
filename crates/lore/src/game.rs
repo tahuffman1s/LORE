@@ -542,8 +542,11 @@ impl Frame {
     }
 
     /// Starts the frame for a window of `screen` pixels, if there is one yet, with `buffer` to
-    /// gather the UI in: the last frame's, so its memory is used again.
-    pub(crate) fn for_window(mut self, screen: Option<[u32; 2]>, mut buffer: DrawBuffer) -> Self {
+    /// gather the UI in: the last frame's, so its memory is used again. The
+    /// engine does this for the game it runs; it is here for a tool that
+    /// draws a game's HUD with no window.
+    #[must_use]
+    pub fn for_window(mut self, screen: Option<[u32; 2]>, mut buffer: DrawBuffer) -> Self {
         buffer.clear();
         // A minimised window has no size; a UI still needs one to lay out in.
         self.screen = screen.map_or(NO_WINDOW, |[width, height]| [width.max(1), height.max(1)]);
@@ -552,7 +555,7 @@ impl Frame {
     }
 
     /// Everything the game asked to be drawn over it this frame.
-    pub(crate) fn take_ui(&mut self) -> DrawBuffer {
+    pub fn take_ui(&mut self) -> DrawBuffer {
         std::mem::take(&mut self.ui)
     }
 

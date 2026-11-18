@@ -24,6 +24,7 @@ enum Request {
     Stop(Playing),
     StopAll,
     MoveTo(Playing, [f32; 3]),
+    Loudness(Playing, f32),
     Listener(Listener),
     Volume(f32),
     GroupVolume(Group, f32),
@@ -160,6 +161,12 @@ impl Speakers {
     /// Moves a playing sound.
     pub fn move_to(&mut self, playing: Playing, position: [f32; 3]) {
         self.send(Request::MoveTo(playing, position));
+    }
+
+    /// Makes a playing sound as loud as `volume` says, from 0 to 2: see
+    /// [`Mixer::set_loudness`].
+    pub fn set_loudness(&mut self, playing: Playing, volume: f32) {
+        self.send(Request::Loudness(playing, volume));
     }
 
     /// Says where the player's head is. Call it every tick.
@@ -311,6 +318,7 @@ impl Feed {
                 Request::Stop(playing) => self.mixer.stop(playing),
                 Request::StopAll => self.mixer.stop_all(),
                 Request::MoveTo(playing, position) => self.mixer.move_to(playing, position),
+                Request::Loudness(playing, volume) => self.mixer.set_loudness(playing, volume),
                 Request::Listener(listener) => self.mixer.set_listener(listener),
                 Request::Volume(volume) => self.mixer.set_volume(volume),
                 Request::GroupVolume(group, volume) => self.mixer.set_group_volume(group, volume),

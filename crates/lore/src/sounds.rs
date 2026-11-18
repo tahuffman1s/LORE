@@ -24,13 +24,14 @@ use lore_script::SoundRequest;
 pub const SOUNDS_FOLDER: &str = "sounds";
 
 /// The sounds every game has without a file of its own, in order.
-pub const STARTER_SOUNDS: [&str; 15] = [
+pub const STARTER_SOUNDS: [&str; 17] = [
     "bubbles",
     "drip",
     "dry-fire",
     "footstep",
     "gunshot",
     "landing",
+    "rain",
     "reload",
     "splash",
     "splash-small",
@@ -40,6 +41,7 @@ pub const STARTER_SOUNDS: [&str; 15] = [
     "thunder-far",
     "underwater",
     "wade",
+    "wind",
 ];
 
 /// How often a game's folder is looked at for new, changed or removed sounds.
@@ -498,6 +500,10 @@ fn starters() -> BTreeMap<String, Entry> {
         ("drip", takes(starter::drips(), DRIP)),
         // Heard with the head under: to loop, the same in both ears.
         ("underwater", one(starter::underwater(), close)),
+        // The weather, to loop for as long as it lasts: the engine plays
+        // them by itself, louder the harder it rains and blows.
+        ("rain", one(starter::rain(), close)),
+        ("wind", one(starter::wind(), close)),
     ];
     entries
         .into_iter()
@@ -792,6 +798,9 @@ mod tests {
             ("bubbles", 1.0..1.4),
             ("underwater", 4.0..6.0),
             ("drip", 0.1..0.2),
+            // The weather's loops are here too: they are found the same way.
+            ("rain", 5.9..6.1),
+            ("wind", 7.9..8.1),
         ];
         for (name, seconds) in water {
             assert!(STARTER_SOUNDS.contains(&name), "{name}");

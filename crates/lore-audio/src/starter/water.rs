@@ -30,7 +30,7 @@ const PER_SECOND: f32 = RATE as f32;
 /// The sine of an angle given in whole turns: 0.25 is a quarter turn,
 /// where it is 1. Right to five places, which the ear cannot tell from
 /// the real thing.
-fn wave(turns: f32) -> f32 {
+pub(super) fn wave(turns: f32) -> f32 {
     // Whole turns change nothing and are dropped. Then it is folded into
     // the quarter turn either side of nothing, where a short sum is close.
     let mut part = turns - turns as i32 as f32;
@@ -83,17 +83,17 @@ fn between(low: f32, high: f32, along: f32) -> f32 {
 }
 
 /// A sound split around one pitch.
-struct Parts {
+pub(super) struct Parts {
     /// What is below the pitch.
-    low: f32,
+    pub(super) low: f32,
     /// What is near it.
-    near: f32,
+    pub(super) near: f32,
     /// What is above it.
-    high: f32,
+    pub(super) high: f32,
 }
 
 /// Splits a sound around a pitch, which may move while it plays.
-struct Split {
+pub(super) struct Split {
     per_second: f32,
     narrow: f32,
     a1: f32,
@@ -110,7 +110,7 @@ impl Split {
     }
 
     /// The same, for a sound of `per_second` samples a second.
-    fn at_rate(pitch: f32, sharp: f32, per_second: f32) -> Self {
+    pub(super) fn at_rate(pitch: f32, sharp: f32, per_second: f32) -> Self {
         let mut split = Self {
             per_second,
             narrow: 1.0,
@@ -124,7 +124,7 @@ impl Split {
     }
 
     /// Moves it to `pitch` hertz.
-    fn tune(&mut self, pitch: f32, sharp: f32) {
+    pub(super) fn tune(&mut self, pitch: f32, sharp: f32) {
         // Half the angle the pitch turns through each sample; its tangent
         // is what the filter is built from.
         let half = (pitch / self.per_second).clamp(0.000_2, 0.45) * 0.5;
@@ -135,7 +135,7 @@ impl Split {
         self.a3 = g * self.a2;
     }
 
-    fn next(&mut self, sample: f32) -> Parts {
+    pub(super) fn next(&mut self, sample: f32) -> Parts {
         let [first, second] = &mut self.kept;
         let above = sample - *second;
         let near = self.a1 * *first + self.a2 * above;
@@ -304,7 +304,7 @@ fn finish(mut samples: Vec<f32>, floor: f32, peak: f32, fade: f32) -> Sound {
 }
 
 /// `samples` made louder or quieter so that the loudest is `peak` loud.
-fn loudest_at(mut samples: Vec<f32>, peak: f32) -> Vec<f32> {
+pub(super) fn loudest_at(mut samples: Vec<f32>, peak: f32) -> Vec<f32> {
     let loudest = samples.iter().fold(0.0_f32, |a, b| a.max(b.abs()));
     if loudest > 0.0 {
         for sample in &mut samples {

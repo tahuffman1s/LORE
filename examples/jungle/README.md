@@ -17,6 +17,17 @@ down between the leaves, the light ripples over the bottom, your breath
 goes up in bubbles and everything you hear is muffled. Jump in from the
 bank for the splash.
 
+And it is here for the weather. Press E (Y on a gamepad) for a panel with
+a line for everything a script can say of it: one word for the whole sky,
+from clear through storm to blizzard, and then the cloud, the storms, the
+rain, the air's warmth, the wind and which way it blows, the fog and the
+hour, each on a slider. Turn the warmth down and the rain turns to sleet
+and then snow, the snow settles, and the lake freezes until it bears you:
+walk out on it, and mind that it is slippery. Turn it up again and it all
+melts. There is lightning to call down, and a tornado to stand too close
+to. Every line is one call a script of your own could make, such as
+`game.weather.set("blizzard")` or `game.weather.setTemperature(-5)`.
+
 Neither the lake nor the pond has a shore drawn for it. `build.py` makes
 the hollows in the ground and lays a sheet of water two strides across in
 the middle of each; the engine lets each one fill its hollow.

@@ -585,6 +585,9 @@ pub struct Playing {
     marks: Vec<WaterMark>,
     /// Whether the rumble of being under water is playing.
     under: bool,
+    /// How loud each of the weather's own sounds was last said to be, if
+    /// it is playing: the rain, the wind and the roar of a tornado.
+    weather_heard: [Option<f32>; 3],
 }
 
 /// The most marks on the water kept for a frame to show.
@@ -593,6 +596,21 @@ const MOST_MARKS: usize = 64;
 /// What the rumble heard with the head under water is known by, so that
 /// it can be stopped: no script's sound has this number.
 const UNDER_WATER: lore_script::SoundId = lore_script::SoundId(u64::MAX);
+
+/// What the weather's own sounds are known by: the rain, the wind, and the
+/// roar of a tornado. Each plays for as long as there is any of it.
+const WEATHER_SOUNDS: [lore_script::SoundId; 3] = [
+    lore_script::SoundId(u64::MAX - 1),
+    lore_script::SoundId(u64::MAX - 2),
+    lore_script::SoundId(u64::MAX - 3),
+];
+
+/// How far off a tornado is heard at its loudest, and how far off at all,
+/// in metres: its roar carries for kilometres.
+const TORNADO_HEARD: lore_audio::Range = lore_audio::Range {
+    near: 120.0,
+    far: 4_000.0,
+};
 
 /// The most noises kept for a frame to play. With more than this in a
 /// quarter of a second the newest are left out: nobody could tell them
@@ -679,6 +697,7 @@ impl Playing {
             heard: Vec::with_capacity(MOST_HEARD),
             marks: Vec::with_capacity(MOST_MARKS),
             under: false,
+            weather_heard: [None; 3],
         }
     }
 
@@ -792,6 +811,8 @@ impl Playing {
             };
             frame.stir(stir);
         }
+        self.hear_weather(frame);
+        let player = *self.world.player();
         // With the ears under, everything is muffled and the water hums.
         frame.hear_under_water(player.head_under);
         if player.head_under != self.under {
@@ -802,6 +823,71 @@ impl Playing {
                 }
             } else {
                 frame.sound(SoundAsk::Stop(UNDER_WATER));
+            }
+        }
+    }
+}
+
+impl Playing {
+    /// Lets the weather be heard: rain as loud as it falls on the player
+    /// (hail and sleet rattle louder than they fall; snow is silent), wind
+    /// as loud as the air moves where they stand, which under a storm is
+    /// three times the wind, and the roar of a tornado from where it is.
+    /// Each sound starts when there is some of it and stops when there is
+    /// none.
+    fn hear_weather(&mut self, frame: &mut Frame) {
+        let climate = &self.world.climate;
+        let falling = climate.falling();
+        let rain = falling.rain.max(0.8 * falling.sleet).max(falling.hail);
+        let eye = self.world.player().eye_position();
+        let seconds = self.world.sky_seconds();
+        let [along_x, _, along_z] = climate.weather().wind_at(eye, seconds);
+        let wind = along_x.hypot(along_z);
+        let tornado = climate.weather().tornado;
+        // How loud each is, from 0 to 1.
+        let ease = |low: f32, high: f32, value: f32| {
+            let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+            share * share * (3.0 - 2.0 * share)
+        };
+        let loud = [
+            if rain > 0.01 { 0.12 + 0.88 * rain } else { 0.0 },
+            // The breeze of a fair day is not heard.
+            ease(6.0, 30.0, wind),
+            tornado.map_or(0.0, |tornado| ease(0.0, 0.3, tornado.strength)),
+        ];
+        let names = ["rain", "wind", "wind"];
+        for which in 0..3 {
+            // A tornado is louder than any wind.
+            let loud = loud[which] * if which == 2 { 1.6 } else { 1.0 };
+            let id = WEATHER_SOUNDS[which];
+            let said = &mut self.weather_heard[which];
+            if loud <= 0.004 {
+                if said.take().is_some() {
+                    frame.sound(SoundAsk::Stop(id));
+                }
+                continue;
+            }
+            if said.is_none() {
+                let Some(mut play) = self.world.game.sounds_mut().take(names[which], 0) else {
+                    continue;
+                };
+                if let (2, Some(tornado)) = (which, tornado) {
+                    // A tornado roars: the wind, an octave down, from
+                    // where it stands.
+                    play.place = lore_audio::Place::At(tornado.place);
+                    play.range = TORNADO_HEARD;
+                    play.pitch = 0.5;
+                }
+                frame.sound(SoundAsk::Play(id, play.volume(loud).looping()));
+                *said = Some(loud);
+            } else if said.is_some_and(|said| (said - loud).abs() > 0.01) {
+                // Said again only when it has changed enough to hear: a
+                // frame in steady rain asks for nothing.
+                frame.sound(SoundAsk::Loud(id, loud));
+                *said = Some(loud);
+            }
+            if let (2, Some(tornado)) = (which, tornado) {
+                frame.sound(SoundAsk::Move(id, tornado.place));
             }
         }
     }

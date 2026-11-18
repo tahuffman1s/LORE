@@ -191,6 +191,18 @@ impl Mixer {
         }
     }
 
+    /// Makes a playing sound as loud as `volume` says, from 0 (silent)
+    /// through 1 (as recorded) to 2 at most: for one that lasts while what
+    /// makes it grows and dies, such as rain. The change is eased like
+    /// every other, so it does not click.
+    pub fn set_loudness(&mut self, playing: Playing, volume: f32) {
+        if let Some(voice) = self.voice_mut(playing)
+            && volume.is_finite()
+        {
+            voice.volume = volume.clamp(0.0, 2.0);
+        }
+    }
+
     /// Whether a sound is still going.
     #[must_use]
     pub fn is_playing(&self, playing: Playing) -> bool {
