@@ -593,6 +593,8 @@ pub struct Playing {
     /// How loud each of the weather's own sounds was last said to be, if
     /// it is playing: the rain, the wind and the roar of a tornado.
     weather_heard: [Option<f32>; 3],
+    /// Where the roar of the tornado was last said to come from.
+    roar_from: [f32; 3],
 }
 
 /// The most marks on the water kept for a frame to show.
@@ -703,6 +705,7 @@ impl Playing {
             marks: Vec::with_capacity(MOST_MARKS),
             under: false,
             weather_heard: [None; 3],
+            roar_from: [0.0; 3],
         }
     }
 
@@ -885,14 +888,21 @@ impl Playing {
                 }
                 frame.sound(SoundAsk::Play(id, play.volume(loud).looping()));
                 *said = Some(loud);
+                if let Some(tornado) = tornado {
+                    self.roar_from = tornado.place;
+                }
             } else if said.is_some_and(|said| (said - loud).abs() > 0.01) {
                 // Said again only when it has changed enough to hear: a
                 // frame in steady rain asks for nothing.
                 frame.sound(SoundAsk::Loud(id, loud));
                 *said = Some(loud);
             }
-            if let (2, Some(tornado)) = (which, tornado) {
+            // The roar goes with the tornado, a stride at a time.
+            if let (2, Some(tornado)) = (which, tornado)
+                && (0..3).any(|axis| (tornado.place[axis] - self.roar_from[axis]).abs() > 1.0)
+            {
                 frame.sound(SoundAsk::Move(id, tornado.place));
+                self.roar_from = tornado.place;
             }
         }
     }
