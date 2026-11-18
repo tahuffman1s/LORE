@@ -401,7 +401,7 @@ impl Player {
             velocity.y = 0.0;
             // Ice gives feet little to stop with or to push off from.
             velocity = slowed(velocity, settings, dt * grip);
-            velocity = sped_up(
+            let pushed = sped_up(
                 velocity,
                 wish,
                 wish_speed,
@@ -409,6 +409,19 @@ impl Player {
                 settings.ground_acceleration * push_off,
                 dt,
             );
+            // Feet push the body no faster than it is asked to go. Pushing
+            // into a wall at an angle, only the part of the speed along the
+            // push is counted, and the wall keeps taking that part away, so
+            // the speed along the wall would grow past a walk. Speed the
+            // body already had (from a fall, a slide or a blow) is kept,
+            // not added to.
+            let most = flat_speed(velocity).max(wish_speed);
+            let now = flat_speed(pushed);
+            velocity = if now > most {
+                pushed * (most / now)
+            } else {
+                pushed
+            };
             if push == 0.0 {
                 velocity = footing.held(velocity, dt);
             }
