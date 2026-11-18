@@ -51,7 +51,7 @@ It also writes `places.luau`, where the named places are (see below).
 | key | gamepad | what it does |
 |---|---|---|
 | Escape | Start | the pause menu: the game stands still, with Resume, Settings (sound, controls and graphics, each in force at once) and Quit |
-| F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the moon, snow, ice, lightning and a tornado |
+| F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the moon, snow, ice, lightning and a tornado that comes down the alley to you |
 | F7 | Select, then a bumper | the debug menu: walk, fly or noclip, fly speed, the speed of time, a jump to each named place, and what the player is doing |
 | F12 | in the debug menu | the frame meter: off, one line, or numbers with a graph |
 | F8 | left bumper | clear away every fluid |

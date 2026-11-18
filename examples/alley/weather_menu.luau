@@ -213,28 +213,31 @@ return menu.new("Weather", {
         end,
     }),
     menu.button("Tornado", {
-        -- It comes down 400 m ahead and travels across the way you look.
+        -- Between tall buildings the sky is a strip, so it comes down where
+        -- that strip shows it: 300 m off at the end of the alley you are
+        -- looking towards, and it travels down the alley to you and on.
         press = function()
             if game.weather.tornado() then
                 game.weather.stopTornado()
                 return
             end
-            local flat = ahead()
-            game.weather.startTornado(game.player.position + flat * 400, {
-                strength = 0.7,
-                heading = vector.create(-flat.z, 0, flat.x),
-                speed = 7,
-                lasts = 150,
+            local south = ahead().z > 0
+            game.weather.startTornado(vector.create(0, 0, if south then 300 else -300), {
+                strength = 0.5,
+                heading = vector.create(0, 0, if south then -1 else 1),
+                speed = 8,
+                lasts = 110,
             })
         end,
         text = function()
             local at = game.weather.tornado()
             if not at then
-                return "let one down 400 m ahead"
+                return if ahead().z > 0 then "let one down 300 m south" else "let one down 300 m north"
             end
             local here = game.player.position
             local away = vector.magnitude(vector.create(at.x - here.x, 0, at.z - here.z))
-            return string.format("%d m off: press to stop it", math.floor(away + 0.5))
+            local where = if at.z > here.z then "south" else "north"
+            return string.format("%d m %s: press to stop it", math.floor(away + 0.5), where)
         end,
     }),
     menu.button("Start again", {
