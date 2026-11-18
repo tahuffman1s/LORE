@@ -372,6 +372,15 @@ fn number(
     match value {
         Some(Value::Number(number)) if number.is_finite() => Ok(*number as f32),
         Some(Value::Integer(number)) => Ok(*number as f32),
+        // Infinity, or what 0 / 0 gives: a number to Luau, and no amount
+        // of anything.
+        Some(Value::Number(_)) => Err(fail(
+            lua,
+            format!(
+                "{function} was given a number with no size: infinity, or the answer to a sum \
+                 such as 0 / 0. It takes {takes}. Write it like this: {example}"
+            ),
+        )),
         other => Err(fail(
             lua,
             format!(
@@ -585,7 +594,8 @@ fn set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
     lua.create_function(move |lua, values: Variadic<Value>| {
         let name = match values.first() {
-            Some(Value::String(name)) => name.to_string_lossy(),
+            // "Rain" and "RAIN" are rain.
+            Some(Value::String(name)) => name.to_string_lossy().trim().to_ascii_lowercase(),
             other => {
                 return Err(fail(
                     lua,
@@ -799,7 +809,7 @@ fn lightning(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()
 fn tornado(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> {
     const EXAMPLE: &str =
         "game.weather.startTornado(game.player.position + vector.create(0, 0, -300))";
-    const OPTIONS: [&str; 4] = ["strength", "heading", "speed", "seconds"];
+    const OPTIONS: [&str; 4] = ["strength", "heading", "speed", "lasts"];
     let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
     weather.set(
         "startTornado",
@@ -848,13 +858,13 @@ fn tornado(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> 
                                     "game.weather.startTornado(at, { speed = 12 })",
                                 )?;
                             }
-                            "seconds" => {
+                            "lasts" => {
                                 seconds = number(
                                     lua,
                                     function,
                                     Some(&value),
-                                    "as seconds how long it lasts",
-                                    "game.weather.startTornado(at, { seconds = 90 })",
+                                    "as lasts how many seconds it is there for",
+                                    "game.weather.startTornado(at, { lasts = 90 })",
                                 )?;
                             }
                             "heading" => {
@@ -899,7 +909,7 @@ fn tornado(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> 
                         format!(
                             "game.weather.startTornado takes its options in a table after \
                              the place, but it was given {}. Write it like this: \
-                             game.weather.startTornado(at, {{ strength = 0.8, seconds = 90 }})",
+                             game.weather.startTornado(at, {{ strength = 0.8, lasts = 90 }})",
                             describe(other)
                         ),
                     ));
@@ -911,7 +921,7 @@ fn tornado(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> 
             asked.clear();
             asked.push(TornadoAsk::Start {
                 at: [at.x(), at.y(), at.z()],
-                strength: strength.clamp(0.05, 1.0),
+                strength: strength.clamp(0.1, 1.0),
                 heading,
                 speed: speed.clamp(0.0, 40.0),
                 seconds: seconds.clamp(5.0, 3_600.0),

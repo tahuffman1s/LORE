@@ -169,8 +169,18 @@ fn blowing() -> Sound {
     // The moan: hiss kept near a pitch that wanders, twice over at pitches
     // that wander apart.
     let mut moans = [
-        (Hiss(seed), Split::at_rate(300.0, 2.2, per_second), 0.125, 0.0),
-        (Hiss(seed + 1), Split::at_rate(520.0, 1.6, per_second), 0.25, 0.37),
+        (
+            Hiss(seed),
+            Split::at_rate(300.0, 2.2, per_second),
+            0.125,
+            0.0,
+        ),
+        (
+            Hiss(seed + 1),
+            Split::at_rate(520.0, 1.6, per_second),
+            0.25,
+            0.37,
+        ),
     ];
     // The weight of the air going by: its lowest part.
     let mut deep = (

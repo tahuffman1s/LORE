@@ -143,10 +143,10 @@ local function strike(near: number, far: number)
     local way = panel.heading
     local x, z = way.x * c - way.z * s, way.x * s + way.z * c
     local away = near + (far - near) * ((panel.strikes * 0.381) % 1)
+    -- The bolt comes down on whatever is highest there: a tree, or the
+    -- ground.
     local here = game.player.position
-    -- A little under the player's feet: the bolt comes down to the ground
-    -- wherever the ground is there.
-    game.weather.strike(vector.create(here.x + x * away, here.y - 25, here.z + z * away))
+    game.weather.strike(vector.create(here.x + x * away, here.y, here.z + z * away))
 end
 
 -- What the moon is called, a share of the way round its month.
@@ -204,7 +204,7 @@ local lines: { Line } = {
         -- near freezing and snow below it.
         words = function()
             local warm = game.weather.temperature()
-            local what = if warm <= 0.5 then "Snow" elseif warm < 3 then "Sleet" else "Rain"
+            local what = if warm <= 0 then "Snow" elseif warm < 3 then "Sleet" else "Rain"
             return what .. "  " .. percent(game.weather.rain())
         end,
         read = game.weather.rain,
@@ -366,7 +366,7 @@ local lines: { Line } = {
                 strength = 0.7,
                 heading = vector.create(-way.z, 0, way.x),
                 speed = 7,
-                seconds = 150,
+                lasts = 150,
             })
         end,
         color = "#ffb0b0",

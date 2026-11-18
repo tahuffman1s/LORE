@@ -371,5 +371,8 @@ fn rain_and_wind_are_heard_for_as_long_as_they_last_and_a_tornado_from_where_it_
     played.run(900);
     let [left, right] = played.loudest;
     assert!(right > 0.005 && right > left * 1.2, "{left} {right}");
-    assert!(played.noises.is_empty(), "the weather makes no noise of the player's");
+    assert!(
+        played.noises.is_empty(),
+        "the weather makes no noise of the player's"
+    );
 }

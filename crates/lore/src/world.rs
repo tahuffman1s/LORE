@@ -457,10 +457,15 @@ impl Game for World {
             &mut self.noises,
         );
         self.game.tick(input, step);
-        // Lightning the script asked for in this tick falls where it asked:
-        // taken here, before a frame can show it with no thunder to follow.
+        // Lightning the script asked for in this tick falls where it asked,
+        // on whatever is highest there: taken here, before a frame can show
+        // it with no thunder to follow.
         for (place, _) in self.game.host_mut().take_strikes() {
-            self.strike(place);
+            let [x, _, z] = place;
+            let struck = (self.ground.level)
+                .raycast([x, 4_000.0, z], [0.0, -1.0, 0.0], 8_000.0)
+                .map_or(place, |hit| hit.point);
+            self.strike(struck);
         }
     }
 

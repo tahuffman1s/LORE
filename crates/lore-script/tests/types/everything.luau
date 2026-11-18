@@ -225,7 +225,7 @@ game.weather.startTornado(vector.create(0, 0, 0), {
     strength = 0.9,
     heading = vector.create(1, 0, 0),
     speed = 12,
-    seconds = 180,
+    lasts = 180,
 })
 local twister: vector? = game.weather.tornado()
 if twister then

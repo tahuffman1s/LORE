@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn a_tornado_comes_down_travels_and_dies_away() {
         let script = r"game.weather.startTornado(vector.create(100, 0, 0), {
-                strength = 0.8, heading = vector.create(1, 0, 0), speed = 10, seconds = 60,
+                strength = 0.8, heading = vector.create(1, 0, 0), speed = 10, lasts = 60,
             })
             game.onTick(function()
                 local at = game.weather.tornado()
@@ -505,7 +505,7 @@ mod tests {
         let (gone, _) = after(script, 3660);
         assert!(gone.weather().tornado.is_none());
         // Told to stop, it dies away in ten seconds from as strong as it was.
-        let stopped = r"game.weather.startTornado(vector.create(100, 0, 0), { seconds = 600 })
+        let stopped = r"game.weather.startTornado(vector.create(100, 0, 0), { lasts = 600 })
             game.after(30, function() game.weather.stopTornado() end)";
         let (dying, _) = after(stopped, 2100);
         let tornado = dying.weather().tornado.unwrap();
@@ -538,7 +538,7 @@ mod tests {
         // At the wall of a strong tornado they are taken off their feet.
         let (twister, _) = after(
             r"game.weather.setWind(vector.create(0, 0, 0))
-            game.weather.startTornado(vector.create(0, 0, 0), { strength = 1, speed = 0, seconds = 600 })",
+            game.weather.startTornado(vector.create(0, 0, 0), { strength = 1, speed = 0, lasts = 600 })",
             1800,
         );
         let core = twister.weather().tornado.unwrap().core();
