@@ -42,8 +42,9 @@ struct View {
     shadow_from_world: array<mat4x4<f32>, 5>,
     // The way the eye looks, then how far a line of sight leans to the
     // right and up between the middle of the picture and its edge. The
-    // fourth numbers of the last two are the part-of-a-pixel shift the
-    // upscaler asked for, across and up.
+    // fourth number of the first is how many pixels high the picture is,
+    // and the fourth numbers of the last two are the part-of-a-pixel shift
+    // the upscaler asked for, across and up.
     sky_rays: array<vec4<f32>, 3>,
     // The clouds: how much of the sky they cover from 0 to 1, how many
     // seconds they have been drifting, and how high they are in metres. The
