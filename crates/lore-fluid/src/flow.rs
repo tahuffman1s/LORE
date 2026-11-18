@@ -19,6 +19,8 @@ const SPHERE_DRAG: f32 = 0.47;
 const FILM_CAP: f32 = 2.0;
 /// The rim of a spreading patch moves no faster than this, m/s.
 const SPREAD_CAP: f32 = 1.0;
+/// How many characteristic times a jet holds together before it breaks.
+const BREAKUP_TIMES: f32 = 3.0;
 /// From this Ohnesorge number up a spray leaves as a thread, not as drops.
 pub(crate) const OH_THREAD: f32 = 1.0;
 /// Splashing threshold of `K = sqrt(We) * Re^0.25` (Mundo, Sommerfeld and
@@ -206,6 +208,20 @@ impl Physics {
     /// `mu / sqrt(rho sigma L)`. High means thick: a thread, not drops.
     pub(crate) fn ohnesorge(&self, diameter: f32) -> f32 {
         self.mu / (self.rho * self.sigma * diameter.max(1.0e-6)).sqrt()
+    }
+
+    /// How long a jet of radius `r` metres takes to break into round drops,
+    /// seconds: a few of the Rayleigh–Plateau time `sqrt(rho r^3 / sigma)`,
+    /// which is the whole of it for a thin fluid, and of the viscous time
+    /// `mu r / sigma`, which holds a thick one together as a thread (Eggers
+    /// 1997, "Nonlinear dynamics and breakup of free-surface flows"). A
+    /// water jet a centimetre across holds for about a sixth of a second;
+    /// honey for seconds.
+    pub(crate) fn breakup_time(&self, r: f32) -> f32 {
+        let r = r.max(1.0e-5);
+        let inertial = (self.rho * r * r * r / self.sigma).sqrt();
+        let viscous = self.mu * r / self.sigma;
+        (BREAKUP_TIMES * (inertial + viscous)).max(1.0e-3)
     }
 
     /// The splash number `K = sqrt(We) Re^0.25` and `sqrt(We)` of a drop of

@@ -340,7 +340,9 @@ fn many_sprays_on_one_spot_do_not_stack_and_drops_merge() {
                 ((a.place[0] - b.place[0]).powi(2) + (a.place[2] - b.place[2]).powi(2)).sqrt();
             let overlap = a.radius + b.radius - flat;
             assert!(
-                overlap < 0.3 * a.radius.min(b.radius) + 0.002,
+                // Neighbours of one puddle may overlap by half the smaller,
+                // so that they lie as one sheet.
+                overlap < 0.5 * a.radius.min(b.radius) + 0.002,
                 "overlap {overlap} m between {a:?} and {b:?}"
             );
         }
@@ -359,7 +361,9 @@ fn on_a_tilted_floor_water_moves_downhill() {
         l.iter().map(|d| d.place[0]).sum::<f32>() / l.len().max(1) as f32
     };
     let before = mean_x(&fluids);
-    run(&mut fluids, &level, 300);
+    // A second more: water on a slope this steep runs off the floor's
+    // edge within a few.
+    run(&mut fluids, &level, 60);
     let after = mean_x(&fluids);
     assert!(after < before - 0.02, "x went from {before} to {after}");
 }

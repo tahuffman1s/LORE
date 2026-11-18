@@ -23,6 +23,7 @@ use crate::sound_output::SoundAsk;
 
 mod bodies;
 mod climate;
+mod fluids;
 mod ground;
 mod spawn;
 mod trail;
@@ -91,6 +92,8 @@ pub struct World {
     /// taken, and the way it said to face there, if it said: yaw, then
     /// pitch. [`Playing`] turns the view to match.
     teleported: Option<Option<(f32, f32)>>,
+    /// Every drop of fluid in the world, and what the script said of them.
+    fluids: fluids::WorldFluids,
 }
 
 /// The unit vector the eyes look along at `yaw` and `pitch`, as the
@@ -192,6 +195,7 @@ impl World {
             strokes: Vec::with_capacity(MOST_STROKES),
             thunder: Vec::with_capacity(MOST_THUNDER),
             teleported: None,
+            fluids: fluids::WorldFluids::default(),
         }
     }
 
@@ -499,6 +503,9 @@ impl Game for World {
             self.treads.clear();
             self.game.tick(input, step);
             self.teleport();
+            // What the script asked of the fluids is done, but nothing
+            // moves: a clear still clears, and a spray hangs in the air.
+            self.fluids.hear(self.game.host_mut());
             return;
         }
         // A player who died since the last tick is back at a spawn point
@@ -518,6 +525,14 @@ impl Game for World {
             self.ground.step,
         );
         self.storm();
+        // The fluids move, with what the script asked of them in its last
+        // tick, and what is now under the player's feet is found.
+        self.fluids.hear(self.game.host_mut());
+        self.fluids.step(
+            &self.ground.level,
+            self.ground.step,
+            self.player.player.position,
+        );
         let Ground {
             level,
             rules,
@@ -543,6 +558,14 @@ impl Game for World {
                 moving.forward *= slowed;
                 moving.right *= slowed;
             }
+            // Fluid underfoot: oil slides, honey drags, glue holds, slime
+            // bounces.
+            moving.footing = self.fluids.footing();
+            // A lake the script made thicker than water is slow to wade
+            // and swim through.
+            let waded = self.fluids.wading(player.submerged);
+            moving.forward *= waded;
+            moving.right *= waded;
         }
         let before = *player;
         player.step(level, rules, &moving, *tick);
@@ -609,6 +632,9 @@ impl Game for World {
             self.game.host_mut(),
             &mut self.noises,
         );
+        // The script hears how much fluid there is and what the player
+        // stands in, before its own tick.
+        self.fluids.tell(self.game.host_mut(), *tick);
         self.game.tick(input, step);
         // The script may have put the player somewhere.
         self.teleport();
@@ -634,6 +660,7 @@ impl Game for World {
         for stroke in self.strokes.drain(..) {
             frame.strike(stroke);
         }
+        self.fluids.frame(frame);
         self.game.frame(frame);
         // After the script's own frame, which says the weather as it
         // asked for it: this is the weather with what followed from it.

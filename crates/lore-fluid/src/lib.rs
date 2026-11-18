@@ -90,6 +90,14 @@ const MOST_SPRAY_SPEED: f32 = 200.0;
 const THIN_RADIUS: f32 = 0.0025;
 /// How big a drop of thread-forming fluid is when it leaves a spray, metres.
 const THREAD_RADIUS: f32 = 0.004;
+/// How much longer than the gap between them the pieces of a jet are drawn,
+/// so that they overlap.
+const JET_OVERLAP: f32 = 2.0;
+/// The most radii a piece of a jet is drawn out.
+const MOST_LONG: f32 = 8.0;
+/// How much the drops of a straight jet differ in speed, as a share: a
+/// nozzle's jet holds together for a while, as a water pistol's does.
+const SPEED_JITTER: f32 = 0.01;
 /// The tick length a stream is spaced for, seconds.
 const SPRAY_TICK: f32 = 1.0 / 60.0;
 /// The most a single spray may pour, litres: a tank, not a sum that overflows.
@@ -266,12 +274,13 @@ impl Fluids {
         let heading = normalize(velocity);
         let (u, v) = frame(heading.unwrap_or([0.0, 1.0, 0.0]));
         let cone = 1.0 - libm::cosf(spread);
+        let jitter = SPEED_JITTER + libm::sinf(spread.min(PI / 2.0)) * 0.1;
         let spacing = speed * SPRAY_TICK / n as f32;
-        let long = if thread {
-            (spacing / r).clamp(1.0, 6.0)
-        } else {
-            1.0
-        };
+        // Each drop is a piece of the jet, drawn out along its way so that
+        // the pieces of one tick overlap and leave the nozzle as one stream.
+        // In flight a thin jet then breaks into round drops; a thread of a
+        // thick fluid stays drawn out (see `Physics::breakup_time`).
+        let long = libm::powf(JET_OVERLAP * spacing / (2.0 * r), 1.5).clamp(1.0, MOST_LONG);
         let mut replaced = false;
         for i in 0..n {
             // Rolled in a fixed order whether or not the drop is made.
@@ -288,7 +297,9 @@ impl Fluids {
                     ),
                 )
             });
-            let vel = scale(way, speed * (0.97 + 0.06 * c));
+            // A tight jet leaves the nozzle as one: its drops differ in
+            // speed by a percent; a wide spray's by more.
+            let vel = scale(way, speed * (1.0 + (c - 0.5) * jitter));
             self.born += 1;
             let mut drop = Particle::flying(kind, from, vel, each, self.born);
             drop.head_start = i as f32 / n as f32;
@@ -456,6 +467,21 @@ impl Fluids {
         total
     }
 
+    /// How many litres of each kind there are, flying and lying together,
+    /// all counted in one pass over the store: the index is the kind.
+    #[must_use]
+    pub fn litres_by_kind(&self) -> [f32; MOST_KINDS] {
+        let mut by_kind = [0.0f32; MOST_KINDS];
+        for p in &self.parts {
+            if let Some(sum) = by_kind.get_mut(usize::from(p.kind))
+                && !p.dead
+            {
+                *sum += p.volume * 1000.0;
+            }
+        }
+        by_kind
+    }
+
     /// Fills the list of drops that [`drops`](Self::drops) shows.
     pub(crate) fn publish(&mut self) {
         self.out.clear();
@@ -475,7 +501,9 @@ impl Fluids {
                     kind: p.kind,
                 }
             } else {
-                let r = p.ball();
+                // Drawn out `long` times, with the volume it has: thinner
+                // as it is longer.
+                let r = p.ball() / libm::cbrtf(p.long.max(1.0));
                 Drop {
                     place: p.pos,
                     radius: r,

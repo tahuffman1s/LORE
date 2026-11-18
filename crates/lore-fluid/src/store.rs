@@ -39,6 +39,10 @@ pub(crate) struct Particle {
     pub changed: bool,
     /// It is awake but creeping, so it is only updated every few ticks.
     pub calm: bool,
+    /// It was thrown off by a splash, and does not splash again where it
+    /// lands: the droplets of a splash are small and slow, and a splash of
+    /// splashes would fill the store with spatter.
+    pub thrown: bool,
     /// A counter bumped for every drop made: the bigger, the newer.
     pub born: u64,
     /// Metres a second, in flight.
@@ -84,6 +88,7 @@ impl Particle {
             dead: false,
             changed: false,
             calm: false,
+            thrown: false,
         }
     }
 

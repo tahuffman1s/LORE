@@ -70,7 +70,7 @@ pub use lore_input::{ActionId, ActionMap, ActionSetId, InputFrame, MouseMode, Ru
 pub use lore_render as render;
 
 pub use app::{AppError, Config, run};
-pub use game::{Frame, Game};
+pub use game::{FluidFrame, Frame, Game};
 pub use lore_render::Upscaling;
 pub use lore_script as script;
 pub use lore_ui as ui;
