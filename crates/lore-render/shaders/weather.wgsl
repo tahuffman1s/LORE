@@ -87,8 +87,11 @@ fn falling(
     let speed = length(across);
     let drawn = across / max(speed, 0.001);
     let long = min(speed * blink, 0.55 * cell);
-    // How much of the world one pixel covers at one metre.
-    let pixel = 2.0 * length(view.sky_rays[2].xyz) / f32(textureDimensions(behind_colour).y);
+    // How much of the world one pixel covers at one metre. The picture's
+    // height comes with the view: the copy of the picture, which has the
+    // same height, is not there to be asked until something has been
+    // drawn that is seen through.
+    let pixel = 2.0 * length(view.sky_rays[2].xyz) / max(view.sky_rays[0].w, 1.0);
 
     let safe = select(direction, vec3<f32>(0.0001), abs(direction) < vec3<f32>(0.0001));
     let way = sign(safe);

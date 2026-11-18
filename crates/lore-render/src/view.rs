@@ -190,7 +190,7 @@ impl SceneView {
             eye: camera.position,
             sharper: self.sharper,
             rays: [
-                [forward[0], forward[1], forward[2], 0.0],
+                [forward[0], forward[1], forward[2], height],
                 [right[0], right[1], right[2], across],
                 [up[0], up[1], up[2], upwards],
             ],

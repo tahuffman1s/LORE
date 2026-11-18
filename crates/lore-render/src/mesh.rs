@@ -79,8 +79,9 @@ pub(crate) struct View {
     pub(crate) sharper: f32,
     /// The way the eye looks, then how far a line of sight leans to the
     /// right and up between the middle of the picture and its edge
-    /// ([`Camera::rays`](crate::Camera)); the fourth numbers of the last
-    /// two are the upscaler's shift across and up.
+    /// ([`Camera::rays`](crate::Camera)). The fourth number of the first
+    /// is how many pixels high the picture is, and the fourth numbers of
+    /// the last two are the upscaler's shift across and up.
     pub(crate) rays: [[f32; 4]; 3],
     /// How long the scene has been drawn for, in seconds.
     pub(crate) time: f32,
