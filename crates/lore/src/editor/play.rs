@@ -18,6 +18,7 @@ use lore_input::ActionMap;
 use crate::game::{Frame, Game};
 use crate::map::Map;
 use crate::script_game::ScriptGame;
+use crate::settings::Settings;
 use crate::world::{Ground, Playing};
 
 /// Said on the screen for as long as the level is played.
@@ -39,8 +40,9 @@ pub(super) struct Play {
 
 impl Play {
     /// Starts the game in `folder` (or, with no folder, a game with no
-    /// script) on `ground`, with `map` placed in it, and puts the player's
-    /// eyes at `eye` looking the way `facing` says (yaw, then pitch).
+    /// script) on `ground`, with `map` placed in it, for a player with the
+    /// `settings` in force, and puts the player's eyes at `eye` looking
+    /// the way `facing` says (yaw, then pitch).
     ///
     /// # Errors
     ///
@@ -50,13 +52,18 @@ impl Play {
         map: &Map,
         ground: &Ground,
         actions: &ActionMap,
+        settings: Settings,
         eye: [f32; 3],
         facing: [f32; 2],
     ) -> Result<Self, String> {
         let game = match folder {
-            Some(folder) => ScriptGame::open(folder, actions)
+            Some(folder) => ScriptGame::open_with_settings(folder, actions, settings)
                 .map_err(|error| format!("Could not play: {error}"))?,
-            None => ScriptGame::from_source("", actions),
+            None => ScriptGame::from_sources_with_settings(
+                [(lore_script::ENTRY_SCRIPT.to_owned(), String::new())],
+                actions,
+                settings,
+            ),
         };
         // The editor's controls are fixed, so a game's own actions are not
         // heard here; `lore run` plays with them.
@@ -134,6 +141,12 @@ impl Play {
     #[cfg(test)]
     pub(super) fn map(&self) -> &Map {
         self.game.world().game().map()
+    }
+
+    /// What runs the game's script.
+    #[cfg(test)]
+    pub(super) fn host(&self) -> &lore_script::ScriptHost {
+        self.game.world().game().host()
     }
 }
 

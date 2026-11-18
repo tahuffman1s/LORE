@@ -406,6 +406,72 @@ fn the_same_changes_on_the_same_ticks_give_the_same_fingerprint() {
 }
 
 #[test]
+fn only_the_settings_a_script_changed_are_handed_to_the_engine() {
+    let script = r#"
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 1 then
+                game.settings.set("subtitles", true)
+            elseif ticks == 2 then
+                game.settings.reset()
+            end
+        end)
+    "#;
+    let mut host = game(script);
+    let handed = |host: &mut ScriptHost| {
+        let mut said = Vec::new();
+        host.take_changed_settings(|name, value| said.push((name.to_owned(), value.clone())));
+        said
+    };
+    tick(&mut host);
+    assert_eq!(
+        handed(&mut host),
+        [("subtitles".to_owned(), SettingValue::Toggle(true))]
+    );
+    // A reset of all of them hands over the ones it changed: the volume
+    // was not at its default and the subtitles were on, while the
+    // upscaling was already at its own.
+    tick(&mut host);
+    assert_eq!(
+        handed(&mut host),
+        [
+            ("volume".to_owned(), SettingValue::Number(100.0)),
+            ("subtitles".to_owned(), SettingValue::Toggle(false)),
+        ]
+    );
+    assert_eq!(handed(&mut host), []);
+}
+
+#[test]
+fn the_engine_tells_a_script_the_settings_in_force_and_an_untaken_change_stays() {
+    let script = r#"
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 1 then game.settings.set("subtitles", true) end
+            print(game.settings.get("volume"), game.settings.get("subtitles"))
+        end)
+    "#;
+    let mut host = game(script);
+    tick(&mut host);
+    assert_eq!(printed(), ["40 true"]);
+    // The engine says the player turned the volume up somewhere else and
+    // has the subtitles off, before it took the script's change to them.
+    let mut theirs = three();
+    theirs[0].value = SettingValue::Number(90.0);
+    host.set_settings(theirs);
+    tick(&mut host);
+    assert_eq!(printed(), ["90 true"], "the script's change is kept");
+    assert_eq!(
+        changed(&mut host),
+        Some(vec![SettingValue::Toggle(true)]),
+        "and handed over, alone"
+    );
+    assert_eq!(host.settings()[0].value, SettingValue::Number(90.0));
+}
+
+#[test]
 fn saving_the_script_lets_a_paused_game_go_on() {
     let folder = std::env::temp_dir().join(format!("lore-settings-pause-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&folder);
@@ -423,5 +489,37 @@ fn saving_the_script_lets_a_paused_game_go_on() {
     host.reload().unwrap();
     assert!(!host.paused());
     assert_eq!(host.time_speed(), 2.0);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn a_script_that_pauses_as_it_loads_is_still_paused_after_a_save() {
+    let folder =
+        std::env::temp_dir().join(format!("lore-settings-pause-load-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    let script = folder.join("main.luau");
+    std::fs::write(&script, "game.pause()\n").unwrap();
+    let mut host = ScriptHost::open(&folder, ActionMap::standard()).unwrap();
+    tick(&mut host);
+    assert!(host.paused());
+    host.reload().unwrap();
+    assert!(
+        host.paused(),
+        "the new version paused the game as it loaded"
+    );
+
+    // A version that does not load leaves the game as it was: paused here,
+    // and going on once the old version has let it go on.
+    std::fs::write(&script, "game.pause(\n").unwrap();
+    assert!(host.reload().is_err());
+    assert!(host.paused());
+    std::fs::write(&script, "game.onTick(function() game.resume() end)\n").unwrap();
+    host.reload().unwrap();
+    tick(&mut host);
+    assert!(!host.paused());
+    std::fs::write(&script, "game.pause(\n").unwrap();
+    assert!(host.reload().is_err());
+    assert!(!host.paused());
     let _ = std::fs::remove_dir_all(&folder);
 }

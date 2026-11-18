@@ -131,8 +131,10 @@ impl SettingValue {
 #[derive(Default)]
 pub(crate) struct SettingsState {
     list: RefCell<Vec<Setting>>,
-    /// Whether the script has changed one that the engine has not yet taken.
-    changed: Cell<bool>,
+    /// The names of the settings the script has changed that the engine
+    /// has not yet taken. Only these are handed over: the others are as
+    /// the engine has them, and the engine's are the newer.
+    changed: RefCell<Vec<String>>,
     /// Whether the script asked to end the game, and the engine has not
     /// yet heard.
     quit: Cell<bool>,
@@ -143,7 +145,7 @@ impl SettingsState {
     pub fn new(settings: Vec<Setting>) -> Self {
         Self {
             list: RefCell::new(settings),
-            changed: Cell::new(false),
+            changed: RefCell::new(Vec::new()),
             quit: Cell::new(false),
         }
     }
@@ -153,15 +155,47 @@ impl SettingsState {
         self.list.borrow().clone()
     }
 
-    /// If the script changed a setting since this was last called, calls
-    /// `see` with every setting's name and value and gives true.
+    /// Takes `settings` as the engine now has them. A change the script
+    /// made that the engine has not yet taken stays, to be taken.
+    pub fn replace(&self, mut settings: Vec<Setting>) {
+        let mut changed = self.changed.borrow_mut();
+        {
+            let list = self.list.borrow();
+            for setting in &mut settings {
+                if changed.contains(&setting.name)
+                    && let Some(own) = list.iter().find(|own| own.name == setting.name)
+                {
+                    setting.value = own.value.clone();
+                }
+            }
+        }
+        // A change to a setting the engine no longer has is nobody's.
+        changed.retain(|name| settings.iter().any(|setting| setting.name == *name));
+        self.list.replace(settings);
+    }
+
+    /// Notes that the script changed the setting called `name`.
+    fn note_changed(&self, name: &str) {
+        let mut changed = self.changed.borrow_mut();
+        if !changed.iter().any(|known| known == name) {
+            changed.push(name.to_owned());
+        }
+    }
+
+    /// If the script changed settings since this was last called, calls
+    /// `see` with the name and value of each it changed, in the order of
+    /// the list, and gives true.
     pub fn take_changed(&self, mut see: impl FnMut(&str, &SettingValue)) -> bool {
-        if !self.changed.take() {
+        let mut changed = self.changed.borrow_mut();
+        if changed.is_empty() {
             return false;
         }
         for setting in self.list.borrow().iter() {
-            see(&setting.name, &setting.value);
+            if changed.contains(&setting.name) {
+                see(&setting.name, &setting.value);
+            }
         }
+        changed.clear();
         true
     }
 
@@ -359,7 +393,7 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 && setting.value != new
             {
                 setting.value = new;
-                state.changed.set(true);
+                state.note_changed(&name);
             }
             Ok(())
         })?,
@@ -392,7 +426,7 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 let wanted = only.as_ref().is_none_or(|only| setting.name == *only);
                 if wanted && setting.value != setting.default {
                     setting.value = setting.default.clone();
-                    state.changed.set(true);
+                    state.note_changed(&setting.name);
                 }
             }
             Ok(())

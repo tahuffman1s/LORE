@@ -54,9 +54,10 @@ pub struct ScriptGame {
     map_file: Option<MapFile>,
     /// Why the map file as it now is could not be read, if it could not.
     map_error: Option<MapError>,
-    /// The player's settings, as the game was opened with them and as its
-    /// script has changed them since.
-    settings: Settings,
+    /// The player's settings as the script was last told them. They are
+    /// not kept here to be put into effect: whoever runs the game has the
+    /// settings in force, and is handed only what the script changes.
+    told: Settings,
 }
 
 /// Said after a mistake in a map file, by what the game does about it.
@@ -85,7 +86,7 @@ impl ScriptGame {
             map: Map::default(),
             map_file: None,
             map_error: None,
-            settings,
+            told: settings,
         };
         game.name_sounds();
         game
@@ -163,8 +164,11 @@ impl ScriptGame {
 
     /// Opens the game in `folder` as [`open`](Self::open) does, for a
     /// player who has chosen `settings`: what the game's script reads with
-    /// `game.settings`, from its first line on. Run the game with the same
-    /// settings ([`Config::settings`](crate::Config)).
+    /// `game.settings` from its first line on, so a menu it builds as it
+    /// loads shows them. Run the game with the same settings
+    /// ([`Config::settings`](crate::Config)). From the first frame on the
+    /// script reads the settings the game is run with, whatever it was
+    /// opened with, and what it changes is put into effect onto those.
     ///
     /// ```no_run
     /// use lore::{Config, ScriptGame};
@@ -215,7 +219,7 @@ impl ScriptGame {
             map,
             map_file: Some(map_file),
             map_error,
-            settings,
+            told: settings,
         };
         game.name_sounds();
         Ok(game)
@@ -258,13 +262,6 @@ impl ScriptGame {
         let host =
             ScriptHost::from_sources_with_settings(scripts, actions.clone(), settings.described());
         Self::without_files(host, settings)
-    }
-
-    /// The player's settings as they now are: as the game was opened with
-    /// them, with what its script has changed since.
-    #[must_use]
-    pub fn settings(&self) -> &Settings {
-        &self.settings
     }
 
     /// Places `map` in the game's level, as a packaged game does with the
@@ -310,6 +307,27 @@ impl ScriptGame {
         }
     }
 
+    /// Puts what the script's settings menu changed into effect, and keeps
+    /// the script told the settings in force.
+    ///
+    /// Only the settings the script changed are changed, onto the ones in
+    /// force: the rest may have changed since the script last heard (the
+    /// player's file was read after the game was opened, or a game played
+    /// from the editor changed them before this one started), and the ones
+    /// in force are the newer. Whoever runs the game saves them.
+    fn follow_settings(&mut self, frame: &mut Frame) {
+        let mut settings = frame.settings().copied().unwrap_or(self.told);
+        if (self.host).take_changed_settings(|name, value| settings.change(name, value)) {
+            frame.change_settings(|now| *now = settings);
+        }
+        if let Some(&now) = frame.settings()
+            && now != self.told
+        {
+            self.host.set_settings(now.described());
+            self.told = now;
+        }
+    }
+
     /// The script host, for example to read its latest error.
     #[must_use]
     pub fn host(&self) -> &ScriptHost {
@@ -346,6 +364,7 @@ impl Game for ScriptGame {
             self.host.set_controls(controls);
         }
         frame.set_time_speed(self.host.time_speed());
+        self.follow_settings(frame);
         // After those, so what the script asks for while drawing is in this frame.
         self.host.draw(frame.alpha());
         if let Some(rumble) = self.host.take_rumble() {
@@ -365,12 +384,6 @@ impl Game for ScriptGame {
         }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
-        }
-        // What the script's settings menu changed is put into effect, and
-        // saved, by whoever runs the game.
-        let settings = &mut self.settings;
-        if (self.host).take_changed_settings(|name, value| settings.change(name, value)) {
-            frame.apply_settings(self.settings);
         }
         if self.host.take_quit() {
             frame.close();

@@ -39,15 +39,22 @@ struct Played {
 impl Played {
     /// A new game as `lore new` writes it, with `main` as its `main.luau`.
     fn with_main(main: &str, settings: Settings) -> Self {
+        Self::opened_with(main, settings, settings)
+    }
+
+    /// A new game as `lore new` writes it, with `main` as its `main.luau`,
+    /// opened with the settings `opened` and played with the settings
+    /// `in_force`: as the editor played a game before it said them, or as
+    /// a game opened before the player's file was read is played.
+    fn opened_with(main: &str, opened: Settings, in_force: Settings) -> Self {
         let scripts = [
             ("main.luau", main),
             ("pause_menu.luau", PAUSE_MENU),
             ("menu.luau", MENU_KIT),
         ]
         .map(|(name, text)| (name.to_owned(), text.to_owned()));
-        let game =
-            ScriptGame::from_sources_with_settings(scripts, &ActionMap::standard(), settings);
-        Self::of(game, settings, true)
+        let game = ScriptGame::from_sources_with_settings(scripts, &ActionMap::standard(), opened);
+        Self::of(game, in_force, true)
     }
 
     /// The game `lore new` writes.
@@ -80,10 +87,11 @@ impl Played {
         played
     }
 
-    /// One tick and the frame after it.
+    /// One tick and the frame after it, which says the settings in force,
+    /// as the window does.
     fn step(&mut self) {
         self.world.tick(self.input.tick(), STEP);
-        let mut frame = Frame::new(1.0);
+        let mut frame = Frame::new(1.0).with_settings(self.settings);
         self.world.frame(&mut frame);
         if self.strict {
             assert_eq!(self.host().last_error(), None);
@@ -304,7 +312,66 @@ fn the_menu_starts_with_the_settings_the_player_has() {
     assert_eq!(played.value_of("Upscaling"), "<  performance  >");
     // Nothing was changed, so nothing was asked of the engine.
     assert_eq!(played.changes, 0);
-    assert_eq!(played.world.game().settings(), &theirs);
+    assert_eq!(played.settings, theirs);
+}
+
+#[test]
+fn a_game_opened_with_other_settings_changes_only_what_its_menu_changes() {
+    // As the editor played a game: opened with a new player's settings,
+    // while the player had widened the field of view in a game played
+    // from the editor before it.
+    let theirs = Settings {
+        field_of_view: 110.0,
+        ..Settings::default()
+    };
+    let main = MAIN.replace("{name}", "test");
+    let mut played = Played::opened_with(&main, Settings::default(), theirs);
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    played.tap(Key::ArrowLeft);
+    assert_eq!(played.value_of("Volume"), "95");
+    // The volume changed, and nothing else went back to what the game was
+    // opened with.
+    assert_eq!(played.changes, 1);
+    assert_eq!(
+        played.settings,
+        Settings {
+            volume: 95.0,
+            ..theirs
+        }
+    );
+    // The menu shows the settings in force.
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert_eq!(played.value_of("Field of view"), "110");
+}
+
+#[test]
+fn a_frame_rate_limit_of_0_is_shown_as_no_limit() {
+    let mut played = Played::with_main(
+        &MAIN.replace("{name}", "test"),
+        Settings {
+            frame_rate_limit: 30.0,
+            ..Settings::default()
+        },
+    );
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert_eq!(played.value_of("Frame rate limit"), "30");
+    // Down past the size, the field of view, the brightness, the upscaling
+    // and vsync.
+    for _ in 0..5 {
+        played.tap(Key::ArrowDown);
+    }
+    played.tap(Key::ArrowLeft);
+    assert_eq!(played.settings.frame_rate_limit, 0.0);
+    assert_eq!(played.value_of("Frame rate limit"), "no limit");
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.settings.frame_rate_limit, 30.0);
 }
 
 #[test]

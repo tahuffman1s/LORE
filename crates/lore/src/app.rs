@@ -14,7 +14,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::controls;
-use crate::game::{Frame, Game};
+use crate::game::{Frame, Game, View};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
 use crate::settings::{self, Settings};
@@ -42,6 +42,18 @@ const PIXELS_PER_NOTCH: f32 = 40.0;
 
 /// The most wheel notches one scroll event may add up to.
 const MOST_NOTCHES_PER_EVENT: f32 = 16.0;
+
+/// The camera that draws `view`: at the view's own field of view if it has
+/// one (the editor's camera), and otherwise at the player's.
+fn camera(view: View, settings: &Settings) -> Camera {
+    Camera {
+        position: view.position,
+        yaw: view.yaw,
+        pitch: view.pitch,
+        fov_degrees: view.fov_degrees.unwrap_or(settings.field_of_view),
+        ..Camera::default()
+    }
+}
 
 /// How long to leave the window alone after a frame could not be drawn.
 ///
@@ -271,7 +283,9 @@ fn start(
         // The game is told the controls once, so the first label it draws
         // is right: with no bindings file they are the config's own.
         new_controls: Some(config.actions.clone()),
-        ui_scale: config.settings.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1),
+        ui_scale: Some(config.settings.ui_scale())
+            .filter(|scale| scale.is_finite())
+            .map_or(1.0, |scale| scale.clamp(UI_SCALES.0, UI_SCALES.1)),
         settings_file: SettingsFile::at(config.settings_file.take()),
         pointer: None,
         pointer_down: false,
@@ -487,8 +501,9 @@ impl<G: Game> App<G> {
     /// mouse is held down: the slider that sets the size would grow under
     /// the pointer dragging it, and run away from it.
     fn follow_ui_size(&mut self) {
-        if !self.pointer_down {
-            self.ui_scale = (self.config.settings.ui_scale()).clamp(UI_SCALES.0, UI_SCALES.1);
+        let chosen = self.config.settings.ui_scale();
+        if !self.pointer_down && chosen.is_finite() {
+            self.ui_scale = chosen.clamp(UI_SCALES.0, UI_SCALES.1);
         }
     }
 
@@ -759,7 +774,8 @@ impl<G: Game> App<G> {
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
-            .with_controls(self.new_controls.take());
+            .with_controls(self.new_controls.take())
+            .with_settings(self.config.settings);
         frame.set_ui_scale(self.ui_scale);
         #[cfg(feature = "editor")]
         if let (Some(panels), Some(window)) = (&mut self.panels, &self.window) {
@@ -781,13 +797,7 @@ impl<G: Game> App<G> {
             renderer.set_ui(self.ui.draw());
         }
         if let (Some(view), Some(renderer)) = (frame.view(), &mut self.renderer) {
-            let camera = Camera {
-                position: view.position,
-                yaw: view.yaw,
-                pitch: view.pitch,
-                fov_degrees: self.config.settings.field_of_view,
-                ..Camera::default()
-            };
+            let camera = camera(view, &self.config.settings);
             // Nobody walks or falls this far in one frame: it is a respawn
             // or a teleport, and the frames from before it do not belong
             // in the picture.
@@ -1181,5 +1191,26 @@ mod tests {
         let mut nowhere = SettingsFile::at(None);
         nowhere.changed(start);
         nowhere.save(&settings);
+    }
+
+    #[test]
+    fn a_view_is_drawn_at_its_own_field_of_view_or_else_at_the_players() {
+        let wide = Settings {
+            field_of_view: 110.0,
+            ..Settings::default()
+        };
+        let mut frame = Frame::new(0.0);
+        frame.look_from([1.0, 2.0, 3.0], 0.5, -0.25);
+        let eyes = camera(frame.view().unwrap(), &wide);
+        assert_eq!(eyes.fov_degrees, 110.0);
+        assert_eq!(
+            (eyes.position, eyes.yaw, eyes.pitch),
+            ([1.0, 2.0, 3.0], 0.5, -0.25)
+        );
+        #[cfg(feature = "editor")]
+        {
+            frame.look_from_with_fov([1.0, 2.0, 3.0], 0.5, -0.25, 60.0);
+            assert_eq!(camera(frame.view().unwrap(), &wide).fov_degrees, 60.0);
+        }
     }
 }

@@ -124,6 +124,11 @@ top = menu.new("Paused", {
     }),
 }, PLACE)
 
+-- How the frame rate limit reads in its row: 0 is no limit at all.
+local function limitWords(limit: number): string
+    return if limit == 0 then "no limit" else string.format("%g", limit)
+end
+
 -- The row for one setting, of the kind the setting is: a slider for a
 -- number, left and right through the words of a choice, on or off.
 local function rowFor(setting: Setting): menu.Row
@@ -138,7 +143,8 @@ local function rowFor(setting: Setting): menu.Row
         end
     end
     if setting.kind == "number" then
-        return menu.slider(setting.label, { min = setting.min, max = setting.max, step = setting.step, get = get, set = set })
+        local format = if name == "frame_rate_limit" then limitWords else nil
+        return menu.slider(setting.label, { min = setting.min, max = setting.max, step = setting.step, get = get, set = set, format = format })
     elseif setting.kind == "choice" then
         return menu.choice(setting.label, { options = setting.options or {}, get = get, set = set })
     end

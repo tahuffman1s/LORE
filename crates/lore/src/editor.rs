@@ -45,6 +45,7 @@ use crate::blend;
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::map::{Map, MapFile, SPAWN};
+use crate::settings::Settings;
 use crate::sound_output::SoundAsk;
 use crate::world::Ground;
 
@@ -76,8 +77,10 @@ const SAVE_AGAIN_AFTER: f32 = 5.0;
 /// within this many metres, and otherwise this far ahead of the camera.
 const PLACE_WITHIN: f32 = 60.0;
 const PLACE_AHEAD: f32 = 5.0;
-/// How much of the picture is seen from bottom to top, in degrees: the
-/// camera the window draws with.
+/// How much of the picture the editor's camera sees from bottom to top, in
+/// degrees: what the window draws it with, and what clicks in the picture
+/// and the marks over it are worked out with. It is the editor's own, not
+/// the player's field of view, which is for playing.
 const FOV_DEGREES: f32 = 74.0;
 /// A placed thing's mark in the picture: the dot's size in `egui` points,
 /// how long the line showing its facing is in metres, and how far away its
@@ -398,6 +401,9 @@ struct Editor {
     play_problem: String,
     /// Playing has just stopped, so the game's sounds are to stop too.
     hush: bool,
+    /// The player's settings in force, as the last frame said them: what a
+    /// game played from here starts with, so its menu shows them.
+    settings: Settings,
 }
 
 impl Editor {
@@ -446,6 +452,7 @@ impl Editor {
             play_asked: false,
             play_problem: String::new(),
             hush: false,
+            settings: Settings::default(),
         };
         Some((editor, actions))
     }
@@ -465,6 +472,7 @@ impl Editor {
             &self.map,
             &self.ground,
             &self.actions,
+            self.settings,
             camera.position,
             [camera.yaw, camera.pitch],
         ) {
@@ -672,6 +680,9 @@ impl Game for Editor {
     }
 
     fn frame(&mut self, frame: &mut Frame) {
+        if let Some(&settings) = frame.settings() {
+            self.settings = settings;
+        }
         if let Some(play) = &mut self.play {
             // The game's own actions are live, in the set its script chose.
             frame.use_action_set(play.action_set());
@@ -825,7 +836,7 @@ impl Game for Editor {
             self.unsaved = Some(0.0);
         }
         let seen = self.camera.drawn(&self.before, alpha, turn);
-        frame.look_from(seen.position, seen.yaw, seen.pitch);
+        frame.look_from_with_fov(seen.position, seen.yaw, seen.pitch, FOV_DEGREES);
     }
 }
 
@@ -942,10 +953,19 @@ pub fn run(
         },
         ..Config::default()
     };
-    // Playing the level from here is done with the player's own controls,
-    // as `lore run` does it.
+    // Playing the level from here is done with the player's own controls
+    // and settings, as `lore run` does it, and what its settings menu
+    // changes is kept for the player as it is there.
     if let Some(path) = crate::controls::file() {
         for problem in crate::controls::load(&path, &mut config.actions) {
+            log::warn!("{problem}");
+        }
+    }
+    config.settings_file = crate::settings::file();
+    if let Some(path) = &config.settings_file {
+        let (settings, problems) = crate::settings::load(path);
+        config.settings = settings;
+        for problem in problems {
             log::warn!("{problem}");
         }
     }
@@ -954,10 +974,11 @@ pub fn run(
         Some(level) => Editor::new(level, false, placed, game, rate),
         None => Editor::new(&crate::standin::scene(), true, placed, game, rate),
     };
-    let Some((editor, actions)) = made else {
+    let Some((mut editor, actions)) = made else {
         // Not reachable: the bindings are fixed and covered by a test.
         return Ok(());
     };
+    editor.settings = config.settings;
     config.actions = actions;
     app::run_editor(config, editor)
 }
@@ -2644,6 +2665,39 @@ mod tests {
             assert_ne!(editor.camera.position, camera.position);
             let _ = std::fs::remove_dir_all(&folder);
         }
+    }
+
+    #[test]
+    fn a_game_played_from_here_has_the_settings_in_force_and_the_editor_keeps_its_own_view() {
+        let (folder, mut editor, mut input) = game_in("play-settings", ONE_SPAWN);
+        let theirs = Settings {
+            field_of_view: 110.0,
+            ..Settings::default()
+        };
+        // The editor's camera is drawn at its own field of view, the one
+        // clicks and marks are worked out with, whatever the player's is.
+        editor.tick(input.tick(), STEP);
+        let mut frame = Frame::new(1.0).with_settings(theirs);
+        editor.frame(&mut frame);
+        assert_eq!(frame.view().unwrap().fov_degrees, Some(FOV_DEGREES));
+
+        // The game's script reads the settings in force from its first
+        // line, so its menu shows them.
+        input.press(Key::F5);
+        editor.tick(input.tick(), STEP);
+        input.release(Key::F5);
+        let play = editor.play.as_ref().expect("the level is being played");
+        let told = play.host().settings();
+        let field = told.iter().find(|setting| setting.name == "field_of_view");
+        assert_eq!(
+            field.map(|setting| &setting.value),
+            Some(&lore_script::SettingValue::Number(110.0))
+        );
+        // While playing, the picture is the player's eyes at their own.
+        let mut frame = Frame::new(1.0).with_settings(theirs);
+        editor.frame(&mut frame);
+        assert_eq!(frame.view().unwrap().fov_degrees, None);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

@@ -659,7 +659,8 @@ declare game: {
     --- functions still run, with a `step` of 0, so a menu can hear the
     --- player and let the game go on. Pausing a paused game does nothing.
     --- Saving the script (a reload) ends the pause, because a reloaded
-    --- script starts with its menus closed.
+    --- script starts with its menus closed; a script that pauses the game
+    --- at the top of its file pauses it again as it loads.
     --- Example: if game.input.justPressed("pause") then game.pause() end
     pause: () -> (),
 
@@ -1353,9 +1354,9 @@ declare game: {
     --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
     --- "upscaling" ("off", "native", "quality", "balanced", "performance"
     --- or "ultra-performance"), "vsync" (true or false) and
-    --- "frame_rate_limit" (30 to 400). A later LORE may have more, so build
-    --- a menu from `game.settings.list()`, as pause_menu.luau does, and it
-    --- gains their rows by itself.
+    --- "frame_rate_limit" (30 to 1000, or 0 for no limit). A later LORE
+    --- may have more, so build a menu from `game.settings.list()`, as
+    --- pause_menu.luau does, and it gains their rows by itself.
     settings: {
         --- Every setting there is, in the order to show them, each saying
         --- what kind of thing it is: see `Setting`.

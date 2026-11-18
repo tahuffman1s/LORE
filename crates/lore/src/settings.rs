@@ -58,6 +58,10 @@ pub struct Range {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Shape {
     Number(Range),
+    /// A number that is 0 for no limit, and otherwise from the range's
+    /// lowest to its highest. What lies between 0 and the lowest is no
+    /// limit of its own: see [`limit`].
+    Limit(Range),
     Toggle,
     /// One of these words.
     Choice(&'static [&'static str]),
@@ -251,9 +255,10 @@ settings! {
     /// true waits for the display before showing each picture, so the
     /// picture never tears. false shows each at once, for the lowest delay.
     vsync: bool = true, Shape::Toggle, "Graphics", "Vsync";
-    /// The most pictures drawn each second, from 30 to 400. It matters with
-    /// `vsync` off, where nothing else holds the game back.
-    frame_rate_limit: f32 = 400.0, Shape::Number(Settings::FRAME_RATE_LIMIT), "Graphics",
+    /// The most pictures drawn each second, from 30 to 1000, or 0 for no
+    /// limit. It matters with `vsync` off, where nothing else holds the
+    /// game back.
+    frame_rate_limit: f32 = 400.0, Shape::Limit(Settings::FRAME_RATE_LIMIT), "Graphics",
         "Frame rate limit";
 }
 
@@ -306,10 +311,13 @@ impl Settings {
         highest: 100.0,
         step: 5.0,
     };
-    /// What [`frame_rate_limit`](Self::frame_rate_limit) can be.
+    /// What [`frame_rate_limit`](Self::frame_rate_limit) can be besides 0,
+    /// which is no limit. The lowest is the slowest frames can come
+    /// without leaving ticks behind; the highest is above what the fastest
+    /// displays show.
     pub const FRAME_RATE_LIMIT: Range = Range {
         lowest: 30.0,
-        highest: 400.0,
+        highest: 1000.0,
         step: 10.0,
     };
 
@@ -365,13 +373,17 @@ impl Settings {
         ((self.brightness - 50.0) / 50.0).clamp(-1.0, 1.0) * BRIGHTNESS_STOPS
     }
 
-    /// The most pictures drawn each second, as a whole number.
+    /// The most pictures drawn each second, as a whole number: 0 for no
+    /// limit.
     #[must_use]
     pub fn frames_per_second(&self) -> u32 {
+        if self.frame_rate_limit <= 0.0 {
+            return 0;
+        }
         let Range {
             lowest, highest, ..
         } = Self::FRAME_RATE_LIMIT;
-        // Held between 30 and 400, which a `u32` holds.
+        // Held between 30 and 1000, which a `u32` holds.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let limit = self.frame_rate_limit.clamp(lowest, highest).round() as u32;
         limit
@@ -402,6 +414,11 @@ impl Settings {
                         max: exactly(range.highest),
                         step: exactly(range.step),
                     },
+                    Shape::Limit(range) => SettingKind::Number {
+                        min: 0.0,
+                        max: exactly(range.highest),
+                        step: exactly(range.step),
+                    },
                     Shape::Toggle => SettingKind::Toggle,
                     Shape::Choice(words) => SettingKind::Choice {
                         options: words.iter().map(|word| (*word).to_owned()).collect(),
@@ -421,11 +438,18 @@ impl Settings {
         let Some(entry) = ALL.iter().find(|entry| entry.name == name) else {
             return;
         };
+        // A setting needs no more precision than an `f32` holds.
+        #[allow(clippy::cast_possible_truncation)]
         let value = match (entry.shape, value) {
-            // A setting needs no more precision than an `f32` holds.
-            #[allow(clippy::cast_possible_truncation)]
             (Shape::Number(range), SettingValue::Number(number)) if number.is_finite() => {
                 Value::Number((*number as f32).clamp(range.lowest, range.highest))
+            }
+            (Shape::Limit(range), SettingValue::Number(number)) if number.is_finite() => {
+                let now = match (entry.get)(self) {
+                    Value::Number(now) => now,
+                    Value::Toggle(_) | Value::Choice(_) => 0.0,
+                };
+                Value::Number(limit(*number as f32, now, range))
             }
             (Shape::Toggle, SettingValue::Toggle(on)) => Value::Toggle(*on),
             (Shape::Choice(words), SettingValue::Choice(word)) => {
@@ -583,6 +607,11 @@ fn read_one(entry: &Entry, value: &DeValue<'_>, settings: &mut Settings) -> Opti
             (entry.set)(settings, Value::Number(read));
             said
         }
+        (Shape::Limit(range), Value::Number(usual)) => {
+            let (read, said) = limit_in_file(name, value, range, usual);
+            (entry.set)(settings, Value::Number(read));
+            said
+        }
         (Shape::Toggle, _) => match value {
             DeValue::Boolean(flag) => {
                 (entry.set)(settings, Value::Toggle(*flag));
@@ -662,10 +691,8 @@ pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
     crate::controls::write_whole(path, &settings.to_text())
 }
 
-/// Reads a number setting that is `usual` unless the file says otherwise.
-/// Gives the number to use, and what the player should know if the file's
-/// could not be used as written.
-fn number(name: &str, value: &DeValue<'_>, range: Range, usual: f32) -> (f32, Option<String>) {
+/// The number a line of a settings file holds, if it holds one.
+fn number_in(value: &DeValue<'_>) -> Option<f32> {
     let read = match value {
         DeValue::Integer(whole) => i64::from_str_radix(whole.as_str(), whole.radix())
             .ok()
@@ -678,10 +705,63 @@ fn number(name: &str, value: &DeValue<'_>, range: Range, usual: f32) -> (f32, Op
         DeValue::Float(float) => float.as_str().parse::<f32>().ok(),
         _ => None,
     };
+    read.filter(|read| read.is_finite())
+}
+
+/// A limit set to `asked` while it is `now`, as [`Shape::Limit`] holds it.
+/// 0 is no limit, and anything between that and the lowest limit becomes
+/// the lowest, since frames slower than it are not held to; except that a
+/// step down from the lowest limit itself is no limit, so a menu stepping
+/// left reaches it, as a step up from no limit reaches the lowest.
+fn limit(asked: f32, now: f32, range: Range) -> f32 {
+    let asked = asked.clamp(0.0, range.highest);
+    if asked > 0.0 && asked < range.lowest {
+        if now > 0.0 && now <= range.lowest && asked < now {
+            0.0
+        } else {
+            range.lowest
+        }
+    } else {
+        asked
+    }
+}
+
+/// Reads a limit setting that is `usual` unless the file says otherwise,
+/// as [`number`] reads a number.
+fn limit_in_file(
+    name: &str,
+    value: &DeValue<'_>,
+    range: Range,
+    usual: f32,
+) -> (f32, Option<String>) {
+    let can = format!(
+        "0 for no limit, or from {} to {}",
+        range.lowest, range.highest
+    );
+    let Some(read) = number_in(value) else {
+        return (
+            usual,
+            Some(format!(
+                "`{name}` must be {can}. It keeps its usual value, {usual}."
+            )),
+        );
+    };
+    // A file is not a step in a menu: whatever it says between 0 and the
+    // lowest limit is the lowest.
+    let held = limit(read, range.highest, range);
+    let said =
+        (held != read).then(|| format!("`{name}` is {can}, so {read} was changed to {held}."));
+    (held, said)
+}
+
+/// Reads a number setting that is `usual` unless the file says otherwise.
+/// Gives the number to use, and what the player should know if the file's
+/// could not be used as written.
+fn number(name: &str, value: &DeValue<'_>, range: Range, usual: f32) -> (f32, Option<String>) {
     let Range {
         lowest, highest, ..
     } = range;
-    let Some(read) = read.filter(|read| read.is_finite()) else {
+    let Some(read) = number_in(value) else {
         return (
             usual,
             Some(format!(
@@ -886,6 +966,67 @@ mod tests {
         settings.change("volume", &SettingValue::Number(f64::NAN));
         settings.change("frame_meter", &SettingValue::Toggle(true));
         assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn a_frame_rate_limit_of_0_is_no_limit_and_one_below_30_is_30() {
+        let (read, problems) = Settings::read("frame_rate_limit = 0\n");
+        assert_eq!(problems, Vec::<String>::new());
+        assert_eq!(read.frames_per_second(), 0);
+        let (read, problems) = Settings::read("frame_rate_limit = 20\n");
+        assert_eq!(read.frames_per_second(), 30);
+        assert_eq!(
+            problems,
+            [
+                "line 1: `frame_rate_limit` is 0 for no limit, or from 30 to 1000, so 20 was \
+              changed to 30."
+            ]
+        );
+        // The fastest displays are not held back.
+        let (read, problems) = Settings::read("frame_rate_limit = 480\n");
+        assert_eq!((read.frames_per_second(), problems), (480, Vec::new()));
+        assert_eq!(
+            Settings::read("frame_rate_limit = 5000\n")
+                .0
+                .frame_rate_limit,
+            1000.0
+        );
+
+        // A script is told it goes from 0, and said what 0 is.
+        let told = Settings::default().described();
+        let limit = told
+            .iter()
+            .find(|setting| setting.name == "frame_rate_limit")
+            .unwrap();
+        assert_eq!(
+            limit.kind,
+            SettingKind::Number {
+                min: 0.0,
+                max: 1000.0,
+                step: 10.0
+            }
+        );
+        assert!(
+            limit.description.contains("or 0 for no limit"),
+            "{}",
+            limit.description
+        );
+
+        // A menu steps down from 30 to no limit, and back up to 30; a
+        // script that asks for 20 from higher up gets the lowest limit.
+        let mut settings = Settings {
+            frame_rate_limit: 30.0,
+            ..Settings::default()
+        };
+        settings.change("frame_rate_limit", &SettingValue::Number(20.0));
+        assert_eq!(settings.frame_rate_limit, 0.0);
+        settings.change("frame_rate_limit", &SettingValue::Number(10.0));
+        assert_eq!(settings.frame_rate_limit, 30.0);
+        settings.change("frame_rate_limit", &SettingValue::Number(240.0));
+        settings.change("frame_rate_limit", &SettingValue::Number(20.0));
+        assert_eq!(settings.frame_rate_limit, 30.0);
+        settings.change("frame_rate_limit", &SettingValue::Number(0.0));
+        assert_eq!(settings.frames_per_second(), 0);
     }
 
     #[test]

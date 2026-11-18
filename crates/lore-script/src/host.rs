@@ -537,8 +537,10 @@ impl ScriptHost {
     /// Whether the script has paused the game with `game.pause` and not
     /// yet let it go on with `game.resume`. A paused game is stopped as at
     /// a time speed of 0 ([`time_speed`](Self::time_speed) says 0), and
-    /// goes on at the speed it had. Saving the script lets the game go on:
-    /// the menu that paused it starts again closed.
+    /// goes on at the speed it had. Saving the script lets the game go on,
+    /// since the menu that paused it starts again closed, unless the new
+    /// version pauses it again as it loads. A save that fails to load
+    /// leaves the pause as it was.
     #[must_use]
     pub fn paused(&self) -> bool {
         self.clock.is_paused()
@@ -557,11 +559,13 @@ impl ScriptHost {
         self.settings.all()
     }
 
-    /// If the script changed a setting with `game.settings.set` or
+    /// If the script changed settings with `game.settings.set` or
     /// `game.settings.reset` since this was last called, calls `see` with
-    /// the name and value of EVERY setting and gives true; otherwise calls
-    /// nothing and gives false. The engine puts them into effect and saves
-    /// them.
+    /// the name and value of each setting it changed, and gives true;
+    /// otherwise calls nothing and gives false. The engine puts them into
+    /// effect onto the settings it has, and saves them. A setting the
+    /// script did not change is not handed over, so the engine's own,
+    /// which may be newer than the script's, is never put back.
     ///
     /// ```
     /// use lore_input::{ActionMap, InputFrame};
@@ -588,6 +592,17 @@ impl ScriptHost {
     /// ```
     pub fn take_changed_settings(&mut self, see: impl FnMut(&str, &SettingValue)) -> bool {
         self.settings.take_changed(see)
+    }
+
+    /// Tells the script the player's settings as the engine now has them,
+    /// when they changed outside the script: they were read from the
+    /// player's file after the script was opened, say, or another game
+    /// changed them. From now on `game.settings` reads these. A change the
+    /// script made that has not been taken yet
+    /// ([`take_changed_settings`](Self::take_changed_settings)) stays, to
+    /// be taken.
+    pub fn set_settings(&mut self, settings: Vec<Setting>) {
+        self.settings.replace(settings);
     }
 
     /// The seconds of game time that have been run: the number of ticks
@@ -1055,16 +1070,20 @@ impl ScriptHost {
             self.kept.replace(kept);
         }
         // The new version starts in `gameplay`, as its variables start
-        // again: a shop that was open is closed in both. A version that
-        // fails to load leaves the old one in the set it chose.
+        // again: a shop that was open is closed in both. And it starts
+        // with the game going on, since whatever paused it, a menu most
+        // likely, starts again closed and could never let it go on; a
+        // version that pauses the game as it loads keeps its pause. A
+        // version that fails to load leaves the old one in the set it
+        // chose, and paused if it was.
         let before = self.live_set.live.replace(ActionMap::GAMEPLAY);
+        let was_paused = self.clock.is_paused();
+        self.clock.set_paused(false);
         if let Err(error) = self.install() {
             self.live_set.live.set(before);
+            self.clock.set_paused(was_paused);
             return Err(error);
         }
-        // Whatever paused the game, a menu most likely, starts again
-        // closed, and could never let the game go on.
-        self.clock.set_paused(false);
         if self.live_set.live.get() != before {
             self.live_set.asked.set(true);
         }
