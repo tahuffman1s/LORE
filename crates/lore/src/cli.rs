@@ -144,6 +144,8 @@ fn rules_by_tick(game: &mut ScriptGame, actions: &ActionMap, pictures: &[u32]) -
     const TICKS: u16 = 60;
     let step = 1.0 / f32::from(TICKS);
     let mut input = Input::new(actions.clone());
+    // As in the check itself: something is under the pointer.
+    press::point_in_middle(&mut input);
     let mut done = Vec::new();
     let mut tick = |game: &mut ScriptGame, frame: &lore_input::InputFrame| {
         game.tick(frame, step);
@@ -265,8 +267,13 @@ fn no_game_in(folder: &Path, command: &str) -> String {
 /// kept, as text to print. Writes the bindings file if there is none, so
 /// there is something to open and edit.
 ///
+/// With `game`, the folder of a game, the controls are the game's own: the
+/// engine's actions, then the ones the game's script made for itself, which
+/// the file keeps in its `[game_bindings]` table. The file written then has
+/// them in it too.
+///
 /// The second text is what is wrong with the file, to print as a warning.
-pub fn controls() -> Result<(String, Vec<String>), String> {
+pub fn controls(game: Option<&Path>) -> Result<(String, Vec<String>), String> {
     let path = crate::controls::file().ok_or_else(|| {
         format!(
             "This computer does not say where settings are kept (no home folder is set), \
@@ -275,7 +282,13 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
             crate::controls::FILE_VARIABLE
         )
     })?;
-    let defaults = ActionMap::standard();
+    // The game's map is the standard one with what its script added.
+    let defaults = match game {
+        Some(folder) => open_game(folder, &ActionMap::standard(), "lore controls")?
+            .host()
+            .actions(),
+        None => ActionMap::standard(),
+    };
     let mut actions = defaults.clone();
     let mut problems = crate::controls::load(&path, &mut actions);
     // A game says this itself when it starts; here nothing else would. An
@@ -303,22 +316,33 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
         .map(|action| actions.name(action).len())
         .max()
         .unwrap_or(0);
-    let mut said = String::from("Your controls:\n");
-    for action in actions.actions() {
-        let name = actions.name(action);
-        let bindings: Vec<String> = (actions.bindings(action).iter())
-            .map(ToString::to_string)
-            .collect();
-        let bound = if bindings.is_empty() {
-            "nothing".to_owned()
-        } else {
-            bindings.join(", ")
-        };
-        let changed = defaults
-            .action(name)
-            .is_ok_and(|default| defaults.bindings(default) != actions.bindings(action));
-        let note = if changed { "  (changed by you)" } else { "" };
-        said.push_str(&format!("  {name:<width$}  {bound}{note}\n"));
+    let list = |own: bool| -> String {
+        let mut lines = String::new();
+        for action in actions.actions().filter(|id| actions.is_own(*id) == own) {
+            let name = actions.name(action);
+            let bindings: Vec<String> = (actions.bindings(action).iter())
+                .map(ToString::to_string)
+                .collect();
+            let bound = if bindings.is_empty() {
+                "nothing".to_owned()
+            } else {
+                bindings.join(", ")
+            };
+            let changed = defaults
+                .action(name)
+                .is_ok_and(|default| defaults.bindings(default) != actions.bindings(action));
+            let note = if changed { "  (changed by you)" } else { "" };
+            lines.push_str(&format!("  {name:<width$}  {bound}{note}\n"));
+        }
+        lines
+    };
+    let mut said = format!("Your controls:\n{}", list(false));
+    let own = list(true);
+    if !own.is_empty() {
+        said.push_str(&format!(
+            "\nThe game's own actions, which its script made. They are kept in the file's \
+             [game_bindings] table, so they stay with this game:\n{own}"
+        ));
     }
     said.push_str(&format!(
         "\nThey are kept in {}{}.\nOpen that file in a text editor, change a line and save. \
@@ -591,6 +615,24 @@ mod tests {
         "#;
         assert_eq!(paced_with(script), Paced::Same);
         assert_eq!(paced_with(""), Paced::Same);
+    }
+
+    #[test]
+    fn stopping_and_starting_time_on_key_presses_is_the_same_at_any_pace() {
+        // Each press of jump flips between a stopped game and a running
+        // one: the script hears the ticks of a stopped game with a step of 0.
+        let script = r#"
+            local stopped = false
+            game.onTick(function(step)
+                if game.input.justPressed("jump") then
+                    stopped = not stopped
+                    game.setTimeSpeed(stopped and 0 or 1)
+                    print("time speed", game.timeSpeed(), step)
+                end
+            end)
+            game.onDraw(function() game.input.rumble(0.1, 0.1, 0.1) end)
+        "#;
+        assert_eq!(paced_with(script), Paced::Same);
     }
 
     #[test]

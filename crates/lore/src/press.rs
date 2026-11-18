@@ -26,6 +26,13 @@ const ROUND: [[f32; 2]; 8] = [
 /// other way.
 const MOUSE: [[f32; 2]; 2] = [[3.0, 1.0], [-240.0, -90.0]];
 
+/// Puts the pointer in the middle of a 1920 by 1080 screen, where a game
+/// run with no window has none: so that code which only runs while
+/// something is hovered runs in `lore check` too.
+pub fn point_in_middle(input: &mut Input) {
+    input.set_pointer(Some([960.0, 540.0]), [1920.0, 1080.0]);
+}
+
 /// What [`every_action`] did.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Pressed {
