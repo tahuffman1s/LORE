@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::lamp_shadow::LampShadows;
 use crate::camera::{Camera, Mat4, shifted};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
@@ -68,6 +69,8 @@ pub(crate) struct SceneView {
     /// Whether the air is lit: beams where the sun reaches it, the glow of
     /// lamps in it.
     pub(crate) shafts: bool,
+    /// How many lamps cast shadows, and how sharp.
+    pub(crate) lamp_shadows: LampShadows,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -126,6 +129,7 @@ impl SceneView {
             stir: 0.0,
             measured: false,
             shafts: true,
+            lamp_shadows: LampShadows::default(),
         })
     }
 
@@ -262,6 +266,7 @@ impl SceneView {
             keeps: matches!(self.mirroring, Mirroring::Running | Mirroring::Keeping),
             copied: false,
             shafts: self.shafts,
+            lamp_shadows: self.lamp_shadows,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`

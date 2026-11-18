@@ -2,7 +2,7 @@
 //! sky and shadowed from the sun by the others, nearer ones in front of
 //! farther ones.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +23,7 @@ use crate::grid::{self, grid_bytes};
 use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
+use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
@@ -127,6 +128,8 @@ pub(crate) struct View {
     /// Whether the air is lit once the picture is drawn: beams where the
     /// sun reaches it, the glow of lamps in it.
     pub(crate) shafts: bool,
+    /// How many lamps cast shadows, and how sharp.
+    pub(crate) lamp_shadows: LampShadows,
 }
 
 impl View {
@@ -759,6 +762,15 @@ pub(crate) struct MeshPipeline {
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
     shadows: Option<ShadowMap>,
+    /// What the lamps that cast shadows see: made when a lamp first needs
+    /// it, and made again when the player's setting changes.
+    lamp_atlas: RefCell<Option<LampAtlas>>,
+    /// The pictures each frame's set was last pointed at for the lamps'
+    /// shadows.
+    lamp_bound: RefCell<Vec<vk::ImageView>>,
+    /// The setting the atlas could not be made for, if it could not: it is
+    /// not tried again until the setting changes.
+    lamp_atlas_failed: Cell<Option<LampShadows>>,
     /// What the clouds are shaped from: `None` only while the pipeline is
     /// being built.
     clouds: Option<CloudVolume>,
@@ -816,6 +828,9 @@ impl MeshPipeline {
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
+            lamp_atlas: RefCell::new(None),
+            lamp_bound: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            lamp_atlas_failed: Cell::new(None),
             clouds: None,
             fluid: None,
             sky: vk::Pipeline::null(),
@@ -841,7 +856,7 @@ impl MeshPipeline {
         })?;
 
         let shadows = ShadowMap::new(gpu)?;
-        let (shadow_view, shadow_sampler) = (shadows.view, shadows.sampler);
+        let (shadow_view, shadow_sampler) = (shadows.pictures.view, shadows.sampler);
         mesh.shadows = Some(shadows);
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
@@ -939,6 +954,12 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The lamps' shadows.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(17)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -948,11 +969,11 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps and their grid,
-            // nine pictures and four readers.
+            // eleven pictures and four readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 2,
-                vk::DescriptorType::SAMPLED_IMAGE => 10,
+                vk::DescriptorType::SAMPLED_IMAGE => 11,
                 _ => 4,
             };
             vk::DescriptorPoolSize::default()
@@ -1068,6 +1089,13 @@ impl MeshPipeline {
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
                         .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&pictures),
+                    // Until a lamp casts a shadow, the sun's stand in for
+                    // the lamps' (and are never read as theirs).
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(17)
                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                         .image_info(&pictures),
                     vk::WriteDescriptorSet::default()
@@ -1803,12 +1831,15 @@ impl MeshPipeline {
             rays: [forward, right, up],
             size: [target.extent.width, target.extent.height],
         };
+        // SAFETY: the caller's guarantees cover this frame's set, which is
+        // not in use, and the atlas, which is this pipeline's own.
+        let shadowing = unsafe { self.lamp_atlas_for(frame, view, lamps, meshes) }?;
         if let (Some((lamp_buffer, cell_buffer)), Ok(mut frame_lamps)) = (
             self.lamp_buffers
                 .get(frame % self.lamp_buffers.len().max(1)),
             self.lamp_frame.try_borrow_mut(),
         ) {
-            let packed = frame_lamps.pack(lamps, &seen, per_lux);
+            let packed = frame_lamps.pack(lamps, &seen, per_lux, &shadowing);
             // SAFETY: the buffers were made writable and as long as the most
             // `pack` gives, and the caller guarantees the commands that read
             // them last have finished. With no lamp in view the cells are
@@ -1816,6 +1847,15 @@ impl MeshPipeline {
             unsafe {
                 lamp_buffer.write(packed.lamps)?;
                 cell_buffer.write(packed.cells)?;
+            }
+            // The shadows' pictures that are not drawn yet are drawn before
+            // the picture that reads them.
+            if let (Some(meshes), Ok(atlas)) = (meshes, self.lamp_atlas.try_borrow())
+                && let Some(atlas) = atlas.as_ref()
+            {
+                // SAFETY: the caller's guarantees cover the atlas, which is
+                // this pipeline's own, and no pass has been begun yet.
+                unsafe { self.record_lamp_shadows(commands, meshes, atlas, frame_lamps.faces()) };
             }
         }
         let readers =
@@ -2291,76 +2331,222 @@ impl MeshPipeline {
         meshes: &Meshes,
         cascades: &[Cascade; PICTURES],
     ) {
-        let (Some(shadows), Some((vertices, indices))) = (&self.shadows, &meshes.buffers) else {
+        let (Some(shadows), true) = (&self.shadows, meshes.buffers.is_some()) else {
             return;
         };
-        let device = self.gpu.device();
         let stale = shadows.take_stale(meshes.id, cascades);
-        let casters = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
         for (layer, cascade) in cascades.iter().enumerate() {
             if !stale[layer] {
                 continue;
             }
-            // SAFETY: the caller guarantees the command buffer is recording
-            // outside a render pass and that the meshes are live and of
-            // this device; the draws only name points, triangles and
-            // materials that `Meshes::new` made.
+            // SAFETY: the caller's guarantees cover these.
             unsafe {
-                shadows.begin(commands, layer);
-                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
-                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
-                // Both sides cast: a wall one triangle thick, or a rock
-                // with no underside, still stops the sun.
-                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
-                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
-                let mut last: Option<&Draw> = None;
-                for draw in casters
-                    .iter()
-                    .filter(|draw| cascade.holds(draw.middle, draw.radius))
-                {
-                    let cut_out = draw.surface == Surface::CutOut;
-                    if last.is_none_or(|last| last.surface != draw.surface) {
-                        device.cmd_bind_pipeline(
-                            commands,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            self.shadow_pipelines[usize::from(cut_out)],
-                        );
-                    }
-                    // Only a cut-out part reads its material, for its holes.
-                    if cut_out && last.is_none_or(|last| last.material != draw.material) {
-                        device.cmd_bind_descriptor_sets(
-                            commands,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            self.layout,
-                            1,
-                            &[meshes.materials.set(draw.material)],
-                            &[],
-                        );
-                    }
-                    let seen = Draw {
-                        world: multiply(&cascade.clip, &draw.world),
-                        ..*draw
-                    };
-                    device.cmd_push_constants(
-                        commands,
-                        self.layout,
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                        0,
-                        &draw_bytes(&seen),
-                    );
-                    device.cmd_draw_indexed(
-                        commands,
-                        draw.index_count,
-                        1,
-                        draw.first_index,
-                        draw.first_vertex,
-                        0,
-                    );
-                    last = Some(draw);
-                }
-                shadows.end(commands, layer);
+                shadows.pictures.begin(commands, layer);
+                self.draw_casters(commands, meshes, &cascade.clip, |draw| {
+                    cascade.holds(draw.middle, draw.radius)
+                });
+                shadows.pictures.end(commands, layer);
             }
         }
+    }
+
+    /// Records drawing what each lamp's picture `faces` sees of `meshes`
+    /// into the lamps' atlas.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), before its render pass begins.
+    unsafe fn record_lamp_shadows(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        atlas: &LampAtlas,
+        faces: &[Face],
+    ) {
+        for face in faces {
+            if face.layer >= atlas.pictures.count() {
+                continue;
+            }
+            // SAFETY: the caller's guarantees cover these.
+            unsafe {
+                atlas.pictures.begin(commands, face.layer);
+                self.draw_casters(commands, meshes, &face.clip, |draw| {
+                    face.holds(draw.middle, draw.radius)
+                });
+                atlas.pictures.end(commands, face.layer);
+            }
+        }
+    }
+
+    /// Records drawing how far away from a light each solid part of
+    /// `meshes` that `seen` lets through is, placed in its picture by
+    /// `clip`, into the depth picture being drawn.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), between the `begin` and `end` of a
+    /// depth picture.
+    unsafe fn draw_casters(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        clip: &Mat4,
+        seen: impl Fn(&Draw) -> bool,
+    ) {
+        let Some((vertices, indices)) = &meshes.buffers else {
+            return;
+        };
+        let device = self.gpu.device();
+        let casters = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
+        // SAFETY: the caller guarantees the command buffer is recording a
+        // depth picture and that the meshes are live and of this device;
+        // the draws only name points, triangles and materials that
+        // `Meshes::new` made.
+        unsafe {
+            device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+            device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+            // Both sides cast: a wall one triangle thick, or a rock with no
+            // underside, still stops the light.
+            device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+            device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+            let mut last: Option<&Draw> = None;
+            for draw in casters.iter().filter(|draw| seen(draw)) {
+                let cut_out = draw.surface == Surface::CutOut;
+                if last.is_none_or(|last| last.surface != draw.surface) {
+                    device.cmd_bind_pipeline(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.shadow_pipelines[usize::from(cut_out)],
+                    );
+                }
+                // Only a cut-out part reads its material, for its holes.
+                if cut_out && last.is_none_or(|last| last.material != draw.material) {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.layout,
+                        1,
+                        &[meshes.materials.set(draw.material)],
+                        &[],
+                    );
+                }
+                let placed = Draw {
+                    world: multiply(clip, &draw.world),
+                    ..*draw
+                };
+                device.cmd_push_constants(
+                    commands,
+                    self.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &draw_bytes(&placed),
+                );
+                device.cmd_draw_indexed(
+                    commands,
+                    draw.index_count,
+                    1,
+                    draw.first_index,
+                    draw.first_vertex,
+                    0,
+                );
+                last = Some(draw);
+            }
+        }
+    }
+
+    /// Makes the lamps' atlas as `view` asks, or frees it, and points this
+    /// frame's set at it; then says how this frame's lamps may cast
+    /// shadows. Making it waits for the graphics card to finish what it was
+    /// given before, which happens only when the setting changes or a lamp
+    /// first needs a shadow.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), before its render pass begins.
+    unsafe fn lamp_atlas_for(
+        &self,
+        frame: usize,
+        view: &View,
+        lamps: &[Lamp],
+        meshes: Option<&Meshes>,
+    ) -> Result<Shadowing, RenderError> {
+        let device = self.gpu.device();
+        let (Ok(mut atlas), Ok(mut bound)) =
+            (self.lamp_atlas.try_borrow_mut(), self.lamp_bound.try_borrow_mut())
+        else {
+            return Ok(Shadowing::default());
+        };
+        let wanted = view.lamp_shadows;
+        let level = meshes.filter(|meshes| meshes.buffers.is_some());
+        let needed = wanted.lamps() > 0
+            && level.is_some()
+            && lamps.iter().any(|lamp| lamp.casts_shadows)
+            && self.lamp_atlas_failed.get() != Some(wanted);
+        let fits = atlas.as_ref().map(|atlas| atlas.shadows);
+        // An atlas made for another setting is freed; one that is not
+        // needed yet is not made, but one already made is kept for the
+        // lamps that come and go.
+        if fits.is_some_and(|fits| fits != wanted) || (fits.is_some() && wanted.lamps() == 0) {
+            // SAFETY: waiting for the device is always allowed; once it is
+            // idle nothing reads the atlas, so it may be freed.
+            unsafe { device.device_wait_idle() }
+                .map_err(RenderError::driver("making room for the lamps' shadows"))?;
+            *atlas = None;
+            // A new view may be given the freed one's handle: every set is
+            // pointed again.
+            bound.fill(vk::ImageView::null());
+        }
+        if atlas.is_none() && needed {
+            // SAFETY: as above.
+            unsafe { device.device_wait_idle() }
+                .map_err(RenderError::driver("making room for the lamps' shadows"))?;
+            match LampAtlas::new(&self.gpu, wanted) {
+                Ok(made) => *atlas = Some(made),
+                // A card without the memory for them draws lamps with no
+                // shadows, as the setting "off" does, until the setting
+                // changes.
+                Err(error) => {
+                    log::warn!(
+                        "Lamps cast no shadows: {error} Set \"Lamp shadows\" lower in the \
+                         graphics settings to try again."
+                    );
+                    self.lamp_atlas_failed.set(Some(wanted));
+                }
+            }
+            bound.fill(vk::ImageView::null());
+        }
+        let slot = frame % self.views.len().max(1);
+        let pictures = atlas.as_ref().map_or_else(
+            || self.shadows.as_ref().map(|shadows| shadows.pictures.view),
+            |atlas| Some(atlas.pictures.view),
+        );
+        if let (Some(pictures), Some((_, set)), Some(bound)) =
+            (pictures, self.views.get(slot), bound.get_mut(slot))
+            && *bound != pictures
+        {
+            let info = [vk::DescriptorImageInfo::default()
+                .image_view(pictures)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            let writes = [vk::WriteDescriptorSet::default()
+                .dst_set(*set)
+                .dst_binding(17)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .image_info(&info)];
+            // SAFETY: the caller guarantees the commands last recorded with
+            // this frame's set have finished, so it is not in use.
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            *bound = pictures;
+        }
+        // With no level drawn this frame, nothing in the atlas may be
+        // read: it holds what an earlier level's lamps saw.
+        Ok(match (atlas.as_ref(), level) {
+            (Some(atlas), Some(level)) => Shadowing {
+                slots: atlas.shadows.lamps(),
+                level: level.id,
+                elapsed: view.elapsed,
+            },
+            _ => Shadowing::default(),
+        })
     }
 
     /// Records drawing one mesh part, changing only what differs from the
@@ -2734,6 +2920,7 @@ mod tests {
             keeps: true,
             copied: true,
             shafts: false,
+            lamp_shadows: LampShadows::Off,
         };
         let lighting = Lighting {
             towards_sun: [0.0, 1.0, 0.0],

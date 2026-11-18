@@ -1212,7 +1212,7 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
             let beside = on_disc(look, CASTER_LOOKS, turn);
             let at = clamp(uv + beside * search, vec2<f32>(0.0), vec2<f32>(1.0));
             let held = textureLoad(
-                shadow_map, vec2<i32>(at * size), picture, 0,
+                shadow_map, min(vec2<i32>(at * size), vec2<i32>(size) - 1), picture, 0,
             );
             let allowed = (metres_a_pixel + length(beside) * search_metres * slope) / depth_metres;
             if held < place.z - allowed {

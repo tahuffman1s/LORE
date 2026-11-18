@@ -459,6 +459,33 @@ pub fn upscaling(text: &str) -> Result<lore_render::Upscaling, String> {
         })
 }
 
+/// Reads how many lamps cast shadows, as the settings file says it: `off`,
+/// `low`, `medium` or `high`.
+///
+/// # Errors
+///
+/// Fails, naming the four, for any other word.
+pub fn lamp_shadows(text: &str) -> Result<lore_render::LampShadows, String> {
+    use lore_render::LampShadows;
+    const ALL: [(LampShadows, &str); 4] = [
+        (LampShadows::Off, "off"),
+        (LampShadows::Low, "low"),
+        (LampShadows::Medium, "medium"),
+        (LampShadows::High, "high"),
+    ];
+    let typed = text.trim().to_lowercase();
+    ALL.into_iter()
+        .find(|(_, name)| *name == typed)
+        .map(|(shadows, _)| shadows)
+        .ok_or_else(|| {
+            format!(
+                "`{}` is not a lamp shadow setting. Use off, low, medium or high, as in \
+                 --lamp-shadows high",
+                text.trim()
+            )
+        })
+}
+
 /// Reads a frame-time budget typed in milliseconds, such as `16.6`.
 ///
 /// # Errors

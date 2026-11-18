@@ -33,13 +33,13 @@ use crate::weather_api::number;
 /// it.
 pub(crate) const LAMP_FIELDS: &[&str] = &[
     "name", "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range",
-    "radius", "flicker",
+    "radius", "flicker", "castsShadows",
 ];
 
 /// What can be set on a lamp, or given when one is made.
 const SETTINGS: &[&str] = &[
     "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range", "radius",
-    "flicker",
+    "flicker", "castsShadows",
 ];
 
 /// The most lamps a game can have. The renderer draws the nearest 256 of
@@ -69,6 +69,8 @@ pub struct LampLight {
     pub radius: f32,
     /// Its beam, or `None` for a lamp that shines every way.
     pub beam: Option<LampBeam>,
+    /// Whether it may cast shadows: false lets its light through walls.
+    pub casts_shadows: bool,
 }
 
 /// The cone a lamp with a beam shines in.
@@ -324,6 +326,7 @@ struct Spec {
     reach: f32,
     radius: f32,
     flicker: Flicker,
+    casts_shadows: bool,
     /// Its colour as bright as white, and its candela before the flicker:
     /// worked out when anything changes (`settle`), not every frame.
     colour_drawn: [f32; 3],
@@ -365,6 +368,7 @@ impl Spec {
                         .map(|l| f32::from(l - b'a') / 12.0)
                         .collect(),
                 }),
+            casts_shadows: true,
             colour_drawn: [1.0; 3],
             candela_drawn: 0.0,
         };
@@ -402,6 +406,7 @@ impl Spec {
             reach: light.reach,
             radius: light.radius,
             flicker: Flicker::steady(),
+            casts_shadows: light.casts_shadows,
             colour_drawn: [1.0; 3],
             candela_drawn: 0.0,
         };
@@ -457,6 +462,7 @@ impl Spec {
             reach: self.reach,
             radius: self.radius,
             beam,
+            casts_shadows: self.casts_shadows,
         })
     }
 }
@@ -559,6 +565,7 @@ impl Spec {
             "range" => self.reach = other.reach,
             "radius" => self.radius = other.radius,
             "flicker" => self.flicker = other.flicker.clone(),
+            "castsShadows" => self.casts_shadows = other.casts_shadows,
             _ => {}
         }
         self.settle();
@@ -855,8 +862,8 @@ fn apply(lua: &Lua, spec: &mut Spec, key: &str, value: &Value, label: &str) -> m
             }
             spec.pointing = way.map(|part| part / long);
         }
-        "on" => {
-            let Value::Boolean(on) = value else {
+        "on" | "castsShadows" => {
+            let Value::Boolean(yes) = value else {
                 return Err(fail(
                     lua,
                     format!(
@@ -867,7 +874,11 @@ fn apply(lua: &Lua, spec: &mut Spec, key: &str, value: &Value, label: &str) -> m
                     ),
                 ));
             };
-            spec.on = *on;
+            if key == "on" {
+                spec.on = *yes;
+            } else {
+                spec.casts_shadows = *yes;
+            }
         }
         "lumens" => {
             spec.lumens = amount(
@@ -960,10 +971,22 @@ fn vector_of(lua: &Lua, label: &str, value: &Value, sample: &str) -> mlua::Resul
     Ok(parts)
 }
 
+/// The field of `known` that a script writing `key` most likely meant:
+/// the one spelt nearest, or for any word about shadows (`shadows`, as
+/// Roblox calls it, or `shadow`), `castsShadows`.
+fn meant<'a>(key: &str, known: &[&'a str]) -> Option<&'a str> {
+    closest(key, known.iter().copied()).or_else(|| {
+        key.to_lowercase()
+            .contains("shadow")
+            .then(|| known.iter().copied().find(|field| *field == "castsShadows"))
+            .flatten()
+    })
+}
+
 /// The error for a setting that does not exist.
 fn unknown_setting(lua: &Lua, what: &str, key: &str) -> mlua::Error {
     let mut message = format!("{what} has no setting called {key}.");
-    match closest(key, SETTINGS.iter().copied()) {
+    match meant(key, SETTINGS) {
         Some(near) => {
             let _ = write!(message, " Did you mean {near}?");
         }
@@ -1235,9 +1258,10 @@ impl UserData for LampRef {
                     "range" => number(spec.reach),
                     "radius" => number(spec.radius),
                     "flicker" => Value::String(lua.create_string(&spec.flicker.said)?),
+                    "castsShadows" => Value::Boolean(spec.casts_shadows),
                     _ => {
                         let mut message = format!("lamp.{key} does not exist.");
-                        match closest(&key, LAMP_FIELDS.iter().copied()) {
+                        match meant(&key, LAMP_FIELDS) {
                             Some(near) => {
                                 let _ = write!(message, " Did you mean lamp.{near}?");
                             }
@@ -1267,7 +1291,7 @@ impl UserData for LampRef {
                 if !SETTINGS.contains(&key.as_str()) {
                     let mut message =
                         format!("lamp.{key} cannot be set, there is no such setting.");
-                    match closest(&key, SETTINGS.iter().copied()) {
+                    match meant(&key, SETTINGS) {
                         Some(near) => {
                             let _ = write!(message, " Did you mean lamp.{near}?");
                         }
@@ -1380,12 +1404,14 @@ mod tests {
                 inner: 0.3,
                 outer: 0.6,
             }),
+            casts_shadows: false,
         };
         let back = Spec::from_light(&light).light(0.0, 0.0).unwrap();
         assert!((back.candela - 50.0).abs() < 1e-3, "{}", back.candela);
         let beam = back.beam.unwrap();
         assert!((beam.outer - 0.6).abs() < 1e-5 && (beam.inner - 0.3).abs() < 1e-5);
         assert_eq!(back.reach, 9.0);
+        assert!(!back.casts_shadows);
     }
 
     #[test]

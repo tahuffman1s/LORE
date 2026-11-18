@@ -59,6 +59,8 @@ pub struct Bench {
     pub upscaling: Upscaling,
     /// How many lamps light the scene (see [`lamps`]).
     pub lamps: u32,
+    /// How many of them cast shadows.
+    pub lamp_shadows: lore_render::LampShadows,
 }
 
 impl Default for Bench {
@@ -72,6 +74,7 @@ impl Default for Bench {
             height: 720,
             upscaling: Upscaling::default(),
             lamps: 0,
+            lamp_shadows: lore_render::LampShadows::default(),
         }
     }
 }
@@ -258,6 +261,7 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     if bench.lamps > 0 {
         headless.set_lamps(&lamps(bench.lamps));
     }
+    headless.set_lamp_shadows(bench.lamp_shadows);
     for frame in 0..bench.warmup {
         headless.render(&camera(frame))?;
     }
@@ -313,10 +317,14 @@ impl Report {
             upscaling,
             ..
         } = self.bench;
+        let shadows = match self.bench.lamp_shadows.lamps() {
+            0 => " and no shadows".to_owned(),
+            most => format!(", the nearest {most} with shadows"),
+        };
         let lamps = match self.bench.lamps {
             0 => String::new(),
-            1 => ", 1 lamp".to_owned(),
-            many => format!(", {many} lamps"),
+            1 => format!(", 1 lamp{shadows}"),
+            many => format!(", {many} lamps{shadows}"),
         };
         let mut text = format!(
             "Drew {frames} frames of the benchmark scene ({} meshes, {} triangles{lamps}) at \
@@ -384,7 +392,7 @@ impl Report {
             "{{\n  \"lore\": \"{}\",\n  \"graphics_card\": \"{gpu}\",\n  \
              \"frames\": {},\n  \"warmup_frames\": {},\n  \"width\": {},\n  \"height\": {},\n  \
              \"drawn_width\": {},\n  \"drawn_height\": {},\n  \"upscaling\": \"{}\",\n  \
-             \"meshes\": {},\n  \"triangles\": {},\n  \"lamps\": {},\n  \"frame\": {},\n  \"engine\": {},\n  \
+             \"meshes\": {},\n  \"triangles\": {},\n  \"lamps\": {},\n  \"shadowed_lamps\": {},\n  \"frame\": {},\n  \"engine\": {},\n  \
              \"graphics_card_work\": {},\n  \"budget_ms\": {},\n  \"within_budget\": {}\n}}\n",
             env!("CARGO_PKG_VERSION"),
             self.bench.frames,
@@ -397,6 +405,7 @@ impl Report {
             self.placed,
             self.triangles,
             self.bench.lamps,
+            self.bench.lamp_shadows.lamps().min(self.bench.lamps as usize),
             times(&self.frame),
             times(&self.recording),
             times(&self.drawing),

@@ -24,6 +24,7 @@
 
 use lore_assets::{Light, LightKind};
 
+use crate::lamp_shadow::{Face, Shadow, ShadowSlots, Shadowing};
 use crate::mesh::Lighting;
 
 /// The most lamps one frame draws. Past this many in view, the nearest are
@@ -45,9 +46,9 @@ const WORDS: usize = MOST_LAMPS / 32;
 const NEAREST: f32 = 0.3;
 const FARTHEST: f32 = 1000.0;
 
-/// The bytes of one lamp as the shader takes it: four rows of four
+/// The bytes of one lamp as the shader takes it: five rows of four
 /// numbers.
-const LAMP_BYTES: usize = 64;
+const LAMP_BYTES: usize = 80;
 /// The bytes before the lamps: the size of the picture and how the grid
 /// is laid over it.
 const HEAD_BYTES: usize = 32;
@@ -192,6 +193,10 @@ pub struct Lamp {
     pub radius: f32,
     /// The beam of a spot, or `None` for a lamp that shines every way.
     pub beam: Option<Beam>,
+    /// Whether it may cast shadows. The lamps that matter most to the
+    /// picture do, as many as the player's setting allows; one told not to
+    /// never does, and its light goes through walls.
+    pub casts_shadows: bool,
 }
 
 impl Default for Lamp {
@@ -204,6 +209,7 @@ impl Default for Lamp {
             reach: 0.0,
             radius: USUAL_RADIUS,
             beam: None,
+            casts_shadows: true,
         }
     }
 }
@@ -244,6 +250,7 @@ impl Lamp {
             reach: light.range.unwrap_or(0.0),
             radius: USUAL_RADIUS,
             beam,
+            casts_shadows: true,
         };
         lamp.sound().then_some(lamp)
     }
@@ -321,6 +328,10 @@ pub(crate) struct LampFrame {
     cells: Vec<u8>,
     /// The lamps that light what is seen: how far each is, and which it is.
     near: Vec<(f32, usize)>,
+    /// Which lamps have shadows, kept from frame to frame.
+    slots: ShadowSlots,
+    /// The shadow of each of `near`, in the same order.
+    shadows: Vec<Shadow>,
 }
 
 /// What [`LampFrame::pack`] made: the bytes of the two buffers the shader
@@ -337,14 +348,24 @@ impl LampFrame {
             lamps: Vec::with_capacity(LAMP_BUFFER_BYTES),
             cells: Vec::with_capacity(CELL_BUFFER_BYTES),
             near: Vec::with_capacity(MOST_LAMPS),
+            slots: ShadowSlots::default(),
+            shadows: Vec::with_capacity(MOST_LAMPS),
         }
     }
 
     /// The shader's `Lamps` and `lamp_cells` for `lamps` seen as `seen`
-    /// says, each drawn `per_lux` times as bright as the lux it gives.
+    /// says, each drawn `per_lux` times as bright as the lux it gives, and
+    /// the lamps that matter most given shadows as `shadowing` allows.
     /// Lamps that light nothing in view are left out, and past
-    /// [`MOST_LAMPS`] the farthest.
-    pub(crate) fn pack(&mut self, lamps: &[Lamp], seen: &Seen, per_lux: f32) -> Packed<'_> {
+    /// [`MOST_LAMPS`] the farthest. The shadows' pictures that have to be
+    /// drawn before the lamps are read are then [`faces`](Self::faces).
+    pub(crate) fn pack(
+        &mut self,
+        lamps: &[Lamp],
+        seen: &Seen,
+        per_lux: f32,
+        shadowing: &Shadowing,
+    ) -> Packed<'_> {
         let [forward, right, up] = seen.rays;
         let across = length(right);
         let upward = length(up);
@@ -376,6 +397,8 @@ impl LampFrame {
         self.near
             .sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         self.near.truncate(MOST_LAMPS);
+        self.slots
+            .choose(lamps, &self.near, shadowing, &mut self.shadows);
 
         let count = self.near.len();
         let words = count.div_ceil(32);
@@ -403,7 +426,7 @@ impl LampFrame {
         }
         let lamp_bytes = &mut self.lamps[HEAD_BYTES..];
         let cell_bytes = &mut self.cells[..];
-        for (slot, &(_, number)) in self.near.iter().enumerate() {
+        for (slot, (&(_, number), shadow)) in self.near.iter().zip(&self.shadows).enumerate() {
             let lamp = &lamps[number];
             let reach = lamp.reach();
             let [scale, offset] = lamp.cone();
@@ -416,8 +439,9 @@ impl LampFrame {
             let rows = [
                 [lamp.at[0], lamp.at[1], lamp.at[2], reach],
                 [light[0], light[1], light[2], lamp.radius.clamp(0.0, reach)],
-                [pointing[0], pointing[1], pointing[2], 0.0],
-                [scale, offset, 0.0, 0.0],
+                [pointing[0], pointing[1], pointing[2], shadow.along_beam],
+                [scale, offset, shadow.strength, 0.0],
+                shadow.row,
             ];
             let bytes = &mut lamp_bytes[slot * LAMP_BYTES..(slot + 1) * LAMP_BYTES];
             put(bytes, rows.as_flattened());
@@ -449,6 +473,11 @@ impl LampFrame {
             lamps: &self.lamps,
             cells: &self.cells,
         }
+    }
+
+    /// The shadows' pictures the last frame packed has to draw first.
+    pub(crate) fn faces(&self) -> &[Face] {
+        self.slots.faces()
     }
 
     /// How many lamps the last frame packed.
@@ -574,7 +603,7 @@ mod tests {
     /// The bytes of both buffers of the frame, one after the other, and how
     /// many words each cell has.
     fn packed(frame: &mut LampFrame, lamps: &[Lamp], per_lux: f32) -> (Vec<u8>, Vec<u8>) {
-        let packed = frame.pack(lamps, &seen(), per_lux);
+        let packed = frame.pack(lamps, &seen(), per_lux, &Shadowing::default());
         (packed.lamps.to_vec(), packed.cells.to_vec())
     }
 

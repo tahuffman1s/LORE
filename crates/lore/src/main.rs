@@ -179,7 +179,10 @@ enum Command {
                             than 16.6 ms\n  \
                             lore bench --json bench.json     Also save the numbers for a program \
                             to read\n  \
-                            lore bench --lamps 256           Light it with 256 lamps as well\n\n\
+                            lore bench --lamps 256           Light it with 256 lamps as well\n  \
+                            lore bench --lamps 20 --lamp-shadows off\n  \
+                            \x20                                Twenty lamps whose light goes \
+                            through walls\n\n\
                       No window opens. The same frames are drawn on every run, so two runs \
                       differ only in how\nfast the computer drew them. Close other programs \
                       first for steadier numbers."
@@ -207,6 +210,9 @@ enum Command {
         /// Light the scene with this many lamps as well, to measure what lamps cost
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(..=4096))]
         lamps: u32,
+        /// How many of those lamps cast shadows: off, low, medium (the game's own default) or high
+        #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::lamp_shadows)]
+        lamp_shadows: lore_render::LampShadows,
     },
 }
 
@@ -334,6 +340,7 @@ fn command() -> Result<(), String> {
             budget_ms,
             json,
             lamps,
+            lamp_shadows,
         }) => cli::bench(
             &Bench {
                 frames,
@@ -342,6 +349,7 @@ fn command() -> Result<(), String> {
                 height,
                 upscaling,
                 lamps,
+                lamp_shadows,
             },
             budget_ms,
             json.as_deref(),

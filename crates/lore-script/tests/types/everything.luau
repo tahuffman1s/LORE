@@ -341,7 +341,7 @@ print(honey.name, honey.color, honey.clarity, honey.cloudiness, honey.glow, hone
 print(honey.viscosity, honey.density, honey.beading, honey.slippery, honey.sticky, honey.bouncy, honey.corrosive, honey.dries, honey.washes, pond)
 
 local porch: Lamp = game.lamp("porch", { from = "lantern", at = vector.create(2, 2.2, 0) })
-local torch = game.lamp("torch", { from = porch, beam = 40, lumens = 300, kelvin = 5000, pointing = vector.create(0, 0, -1), softness = 0.3, range = 20, radius = 0.05, flicker = "torch", on = true, color = "#ffd0a0" })
+local torch = game.lamp("torch", { from = porch, beam = 40, lumens = 300, kelvin = 5000, pointing = vector.create(0, 0, -1), softness = 0.3, range = 20, radius = 0.05, flicker = "torch", on = true, color = "#ffd0a0", castsShadows = true })
 game.lamp("candle")
 porch.at = vector.create(2, 2.4, 0)
 porch.on = (game.sky.hour() or 12) > 19
@@ -354,8 +354,9 @@ porch.softness = 0
 porch.range = 8
 porch.radius = 0.03
 porch.flicker = "mmnmmommommnonmmonqnmmo"
+porch.castsShadows = false
 print(porch.name, porch.at, porch.on, porch.lumens, porch.color, porch.kelvin, porch.beam, porch.pointing)
-print(porch.softness, porch.range, porch.radius, porch.flicker, torch)
+print(porch.softness, porch.range, porch.radius, porch.flicker, porch.castsShadows, torch)
 for _, name in game.lamps.names() do
     game.lamp(name).on = false
 end

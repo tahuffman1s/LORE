@@ -19,6 +19,7 @@ pub(crate) fn drawn(light: &LampLight) -> Lamp {
             inner: beam.inner,
             outer: beam.outer,
         }),
+        casts_shadows: light.casts_shadows,
     }
 }
 
@@ -63,6 +64,7 @@ pub(crate) fn of_level(level: &Scene) -> Vec<(String, LampLight)> {
                     inner: beam.inner,
                     outer: beam.outer,
                 }),
+                casts_shadows: lamp.casts_shadows,
             };
             Some((name, said))
         })

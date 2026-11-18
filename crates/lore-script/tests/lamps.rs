@@ -170,6 +170,7 @@ fn the_level_s_lamps_are_found_by_name_and_drawn_as_the_file_says_until_changed(
         reach: 0.0,
         radius: 0.03,
         beam: None,
+        casts_shadows: true,
     };
     host.set_level_lamps(&[("Lantern.001".to_owned(), light)]);
     let before = lit(&host);
@@ -303,6 +304,7 @@ fn a_colour_reads_back_as_it_was_written_and_a_level_lamp_is_described_from_its_
         reach: 9.0,
         radius: 0.03,
         beam: None,
+        casts_shadows: true,
     };
     host.set_level_lamps(&[("Lantern 1".to_owned(), light)]);
     run(&mut host, 1);
@@ -323,6 +325,7 @@ fn file_lamp(at: [f32; 3], candela: f32) -> LampLight {
         reach: 0.0,
         radius: 0.03,
         beam: None,
+        casts_shadows: true,
     }
 }
 
@@ -379,4 +382,40 @@ fn host_levels(mut host: ScriptHost) {
     let lamps = lit(&host);
     assert_eq!(lamps.len(), 2, "the porch and the brazier, not the torch");
     assert!(lamps.iter().all(|lamp| lamp.at != [0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn a_lamp_casts_shadows_unless_it_is_told_not_to() {
+    let mut host = game(
+        r#"
+local porch = game.lamp("porch", { at = vector.create(0, 2, 0) })
+local ceiling = game.lamp("ceiling", { from = "bulb", castsShadows = false })
+assert(porch.castsShadows == true and ceiling.castsShadows == false)
+game.onTick(function()
+    porch.castsShadows = false
+    ceiling.castsShadows = true
+end)
+"#,
+    );
+    let shadows = |host: &ScriptHost| {
+        let mut all: Vec<bool> = Vec::new();
+        host.lamps(|lamp| all.push(lamp.casts_shadows));
+        all
+    };
+    let before = shadows(&host);
+    assert_eq!(before.iter().filter(|casts| **casts).count(), 1);
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let after = shadows(&host);
+    assert_eq!(after.len(), 2);
+    assert_ne!(before, after, "each lamp changed");
+
+    let mistake = load_mistake(r#"game.lamp("porch", { castsShadows = "no" })"#);
+    assert!(mistake.contains("true or false"), "{mistake}");
+    assert!(mistake.contains("castsShadows"), "{mistake}");
+    // Roblox's name, and a slip, both lead to the field.
+    let mistake = load_mistake(r#"game.lamp("porch").shadows = false"#);
+    assert!(mistake.contains("Did you mean lamp.castsShadows?"), "{mistake}");
+    let mistake = load_mistake(r#"game.lamp("porch", { castShadows = false })"#);
+    assert!(mistake.contains("Did you mean castsShadows?"), "{mistake}");
 }

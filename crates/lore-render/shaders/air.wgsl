@@ -81,7 +81,12 @@ fn lamps_in_air(world: vec3<f32>, along: vec3<f32>, pixel: vec2<f32>) -> vec3<f3
             let lamp = lamps.lamps[word * 32u + firstTrailingBit(bits)];
             bits &= bits - 1u;
             let fall = lamp_falls(lamp, world);
-            sum += fall.light * sent_towards(AIR_ONWARDS, dot(fall.towards, along));
+            // Air the lamp's shadow falls on is dark: beams from a lamp
+            // through a window or between the bars of a gate.
+            if max(fall.light.r, max(fall.light.g, fall.light.b)) > 0.0 {
+                sum += fall.light * sent_towards(AIR_ONWARDS, dot(fall.towards, along))
+                    * lamp_reaches(lamp, world);
+            }
         }
     }
     return sum / (4.0 * PI);
