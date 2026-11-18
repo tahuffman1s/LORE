@@ -456,6 +456,12 @@ impl ScriptHost {
             .flatten()
     }
 
+    /// How stormy the script last said the sky is, from 0 to 1.
+    #[must_use]
+    pub fn storminess(&self) -> f32 {
+        self.weather.storminess.get()
+    }
+
     /// How stormy the script said the sky is with
     /// `game.weather.setStorminess`, from 0 to 1, if it has said so since
     /// this was last called.

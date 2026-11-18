@@ -30,6 +30,8 @@ pub(crate) struct SceneView {
     /// gives the same picture every time: for pictures drawn with no
     /// window, which tests compare.
     pub(crate) still: bool,
+    /// The time the clouds' clock shows, if the game says it.
+    clock: Option<f64>,
     /// Where the eye was in the last frame, and how much its walking is
     /// stirring what it walks through, from 0 to 1.
     eye: Option<[f32; 3]>,
@@ -54,7 +56,14 @@ fn sharper(render: u32, output: u32) -> f32 {
 impl SceneView {
     /// How long this view has been drawn for, in seconds: the clouds' clock.
     pub(crate) fn seconds(&self) -> f64 {
-        self.seconds
+        self.clock.unwrap_or(self.seconds)
+    }
+
+    /// Says what time the clouds' clock shows, in seconds, in place of how
+    /// long this view has been drawn: the game's own time, so that the sky
+    /// is where the game's rules have it. `None` gives it back to the view.
+    pub(crate) fn set_clock(&mut self, clock: Option<f64>) {
+        self.clock = clock.filter(|clock| clock.is_finite());
     }
 
     /// Makes a view whose finished picture is `output` pixels.
@@ -80,6 +89,7 @@ impl SceneView {
             frame: 0,
             seconds: 0.0,
             still: false,
+            clock: None,
             eye: None,
             stir: 0.0,
         })
@@ -186,8 +196,8 @@ impl SceneView {
             ],
             // Clouds need no more of the time than an f32 holds.
             #[allow(clippy::cast_possible_truncation)]
-            time: self.seconds as f32,
-            exact: self.seconds,
+            time: self.seconds() as f32,
+            exact: self.seconds(),
             elapsed,
             stir: self.stir,
             // Only an upscaler mixes frames; without one a pattern that

@@ -1416,7 +1416,9 @@ impl MeshPipeline {
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
-        let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye));
+        // All of it stands as high as rain has raised it.
+        let rise = weather[1][1];
+        let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
             // SAFETY: the caller's guarantees cover the water's pictures,
@@ -1677,7 +1679,7 @@ impl MeshPipeline {
                             self.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            &body_bytes(body, view.eye, grid),
+                            &body_bytes(body, view.eye, grid, weather[1][1]),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
                     }
@@ -2060,7 +2062,7 @@ fn picture_write(
 /// directions turn, the body itself: where its grid of depths starts and
 /// how far apart its points are, how many there are and how high the water
 /// stands, and the water's colour. Its clearness is the number after.
-fn body_bytes(body: &Body, eye: [f32; 3], grid: u32) -> [u8; DRAW_BYTES] {
+fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
     // Sizes are far below the point where f32 stops being exact.
     #[allow(clippy::cast_precision_loss)]
@@ -2070,9 +2072,9 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32) -> [u8; DRAW_BYTES] {
         [apart, finest, squares, 0.0],
         [0.0; 4],
         [0.0; 4],
-        [middle[0], body.level, middle[1], 1.0],
+        [middle[0], body.level + rise, middle[1], 1.0],
         [body.origin[0], body.origin[1], body.cell, 0.0],
-        [size[0], size[1], body.level, 0.0],
+        [size[0], size[1], body.level + rise, 0.0],
         [body.colour[0], body.colour[1], body.colour[2], 0.0],
         [body.colour[3], 0.0, 0.0, 0.0],
     ];

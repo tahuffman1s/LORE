@@ -86,6 +86,10 @@ pub struct Frame {
     storminess: Option<f32>,
     /// The hour of the day, if the game said it this frame.
     hour: Option<f64>,
+    /// How far rain has raised the water and what the sky's clock shows,
+    /// if the game said them this frame.
+    water_rise: Option<f32>,
+    sky_clock: Option<f64>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
@@ -172,6 +176,8 @@ impl Frame {
             strikes: Vec::new(),
             storminess: None,
             hour: None,
+            water_rise: None,
+            sky_clock: None,
             under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
@@ -711,6 +717,25 @@ impl Frame {
     /// The hour of the day, if the game said it this frame.
     pub(crate) fn take_hour(&mut self) -> Option<f64> {
         self.hour.take()
+    }
+
+    /// Says how far rain has raised the level's still water, in metres, so
+    /// that it is drawn as high as the game's rules have it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.water_rise = Some(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds of the game's own
+    /// time: clouds, storms and rain are then where the game's rules have
+    /// them.
+    pub fn set_sky_clock(&mut self, seconds: f64) {
+        self.sky_clock = Some(seconds);
+    }
+
+    /// How far rain has raised the water and what the sky's clock shows,
+    /// if the game said them this frame.
+    pub(crate) fn take_water(&mut self) -> (Option<f32>, Option<f64>) {
+        (self.water_rise.take(), self.sky_clock.take())
     }
 
     /// The lightning let go this frame.

@@ -165,6 +165,8 @@ pub struct Renderer {
     grid: bool,
     /// Where the scene is seen from.
     camera: Camera,
+    /// The time the sky's clock shows, if the game says it.
+    sky_clock: Option<f64>,
     /// What the scene is drawn into and upscaled by; its finished picture
     /// is the size of the swapchain's images.
     view: Option<SceneView>,
@@ -236,6 +238,7 @@ impl Renderer {
             effects: Effects::new(),
             grid: false,
             camera: Camera::default(),
+            sky_clock: None,
             view: None,
             view_for: (vk::Extent2D::default(), config.upscaling),
             last_frame: None,
@@ -377,6 +380,22 @@ impl Renderer {
     /// starts, the level's own light is the light and it is always day.
     pub fn set_hour(&mut self, hour: Option<f64>) {
         self.effects.set_hour(hour);
+    }
+
+    /// Says how far rain has raised the level's still water, in metres:
+    /// every lake and pond is drawn that much higher, and over whatever
+    /// ground beside it is lower than that. The game's rules decide it
+    /// (`Level::set_water_rise` in the physics); this shows it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.effects.set_rise(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds: the game's own
+    /// time, so that clouds, storms and rain are where the game's rules
+    /// have them and a saved game finds the same sky. With `None`, which
+    /// is how it starts, the clock is how long the picture has been drawn.
+    pub fn set_sky_clock(&mut self, clock: Option<f64>) {
+        self.sky_clock = clock;
     }
 
     /// Says that something is in the water during the next frame drawn: a
@@ -603,6 +622,7 @@ impl Renderer {
             (now - last).as_secs_f32().min(LONGEST_FRAME_SECONDS)
         });
         self.last_frame = Some(now);
+        view.set_clock(self.sky_clock);
         self.effects.storms(view.seconds(), self.camera.position);
         // What flies moves on by as long as the last frame took.
         self.effects.step(

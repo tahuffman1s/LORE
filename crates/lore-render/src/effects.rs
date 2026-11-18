@@ -74,6 +74,52 @@ struct Bit {
     own: f32,
 }
 
+/// `value` between `low` and `high`, as a share from 0 to 1 that starts
+/// and ends gently.
+fn eased(low: f32, high: f32, value: f32) -> f32 {
+    let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
+    share * share * (3.0 - 2.0 * share)
+}
+
+/// How much of a storm is over a place `time` seconds after the clouds
+/// set off, from 0 to 1, when the sky is as stormy as `storminess` says: as
+/// `weather_over` in the shader reads it.
+pub(crate) fn storm_over(x: f32, z: f32, time: f64, storminess: f32) -> f32 {
+    let [along_x, along_z, speed] = sky::WIND;
+    // As the shader carries the clouds: f32 holds all of it they need.
+    #[allow(clippy::cast_possible_truncation)]
+    let carried = speed * 2.4 * time as f32;
+    let more = storminess.clamp(0.0, 1.0) * 0.3;
+    let [place, kind] = clouds::read([
+        (x - along_x * carried) / 53_000.0,
+        (z - along_z * carried) / 53_000.0,
+        0.37,
+    ]);
+    eased(0.55 - more, 0.69 - more, place) * eased(0.38 - more, 0.6 - more, kind)
+}
+
+/// How hard it rains at a place (its x and z, in metres), from 0 to 1,
+/// `seconds` after the clouds set off under a sky as stormy as
+/// `storminess` says: it rains under a thunder cloud. The same place, time
+/// and sky always give the same rain, which is what lets a game's rules
+/// count the rain that has fallen. What is no number gives no rain.
+#[must_use]
+pub fn rain_at(place: [f32; 2], seconds: f64, storminess: f32) -> f32 {
+    if !(place[0].is_finite() && place[1].is_finite() && seconds.is_finite()) {
+        return 0.0;
+    }
+    let storminess = if storminess.is_finite() {
+        storminess
+    } else {
+        0.0
+    };
+    eased(
+        0.25,
+        0.7,
+        storm_over(place[0], place[1], seconds, storminess),
+    )
+}
+
 /// The water under a place, as far as what flies needs to know it.
 pub(crate) trait Surface {
     /// How high the still water at `x`, `z` stands, if there is any there.
@@ -117,6 +163,8 @@ pub(crate) struct Effects {
     here: [f32; 4],
     /// The sky at the hour the game says it is, if it has said.
     day: Option<(f64, Day)>,
+    /// How far rain has raised the still water, in metres.
+    rise: f32,
 }
 
 impl Default for Effects {
@@ -141,6 +189,7 @@ impl Effects {
             storminess: 0.0,
             here: [0.0; 4],
             day: None,
+            rise: 0.0,
         }
     }
 
@@ -385,6 +434,7 @@ impl Effects {
 
     /// Moves every bit and every push on by `seconds`.
     fn moved_on<S: Surface + ?Sized>(&mut self, seconds: f32, water: &S) {
+        let rise = self.rise;
         // What is still pushing on the water.
         for (stir, left) in &mut self.pushes {
             if self.stirs.len() < MOST_STIRS {
@@ -404,7 +454,8 @@ impl Effects {
                 continue;
             }
             let mut gone = bit.age >= bit.lasts;
-            let level = water.water_at(bit.place[0], bit.place[2]);
+            // The water stands as high as rain has raised it.
+            let level = (water.water_at(bit.place[0], bit.place[2])).map(|level| level + rise);
             match bit.kind {
                 Kind::Drop => {
                     bit.moving[1] -= FALL * seconds;
@@ -530,10 +581,15 @@ impl Effects {
         };
     }
 
+    /// Says how far rain has raised the still water, in metres.
+    pub(crate) fn set_rise(&mut self, rise: f32) {
+        self.rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
+    }
+
     /// The weather as the shader takes it: what it is at the eye, then how
-    /// stormy the whole sky is.
+    /// stormy the whole sky is and how far rain has raised the water.
     pub(crate) fn weather(&self) -> [[f32; 4]; 2] {
-        [self.here, [self.storminess, 0.0, 0.0, 0.0]]
+        [self.here, [self.storminess, self.rise, 0.0, 0.0]]
     }
 
     /// Where the light of each stroke comes from, and how bright it is
@@ -549,25 +605,9 @@ impl Effects {
     /// in the cloud; one in four comes to the ground, and now and then one
     /// runs along under the cloud.
     pub(crate) fn storms(&mut self, time: f64, eye: [f32; 3]) {
-        let [along_x, along_z, speed] = sky::WIND;
-        // As the shader carries the clouds: f32 holds all of it they need.
-        #[allow(clippy::cast_possible_truncation)]
-        let carried = speed * 2.4 * time as f32;
-        let step = |low: f32, high: f32, value: f32| {
-            let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
-            share * share * (3.0 - 2.0 * share)
-        };
-        // How much of a storm is over a place, as `weather_over` in the
-        // shader reads it.
-        let more = self.storminess * 0.3;
-        let storm_over = |x: f32, z: f32| {
-            let [place, kind] = clouds::read([
-                (x - along_x * carried) / 53_000.0,
-                (z - along_z * carried) / 53_000.0,
-                0.37,
-            ]);
-            step(0.55 - more, 0.69 - more, place) * step(0.38 - more, 0.6 - more, kind)
-        };
+        let storminess = self.storminess;
+        let storm_over = |x: f32, z: f32| storm_over(x, z, time, storminess);
+        let step = eased;
         // Under a storm it rains, and in the heart of one it hails.
         let overhead = if eye.iter().all(|part| part.is_finite()) {
             storm_over(eye[0], eye[2])
@@ -699,6 +739,10 @@ mod tests {
             effects.weather()[0][0] > 0.95
         });
         assert!(under.is_some(), "no storm anywhere");
+        // The rules of a game are told the same rain.
+        let [x, _, z] = under.unwrap_or_default();
+        assert!(rain_at([x, z], 0.0, 1.0) > 0.95);
+        assert_eq!(rain_at([f32::NAN, 0.0], 0.0, 1.0), 0.0);
         assert!(effects.weather()[0][3] > 0.5, "and the wind blows harder");
         for _ in 0..2400 {
             effects.step(1.0 / 60.0, dry);

@@ -146,7 +146,9 @@ fn near_depth(place: vec2<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return -2.0;
     }
-    return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r;
+    // Rain has raised the water, and it is that much deeper everywhere,
+    // and wet where the ground stood less than that above it.
+    return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
 }
 
 // Whether a point of the world is under the surface of the still water
@@ -799,7 +801,7 @@ fn body_depth(place: vec2<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return -2.0;
     }
-    return textureSampleLevel(body_water, clamp_sampler, uv, 0.0).r;
+    return textureSampleLevel(body_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
 }
 
 // One point of the grid a body of still water is drawn with. The grid is

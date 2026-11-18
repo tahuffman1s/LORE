@@ -88,7 +88,8 @@ struct View {
     // The weather. At the eye: how hard it rains and how hard it hails,
     // from 0 to 1, how wet the ground has got, and how much of a storm
     // is overhead, which is how much harder the wind blows. Then how
-    // stormy the whole sky is, from 0 for fair weather to 1.
+    // stormy the whole sky is, from 0 for fair weather to 1, and how far
+    // rain has raised the still water, in metres.
     weather: array<vec4<f32>, 2>,
     // The heavens (`sky.rs`): towards the sun itself, and how far the
     // night has come from 0 to 1; towards the moon, and how far the stars

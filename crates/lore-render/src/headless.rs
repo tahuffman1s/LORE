@@ -266,6 +266,22 @@ impl Headless {
         self.effects.set_hour(hour);
     }
 
+    /// Says how far rain has raised the level's still water, in metres:
+    /// every lake and pond is drawn that much higher, and over whatever
+    /// ground beside it is lower than that. The game's rules decide it
+    /// (`Level::set_water_rise` in the physics); this shows it.
+    pub fn set_water_rise(&mut self, rise: f32) {
+        self.effects.set_rise(rise);
+    }
+
+    /// Says what time the sky's clock shows, in seconds: the game's own
+    /// time, so that clouds, storms and rain are where the game's rules
+    /// have them and a saved game finds the same sky. With `None`, which
+    /// is how it starts, the clock is how long the picture has been drawn.
+    pub fn set_sky_clock(&mut self, clock: Option<f64>) {
+        self.view.set_clock(clock);
+    }
+
     /// Says that something is in the water during the next frame drawn: a
     /// leg wading, a body swimming. Rings run out from it, and it trails
     /// a wake as it moves. Call it every frame for as long as it is there.

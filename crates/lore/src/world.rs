@@ -69,6 +69,24 @@ pub struct World {
     marks: Vec<WaterMark>,
     /// How many times the player has been put at a spawn point.
     spawned: u32,
+    /// How far the rain that has fallen has raised the level's still
+    /// water, in metres.
+    rise: f32,
+}
+
+/// How fast a downpour raises the still water, and how fast it falls back
+/// when the rain stops, in metres a second; and the most it rises. Far
+/// faster than weather is, as a game's day is far shorter than a day: a
+/// storm fills a lake to its brim in a little over two minutes, and it is
+/// seven minutes going down.
+const WATER_RISES: f32 = 0.006;
+const WATER_FALLS: f32 = 0.002;
+const MOST_RISE: f32 = 0.8;
+
+/// The rise of the water after `seconds` more of rain as hard as `rain`,
+/// from 0 to 1.
+fn risen(rise: f32, rain: f32, seconds: f32) -> f32 {
+    (rise + seconds * (rain * WATER_RISES - (1.0 - rain) * WATER_FALLS)).clamp(0.0, MOST_RISE)
 }
 
 impl World {
@@ -106,6 +124,7 @@ impl World {
             noises: Vec::new(),
             marks: Vec::new(),
             spawned,
+            rise: 0.0,
         }
     }
 
@@ -143,6 +162,19 @@ impl World {
     /// The game being played, to change it.
     pub fn game_mut(&mut self) -> &mut ScriptGame {
         &mut self.game
+    }
+
+    /// How long the world has run, in seconds of its own time: what the
+    /// sky's clock shows.
+    fn sky_seconds(&self) -> f64 {
+        f64::from(self.tick) * f64::from(self.ground.step)
+    }
+
+    /// How far the rain that has fallen has raised the level's still
+    /// water, in metres.
+    #[must_use]
+    pub fn water_rise(&self) -> f32 {
+        self.rise
     }
 
     /// How many ticks the world has run.
@@ -260,6 +292,13 @@ impl Game for World {
         // before they move.
         self.respawn();
         self.tick = self.tick.saturating_add(1);
+        // Where a storm stands over the player it rains, and rain raises
+        // the water: it is said to the level before anything is moved in
+        // it, since the level's shapes are shared.
+        let [x, _, z] = self.player.player.position;
+        let rain = lore_render::rain_at([x, z], self.sky_seconds(), self.game.host().storminess());
+        self.rise = risen(self.rise, rain, self.ground.step);
+        self.ground.level.set_water_rise(self.rise);
         let Ground {
             level,
             rules,
@@ -307,6 +346,9 @@ impl Game for World {
 
     /// The script's own presenting, such as its HUD and its rumble.
     fn frame(&mut self, frame: &mut Frame) {
+        // The sky and the water are drawn where the rules have them.
+        frame.set_sky_clock(self.sky_seconds());
+        frame.set_water_rise(self.rise);
         self.game.frame(frame);
     }
 }
@@ -703,6 +745,27 @@ mod tests {
     use std::f32::consts::TAU;
 
     use super::*;
+
+    #[test]
+    fn rain_raises_the_water_to_its_brim_and_it_falls_again_after() {
+        let mut rise = 0.0;
+        // Three minutes of downpour, a sixtieth of a second at a time.
+        for _ in 0..(180 * 60) {
+            rise = risen(rise, 1.0, 1.0 / 60.0);
+        }
+        assert_eq!(rise, MOST_RISE);
+        // A minute of drizzle neither fills nor empties it much.
+        let before = rise;
+        for _ in 0..(60 * 60) {
+            rise = risen(rise, 0.25, 1.0 / 60.0);
+        }
+        assert!((rise - before).abs() < 0.05, "{rise}");
+        // Eight dry minutes and it is back where it was put.
+        for _ in 0..(480 * 60) {
+            rise = risen(rise, 0.0, 1.0 / 60.0);
+        }
+        assert_eq!(rise, 0.0);
+    }
 
     #[test]
     fn a_script_played_alone_rumbles_the_players_gamepad() {

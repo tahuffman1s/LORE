@@ -571,10 +571,10 @@ impl Bodies {
     /// The body `eye` is in or over, or else the one it is nearest to.
     /// (A pool inside the square a moat lies in is told from the moat by
     /// which of them there is water of at the eye.)
-    pub(crate) fn nearest(&self, eye: [f32; 3]) -> Option<&Body> {
+    pub(crate) fn nearest(&self, eye: [f32; 3], rise: f32) -> Option<&Body> {
         self.list
             .iter()
-            .filter(|body| body.water.depth_at(eye[0], eye[2]) > 0.0)
+            .filter(|body| body.water.depth_at(eye[0], eye[2]) + rise > 0.0)
             .max_by(|one, other| one.level.total_cmp(&other.level))
             .or_else(|| {
                 self.list
