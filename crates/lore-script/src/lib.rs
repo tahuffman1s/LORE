@@ -67,7 +67,7 @@ pub use lore_weapons as weapons;
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
-pub use weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
+pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
 /// Type definitions for the script API, in the format the Luau language
 /// server reads, so editors can autocomplete and check `game`.

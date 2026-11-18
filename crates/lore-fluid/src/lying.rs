@@ -159,17 +159,21 @@ impl Fluids {
                         slot.dead = true;
                     }
                 }
-                slot.landed_now = false;
                 slot.still = 0;
                 slot.calm = false;
             }
+        }
+        // Only now, so that which of two drops landing on each other this
+        // tick lies on top does not hang on where each is kept.
+        for p in parts.iter_mut() {
+            p.landed_now = false;
         }
     }
 
     /// Everything the awake lying drops do in one tick: spread, merge or
     /// push apart, run, follow their surface, leave trails and fall asleep.
     pub(crate) fn lie(&mut self, level: &Level, dt: f32) {
-        self.spread(dt);
+        self.spread(level, dt);
         self.crowd(dt);
         self.run(level, dt);
     }
@@ -178,7 +182,7 @@ impl Fluids {
     /// has spread as wide as a patch may be and is still much thicker than
     /// a puddle splits in two side by side, so that what a stream pours
     /// into one place spreads into a wider puddle instead of piling up.
-    pub(crate) fn spread(&mut self, dt: f32) {
+    pub(crate) fn spread(&mut self, level: &Level, dt: f32) {
         for i in 0..self.parts.len() {
             let Some(mut p) = self.parts.get(i).copied() else {
                 continue;
@@ -214,22 +218,23 @@ impl Fluids {
                 let (u, v) = frame(p.normal);
                 let turn = core::f32::consts::TAU * self.rolls.next();
                 let way = add(scale(u, libm::cosf(turn)), scale(v, libm::sinf(turn)));
-                p.volume *= 0.5;
                 let half = 0.5 * R_MAX;
-                self.born += 1;
-                let mut other = Particle::lying(
-                    p.kind,
-                    madd(p.pos, way, half),
-                    p.normal,
-                    p.volume,
-                    p.h,
-                    self.born,
-                );
-                other.dry_left = p.dry_left;
-                p.pos = madd(p.pos, way, -half);
-                p.changed = true;
-                p.h_ref = p.h;
-                self.parts.push(other);
+                // Each half stops short of a wall and lies on the surface
+                // it reaches; where one would go off an edge it stays whole.
+                let there = moved_on(level, p.pos, p.normal, way, half);
+                let here = moved_on(level, p.pos, p.normal, scale(way, -1.0), half);
+                if let (Some((there, there_facing)), Some((here, here_facing))) = (there, here) {
+                    p.volume *= 0.5;
+                    self.born += 1;
+                    let mut other =
+                        Particle::lying(p.kind, there, there_facing, p.volume, p.h, self.born);
+                    other.dry_left = p.dry_left;
+                    p.pos = here;
+                    p.normal = here_facing;
+                    p.changed = true;
+                    p.h_ref = p.h;
+                    self.parts.push(other);
+                }
             }
             // Thickness is compared with where it last counted as changed,
             // so a slow spread still keeps a drop awake now and then.
@@ -311,6 +316,9 @@ impl Fluids {
                 p.flight_time = 0.0;
                 p.run = 0.0;
                 p.push = [0.0; 3];
+                // Off the ceiling's plane, or the ray it falls along next
+                // meets the ceiling where it starts and it lands there again.
+                p.pos = madd(p.pos, normal, LOOK_LIFT);
                 if let Some(slot) = self.parts.get_mut(i) {
                     *slot = p;
                 }
@@ -339,14 +347,26 @@ impl Fluids {
                     .raycast(madd(p.pos, normal, LOOK_LIFT), way, step_len + LOOK_AHEAD)
                     .filter(|hit| dot(hit.normal, normal) < 0.9995);
                 if let Some(hit) = corner {
-                    if ran * 2.0 >= step_len {
+                    let facing = normalize(hit.normal).unwrap_or(normal);
+                    // A surface whose own downhill runs back into this one
+                    // (the foot of a wall, the bottom of a ditch) is the
+                    // bottom: going round onto it would only bring the drop
+                    // back, tick after tick.
+                    let bottom = normalize(madd([0.0, -1.0, 0.0], facing, facing[1]))
+                        .is_some_and(|down| dot(down, normal) < 0.0);
+                    if ran * 2.0 >= step_len && !bottom {
                         // Running into a corner: the drop goes round it.
                         p.pos = hit.point;
-                        p.normal = normalize(hit.normal).unwrap_or(normal);
+                        p.normal = facing;
                     } else {
-                        // Merely crowded against a wall: it stays on its surface.
+                        // Crowded against a wall, or at the bottom: it stays
+                        // on its surface, and once it is there it is still.
                         let along = (hit.distance - LOOK_LIFT).max(0.0);
                         p.pos = madd(p.pos, way, along);
+                        if along <= MOVED {
+                            moved = false;
+                            ran = 0.0;
+                        }
                     }
                 } else {
                     let next = add(p.pos, step);
@@ -385,7 +405,7 @@ impl Fluids {
                 p.run += ran;
                 if p.run >= 2.0 * radius {
                     p.run = 0.0;
-                    self.leave_trail(&mut p, &phys, speed, before, normal, radius);
+                    self.leave_trail(level, &mut p, &phys, speed, before, normal, radius);
                 }
             }
 
@@ -405,12 +425,14 @@ impl Fluids {
     /// A running drop `p` leaves a thin lying drop where it was, taking its
     /// volume from itself (a Landau-Levich-Derjaguin film), when there is
     /// room to spare and the film is worth keeping.
+    #[expect(clippy::too_many_arguments)]
     fn leave_trail(
         &mut self,
+        level: &Level,
         p: &mut Particle,
         phys: &Physics,
         speed: f32,
-        place: [f32; 3],
+        before: [f32; 3],
         normal: [f32; 3],
         radius: f32,
     ) {
@@ -422,8 +444,25 @@ impl Fluids {
         if volume < MIN_VOLUME || p.volume - volume < MIN_VOLUME {
             return;
         }
+        // The film lies behind the drop, clear of it: where the drop was a
+        // tick ago it would overlap it and be taken straight back in.
+        let trail_radius = (volume / (PI * film)).sqrt();
+        let run = in_plane(sub(p.pos, before), normal);
+        let ran = length(run);
+        let Some(back) = normalize(scale(run, -1.0)) else {
+            return;
+        };
+        let gap = radius + trail_radius - ran;
+        let (place, facing) = if gap > 0.0 {
+            match moved_on(level, before, normal, back, gap) {
+                Some(found) => found,
+                None => return,
+            }
+        } else {
+            (before, normal)
+        };
         self.born += 1;
-        let mut trail = Particle::lying(p.kind, place, normal, volume, film, self.born);
+        let mut trail = Particle::lying(p.kind, place, facing, volume, film, self.born);
         // A thin film dries sooner.
         trail.dry_left = 0.3 * phys.dries;
         p.volume -= volume;
@@ -454,6 +493,29 @@ impl Fluids {
             }
         }
     }
+}
+
+/// Where a drop lying at `pos` on the surface facing `normal` comes to when
+/// it is moved `far` along `way`: stopped short of a wall in the way, and on
+/// the surface there. `None` where that surface has ended.
+fn moved_on(
+    level: &Level,
+    pos: [f32; 3],
+    normal: [f32; 3],
+    way: [f32; 3],
+    far: f32,
+) -> Option<([f32; 3], [f32; 3])> {
+    let along = level
+        .raycast(madd(pos, normal, LOOK_LIFT), way, far + LOOK_AHEAD)
+        .filter(|hit| dot(hit.normal, normal) < 0.9995)
+        .map_or(far, |hit| (hit.distance - LOOK_LIFT - LOOK_AHEAD).max(0.0));
+    let next = madd(pos, way, along);
+    let hit = level.raycast(
+        madd(next, normal, SNAP_LIFT),
+        scale(normal, -1.0),
+        SNAP_REACH,
+    )?;
+    Some((hit.point, normalize(hit.normal).unwrap_or(normal)))
 }
 
 /// Drop `i` (awake, and read as `a`) meets drop `j`: they merge, or are

@@ -77,10 +77,27 @@ impl Fluids {
         let speed = length(p.vel);
         // The ray along the centre stops at the surface: a drop is
         // millimetres across and a ray is continuous, so nothing tunnels.
-        let hit = level.raycast(p.pos, p.vel, speed * t + r);
-        let end = hit.map_or_else(|| madd(p.pos, p.vel, t), |h| h.point);
+        let mut hit = level.raycast(p.pos, p.vel, speed * t + r);
+        let mut end = hit.map_or_else(|| madd(p.pos, p.vel, t), |h| h.point);
+        // Ice that bears a person bears a drop: it lands on a frozen lake,
+        // which is not in the level's mesh, rather than on its bed.
+        if let Some(ice) = level.ice_around(end)
+            && p.pos[1] >= ice
+            && end[1] < ice
+        {
+            let share = (p.pos[1] - ice) / (p.pos[1] - end[1]);
+            let point = madd(p.pos, sub(end, p.pos), share);
+            hit = Some(RayHit {
+                distance: length(sub(point, p.pos)),
+                point,
+                normal: [0.0, 1.0, 0.0],
+            });
+            end = point;
+        }
+        // Under the surface of the water it is in, not of water over it: a
+        // drop in a cellar under a pool is in the air.
         let drowned = level
-            .water_at(end[0], end[2])
+            .water_around(end)
             .is_some_and(|surface| end[1] < surface);
         if drowned || p.flight_time > FLIGHT_LIMIT || !end.iter().all(|c| c.is_finite()) {
             p.dead = true;

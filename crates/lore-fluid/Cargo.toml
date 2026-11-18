@@ -12,5 +12,9 @@ lore-physics = { path = "../lore-physics" }
 # Trig, exp, pow and cube roots that give the same digits on every machine.
 libm = "0.2"
 
+[dev-dependencies]
+# Levels with still water in them, for the tests.
+lore-assets = { path = "../lore-assets" }
+
 [lints]
 workspace = true

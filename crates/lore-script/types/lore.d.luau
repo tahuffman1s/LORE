@@ -1215,6 +1215,7 @@ declare game: {
         --- 0.05 the land is white and the player leaves footprints; from
         --- 0.1 they plough a furrow through it and walk slower, and low
         --- plants are pressed down under it. New snow fills tracks in.
+        --- It lies no deeper than 0.6.
         --- Example: game.weather.setSnowDepth(0.3)
         setSnowDepth: (metres: number) -> (),
 
@@ -1227,6 +1228,7 @@ declare game: {
         --- thaws above it; this freezes it at once. Thin ice is only seen.
         --- At 0.05 it bears the player, who then walks on the lake instead
         --- of swimming in it, and slides. Running water does not freeze.
+        --- It grows no thicker than 0.5.
         --- Example: game.weather.setIce(0.2)
         setIce: (metres: number) -> (),
 

@@ -31,14 +31,14 @@ const MOST_RISE: f32 = 0.8;
 const SNOW_SETTLES: f32 = 0.002;
 const SNOW_MELTS: f32 = 0.0003;
 const RAIN_MELTS: f32 = 0.002;
-const MOST_SNOW: f32 = 0.6;
+const MOST_SNOW: f32 = lore_script::DEEPEST_SNOW;
 
 /// How fast ice grows on still water for each degree below freezing, and
 /// how fast it thaws for each degree above, in metres a second; and the
 /// thickest it gets. At five below it bears a walker in under a minute.
 const ICE_GROWS: f32 = 0.0002;
 const ICE_THAWS: f32 = 0.0004;
-const MOST_ICE: f32 = 0.5;
+const MOST_ICE: f32 = lore_script::THICKEST_ICE;
 
 /// How much of the push of the air on a body becomes speed, for each metre
 /// a second of wind squared: half the weight of the air, times the half
@@ -106,13 +106,30 @@ struct Twister {
     lasts: f32,
     /// How far round it has turned, in radians.
     turned: f32,
+    /// When it was told to stop, and how strong it was then: it dies away
+    /// from there.
+    stopped: Option<(f32, f32)>,
 }
 
 impl Twister {
+    /// How long it takes to die away, in seconds.
+    fn dies(&self) -> f32 {
+        TORNADO_DIES.min(self.lasts * 0.25)
+    }
+
+    /// How old it is when it is gone.
+    fn ends(&self) -> f32 {
+        self.stopped
+            .map_or(self.lasts, |(told, _)| told + self.dies())
+    }
+
     /// How strong it is now: it comes down, holds, and dies away.
     fn strength(&self) -> f32 {
+        let dies = self.dies();
+        if let Some((told, then)) = self.stopped {
+            return then * (1.0 - eased(told, told + dies, self.age));
+        }
         let grows = TORNADO_GROWS.min(self.lasts * 0.25);
-        let dies = TORNADO_DIES.min(self.lasts * 0.25);
         self.peak
             * eased(0.0, grows, self.age)
             * (1.0 - eased(self.lasts - dies, self.lasts, self.age))
@@ -256,23 +273,24 @@ impl Climate {
                         age: 0.0,
                         lasts: seconds,
                         turned: 0.0,
+                        stopped: None,
                     });
                 }
                 TornadoAsk::Stop => {
-                    if let Some(twister) = &mut self.twister {
-                        // It dies away from where it has got to, and no
-                        // stronger than it now is.
-                        let dies = TORNADO_DIES.min(twister.lasts * 0.25);
-                        twister.peak = twister.strength();
-                        twister.lasts = twister.lasts.min(twister.age + dies);
-                        twister.age = twister.age.max(twister.lasts - dies);
+                    // It dies away from as strong as it now is; one that is
+                    // already dying away goes on as it was.
+                    if let Some(twister) = &mut self.twister
+                        && twister.stopped.is_none()
+                        && twister.age < twister.lasts - twister.dies()
+                    {
+                        twister.stopped = Some((twister.age, twister.strength()));
                     }
                 }
             }
         }
         if let Some(twister) = &mut self.twister {
             twister.step(level, step);
-            if twister.age >= twister.lasts {
+            if twister.age >= twister.ends() {
                 self.twister = None;
             }
         }
@@ -541,6 +559,13 @@ mod tests {
             "{tornado:?}"
         );
         assert!(after(stopped, 2460).0.weather().tornado.is_none());
+        // Told to stop while it is already dying away, it goes on as it was.
+        let natural = r"game.weather.startTornado(vector.create(100, 0, 0), { lasts = 60 })";
+        let late = r"game.weather.startTornado(vector.create(100, 0, 0), { lasts = 60 })
+            game.after(55, function() game.weather.stopTornado() end)";
+        let strength = |script| after(script, 3360).0.weather().tornado.unwrap().strength;
+        let (natural, late) = (strength(natural), strength(late));
+        assert!((natural - late).abs() < 1e-4, "{late} against {natural}");
     }
 
     /// A flat sheet `high` up from (x0, z0) to (x1, z1), as two triangles.
@@ -568,6 +593,7 @@ mod tests {
             age: 0.0,
             lasts: 600.0,
             turned: 0.0,
+            stopped: None,
         };
         // Where it comes down it is on the ground at once.
         twister.step(&level, STEP);

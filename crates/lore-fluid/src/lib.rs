@@ -196,11 +196,24 @@ impl Fluids {
     pub fn set_flow(&mut self, kind: u8, flow: Flow) {
         let flow = flow.cleaned();
         let index = usize::from(kind);
-        if let (Some(slot), Some(physics)) =
-            (self.flows.get_mut(index), self.physics.get_mut(index))
-        {
-            *slot = flow;
-            *physics = Physics::new(&flow);
+        let Some((slot, physics)) = self.flows.get_mut(index).zip(self.physics.get_mut(index))
+        else {
+            return;
+        };
+        let (was, now) = (physics.dries, flow.dries);
+        *slot = flow;
+        *physics = Physics::new(&flow);
+        // What already lies there dries at the new pace from now on: a
+        // kind that never dried starts drying, rather than every puddle of
+        // it vanishing at once.
+        if was != now {
+            for p in self.parts.iter_mut().filter(|p| p.kind == kind && p.lying) {
+                p.dry_left = if was > 0.0 {
+                    p.dry_left * now / was
+                } else {
+                    now
+                };
+            }
         }
     }
 
