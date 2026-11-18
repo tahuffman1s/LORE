@@ -458,10 +458,10 @@ impl Frame {
         self
     }
 
-    /// The size the player chose for the HUD and menus in the settings
-    /// menu: 1 is the designed size. Give it to
+    /// The size the player chose for the HUD and menus in their settings:
+    /// 1 is the designed size. Give it to
     /// [`Ui::set_ui_scale`] so a game's own HUD grows and shrinks with
-    /// the engine's menus.
+    /// a script's.
     #[must_use]
     pub fn ui_scale(&self) -> f32 {
         self.ui_scale
@@ -497,14 +497,18 @@ impl Frame {
         self.time_speed
     }
 
-    /// Puts the player's settings into effect: how loud the speakers are
-    /// and how the view turns.
-    pub(crate) fn apply_settings(&mut self, settings: Settings) {
+    /// Puts the player's settings into effect, as a game's settings menu
+    /// has changed them: how loud the speakers are, how the view turns and
+    /// how the picture is drawn. The engine saves them to the player's
+    /// file. In a game run with no window nothing happens.
+    pub fn apply_settings(&mut self, settings: Settings) {
         self.settings = Some(settings);
     }
 
-    /// The settings to put into effect, if they changed this frame.
-    pub(crate) fn take_settings(&mut self) -> Option<Settings> {
+    /// The settings the game asked to be put into effect this frame, if it
+    /// asked. The engine takes them from the game it runs; this is here for
+    /// a tool that draws a game with no window.
+    pub fn take_settings(&mut self) -> Option<Settings> {
         self.settings.take()
     }
 
@@ -648,6 +652,14 @@ impl Frame {
     /// Whether the game asked to end this frame.
     pub(crate) fn closing(&self) -> bool {
         self.close
+    }
+
+    /// Takes back a [`close`](Self::close): whether the game asked to end
+    /// this frame, which it then has not. The editor does this for the
+    /// game it plays, which ends by going back to editing.
+    #[cfg(feature = "editor")]
+    pub(crate) fn take_close(&mut self) -> bool {
+        std::mem::take(&mut self.close)
     }
 
     /// Where the game asked the world to be seen from this frame, if it did.

@@ -539,6 +539,47 @@ end
 --- Example: game.fluid("goo", { from = "honey", color = "green" })
 type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean? }
 
+--- One of the player's settings, as `game.settings.list()` describes it:
+--- enough for a menu to build a row for it without knowing its name.
+--- Example: for _, setting in game.settings.list() do print(setting.label, setting.value) end
+export type Setting = {
+    --- What `game.settings.get` and `game.settings.set` call it, such as
+    --- "music_volume".
+    name: string,
+
+    --- What to show the player beside it, such as "Music volume".
+    label: string,
+
+    --- A sentence or two for the player about what it does.
+    description: string,
+
+    --- The heading to show it under: "Sound", "Controls" or "Graphics".
+    group: string,
+
+    --- What it is: "number" (a number from `min` to `max`), "toggle" (true
+    --- or false) or "choice" (one of the words in `options`).
+    kind: "number" | "toggle" | "choice",
+
+    --- For a number: the lowest and the highest it can be. nil otherwise.
+    min: number?,
+    max: number?,
+
+    --- For a number: how far one press of left or right should move it in
+    --- a menu. Any number from `min` to `max` can be set. nil otherwise.
+    step: number?,
+
+    --- For a choice: the words it can be, in the order a menu goes through
+    --- them. nil otherwise.
+    options: { string }?,
+
+    --- What it was set to when the list was asked for. It does not follow
+    --- later changes: read the setting now with `game.settings.get`.
+    value: number | boolean | string,
+
+    --- What a new player has, and what `game.settings.reset` puts back.
+    default: number | boolean | string,
+}
+
 declare game: {
     --- The player: the one person playing. There from the first line of
     --- the script to the last, so it needs no waiting for and no looking up.
@@ -556,8 +597,9 @@ declare game: {
     --- `distance += speed * step` moves at the same speed everywhere. To wait
     --- or to repeat, use `game.after` and `game.every` instead of counting.
     --- You can add several handlers; they run in the order they were added.
-    --- While time is stopped (`game.setTimeSpeed(0)`) the handlers still run
-    --- every tick, so the game can hear the player, but `step` is 0.
+    --- While the game is paused (`game.pause()`) or time is stopped
+    --- (`game.setTimeSpeed(0)`) the handlers still run every tick, so the
+    --- game can hear the player, but `step` is 0.
     --- Example: game.onTick(function() if game.input.justPressed("jump") then print("Jump!") end end)
     onTick: (handler: (step: number) -> ()) -> (),
 
@@ -600,14 +642,42 @@ declare game: {
     --- holds. `game.onTick` functions still run, with a `step` of 0, so the
     --- game can hear the player and start time again. Numbers outside 0 to 8
     --- are taken as the nearest end. It stays through a reload of the script.
-    --- Example: game.input.bind("pause_time", { "F2", "GamepadSelect" })
-    --- Example: if game.input.justPressed("pause_time") then game.setTimeSpeed(0) end
+    --- To stop the game for a menu, use `game.pause`, which keeps the speed
+    --- to go on at.
+    --- Example: game.input.bind("slow_motion", { "F2", "GamepadSelect" })
+    --- Example: if game.input.justPressed("slow_motion") then game.setTimeSpeed(0.25) end
     setTimeSpeed: (speed: number) -> (),
 
-    --- How fast the game is running: what `game.setTimeSpeed` last said, or
-    --- 1.
+    --- How fast the game runs: what `game.setTimeSpeed` last said, or 1.
+    --- A paused game keeps its speed, to go on at: see `game.paused`.
     --- Example: if game.timeSpeed() == 0 then print("Time is stopped") end
     timeSpeed: () -> number,
+
+    --- Pauses the game: time stands still, as at a time speed of 0, until
+    --- `game.resume`. `game.time()` stays still, timers, tweens and the
+    --- weather wait, and nothing in the world moves. `game.onTick`
+    --- functions still run, with a `step` of 0, so a menu can hear the
+    --- player and let the game go on. Pausing a paused game does nothing.
+    --- Saving the script lets the game go on, as its menus start closed.
+    --- Example: if game.input.justPressed("pause") then game.pause() end
+    pause: () -> (),
+
+    --- Lets a paused game go on, at the speed it had (`game.timeSpeed`).
+    --- Does nothing if the game is not paused.
+    --- Example: if game.input.justPressed("menu_back") then game.resume() end
+    resume: () -> (),
+
+    --- True while the game is paused with `game.pause`.
+    --- Example: game.onTick(function() if game.paused() then return end; moveEnemies() end)
+    paused: () -> boolean,
+
+    --- Ends the game and closes its window, as if the player had closed
+    --- it. Ask first, and start on the answer that keeps playing: a game
+    --- left by one slip of the thumb is a game not saved. In `lore check`,
+    --- which has no window, nothing happens; a level played from the
+    --- editor goes back to the editor.
+    --- Example: menu.button("Quit", { press = game.quit })
+    quit: () -> (),
 
     --- A kind of fluid, by name; it is made the first time it is asked for.
     --- Names are trimmed and in lower case ("Honey" is "honey"). Kind "water"
@@ -819,7 +889,7 @@ declare game: {
     ---
     --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
     --- is "music/theme". The sounds in that folder, and a sound called
-    --- "music", follow the player's music volume in the settings menu; every
+    --- "music", follow the player's music volume (see `game.settings`); every
     --- other sound follows their effects volume. Music can be as long as you
     --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
     --- little at a time as it plays. A WAV file is held in memory whole, so
@@ -1100,7 +1170,7 @@ declare game: {
     ---     code such as "#ff8800" ("#ff880080" is half see-through).
     --- A piece made later is drawn on top of one made before. The HUD keeps
     --- clear of the very edge of the screen, which televisions cut off, and
-    --- grows with the size the player chose in the settings menu.
+    --- grows with the size the player chose (the "ui_size" setting).
     hud: {
         --- Puts one line of text on the HUD. Its own option:
         ---   size: the height of the text in pixels on a screen 1080 high.
@@ -1141,20 +1211,21 @@ declare game: {
     --- "melee", "use_item", "next_item", "previous_item", "map", "inventory"
     --- and "pause". Action names are lower case with underscores.
     ---
-    --- The engine moves, jumps, crouches, sprints, fires, aims, reloads and
-    --- pauses by itself. The rest are yours to give a meaning: "interact"
+    --- The engine moves, jumps, crouches, sprints, fires, aims and reloads
+    --- by itself. The rest are yours to give a meaning: "interact"
     --- (E, or the top face button), "melee" (V), "use_item" (G, or the right
     --- bumper), "next_item" and "previous_item" (the mouse wheel, or the
     --- d-pad left and right), "map" (M, or d-pad up) and "inventory" (Tab,
     --- or d-pad down).
     --- Example: if game.input.justPressed("map") then mapShown = not mapShown end
     ---
-    --- "pause" opens the menu every game has. While it is open, the actions
-    --- above all read as let go, and the menu's own are heard instead:
-    --- "menu_move", "menu_confirm", "menu_click", "menu_back", "menu_previous_tab",
-    --- "menu_next_tab" and "menu_close". Escape goes back one screen, and
-    --- closes the menu from its first screen; "menu_close" (P, or Start on
-    --- a gamepad) closes it from anywhere.
+    --- "pause" (Escape, or Start on a gamepad) is for the game's pause
+    --- menu: the engine draws none, and a game from `lore new` has one in
+    --- pause_menu.luau. While a menu is open (`game.input.useSet("menu")`),
+    --- the actions above all read as let go, and the menu's own are heard
+    --- instead: "menu_move", "menu_confirm", "menu_click", "menu_back"
+    --- (Escape, or B), "menu_previous_tab", "menu_next_tab" and
+    --- "menu_close" (P, or Start).
     input: {
         --- True while the action is held down, or its stick is off centre.
         --- Example: if game.input.pressed("sprint") then speed = 8 end
@@ -1193,7 +1264,7 @@ declare game: {
         --- new rumble replaces the one playing, so `rumble(0, 0)` stops it.
         --- It is felt on a gamepad, on Linux and Windows, when the game is
         --- played (`lore run`). The player can turn rumble down or off in
-        --- the menu's settings, so never make it the only sign of something.
+        --- their settings, so never make it the only sign of something.
         --- Example: if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
         rumble: (strong: number, weak: number, seconds: number?) -> (),
 
@@ -1215,12 +1286,11 @@ declare game: {
 
         --- The name of the set of actions the game is in: the one last
         --- given to `useSet`, at once, or "gameplay" if there was none.
-        --- The engine's own pause menu does not change it.
         --- Example: shop.visible = game.input.currentSet() == "menu"
         currentSet: () -> string,
 
         --- Makes an action of the game's own: a button the player can
-        --- rebind in the menu, such as a key that opens your map. `name` is
+        --- rebind (`lore controls` says how), such as a key that opens your map. `name` is
         --- 1 to 40 lower case letters, digits and underscores, like the
         --- engine's own "menu_click" or "use_item", and not the name of one
         --- of the engine's actions (read those with `pressed`). `bindings`
@@ -1267,6 +1337,51 @@ declare game: {
         --- read while drawing, in `game.onDraw`.
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
+    },
+
+    --- The player's settings: how loud the game is, how the view turns,
+    --- and how the picture is drawn. They are the player's, for every game
+    --- made with LORE, and a game's settings menu is how they change them.
+    --- A change is in force at once, and the engine saves it to the
+    --- player's settings file: a script never deals with files.
+    ---
+    --- The settings today, by name: "volume", "music_volume" and
+    --- "effects_volume" (0 to 100); "sensitivity" (how fast the view turns,
+    --- 0.1 to 3), "invert_look" (true or false) and "rumble" (0 to 100);
+    --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"
+    --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
+    --- "upscaling" ("off", "native", "quality", "balanced", "performance"
+    --- or "ultra-performance"), "vsync" (true or false) and
+    --- "frame_rate_limit" (30 to 400). A later LORE may have more, so build
+    --- a menu from `game.settings.list()`, as pause_menu.luau does, and it
+    --- gains their rows by itself.
+    settings: {
+        --- Every setting there is, in the order to show them, each saying
+        --- what kind of thing it is: see `Setting`.
+        --- Example: for _, setting in game.settings.list() do print(setting.name, setting.kind) end
+        list: () -> { Setting },
+
+        --- What a setting is set to now: a number, true or false, or one of
+        --- its words, by its kind. A name that is no setting is a mistake
+        --- that says the nearest one.
+        --- Example: local loud = game.settings.get("volume")
+        --- Example: if game.settings.get("invert_look") then print("Inverted") end
+        get: (name: string) -> any,
+
+        --- Changes a setting, at once, and has the engine save it. A number
+        --- outside what the setting takes is taken as the nearest end; a
+        --- word that is not one of a choice's is a mistake that lists them.
+        --- It changes the game, so it belongs in `game.onTick`, not in
+        --- `game.onDraw`.
+        --- Example: game.settings.set("volume", 40)
+        --- Example: game.settings.set("upscaling", "performance")
+        set: (name: string, value: number | boolean | string) -> (),
+
+        --- Puts every setting back to what a new player has, or only the
+        --- one named.
+        --- Example: game.settings.reset()
+        --- Example: game.settings.reset("field_of_view")
+        reset: (name: string?) -> (),
     },
 
     --- How fast this computer is drawing pictures. It is different on every

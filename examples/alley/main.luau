@@ -5,8 +5,9 @@
 --     lore run
 -- The level (level.glb) is made by build.py from free scans; see README.md.
 --
--- The keys (each can be changed in the settings menu; on a gamepad, see
--- below):
+-- The keys (on a gamepad, see below):
+--   Esc  the pause menu: resume, the settings (sound, controls and
+--        graphics) and quit. Start on a gamepad.
 --   F1   the weather menu
 --   F7   the debug menu: walk, fly or noclip, the speed of time, jumps to
 --        places, and what the player is doing
@@ -26,7 +27,8 @@
 -- across to its own.
 --
 -- Each part is a file beside this one: menu.luau makes menus (copy it into
--- your own game), and the others use it.
+-- your own game), and the others use it. pause_menu.luau is the pause menu
+-- every new game starts with, as `lore new` writes it.
 
 game.input.bind("weather_menu", { "F1", "GamepadSelect" })
 game.input.bind("debug_menu", { "F7" })
@@ -46,6 +48,9 @@ local fluidMenu = require("./fluid_menu")
 -- The menus are tabs of one panel, so one gamepad button reaches them all.
 local panel = menu.panel({ weatherMenu, debugMenu.menu, fluidMenu })
 
+-- The pause menu, made last so that it is drawn over everything else.
+local pauseMenu = require("./pause_menu")
+
 -- The alley reads best under a grey sky early in the afternoon: in sun its
 -- shadowed walls are nearly black.
 game.onStart(function()
@@ -54,6 +59,10 @@ game.onStart(function()
 end)
 
 game.onTick(function(step)
+    -- While the game is paused, the keys are the pause menu's.
+    if pauseMenu.isOpen() then
+        return
+    end
     if game.input.justPressed("weather_menu") then
         panel:toggle(weatherMenu)
     elseif game.input.justPressed("debug_menu") then
@@ -74,7 +83,7 @@ game.onTick(function(step)
 end)
 
 game.onDraw(function()
-    local playing = not panel.isOpen -- no menu is open
+    local playing = not panel.isOpen and not pauseMenu.isOpen() -- no menu is open
     panel:draw()
     meter.draw()
     debugMenu.draw(playing)

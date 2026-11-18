@@ -648,7 +648,8 @@ impl Game for Editor {
             // The map goes on being saved, and read again when something
             // else saves it: playing has its own copy.
             self.keep_map(step);
-            if input.just_pressed(self.controls.back) {
+            let quit = self.play.as_ref().is_some_and(Play::quit);
+            if quit || input.just_pressed(self.controls.back) {
                 self.stop_playing();
             } else if let Some(play) = &mut self.play {
                 play.tick(input, step);

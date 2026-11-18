@@ -9,8 +9,31 @@
 use lore_script::{FRAME_HISTORY, HudPiece, HudShape, ScriptHost};
 use lore_ui::{Anchor, Ui, UiInput, WidgetId};
 
+use lore_ui::Color;
+
 use crate::game::Frame;
-use crate::meter::{LINE, TOP, colour_of};
+
+/// The frame time at a graph's top edge, in seconds: a frame this long or
+/// longer is a spike to the top.
+const TOP: f32 = 1.0 / 25.0;
+/// The lines at 60 and 30 frames a second.
+const LINE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
+/// Under a sixtieth of a second, under a thirtieth, and slower.
+const GOOD: Color = Color::rgba(0.35, 0.9, 0.45, 1.0);
+const FAIR: Color = Color::rgba(0.98, 0.78, 0.25, 1.0);
+const POOR: Color = Color::rgba(0.98, 0.35, 0.3, 1.0);
+
+/// The colour of a mark for a frame of `seconds`: good while it kept up
+/// with 60 frames a second, fair while it kept up with 30, poor beyond.
+fn colour_of(seconds: f32) -> Color {
+    if seconds <= 1.0 / 58.0 {
+        GOOD
+    } else if seconds <= 1.0 / 29.0 {
+        FAIR
+    } else {
+        POOR
+    }
+}
 
 /// How tall one frame's mark in a graph is, in HUD units.
 const MARK_HIGH: f32 = 3.0;

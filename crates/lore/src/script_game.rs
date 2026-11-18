@@ -9,6 +9,7 @@ use crate::error_overlay::ErrorOverlay;
 use crate::game::{Frame, Game};
 use crate::map::{Map, MapError, MapFile};
 use crate::script_hud::ScriptHud;
+use crate::settings::Settings;
 use crate::sound_output::SoundAsk;
 use crate::sounds::Sounds;
 
@@ -53,6 +54,9 @@ pub struct ScriptGame {
     map_file: Option<MapFile>,
     /// Why the map file as it now is could not be read, if it could not.
     map_error: Option<MapError>,
+    /// The player's settings, as the game was opened with them and as its
+    /// script has changed them since.
+    settings: Settings,
 }
 
 /// Said after a mistake in a map file, by what the game does about it.
@@ -71,7 +75,7 @@ fn said_of(map: &Map) {
 impl ScriptGame {
     /// A game running `host` with no files behind it: it has the starter
     /// sounds, and nothing placed in its level.
-    fn without_files(mut host: ScriptHost) -> Self {
+    fn without_files(mut host: ScriptHost, settings: Settings) -> Self {
         host.set_text_measure(crate::error_overlay::measure());
         let mut game = Self {
             host,
@@ -81,6 +85,7 @@ impl ScriptGame {
             map: Map::default(),
             map_file: None,
             map_error: None,
+            settings,
         };
         game.name_sounds();
         game
@@ -153,8 +158,43 @@ impl ScriptGame {
     ///
     /// Fails if `folder` has no `main.luau` or the file cannot be read.
     pub fn open(folder: impl AsRef<Path>, actions: &ActionMap) -> Result<Self, OpenError> {
+        Self::open_with_settings(folder, actions, Settings::default())
+    }
+
+    /// Opens the game in `folder` as [`open`](Self::open) does, for a
+    /// player who has chosen `settings`: what the game's script reads with
+    /// `game.settings`, from its first line on. Run the game with the same
+    /// settings ([`Config::settings`](crate::Config)).
+    ///
+    /// ```no_run
+    /// use lore::{Config, ScriptGame};
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let file = lore::settings::file();
+    ///     let config = Config {
+    ///         settings: file.as_deref().map_or_else(Default::default, |file| {
+    ///             lore::settings::load(file).0
+    ///         }),
+    ///         settings_file: file,
+    ///         ..Config::default()
+    ///     };
+    ///     let game = ScriptGame::open_with_settings("my-game", &config.actions, config.settings)?;
+    ///     lore::run(config, game)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails if `folder` has no `main.luau` or the file cannot be read.
+    pub fn open_with_settings(
+        folder: impl AsRef<Path>,
+        actions: &ActionMap,
+        settings: Settings,
+    ) -> Result<Self, OpenError> {
         let folder = folder.as_ref();
-        let mut host = ScriptHost::open(folder, actions.clone())?;
+        let mut host =
+            ScriptHost::open_with_settings(folder, actions.clone(), settings.described())?;
         host.set_text_measure(crate::error_overlay::measure());
         let (map_file, read) = MapFile::open(folder);
         let (map, map_error) = match read {
@@ -175,6 +215,7 @@ impl ScriptGame {
             map,
             map_file: Some(map_file),
             map_error,
+            settings,
         };
         game.name_sounds();
         Ok(game)
@@ -186,7 +227,10 @@ impl ScriptGame {
     /// `last_error`.
     #[must_use]
     pub fn from_source(source: impl Into<String>, actions: &ActionMap) -> Self {
-        Self::without_files(ScriptHost::from_source(source, actions.clone()))
+        Self::from_sources(
+            [(lore_script::ENTRY_SCRIPT.to_owned(), source.into())],
+            actions,
+        )
     }
 
     /// Runs a game whose scripts are given as text, as a packaged game does.
@@ -199,7 +243,28 @@ impl ScriptGame {
         scripts: impl IntoIterator<Item = (String, String)>,
         actions: &ActionMap,
     ) -> Self {
-        Self::without_files(ScriptHost::from_sources(scripts, actions.clone()))
+        Self::from_sources_with_settings(scripts, actions, Settings::default())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources`](Self::from_sources) does, for a player who has
+    /// chosen `settings`: see [`open_with_settings`](Self::open_with_settings).
+    #[must_use]
+    pub fn from_sources_with_settings(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        actions: &ActionMap,
+        settings: Settings,
+    ) -> Self {
+        let host =
+            ScriptHost::from_sources_with_settings(scripts, actions.clone(), settings.described());
+        Self::without_files(host, settings)
+    }
+
+    /// The player's settings as they now are: as the game was opened with
+    /// them, with what its script has changed since.
+    #[must_use]
+    pub fn settings(&self) -> &Settings {
+        &self.settings
     }
 
     /// Places `map` in the game's level, as a packaged game does with the
@@ -301,6 +366,15 @@ impl Game for ScriptGame {
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
         }
+        // What the script's settings menu changed is put into effect, and
+        // saved, by whoever runs the game.
+        let settings = &mut self.settings;
+        if (self.host).take_changed_settings(|name, value| settings.change(name, value)) {
+            frame.apply_settings(self.settings);
+        }
+        if self.host.take_quit() {
+            frame.close();
+        }
         // A frame means someone is here to listen.
         self.load_sounds();
         while let Some(command) = self.host.take_sound() {
@@ -323,6 +397,9 @@ impl Game for ScriptGame {
         }
     }
 }
+
+#[cfg(test)]
+mod menus;
 
 #[cfg(test)]
 mod tests {

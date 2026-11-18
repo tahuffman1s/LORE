@@ -98,8 +98,8 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
     );
     assert!(
         said.contains(&format!(
-            "\nGamepad rumble is off. To change it, from 0 (off) to 100, use Settings in the \
-             menu a game opens with Escape or Start, or the line `rumble = 50` in {}.\n",
+            "\nGamepad rumble is off. To change it, from 0 (off) to 100, use the settings in \
+             a game's pause menu (Escape or Start), or the line `rumble = 50` in {}.\n",
             folder.join("settings.toml").display()
         )),
         "{said}"

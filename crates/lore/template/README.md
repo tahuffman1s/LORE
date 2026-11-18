@@ -36,6 +36,8 @@ Firing plays the engine's starter gunshot. To use a sound of your own, make a fo
 The game is `main.luau`. Edit it and save: the running game loads the new version by itself.
 If there is a mistake, the terminal shows the line and what to try, and the game keeps running the last version that worked.
 
+Escape, or Start on a gamepad, pauses the game and opens its menu: Resume, Settings and Quit. The menu is part of your game: `pause_menu.luau` in this folder, which the last line of `main.luau` puts in. Change its words and rows as you like. Its settings screen lists every setting LORE has by itself, and LORE saves what the player changes there. `menu.luau` is what it is made with, and makes menus of your own too; the top of that file says how.
+
 When `main.luau` gets long, move part of it to another file in this folder, such as `weapons.luau`, end that file with `return weapons`, and get it in `main.luau` with `local weapons = require("./weapons")`. Saving either file reloads the game.
 
 To test the script without opening a window, run `lore check`.

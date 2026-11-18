@@ -372,7 +372,8 @@ fn new(folder: &Path) -> Result<(), String> {
 /// The config's actions become the game's own map, with the actions its
 /// script made for itself, so the engine hears everything the script reads.
 fn open(folder: &Path, config: &mut Config, verb: &str) -> Result<ScriptGame, String> {
-    let game = cli::open_game(folder, &config.actions, &format!("lore {verb}"))?;
+    let command = format!("lore {verb}");
+    let game = cli::open_game_with(folder, &config.actions, config.settings, &command)?;
     config.actions = game.host().actions();
     Ok(game)
 }
@@ -717,7 +718,8 @@ fn start(config: Config, game: ScriptGame) -> Result<(), String> {
 /// packaged game started by its player, or `lore run` given a pack.
 fn play_pack(pack: &Path) -> Result<(), String> {
     let mut config = player_config();
-    let packed = player::open(pack, &config.actions).map_err(|error| error.to_string())?;
+    let packed = player::open_with_settings(pack, &config.actions, config.settings)
+        .map_err(|error| error.to_string())?;
     // The engine hears the actions the game's script made for itself.
     config.actions = packed.game.host().actions();
     // The window carries the game's own name; one with none keeps the usual title.
@@ -808,7 +810,7 @@ fn player_config() -> Config {
     let mut config = Config {
         // Read when the window opens, and again whenever the player saves it.
         controls_file: lore::controls::file(),
-        // What the pause menu's settings screen saved the last time.
+        // What a game's settings menu changed the last time.
         settings_file: lore::settings::file(),
         ..Config::default()
     };
@@ -826,8 +828,8 @@ fn player_config() -> Config {
 fn demo() -> Result<(), String> {
     log::info!(
         "This is the input demo. Click the window to capture the mouse, then use \
-         keyboard, mouse or a gamepad. Escape or Start opens the menu every game has: \
-         the cursor comes back and the game hears nothing until you close it."
+         keyboard, mouse or a gamepad. Escape gives the cursor back; close the \
+         window to leave."
     );
     let config = player_config();
     let demo = InputDemo::new(config.actions.clone());

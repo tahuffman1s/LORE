@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use lore_input::{ActionMap, ActionSetId, Input, InputFrame, MouseMode, MouseWheel};
-use lore_render::{Camera, RenderConfig, RenderError, Renderer, Upscaling};
+use lore_render::{Camera, RenderConfig, RenderError, Renderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
@@ -17,8 +17,7 @@ use crate::controls;
 use crate::game::{Frame, Game};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
-use crate::pause::PauseMenu;
-use crate::settings::Settings;
+use crate::settings::{self, Settings};
 use crate::sound_output::{LazySpeakers, SoundOutput};
 use crate::tick::{self, Hitches, TickClock};
 use crate::translate;
@@ -77,47 +76,6 @@ pub struct Config {
     /// };
     /// ```
     pub tick_rate: u32,
-    /// Wait for the display before showing each frame.
-    ///
-    /// On: no tearing, and the frame rate matches the display. Off: frames are
-    /// drawn as fast as possible for the lowest input delay, but this uses more
-    /// power and can show a visible split line (tearing).
-    ///
-    /// ```
-    /// let config = lore::Config {
-    ///     vsync: false,
-    ///     ..lore::Config::default()
-    /// };
-    /// ```
-    pub vsync: bool,
-    /// The most frames drawn each second. 0 is no limit.
-    ///
-    /// This matters with `vsync` off, where nothing else holds frames back:
-    /// a simple scene can be drawn thousands of times a second, which keeps a
-    /// processor core and the graphics card busy for frames nobody sees. With
-    /// `vsync` on the display already sets the pace, and this only has an
-    /// effect when it is lower than the display's rate.
-    ///
-    /// A limit from 1 to 29 is treated as 30, so the simulation keeps up.
-    ///
-    /// ```
-    /// let config = lore::Config {
-    ///     vsync: false,
-    ///     max_fps: 240,
-    ///     ..lore::Config::default()
-    /// };
-    /// ```
-    pub max_fps: u32,
-    /// How much smaller than the window the game is drawn before AMD's
-    /// FSR 3.1 makes it full size. Smaller is faster.
-    ///
-    /// ```
-    /// let config = lore::Config {
-    ///     upscaling: lore::Upscaling::Performance,
-    ///     ..lore::Config::default()
-    /// };
-    /// ```
-    pub upscaling: Upscaling,
     /// The actions the game reads and what they are bound to.
     pub actions: ActionMap,
     /// The level the game is played in. [`level::load`](crate::level::load)
@@ -132,32 +90,16 @@ pub struct Config {
     /// # Ok::<(), lore::level::LevelError>(())
     /// ```
     pub level: Option<lore_assets::Scene>,
-    /// Whether the engine's pause menu is put over the game: the `pause`
-    /// action (Escape, or Start on a gamepad) opens it, and it holds the
-    /// player's settings and the way out. The game keeps running under
-    /// it; only the player's input stops reaching it.
-    ///
-    /// On unless a game says otherwise. It needs the `pause` action and
-    /// the `menu` action set of [`ActionMap::standard`]; a game with
-    /// other controls gets no menu. Turn it off for a game that has its
-    /// own:
-    ///
-    /// ```
-    /// let config = lore::Config {
-    ///     pause_menu: false,
-    ///     ..lore::Config::default()
-    /// };
-    /// ```
-    pub pause_menu: bool,
     /// What the player has chosen: how loud, how fast the view turns and
-    /// which way up, and how big the HUD and menus are. The pause menu's
-    /// settings screen changes them while the game runs.
+    /// which way up, how big the HUD and menus are, and how the picture is
+    /// drawn (upscaling, vsync, the frame rate limit, the field of view and
+    /// the brightness). A game's script changes them while the game runs
+    /// with `game.settings`, as its settings menu does.
     ///
-    /// They hold from the first tick, with the pause menu or without it.
-    /// The turning speed and the swap of up and down are applied to the
-    /// action named `look`, before the game reads it.
-    /// [`settings::load`](crate::settings::load) reads the player's own
-    /// file:
+    /// They hold from the first tick. The turning speed and the swap of up
+    /// and down are applied to the action named `look`, before the game
+    /// reads it. [`settings::load`](crate::settings::load) reads the
+    /// player's own file:
     ///
     /// ```no_run
     /// let file = lore::settings::file();
@@ -169,9 +111,18 @@ pub struct Config {
     ///     ..lore::Config::default()
     /// };
     /// ```
+    ///
+    /// A game that is not the player's to set up says how it is drawn here:
+    ///
+    /// ```
+    /// let mut config = lore::Config::default();
+    /// config.settings.vsync = false;
+    /// config.settings.frame_rate_limit = 240.0;
+    /// config.settings.upscaling = lore::Upscaling::Performance;
+    /// ```
     pub settings: Settings,
-    /// Where the pause menu saves the settings the player changes. With
-    /// `None` they last until the game is closed.
+    /// Where the engine saves the settings a game changes while it runs.
+    /// With `None` they last until the game is closed.
     pub settings_file: Option<std::path::PathBuf>,
     /// The player's own bindings file, if the game reads one:
     /// [`controls::file`](crate::controls::file) says where it is kept.
@@ -189,21 +140,17 @@ pub struct Config {
 }
 
 impl Default for Config {
-    /// A 1280x720 window, 60 ticks per second, vsync on, at most 400 frames
-    /// per second, FSR upscaling at Quality, the standard FPS controls, no
-    /// level, and the pause menu with a new player's settings, saved nowhere.
+    /// A 1280x720 window, 60 ticks per second, the standard controls, no
+    /// level, and a new player's settings (vsync on, at most 400 frames per
+    /// second, FSR upscaling at Quality), saved nowhere.
     fn default() -> Self {
         Self {
             title: "LORE".to_owned(),
             width: 1280,
             height: 720,
             tick_rate: 60,
-            vsync: true,
-            max_fps: 400,
-            upscaling: Upscaling::default(),
             actions: ActionMap::standard(),
             level: None,
-            pause_menu: true,
             settings: Settings::default(),
             settings_file: None,
             controls_file: None,
@@ -263,6 +210,11 @@ impl std::error::Error for AppError {
 /// [`Frame::use_action_set`], the cursor is shown and freed, and it is
 /// captured again when the game goes back.
 ///
+/// The engine draws no menu of its own: pausing, the settings and the way
+/// out are the game's to show. A game written in Luau has them from
+/// `lore new` (`pause_menu.luau`), built on `game.pause`, `game.settings`
+/// and `game.quit`.
+///
 /// Call this from the main thread.
 ///
 /// # Errors
@@ -271,7 +223,6 @@ impl std::error::Error for AppError {
 /// or no graphics card here can draw with Vulkan 1.3. The error's message says
 /// what to do about it.
 pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
-    // Before the menu reads what its buttons are called.
     let controls = config.controls_file.take().map(|file| {
         let (live, said) = controls::Live::start(file, &mut config.actions);
         for problem in said {
@@ -279,12 +230,6 @@ pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
         }
         live
     });
-    let game = if config.pause_menu {
-        let file = config.settings_file.take();
-        PauseMenu::over(game, &config.actions, config.settings, file)
-    } else {
-        PauseMenu::off(game, config.settings)
-    };
     start(config, game, controls, false)
 }
 
@@ -298,7 +243,7 @@ pub(crate) fn run_editor(config: Config, game: impl Game) -> Result<(), AppError
 
 /// Opens the window and runs `game` in it, as the editor if `editing`.
 fn start(
-    config: Config,
+    mut config: Config,
     game: impl Game,
     controls: Option<controls::Live>,
     editing: bool,
@@ -307,7 +252,7 @@ fn start(
         log::warn!("{gap}");
     }
     let event_loop = EventLoop::new().map_err(AppError::EventLoop)?;
-    // The player's settings hold from the first tick, menu or no menu.
+    // The player's settings hold from the first tick.
     let look = config.actions.action("look").ok();
     let mut input = Input::new(config.actions.clone());
     if let Some(look) = look {
@@ -318,7 +263,7 @@ fn start(
     let mut app = App {
         clock: TickClock::new(config.tick_rate),
         hitches: Hitches::default(),
-        pacer: FramePacer::new(config.max_fps, Instant::now()),
+        pacer: FramePacer::new(config.settings.frames_per_second(), Instant::now()),
         input,
         look,
         rumble_share: config.settings.rumble_share(),
@@ -327,6 +272,7 @@ fn start(
         // is right: with no bindings file they are the config's own.
         new_controls: Some(config.actions.clone()),
         ui_scale: config.settings.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1),
+        settings_file: SettingsFile::at(config.settings_file.take()),
         pointer: None,
         pointer_down: false,
         pointer_tapped: false,
@@ -352,7 +298,10 @@ fn start(
         panels: None,
         error: None,
     };
-    event_loop.run_app(&mut app).map_err(AppError::EventLoop)?;
+    let ran = event_loop.run_app(&mut app).map_err(AppError::EventLoop);
+    // A game closed a moment after a setting was changed keeps the change.
+    app.settings_file.save(&app.config.settings);
+    ran?;
     app.error.map_or(Ok(()), Err)
 }
 
@@ -374,9 +323,12 @@ struct App<G> {
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
     new_controls: Option<ActionMap>,
-    /// The size the player chose for the HUD, for turning the pointer's
-    /// pixels into HUD units.
+    /// The size the HUD and menus are drawn at, which is also what turns
+    /// the pointer's pixels into HUD units. It is the player's setting,
+    /// but not while the mouse is held down: see [`App::follow_ui_size`].
     ui_scale: f32,
+    /// Where the settings are saved when the game changes them.
+    settings_file: SettingsFile,
     /// Where the mouse pointer is over the window, in pixels from its
     /// top-left corner.
     pointer: Option<[f32; 2]>,
@@ -448,7 +400,98 @@ fn starts_something(event: &WindowEvent) -> bool {
     }
 }
 
+/// How long after the last change to a setting the file is written. A
+/// slider being dragged changes its setting on every tick, and the file is
+/// written once, when the hand has stopped.
+const SAVE_AFTER: Duration = Duration::from_millis(500);
+
+/// The player's settings file, written a moment after a game last changed
+/// a setting.
+#[derive(Debug)]
+struct SettingsFile {
+    /// Where it is; with `None` the settings last until the game is closed.
+    path: Option<std::path::PathBuf>,
+    /// When a setting was last changed, if the file has not been written
+    /// since.
+    changed: Option<Instant>,
+}
+
+impl SettingsFile {
+    fn at(path: Option<std::path::PathBuf>) -> Self {
+        Self {
+            path,
+            changed: None,
+        }
+    }
+
+    /// Notes that a setting changed at `now`.
+    fn changed(&mut self, now: Instant) {
+        self.changed = Some(now);
+    }
+
+    /// Writes `settings` if a change has waited long enough by `now`.
+    fn save_when_settled(&mut self, settings: &Settings, now: Instant) {
+        if (self.changed).is_some_and(|changed| now.duration_since(changed) >= SAVE_AFTER) {
+            self.save(settings);
+        }
+    }
+
+    /// Writes `settings` now, if a change is waiting to be written.
+    fn save(&mut self, settings: &Settings) {
+        // Tried once for each change, whether or not it works: a file that
+        // cannot be written is not tried again every frame.
+        if self.changed.take().is_none() {
+            return;
+        }
+        let Some(file) = &self.path else {
+            return;
+        };
+        if let Err(error) = settings::save(file, settings) {
+            log::warn!(
+                "Your settings could not be saved to {}: {error}. They last until the game \
+                 is closed. Check that you may write there, or set {} to the path of \
+                 another file.",
+                file.display(),
+                settings::FILE_VARIABLE
+            );
+        }
+    }
+}
+
 impl<G: Game> App<G> {
+    /// Puts `settings` into effect, all of them: the sound, the gamepad,
+    /// how the view turns, how fast pictures are drawn and how. They are
+    /// saved a moment later.
+    ///
+    /// A new setting is put into effect here.
+    fn apply_settings(&mut self, settings: Settings) {
+        self.sound.set_volumes(&settings);
+        self.rumble_share = settings.rumble_share();
+        if let Some(look) = self.look {
+            self.input.set_sensitivity(look, settings.look());
+        }
+        self.pacer
+            .set_limit(settings.frames_per_second(), Instant::now());
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_upscaling(settings.upscaling);
+            renderer.set_vsync(settings.vsync);
+            renderer.set_exposure(settings.exposure_stops());
+        }
+        // The field of view is read when the camera is next placed, and
+        // the size of the HUD by `follow_ui_size`.
+        self.config.settings = settings;
+        self.settings_file.changed(Instant::now());
+    }
+
+    /// Lets the HUD and menus take the size the player chose, unless the
+    /// mouse is held down: the slider that sets the size would grow under
+    /// the pointer dragging it, and run away from it.
+    fn follow_ui_size(&mut self) {
+        if !self.pointer_down {
+            self.ui_scale = (self.config.settings.ui_scale()).clamp(UI_SCALES.0, UI_SCALES.1);
+        }
+    }
+
     /// Hides the cursor and holds it in the window so the mouse can look around.
     fn capture_mouse(&mut self) {
         let Some(window) = &self.window else {
@@ -680,6 +723,7 @@ impl<G: Game> App<G> {
         self.follow_controls();
 
         self.gamepads.poll(&mut self.input, self.focused);
+        self.follow_ui_size();
         self.point_input();
         let step = self.clock.step().as_secs_f32();
         let due = tick::run_due(
@@ -716,6 +760,7 @@ impl<G: Game> App<G> {
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
             .with_controls(self.new_controls.take());
+        frame.set_ui_scale(self.ui_scale);
         #[cfg(feature = "editor")]
         if let (Some(panels), Some(window)) = (&mut self.panels, &self.window) {
             let input = panels.state.take_egui_input(window);
@@ -740,6 +785,7 @@ impl<G: Game> App<G> {
                 position: view.position,
                 yaw: view.yaw,
                 pitch: view.pitch,
+                fov_degrees: self.config.settings.field_of_view,
                 ..Camera::default()
             };
             // Nobody walks or falls this far in one frame: it is a respawn
@@ -821,23 +867,15 @@ impl<G: Game> App<G> {
         if let Some(under) = frame.under_water() {
             self.sound.set_underwater(if under { 1.0 } else { 0.0 });
         }
-        // The size the HUD was just laid out at: a `Ui` keeps its size
-        // between these, so the pointer's units are the same.
-        self.ui_scale = if frame.ui_scale().is_finite() {
-            frame.ui_scale().clamp(UI_SCALES.0, UI_SCALES.1)
-        } else {
-            1.0
-        };
         if let Some(speed) = frame.time_speed() {
             self.clock.set_speed(speed);
         }
-        if let Some(settings) = frame.take_settings() {
-            self.sound.set_volumes(&settings);
-            self.rumble_share = settings.rumble_share();
-            if let Some(look) = self.look {
-                self.input.set_sensitivity(look, settings.look());
-            }
+        if let Some(settings) = frame.take_settings()
+            && settings != self.config.settings
+        {
+            self.apply_settings(settings);
         }
+        (self.settings_file).save_when_settled(&self.config.settings, now);
         self.sound.handle(frame.take_sounds());
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
@@ -867,9 +905,10 @@ impl<G: Game> ApplicationHandler for App<G> {
             Ok(window) => {
                 let window = Rc::new(window);
                 let size = window.inner_size();
+                let settings = self.config.settings;
                 let config = RenderConfig {
-                    vsync: self.config.vsync,
-                    upscaling: self.config.upscaling,
+                    vsync: settings.vsync,
+                    upscaling: settings.upscaling,
                 };
                 let renderer = Renderer::new(Rc::clone(&window), size.width, size.height, config)
                     .and_then(|mut renderer| {
@@ -879,8 +918,10 @@ impl<G: Game> ApplicationHandler for App<G> {
                             None => renderer.set_scene(&crate::standin::scene())?,
                         }
                         renderer.set_grid(self.editing);
+                        renderer.set_exposure(settings.exposure_stops());
                         renderer.set_camera(Camera {
                             position: [0.0, STANDING_EYE, 0.0],
+                            fov_degrees: settings.field_of_view,
                             ..Camera::default()
                         });
                         Ok(renderer)
@@ -1090,5 +1131,55 @@ impl<G: Game> ApplicationHandler for App<G> {
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + self.clock.until_next_tick(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_are_written_once_the_hand_has_stopped_and_when_the_game_closes() {
+        let folder = std::env::temp_dir().join(format!("lore-app-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let path = folder.join("settings.toml");
+        let mut file = SettingsFile::at(Some(path.clone()));
+        let start = Instant::now();
+        let mut settings = Settings::default();
+
+        // Nothing has changed, so nothing is written.
+        file.save_when_settled(&settings, start + SAVE_AFTER * 4);
+        file.save(&settings);
+        assert!(!path.exists());
+
+        // A slider dragged for a while: every tick is a change, and none of
+        // them is written while they keep coming.
+        for tick in 0..120 {
+            let now = start + Duration::from_millis(16) * tick;
+            settings.volume = 100.0 - 0.5 * f32::from(u8::try_from(tick).unwrap());
+            file.changed(now);
+            file.save_when_settled(&settings, now);
+        }
+        assert!(!path.exists());
+        let let_go = start + Duration::from_millis(16) * 119;
+        file.save_when_settled(&settings, let_go + SAVE_AFTER);
+        assert_eq!(settings::load(&path), (settings, Vec::new()));
+
+        // Written once: taking the file away shows nothing writes it again.
+        std::fs::remove_file(&path).unwrap();
+        file.save_when_settled(&settings, let_go + SAVE_AFTER * 3);
+        assert!(!path.exists());
+
+        // A game closed a moment after a change keeps the change.
+        settings.vsync = false;
+        file.changed(let_go + SAVE_AFTER * 4);
+        file.save(&settings);
+        assert_eq!(settings::load(&path), (settings, Vec::new()));
+        let _ = std::fs::remove_dir_all(&folder);
+
+        // With nowhere to save, a change is simply kept until the game closes.
+        let mut nowhere = SettingsFile::at(None);
+        nowhere.changed(start);
+        nowhere.save(&settings);
     }
 }

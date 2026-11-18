@@ -25,6 +25,7 @@ use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::limit::{self, within_time_limit};
 use crate::modules::{Files, Modules, Stamp, Touched, stamp};
+use crate::settings_api::{Setting, SettingValue, SettingsState};
 use crate::time_api::Clock;
 use crate::tools_api::{Motion, Movement, Teleport, Tools};
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
@@ -179,6 +180,9 @@ pub struct ScriptHost {
     /// What the engine feeds the script about the screen, the frames and
     /// the player, and what the script asks of the player.
     tools: Rc<Tools>,
+    /// The player's settings, as the engine handed them over and as the
+    /// script has changed them since. Kept here so a save loses no change.
+    settings: Rc<SettingsState>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -205,6 +209,27 @@ impl ScriptHost {
     ///
     /// Fails if `folder` has no `main.luau` or the file cannot be read.
     pub fn open(folder: impl AsRef<Path>, actions: ActionMap) -> Result<Self, OpenError> {
+        Self::open_with_settings(folder, actions, Vec::new())
+    }
+
+    /// Opens the game in `folder` as [`open`](Self::open) does, with the
+    /// player's `settings` for `game.settings` to read and change.
+    ///
+    /// They are handed over here, before the first line of the script
+    /// runs, so that a menu the script builds from them as it loads has
+    /// them all, set as the player has them. What the script changes is
+    /// for the engine to take
+    /// ([`take_changed_settings`](Self::take_changed_settings)), put into
+    /// effect and save.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `folder` has no `main.luau` or the file cannot be read.
+    pub fn open_with_settings(
+        folder: impl AsRef<Path>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+    ) -> Result<Self, OpenError> {
         let folder = folder.as_ref();
         let path = folder.join(ENTRY_SCRIPT);
         if let Err(source) = std::fs::File::open(&path) {
@@ -214,7 +239,11 @@ impl ScriptHost {
                 OpenError::Unreadable { path, source }
             });
         }
-        Ok(Self::with_files(Files::Folder(folder.to_owned()), actions))
+        Ok(Self::with_files(
+            Files::Folder(folder.to_owned()),
+            actions,
+            settings,
+        ))
     }
 
     /// Runs `source` as a game's `main.luau` without a file behind it. The
@@ -259,11 +288,25 @@ impl ScriptHost {
         scripts: impl IntoIterator<Item = (String, String)>,
         actions: ActionMap,
     ) -> Self {
-        Self::with_files(Files::Memory(scripts.into_iter().collect()), actions)
+        Self::from_sources_with_settings(scripts, actions, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources`](Self::from_sources) does, with the player's
+    /// `settings` for `game.settings` to read and change: see
+    /// [`open_with_settings`](Self::open_with_settings).
+    #[must_use]
+    pub fn from_sources_with_settings(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings)
     }
 
     /// A host running the `main.luau` in `files`.
-    fn with_files(files: Files, actions: ActionMap) -> Self {
+    fn with_files(files: Files, actions: ActionMap, settings: Vec<Setting>) -> Self {
         let mut host = Self {
             files: Rc::new(files),
             file: ENTRY_SCRIPT.to_owned(),
@@ -287,6 +330,7 @@ impl ScriptHost {
             fluids: Rc::default(),
             versions: 0,
             tools: Rc::default(),
+            settings: Rc::new(SettingsState::new(settings)),
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -488,6 +532,62 @@ impl ScriptHost {
         #[allow(clippy::cast_possible_truncation)]
         let speed = self.clock.speed() as f32;
         speed
+    }
+
+    /// Whether the script has paused the game with `game.pause` and not
+    /// yet let it go on with `game.resume`. A paused game is stopped as at
+    /// a time speed of 0 ([`time_speed`](Self::time_speed) says 0), and
+    /// goes on at the speed it had. Saving the script lets the game go on:
+    /// the menu that paused it starts again closed.
+    #[must_use]
+    pub fn paused(&self) -> bool {
+        self.clock.is_paused()
+    }
+
+    /// Whether the script asked to end the game with `game.quit` since
+    /// this was last called.
+    pub fn take_quit(&mut self) -> bool {
+        self.settings.take_quit()
+    }
+
+    /// Every one of the player's settings as it now is: as the engine
+    /// handed it over, or as the script has changed it since.
+    #[must_use]
+    pub fn settings(&self) -> Vec<Setting> {
+        self.settings.all()
+    }
+
+    /// If the script changed a setting with `game.settings.set` or
+    /// `game.settings.reset` since this was last called, calls `see` with
+    /// the name and value of EVERY setting and gives true; otherwise calls
+    /// nothing and gives false. The engine puts them into effect and saves
+    /// them.
+    ///
+    /// ```
+    /// use lore_input::{ActionMap, InputFrame};
+    /// use lore_script::{ScriptHost, Setting, SettingKind, SettingValue};
+    ///
+    /// let subtitles = Setting {
+    ///     name: "subtitles".to_owned(),
+    ///     label: "Subtitles".to_owned(),
+    ///     description: "Shows what is said as text.".to_owned(),
+    ///     group: "Sound".to_owned(),
+    ///     kind: SettingKind::Toggle,
+    ///     value: SettingValue::Toggle(false),
+    ///     default: SettingValue::Toggle(false),
+    /// };
+    /// let script = r#"game.onStart(function() game.settings.set("subtitles", true) end)"#;
+    /// let scripts = [("main.luau".to_owned(), script.to_owned())];
+    /// let mut host =
+    ///     ScriptHost::from_sources_with_settings(scripts, ActionMap::standard(), vec![subtitles]);
+    /// host.tick(&InputFrame::default(), 1.0 / 60.0);
+    /// let mut now = Vec::new();
+    /// assert!(host.take_changed_settings(|name, value| now.push((name.to_owned(), value.clone()))));
+    /// assert_eq!(now, [("subtitles".to_owned(), SettingValue::Toggle(true))]);
+    /// assert!(!host.take_changed_settings(|_, _| {}));
+    /// ```
+    pub fn take_changed_settings(&mut self, see: impl FnMut(&str, &SettingValue)) -> bool {
+        self.settings.take_changed(see)
     }
 
     /// The seconds of game time that have been run: the number of ticks
@@ -962,6 +1062,9 @@ impl ScriptHost {
             self.live_set.live.set(before);
             return Err(error);
         }
+        // Whatever paused the game, a menu most likely, starts again
+        // closed, and could never let the game go on.
+        self.clock.set_paused(false);
         if self.live_set.live.get() != before {
             self.live_set.asked.set(true);
         }
@@ -1074,6 +1177,7 @@ impl ScriptHost {
             kept: Kept::default(),
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
+            settings: Rc::clone(&self.settings),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
             timers: RefCell::new(Vec::new()),

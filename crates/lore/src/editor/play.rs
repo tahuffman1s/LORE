@@ -32,6 +32,9 @@ pub(super) struct Play {
     game: Playing,
     /// Whether the player started where the camera was.
     from_here: bool,
+    /// The game asked to end (`game.quit`), which here means going back to
+    /// editing.
+    quit: bool,
 }
 
 impl Play {
@@ -66,13 +69,22 @@ impl Play {
         // The map as the editor has it, whatever is in the file by now.
         let game = game.with_map(map.clone());
         let (game, from_here) = Playing::start_from(game, ground, actions, eye, facing);
-        Ok(Self { game, from_here })
+        Ok(Self {
+            game,
+            from_here,
+            quit: false,
+        })
     }
 
     /// The action set the game's script has chosen: `gameplay` unless it
     /// said otherwise.
     pub(super) fn action_set(&self) -> lore_input::ActionSetId {
         self.game.action_set()
+    }
+
+    /// Whether the game has asked to end.
+    pub(super) fn quit(&self) -> bool {
+        self.quit
     }
 
     /// Plays one tick.
@@ -84,6 +96,9 @@ impl Play {
     /// back to editing.
     pub(super) fn frame(&mut self, frame: &mut Frame) {
         self.game.frame(frame);
+        // The game asking to end is its player leaving it: back to editing,
+        // not out of the editor.
+        self.quit |= frame.take_close();
         let from_here = self.from_here;
         frame.panels(|ui| {
             // A name being typed when playing began must not go on taking

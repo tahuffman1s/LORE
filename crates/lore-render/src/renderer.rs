@@ -488,6 +488,17 @@ impl Renderer {
         }
     }
 
+    /// Waits for the display before showing each frame, or stops waiting,
+    /// from the next frame on. For a settings menu; see
+    /// [`RenderConfig::vsync`].
+    pub fn set_vsync(&mut self, vsync: bool) {
+        if self.config.vsync != vsync {
+            self.config.vsync = vsync;
+            // How frames reach the screen is fixed when the swapchain is made.
+            self.stale = true;
+        }
+    }
+
     /// Makes the whole picture brighter or darker, in camera stops.
     ///
     /// `0.0` shows the scene's light as it is. Each `+1.0` doubles it and each

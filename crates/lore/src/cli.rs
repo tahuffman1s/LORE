@@ -9,6 +9,7 @@ use lore_script::{ENTRY_SCRIPT, OpenError};
 use crate::game::Game;
 use crate::press;
 use crate::script_game::ScriptGame;
+use crate::settings::Settings;
 
 /// Prints log messages to standard error.
 struct StderrLog;
@@ -36,16 +37,31 @@ pub fn log_to_stderr() {
     }
 }
 
-/// Opens the game in `folder`, or says how to get one. `command` is what the
-/// person typed before the folder, such as `lore run`, and is used in the
-/// advice.
+/// Opens the game in `folder` for a player with the usual settings, or
+/// says how to get one. `command` is what the person typed before the
+/// folder, such as `lore run`, and is used in the advice.
 ///
 /// # Errors
 ///
 /// Fails with a message for the person if `folder` is not a game's folder.
 pub fn open_game(folder: &Path, actions: &ActionMap, command: &str) -> Result<ScriptGame, String> {
+    open_game_with(folder, actions, Settings::default(), command)
+}
+
+/// Opens the game in `folder` as [`open_game`] does, for a player who has
+/// chosen `settings`.
+///
+/// # Errors
+///
+/// Fails with a message for the person if `folder` is not a game's folder.
+pub fn open_game_with(
+    folder: &Path,
+    actions: &ActionMap,
+    settings: Settings,
+    command: &str,
+) -> Result<ScriptGame, String> {
     is_folder(folder)?;
-    ScriptGame::open(folder, actions).map_err(|error| match error {
+    ScriptGame::open_with_settings(folder, actions, settings).map_err(|error| match error {
         OpenError::Missing { .. } => no_game_in(folder, command),
         other @ OpenError::Unreadable { .. } => other.to_string(),
     })
@@ -377,8 +393,8 @@ fn rumble_setting() -> (String, Vec<String>) {
         format!(", or the line `rumble = 50` in {}", file.display())
     });
     let said = format!(
-        "\n{strength}. To change it, from 0 (off) to 100, use Settings in the menu a game \
-         opens with Escape or Start{place}.\n"
+        "\n{strength}. To change it, from 0 (off) to 100, use the settings in a game's \
+         pause menu (Escape or Start){place}.\n"
     );
     (said, problems)
 }
