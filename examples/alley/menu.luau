@@ -46,6 +46,8 @@
 -- "menu_confirm", "menu_click", "menu_back", "menu_previous_tab" and
 -- "menu_next_tab". An action the game made with game.input.bind, such as
 -- "sound_menu" above, is heard in every set, so the same key closes it.
+-- Closing the panel puts the game back in the set it was in when the
+-- panel opened.
 --
 -- What the player does in it:
 --   choose a row:  up and down (arrow keys, W and S, the d-pad or the left
@@ -462,6 +464,11 @@ export type Panel = typeof(setmetatable(
         tabs: { HudText },
         marks: { HudBox },
         keys: HudText,
+        -- The set of actions the game was in when the panel opened.
+        returnTo: string,
+        -- What the line of keys says "menu_back" does: "close", unless the
+        -- game sets another word, such as "back" for a screen within a menu.
+        backWord: string,
         lastX: number?,
         lastY: number?,
         -- False until the pointer has been seen once since the panel opened.
@@ -507,6 +514,8 @@ function menu.panel(menus: { Menu }): Panel
         tabs = tabs,
         marks = marks,
         keys = keys,
+        returnTo = "gameplay",
+        backWord = "close",
         lastX = nil :: number?,
         lastY = nil :: number?,
         pointerSeen = false,
@@ -519,6 +528,9 @@ end
 -- frees the pointer, and leaves the player's own controls waiting.
 -- Example: panel:open(sound)
 function Panel.open(self: Panel, shown: Menu)
+    if not self.isOpen then
+        self.returnTo = game.input.currentSet()
+    end
     self.current = shown
     self.isOpen = true
     self.pointerSeen = false
@@ -526,13 +538,17 @@ function Panel.open(self: Panel, shown: Menu)
     showPieces(self, shown)
 end
 
--- Closes the panel, gives the mouse back to looking round and the player
--- their own controls (the "gameplay" set of actions).
+-- Closes the panel and puts the game back in the set of actions it was in
+-- when the panel opened: from "gameplay", that gives the mouse back to
+-- looking round and the player their own controls.
 -- Example: panel:close()
 function Panel.close(self: Panel)
+    if not self.isOpen then
+        return
+    end
     self.isOpen = false
     self.current.dragging = nil
-    game.input.useSet("gameplay")
+    game.input.useSet(self.returnTo)
     showPieces(self, nil)
 end
 
@@ -603,11 +619,12 @@ function Panel.draw(self: Panel)
         then string.format("   %s %s tabs", label("menu_previous_tab"), label("menu_next_tab"))
         else ""
     self.keys.text = string.format(
-        "%s choose and change   %s press%s   %s close",
+        "%s choose and change   %s press%s   %s %s",
         label("menu_move"),
         label("menu_confirm"),
         tabs,
-        label("menu_back")
+        label("menu_back"),
+        self.backWord
     )
 end
 

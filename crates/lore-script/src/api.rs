@@ -19,6 +19,7 @@ use crate::hud::{self, HUD_FUNCTIONS, HudState};
 use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
+use crate::settings_api::{self, SETTINGS_FUNCTIONS, SettingsState};
 use crate::time_api::{self, Clock, Timer};
 use crate::tools_api::{self, FRAMES_FUNCTIONS, Tools};
 use crate::weapon_api::{self, Kind, WeaponState};
@@ -44,6 +45,10 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "setTimeSpeed",
     "timeSpeed",
     "fluid",
+    "pause",
+    "resume",
+    "paused",
+    "quit",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -161,6 +166,9 @@ pub(crate) struct Shared {
     pub weapons: Rc<WeaponState>,
     /// The kinds of weapon this version made with `game.weapon`.
     pub kinds: RefCell<Vec<Kind>>,
+    /// The player's settings as the script reads and changes them. They
+    /// outlive this version of the script.
+    pub settings: Rc<SettingsState>,
     /// The game's time. It outlives this version of the script.
     pub clock: Rc<Clock>,
     /// The functions this version is waiting to call, from `game.after` and
@@ -294,6 +302,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
     fluid_api::install(lua, shared, &game)?;
+    settings_api::install(lua, shared, &game)?;
 
     let input = lua.create_table()?;
     let any = Reads::Any;
@@ -354,6 +363,10 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &pieces, "game.hud", HUD_FUNCTIONS)?;
     game.set("hud", pieces)?;
 
+    let settings = settings_api::table(lua, shared)?;
+    strict(lua, &settings, "game.settings", SETTINGS_FUNCTIONS)?;
+    game.set("settings", settings)?;
+
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
@@ -361,6 +374,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("frames");
     members.push("hud");
     members.push("input");
+    members.push("settings");
     members.push("sky");
     members.push("weather");
     strict(lua, &game, "game", &members)?;
@@ -738,7 +752,17 @@ mod tests {
         for line in crate::TYPE_DEFINITIONS.lines().map(str::trim) {
             // A name for a type (`type HudPlace = ...`) is not part of
             // the API a script calls.
-            if line.is_empty() || line.starts_with("--") || line.starts_with("type ") {
+            if line.is_empty() || line.starts_with("--") {
+                continue;
+            }
+            // A table a script is handed (`export type Setting = {`) is listed by
+            // what is in it; any other name for a type
+            // (`type HudPlace = ...`) is not part of the API a script calls.
+            let aliased = line.strip_prefix("export ").unwrap_or(line);
+            if let Some(named) = aliased.strip_prefix("type ") {
+                if let Some(table) = named.strip_suffix(" = {") {
+                    inside.push(table);
+                }
                 continue;
             }
             if line == "end" || line.starts_with('}') {
@@ -772,7 +796,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 28] = [
+        let groups: [(&str, &[&str]); 30] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -788,6 +812,8 @@ mod tests {
             ("HudGraph:", hud::PIECE_METHODS),
             ("game.frames.", FRAMES_FUNCTIONS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("game.settings.", SETTINGS_FUNCTIONS),
+            ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),

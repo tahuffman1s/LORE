@@ -233,9 +233,9 @@ impl ActionMap {
     /// mouse points in it. `menu_click` is a click on a script's menu, and a
     /// button held down to drag a slider; the right trigger is its gamepad
     /// twin, though a gamepad has no pointer, so it only matters where a
-    /// script treats it so. `pause` opens the
-    /// engine's own pause menu, which makes this set live; a game with its
-    /// own menus switches to it with `Frame::use_action_set`.
+    /// script treats it so. `pause` is for a game's pause menu, which the
+    /// game makes itself: a game switches to this set with
+    /// `Frame::use_action_set`, and a script with `game.input.useSet`.
     ///
     /// | Action | Keyboard | Gamepad |
     /// | --- | --- | --- |

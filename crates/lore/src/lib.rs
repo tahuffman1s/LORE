@@ -39,12 +39,10 @@ mod gamepad;
 pub mod level;
 mod look;
 pub mod map;
-mod meter;
 pub mod noise;
 mod pace;
 #[cfg(feature = "cli")]
 pub mod package;
-mod pause;
 #[cfg(test)]
 mod playback;
 pub mod player;
