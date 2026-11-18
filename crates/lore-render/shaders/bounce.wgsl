@@ -28,6 +28,9 @@ struct Bounce {
     // How many probes trace this frame, how many of those are their turn
     // (the rest are new), how many rays each sends, and the frame.
     counts: vec4<u32>,
+    // Where `probe_origin` was the frame before. A probe new to the grid
+    // holds, until its rays are traced, what its slot's last probe saw.
+    probe_was: vec4<i32>,
     // Each ray's direction this frame.
     ways: array<vec4<f32>, 128>,
     // The probes that trace, by slot; the top bit says one is new.
@@ -155,6 +158,13 @@ fn probe_grid_inside(world: vec3<f32>) -> f32 {
 // `to_eye` moves the point the probes are asked from a little towards the
 // eye and off the surface, so that it is not shadowed by itself.
 fn probe_light(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec4<f32> {
+    return probe_light_known(world, normal, to_eye, false);
+}
+
+// The same, leaving out while `tracing` the probes new to the grid this
+// frame: their rays are being traced, and their slots still hold what
+// probes on the far side of the grid saw.
+fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tracing: bool) -> vec4<f32> {
     if bounce.probe.z < 0.5 {
         return vec4<f32>(0.0);
     }
@@ -181,6 +191,10 @@ fn probe_light(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec4<f
         let step = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
         let cell = base + step;
         if any(cell < origin) || any(cell >= origin + PROBES) {
+            continue;
+        }
+        let was = bounce.probe_was.xyz;
+        if tracing && (any(cell < was) || any(cell >= was + PROBES)) {
             continue;
         }
         // Nearer probes count for more; one that would count for almost
@@ -515,7 +529,7 @@ fn fragment_trace(whole: Whole) -> @location(0) vec4<f32> {
     // Beyond the probes, what falls on it from all round is guessed from
     // the sky as surfaces beyond them are lit; among them it is theirs
     // alone, so that light found nowhere (in a shut room) is not made up.
-    let before = probe_light(at, normal, -way);
+    let before = probe_light_known(at, normal, -way, true);
     let beyond = 1.0 - clamp(probe_grid_inside(at) / 1.5, 0.0, 1.0);
     let falls = sun + lamps_anywhere(at, normal) + before.rgb * before.a
         + surroundings(normal) * sky * open_sky(at, vec2<f32>(0.0)) * beyond;

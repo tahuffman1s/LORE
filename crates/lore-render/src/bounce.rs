@@ -87,7 +87,7 @@ pub(crate) const MOST_LISTED: usize = PROBE_COUNT / 4 + MOST_FRESH;
 
 /// The bytes before the rays' directions in the shader's `Bounce`, and
 /// before the list of probes: the head, then a direction for every ray.
-const HEAD_BYTES: usize = 8 * 16;
+const HEAD_BYTES: usize = 9 * 16;
 const WAYS_BYTES: usize = MOST_RAYS as usize * 16;
 const LIST_FROM: usize = HEAD_BYTES + WAYS_BYTES;
 
@@ -279,7 +279,7 @@ impl ProbeGrid {
                 self.origin.unwrap_or_default(),
                 self.voxels.unwrap_or_default(),
             );
-            let head = self.head(origin, voxels, bounce, 0, 0);
+            let head = self.head(origin, origin, voxels, bounce, 0, 0);
             self.bytes[..HEAD_BYTES].copy_from_slice(&head);
             return Plan {
                 bytes: &self.bytes[..HEAD_BYTES],
@@ -299,6 +299,9 @@ impl ProbeGrid {
             (eye[axis] / SPACING).floor() as i32 - PROBES[axis] as i32 / 2
         });
         let mut clear = new_level || self.origin.is_none();
+        // Where the grid was: a probe new to it holds, until its rays are
+        // traced, what the probe its slot held before saw, far away.
+        let mut was = self.origin.unwrap_or(origin);
         if !clear && self.origin != Some(origin) {
             let was = self.origin.unwrap_or(origin);
             let mut moved = 0;
@@ -312,6 +315,7 @@ impl ProbeGrid {
         }
         if clear {
             self.fresh.fill(true);
+            was = origin;
         }
         self.origin = Some(origin);
 
@@ -351,7 +355,7 @@ impl ProbeGrid {
         }
         self.frame = self.frame.wrapping_add(1);
 
-        let head = self.head(origin, voxels, bounce, listed, turn);
+        let head = self.head(origin, was, voxels, bounce, listed, turn);
         self.bytes[..HEAD_BYTES].copy_from_slice(&head);
         // Each ray's direction this frame, worked out once here rather than
         // in every pixel of every probe that reads it.
@@ -407,10 +411,12 @@ impl ProbeGrid {
         self.bytes.extend_from_slice(&entry.to_ne_bytes());
     }
 
-    /// The head of the shader's `Bounce`.
+    /// The head of the shader's `Bounce`, for a grid at `origin` that was
+    /// at `was` the frame before.
     fn head(
         &self,
         origin: [i32; 3],
+        was: [i32; 3],
         voxels: [i32; 3],
         bounce: Bounce,
         listed: usize,
@@ -422,7 +428,7 @@ impl ProbeGrid {
         // A turn of the rays for each frame, so that over a few the probes
         // see in every direction; the same every run.
         let rotation = turned(self.frame.wrapping_sub(1));
-        let mut rows = [[0_u32; 4]; 8];
+        let mut rows = [[0_u32; 4]; 9];
         let float = |row: [f32; 4]| row.map(f32::to_bits);
         let int = |row: [i32; 4]| row.map(i32::cast_unsigned);
         rows[0] = float([corner[0], corner[1], corner[2], VOXEL]);
@@ -438,6 +444,7 @@ impl ProbeGrid {
             bounce.rays(),
             self.frame,
         ];
+        rows[8] = int([was[0], was[1], was[2], 0]);
         let mut bytes = [0_u8; HEAD_BYTES];
         for (slot, word) in bytes
             .as_chunks_mut::<4>()
@@ -1037,12 +1044,32 @@ mod tests {
         assert_eq!(fresh, (PROBES[1] * PROBES[2]) as usize);
         // They take the place of as many of the turn: no more is traced.
         assert_eq!(step.listed as usize, PROBE_COUNT / 8);
+        // The head says where the grid was, so that the rays traced this
+        // frame do not read what the new probes' slots held before.
+        let int = |row: usize| {
+            [0, 1, 2].map(|part| {
+                let at = row * 16 + part * 4;
+                i32::from_ne_bytes([
+                    step.bytes[at],
+                    step.bytes[at + 1],
+                    step.bytes[at + 2],
+                    step.bytes[at + 3],
+                ])
+            })
+        };
+        assert_eq!(int(8)[0] + 1, int(2)[0]);
+        assert_eq!(int(8)[1..], int(2)[1..]);
         // Four metres on, the copy of the level moves.
         let far = grid.plan([4.5, 1.7, 0.5], 1, Bounce::Medium, false);
         assert!(far.voxelize);
         // Fifty metres away, everything starts again.
         let jump = grid.plan([54.5, 1.7, 0.5], 1, Bounce::Medium, false);
         assert!(jump.clear && jump.voxelize);
+        // Everything was forgotten: nothing is left to mistake for the new.
+        assert_eq!(
+            jump.bytes[2 * 16..2 * 16 + 12],
+            jump.bytes[8 * 16..8 * 16 + 12]
+        );
         // Another level too.
         let other = grid.plan([54.5, 1.7, 0.5], 2, Bounce::Medium, false);
         assert!(other.clear && other.voxelize);
