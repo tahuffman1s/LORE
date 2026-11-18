@@ -71,8 +71,11 @@ const STEP_BYTES: usize = 43 * 16 + 3 * 16 + MOST_STIRS * 32;
 pub(crate) const GRID_SQUARES: u32 = 192;
 pub(crate) const GRID_FINEST: f32 = 0.015;
 /// The most grids one body of water is drawn with: the last reaches more
-/// than a kilometre from the eye.
-const MOST_GRIDS: u32 = 11;
+/// than ninety kilometres from the eye, so that the widest body there can
+/// be (8192 points eight metres apart) is drawn whole from anywhere over
+/// it. A body takes only as many as reach it, and draws only those of them
+/// it is not wholly under a finer one of, so a pond costs no more for it.
+const MOST_GRIDS: u32 = 17;
 
 /// Something that stirs the water for one frame: a leg wading, a body
 /// swimming, a stone or a drop going in.
@@ -448,8 +451,9 @@ impl Body {
         if !reaches || grid == 0 {
             return reaches;
         }
-        // The finer grid's middle and reach, as the shader works them out.
-        let finer = [0, 2].map(|axis| (finite(eye[axis]) / apart).round() * apart);
+        // The finer grid's middle, which the shader is given, and how far
+        // round it the shader leaves this grid out.
+        let (_, finer) = grid_laid(eye, grid - 1);
         let covered = half / 2.0 - apart;
         let hidden = (0..2)
             .all(|axis| low[axis] >= finer[axis] - covered && high[axis] <= finer[axis] + covered);
@@ -609,8 +613,13 @@ fn finite(number: f32) -> f32 {
 /// after it is twice as wide with its points twice as far apart. The
 /// middle is the eye to the nearest two points, so that the grid moves by
 /// whole squares and its points stay where they were.
+///
+/// The shader is given the middle of the next finer grid as this works it
+/// out, and does not work it out again: the graphics card rounds halves
+/// another way and divides less exactly, and a grid left out round a
+/// middle one point off leaves a crack.
 pub(crate) fn grid_laid(eye: [f32; 3], grid: u32) -> (f32, [f32; 2]) {
-    // Eleven grids at most: the power fits an f32 exactly.
+    // Seventeen grids at most: the power fits an f32 exactly.
     #[allow(clippy::cast_possible_wrap)]
     let apart = GRID_FINEST * 2.0_f32.powi(grid as i32);
     let middle = [0, 2].map(|axis| (finite(eye[axis]) / (2.0 * apart)).round() * 2.0 * apart);
@@ -1667,21 +1676,53 @@ fn grid(gpu: &Arc<Gpu>) -> Result<(Buffer, Buffer), RenderError> {
             points.extend(at.iter().flat_map(|part| part.to_ne_bytes()));
         }
     }
-    let mut triangles = Vec::with_capacity((GRID_INDICES * 4) as usize);
-    for row in 0..GRID_SQUARES {
-        for column in 0..GRID_SQUARES {
-            let near = row * across + column;
-            let far = near + across;
-            // Seen from above, anticlockwise.
-            for point in [near, far, near + 1, near + 1, far, far + 1] {
-                triangles.extend(point.to_ne_bytes());
-            }
-        }
-    }
+    let triangles: Vec<u8> = grid_triangles()
+        .iter()
+        .flat_map(|point| point.to_ne_bytes())
+        .collect();
     Ok((
         Buffer::holding(gpu, &points, vk::BufferUsageFlags::VERTEX_BUFFER, DOING)?,
         Buffer::holding(gpu, &triangles, vk::BufferUsageFlags::INDEX_BUFFER, DOING)?,
     ))
+}
+
+/// The triangles of the grid still water is drawn with, as numbers of its
+/// points, a square at a time from the outermost ring of squares round
+/// its middle in to the innermost, each ring walked round.
+///
+/// Water writes no depth that the rest of itself is tested against, so its
+/// own triangles are drawn over each other in the order they come. The
+/// grid's middle is where the eye is, and along every line of sight from
+/// there what is farther off is in an outer ring: drawn first, so that a
+/// near crest is drawn over the far side of the trough behind it and not
+/// the other way round. Neighbours in a ring share two points, as
+/// neighbours in a row do, so no point is worked out more often.
+fn grid_triangles() -> Vec<u32> {
+    let across = GRID_SQUARES + 1;
+    let half = GRID_SQUARES / 2;
+    let mut triangles = Vec::with_capacity(GRID_INDICES as usize);
+    let mut square = |row: u32, column: u32| {
+        let near = row * across + column;
+        let far = near + across;
+        // Seen from above, anticlockwise.
+        triangles.extend([near, far, near + 1, near + 1, far, far + 1]);
+    };
+    for ring in (0..half).rev() {
+        let (low, high) = (half - 1 - ring, half + ring);
+        for column in low..=high {
+            square(low, column);
+        }
+        for row in low + 1..=high {
+            square(row, high);
+        }
+        for column in (low..high).rev() {
+            square(high, column);
+        }
+        for row in (low + 1..high).rev() {
+            square(row, low);
+        }
+    }
+    triangles
 }
 
 impl Drop for WaterWorks {
@@ -1808,5 +1849,115 @@ mod tests {
         assert_eq!(number(&bytes, 748), -1.5);
         assert_eq!(number(&bytes, 764), 0.25);
         assert_eq!(number(&bytes, 768), 3.0);
+    }
+
+    /// A body of water `size` points `cell` metres apart from `origin`,
+    /// with nothing on the graphics card.
+    fn body(origin: [f32; 2], cell: f32, size: [u32; 2]) -> Body {
+        Body {
+            id: 0,
+            level: 0.0,
+            origin,
+            cell,
+            size,
+            colour: [0.0; 4],
+            water: Water {
+                name: None,
+                sources: Vec::new(),
+                level: 0.0,
+                origin,
+                cell,
+                size,
+                depths: Vec::new(),
+                colour: [0.0; 4],
+            },
+            depths: Picture::null(),
+            set: vk::DescriptorSet::null(),
+        }
+    }
+
+    #[test]
+    fn the_widest_lake_is_drawn_whole_and_a_far_pond_by_one_grid() {
+        // The widest body there can be, seen from one corner of it.
+        let sea = body([0.0, 0.0], 8.0, [8192, 8192]);
+        let eye = [1.0, 2.0, 1.0];
+        let grids = sea.grids(eye);
+        let (apart, middle) = grid_laid(eye, grids - 1);
+        #[allow(clippy::cast_precision_loss)]
+        let reach = GRID_SQUARES as f32 / 2.0 * apart;
+        let far = sea.far_corner();
+        assert!(
+            middle[0] + reach >= far[0] && middle[1] + reach >= far[1],
+            "{grids} grids reach {reach} m, the far shore is {far:?}"
+        );
+        // A pond two kilometres off, past where eleven grids reached, is
+        // drawn, and by no more than two grids.
+        let pond = body([2000.0, 40.0], 0.25, [120, 120]);
+        let drawn = (0..pond.grids(eye))
+            .filter(|grid| pond.drawn_by(eye, *grid))
+            .count();
+        assert!((1..=2).contains(&drawn), "drawn by {drawn} grids");
+        // A pond round the eye takes no more grids than it did.
+        let near = body([-10.0, -10.0], 0.1, [200, 200]);
+        assert!(near.grids(eye) <= 6, "{}", near.grids(eye));
+    }
+
+    #[test]
+    fn a_coarser_grid_is_left_out_round_the_middle_the_finer_one_is_laid_at() {
+        // Eyes exactly half way between two points of a grid, where
+        // rounding one way or the other matters.
+        for grid in 1..MOST_GRIDS {
+            let (apart, _) = grid_laid([0.0; 3], grid);
+            let eye = [apart * 2.5, 1.0, -apart * 3.5];
+            let (finer_apart, finer) = grid_laid(eye, grid - 1);
+            assert_eq!(finer_apart * 2.0, apart);
+            // The finer grid's middle is on a point of this one, within a
+            // point of the eye.
+            for (axis, at) in [(0, eye[0]), (1, eye[2])] {
+                let points = finer[axis] / apart;
+                assert!((points - points.round()).abs() < 1e-3, "{points}");
+                assert!((finer[axis] - at).abs() <= apart * 0.5 + 1e-3);
+            }
+        }
+    }
+
+    #[test]
+    fn the_grid_is_drawn_from_its_outer_ring_in() {
+        let triangles = grid_triangles();
+        assert_eq!(triangles.len(), GRID_INDICES as usize);
+        let across = GRID_SQUARES + 1;
+        let half = GRID_SQUARES / 2;
+        // Each square once, by the point at its corner nearest nothing.
+        let mut seen = vec![false; (GRID_SQUARES * GRID_SQUARES) as usize];
+        let mut ring_before = u32::MAX;
+        let mut corner_before: Option<u32> = None;
+        for square in triangles.as_chunks::<6>().0 {
+            let (row, column) = (square[0] / across, square[0] % across);
+            let at = (row * GRID_SQUARES + column) as usize;
+            assert!(!seen[at], "square {row}, {column} twice");
+            seen[at] = true;
+            // How many rings out from the middle it is: never more than
+            // the square before.
+            let ring = [row, column]
+                .map(|n| if n < half { half - 1 - n } else { n - half })
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            assert!(ring <= ring_before, "ring {ring} after {ring_before}");
+            // And in a ring, beside the square before, sharing two points.
+            if ring == ring_before
+                && let Some(before) = corner_before
+            {
+                let (was_row, was_column) = (before / across, before % across);
+                assert_eq!(
+                    was_row.abs_diff(row) + was_column.abs_diff(column),
+                    1,
+                    "{row}, {column} after {was_row}, {was_column}"
+                );
+            }
+            ring_before = ring;
+            corner_before = Some(square[0]);
+        }
+        assert!(seen.iter().all(|square| *square));
     }
 }

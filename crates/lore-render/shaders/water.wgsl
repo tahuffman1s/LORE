@@ -1032,10 +1032,11 @@ fn fragment_body(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let squares = draw.world_from_local[0].z;
     // Each grid but the finest has the next finer one lying over its
     // middle: there this one is not drawn. The finer grid's middle is the
-    // eye, to the nearest point of this one. They overlap by one square
-    // of this grid, so that no gap opens between them.
+    // eye, to the nearest point of this one, as the engine worked it out
+    // to lay that grid. They overlap by one square of this grid, so that
+    // no gap opens between them.
     if finest < 0.5 {
-        let finer = round(view.eye.xz / apart) * apart;
+        let finer = draw.world_from_local[1].xy;
         let off = max(abs(rest.x - finer.x), abs(rest.y - finer.y));
         if off < squares * apart * 0.25 - apart {
             discard;

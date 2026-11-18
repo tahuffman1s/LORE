@@ -3079,21 +3079,26 @@ fn picture_write(
 ///
 /// Where the mesh shader keeps how a mesh stands, this keeps how the grid
 /// is laid (how far apart its points are, whether it is the finest, how
-/// many squares it has a side, and where its middle is: the eye, to the
-/// nearest two points, so that the grid moves by whole squares and its
-/// points stay where they were); and where the shader keeps how surface
-/// directions turn, the body itself: where its grid of depths starts and
-/// how far apart its points are, how many there are and how high the water
-/// stands, and the water's colour. Its clearness is the number after.
+/// many squares it has a side, where the next finer grid's middle is,
+/// round which this one is left out, and where its own middle is: the
+/// eye, to the nearest two points, so that the grid moves by whole squares
+/// and its points stay where they were); and where the shader keeps how
+/// surface directions turn, the body itself: where its grid of depths
+/// starts and how far apart its points are, how many there are and how
+/// high the water stands, and the water's colour. Its clearness is the
+/// number after.
 fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
+    let finer = grid
+        .checked_sub(1)
+        .map_or(middle, |finer| grid_laid(eye, finer).1);
     // Sizes are far below the point where f32 stops being exact.
     #[allow(clippy::cast_precision_loss)]
     let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
     let finest = if grid == 0 { 1.0 } else { 0.0 };
     let numbers = [
         [apart, finest, squares, 0.0],
-        [0.0; 4],
+        [finer[0], finer[1], 0.0, 0.0],
         [0.0; 4],
         [middle[0], body.level + rise, middle[1], 1.0],
         [body.origin[0], body.origin[1], body.cell, 0.0],
