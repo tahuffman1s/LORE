@@ -32,14 +32,35 @@ use crate::weather_api::number;
 /// What can be read from a lamp. The type definitions are tested against
 /// it.
 pub(crate) const LAMP_FIELDS: &[&str] = &[
-    "name", "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range",
-    "radius", "flicker", "castsShadows",
+    "name",
+    "at",
+    "on",
+    "lumens",
+    "color",
+    "kelvin",
+    "beam",
+    "pointing",
+    "softness",
+    "range",
+    "radius",
+    "flicker",
+    "castsShadows",
 ];
 
 /// What can be set on a lamp, or given when one is made.
 const SETTINGS: &[&str] = &[
-    "at", "on", "lumens", "color", "kelvin", "beam", "pointing", "softness", "range", "radius",
-    "flicker", "castsShadows",
+    "at",
+    "on",
+    "lumens",
+    "color",
+    "kelvin",
+    "beam",
+    "pointing",
+    "softness",
+    "range",
+    "radius",
+    "flicker",
+    "castsShadows",
 ];
 
 /// The most lamps a game can have. The renderer draws the nearest 256 of

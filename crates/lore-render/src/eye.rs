@@ -86,7 +86,13 @@ const STORM_DARKER: f32 = 3.0;
 /// Lightning, which is light added to the view, is as bright as ever in
 /// it.
 pub(crate) fn weather_darker(weather: &Weather, storm: f32) -> f32 {
-    let sound = |value: f32| if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+    let sound = |value: f32| {
+        if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
     let rain = sound(weather.precipitation);
     // Steady rain falls from a sky that is all cloud, said or not.
     let grey = eased(0.6, 1.0, sound(weather.cloud_cover).max(rain));
@@ -219,7 +225,11 @@ impl Eye {
         // metre (a white wall under `E` lux is `E / pi`), and as a camera
         // would meter it, EV100 = log2(L * 100 / 12.5).
         let ev = seen - per_lux.log2() + 3.0;
-        let weather = if weather.is_finite() { weather.max(0.0) } else { 0.0 };
+        let weather = if weather.is_finite() {
+            weather.max(0.0)
+        } else {
+            0.0
+        };
         let wanted = USUAL_VIEW - darker(ev) - weather - seen;
         let wanted = wanted.clamp(-self.adaptation.closes, self.adaptation.opens);
         let seconds = if wanted > self.stops {
@@ -690,7 +700,10 @@ mod tests {
         let dull = weather_darker(&grey, 0.0);
         let wet = weather_darker(&rain, 0.0);
         let storm = weather_darker(&rain, 1.0);
-        assert!(dull > 0.3 && dull < wet && wet < storm, "{dull} {wet} {storm}");
+        assert!(
+            dull > 0.3 && dull < wet && wet < storm,
+            "{dull} {wet} {storm}"
+        );
         assert!((storm - STORM_DARKER).abs() < 1e-6);
         // What is no number leaves the view as a clear day's.
         let broken = Weather {
@@ -705,7 +718,11 @@ mod tests {
         eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, 0.0);
         let opened = eye.stops;
         eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, storm);
-        assert!((opened - eye.stops - storm).abs() < 1e-4, "{opened} {}", eye.stops);
+        assert!(
+            (opened - eye.stops - storm).abs() < 1e-4,
+            "{opened} {}",
+            eye.stops
+        );
     }
 
     #[test]

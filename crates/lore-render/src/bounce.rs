@@ -220,7 +220,11 @@ fn slot_of(cell: [i32; 3]) -> usize {
 /// The probe at `slot` in a grid whose lowest corner is the probe `origin`.
 pub(crate) fn cell_of(slot: usize, origin: [i32; 3]) -> [i32; 3] {
     let dims = PROBES.map(|count| count as usize);
-    let at = [slot % dims[0], slot / dims[0] % dims[1], slot / (dims[0] * dims[1])];
+    let at = [
+        slot % dims[0],
+        slot / dims[0] % dims[1],
+        slot / (dims[0] * dims[1]),
+    ];
     std::array::from_fn(|axis| {
         // All of these are far smaller than an i32.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -246,7 +250,9 @@ impl ProbeGrid {
     ) -> Plan<'_> {
         self.bytes.clear();
         self.bytes.resize(LIST_FROM, 0);
-        let sound = eye.iter().all(|part| part.is_finite() && part.abs() < 1.0e6);
+        let sound = eye
+            .iter()
+            .all(|part| part.is_finite() && part.abs() < 1.0e6);
         if bounce == Bounce::Off || level == 0 || !sound {
             // Whatever the grid held is forgotten: when light bounces again
             // every probe starts afresh.
@@ -269,7 +275,10 @@ impl ProbeGrid {
             && self.settled()
         {
             // The head as it was, with nothing to trace.
-            let (origin, voxels) = (self.origin.unwrap_or_default(), self.voxels.unwrap_or_default());
+            let (origin, voxels) = (
+                self.origin.unwrap_or_default(),
+                self.voxels.unwrap_or_default(),
+            );
             let head = self.head(origin, voxels, bounce, 0, 0);
             self.bytes[..HEAD_BYTES].copy_from_slice(&head);
             return Plan {
@@ -356,7 +365,12 @@ impl ProbeGrid {
             .take(rays as usize)
         {
             let way = ray_way(u32::try_from(number).unwrap_or(0), rays, &rotation);
-            for (part, value) in slot.as_chunks_mut::<4>().0.iter_mut().zip(way.iter().chain(&[0.0])) {
+            for (part, value) in slot
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(way.iter().chain(&[0.0]))
+            {
                 *part = value.to_ne_bytes();
             }
         }
@@ -425,7 +439,12 @@ impl ProbeGrid {
             self.frame,
         ];
         let mut bytes = [0_u8; HEAD_BYTES];
-        for (slot, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(rows.as_flattened()) {
+        for (slot, word) in bytes
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rows.as_flattened())
+        {
             *slot = word.to_ne_bytes();
         }
         bytes
@@ -457,9 +476,21 @@ fn turned(frame: u32) -> [[f32; 3]; 3] {
     let (t1, t2) = (std::f32::consts::TAU * b, std::f32::consts::TAU * c);
     let [x, y, z, w] = [t1.sin() * s1, t1.cos() * s1, t2.sin() * s2, t2.cos() * s2];
     [
-        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
-        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
-        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
     ]
 }
 
@@ -615,10 +646,26 @@ impl BounceWorks {
             crate::buffer::once(gpu, doing, |commands| {
                 let to_clear = [
                     whole(voxels, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL),
-                    whole(normals, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL),
-                    whole(light, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL),
-                    whole(depth, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL),
-                    whole(rays, vk::ImageLayout::UNDEFINED, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    whole(
+                        normals,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::GENERAL,
+                    ),
+                    whole(
+                        light,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    ),
+                    whole(
+                        depth,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    ),
+                    whole(
+                        rays,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    ),
                 ]
                 .map(|barrier| {
                     barrier
@@ -752,7 +799,8 @@ impl BounceWorks {
             stage(vk::ShaderStageFlags::FRAGMENT, c"fragment_trace"),
         ];
         let formats = [RAYS_FORMAT];
-        let mut rendering = vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+        let mut rendering =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
         let attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
@@ -778,7 +826,8 @@ impl BounceWorks {
             stage(vk::ShaderStageFlags::FRAGMENT, c"fragment_probe"),
         ];
         let formats = [LIGHT_FORMAT, DEPTH_FORMAT];
-        let mut rendering = vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+        let mut rendering =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
         let blended = vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(true)
             .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -887,10 +936,20 @@ impl Drop for BounceWorks {
         // dropping these, so none is in use; null handles are allowed.
         unsafe {
             let device = self.gpu.device();
-            for pipeline in [self.voxel_pipeline, self.trace_pipeline, self.probe_pipeline] {
+            for pipeline in [
+                self.voxel_pipeline,
+                self.trace_pipeline,
+                self.probe_pipeline,
+            ] {
                 device.destroy_pipeline(pipeline, None);
             }
-            for picture in [&self.voxels, &self.normals, &self.light, &self.depth, &self.rays] {
+            for picture in [
+                &self.voxels,
+                &self.normals,
+                &self.light,
+                &self.depth,
+                &self.rays,
+            ] {
                 picture.destroy(&self.gpu);
             }
         }
@@ -1000,7 +1059,11 @@ mod tests {
         assert_eq!(off.bytes[3 * 16 + 8..3 * 16 + 12], [0; 4]);
         let again = grid.plan([0.0; 3], 1, Bounce::Medium, false);
         assert!(again.clear && again.voxelize);
-        assert_eq!(grid.plan([f32::NAN, 0.0, 0.0], 1, Bounce::Medium, false).listed, 0);
+        assert_eq!(
+            grid.plan([f32::NAN, 0.0, 0.0], 1, Bounce::Medium, false)
+                .listed,
+            0
+        );
     }
 
     #[test]

@@ -409,7 +409,10 @@ impl Report {
             self.placed,
             self.triangles,
             self.bench.lamps,
-            self.bench.lamp_shadows.lamps().min(self.bench.lamps as usize),
+            self.bench
+                .lamp_shadows
+                .lamps()
+                .min(self.bench.lamps as usize),
             times(&self.frame),
             times(&self.recording),
             times(&self.drawing),

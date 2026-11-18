@@ -5,10 +5,10 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::bounce::Bounce;
-use crate::lamp_shadow::LampShadows;
 use crate::camera::{Camera, Mat4, shifted};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
+use crate::lamp_shadow::LampShadows;
 use crate::mesh::{Contents, MeshPipeline, View};
 use crate::scene::SceneTarget;
 use crate::upscale::{Drawn, Upscale, Upscaling};

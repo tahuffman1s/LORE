@@ -144,7 +144,8 @@ impl Face {
             return false;
         }
         let [across, up, ahead] = self.axes.map(|axis| dot(from, axis));
-        let beyond = |side: f32| (side.abs() - self.lean * ahead) / (1.0 + self.lean * self.lean).sqrt();
+        let beyond =
+            |side: f32| (side.abs() - self.lean * ahead) / (1.0 + self.lean * self.lean).sqrt();
         ahead > NEAR - radius && beyond(across) < radius && beyond(up) < radius
     }
 }
@@ -369,7 +370,8 @@ impl ShadowSlots {
             let numbers = pictured(lamp, held.far);
             for (face, drawn) in faces.into_iter().enumerate() {
                 if drawn {
-                    self.faces.push(numbers.face(slot * FACES + face, face, held.far));
+                    self.faces
+                        .push(numbers.face(slot * FACES + face, face, held.far));
                 }
             }
             self.slots[slot] = Slot {
@@ -414,10 +416,9 @@ impl ShadowSlots {
 
     /// The slot whose pictures `lamp` can use as they are.
     fn held_by(&self, lamp: &Lamp, reach: f32, level: u64) -> Option<usize> {
-        self.slots.iter().position(|slot| {
-            slot.held
-                .is_some_and(|held| held.fits(lamp, reach, level))
-        })
+        self.slots
+            .iter()
+            .position(|slot| slot.held.is_some_and(|held| held.fits(lamp, reach, level)))
     }
 
     /// The slot not yet chosen this frame that most likely held `lamp`
@@ -640,9 +641,17 @@ mod tests {
             let [across, up, ahead] = numbers.axes(0);
             (0, dot(from, across), dot(from, up), dot(from, ahead))
         } else if a[0] >= a[1] && a[0] >= a[2] {
-            if x > 0.0 { (0, -z, y, a[0]) } else { (1, z, y, a[0]) }
+            if x > 0.0 {
+                (0, -z, y, a[0])
+            } else {
+                (1, z, y, a[0])
+            }
         } else if a[1] >= a[2] {
-            if y > 0.0 { (2, x, -z, a[1]) } else { (3, x, z, a[1]) }
+            if y > 0.0 {
+                (2, x, -z, a[1])
+            } else {
+                (3, x, z, a[1])
+            }
         } else if z > 0.0 {
             (4, x, y, a[2])
         } else {
@@ -651,7 +660,11 @@ mod tests {
         let s = numbers.scale;
         (
             face,
-            [across * s / ahead, up * s / ahead, numbers.a + numbers.b / ahead],
+            [
+                across * s / ahead,
+                up * s / ahead,
+                numbers.a + numbers.b / ahead,
+            ],
         )
     }
 
@@ -665,7 +678,9 @@ mod tests {
     }
 
     fn close(one: [f32; 3], other: [f32; 3]) -> bool {
-        one.iter().zip(other).all(|(one, other)| (one - other).abs() < 1e-4)
+        one.iter()
+            .zip(other)
+            .all(|(one, other)| (one - other).abs() < 1e-4)
     }
 
     #[test]
@@ -683,7 +698,10 @@ mod tests {
             let (face, seen) = shader_place(&numbers, from);
             let drawn = numbers.face(face, face, 16.0);
             let point = [0, 1, 2].map(|axis| lamp.at[axis] + from[axis]);
-            assert!(close(placed(&drawn, point), seen), "{from:?} on face {face}");
+            assert!(
+                close(placed(&drawn, point), seen),
+                "{from:?} on face {face}"
+            );
             // Inside the picture, and in its depth.
             assert!(seen[0].abs() < 1.0 && seen[1].abs() < 1.0);
             assert!(seen[2] > 0.0 && seen[2] < 1.0);
@@ -712,9 +730,8 @@ mod tests {
         // The edge of the beam is inside the picture, near its border.
         let edge = 0.35_f32;
         let pointing = unit([1.0, -1.0, 0.0]);
-        let rim = [0, 1, 2].map(|axis| {
-            (pointing[axis] * edge.cos() + [0.0, 0.0, 1.0][axis] * edge.sin()) * 2.0
-        });
+        let rim = [0, 1, 2]
+            .map(|axis| (pointing[axis] * edge.cos() + [0.0, 0.0, 1.0][axis] * edge.sin()) * 2.0);
         let (_, rim) = shader_place(&numbers, rim);
         let out = rim[0].abs().max(rim[1].abs());
         assert!(out > 0.8 && out < 1.0, "{out}");
@@ -764,7 +781,12 @@ mod tests {
         assert!(!east.holds([3.0, 2.0, 5.0], 0.5));
     }
 
-    fn choose(slots: &mut ShadowSlots, lamps: &[Lamp], eye: [f32; 3], how: &Shadowing) -> Vec<Shadow> {
+    fn choose(
+        slots: &mut ShadowSlots,
+        lamps: &[Lamp],
+        eye: [f32; 3],
+        how: &Shadowing,
+    ) -> Vec<Shadow> {
         let mut near: Vec<(f32, usize)> = lamps
             .iter()
             .enumerate()
@@ -801,7 +823,10 @@ mod tests {
         let cast: Vec<bool> = shadows.iter().map(|shadow| shadow.strength > 0.0).collect();
         assert_eq!(cast, [true, true, false, false, false, false]);
         assert_eq!(slots.faces().len(), 12);
-        assert!((shadows[0].strength - 1.0).abs() < 1e-6, "the first frame shows them at once");
+        assert!(
+            (shadows[0].strength - 1.0).abs() < 1e-6,
+            "the first frame shows them at once"
+        );
 
         // Nothing has moved: nothing is drawn again.
         let how = Shadowing {
@@ -874,7 +899,11 @@ mod tests {
             lamps[1].at[0] += 0.1;
             let moved = choose(&mut slots, &lamps, [0.0, 1.7, 1.0], &how);
             assert_eq!(slots.faces().len(), 6);
-            assert!((moved[1].strength - 1.0).abs() < 1e-6, "{}", moved[1].strength);
+            assert!(
+                (moved[1].strength - 1.0).abs() < 1e-6,
+                "{}",
+                moved[1].strength
+            );
             assert!(slots.faces().iter().all(|face| face.layer < FACES));
         }
     }

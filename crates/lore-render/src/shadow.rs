@@ -496,7 +496,10 @@ fn range(layer: u32, count: u32) -> vk::ImageSubresourceRange {
 /// Makes the reader that compares a depth with a picture's and smooths the
 /// answer: a point is lit if it is no farther from the light than what the
 /// picture holds. Outside the picture counts as what its edge holds.
-pub(crate) fn comparing_sampler(gpu: &Gpu, doing: &'static str) -> Result<vk::Sampler, RenderError> {
+pub(crate) fn comparing_sampler(
+    gpu: &Gpu,
+    doing: &'static str,
+) -> Result<vk::Sampler, RenderError> {
     // Not every graphics card can smooth between the pixels of a depth
     // picture; one that cannot gets a harder edge.
     // SAFETY: the instance and physical device are alive.
