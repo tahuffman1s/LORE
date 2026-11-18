@@ -454,6 +454,7 @@ class Level:
         self.material_numbers, self.image_numbers = {}, {}
         self.triangles = 0
         self.solid_triangles = 0
+        self.transformed = False
 
     def view(self, data, target=None):
         while len(self.blob) % 4:
@@ -498,8 +499,12 @@ class Level:
         multiplies the base picture, "rough" and "metal" numbers (which
         multiply the arm picture's when there is one), "cut" for holes cut
         by alpha, "blend" for a see-through surface mixed by alpha,
-        "glow" (red, green, blue) for light it gives off itself, and
-        "two_sided"."""
+        "glow" (red, green, blue) for light it gives off itself,
+        "two_sided", "scale" (a number: how many copies of each picture
+        cover one unit of the mesh's UVs, so a mesh can have UVs in metres
+        and each material its own metres to a copy), and "paint": another
+        material (a dict) to show where the mesh's vertex alpha is under 1,
+        or {"with": material, "edge": 0..1, "ragged": 0..1}."""
         name = about["name"]
         if name not in self.material_numbers:
             arm = self.texture(about.get("arm"))
@@ -522,7 +527,15 @@ class Level:
                     made["normalTexture"]["scale"] = about["bumps"]
             if arm and about.get("occlusion", True):
                 # The same picture holds how shaded each crevice is.
-                made["occlusionTexture"] = arm
+                made["occlusionTexture"] = dict(arm)
+            if "scale" in about:
+                # The same transform on every picture of the material.
+                self.transformed = True
+                for slot in (pbr.get("baseColorTexture"), pbr.get("metallicRoughnessTexture"),
+                             made.get("normalTexture"), made.get("occlusionTexture")):
+                    if slot is not None:
+                        scale = about["scale"]
+                        slot["extensions"] = {"KHR_texture_transform": {"scale": [scale, scale]}}
             if about.get("two_sided"):
                 made["doubleSided"] = True
             if "glow" in about:
@@ -542,6 +555,17 @@ class Level:
                 # The engine draws the pictures blended with themselves
                 # moved elsewhere, so that their repetition is not seen.
                 made["extras"] = {"shuffle": about["shuffle"]}
+            if about.get("paint"):
+                # Where the mesh's vertex alpha is under 1 the engine shows
+                # another material, its edge broken up by noise. That
+                # material must be in the file though no mesh uses it.
+                paint = about["paint"]
+                if "with" not in paint:
+                    paint = {"with": paint}
+                other = dict(paint)
+                self.material(other["with"])
+                other["with"] = other["with"]["name"]
+                made.setdefault("extras", {})["paint"] = other
             self.materials.append(made)
             self.material_numbers[name] = len(self.materials) - 1
         return self.material_numbers[name]
@@ -632,6 +656,8 @@ class Level:
         used = ["KHR_lights_punctual"]
         if any("extensions" in m for m in self.materials):
             used.append("KHR_materials_emissive_strength")
+        if self.transformed:
+            used.append("KHR_texture_transform")
         document = {
             "asset": {
                 "version": "2.0",
@@ -859,6 +885,61 @@ def wall_distance(x, z):
     return max(min(out), 0.0)
 
 
+def smooth(edge0, edge1, x):
+    """0 at edge0 rising to 1 at edge1 as a smooth step (either order)."""
+    t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def box_distance(x, z, x0, x1, z0, z1, radius):
+    """How far x, z is outside the box x0..x1, z0..z1 with corners rounded
+    by `radius` (negative inside)."""
+    qx = abs(x - (x0 + x1) / 2) - (x1 - x0) / 2 + radius
+    qz = abs(z - (z0 + z1) / 2) - (z1 - z0) / 2 + radius
+    return math.hypot(max(qx, 0.0), max(qz, 0.0)) + min(max(qx, qz), 0.0) - radius
+
+
+def line_distance(x, z, x0, z0, x1, z1, half):
+    """How far x, z is outside a stroke from (x0, z0) to (x1, z1) `half`
+    metres either side, with round ends (negative inside)."""
+    dx, dz = x1 - x0, z1 - z0
+    t = min(max(((x - x0) * dx + (z - z0) * dz) / (dx * dx + dz * dz), 0.0), 1.0)
+    return math.hypot(x - x0 - dx * t, z - z0 - dz * t) - half
+
+
+def court_distance(x, z):
+    """How far x, z is outside the court's surface: a rounded box that
+    runs on under the east wall, its edge wandering a little."""
+    d = box_distance(x, z, -6.4, 9.5, -8.4, 8.4, 1.4)
+    return d + 0.9 * rolling(x * 0.7, z * 0.7, seed=71, octaves=2)
+
+
+def tar_cover(x, z):
+    """How much of the lane's asphalt is covered by newer, darker tar at
+    x, z: 0 to 1. Resurfaced where trenches were dug and holes mended,
+    ragged and rounded and not square, and worn into two tracks by
+    wheels. Where the ground's alpha is 1 - this, the engine breaks the
+    edge up."""
+    near = 0.0
+    for kind, shape, seed, grow in PATCHES:
+        if kind == "box":
+            d = box_distance(x, z, *shape, 0.8)
+        elif kind == "line":
+            d = line_distance(x, z, *shape)
+        else:
+            d = math.hypot(x - shape[0], z - shape[1]) - shape[2]
+        d += grow * rolling(x * 1.3, z * 1.3, seed=seed, octaves=3)
+        near = max(near, smooth(0.42, -0.42, d))
+    # Wheel tracks down the lane, coming and going.
+    for side in (-1.0, 1.0):
+        centre = side * 1.15 + 0.35 * rolling(z / 7.0, 0.0, seed=81 + int(side), octaves=2)
+        across = (x - centre) / 0.42
+        worn = math.exp(-across * across) * smooth(-0.1, 0.18, rolling(z / 2.4, 1.0, seed=83, octaves=3))
+        near = max(near, 0.45 * worn)
+    # None over the court's edge, where the court fades into the asphalt.
+    return near * smooth(0.0, 0.8, court_distance(x, z))
+
+
 def ground(kinds, step=0.25):
     """The ground of the alley and the yard as one part for each kind of
     surface, made of squares `step` across. Every point follows
@@ -867,24 +948,20 @@ def ground(kinds, step=0.25):
     finer, so their rims are ragged and not blocky. The drains are left
     open: their grates stand in the holes.
 
-    `kinds` maps "asphalt", "patch" and "court" to (material, metres a
-    picture covers)."""
+    `kinds` maps "asphalt" and "court" to materials with a "scale", so
+    that the UVs are metres and two parts laid side by side carry on one
+    another's pictures. The asphalt is painted with newer tar (see
+    tar_cover) and the court with the asphalt, so that it fades into it
+    over its last half metre and does not end at a line."""
     buckets = {}
-    for name, (material, tile) in kinds.items():
-        buckets[name] = (Shape(material), tile, {})
+    for name, material in kinds.items():
+        buckets[name] = (Shape(material), {}, name)
 
     def kind_at(x, z):
-        # Resurfaced in rectangles where trenches were dug, and the court
-        # laid anew.
-        if abs(z) <= YARD_END - 0.6 and -6.4 <= x <= 7.6:
-            return "court"
-        for x0, x1, z0, z1 in PATCHES:
-            if x0 <= x <= x1 and z0 <= z <= z1:
-                return "patch"
-        return "asphalt"
+        return "court" if court_distance(x, z) < 0.0 else "asphalt"
 
     def corner(bucket, x, z, y=None):
-        shape, tile, seen = bucket
+        shape, seen, name = bucket
         key = (round(x * 64), round(z * 64))
         at = seen.get(key)
         if at is None:
@@ -895,10 +972,12 @@ def ground(kinds, step=0.25):
             length = math.sqrt(nx * nx + (2 * e) ** 2 + nz * nz)
             shade = grime_ground(x, z, wall_distance)
             # A hint of brown in the dirt and blue-grey in the wet.
-            colour = (shade * 0.98, shade * 0.97, shade * 0.95, 1.0)
-            # One copy of the picture is laid at an angle to the next
-            # kind's, so patches do not line up with the asphalt round them.
-            at = seen[key] = shape.point((x, y, z), (nx / length, 2 * e / length, nz / length), (x / tile, z / tile), colour)
+            if name == "asphalt":
+                alpha = 1.0 - tar_cover(x, z)
+            else:
+                alpha = smooth(0.0, 0.75, -court_distance(x, z))
+            colour = (shade * 0.98, shade * 0.97, shade * 0.95, alpha)
+            at = seen[key] = shape.point((x, y, z), (nx / length, 2 * e / length, nz / length), (x, z), colour)
         return at
 
     def near_hole(x0, z0):
@@ -956,14 +1035,41 @@ def ground(kinds, step=0.25):
     return [bucket[0].part() for bucket in buckets.values() if bucket[0].indices]
 
 
-# Rectangles of newer asphalt where the alley was dug up: x0, x1, z0, z1.
+# Where newer tar was laid over the lane's asphalt: ("box", (x0, x1, z0, z1))
+# and ("line", (x0, z0, x1, z1, half width)) and ("blob", (x, z, radius)),
+# each with a seed and how far its edge wanders. The ones that reach a wall
+# run on under it.
 PATCHES = [
-    (-3.5, 0.75, -28.5, -26.0),
-    (-0.5, 0.5, -19.0, -9.0),     # a trench down the middle to the drain
-    (1.25, 3.5, 11.0, 13.5),
-    (-3.5, -1.75, 22.0, 27.25),
-    (-0.5, 0.5, 9.0, 20.5),
+    ("box", (-4.6, 0.75, -28.5, -26.0), 91, 0.9),
+    ("line", (0.05, -19.6, -0.1, -9.8, 0.5), 92, 0.6),     # a trench down the middle to the drain
+    ("box", (1.25, 4.6, 11.0, 13.5), 93, 0.9),
+    ("box", (-4.6, -1.75, 22.0, 27.25), 94, 0.9),
+    ("line", (0.1, 9.9, -0.15, 20.5, 0.5), 95, 0.6),
+    ("blob", (-1.7, -22.8, 0.8), 96, 0.8),
+    ("blob", (2.3, -14.6, 0.6), 97, 0.8),
+    ("blob", (-2.3, 16.5, 0.55), 98, 0.8),
+    ("blob", (1.3, 28.2, 0.5), 99, 0.8),
+    ("blob", (-1.0, -12.2, 0.45), 100, 0.45),
 ]
+
+
+def road_cover(x, z):
+    """How much of a road is worn or mended: tracks along each lane, and
+    some mended patches, as for the lane."""
+    lane = abs(z)
+    near = 0.0
+    for track in (34.1, 35.5, 38.4, 39.9):
+        across = (lane - (track + 0.3 * rolling(x / 6.0, track, seed=111, octaves=2))) / 0.4
+        worn = math.exp(-across * across) * smooth(-0.1, 0.18, rolling(x / 2.2, track, seed=113, octaves=3))
+        near = max(near, 0.45 * worn)
+    for k, (cx, cz, wide, deep) in enumerate(ROAD_PATCHES):
+        d = box_distance(x, lane, cx - wide, cx + wide, cz - deep, cz + deep, 0.7)
+        d += 0.8 * rolling(x * 1.2, lane * 1.2, seed=120 + k, octaves=3)
+        near = max(near, smooth(0.42, -0.42, d))
+    return near
+
+
+ROAD_PATCHES = [(-9.0, 36.2, 2.2, 0.9), (4.5, 38.6, 1.6, 1.1), (15.0, 34.4, 2.8, 0.7), (-17.5, 39.2, 1.9, 1.0), (-2.0, 33.4, 1.2, 0.5)]
 
 
 def streets(kinds):
@@ -974,8 +1080,9 @@ def streets(kinds):
     step = 0.5
     for side in (-1.0, 1.0):
         for name, z_from, z_to in (("pavement", END, KERB), ("road", KERB, FAR_KERB), ("pavement", FAR_KERB, FAR)):
-            material, tile = kinds[name]
+            material = kinds[name]
             shape = Shape(material)
+            painted = bool(material.get("paint"))
             seen = {}
 
             def corner(x, z):
@@ -993,7 +1100,7 @@ def streets(kinds):
                     if name == "road":
                         # Silt and wet along the gutters.
                         shade *= 0.78 + 0.22 * min(gutter / 0.45, 1.0)
-                    seen[key] = shape.point((x, y, z), (0.0, 2 * e / length, nz / length), (x / tile, z / tile), (shade, shade * 0.99, shade * 0.97, 1.0))
+                    seen[key] = shape.point((x, y, z), (0.0, 2 * e / length, nz / length), (x, z), (shade, shade * 0.99, shade * 0.97, 1.0 - road_cover(x, z) if painted else 1.0))
                 return seen[key]
 
             columns = int(2 * STREET / step)
@@ -1106,6 +1213,74 @@ def wall_grime(u, v, length, tall, openings, seed, foot):
     return (shade * 0.98, shade * green * 0.97, shade * 0.95, 1.0)
 
 
+# What each building's wall is painted with by weather and by hand: the
+# other look, how it comes through ("render": plaster left in islands on
+# brick; "bare": the wall's own plaster or paint gone in islands to what is
+# under it, most at the foot; "whitewash": worn off towards the ground;
+# "soot": dark and damp at the foot, under the coping and under the sills;
+# "repair": a different brick where the wall was mended) and how dark it is.
+WALL_PAINTS = {
+    "w1": ("worn_plaster_wall", "render", 0.95),
+    "w2": ("brick_wall_006", "repair", 1.0),
+    "w3": ("whitewashed_brick", "whitewash", 0.95),
+    "w4": ("red_bricks_02", "repair", 0.95),
+    "w5": ("beige_wall_001", "render", 1.0),
+    "e1": ("factory_brick", "soot", 0.33),
+    "e2": ("painted_plaster_wall", "render", 0.9),
+    "e3": ("dirty_concrete", "soot", 0.7),
+    "e4": ("brick_wall_02", "repair", 0.9),
+    "e5": ("brick_wall_10", "bare", 1.0),
+    "nw": ("red_bricks_02", "bare", 1.0),
+    "ne": ("slumped_mortar_brick", "soot", 0.4),
+    "sw": ("brick_wall_02", "bare", 1.0),
+    "se": ("whitewashed_brick", "whitewash", 0.95),
+    "n1": ("brick_wall_10", "bare", 1.0),
+    "n2": ("factory_brick", "soot", 0.45),
+    "n3": ("red_bricks_02", "bare", 1.0),
+    "n4": ("worn_plaster_wall", "render", 0.9),
+    "s1": ("slumped_mortar_brick", "repair", 0.9),
+    "s2": ("brick_wall_02", "bare", 1.0),
+    "s3": ("whitewashed_brick", "whitewash", 0.9),
+    "s4": ("slumped_mortar_brick", "soot", 0.5),
+    "nwx": ("worn_plaster_wall", "render", 0.9),
+    "nex": ("brick_wall_10", "repair", 1.0),
+    "swx": ("whitewashed_brick", "whitewash", 0.95),
+    "sex": ("beige_wall_001", "render", 0.95),
+}
+
+
+def wall_cover(mode, u, v, up, length, tall, openings, seed):
+    """How much of the second look shows on a wall at u along and v up,
+    `up` metres over the ground, from 0 to 1: low-frequency noise shaped by
+    weather, which is worst at the foot, under the coping, under each
+    sill and at the corners. The engine breaks the edge up finely."""
+    big = rolling(u / 2.8, v / 2.8, seed=seed, octaves=3)
+    mid = rolling(u / 1.3, v / 1.3, seed=seed + 5, octaves=2)
+    corner = math.exp(-min(u, length - u) / 1.1)
+    foot = 1.0 - smooth(0.0, 1.5 + 1.8 * (big + 0.3), up)
+    top = smooth(tall - 1.9 - 1.2 * mid, tall, v)
+    sill = 0.0
+    for u0, u1, v0, v1 in openings:
+        if u0 - 0.25 < u < u1 + 0.25 and v < v0:
+            sill = max(sill, (1.0 - min((v0 - v) / 2.6, 1.0)) * (0.7 + 0.6 * mid))
+    if mode == "render":
+        # Render stays on in broad sheets; it comes away at the foot, at
+        # corners and in islands.
+        value = 0.62 + 2.6 * big + 0.8 * mid - 1.1 * foot - 0.55 * corner - 0.3 * sill
+    elif mode == "bare":
+        # What is under shows through the wall's own plaster or paint.
+        value = -0.25 + 2.3 * big + 0.6 * mid + 1.2 * foot + 0.55 * corner + 0.25 * sill - 0.35 * top
+    elif mode == "whitewash":
+        # Whitewash is worn off towards the ground and stays in the dry.
+        value = 0.2 + (up - 1.2) / 3.2 + 1.5 * big + 0.6 * mid - 0.5 * sill + 0.2 * top
+    elif mode == "soot":
+        value = -0.1 + 1.25 * foot + 0.9 * top + 0.9 * sill + 1.6 * big + 0.5 * mid + 0.3 * corner
+    else:
+        # A mended length: a different brick in a few patches.
+        value = -0.55 + 3.4 * big + 0.8 * mid + 0.35 * corner + 0.4 * foot
+    return min(max(value, 0.0), 1.0) * 1.0
+
+
 def building_parts(building, materials, extras):
     """The building's walls, windows, sills, coping and roof, as parts
     gathered in `materials` (a Buckets). Openings for the ground storey's
@@ -1114,9 +1289,18 @@ def building_parts(building, materials, extras):
     downpipes and the like can go."""
     style = building.style
     wall_mat, tile = materials.look(building.look, building.seed)
+    mode = None
+    if building.name in WALL_PAINTS:
+        # A second look is painted over the wall by vertex alpha. It is
+        # laid through the same UVs, so its scale is the wall's tile over
+        # its own.
+        other, mode, tint = WALL_PAINTS[building.name]
+        under, under_tile = materials.look(other)
+        under = dict(under, name=f"{under['name']} x{tint}", colour=[tint, tint, tint, 1.0], scale=tile / under_tile)
+        wall_mat = dict(wall_mat, name=f"{wall_mat['name']} +{under['name']}", paint={"with": under, "edge": 0.25, "ragged": 0.85})
     chooser = random.Random(building.seed)
     x0, x1, z0, z1 = building.box
-    for side in ("+x", "-x", "+z", "-z"):
+    for number, side in enumerate(("+x", "-x", "+z", "-z")):
         origin, along, normal, length = face_frame(building, side)
         front = side in building.fronts
 
@@ -1169,7 +1353,7 @@ def building_parts(building, materials, extras):
         # The wall itself, cut round its openings: a grid whose lines run
         # along every opening's edges, about half a metre apart elsewhere,
         # so that grime can be painted on its points.
-        spacing = 0.55 if front else 1.6
+        spacing = 0.55 if front else (0.8 if mode else 1.6)
         # The openings' edges must be lines of the grid, or a sliver of
         # wall is missing beside them; a regular line too near one of them
         # is left out instead.
@@ -1190,6 +1374,9 @@ def building_parts(building, materials, extras):
                 # The ground just in front of the wall.
                 foot = height(p[0] + normal[0] * 0.3, p[2] + normal[2] * 0.3) if abs(p[2]) < FAR + 0.5 else 0.15
                 colour = wall_grime(u, v, length, building.tall, openings, building.seed, foot)
+                if mode:
+                    cover = wall_cover(mode, u, v, v - foot, length, building.tall, openings, building.seed * 8 + number)
+                    colour = colour[:3] + (1.0 - cover,)
                 points[(i, j)] = shape.point(p, normal, ((u + offset) / tile, -v / tile), colour)
             return points[(i, j)]
 
@@ -1328,6 +1515,19 @@ def trims(materials, at, along, normal, length, building, chooser):
         paint = materials.fascia
         shade = chooser.choice(((0.1, 0.16, 0.12), (0.35, 0.08, 0.07), (0.08, 0.1, 0.2), (0.12, 0.12, 0.12)))
         slab(paint, 0.0, length, 3.0, 3.55, -0.01, 0.1, shade + (1.0,))
+
+
+def metres(look):
+    """A look whose pictures are laid by metres: a mesh whose UVs are
+    world metres shows `tile` metres to a copy."""
+    material, tile = look
+    return dict(material, name=f"{material['name']} /m", scale=1.0 / tile)
+
+
+def painted(base, other, edge=0.2, ragged=0.8):
+    """`base` (a material) painted with `other` where the vertex alpha is
+    under 1, as a material of its own."""
+    return dict(base, name=f"{base['name']} +{other['name']}", paint={"with": other, "edge": edge, "ragged": ragged})
 
 
 def patched(look, shade, rough=0.92):
@@ -1685,14 +1885,23 @@ def main():
     solids = []
 
     print("The ground...", file=sys.stderr)
+    # Every ground picture is laid by metres, each at its own scale, so
+    # that parts that meet carry on one another's pictures; and each
+    # asphalt is painted with another where it is mended or worn.
+    lane = metres(patched(looks.look("asphalt_02"), 0.95))
+    tar_material, tar_tile = patched(looks.look("asphalt_01"), 0.62, 0.8)
+    # Fresh tar: the picture is brown, so the tint takes the brown out.
+    tar = metres((dict(tar_material, colour=[0.78, 0.92, 1.15, 1.0]), tar_tile))
+    court = metres(patched(looks.look("asphalt_04"), 0.72, 0.85))
+    road = metres(patched(looks.look("asphalt_02"), 0.85))
     level.place("ground", level.mesh("ground", ground({
-        "asphalt": patched(looks.look("asphalt_02"), 0.95),
-        "patch": patched(looks.look("asphalt_02"), 0.6),
-        "court": patched(looks.look("asphalt_04"), 0.72, 0.85),
+        "asphalt": painted(lane, tar, edge=0.35, ragged=1.0),
+        # The court fades into the lane's asphalt over its last half metre.
+        "court": painted(court, lane, edge=0.3, ragged=0.8),
     })))
     level.place("streets", level.mesh("streets", streets({
-        "pavement": patched(looks.look("concrete_pavement"), 0.9),
-        "road": patched(looks.look("asphalt_02"), 0.85),
+        "pavement": metres(patched(looks.look("concrete_pavement"), 0.9)),
+        "road": painted(road, tar, edge=0.35, ragged=1.0),
     })))
     kerb_material, kerb_tile = looks.look("concrete_floor_02")
     level.place("kerbs", level.mesh("kerbs", [kerbs(kerb_material, kerb_tile)]))
@@ -2313,8 +2522,6 @@ def decorate(level, fronts, pictures, made):
         wall, a, b = chooser.choice(walls)
         look = chooser.choice(marks["tag"] + small)
         on(wall, chooser.uniform(a, b), chooser.uniform(0.6, 1.9), look, chooser.uniform(1.0, 1.8) if look in small else chooser.uniform(0.7, 1.2), 0.0075 + 0.0002 * k)
-    for k, (wall, along, bottom) in enumerate((("E", 23.6, 0.2), ("W", -9.9, 0.3), ("W", 22.6, 0.6), ("E", -11.6, 0.4))):
-        on(wall, along, bottom, marks["buff"][k % len(marks["buff"])], 1.0, 0.0055)
     # ---- moss and damp at the walls' feet
     feet = marks["moss"] + [grime["moss"]]
     for k in range(26):
