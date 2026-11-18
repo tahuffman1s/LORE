@@ -362,9 +362,11 @@ impl LampFrame {
     /// the lamps that matter most given shadows as `shadowing` allows.
     /// Lamps that light nothing in view are left out, unless their light
     /// reaches within `around` metres of the eye (where bounce light's
-    /// probes are, which they light wherever the eye looks); past
-    /// [`MOST_LAMPS`] the farthest. The shadows' pictures that have to be
-    /// drawn before the lamps are read are then [`faces`](Self::faces).
+    /// probes are, which they light wherever the eye looks). Past
+    /// [`MOST_LAMPS`], the nearest of those that light what is seen are
+    /// kept first, and the nearest of the rest fill what room is left. The
+    /// shadows' pictures that have to be drawn before the lamps are read
+    /// are then [`faces`](Self::faces).
     pub(crate) fn pack(
         &mut self,
         lamps: &[Lamp],
@@ -406,17 +408,24 @@ impl LampFrame {
                 }
             }
         }
-        // Nearest first, and the same order every time.
-        self.near
-            .sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
-        self.near.truncate(MOST_LAMPS);
-        self.slots.choose(
-            lamps,
-            &self.near,
-            &self.viewed,
-            shadowing,
-            &mut self.shadows,
-        );
+        // Nearest first, and the same order every time. Past the most that
+        // can be drawn, those that light what is seen come first; lamps
+        // out of view that only light the probes have what room is left.
+        let nearest = |one: &(f32, usize), other: &(f32, usize)| {
+            one.0.total_cmp(&other.0).then(one.1.cmp(&other.1))
+        };
+        if self.near.len() > MOST_LAMPS {
+            let viewed = &self.viewed;
+            self.near.sort_unstable_by(|one, other| {
+                viewed[other.1]
+                    .cmp(&viewed[one.1])
+                    .then_with(|| nearest(one, other))
+            });
+            self.near.truncate(MOST_LAMPS);
+        }
+        self.near.sort_unstable_by(nearest);
+        self.slots
+            .choose(lamps, &self.near, shadowing, &mut self.shadows);
 
         let count = self.near.len();
         let words = count.div_ceil(32);
@@ -867,5 +876,94 @@ mod tests {
             );
             last = now;
         }
+    }
+
+    /// Number `column` of row `row` of lamp `slot` of the frame.
+    fn lamp_number(bytes: &[u8], slot: usize, row: usize, column: usize) -> f32 {
+        let at = HEAD_BYTES + slot * LAMP_BYTES + row * 16 + column * 4;
+        f32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+    }
+
+    #[test]
+    fn a_lamp_out_of_view_that_lights_the_probes_casts_a_shadow_wherever_the_eye_looks() {
+        // One slot, and two lamps: one behind the eye, whose light reaches
+        // the probes round it but nothing in view, and a farther one ahead.
+        let behind = Lamp {
+            reach: 3.0,
+            ..bulb([0.0, 0.0, 6.0])
+        };
+        let ahead = Lamp {
+            reach: 3.0,
+            ..bulb([0.0, 0.0, -10.0])
+        };
+        let lamps = [behind, ahead];
+        let mut frame = LampFrame::new();
+        let how = Shadowing {
+            slots: 1,
+            level: 1,
+            elapsed: 0.0,
+        };
+        // The one behind matters more to the light that bounces, and has
+        // the shadow, so that it does not light the probes through walls.
+        let packed = frame.pack(&lamps, &seen(), 1.0, &how, 18.0);
+        let bytes = packed.lamps.to_vec();
+        assert_eq!(head(&bytes)[3], 2);
+        // Nearest first: the one behind is the first of the frame's lamps.
+        assert!(lamp_number(&bytes, 0, 4, 0) >= 0.0, "it has no shadow");
+        assert_eq!(lamp_number(&bytes, 0, 3, 2), 1.0);
+        assert_eq!(lamp_number(&bytes, 1, 4, 0), -1.0);
+        assert_eq!(frame.faces().len(), 6);
+        // Turned round to face it, and back: its shadow stays, and is not
+        // drawn again.
+        let turned = Seen {
+            rays: [[0.0, 0.0, 1.0], [-16.0 / 9.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            ..seen()
+        };
+        let how = Shadowing {
+            elapsed: 1.0 / 60.0,
+            ..how
+        };
+        for view in [turned, seen(), turned] {
+            let packed = frame.pack(&lamps, &view, 1.0, &how, 18.0);
+            let now = packed.lamps.to_vec();
+            assert_eq!(lamp_number(&now, 0, 4, 0), lamp_number(&bytes, 0, 4, 0));
+            assert_eq!(lamp_number(&now, 0, 3, 2), 1.0);
+            assert!(frame.faces().is_empty());
+        }
+    }
+
+    #[test]
+    fn past_the_most_lamps_out_of_view_give_way_to_those_in_view() {
+        // Forty lamps just behind the eye that light only the probes round
+        // it, and more lamps ahead than can be drawn.
+        let lamps: Vec<Lamp> = (0..40)
+            .map(|number| {
+                #[allow(clippy::cast_precision_loss)]
+                let behind = 4.0 + number as f32 * 0.1;
+                Lamp {
+                    reach: 1.0,
+                    ..bulb([0.0, 0.0, behind])
+                }
+            })
+            .chain((0..MOST_LAMPS + 10).map(|number| {
+                #[allow(clippy::cast_precision_loss)]
+                let ahead = 5.0 + number as f32 * 0.5;
+                Lamp {
+                    reach: 1.0,
+                    ..bulb([0.0, 0.0, -ahead])
+                }
+            }))
+            .collect();
+        let mut frame = LampFrame::new();
+        frame.pack(&lamps, &seen(), 1.0, &Shadowing::default(), 18.0);
+        assert_eq!(frame.count(), MOST_LAMPS);
+        assert!(frame.near.iter().all(|&(_, number)| frame.viewed[number]));
+        // Still nearest first, for bounce light's nearest lamps.
+        assert!(frame.near.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        // With room to spare, those out of view fill it.
+        let few: Vec<Lamp> = lamps[..60].to_vec();
+        frame.pack(&few, &seen(), 1.0, &Shadowing::default(), 18.0);
+        assert_eq!(frame.count(), 60);
+        assert_eq!(frame.near[0].1, 0);
     }
 }
