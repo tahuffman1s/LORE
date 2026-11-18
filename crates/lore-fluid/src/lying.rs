@@ -25,6 +25,19 @@ const SAME_PLANE: f32 = 0.02;
 const SAME_FACING: f32 = 0.8;
 /// Overlap under this is left alone, metres, so crowded drops can rest.
 const LEAST_PUSH: f32 = 5.0e-4;
+/// How much of the smaller of two neighbouring patches of one kind may lie
+/// under the other before they push apart.
+const SHEET_OVERLAP: f32 = 0.5;
+/// A patch as wide as it may be splits in two once it is this many times as
+/// thick as a puddle of its kind.
+const SPLIT_THICK: f32 = 2.0;
+/// A small drop that meets a patch of its own kind at most this share of
+/// the patch's volume joins it even when the two would be wider than a
+/// patch may be: the patch grows thicker, and then splits.
+const JOIN_SHARE: f32 = 0.25;
+/// The thickest a patch may grow by small drops joining it, in puddle
+/// thicknesses: past the split, so a patch splits before it stops taking.
+const JOIN_THICKEST: f32 = 2.0 * SPLIT_THICK;
 /// Trail drops leave this many store places free for the rest.
 const TRAIL_ROOM: usize = 256;
 /// How far above its surface a drop looks along its way, metres.
@@ -61,9 +74,14 @@ fn creep_speed(phys: &Physics, p: &Particle, radius: f32) -> f32 {
         .max(run_speed(phys, p, radius))
 }
 
+/// How much of itself a corrosive drop uses up per unit of volume it eats,
+/// times its corrosiveness: a modelling choice, not a measured number.
+const ACID_SPENT: f32 = 0.5;
+
 impl Fluids {
     /// What a drop that has just landed does to the other kinds under it:
-    /// washes them away, or lies on top and covers part of them.
+    /// washes them away, eats them (if it is corrosive), or lies on top and
+    /// covers part of them.
     pub(crate) fn settle_landings(&mut self) {
         let Self {
             parts,
@@ -78,7 +96,11 @@ impl Fluids {
             if !(p.landed_now && p.lying && !p.dead) {
                 continue;
             }
-            let washes = physics.get(usize::from(p.kind)).is_some_and(|f| f.washes);
+            let (washes, corrosive) = physics
+                .get(usize::from(p.kind))
+                .map_or((false, 0.0), |f| (f.washes, f.corrosive));
+            // Volume of other kinds this drop has eaten.
+            let mut eaten = 0.0f32;
             let radius = p.patch();
             let reach = radius + R_MAX;
             let lo = [p.pos[0] - reach, p.pos[1] - reach, p.pos[2] - reach];
@@ -117,15 +139,26 @@ impl Fluids {
                 let small = radius.min(rq);
                 let mut share = ((radius + rq - d) / (2.0 * small)).clamp(0.0, 1.0)
                     * (small * small / (rq * rq));
-                if washes {
-                    share = (2.0 * share).min(1.0);
+                let mut times = if washes { 2.0 } else { 1.0 };
+                if corrosive > 0.0 {
+                    times = f32::max(times, 1.0 + corrosive);
                 }
+                if times > 1.0 {
+                    share = (times * share).min(1.0);
+                }
+                eaten += q.volume * share;
                 q.volume *= 1.0 - share;
                 if q.volume < MIN_VOLUME {
                     q.dead = true;
                 }
             });
             if let Some(slot) = parts.get_mut(i) {
+                if corrosive > 0.0 {
+                    slot.volume = (slot.volume - corrosive * ACID_SPENT * eaten).max(0.0);
+                    if slot.volume < MIN_VOLUME {
+                        slot.dead = true;
+                    }
+                }
                 slot.landed_now = false;
                 slot.still = 0;
                 slot.calm = false;
@@ -141,18 +174,26 @@ impl Fluids {
         self.run(level, dt);
     }
 
-    /// Lying drops spread towards the thickness of a puddle.
+    /// Lying drops spread towards the thickness of a puddle. A drop that
+    /// has spread as wide as a patch may be and is still much thicker than
+    /// a puddle splits in two side by side, so that what a stream pours
+    /// into one place spreads into a wider puddle instead of piling up.
     pub(crate) fn spread(&mut self, dt: f32) {
-        for (i, p) in self.parts.iter_mut().enumerate() {
+        for i in 0..self.parts.len() {
+            let Some(mut p) = self.parts.get(i).copied() else {
+                continue;
+            };
             if !p.lying || p.dead || p.still >= SLEEP_TICKS {
                 continue;
             }
-            let Some(ticks) = pace(self.tick, i, p) else {
+            let Some(ticks) = pace(self.tick, i, &p) else {
                 continue;
             };
             let dt = dt * ticks as f32;
-            let Some(phys) = self.physics.get(usize::from(p.kind)) else {
-                p.dead = true;
+            let Some(phys) = self.physics.get(usize::from(p.kind)).copied() else {
+                if let Some(slot) = self.parts.get_mut(i) {
+                    slot.dead = true;
+                }
                 continue;
             };
             // A drop already thinner than a puddle is a lens and stays one.
@@ -163,11 +204,41 @@ impl Fluids {
             // Never wider than R_MAX: a big drop settles thick, not wide.
             let r2 = (r + phys.spread_speed(p.h, r) * dt).min(R_MAX);
             p.h = (p.volume / (PI * r2 * r2)).max(phys.h_eq);
+            if r2 >= R_MAX
+                && p.h > SPLIT_THICK * phys.h_eq
+                && self.parts.len() + TRAIL_ROOM < MOST_DROPS
+            {
+                // Half of it goes to one side and half to the other, each
+                // as thick as the whole was: they then spread on their own
+                // and push apart, quickly if thin and slowly if thick.
+                let (u, v) = frame(p.normal);
+                let turn = core::f32::consts::TAU * self.rolls.next();
+                let way = add(scale(u, libm::cosf(turn)), scale(v, libm::sinf(turn)));
+                p.volume *= 0.5;
+                let half = 0.5 * R_MAX;
+                self.born += 1;
+                let mut other = Particle::lying(
+                    p.kind,
+                    madd(p.pos, way, half),
+                    p.normal,
+                    p.volume,
+                    p.h,
+                    self.born,
+                );
+                other.dry_left = p.dry_left;
+                p.pos = madd(p.pos, way, -half);
+                p.changed = true;
+                p.h_ref = p.h;
+                self.parts.push(other);
+            }
             // Thickness is compared with where it last counted as changed,
             // so a slow spread still keeps a drop awake now and then.
             if (p.h - p.h_ref).abs() > 0.01 * p.h_ref {
                 p.h_ref = p.h;
                 p.changed = true;
+            }
+            if let Some(slot) = self.parts.get_mut(i) {
+                *slot = p;
             }
         }
     }
@@ -426,7 +497,16 @@ fn meet(
     let volume = a.volume + b.volume;
     let h = a.h.max(b.h);
     let wide = (volume / (PI * h)).sqrt();
-    if wide <= R_MAX {
+    // A small drop joins a full patch only while the patch is not already
+    // as thick as a split makes it: with the store too full to split, the
+    // two push apart instead of piling up without end.
+    let h_eq = physics.get(usize::from(a.kind)).map_or(0.0, |f| f.h_eq);
+    let joined_h = h.max(volume / (PI * R_MAX * R_MAX));
+    let small_joins = a.volume.min(b.volume) <= JOIN_SHARE * a.volume.max(b.volume)
+        && joined_h <= JOIN_THICKEST * h_eq;
+    if wide <= R_MAX || small_joins {
+        // Never wider than a patch may be: what does not fit lies thicker.
+        let h = h.max(volume / (PI * R_MAX * R_MAX));
         let (keep, gone, kept_at, gone_at) = if i < j { (*a, b, i, j) } else { (b, *a, j, i) };
         let share = gone.volume / volume;
         let mut merged = keep;
@@ -449,7 +529,9 @@ fn meet(
         }
         return true;
     }
-    let overlap = ra + rb - d;
+    // Patches of one puddle are left overlapping by a share of the smaller,
+    // so that together they lie as one sheet of liquid with no dry seams.
+    let overlap = ra + rb - d - SHEET_OVERLAP * ra.min(rb);
     if overlap <= LEAST_PUSH {
         return false;
     }

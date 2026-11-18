@@ -97,6 +97,7 @@
       <tr><td><code>game.audio.play</code>, <code>game.audio.playAt</code></td><td>Plays a sound by name: <code>game.audio.play("music/theme", { volume = 0.4, loop = true })</code> is as loud wherever the player stands, and <code>game.audio.playAt("door", vector.create(10, 1, -4), { range = 30 })</code> comes from a place in the world, in metres. Both give back a sound that <code>sound:stop()</code> ends, and <code>game.audio.stopAll()</code> stops every sound the script has played. A sound is a WAV or Ogg Vorbis file in the game's <code>sounds</code> folder, named without <code>.wav</code> or <code>.ogg</code>. Music goes in <code>sounds/music</code> as Ogg Vorbis and follows the player's music volume, and a long Ogg Vorbis file is decoded as it plays, not held in memory whole; the starter sounds <code>"footstep"</code>, <code>"gunshot"</code>, <code>"landing"</code>, <code>"dry-fire"</code> and <code>"reload"</code> need no file, and a file with one of those names replaces it.</td></tr>
       <tr><td><code>game.hud.text</code>, <code>game.hud.bar</code>, <code>game.hud.box</code></td><td>Puts a piece on the HUD, over the game: <code>local score = game.hud.text("0", { at = "top" })</code> is a line of text, <code>game.hud.bar(1, { at = "bottom left", color = "red" })</code> a bar that is full at 1 and empty at 0, and <code>game.hud.box({ at = "center", width = 6, height = 6 })</code> a plain box. Make each once, at the top of the file, and change it as the game goes on: <code>score.text = points</code>, <code>health.value = 70 / 100</code>, <code>health.color = "orange"</code>, <code>score.visible = false</code>, <code>score.down = 40</code>, <code>score:remove()</code>. <code>at</code> is <code>"top left"</code>, <code>"top"</code>, <code>"top right"</code>, <code>"left"</code>, <code>"center"</code>, <code>"right"</code>, <code>"bottom left"</code>, <code>"bottom"</code> or <code>"bottom right"</code>; <code>right</code> and <code>down</code> move it from there, in pixels on a screen 1080 high. A colour is a name such as <code>"red"</code> or a hex code such as <code>"#ff8800"</code>.</td></tr>
       <tr><td><code>game.input.rumble</code></td><td>Shakes the player's gamepad: <code>game.input.rumble(0.2, 0.6, 0.1)</code> is the heavy motor, the light motor, then seconds. On Linux and Windows, in <code>lore run</code>; not on macOS yet. The player's Rumble setting scales it, down to off.</td></tr>
+      <tr><td><code>game.fluid</code>, <code>game.fluids</code></td><td>Fluids: drops a script lets out, that fly, splash, run down walls and pool, and change how the player walks. See <a href="#fluids">Fluids</a>.</td></tr>
       <tr><td><code>game.input.useSet</code>, <code>game.input.currentSet</code></td><td>Switches which set of actions hears the player: <code>game.input.useSet("menu")</code> while a shop or inventory of your own is open, where the <code>menu_...</code> actions work and the mouse is a pointer, and <code>game.input.useSet("gameplay")</code> to go back. <code>game.input.currentSet()</code> is the name of the set the game is in. A script cannot add actions or sets of its own yet.</td></tr>
     </tbody>
   </table>
@@ -115,6 +116,34 @@ game.every(10, function()
 end)</code></pre>
   </div>
   <p>A timer is called on the first tick that is not before its time, and a repeating one keeps its beat for ever. <code>timer:cancel()</code> calls one off. Saving the script drops the timers started inside functions (the terminal says how many) and starts the ones at the top of the file again; nothing a script can draw on screen is built yet, so for now <code>game.onDraw</code> has only <code>print</code> and sounds to show with.</p>
+
+  <h3 id="fluids">Fluids</h3>
+  <p>Fluids are drops that a script lets out: <code>game.fluids.spray("water", game.player.eye, game.player.aim * 12)</code>. Call it on every tick a button is held and it flows. The drops fly, splash, run down walls at the speed their thickness gives and pool where they land. A fluid changes how the player walks: oil slides, honey and tar drag, glue holds the feet and slime bounces. A corrosive fluid eats the other fluids it lands on, and tells <code>game.fluids.onTouch</code> how much it hurt (<code>touch.harm</code>); it hurts nobody by itself, because LORE has no health yet, so your game decides what the harm costs. Water is also the level's lakes, so changing water's look recolours them.</p>
+  <p>There are thirteen ready-made kinds, which need no settings: <code>water</code>, <code>oil</code>, <code>honey</code>, <code>slime</code>, <code>tar</code>, <code>acid</code>, <code>lava</code>, <code>mercury</code>, <code>milk</code>, <code>soap</code>, <code>paint</code>, <code>mud</code> and <code>blood</code>. To make your own, write <code>game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })</code> at the top of the file. Its look (<code>color</code>, <code>clarity</code>, <code>cloudiness</code>, <code>glow</code>, <code>shine</code>, <code>metal</code>, <code>refraction</code>) and how it flows (<code>viscosity</code>, <code>density</code>, <code>beading</code>, <code>slippery</code>, <code>sticky</code>, <code>bouncy</code>, <code>corrosive</code>, <code>dries</code>, <code>washes</code>) can be read and changed, as in <code>goo.viscosity = 0.6</code>. <code>game.fluids.clear()</code> takes the drops away, <code>game.fluids.amount("water")</code> says how many litres there are, and <code>game.fluids.under(game.player)</code> says what a character stands in. A world holds at most 32 kinds and 6000 drops; when it is full, the oldest lying drops go first.</p>
+  <p>This is a fluid gun: <kbd>E</kbd> changes the fluid, the fire button sprays it and <kbd>F8</kbd> clears the floor.</p>
+  <div class="code">
+<pre data-file="main.luau" tabindex="0"><code>local kinds = { "water", "oil", "honey", "slime", "acid" }
+local chosen = 1
+game.input.bind("next_fluid", { "E", "GamepadNorth" })
+game.input.bind("clear_fluids", { "F8", "GamepadSelect" })
+
+game.onTick(function()
+    if game.input.justPressed("next_fluid") then
+        chosen = chosen % #kinds + 1
+    end
+    if game.input.justPressed("clear_fluids") then
+        game.fluids.clear()
+    end
+    if game.input.pressed("fire") then
+        local aim = game.player.aim
+        game.fluids.spray(kinds[chosen], game.player.eye + aim * 0.4, aim * 12)
+    end
+end)
+
+game.fluids.onTouch(function(touch)
+    if touch.harm &gt; 0 then print("It burns!", touch.harm) end
+end)</code></pre>
+  </div>
 
   <p>The full list, with every setting and what each function is given, is <a href="https://github.com/tahuffman1s/LORE/blob/main/crates/lore-script/types/lore.d.luau"><code>lore.d.luau</code></a>. A copy is in every game's folder, which is what gives your editor autocomplete: in VS Code, install the <a href="https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp">Luau Language Server</a> extension and open the game's folder.</p>
   <p>A game to read: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/hello/main.luau">hello</a>, the smallest one.</p>

@@ -405,6 +405,140 @@ declare extern type HudGraph with
     function pointerAt(self): (number, number)
 end
 
+--- A kind of fluid: what `game.fluid` gives. Every setting can be read and
+--- changed, and a kind keeps its settings through a reload of the script.
+--- A number outside what a setting takes is brought into it.
+--- Example: local honey = game.fluid("honey"); honey.viscosity = 0.6
+declare extern type Fluid with
+    --- The kind's name, in lower case. It cannot be changed: make another
+    --- kind instead.
+    --- Example: print(game.fluid("Honey").name)
+    name: string
+
+    --- The colour things take on when seen through `clarity` metres of it;
+    --- for a cloudy fluid, the colour it is. A name or "#rrggbb"; reading
+    --- gives "#rrggbb".
+    --- Example: game.fluid("goo").color = "#40c060"
+    color: string
+
+    --- How many metres you can see into it before it takes on its colour
+    --- fully, from 0.0001 to 1000. 10 is clear water, 0.01 thin oil and
+    --- 0.001 opaque.
+    --- Example: game.fluid("pond").clarity = 2
+    clarity: number
+
+    --- How cloudy it is, from 0 (clear, like water and oil) to 1 (opaque
+    --- and milky, like milk, paint and mud).
+    --- Example: game.fluid("pond").cloudiness = 0.3
+    cloudiness: number
+
+    --- How much light it gives off itself, in its colour, from 0 (none) to
+    --- 1 (molten lava).
+    --- Example: game.fluid("goo").glow = 0.2
+    glow: number
+
+    --- How shiny it is, from 1 (glassy, like water) to 0 (matte, like mud).
+    --- Example: game.fluid("mud").shine = 0.4
+    shine: number
+
+    --- How much it is a liquid metal that mirrors in its colour, from 0
+    --- (not at all) to 1 (mercury).
+    --- Example: game.fluid("quicksilver").metal = 1
+    metal: number
+
+    --- How much it bends what is seen through it (its index of
+    --- refraction), from 1 to 3: 1.333 is water, 1.47 oil and 1.5 honey.
+    --- Example: game.fluid("glass-water").refraction = 1.5
+    refraction: number
+
+    --- How thick it is, from 0 to 1: 0 is water, 0.22 olive oil, 0.4
+    --- glycerin, 0.5 honey, 0.85 tar, the thickest that still moves. Each
+    --- 0.1 is about six times thicker.
+    --- Example: game.fluid("goo").viscosity = 0.6
+    viscosity: number
+
+    --- How heavy it is compared with water, from 0.1 to 20: water is 1, oil
+    --- 0.9, honey 1.4 and mercury 13.5.
+    --- Example: game.fluid("goo").density = 1.2
+    density: number
+
+    --- How much it pulls itself into beads (its surface tension), from 0
+    --- (spreads thin, like alcohol) through 0.13 (oil) and 0.4 (water) to 1 (mercury, which
+    --- beads up and rolls).
+    --- Example: game.fluid("goo").beading = 0.5
+    beading: number
+
+    --- How little the feet grip in it, from 0 (dry ground) through 0.45
+    --- (wet concrete, which is water) to 1 (soap or a banana skin).
+    --- Example: game.fluid("grease").slippery = 0.9
+    slippery: number
+
+    --- How much it holds the feet, from 0 (not at all) to 1 (glue: you
+    --- cannot jump and your feet are held still).
+    --- Example: game.fluid("glue").sticky = 1
+    sticky: number
+
+    --- How much a landing in it throws you back, from 0 (not at all) to 1
+    --- (nearly as high as you fell).
+    --- Example: game.fluid("jelly").bouncy = 0.8
+    bouncy: number
+
+    --- How much it harms whoever stands in it, from 0 (harmless) to 1
+    --- (strong acid). It also eats the other fluids it lands on. What the
+    --- harm costs is for your game to decide: see `game.fluids.onTouch`.
+    --- Example: game.fluid("acid").corrosive = 1
+    corrosive: number
+
+    --- How many seconds a settled drop lasts before it dries away, from 0
+    --- (for ever) to 86400.
+    --- Example: game.fluid("puddle").dries = 120
+    dries: number
+
+    --- True if it washes other fluids away where it lands, as water does.
+    --- Example: game.fluid("soap").washes = true
+    washes: boolean
+end
+
+--- What a character stands in: what a `game.fluids.onTouch` function is
+--- handed, and what `game.fluids.under` gives.
+--- Example: game.fluids.onTouch(function(touch) if touch.harm > 0 then print(touch.fluid.name .. " burns") end end)
+declare extern type FluidTouch with
+    --- Who stands in it.
+    --- Example: if touch.character == game.player then print("You are wet") end
+    character: Character
+
+    --- The kind there is most of under their feet.
+    --- Example: if touch.fluid == game.fluid("acid") then print("Acid!") end
+    fluid: Fluid
+
+    --- How much of their footprint is wet, from 0 to 1.
+    --- Example: if touch.cover > 0.5 then print("Soaked") end
+    cover: number
+
+    --- How deep it is, in metres.
+    --- Example: if touch.depth > 1 then print("Out of your depth") end
+    depth: number
+
+    --- How much it has hurt them this tick, already scaled by the tick:
+    --- add it up each tick, and never multiply it by time yourself. It is
+    --- how corrosive the fluid is
+    --- (weighted by `cover`) times the tick's seconds, so a whole second in
+    --- strong acid adds up to 1. 0 for a harmless fluid.
+    --- Example: health -= touch.harm * 20
+    harm: number
+
+    --- How many seconds they have stood in fluid without a break, this tick
+    --- included.
+    --- Example: if touch.seconds > 5 then print("You are drenched") end
+    seconds: number
+end
+
+--- What `game.fluid` takes to make or change a kind. `from` is a kind to
+--- start from (a ready-made name, a kind the game has, or a `Fluid`); each
+--- other setting replaces one thing, and is also a field of `Fluid`.
+--- Example: game.fluid("goo", { from = "honey", color = "green" })
+type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean? }
+
 declare game: {
     --- The player: the one person playing. There from the first line of
     --- the script to the last, so it needs no waiting for and no looking up.
@@ -474,6 +608,28 @@ declare game: {
     --- 1.
     --- Example: if game.timeSpeed() == 0 then print("Time is stopped") end
     timeSpeed: () -> number,
+
+    --- A kind of fluid, by name; it is made the first time it is asked for.
+    --- Names are trimmed and in lower case ("Honey" is "honey"). Kind "water"
+    --- is there from the start. Ready-made kinds, which a new name that is
+    --- one of them becomes: "water" (clear and blue), "oil" (golden, thin
+    --- and slippery), "honey" (thick and sticky), "slime" (green, sticky,
+    --- bouncy and faintly glowing), "tar" (black and very thick), "acid"
+    --- (pale and corrosive), "lava" (glowing, heavy and corrosive),
+    --- "mercury" (a mirror metal, very heavy), "milk" (white and milky),
+    --- "soap" (slippery, and washes), "paint" (red and opaque), "mud"
+    --- (brown, thick and matte) and "blood" (dark red). Any other new name
+    --- is a copy of water.
+    ---
+    --- With a table of settings the kind becomes exactly that: it starts
+    --- from `from` (or from the ready-made of the same name, or water) and
+    --- each setting given replaces one thing. Put the call at the top of the
+    --- file and a save updates the kind in place. There can be 32 kinds,
+    --- water included. Making or changing a kind is a rule: not from
+    --- `game.onDraw`; reading one is fine.
+    --- Example: local honey = game.fluid("honey")
+    --- Example: local goo = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
+    fluid: (name: string, settings: FluidSettings?) -> Fluid,
 
     --- Calls `handler` each time this file is saved and loaded again while
     --- the game is running. Variables in the file start over on a reload;
@@ -1136,5 +1292,48 @@ declare game: {
         --- the worst stutter lately.
         --- Example: game.onDraw(function() worst.text = string.format("%.1f ms", game.frames.slowestTime() * 1000) end)
         slowestTime: () -> number,
+    },
+
+    --- Fluids: letting them out, and what they do to a character. A "kind"
+    --- below is a `Fluid` or the name of one. A ready-made name that is not
+    --- yet a kind (see `game.fluid`) is made for you by `spray`; any other
+    --- name that is not a kind is a mistake that says the nearest one.
+    fluids: {
+        --- Lets fluid out at `from` for this tick, moving at `velocity` in
+        --- metres a second: the vector's length is the speed. Call it on
+        --- every tick while a button is held, and it flows. Options:
+        --- `litresPerSecond` is how much comes out while it flows (0 to 600,
+        --- default 0.6, a strong water pistol; 15 is a fire hose), and
+        --- `spread` is how far the drops fan out either side of `velocity`,
+        --- in degrees (0 to 180, default 3).
+        --- Prefer a `Fluid` kept in a local to a name: a mistyped local is
+        --- caught by your editor.
+        --- Example: game.fluids.spray("water", game.player.eye, game.player.aim * 12)
+        --- Example: game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litresPerSecond = 1.5, spread = 10 })
+        spray: (kind: string | Fluid, from: vector, velocity: vector, options: { litresPerSecond: number?, spread: number? }?) -> (),
+
+        --- Takes every drop of one kind out of the world, or of every kind
+        --- when no kind is given.
+        --- Example: game.fluids.clear("oil")
+        --- Example: game.fluids.clear()
+        clear: (kind: (string | Fluid)?) -> (),
+
+        --- How many litres of a kind are in the world, flying and lying, or
+        --- of every kind together when no kind is given. A read: fine in
+        --- `game.onDraw`.
+        --- Example: if game.fluids.amount("water") > 50 then print("Flooded") end
+        amount: (kind: (string | Fluid)?) -> number,
+
+        --- What a character stands in, or nil when they stand in nothing.
+        --- A read: fine in `game.onDraw`.
+        --- Example: local wet = game.fluids.under(game.player)
+        under: (character: Character) -> FluidTouch?,
+
+        --- Calls `handler` every tick a character stands in fluid, with
+        --- what they stand in. Nothing is hurt for you: `touch.harm` says
+        --- how much the fluid hurt this tick, and your game decides what
+        --- that costs.
+        --- Example: game.fluids.onTouch(function(touch) if touch.fluid == game.fluid("acid") then print(touch.harm) end end)
+        onTouch: (handler: (touch: FluidTouch) -> ()) -> (),
     },
 }

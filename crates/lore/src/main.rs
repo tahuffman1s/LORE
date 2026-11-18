@@ -112,7 +112,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload and the player dying.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying and\nstanding in a burning puddle.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -466,6 +466,20 @@ fn check(folder: &Path) -> Result<(), String> {
         game.tick(input.tick(), step);
         game.host_mut().remove_character(dummy);
         game.tick(input.tick(), step);
+        // Standing in a puddle of water made to burn, so the
+        // game.fluids.onTouch functions run too, with some harm to act on.
+        let puddle = lore_script::FluidUnder {
+            kind: 0,
+            cover: 1.0,
+            depth: 0.003,
+            corrosive: 0.5,
+        };
+        for _ in 0..2 {
+            game.host_mut().stand_in_fluid(player, Some(puddle), step);
+            game.tick(input.tick(), step);
+        }
+        game.host_mut().stand_in_fluid(player, None, step);
+        game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -537,7 +551,7 @@ fn check(folder: &Path) -> Result<(), String> {
         "Then the script was told of things that did not happen, to see what it does with \
          them: a training dummy stood ten metres in front of the player, who fired one shot \
          that hit its body and one that hit a wall, reloaded, died and was put back at a \
-         spawn point. No level was walked and nothing was aimed. Each game.on... function \
+         spawn point, then stood for two ticks in a puddle that burns. No level was walked and nothing was aimed. Each game.on... function \
          in the script was called at least once, with no errors. What those functions do \
          with a shot the check did not make up, such as one to the head or an explosion, \
          was not run."

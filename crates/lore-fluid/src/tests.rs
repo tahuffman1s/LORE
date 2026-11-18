@@ -278,3 +278,74 @@ fn footing_follows_what_is_underfoot() {
         (0.4, 0.2, 0.1)
     );
 }
+
+/// Oil on a floor with `eater` sprayed onto it afterwards: the litres of oil
+/// left and of the eater left.
+fn oil_then(eater: Flow) -> (f32, f32) {
+    let level = floor_and_wall();
+    let mut fluids = Fluids::new(11);
+    fluids.set_flow(
+        1,
+        Flow {
+            washes: false,
+            ..Flow::default()
+        },
+    );
+    fluids.set_flow(2, eater);
+    fluids.spray(1, [0.0, 1.0, 0.0], [0.0, -3.0, 0.0], 0.02, 0.0);
+    for _ in 0..90 {
+        fluids.step(&level, DT);
+    }
+    let oil = fluids.litres(Some(1));
+    fluids.spray(2, [0.0, 1.0, 0.0], [0.0, -3.0, 0.0], 0.01, 0.0);
+    let given = fluids.litres(Some(2));
+    for _ in 0..90 {
+        fluids.step(&level, DT);
+    }
+    assert!(oil > 0.0 && given > 0.0);
+    (fluids.litres(Some(1)) / oil, fluids.litres(Some(2)) / given)
+}
+
+#[test]
+fn acid_eats_oil_it_lands_on_and_is_used_up() {
+    let (oil_plain, own_plain) = oil_then(Flow {
+        washes: false,
+        ..Flow::default()
+    });
+    let (oil_acid, own_acid) = oil_then(Flow {
+        washes: false,
+        corrosive: 1.0,
+        ..Flow::default()
+    });
+    assert!(oil_acid < oil_plain, "{oil_acid} vs {oil_plain}");
+    assert!(own_acid < own_plain, "{own_acid} vs {own_plain}");
+}
+
+#[test]
+fn no_corrosion_leaves_landings_as_they_were() {
+    let a = oil_then(Flow {
+        washes: false,
+        ..Flow::default()
+    });
+    let b = oil_then(Flow {
+        washes: false,
+        corrosive: 0.0,
+        ..Flow::default()
+    });
+    assert_eq!(a, b);
+}
+
+#[test]
+fn every_lying_drop_is_published_with_some_flatness() {
+    let level = floor_and_wall();
+    let mut fluids = Fluids::new(4);
+    fluids.set_flow(1, honey());
+    fluids.spray(1, [0.0, 1.0, 0.0], [0.0, -3.0, 0.0], 0.02, 0.0);
+    fluids.spray(0, [1.0, 1.0, 0.0], [0.0, -3.0, 0.0], 0.02, 0.0);
+    for _ in 0..200 {
+        fluids.step(&level, DT);
+    }
+    // By now nothing is in flight, so every drop published is a lying one.
+    assert!(!fluids.drops().is_empty());
+    assert!(fluids.drops().iter().all(|d| d.flat >= 0.05));
+}

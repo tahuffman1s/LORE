@@ -2,7 +2,8 @@
 //! and splashing.
 
 use crate::flow::{GRAVITY, K_SPLASH, MIN_VOLUME, Physics};
-use crate::math::{add, dot, frame, length, madd, normalize, scale};
+use crate::lying::R_MAX;
+use crate::math::{add, dot, frame, length, madd, normalize, scale, sub};
 use crate::store::Particle;
 use crate::{Fluids, MOST_DROPS};
 use core::f32::consts::TAU;
@@ -15,6 +16,21 @@ const FLIGHT_LIMIT: f32 = 10.0;
 const MOST_THROWN: f32 = 0.7;
 /// How far a splash child starts off the surface, metres.
 const CHILD_LIFT: f32 = 0.001;
+/// Normals closer than this (dot product) are one surface, for landing
+/// in the wet.
+const WET_FACING: f32 = 0.8;
+/// How far off a lying drop's plane a landing still counts as in it, metres.
+const WET_PLANE: f32 = 0.02;
+/// How far beside a lying drop a landing still runs into it, metres: the
+/// crown of a drop landing in the wet is about this wide.
+const WET_REACH: f32 = 0.02;
+/// The fewest and the most drops one splash throws off.
+const FEWEST_THROWN: usize = 2;
+const MOST_CHILDREN: usize = 4;
+/// Splashes throw nothing off once the store has fewer free places than
+/// this: the stream and the puddles it makes matter more than spatter, so
+/// a long spray fills the store slowly and with what is seen.
+const SPLASH_ROOM: usize = 2000;
 
 impl Fluids {
     /// Moves every flying drop one tick, landing, splashing or removing
@@ -54,6 +70,10 @@ impl Fluids {
         p.vel = scale(p.vel, 1.0 / (1.0 + drag * t));
 
         p.flight_time += dt;
+        // A piece of a jet pulls itself round as the jet breaks up.
+        if p.long > 1.0 {
+            p.long = 1.0 + (p.long - 1.0) * libm::expf(-t / phys.breakup_time(r));
+        }
         let speed = length(p.vel);
         // The ray along the centre stops at the surface: a drop is
         // millimetres across and a ray is continuous, so nothing tunnels.
@@ -82,7 +102,11 @@ impl Fluids {
         let impact = length(p.vel);
         let normal_speed = (-dot(p.vel, normal)).max(0.0);
         let (k, root_we) = phys.splash(normal_speed, 2.0 * p.ball());
-        if k > K_SPLASH {
+        if k > K_SPLASH
+            && !p.thrown
+            && self.parts.len() + SPLASH_ROOM < MOST_DROPS
+            && !self.wet_at(hit.point, normal, p.kind)
+        {
             p = self.splash(p, hit.point, normal, impact, k, root_we);
         }
         if p.volume < MIN_VOLUME {
@@ -97,6 +121,33 @@ impl Fluids {
         lying
     }
 
+    /// Whether a lying drop of `kind` already covers `point` on the surface
+    /// facing `normal`. A drop that lands there runs into the liquid rather
+    /// than onto a dry wall, and does not throw spatter off: Mundo's
+    /// splashing threshold is for a dry wall, and a jet on one spot soon
+    /// wets it, after which what it brings joins the puddle it feeds.
+    ///
+    /// It reads the grid of the last step, which still holds every lying
+    /// drop where it was: flying drops land before anything lying moves.
+    fn wet_at(&self, point: [f32; 3], normal: [f32; 3], kind: u8) -> bool {
+        let lo = point.map(|c| c - R_MAX);
+        let hi = point.map(|c| c + R_MAX);
+        let mut wet = false;
+        self.grid.near(lo, hi, &mut |j| {
+            let Some(q) = self.parts.get(j) else {
+                return;
+            };
+            if wet || !q.lying || q.dead || q.kind != kind || dot(q.normal, normal) <= WET_FACING {
+                return;
+            }
+            let off = sub(point, q.pos);
+            let height = dot(off, normal);
+            let across = length(madd(off, normal, -height));
+            wet = height.abs() < WET_PLANE && across < q.patch() + WET_REACH;
+        });
+        wet
+    }
+
     /// Throws a share of `p` off the surface as children and returns `p`
     /// with what is left (Mundo, Sommerfeld and Tropea 1995).
     fn splash(
@@ -109,7 +160,7 @@ impl Fluids {
         root_we: f32,
     ) -> Particle {
         let share = (0.1 * (k / K_SPLASH - 1.0)).min(MOST_THROWN);
-        let children = (libm::floorf(root_we / 8.0) as usize).clamp(2, 6);
+        let children = (libm::floorf(root_we / 8.0) as usize).clamp(FEWEST_THROWN, MOST_CHILDREN);
         let each = share * p.volume / children as f32;
         if each < MIN_VOLUME {
             return p;
@@ -130,13 +181,14 @@ impl Fluids {
                 scale(normal, libm::sinf(lift)),
             );
             self.born += 1;
-            let child = Particle::flying(
+            let mut child = Particle::flying(
                 p.kind,
                 madd(point, normal, CHILD_LIFT),
                 scale(way, speed),
                 each,
                 self.born,
             );
+            child.thrown = true;
             self.parts.push(child);
             p.volume -= each;
         }

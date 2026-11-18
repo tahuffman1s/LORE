@@ -14,6 +14,7 @@ use mlua::{Function, Lua, Table, Value, Variadic};
 use crate::audio::{self, AUDIO_FUNCTIONS, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{TookTooLong, closest};
+use crate::fluid_api::{self, FluidState};
 use crate::hud::{self, HUD_FUNCTIONS, HudState};
 use crate::keep::{self, Kept, Store};
 use crate::limit::Interrupt;
@@ -42,6 +43,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onWeaponReload",
     "setTimeSpeed",
     "timeSpeed",
+    "fluid",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -81,6 +83,7 @@ pub(crate) struct Handlers {
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
     pub lightning: Vec<Function>,
+    pub fluid_touch: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -139,6 +142,9 @@ pub(crate) struct Shared {
     pub live_set: Rc<LiveSet>,
     /// What the script said of the weather and the hour.
     pub weather: Rc<Climate>,
+    /// The kinds of fluid and what was asked of them. It outlives this
+    /// version of the script.
+    pub fluids: Rc<FluidState>,
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
@@ -287,6 +293,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
+    fluid_api::install(lua, shared, &game)?;
 
     let input = lua.create_table()?;
     let any = Reads::Any;
@@ -350,6 +357,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
+    members.push("fluids");
     members.push("frames");
     members.push("hud");
     members.push("input");
@@ -764,7 +772,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 25] = [
+        let groups: [(&str, &[&str]); 28] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -790,6 +798,9 @@ mod tests {
             ("Timer:", crate::time_api::TIMER_METHODS),
             ("Tween.", crate::time_api::TWEEN_FIELDS),
             ("Tween:", crate::time_api::TWEEN_METHODS),
+            ("game.fluids.", crate::fluid_api::FLUIDS_FUNCTIONS),
+            ("Fluid.", crate::fluid_api::FLUID_FIELDS),
+            ("FluidTouch.", crate::fluid_api::TOUCH_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

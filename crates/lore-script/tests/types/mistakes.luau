@@ -71,3 +71,8 @@ game.input.bind("open_map") -- wrong: it needs buttons
 local fast: string = game.frames.rate() -- wrong: a rate is a number
 local slow: number = game.frames.slowest() -- wrong: it is game.frames.slowestTime(), in seconds
 local held: string = health.pressed -- wrong: pressed is true or false
+game.fluid("goo", { viscosity = "thick" }) -- wrong: how thick is a number
+game.fluid(5) -- wrong: a kind is named in quotes
+game.fluids.spray("water", game.player.eye) -- wrong: it needs a velocity too
+game.fluids.under("player") -- wrong: it takes a character
+local sticky: string = game.fluid("goo").sticky -- wrong: stickiness is a number

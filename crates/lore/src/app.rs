@@ -345,6 +345,7 @@ fn start(
         last_frame: Instant::now(),
         last_view: None,
         ui: lore_ui::DrawBuffer::default(),
+        fluid_drops: Vec::new(),
         unseen: InputFrame::default(),
         sound,
         #[cfg(feature = "editor")]
@@ -412,6 +413,9 @@ struct App<G> {
     /// The HUD and menus the game asked for this frame. Kept from frame to
     /// frame so that gathering them stops asking for memory.
     ui: lore_ui::DrawBuffer,
+    /// The fluid's drops the game asked for this frame. Kept from frame to
+    /// frame for the same reason.
+    fluid_drops: Vec<lore_render::FluidDrop>,
     /// What the player did that no tick has seen yet, read again for every
     /// frame. Kept from frame to frame for the same reason.
     unseen: InputFrame,
@@ -707,6 +711,7 @@ impl<G: Game> App<G> {
         let mut frame = Frame::new(self.clock.alpha())
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
+            .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
@@ -762,7 +767,18 @@ impl<G: Game> App<G> {
         let (water_rise, sky_clock) = frame.take_water();
         let storm_bolts = frame.take_storm_bolts();
         let weather = frame.take_weather();
+        let fluid = frame.take_fluid();
         if let Some(renderer) = &mut self.renderer {
+            // The looks first, so that new drops are never drawn in an old one.
+            if let Some(looks) = &fluid.looks {
+                renderer.set_fluid_looks(looks);
+            }
+            if let Some(look) = fluid.water_look {
+                renderer.set_water_look(look);
+            }
+            if fluid.said {
+                renderer.set_fluid(&fluid.drops);
+            }
             for splash in splashes {
                 renderer.splash(splash);
             }
@@ -797,6 +813,7 @@ impl<G: Game> App<G> {
                 renderer.set_storm_bolts(own);
             }
         }
+        self.fluid_drops = fluid.drops;
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);
