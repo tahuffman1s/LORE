@@ -101,8 +101,9 @@ struct View {
     // from its middle its wall is; how strong it is, from 0 for none to 1,
     // how far round it has turned in radians, and how far the wind has
     // carried what is near, which is the same as before but begun again
-    // every few kilometres so that it stays exact.
-    weather: array<vec4<f32>, 6>,
+    // every few kilometres so that it stays exact. Last, how deep the snow
+    // lies, in metres.
+    weather: array<vec4<f32>, 7>,
     // The heavens (`sky.rs`): towards the sun itself, and how far the
     // night has come from 0 to 1; towards the moon, and how far the stars
     // have turned, in radians; the pole they turn about; the colour of the
@@ -139,6 +140,10 @@ struct View {
 @group(0) @binding(11) var clamp_sampler: sampler;
 // How deep the still water nearest the eye is, seen from above.
 @group(0) @binding(12) var near_water: texture_2d<f32>;
+// How far the snow near the eye has been trodden down, from not at all to
+// all the way (`tracks.rs`): a square that repeats, so that a place in the
+// world is always the same point of it.
+@group(0) @binding(13) var track_map: texture_2d<f32>;
 
 // How one texture is laid over a mesh.
 struct Placing {
@@ -284,6 +289,13 @@ fn blown(world: vec3<f32>, foot: vec3<f32>, ago: f32) -> vec3<f32> {
     let quick = 1.0 + 0.5 * smoothstep(8.0, 30.0, speed);
     let shiver = sin(seconds * 5.3 * quick + own) * cos(seconds * 3.1 * quick + own * 1.7);
     moved += vec3<f32>(along.x, 0.5, along.z) * (shiver * 0.014 * out * strength);
+
+    // Snow that lies weighs down what is low and gives: a fern under a
+    // hand of snow is pressed half way to the ground, and under snow to
+    // the knee it is buried. What stands taller than a walker's waist
+    // carries it.
+    let load = smoothstep(0.03, 0.4, view.weather[6].x) * min(draw.sway, 1.0);
+    moved.y -= min(up, 1.6) * 0.7 * load * (1.0 - smoothstep(0.5, 1.6, up));
 
     // Whoever is walking through pushes it aside: what is within a stride
     // of the eye's feet, and no higher than the eye, leans away and is
@@ -1037,6 +1049,85 @@ fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
     return mix(1.0, 0.22 + 0.78 * seen, clamp((inside - 0.04) / 0.08, 0.0, 1.0));
 }
 
+// How far from the eye tracks in the snow are drawn, in metres, how far
+// off they are still carved into it and not only shaded, and the side of
+// the square their map repeats in.
+const TRACKS_SEEN: f32 = 27.0;
+const TRACKS_CARVED: f32 = 14.0;
+const TRACK_SQUARE: f32 = 64.0;
+
+// How far the snow at a place is trodden down, from 0 to 1.
+fn trodden(place: vec2<f32>) -> f32 {
+    return textureSampleLevel(track_map, wave_sampler, place / TRACK_SQUARE, 0.0).r;
+}
+
+// The tracks in the snow at a point of a surface that faces `upright`:
+// how far it is trodden where the line of sight meets the bottom of the
+// track, from 0 to 1, and which way the snow slopes there along x and z,
+// as the rise for each metre.
+//
+// Nothing is moved: the snow is drawn on the ground as it is built, and a
+// track is carved down out of it here, where it is coloured. The line of
+// sight is followed on under the surface, in a few steps, to where it
+// meets the floor of the track or the far wall of it (relief mapping, as
+// the console versions of Batman: Arkham Origins drew their snow, which
+// had no finer triangles to move either). So the near wall of a furrow
+// hides its floor and the far wall is seen, as with a real one. A track
+// goes most of the way down through the snow that lies, and no deeper
+// than a boot: the deeper the snow, the deeper the track.
+fn snow_tracks(place: vec3<f32>, upright: vec3<f32>, ragged: vec2<f32>) -> vec3<f32> {
+    // Nobody treads a ruled line: the edge of a track wanders by a few
+    // centimetres.
+    let world = place + vec3<f32>(ragged.x, 0.0, ragged.y);
+    let line = world - view.eye.xyz;
+    let off = length(line.xz);
+    let deep = 0.85 * min(view.weather[6].x, 0.45);
+    if off >= TRACKS_SEEN || deep <= 0.0005 {
+        return vec3<f32>(0.0);
+    }
+    let here = trodden(world.xz);
+    if here <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let far = length(line);
+    let direction = line / max(far, 0.001);
+    var at = world.xz;
+    // How fast the line of sight goes down into the snow.
+    let falls = -dot(direction, upright);
+    let carved = deep * (1.0 - smoothstep(0.6 * TRACKS_CARVED, TRACKS_CARVED, far));
+    if carved > 0.004 && falls > 0.02 {
+        // No further along than it takes to reach the bottom, and at a
+        // glancing look no further than a few times the depth: past that
+        // the steps are too long to find a wall.
+        let reach = carved / max(falls, 0.22);
+        var along = 0.0;
+        var gap = here * carved;
+        var found = reach;
+        for (var number = 1; number <= 6; number++) {
+            let next = reach * f32(number) / 6.0;
+            let bed = trodden(world.xz + direction.xz * next) * carved;
+            let under = falls * next;
+            if under >= bed {
+                // Between the last step and this one: where the two lines
+                // cross.
+                let over = under - bed;
+                found = mix(along, next, gap / max(gap + over, 0.00001));
+                break;
+            }
+            along = next;
+            gap = bed - under;
+        }
+        at = world.xz + direction.xz * found;
+    }
+    let apart = 0.05;
+    let slope = vec2<f32>(
+        trodden(at + vec2<f32>(apart, 0.0)) - trodden(at - vec2<f32>(apart, 0.0)),
+        trodden(at + vec2<f32>(0.0, apart)) - trodden(at - vec2<f32>(0.0, apart)),
+    ) * (-deep / (2.0 * apart));
+    let seen = 1.0 - smoothstep(0.8 * TRACKS_SEEN, TRACKS_SEEN, off);
+    return vec3<f32>(trodden(at), slope) * seen;
+}
+
 // The light the surface sends to the eye.
 fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var normal = normalize(corner.normal);
@@ -1103,10 +1194,30 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
         let faces = mix(normalize(corner.normal).y * side, normal.y, 0.6)
             + (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
         snowed = smoothstep(needs - 0.1, needs + 0.1, faces) * smoothstep(0.0, 0.12, lies) * out;
-        base_seen = mix(base, vec3<f32>(0.9, 0.92, 0.95), snowed);
+        var snow = vec3<f32>(0.9, 0.92, 0.95);
+        var tilt = vec3<f32>(0.0);
+        // Tracks are in the snow on the ground and on what stands still:
+        // not on a leaf that hangs over where someone walked.
+        if snowed > 0.01 && draw.sway == 0.0 && !thin {
+            // Where it has been trodden: pressed snow is denser, so it is
+            // darker and bluer, and the bottom of a deep track sees less
+            // of the sky. A print in snow no deeper than a finger goes
+            // through to the ground.
+            let track = snow_tracks(
+                corner.world, normalize(corner.normal) * side, (vec2<f32>(small, patches) - 0.5) * 0.07,
+            );
+            let depth = view.weather[6].x;
+            let sunk = track.x * (0.14 + 0.4 * smoothstep(0.01, 0.25, depth));
+            snow = mix(snow, vec3<f32>(0.55, 0.63, 0.78), 0.6 * track.x) * (1.0 - sunk);
+            snowed *= 1.0 - 0.6 * track.x * (1.0 - smoothstep(0.02, 0.08, depth));
+            tilt = vec3<f32>(-track.y, 0.0, -track.z);
+        }
+        base_seen = mix(base, snow, snowed);
         metallic *= 1.0 - snowed;
         roughness = mix(roughness, 0.78, snowed);
         normal = normalize(mix(normal, normalize(corner.normal) * side + vec3<f32>(0.0, 0.35, 0.0), 0.7 * snowed));
+        // The walls of a track face the way they slope.
+        normal = normalize(normal + tilt * snowed);
     }
 
     // What the water laps at is soaked: darker, because light gets into

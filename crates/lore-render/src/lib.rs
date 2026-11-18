@@ -37,6 +37,7 @@ mod shadow;
 mod sky;
 mod swapchain;
 mod texture;
+mod tracks;
 mod tonemap;
 mod ui_pass;
 mod upscale;
@@ -55,6 +56,7 @@ pub use headless::{FrameTime, Headless};
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};
+pub use tracks::Tread;
 pub use upscale::Upscaling;
 pub use water::Stir;
 pub use weather::{Falling, Tornado, Weather};

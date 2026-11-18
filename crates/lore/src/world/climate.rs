@@ -189,7 +189,6 @@ impl Climate {
     }
 
     /// How deep the snow lies, in metres.
-    #[cfg(test)]
     pub(crate) fn snow(&self) -> f32 {
         self.snow
     }

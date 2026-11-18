@@ -630,7 +630,9 @@ declare game: {
         --- Says how deep the snow lies, in metres. Snow settles by itself
         --- while it snows and melts when the air is above freezing; this
         --- puts it there at once, for a level that begins in winter. At
-        --- 0.05 the land is white; in deep snow the player walks slower.
+        --- 0.05 the land is white and the player leaves footprints; from
+        --- 0.1 they plough a furrow through it and walk slower, and low
+        --- plants are pressed down under it. New snow fills tracks in.
         --- Example: game.weather.setSnowDepth(0.3)
         setSnowDepth: (metres: number) -> (),
 

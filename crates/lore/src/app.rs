@@ -717,6 +717,7 @@ impl<G: Game> App<G> {
         // What was done to the water since the last frame is shown.
         let (splashes, stirs) = (frame.take_splashes(), frame.take_stirs());
         let bubbles = frame.take_bubbles();
+        let treads = frame.take_treads();
         let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
         let hour = frame.take_hour();
         let (water_rise, sky_clock) = frame.take_water();
@@ -731,6 +732,9 @@ impl<G: Game> App<G> {
             }
             for (place, count) in bubbles {
                 renderer.bubbles(place, count);
+            }
+            for tread in treads {
+                renderer.tread(tread);
             }
             for strike in strikes {
                 renderer.strike(strike);

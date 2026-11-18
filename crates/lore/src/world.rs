@@ -25,6 +25,7 @@ mod bodies;
 mod climate;
 mod ground;
 mod spawn;
+mod trail;
 mod wet;
 
 pub(crate) use bodies::{Body, Dummy};
@@ -69,6 +70,10 @@ pub struct World {
     noises: Vec<Noise>,
     /// What the player did to the water in the newest tick.
     marks: Vec<WaterMark>,
+    /// The trail the player is leaving in the snow, and where they pressed
+    /// it down in the newest tick.
+    trail: trail::Trail,
+    treads: Vec<lore_render::Tread>,
     /// How many times the player has been put at a spawn point.
     spawned: u32,
     /// The weather, and what has followed from it: the snow that lies,
@@ -130,6 +135,8 @@ impl World {
             walking: Walking::default(),
             noises: Vec::new(),
             marks: Vec::new(),
+            trail: trail::Trail::default(),
+            treads: Vec::with_capacity(8),
             spawned,
             climate: climate::Climate::default(),
             looks_at: 60,
@@ -323,6 +330,14 @@ impl World {
         &self.marks
     }
 
+    /// Where the player pressed the snow down in the newest tick: a print
+    /// where a foot came down, and the furrow of wading through snow that
+    /// is deep. The player sees what is in this list ([`Playing`]): tracks.
+    #[must_use]
+    pub fn treads(&self) -> &[lore_render::Tread] {
+        &self.treads
+    }
+
     /// Stands a training dummy with its feet at `feet`: something the
     /// size of a standing person that stays where it is put and can be
     /// shot. It does nothing by itself, and the script meets it only as
@@ -433,6 +448,12 @@ impl Game for World {
         self.noises.clear();
         self.walking
             .tick(player, self.tick, *tick, &mut self.noises);
+        // And what their feet did to the snow, if any lies.
+        self.treads.clear();
+        let landed = (self.noises.last())
+            .is_some_and(|noise| noise.kind == crate::noise::NoiseKind::Landing);
+        self.trail
+            .tick(player, self.climate.snow(), landed, &mut self.treads);
         // Thunder that has got here from a stroke that fell a while ago.
         let (now, noises) = (self.tick, &mut self.noises);
         self.thunder.retain(|(arrives, position, away)| {
@@ -607,6 +628,9 @@ pub struct Playing {
     /// What was done to the water in the ticks since the last frame, for
     /// the frame to show.
     marks: Vec<WaterMark>,
+    /// Where the snow was pressed down in the ticks since the last frame,
+    /// for the frame to show.
+    treads: Vec<lore_render::Tread>,
     /// Whether the rumble of being under water is playing.
     under: bool,
     /// How loud each of the weather's own sounds was last said to be, if
@@ -722,6 +746,7 @@ impl Playing {
             before: None,
             heard: Vec::with_capacity(MOST_HEARD),
             marks: Vec::with_capacity(MOST_MARKS),
+            treads: Vec::with_capacity(MOST_MARKS),
             under: false,
             weather_heard: [None; 3],
             roar_from: [0.0; 3],
@@ -949,6 +974,10 @@ impl Game for Playing {
         let marks = self.world.water_marks();
         self.marks
             .extend_from_slice(&marks[..marks.len().min(room)]);
+        let room = MOST_MARKS.saturating_sub(self.treads.len());
+        let treads = self.world.treads();
+        self.treads
+            .extend_from_slice(&treads[..treads.len().min(room)]);
     }
 
     /// Looks from the player's eyes and plays what was heard since the
@@ -978,6 +1007,9 @@ impl Game for Playing {
         let seen = self.seen_at(frame.alpha(), turn);
         frame.look_from(seen.eye, seen.yaw, seen.pitch);
         self.show_water(frame, seen.eye);
+        for tread in self.treads.drain(..) {
+            frame.tread(tread);
+        }
     }
 }
 
@@ -1037,6 +1069,37 @@ mod tests {
         // thunder is a second behind the flash.
         assert_eq!(seen_at, Some(1));
         assert!(matches!(heard_at, Some(60..=62)), "{heard_at:?}");
+    }
+
+    #[test]
+    fn whoever_comes_down_on_snow_leaves_a_mark_in_it_and_on_bare_ground_none() {
+        use lore_input::Input;
+
+        let marks = |script: &str| {
+            let actions = ActionMap::default_fps();
+            let script = ScriptGame::from_source(script, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = Input::new(actions);
+            let mut treads = Vec::new();
+            for _ in 0..120 {
+                game.tick(input.tick(), 1.0 / 60.0);
+                let mut frame = Frame::new(0.0);
+                game.frame(&mut frame);
+                treads.extend(frame.take_treads());
+            }
+            assert!(game.world.player().grounded);
+            (treads, game.world.player().position)
+        };
+        let (treads, feet) = marks(
+            "game.weather.setTemperature(-5, 0)
+            game.weather.setSnowDepth(0.3)",
+        );
+        // Where they came down, and nothing more while they stand there.
+        assert!((1..=4).contains(&treads.len()), "{treads:?}");
+        for tread in &treads {
+            assert!((tread.place[0] - feet[0]).hypot(tread.place[1] - feet[2]) < 0.3);
+        }
+        assert!(marks("").0.is_empty());
     }
 
     #[test]

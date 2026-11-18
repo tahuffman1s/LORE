@@ -22,6 +22,7 @@ use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
+use crate::tracks::TrackMap;
 use crate::water::{
     Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
 };
@@ -308,6 +309,10 @@ pub(crate) struct Contents<'a> {
     /// The sky at the hour it is, if the game has said the hour: with
     /// none, the level's own light is the light.
     pub(crate) day: Option<&'a sky::Day>,
+    /// The rows of the map of trodden snow that have changed: the first
+    /// of them and what is in them, as
+    /// [`Effects::tracks`](crate::effects::Effects::tracks) gives them.
+    pub(crate) tracks: Option<(u32, &'a [u8])>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -694,6 +699,9 @@ pub(crate) struct MeshPipeline {
     /// The body of water whose depths each frame's set was last pointed
     /// at; 0 for none.
     near_water: RefCell<Vec<u64>>,
+    /// Where the snow is trodden: `None` only while the pipeline is being
+    /// built.
+    tracks: Option<TrackMap>,
     /// Draws the drops, spray and bubbles a splash throws up.
     bit_pipeline: vk::Pipeline,
     /// Those bits, for each frame that can be in progress at once.
@@ -739,6 +747,7 @@ impl MeshPipeline {
             body_pipeline: vk::Pipeline::null(),
             water: None,
             near_water: RefCell::new(vec![0; frames.max(1)]),
+            tracks: None,
             bit_pipeline: vk::Pipeline::null(),
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
@@ -780,6 +789,9 @@ impl MeshPipeline {
         let water_pictures = water.pictures();
         let (repeating, stopping) = (water.repeating, water.stopping);
         mesh.water = Some(water);
+        let tracks = TrackMap::new(gpu, frames)?;
+        let track_view = tracks.view();
+        mesh.tracks = Some(tracks);
         let both_stages = |binding: u32, kind: vk::DescriptorType| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(binding)
@@ -835,6 +847,12 @@ impl MeshPipeline {
             both_stages(10, vk::DescriptorType::SAMPLED_IMAGE),
             both_stages(11, vk::DescriptorType::SAMPLER),
             both_stages(12, vk::DescriptorType::SAMPLED_IMAGE),
+            // Where the snow near the eye is trodden.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(13)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -842,10 +860,10 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, eight pictures and four readers.
+            // Each frame's set has one view, nine pictures and four readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
-                vk::DescriptorType::SAMPLED_IMAGE => 8,
+                vk::DescriptorType::SAMPLED_IMAGE => 9,
                 _ => 4,
             };
             vk::DescriptorPoolSize::default()
@@ -920,6 +938,9 @@ impl MeshPipeline {
                 });
                 let water_samplers = [repeating, stopping]
                     .map(|sampler| [vk::DescriptorImageInfo::default().sampler(sampler)]);
+                let trodden = [vk::DescriptorImageInfo::default()
+                    .image_view(track_view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
                 let water_write = |binding: u32, info| picture_write(set, binding, info);
                 let reader_write = |binding: u32, info| {
                     picture_write(set, binding, info).descriptor_type(vk::DescriptorType::SAMPLER)
@@ -931,6 +952,7 @@ impl MeshPipeline {
                     water_write(10, &water_views[2]),
                     reader_write(11, &water_samplers[1]),
                     water_write(12, &water_views[3]),
+                    water_write(13, &trodden),
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
                         .dst_binding(0)
@@ -1361,6 +1383,7 @@ impl MeshPipeline {
             flashes,
             weather,
             day,
+            tracks,
         } = contents;
         // What flies is handed over before anything is recorded.
         let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
@@ -1433,6 +1456,12 @@ impl MeshPipeline {
                 |day| &day.sky,
             )
         });
+        // Where the snow has been trodden since the last frame.
+        if let (Some(map), Some((first, bytes))) = (&self.tracks, tracks) {
+            // SAFETY: the caller's guarantees cover the map, which is this
+            // pipeline's own, and no pass has been begun yet.
+            unsafe { map.record(commands, frame, first, bytes) }?;
+        }
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
@@ -2430,6 +2459,7 @@ mod tests {
                         [0.0; 4],
                         [0.0; 4],
                         [0.3, 0.0, 0.0, 0.0],
+                        [0.4, 0.0, 0.0, 0.0],
                     ],
                     cover: 0.6,
                     fog: 0.002,
@@ -2460,8 +2490,9 @@ mod tests {
         assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
         assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
         assert_eq!(number(&bytes, 456), 0.3, "how strong the tornado is");
-        assert_eq!(number(&bytes, 460), 9.0, "the sun, the moon and the stars");
-        assert_eq!(bytes.len(), 480 * 4);
+        assert_eq!(number(&bytes, 460), 0.4, "how deep the snow lies");
+        assert_eq!(number(&bytes, 464), 9.0, "the sun, the moon and the stars");
+        assert_eq!(bytes.len(), 484 * 4);
     }
 
     #[test]

@@ -16,6 +16,7 @@
 use crate::bolt::{Bolt, Lightning};
 use crate::sky;
 use crate::sky::Day;
+use crate::tracks::{Tracks, Tread};
 use crate::weather::{Weather, eased};
 use lore_assets::Water;
 
@@ -76,12 +77,16 @@ struct Bit {
 }
 
 /// How many rows of four numbers the weather is handed to the shader in.
-pub(crate) const WEATHER_ROWS: usize = 6;
+pub(crate) const WEATHER_ROWS: usize = 7;
 
 /// After how many metres what the wind carries near the eye is begun
 /// again: a whole number of the 70 metre squares gusts are laid out in,
 /// and of the 80, 160, 320 and 640 metre ones what falls is.
 const NEAR_AGAIN: f64 = 4_480.0;
+
+/// How long snow falling as hard as it can takes to fill a track in, in
+/// seconds.
+const TRACKS_FILL: f32 = 90.0;
 
 /// The weather as the shader takes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,7 +102,8 @@ pub(crate) struct Air {
     /// and how much of the sky is cloud. Then the tornado: where its foot
     /// is and how far out its wall, how strong it is from 0 for none and
     /// how far it has turned; and how far the wind has carried what is
-    /// near the eye, begun again every [`NEAR_AGAIN`] metres.
+    /// near the eye, begun again every [`NEAR_AGAIN`] metres. Last, how
+    /// deep the snow lies, in metres.
     pub(crate) rows: [[f32; 4]; WEATHER_ROWS],
     /// How much of the sky fair weather's clouds cover, as the shader
     /// counts it.
@@ -166,6 +172,7 @@ impl Air {
                 [along_x, along_z, weather.gusts, cover],
                 place,
                 spin,
+                [weather.snow.clamp(0.0, 10.0), 0.0, 0.0, 0.0],
             ],
             cover,
             fog: weather.fog_thickness(),
@@ -224,6 +231,8 @@ pub(crate) struct Effects {
     /// Whether storms send their own bolts to the ground: not when the
     /// game does, so that it can hear them and know where they fell.
     bolts_of_its_own: bool,
+    /// Where the snow near the eye has been trodden.
+    tracks: Tracks,
 }
 
 impl Default for Effects {
@@ -251,6 +260,7 @@ impl Effects {
             day: None,
             rise: 0.0,
             bolts_of_its_own: true,
+            tracks: Tracks::new(),
         }
     }
 
@@ -265,6 +275,7 @@ impl Effects {
         for bolt in &mut self.bolts {
             bolt.spend();
         }
+        self.tracks.clear();
     }
 
     /// A number from 0 to 1, different each time.
@@ -488,6 +499,13 @@ impl Effects {
             // takes some minutes to dry.
             // Sleet wets it as rain does; snow lies on it dry, and what
             // lies melting keeps it wet.
+            // New snow fills tracks in: a hard fall in a minute and a
+            // half. With no snow left there are none.
+            if self.weather.snow > 0.0 {
+                self.tracks.fill(seconds.min(0.05) * self.cold[0] / TRACKS_FILL);
+            } else {
+                self.tracks.clear();
+            }
             let [rain, _, wet, _] = self.here;
             let rain = rain.max(0.7 * self.cold[1]);
             let thaw = if self.weather.temperature > 0.5 {
@@ -619,6 +637,25 @@ impl Effects {
         }
     }
 
+    /// Presses the snow down at a place, if any lies.
+    pub(crate) fn tread(&mut self, tread: Tread) {
+        if self.weather.snow > 0.0 {
+            self.tracks.tread(tread);
+        }
+    }
+
+    /// The rows of the map of trodden snow that have changed since this
+    /// was last asked, from the first of them to the last.
+    pub(crate) fn take_tracks(&mut self) -> Option<(u32, u32)> {
+        self.tracks.take_changed()
+    }
+
+    /// What is in those rows, for the graphics card: the first of them,
+    /// and whole rows one after another.
+    pub(crate) fn tracks(&self, (first, last): (u32, u32)) -> (u32, &[u8]) {
+        (first, self.tracks.rows(first, last))
+    }
+
     /// Lets a flash of lightning go.
     pub(crate) fn strike(&mut self, lightning: Lightning) {
         self.free_bolt().strike(lightning);
@@ -705,6 +742,8 @@ impl Effects {
         self.here[1] = falling.hail;
         self.here[3] = overhead;
         self.cold = [falling.snow, falling.sleet];
+        // The map of trodden snow is kept round the eye.
+        self.tracks.follow([eye[0], eye[2]]);
         if time < self.looks_next {
             // The clock was put back: a new level.
             if time + 5.0 < self.looks_next {

@@ -1,7 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
 use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
-use lore_render::{Lightning, Splash, Stir};
+use lore_render::{Lightning, Splash, Stir, Tread};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -83,6 +83,8 @@ pub struct Frame {
     /// The lightning let go this frame, and how stormy the sky was said
     /// to be, if it was said.
     strikes: Vec<Lightning>,
+    /// Where the snow was said to be pressed down this frame.
+    treads: Vec<Tread>,
     storminess: Option<f32>,
     /// The hour of the day, if the game said it this frame.
     hour: Option<f64>,
@@ -178,6 +180,7 @@ impl Frame {
             stirs: Vec::new(),
             bubbles: Vec::new(),
             strikes: Vec::new(),
+            treads: Vec::new(),
             storminess: None,
             hour: None,
             water_rise: None,
@@ -678,6 +681,14 @@ impl Frame {
         self.stirs.push(stir);
     }
 
+    /// Presses the snow down at a place: a foot coming down in it, or a
+    /// body wading through. The track stays until new snow has filled it
+    /// in; nothing is seen of it where no snow lies. The player's own
+    /// tracks are made already.
+    pub fn tread(&mut self, tread: Tread) {
+        self.treads.push(tread);
+    }
+
     /// Lets `count` bubbles go at `place`, which is under water: they rise
     /// and are gone at the surface.
     pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
@@ -688,6 +699,11 @@ impl Frame {
     /// everything that is heard is muffled.
     pub(crate) fn hear_under_water(&mut self, under: bool) {
         self.under_water = Some(under);
+    }
+
+    /// Where the snow was said to be pressed down this frame.
+    pub(crate) fn take_treads(&mut self) -> Vec<Tread> {
+        std::mem::take(&mut self.treads)
     }
 
     /// The splashes said this frame, in order.

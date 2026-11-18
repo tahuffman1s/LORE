@@ -23,9 +23,11 @@ from clear through storm to blizzard, and then the cloud, the storms, the
 rain, the air's warmth, the wind and which way it blows, the fog and the
 hour, each on a slider. Turn the warmth down and the rain turns to sleet
 and then snow, the snow settles, and the lake freezes until it bears you:
-walk out on it, and mind that it is slippery. Turn it up again and it all
-melts. There is lightning to call down, and a tornado to stand too close
-to. Every line is one call a script of your own could make, such as
+walk out on it, and mind that it is slippery. Walk through the snow and
+look behind you: prints while it is thin, a furrow once it is deep, which
+new snow fills in again. Turn the warmth up and it all melts. There is
+lightning to call down, and a tornado to let down as far ahead as you
+like and stand too close to. Every line is one call a script of your own could make, such as
 `game.weather.set("blizzard")` or `game.weather.setTemperature(-5)`.
 
 Neither the lake nor the pond has a shore drawn for it. `build.py` makes

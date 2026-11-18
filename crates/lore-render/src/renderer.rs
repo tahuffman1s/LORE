@@ -22,6 +22,7 @@ use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
 use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
+use crate::tracks::Tread;
 use crate::water::Stir;
 use crate::weather::Weather;
 
@@ -430,6 +431,14 @@ impl Renderer {
         self.effects.stir(stir);
     }
 
+    /// Presses the snow down at a place: a foot coming down in it, or a
+    /// body wading through. The track stays, and is carved out of the snow
+    /// wherever it is drawn within some thirty metres of the eye, until
+    /// new snow has filled it in. Nothing is seen of it where no snow lies.
+    pub fn tread(&mut self, tread: Tread) {
+        self.effects.tread(tread);
+    }
+
     /// Lets `count` bubbles go at `place`, under water: breath, or the air
     /// a hand drags down with it. They rise and are gone at the surface.
     pub fn bubbles(&mut self, place: [f32; 3], count: u32) {
@@ -655,6 +664,7 @@ impl Renderer {
             self.meshes.as_ref().map_or(&[][..], Meshes::waters),
         );
         let weather = self.effects.air(view.seconds());
+        let tracks = self.effects.take_tracks();
 
         // SAFETY: every handle used here belongs to `self.gpu`'s device and
         // is alive; the fence wait makes sure this slot's command buffer and
@@ -713,6 +723,7 @@ impl Renderer {
                     flashes: self.effects.flashes(),
                     weather,
                     day: self.effects.day(),
+                    tracks: tracks.map(|rows| self.effects.tracks(rows)),
                 },
                 &self.camera,
                 seconds,
