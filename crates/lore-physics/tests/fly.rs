@@ -195,3 +195,52 @@ fn flying_is_repeatable() {
         assert_eq!(a.position[axis].to_bits(), b.position[axis].to_bits());
     }
 }
+
+#[test]
+fn flying_in_a_vent_stays_crouched_until_there_is_room_to_stand() {
+    // A vent: a slab 1.3 m over the floor, over z from -2 to -8.
+    let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
+    let mut triangles = Vec::new();
+    triangles.extend(quad(
+        [-40.0, 0.0, 40.0],
+        [40.0, 0.0, 40.0],
+        [40.0, 0.0, -40.0],
+        [-40.0, 0.0, -40.0],
+    ));
+    for y in [1.3, 1.8] {
+        triangles.extend(quad(
+            [-3.0, y, -2.0],
+            [3.0, y, -2.0],
+            [3.0, y, -8.0],
+            [-3.0, y, -8.0],
+        ));
+    }
+    let level = Level::from_triangles(&triangles);
+    let mut player = Player::at([0.0, 0.0, 0.0], &MoveSettings::default());
+    let crawl = MoveInput {
+        forward: 1.0,
+        crouch: true,
+        ..MoveInput::default()
+    };
+    run(&mut player, &level, &crawl, 120);
+    assert!(player.crouched && player.position[2] < -3.0, "{player:?}");
+
+    // Flying from in there keeps the crouch, and the body in the vent.
+    run(&mut player, &level, &flying(MoveMode::Fly), 30);
+    assert!(player.crouched, "{player:?}");
+    let [_, feet, z] = player.position;
+    assert!(feet >= 0.0 && feet + 1.1 <= 1.3, "{player:?}");
+    assert!(z < -3.0, "{player:?}");
+    assert!((player.eye_height - 1.0).abs() < 1.0e-6, "{player:?}");
+
+    // Out of it, the flyer stands.
+    let ahead = MoveInput {
+        forward: 1.0,
+        ..flying(MoveMode::Fly)
+    };
+    run(&mut player, &level, &ahead, 120);
+    assert!(player.position[2] < -8.5, "{player:?}");
+    run(&mut player, &level, &flying(MoveMode::Fly), 30);
+    assert!(!player.crouched, "{player:?}");
+    assert!((player.eye_height - 1.6).abs() < 1.0e-6, "{player:?}");
+}

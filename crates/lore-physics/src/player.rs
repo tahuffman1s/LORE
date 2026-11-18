@@ -6,7 +6,7 @@ use parry3d::shape::Capsule;
 
 use crate::level::{Level, Vector};
 use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
-use crate::slide::{SKIN, Slid, slide, unstick};
+use crate::slide::{SKIN, Slid, fits, slide, unstick};
 
 /// How far below the feet counts as standing on something when landing.
 const LANDING_REACH: f32 = 0.02;
@@ -291,7 +291,7 @@ impl Player {
         } else if self.crouched {
             let standing = settings.shape(false);
             let middle = feet + Vector::Y * (settings.height(false) / 2.0);
-            self.crouched = level.overlaps(&standing, middle);
+            self.crouched = !fits(level, &standing, middle);
         }
         let height = settings.height(self.crouched);
         let body = Body {
@@ -422,19 +422,24 @@ impl Player {
                 .map_or(Vector::ZERO, |direction| direction * speed);
             let mut moved = slide(level, &body.shape, middle, tilted, dt, body.steep, true);
             if moved.blocked
-                && let Some(stepped) = body.step_up(middle, velocity)
+                && let Some(stepped) = body.step_up(middle, tilted, moved.position.y)
                 && flat_distance(stepped.position, middle)
                     > flat_distance(moved.position, middle) + 1.0e-4
             {
                 moved = stepped;
             }
             middle = moved.position;
-            // Back to level velocity, keeping the speed walls left us.
-            velocity = Vector::new(moved.velocity.x, 0.0, moved.velocity.z)
-                .try_normalize()
-                .map_or(Vector::ZERO, |direction| {
-                    direction * moved.velocity.length()
-                });
+            // Back to level velocity: the tilt undone, so that what a wall
+            // took off the move is taken off the walk, and the climb a wall
+            // stopped is not turned into speed along it. Never faster than
+            // the move left it.
+            let level_share = flat_speed(tilted);
+            velocity = if level_share > 0.0 {
+                Vector::new(moved.velocity.x, 0.0, moved.velocity.z) * (speed / level_share)
+            } else {
+                Vector::ZERO
+            }
+            .clamp_length_max(moved.velocity.length());
 
             // Stay on the ground down stairs and ramps; otherwise start falling.
             let reach = positive(settings.step_height).max(LANDING_REACH);
@@ -537,7 +542,7 @@ impl Player {
             velocity = water.flow + posture.slowed(velocity - water.flow, part, dt / 2.0);
             velocity += pushed(part) * (dt / 2.0);
             let falling = velocity.y;
-            let across = velocity.x.hypot(velocity.z);
+            let across = flat_speed(velocity);
             let moved = slide(level, &body.shape, middle, velocity, dt, body.steep, false);
             middle = moved.position;
             velocity = moved.velocity;
@@ -559,7 +564,7 @@ impl Player {
                 // Coming down onto a slope tips the fall along it; feet that
                 // land stop that, and keep no more speed across the ground
                 // than the body came down with.
-                let now = velocity.x.hypot(velocity.z);
+                let now = flat_speed(velocity);
                 if now > across {
                     let keep = across / now;
                     velocity.x *= keep;
@@ -576,26 +581,25 @@ impl Player {
 
         // Ice bears whoever is on it: nobody goes down through the frozen
         // surface of still water, and whoever was in the water when it
-        // froze is lifted onto it.
+        // froze is lifted onto it, as far as there is room: under a dock
+        // they stay frozen in where they stood until they walk out.
         let came_to = middle - to_middle;
         if self.hoist <= 0.0
             && velocity.y <= 0.0
             && let Some(ice) = level.ice_around(came_to.to_array())
             && came_to.y <= ice + ICE_REACH
         {
-            middle.y += ice - came_to.y;
+            let lift = Vector::Y * (ice - came_to.y);
+            let room = level
+                .sweep(&body.shape, middle, lift, SKIN)
+                .map_or(1.0, |touch| touch.fraction);
+            middle += lift * room;
             velocity.y = 0.0;
             ground = Vector::Y;
             self.grounded = true;
         }
 
-        let eyes = settings.eye_height(self.crouched);
-        let reach = positive(settings.crouch_rate) * dt;
-        self.eye_height = if self.eye_height.is_finite() {
-            self.eye_height + (eyes - self.eye_height).clamp(-reach, reach)
-        } else {
-            eyes
-        };
+        self.ease_eyes(settings, dt);
 
         // What the water is doing to them where they ended up.
         feet = middle - to_middle;
@@ -647,6 +651,18 @@ impl Player {
             floats.depth
         };
         self.swimming = !self.grounded && depth >= from;
+    }
+
+    /// Moves the eyes one tick of `dt` seconds toward the height they
+    /// have in the player's stance.
+    pub(crate) fn ease_eyes(&mut self, settings: &MoveSettings, dt: f32) {
+        let eyes = settings.eye_height(self.crouched);
+        let reach = positive(settings.crouch_rate) * dt;
+        self.eye_height = if self.eye_height.is_finite() {
+            self.eye_height + (eyes - self.eye_height).clamp(-reach, reach)
+        } else {
+            eyes
+        };
     }
 
     /// Ends any stroke and any treading of water at once.
@@ -932,7 +948,27 @@ impl Body<'_> {
                     .surface_below(feet + Vector::Y * EDGE_PROBE, EDGE_PROBE + 3.0 * SKIN)
                     .filter(standable)
             })
+            .or_else(|| self.crease(middle - Vector::Y * drop, touch.normal))
             .map(ground)
+    }
+
+    /// Which way the crease a shape centred at `middle` sits in faces, if
+    /// it is wedged in one it can stand in: the steep face it rests on,
+    /// facing `normal`, and another face it cannot go down without
+    /// touching (a ravine, a crevice between two boulders, a pit). Two
+    /// faces together hold up what neither holds alone, as long as the
+    /// crease they make is no steeper than ground that can be stood on.
+    fn crease(&self, middle: Vector, normal: Vector) -> Option<Vector> {
+        let away = Vector::new(normal.x, 0.0, normal.z).try_normalize()?;
+        let other = self.level.sweep(
+            &self.shape,
+            middle + away * SKIN,
+            Vector::NEG_Y * (2.0 * SKIN),
+            SKIN,
+        )?;
+        (normal + other.normal)
+            .try_normalize()
+            .filter(|crease| crease.y >= self.steep)
     }
 
     /// Whether there is a ledge ahead to climb out onto: something too
@@ -961,8 +997,9 @@ impl Body<'_> {
     }
 
     /// Tries the move again from a step higher: up, across, and back down.
-    /// Gives the result only if it ends standing on something.
-    fn step_up(&self, middle: Vector, velocity: Vector) -> Option<Slid> {
+    /// Gives the result only if it ends standing on something higher than
+    /// `blocked`, where the plain move left the shape's middle.
+    fn step_up(&self, middle: Vector, velocity: Vector, blocked: f32) -> Option<Slid> {
         let step = positive(self.settings.step_height);
         let headroom = self
             .level
@@ -987,16 +1024,16 @@ impl Body<'_> {
             true,
         );
         let landing = self.ground_below(across.position, rise)?;
-        // Only a real step up counts. Landing back on the same floor would
-        // just be the blocked move again, pressed closer to the wall.
+        let position = across.position - Vector::Y * landing.drop;
+        // Only a real step up counts. Landing back on the same floor, or
+        // the same slope, would just be the blocked move again, pressed
+        // closer to the wall: on a slope that is where the step's touch
+        // sits higher than the feet, and it is no step. Nor is anything
+        // touched higher up than a step reaches.
         let feet = middle.y - self.to_feet;
         let climbed = landing.height - feet;
-        (LOWEST_STEP..=step + SKIN)
-            .contains(&climbed)
-            .then_some(Slid {
-                position: across.position - Vector::Y * landing.drop,
-                ..across
-            })
+        (position.y - blocked >= LOWEST_STEP && climbed <= step + SKIN)
+            .then_some(Slid { position, ..across })
     }
 }
 
@@ -1041,6 +1078,11 @@ fn sped_up(
 
 /// How far apart two points are, ignoring height.
 fn flat_distance(a: Vector, b: Vector) -> f32 {
-    let (x, z) = (a.x - b.x, a.z - b.z);
-    (x * x + z * z).sqrt()
+    flat_speed(a - b)
+}
+
+/// How long `vector` is, ignoring height. A square root is exact on every
+/// machine; `hypot` is not, and a replay must come out the same anywhere.
+fn flat_speed(vector: Vector) -> f32 {
+    (vector.x * vector.x + vector.z * vector.z).sqrt()
 }

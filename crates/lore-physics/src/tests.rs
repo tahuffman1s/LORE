@@ -274,6 +274,40 @@ fn a_crouched_player_fits_under_a_low_ceiling_and_cannot_stand_there() {
 }
 
 #[test]
+fn a_crouched_player_stands_up_only_where_there_is_room_to_spare() {
+    // A ceiling `over` the floor, over z from -2 to -8, crouched under
+    // and let go of in its middle.
+    let stood_under = |over: f32| {
+        let level = level(&[floor(), block([-3.0, over, -8.0], [3.0, over + 0.5, -2.0])]);
+        let mut player = standing_at(&level, [0.0, 0.0, -5.0]);
+        let crouch = MoveInput {
+            crouch: true,
+            ..MoveInput::default()
+        };
+        run(&mut player, &level, crouch, SECOND / 2);
+        run(&mut player, &level, MoveInput::default(), SECOND / 2);
+        let rest = (player.position, player.eye_height);
+        for _ in 0..SECOND {
+            player.step(&level, &MoveSettings::default(), &MoveInput::default(), DT);
+            assert_eq!(
+                (player.position, player.eye_height),
+                rest,
+                "{over}: {player:?}"
+            );
+        }
+        player
+    };
+    // Standing would leave the head a few millimetres short of the
+    // ceiling, nearer than the gap kept from every surface.
+    let feet = stood_under(2.5).position[1];
+    let tight = stood_under(feet + 1.8 + SKIN / 4.0);
+    assert!(tight.crouched, "{tight:?}");
+    // With a gap to spare, they stand.
+    let roomy = stood_under(feet + 1.8 + 2.0 * SKIN);
+    assert!(!roomy.crouched, "{roomy:?}");
+}
+
+#[test]
 fn a_jump_peaks_at_the_jump_height_and_lands() {
     let level = level(&[floor()]);
     let mut player = standing_at(&level, [0.0, 0.0, 0.0]);
@@ -499,6 +533,183 @@ fn a_steep_bank_cannot_be_climbed_or_stood_on() {
     assert!(dropped.grounded, "{dropped:?}");
     assert!(close(dropped.position[1], 0.0, 0.05), "{dropped:?}");
     assert!(dropped.position[2] > -3.0, "{dropped:?}");
+}
+
+/// A hillside 40 m wide that climbs toward -z at `degrees`, from z = 0.
+fn hillside(degrees: f32) -> Vec<Triangle> {
+    let top = 20.0 * libm::tanf(degrees.to_radians());
+    quad(
+        [-20.0, 0.0, 0.0],
+        [20.0, 0.0, 0.0],
+        [20.0, top, -20.0],
+        [-20.0, top, -20.0],
+    )
+    .to_vec()
+}
+
+/// A player settled on a hillside of `degrees` at `x`, `z`.
+fn on_hillside(level: &Level, degrees: f32, x: f32, z: f32) -> Player {
+    let y = -z * libm::tanf(degrees.to_radians());
+    standing_at(level, [x, y + 0.05, z])
+}
+
+#[test]
+fn walking_uphill_beside_a_wall_is_no_faster_than_walking_beside_it_on_the_flat() {
+    // A wall facing -x at x = 3, up a hillside and on the flat; the player
+    // walks up beside it, pushing a little into it.
+    let slope = 40.0;
+    let wall = block([3.0, 0.0, -20.0], [4.0, 20.0, 0.0]);
+    let hill = level(&[hillside(slope), wall.clone()]);
+    let flat = level(&[floor(), wall]);
+    let up = MoveInput {
+        right: 0.3,
+        ..forward()
+    };
+    // How far ahead (-z) they get in a second, once they are going.
+    let ahead = |level: &Level, start: Player| {
+        let mut player = start;
+        run(&mut player, level, up, SECOND);
+        let from = player.position[2];
+        run(&mut player, level, up, SECOND);
+        assert!(player.grounded, "{player:?}");
+        assert!(player.position[0] > 2.6, "not at the wall: {player:?}");
+        from - player.position[2]
+    };
+    let on_hill = ahead(&hill, on_hillside(&hill, slope, 2.6, -3.0));
+    let on_flat = ahead(&flat, standing_at(&flat, [2.6, 0.0, -3.0]));
+    // Walking up a slope goes at full speed along it, so it gets less far
+    // across the ground, wall or no wall.
+    let tipped = on_flat * libm::cosf(slope.to_radians());
+    assert!(
+        close(on_hill, tipped, 0.01 * tipped),
+        "{on_hill} m up the hill beside the wall in a second, against {tipped} m"
+    );
+}
+
+#[test]
+fn pushing_into_a_wall_across_a_slope_slides_along_it_as_on_the_flat() {
+    // A wall across a hillside, and the same wall on the flat, walked at
+    // nearly head on and at an angle: how fast the player goes along it.
+    let slope = 40.0;
+    let wall = block([-20.0, 0.0, -9.0], [20.0, 20.0, -8.0]);
+    let hill = level(&[hillside(slope), wall.clone()]);
+    let flat = level(&[floor(), wall]);
+    let along = |level: &Level, start: Player, yaw: f32| {
+        let mut player = start;
+        let turned = MoveInput { yaw, ..forward() };
+        run(&mut player, level, turned, SECOND);
+        let from = player.position[0];
+        run(&mut player, level, turned, SECOND / 2);
+        assert!(player.grounded, "{player:?}");
+        (from - player.position[0]) * 2.0
+    };
+    for (yaw, within) in [(0.15, 0.3), (0.5, 0.03)] {
+        let on_hill = along(&hill, on_hillside(&hill, slope, 2.0, -6.0), yaw);
+        let on_flat = along(&flat, standing_at(&flat, [2.0, 0.0, -6.0]), yaw);
+        assert!(on_flat > 0.05, "{on_flat} m/s along the wall on the flat");
+        // The climb the wall stops does not become speed along it.
+        assert!(
+            on_hill <= on_flat && on_hill >= on_flat * (1.0 - within),
+            "{on_hill} m/s along the wall on the hill, {on_flat} m/s on the flat"
+        );
+    }
+}
+
+/// A ravine: two faces of `steepness` degrees, 8 m across, meeting in a
+/// crease along z at the origin. The crease runs down toward +z at `tilt`
+/// degrees.
+fn ravine(steepness: f32, tilt: f32) -> Vec<Triangle> {
+    let rise = 4.0 * libm::tanf(steepness.to_radians());
+    let (sin, cos) = (libm::sinf(tilt.to_radians()), libm::cosf(tilt.to_radians()));
+    let tilted = |[x, y, z]: [f32; 3]| [x, y * cos - z * sin, y * sin + z * cos];
+    let crease = |z: f32| tilted([0.0, 0.0, z]);
+    let side = |x: f32, z: f32| tilted([x, rise, z]);
+    [
+        quad(
+            side(-4.0, -10.0),
+            side(-4.0, 10.0),
+            crease(10.0),
+            crease(-10.0),
+        ),
+        quad(
+            crease(-10.0),
+            crease(10.0),
+            side(4.0, 10.0),
+            side(4.0, -10.0),
+        ),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_player_wedged_in_a_ravine_stands_in_it_and_can_jump_out_of_it() {
+    // Two 55° faces, each too steep to stand on: the player slides down
+    // them into the crease and is held there by both.
+    let level = level(&[ravine(55.0, 0.0)]);
+    let mut player = Player::at([0.6, 3.0, 0.0], &MoveSettings::default());
+    run(&mut player, &level, MoveInput::default(), 2 * SECOND);
+    assert!(player.grounded, "stuck in the crease: {player:?}");
+    assert!(close(player.position[0], 0.0, 0.02), "{player:?}");
+    assert!(player.ground_normal[1] > 0.99, "{player:?}");
+    let rest = player.position;
+    run(&mut player, &level, MoveInput::default(), SECOND);
+    assert_eq!(player.position, rest, "standing in the crease is still");
+
+    // And jumps from it as from a floor.
+    let jump = MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    };
+    let mut peak = rest[1];
+    for _ in 0..2 * SECOND {
+        player.step(&level, &MoveSettings::default(), &jump, DT);
+        peak = peak.max(player.position[1]);
+    }
+    assert!(
+        close(peak - rest[1], 1.1, 0.05),
+        "jumped {}",
+        peak - rest[1]
+    );
+    assert!(player.grounded, "{player:?}");
+
+    // Walking along the crease is walking.
+    run(&mut player, &level, MoveInput::default(), SECOND / 2);
+    let along = MoveInput {
+        yaw: std::f32::consts::PI,
+        ..forward()
+    };
+    run(&mut player, &level, along, SECOND);
+    assert!(player.grounded, "{player:?}");
+    assert!(player.position[2] > 3.0, "{player:?}");
+    assert!(close(player.position[0], 0.0, 0.02), "{player:?}");
+}
+
+#[test]
+fn a_crease_is_stood_in_only_where_it_is_no_steeper_than_a_slope_one_can_stand_on() {
+    // A gentle ravine holds the player where they come down in it.
+    let level_crease = level(&[ravine(55.0, 30.0)]);
+    let mut held = Player::at([0.3, 3.0, 0.0], &MoveSettings::default());
+    run(&mut held, &level_crease, MoveInput::default(), 2 * SECOND);
+    assert!(held.grounded, "{held:?}");
+    let rest = held.position;
+    run(&mut held, &level_crease, MoveInput::default(), SECOND);
+    assert_eq!(held.position, rest, "a gentle crease does not slide");
+
+    // A steep one is slid down, as a steep slope is.
+    let level_crease = level(&[ravine(55.0, 60.0)]);
+    let mut sliding = Player::at([0.3, 3.0, 0.0], &MoveSettings::default());
+    let mut stood = 0;
+    for _ in 0..SECOND {
+        sliding.step(
+            &level_crease,
+            &MoveSettings::default(),
+            &MoveInput::default(),
+            DT,
+        );
+        stood += usize::from(sliding.grounded);
+    }
+    assert_eq!(stood, 0, "{sliding:?}");
+    assert!(sliding.position[1] < -1.0, "{sliding:?}");
 }
 
 #[test]
@@ -2204,5 +2415,38 @@ fn a_walker_goes_from_the_shore_onto_the_ice_and_back() {
     assert!(
         walker.grounded && close(walker.position[1], 1.0, 0.03),
         "{walker:?}"
+    );
+}
+
+#[test]
+fn a_wader_under_a_dock_when_the_lake_freezes_is_not_lifted_into_it() {
+    // A lake 1.2 m deep, and a dock whose underside is 0.7 m over the
+    // water: a wader stands under it with their head 0.1 m short of it.
+    let deck = 0.7;
+    let level = flooded(
+        &[bed(1.2), block([-2.0, deck, -2.0], [2.0, deck + 0.2, 2.0])],
+        [-40.0, -40.0],
+        [40.0, 40.0],
+        0.0,
+    );
+    let mut wader = standing_at(&level, [0.0, -1.2, 0.0]);
+    assert!(!wader.swimming, "{wader:?}");
+    level.set_ice(0.1);
+    // The ice lifts them only as far as the dock lets it.
+    run(&mut wader, &level, MoveInput::default(), SECOND / 2);
+    let rest = wader.position;
+    let head = rest[1] + 1.8;
+    assert!(head <= deck && head > deck - 0.03, "{wader:?}");
+    for _ in 0..SECOND {
+        wader.step(&level, &MoveSettings::default(), &MoveInput::default(), DT);
+        assert_eq!(wader.position, rest, "the wader jitters");
+    }
+    // Out from under it, the ice has them on top of it.
+    run(&mut wader, &level, forward(), 2 * SECOND);
+    assert!(wader.position[2] < -3.0, "{wader:?}");
+    run(&mut wader, &level, MoveInput::default(), SECOND);
+    assert!(
+        wader.grounded && close(wader.position[1], 0.0, 1.0e-4),
+        "{wader:?}"
     );
 }

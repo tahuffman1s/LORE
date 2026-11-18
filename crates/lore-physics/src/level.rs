@@ -379,6 +379,7 @@ impl Level {
     }
 
     /// Whether `shape` at `centre` reaches into anything solid.
+    #[cfg(test)]
     pub(crate) fn overlaps(&self, shape: &Capsule, centre: Vector) -> bool {
         self.mesh.as_ref().is_some_and(|mesh| {
             query::intersection_test(
