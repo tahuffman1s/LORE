@@ -133,6 +133,17 @@ from window sills to rain-water pipes, is walked past, not into. The
 boxes that stand for a wall are drawn as nothing, flat on the wall they
 stand for, so what is thrown at a wall lands on its face.
 
+## Walls that do not repeat
+
+Each wall is covered by one photograph of two or three metres of brick,
+laid over and over. On a wall sixty metres long that shows as a grid: the
+same few bricks come round again and again. So the walls' and the ground's
+materials carry LORE's `shuffle` property, and the engine draws each
+photograph blended with itself moved elsewhere, differently from patch to
+patch, and a little lighter and darker in patches. Brickwork is moved by
+whole bricks and whole courses, so that mortar meets mortar: the counts for
+each photograph are in `Looks.SHUFFLES` in `build.py`.
+
 ## What is not there
 
 - Nothing moves but the hoop's net in the wind, and nobody is about.

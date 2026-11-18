@@ -620,6 +620,73 @@ pub struct Material {
     pub extras: Option<String>,
 }
 
+impl Material {
+    /// How the material's pictures may be moved to hide that they repeat,
+    /// if its maker asked for that with the custom property `shuffle`.
+    ///
+    /// A wall sixty metres long is covered by one photograph of two or
+    /// three metres of brick, and the same few bricks come round in a
+    /// grid. A material with `shuffle` is drawn blended with itself moved
+    /// elsewhere, differently from patch to patch, and a little lighter
+    /// and darker in patches, so that no grid is seen.
+    ///
+    /// The two numbers say how far a picture can be moved without breaking
+    /// its pattern: how many equal steps fit across one copy of it, and how
+    /// many up. For brickwork they are the bricks along a course and the
+    /// courses (or half the courses, where every other course is set half a
+    /// brick along). 0 is for a direction with no pattern, where any move
+    /// will do. `"shuffle": true` is `[0, 0]`: asphalt, plaster, concrete.
+    ///
+    /// ```
+    /// use lore_assets::Material;
+    ///
+    /// let bricks = Material {
+    ///     extras: Some(r#"{"shuffle": [8, 11]}"#.to_owned()),
+    ///     ..Material::default()
+    /// };
+    /// assert_eq!(bricks.shuffle(), Some([8, 11]));
+    ///
+    /// let asphalt = Material {
+    ///     extras: Some(r#"{"shuffle": true}"#.to_owned()),
+    ///     ..Material::default()
+    /// };
+    /// assert_eq!(asphalt.shuffle(), Some([0, 0]));
+    /// assert_eq!(Material::default().shuffle(), None);
+    /// ```
+    #[must_use]
+    pub fn shuffle(&self) -> Option<[u32; 2]> {
+        use gltf::json::{Value, deserialize::from_str};
+
+        /// No picture has more steps across it than this: more is a mistake
+        /// in the level, and is taken as no pattern at all.
+        const MOST_STEPS: f64 = 4096.0;
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return None;
+        };
+        // A whole number of steps from 1 to the most there can be; anything
+        // else is no pattern that way.
+        let steps = |value: &Value| match value.as_f64() {
+            // It was just checked to be a small whole number.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some(steps) if (1.0..=MOST_STEPS).contains(&steps) && steps.fract() == 0.0 => {
+                steps as u32
+            }
+            _ => 0,
+        };
+        match properties.get("shuffle")? {
+            Value::Bool(true) => Some([0, 0]),
+            Value::Number(on) if on.as_f64() != Some(0.0) => Some([0, 0]),
+            Value::Array(moves) => match moves.as_slice() {
+                [across, up] => Some([steps(across), steps(up)]),
+                _ => Some([0, 0]),
+            },
+            _ => None,
+        }
+    }
+}
+
 impl Default for Material {
     /// Matte white: what a shape with no material is drawn with.
     fn default() -> Self {
