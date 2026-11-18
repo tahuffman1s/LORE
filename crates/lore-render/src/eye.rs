@@ -34,6 +34,7 @@ use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::scene::{Picture, SceneTarget};
 use crate::swapchain::COLOUR;
+use crate::weather::{Weather, eased};
 
 /// The measuring shader, compiled from `shaders/eye.wgsl` by the build
 /// script.
@@ -65,6 +66,31 @@ const NIGHT_DARKER: f32 = 6.0;
 /// than a sunlit one.
 fn darker(ev: f32) -> f32 {
     NIGHT_DARKER * ((BRIGHT_EV - ev) / (BRIGHT_EV - DARK_EV)).clamp(0.0, 1.0)
+}
+
+/// How many stops darker than a clear day the eye leaves a view under a
+/// grey sky, in steady rain, and under a storm at its darkest.
+const GREY_DARKER: f32 = 0.6;
+const RAIN_DARKER: f32 = 0.6;
+const STORM_DARKER: f32 = 3.0;
+
+/// How many stops darker than a clear day a view is drawn under `weather`,
+/// with a storm `storm` strong overhead (from 0 to 1, as
+/// [`Weather::storm_at`] gives it).
+///
+/// An eye, or a camera left to itself, would open up under any cloud until
+/// the day looked as bright as a clear one, and every weather would look
+/// alike; the eye is opened only part of the way, as a photographer keeps
+/// a storm dark. A grey day is a little duller than a clear one, steady
+/// rain duller again, and a storm overhead dark: an eighth as bright.
+/// Lightning, which is light added to the view, is as bright as ever in
+/// it.
+pub(crate) fn weather_darker(weather: &Weather, storm: f32) -> f32 {
+    let sound = |value: f32| if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+    let rain = sound(weather.precipitation);
+    // Steady rain falls from a sky that is all cloud, said or not.
+    let grey = eased(0.6, 1.0, sound(weather.cloud_cover).max(rain));
+    (GREY_DARKER * grey + RAIN_DARKER * rain).max(STORM_DARKER * sound(storm))
 }
 
 /// How the picture follows the light: how far the eye may open where it is
@@ -166,7 +192,16 @@ impl Eye {
     /// copied back) drawn with a lux of light as bright as `per_lux`, and
     /// moves on `elapsed` seconds; `at_once` goes all the way, for a picture
     /// that must be the same each time it is drawn.
-    pub(crate) fn see(&mut self, bytes: &[u8], per_lux: f32, elapsed: f32, at_once: bool) {
+    ///
+    /// The view is left `weather` stops darker (see [`weather_darker`]).
+    pub(crate) fn see(
+        &mut self,
+        bytes: &[u8],
+        per_lux: f32,
+        elapsed: f32,
+        at_once: bool,
+        weather: f32,
+    ) {
         if !self.adaptation.adapts() {
             self.stops = 0.0;
             return;
@@ -184,7 +219,8 @@ impl Eye {
         // metre (a white wall under `E` lux is `E / pi`), and as a camera
         // would meter it, EV100 = log2(L * 100 / 12.5).
         let ev = seen - per_lux.log2() + 3.0;
-        let wanted = USUAL_VIEW - darker(ev) - seen;
+        let weather = if weather.is_finite() { weather.max(0.0) } else { 0.0 };
+        let wanted = USUAL_VIEW - darker(ev) - weather - seen;
         let wanted = wanted.clamp(-self.adaptation.closes, self.adaptation.opens);
         let seconds = if wanted > self.stops {
             self.adaptation.seconds
@@ -637,9 +673,45 @@ mod tests {
     const NOON: f32 = crate::lamps::DAYLIGHT_PER_LUX;
 
     #[test]
+    fn weather_keeps_its_mood_a_storm_darkest() {
+        let clear = Weather {
+            cloud_cover: 0.2,
+            ..Weather::default()
+        };
+        let grey = Weather {
+            cloud_cover: 1.0,
+            ..clear
+        };
+        let rain = Weather {
+            precipitation: 1.0,
+            ..clear
+        };
+        assert_eq!(weather_darker(&clear, 0.0), 0.0);
+        let dull = weather_darker(&grey, 0.0);
+        let wet = weather_darker(&rain, 0.0);
+        let storm = weather_darker(&rain, 1.0);
+        assert!(dull > 0.3 && dull < wet && wet < storm, "{dull} {wet} {storm}");
+        assert!((storm - STORM_DARKER).abs() < 1e-6);
+        // What is no number leaves the view as a clear day's.
+        let broken = Weather {
+            cloud_cover: f32::NAN,
+            precipitation: f32::INFINITY,
+            ..clear
+        };
+        assert_eq!(weather_darker(&broken, f32::NAN), 0.0);
+
+        // The eye draws a storm that much darker than a clear day.
+        let mut eye = Eye::new(EyeAdaptation::default());
+        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, 0.0);
+        let opened = eye.stops;
+        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, storm);
+        assert!((opened - eye.stops - storm).abs() < 1e-4, "{opened} {}", eye.stops);
+    }
+
+    #[test]
     fn a_sunlit_view_is_drawn_as_the_sky_draws_noon() {
         let mut eye = Eye::new(EyeAdaptation::default());
-        eye.see(&even(USUAL_VIEW), NOON, 1.0, true);
+        eye.see(&even(USUAL_VIEW), NOON, 1.0, true, 0.0);
         assert!(
             (eye.multiplier() - 1.0).abs() < 1e-5,
             "{}",
@@ -651,17 +723,17 @@ mod tests {
     fn the_eye_opens_in_the_dark_and_closes_in_bright_light_within_its_limits() {
         let mut eye = Eye::new(EyeAdaptation::default());
         // A sunlit view one stop darker than usual: one stop brighter.
-        eye.see(&even(USUAL_VIEW - 1.0), NOON, 1.0, true);
+        eye.see(&even(USUAL_VIEW - 1.0), NOON, 1.0, true, 0.0);
         assert!(
             (eye.multiplier() - 2.0).abs() < 1e-3,
             "{}",
             eye.multiplier()
         );
         // Far darker: no more than it may open.
-        eye.see(&even(USUAL_VIEW - 30.0), NOON * 1e9, 1.0, true);
+        eye.see(&even(USUAL_VIEW - 30.0), NOON * 1e9, 1.0, true, 0.0);
         assert!((eye.multiplier() - 8.0_f32.exp2()).abs() < 1e-1);
         // Far brighter: no more than it may close.
-        eye.see(&even(USUAL_VIEW + 12.0), NOON, 1.0, true);
+        eye.see(&even(USUAL_VIEW + 12.0), NOON, 1.0, true, 0.0);
         assert!((eye.multiplier() - (-8.0_f32).exp2()).abs() < 1e-5);
     }
 
@@ -673,7 +745,7 @@ mod tests {
         let night = 2.4;
         let seen = (0.002_f32 * night).log2();
         let mut eye = Eye::new(EyeAdaptation::default());
-        eye.see(&even(seen), night, 1.0, true);
+        eye.see(&even(seen), night, 1.0, true, 0.0);
         let stops = eye.multiplier().log2();
         assert!((stops - (USUAL_VIEW - 6.0 - seen)).abs() < 0.05, "{stops}");
         assert!(
@@ -681,16 +753,16 @@ mod tests {
             "a moonlit street is drawn much as the sky draws it: {stops}"
         );
         // Lamplight thirty times as bright closes it.
-        eye.see(&even(seen + 5.0), night, 1.0, true);
+        eye.see(&even(seen + 5.0), night, 1.0, true, 0.0);
         assert!(eye.multiplier().log2() < stops - 2.0);
     }
 
     #[test]
     fn it_gets_used_to_the_dark_slowly_and_to_bright_light_faster() {
         let mut opening = Eye::new(EyeAdaptation::default());
-        opening.see(&even(USUAL_VIEW - 2.0), NOON, 0.5, false);
+        opening.see(&even(USUAL_VIEW - 2.0), NOON, 0.5, false, 0.0);
         let mut closing = Eye::new(EyeAdaptation::default());
-        closing.see(&even(USUAL_VIEW + 2.0), NOON, 0.5, false);
+        closing.see(&even(USUAL_VIEW + 2.0), NOON, 0.5, false, 0.0);
         let opened = opening.multiplier().log2() / 2.0;
         let closed = -closing.multiplier().log2() / 2.0;
         assert!(opened > 0.1 && opened < 0.5, "{opened}");
@@ -700,7 +772,7 @@ mod tests {
     #[test]
     fn an_eye_that_does_not_adapt_draws_the_sky_as_it_is() {
         let mut eye = Eye::new(EyeAdaptation::FIXED);
-        eye.see(&even(-12.0), NOON, 1.0, true);
+        eye.see(&even(-12.0), NOON, 1.0, true, 0.0);
         assert_eq!(eye.multiplier(), 1.0);
     }
 
