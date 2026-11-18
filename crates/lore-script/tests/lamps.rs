@@ -415,7 +415,10 @@ end)
     assert!(mistake.contains("castsShadows"), "{mistake}");
     // Roblox's name, and a slip, both lead to the field.
     let mistake = load_mistake(r#"game.lamp("porch").shadows = false"#);
-    assert!(mistake.contains("Did you mean lamp.castsShadows?"), "{mistake}");
+    assert!(
+        mistake.contains("Did you mean lamp.castsShadows?"),
+        "{mistake}"
+    );
     let mistake = load_mistake(r#"game.lamp("porch", { castShadows = false })"#);
     assert!(mistake.contains("Did you mean castsShadows?"), "{mistake}");
 }

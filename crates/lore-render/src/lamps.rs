@@ -410,8 +410,13 @@ impl LampFrame {
         self.near
             .sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         self.near.truncate(MOST_LAMPS);
-        self.slots
-            .choose(lamps, &self.near, &self.viewed, shadowing, &mut self.shadows);
+        self.slots.choose(
+            lamps,
+            &self.near,
+            &self.viewed,
+            shadowing,
+            &mut self.shadows,
+        );
 
         let count = self.near.len();
         let words = count.div_ceil(32);

@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ash::vk;
 use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene, Water};
 
+use crate::bounce::{self, Bounce, BounceWorks, colour_range};
 use crate::buffer::Buffer;
 use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
@@ -20,11 +21,10 @@ use crate::fluid::FluidScene;
 use crate::fluid_pass::FluidWorks;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
+use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
 use crate::scene::{DEPTH, SceneTarget};
-use crate::bounce::{self, Bounce, BounceWorks, colour_range};
-use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
@@ -1499,7 +1499,9 @@ impl MeshPipeline {
             // `bounce.wgsl` names.
             let made = unsafe { bounce.make_pipelines(module, layout, &vertex_input, &shared) };
             if let Err(code) = made {
-                log::warn!("Light does not bounce: the graphics driver could not make its shaders ({code:?}).");
+                log::warn!(
+                    "Light does not bounce: the graphics driver could not make its shaders ({code:?})."
+                );
             }
         }
         // The sky: one triangle with no points of its own, drawn only where
@@ -1580,7 +1582,9 @@ impl MeshPipeline {
                 .dst_alpha_blend_factor(vk::BlendFactor::ONE)
                 .alpha_blend_op(vk::BlendOp::ADD)
                 .color_write_mask(
-                    vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B,
+                    vk::ColorComponentFlags::R
+                        | vk::ColorComponentFlags::G
+                        | vk::ColorComponentFlags::B,
                 )];
             let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
             let colour_only = [SceneTarget::FORMAT];
@@ -2239,7 +2243,8 @@ impl MeshPipeline {
                     .subresource_range(COLOUR);
                 device.cmd_pipeline_barrier2(
                     commands,
-                    &vk::DependencyInfo::default().image_memory_barriers(&[depth_done, colour_again]),
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&[depth_done, colour_again]),
                 );
                 let colour = [attachments[0].load_op(vk::AttachmentLoadOp::LOAD)];
                 let over = vk::RenderingInfo::default()
@@ -2264,7 +2269,8 @@ impl MeshPipeline {
                 device.cmd_end_rendering(commands);
                 device.cmd_pipeline_barrier2(
                     commands,
-                    &vk::DependencyInfo::default().image_memory_barriers(&[colour_done, motion_done]),
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&[colour_done, motion_done]),
                 );
             } else {
                 device.cmd_pipeline_barrier2(
@@ -2561,13 +2567,22 @@ impl MeshPipeline {
         meshes: Option<&Meshes>,
     ) -> Result<(), RenderError> {
         let level = meshes.filter(|meshes| meshes.buffers.is_some());
-        let setting = if works.works() { view.bounce } else { Bounce::Off };
+        let setting = if works.works() {
+            view.bounce
+        } else {
+            Bounce::Off
+        };
         let Ok(mut grid) = works.grid.try_borrow_mut() else {
             return Ok(());
         };
         // Held still (time does not pass), the same view is drawn the same.
         let still = view.elapsed <= 0.0;
-        let plan = grid.plan(view.eye, level.map_or(0, |meshes| meshes.id), setting, still);
+        let plan = grid.plan(
+            view.eye,
+            level.map_or(0, |meshes| meshes.id),
+            setting,
+            still,
+        );
         let Some(buffer) = works.buffers.get(frame % works.buffers.len().max(1)) else {
             return Ok(());
         };
@@ -2592,7 +2607,8 @@ impl MeshPipeline {
                 );
             }
         };
-        let read = vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER;
+        let read =
+            vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER;
         let drawing = vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
         let readable = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         let atlases = [works.light.image, works.depth.image];
@@ -2692,10 +2708,12 @@ impl MeshPipeline {
 
         // The rays: what was there is thrown away.
         let rays_layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
-        barrier(&[bounce::whole(works.rays.image, vk::ImageLayout::UNDEFINED, rays_layout)
-            .src_stage_mask(read)
-            .dst_stage_mask(drawing)
-            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)]);
+        barrier(&[
+            bounce::whole(works.rays.image, vk::ImageLayout::UNDEFINED, rays_layout)
+                .src_stage_mask(read)
+                .dst_stage_mask(drawing)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE),
+        ]);
         let rays_wide = rays;
         let rays = [vk::RenderingAttachmentInfo::default()
             .image_view(works.rays.view)
@@ -2705,7 +2723,11 @@ impl MeshPipeline {
         // SAFETY: as above.
         unsafe {
             begin_drawing(device, commands, rays_wide, listed, &rays);
-            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.trace_pipeline);
+            device.cmd_bind_pipeline(
+                commands,
+                vk::PipelineBindPoint::GRAPHICS,
+                works.trace_pipeline,
+            );
             device.cmd_draw(commands, 3, 1, 0, 0);
             device.cmd_end_rendering(commands);
         }
@@ -2721,7 +2743,8 @@ impl MeshPipeline {
                 .src_stage_mask(read)
                 .dst_stage_mask(drawing)
                 .dst_access_mask(
-                    vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 )
         }));
         let probes = [works.light.view, works.depth.view].map(|view| {
@@ -2733,8 +2756,18 @@ impl MeshPipeline {
         });
         // SAFETY: as above.
         unsafe {
-            begin_drawing(device, commands, bounce::ATLAS[0], bounce::ATLAS[1], &probes);
-            device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.probe_pipeline);
+            begin_drawing(
+                device,
+                commands,
+                bounce::ATLAS[0],
+                bounce::ATLAS[1],
+                &probes,
+            );
+            device.cmd_bind_pipeline(
+                commands,
+                vk::PipelineBindPoint::GRAPHICS,
+                works.probe_pipeline,
+            );
             device.cmd_draw(commands, 6, listed, 0, 0);
             device.cmd_end_rendering(commands);
         }
@@ -2756,7 +2789,12 @@ impl MeshPipeline {
     ///
     /// As for [`record`](Self::record), inside a pass, with a pipeline of
     /// this pipeline's layout bound.
-    unsafe fn draw_level(&self, commands: vk::CommandBuffer, meshes: &Meshes, seen: impl Fn(&Draw) -> bool) {
+    unsafe fn draw_level(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        seen: impl Fn(&Draw) -> bool,
+    ) {
         let Some((vertices, indices)) = &meshes.buffers else {
             return;
         };
@@ -2787,7 +2825,14 @@ impl MeshPipeline {
                     0,
                     &draw_bytes(draw),
                 );
-                device.cmd_draw_indexed(commands, draw.index_count, 3, draw.first_index, draw.first_vertex, 0);
+                device.cmd_draw_indexed(
+                    commands,
+                    draw.index_count,
+                    3,
+                    draw.first_index,
+                    draw.first_vertex,
+                    0,
+                );
                 last = Some(draw);
             }
         }
@@ -2796,9 +2841,9 @@ impl MeshPipeline {
     /// Whether every probe of bounce light has traced since it came into
     /// the grid: a picture held still is drawn again until it has.
     pub(crate) fn bounce_settled(&self) -> bool {
-        self.bounce.as_ref().is_none_or(|works| {
-            works.grid.try_borrow().is_ok_and(|grid| grid.settled())
-        })
+        self.bounce
+            .as_ref()
+            .is_none_or(|works| works.grid.try_borrow().is_ok_and(|grid| grid.settled()))
     }
 
     /// Makes the lamps' atlas as `view` asks, or frees it, and points this
@@ -2818,9 +2863,10 @@ impl MeshPipeline {
         meshes: Option<&Meshes>,
     ) -> Result<Shadowing, RenderError> {
         let device = self.gpu.device();
-        let (Ok(mut atlas), Ok(mut bound)) =
-            (self.lamp_atlas.try_borrow_mut(), self.lamp_bound.try_borrow_mut())
-        else {
+        let (Ok(mut atlas), Ok(mut bound)) = (
+            self.lamp_atlas.try_borrow_mut(),
+            self.lamp_bound.try_borrow_mut(),
+        ) else {
             return Ok(Shadowing::default());
         };
         let wanted = view.lamp_shadows;

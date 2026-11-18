@@ -7,9 +7,8 @@ use ash::vk;
 use lore_assets::Scene;
 use lore_ui::DrawList;
 
-use crate::bounce::Bounce;
-use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
+use crate::bounce::Bounce;
 use crate::buffer::Buffer;
 use crate::camera::Camera;
 use crate::effects::{Air, Effects, Splash};
@@ -18,6 +17,7 @@ use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
+use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
@@ -1595,18 +1595,40 @@ mod tests {
         // faces turned inwards, standing in the open at noon.
         let (low, high) = ([-3.0_f32, 0.0, -3.0], [3.0_f32, 3.0, 3.0]);
         let corner = |x: usize, y: usize, z: usize| {
-            [[low[0], high[0]][x], [low[1], high[1]][y], [low[2], high[2]][z]]
+            [
+                [low[0], high[0]][x],
+                [low[1], high[1]][y],
+                [low[2], high[2]][z],
+            ]
         };
         let mut part = lore_assets::MeshPart::default();
         // Each side: its four corners and the way it faces; its triangles
         // go round so that its front faces into the room.
         let sides: [([[usize; 3]; 4], [f32; 3]); 6] = [
-            ([[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [0.0, 1.0, 0.0]),
-            ([[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]], [0.0, -1.0, 0.0]),
-            ([[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], [1.0, 0.0, 0.0]),
-            ([[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], [-1.0, 0.0, 0.0]),
-            ([[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], [0.0, 0.0, 1.0]),
-            ([[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], [0.0, 0.0, -1.0]),
+            (
+                [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+                [0.0, 1.0, 0.0],
+            ),
+            (
+                [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+                [0.0, -1.0, 0.0],
+            ),
+            (
+                [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
+                [1.0, 0.0, 0.0],
+            ),
+            (
+                [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
+                [-1.0, 0.0, 0.0],
+            ),
+            (
+                [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+                [0.0, 0.0, 1.0],
+            ),
+            (
+                [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+                [0.0, 0.0, -1.0],
+            ),
         ];
         for (corners, normal) in sides {
             let first = u32::try_from(part.positions.len()).unwrap();
@@ -1617,7 +1639,10 @@ mod tests {
             part.indices
                 .extend([0, 2, 1, 0, 3, 2].map(|number| first + number));
         }
-        part.bounds = lore_assets::Bounds { min: low, max: high };
+        part.bounds = lore_assets::Bounds {
+            min: low,
+            max: high,
+        };
         let mut scene = fluid_scene(false, false);
         scene.meshes[0].parts[0].bounds = lore_assets::Bounds {
             min: [-50.0, 0.0, -50.0],

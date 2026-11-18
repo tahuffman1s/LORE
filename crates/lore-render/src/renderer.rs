@@ -9,9 +9,8 @@ use lore_assets::Scene;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use crate::bounce::Bounce;
-use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
+use crate::bounce::Bounce;
 use crate::camera::Camera;
 use crate::effects::{Effects, Splash};
 use crate::error::RenderError;
@@ -19,6 +18,7 @@ use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
 use crate::gpu::Gpu;
+use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
@@ -835,7 +835,8 @@ impl Renderer {
                 let [x, _, z] = self.camera.position;
                 let weather =
                     crate::eye::weather_darker(said, said.storm_at([x, z], view.seconds()));
-                self.eye.see(&self.measuring, per_lux, seconds, false, weather);
+                self.eye
+                    .see(&self.measuring, per_lux, seconds, false, weather);
             }
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
