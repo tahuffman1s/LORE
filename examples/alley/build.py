@@ -171,6 +171,14 @@ def model(name, size=SIZE):
         }
         if made["base"] is None and "baseColorFactor" in pbr:
             made["colour"] = pbr["baseColorFactor"]
+        if made["cut"] and made["base"] and made["base"].lower().endswith(".jpg"):
+            # A JPEG has no alpha: the holes are in a picture of their own,
+            # which is put into the colour picture's alpha here.
+            made["base"] = with_holes(name, material.get("name", ""), made["base"], size)
+            made["cut"] = made["base"].endswith(".png")
+        # A picture laid on with KHR_texture_transform: the engine is
+        # given the transformed coordinates instead.
+        made["transform"] = pbr.get("baseColorTexture", {}).get("extensions", {}).get("KHR_texture_transform")
         materials.append(made)
 
     world = {}
@@ -207,6 +215,15 @@ def model(name, size=SIZE):
                 uvs = accessor(gltf, buffers, attributes["TEXCOORD_0"])
             else:
                 uvs = array.array("f", bytes(8 * (len(positions) // 3)))
+            look = materials[primitive.get("material", 0)] if materials else {}
+            moved = look.get("transform")
+            if moved:
+                (ox, oy), turn = moved.get("offset", (0.0, 0.0)), moved.get("rotation", 0.0)
+                su, sv = moved.get("scale", (1.0, 1.0))
+                c, sn = math.cos(turn), math.sin(turn)
+                for at in range(0, len(uvs), 2):
+                    u, v = uvs[at] * su, uvs[at + 1] * sv
+                    uvs[at], uvs[at + 1] = c * u + sn * v + ox, -sn * u + c * v + oy
             parts.append(
                 Part(
                     positions, normals, uvs,
@@ -216,6 +233,27 @@ def model(name, size=SIZE):
             )
         pieces.append((node.get("name", name), parts))
     return pieces
+
+
+def with_holes(name, material, base, size):
+    """`base` with the model's opacity picture for `material` as its alpha,
+    as a PNG beside it; or `base` itself if the model has none."""
+    files = files_of(name)
+    part = material[len(name) + 1 :] if material.startswith(name + "_") else ""
+    for key in (f"{part}_alpha", f"{part}_opacity", "alpha", "opacity"):
+        if key in files and size in files[key]:
+            url = files[key][size]["jpg"]["url"]
+            holes = fetch(url, os.path.join(CACHE, name, "holes", url.rsplit("/", 1)[-1]))
+            out = base[:-4] + "-cut.png"
+            if not os.path.exists(out):
+                from PIL import Image
+
+                colour = Image.open(base).convert("RGB")
+                alpha = Image.open(holes).convert("L").resize(colour.size)
+                colour.putalpha(alpha)
+                colour.save(out)
+            return out
+    return base
 
 
 def texture_set(name, size=SIZE):
@@ -1094,18 +1132,15 @@ def building_parts(building, materials, extras):
         # along every opening's edges, about half a metre apart elsewhere,
         # so that grime can be painted on its points.
         spacing = 0.55 if front else 1.6
-        us = {0.0, length}
-        vs = {0.0 - 0.3, building.tall}
-        for u0, u1, v0, v1 in openings:
-            us.update((u0, u1))
-            vs.update((v0, v1))
-        us.update(k * spacing for k in range(1, int(length / spacing) + 1))
-        vs.update(k * spacing for k in range(1, int(building.tall / spacing) + 1))
-        us = sorted(u for u in us if 0.0 <= u <= length)
-        vs = sorted(v for v in vs if v <= building.tall)
-        # Merge lines that are nearly the same.
-        us = [u for k, u in enumerate(us) if k == 0 or u - us[k - 1] > 0.05 or u == length]
-        vs = [v for k, v in enumerate(vs) if k == 0 or v - vs[k - 1] > 0.05 or v == building.tall]
+        # The openings' edges must be lines of the grid, or a sliver of
+        # wall is missing beside them; a regular line too near one of them
+        # is left out instead.
+        must_u = {0.0, length} | {u for o in openings for u in o[:2]}
+        must_v = {-0.3, building.tall} | {v for o in openings for v in o[2:]}
+        us = sorted(must_u | {u for u in (k * spacing for k in range(1, int(length / spacing) + 1))
+                              if u < length and all(abs(u - m) > 0.06 for m in must_u)})
+        vs = sorted(must_v | {v for v in (k * spacing for k in range(1, int(building.tall / spacing) + 1))
+                              if v < building.tall and all(abs(v - m) > 0.06 for m in must_v)})
         shape = materials(wall_mat)
         points = {}
         offset = chooser.uniform(0, tile)
@@ -1553,6 +1588,10 @@ def write_places(path, places, bounds, alley):
 
 
 def main():
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        raise SystemExit("build.py paints some of its pictures with Pillow. Install it with `pip install pillow` and run this again.")
     random.seed(7)
     level = Level()
     looks = Looks()
@@ -1906,14 +1945,14 @@ def furnish(level, solids, fronts):
             (x, y, z), turn = on_wall(wall, along, y + 1.0, 0.0)
             props.add(clamp, (x, y, z), turn, (-(cx0 + cx1) / 2, -(cy0 + cy1) / 2, -cz0))
     # A roller shutter on a loading bay, and on the workshop.
-    for wall, along, name in (("E", -27.6, "rollershutter_window_01"), ("W", -11.2, "rollershutter_door"),
+    for wall, along, name in (("E", -27.6, "rollershutter_door"), ("W", -11.2, "rollershutter_door"),
                               ("EY", 5.6, "rollershutter_door"), ("NS", -9.0, "rollershutter_window_01"),
                               ("SS", 9.2, "rollershutter_window_01"), ("NF", 9.0, "rollershutter_door")):
         pieces = kit_pieces(name)
         node = chooser.choice(sorted(pieces))
         (x, _, z), turn = on_wall(wall, along, 0.0)
         y = height(*on_wall(wall, along, 0.0, 0.4)[0][::2])
-        props.model(name, (x, y + (1.0 if "window" in name and wall in ("E", "W") else 0.0), z), turn, nodes=[node], sit=True)
+        props.model(name, (x, y, z), turn, nodes=[node], sit=True)
 
     # ---- overhead: cables strung across the alley and the yard, and along
     # the walls from one building to the next.
@@ -2011,7 +2050,9 @@ def furnish(level, solids, fronts):
         spots.append((x, z))
     for (dx, dz) in DRAINS[:2]:
         for _ in range(5):
-            spots.append((dx + chooser.uniform(-0.6, 0.6), dz + chooser.uniform(-0.6, 0.6)))
+            # Round the grate, not on it.
+            angle = chooser.uniform(0, math.tau)
+            spots.append((dx + math.cos(angle) * chooser.uniform(0.38, 0.7), dz + math.sin(angle) * chooser.uniform(0.38, 0.7)))
     for _ in range(30):
         spots.append((chooser.uniform(-0.3, 0.3), chooser.choice((-1, 1)) * chooser.uniform(YARD_END, END)))
     for _ in range(50):
@@ -2019,6 +2060,8 @@ def furnish(level, solids, fronts):
         spots.append((chooser.uniform(-HOARDING + 1, HOARDING - 1), side * (KERB + 0.03) if chooser.random() < 0.5 else side * (FAR_KERB - 0.03)))
     for x, z in spots:
         name, node = chooser.choice(weeds)
+        if any(math.hypot(x - dx, z - dz) < 0.38 for dx, dz in DRAINS):
+            continue
         props.model(name, (x, height(x, z) - 0.01, z), chooser.uniform(0, math.tau), nodes=[node], scale=chooser.uniform(1.0, 2.2))
 
     # ---- on the streets: lamps, a hydrant, bollards, manholes, parked cars
@@ -2198,7 +2241,13 @@ def decorate(level, fronts, pictures, made):
             if v0 < 3.0 or chooser.random() > 0.3:
                 continue
             material, wide, tall = chooser.choice(runs)
-            drop = chooser.uniform(1.0, 2.6)
+            # A run stops short of the lintel of the window below, and of a
+            # shop's fascia.
+            under = [top for left, right, _, top in openings if top < v0 and left < u1 and right > u0]
+            floor = max(under, default=3.6 if building.style["shop"] else 0.0) + 0.3
+            drop = min(chooser.uniform(1.0, 2.6), v0 - 0.07 - floor)
+            if drop < 0.4:
+                continue
             w = (u1 - u0) * chooser.uniform(0.6, 1.0)
             mid = (u0 + u1) / 2 + chooser.uniform(-0.1, 0.1)
             top = v0 - 0.07
