@@ -19,6 +19,7 @@ mod clouds;
 mod effects;
 mod error;
 mod fluid;
+mod fluid_pass;
 mod font;
 mod gpu;
 mod grid;

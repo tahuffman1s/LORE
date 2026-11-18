@@ -16,6 +16,7 @@ use crate::clouds::CloudVolume;
 use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
 use crate::error::RenderError;
 use crate::fluid::FluidScene;
+use crate::fluid_pass::FluidWorks;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::material::{self, Materials};
@@ -718,6 +719,9 @@ pub(crate) struct MeshPipeline {
     /// What the clouds are shaped from: `None` only while the pipeline is
     /// being built.
     clouds: Option<CloudVolume>,
+    /// Draws the fluids a game pours about: `None` only while the pipeline
+    /// is being built.
+    fluid: Option<FluidWorks>,
     /// Draws the sky behind everything.
     sky: vk::Pipeline,
     /// The sky of a scene that sets no light of its own.
@@ -758,6 +762,7 @@ impl MeshPipeline {
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             clouds: None,
+            fluid: None,
             sky: vk::Pipeline::null(),
             usual_sky: Sky::of(&Lighting::default()),
             grid: vk::Pipeline::null(),
@@ -1343,11 +1348,18 @@ impl MeshPipeline {
                 }
             }
         }
+        let fluid = if failed.is_none() {
+            let sets = [mesh.set_layout, mesh.material_layout, mesh.body_layout];
+            Some(FluidWorks::new(gpu, frames, module, sets, &ranges))
+        } else {
+            None
+        };
         // SAFETY: the module is only needed while pipelines are being created.
         unsafe { device.destroy_shader_module(module, None) };
         if let Some(code) = failed {
             return Err(RenderError::driver(doing)(code));
         }
+        mesh.fluid = fluid.transpose()?;
         mesh.grid = grid::pipeline(gpu, layout)?;
         Ok(mesh)
     }
@@ -1391,8 +1403,15 @@ impl MeshPipeline {
             tracks,
             fluid,
         } = contents;
-        // Drawn in a later step of this work; read so that the field is used.
-        let _ = fluid;
+        // Fluid is worked out in pictures of its own, made now so that
+        // nothing fails once rendering has begun; a frame with none draws
+        // exactly what it did before.
+        let fluid = match (&self.fluid, fluid) {
+            // SAFETY: the caller's guarantees cover this frame's buffers
+            // and set, and the target.
+            (Some(works), Some(scene)) => unsafe { works.prepare(frame, scene, target) }?,
+            _ => None,
+        };
         // What flies is handed over before anything is recorded.
         let bit_buffer = self.bits.get(frame % self.bits.len().max(1));
         let bits = &bits[..bits.len().min(MOST_BITS * BIT_BYTES)];
@@ -1684,9 +1703,13 @@ impl MeshPipeline {
             // Water sees what is under it: the picture so far is copied
             // aside for it to read, and drawing carries on over the same
             // picture.
-            if meshes.is_some_and(|meshes| meshes.has_water) || !bits.is_empty() {
+            if meshes.is_some_and(|meshes| meshes.has_water) || !bits.is_empty() || fluid.is_some()
+            {
                 device.cmd_end_rendering(commands);
                 Self::keep_behind(device, commands, target);
+                if let Some(fluid) = &fluid {
+                    fluid.record_passes(commands, *view_set);
+                }
                 let kept =
                     attachments.map(|attachment| attachment.load_op(vk::AttachmentLoadOp::LOAD));
                 let kept_depth = depth.load_op(vk::AttachmentLoadOp::LOAD);
@@ -1706,6 +1729,9 @@ impl MeshPipeline {
                     &[*view_set],
                     &[],
                 );
+                if let Some(fluid) = &fluid {
+                    fluid.shade(commands);
+                }
             }
             // Still water first, each body from the shape it took, the
             // coarsest of its grids first.

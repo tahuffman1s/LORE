@@ -1661,3 +1661,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include water.wgsl
 //!include particles.wgsl
 //!include weather.wgsl
+//!include fluid.wgsl
