@@ -87,6 +87,7 @@ game.input.rumble(0.2, 0.6, 0.1)
 game.input.rumble(0, 0)
 game.input.useSet("menu")
 local inSet: string = game.input.currentSet()
+print(inSet)
 
 -- Weapons: every setting, and none of them.
 game.weapon("smg", {

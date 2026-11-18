@@ -507,7 +507,8 @@ impl Effects {
             // New snow fills tracks in: a hard fall in a minute and a
             // half. With no snow left there are none.
             if self.weather.snow > 0.0 {
-                self.tracks.fill(seconds.min(0.05) * self.cold[0] / TRACKS_FILL);
+                self.tracks
+                    .fill(seconds.min(0.05) * self.cold[0] / TRACKS_FILL);
             } else {
                 self.tracks.clear();
             }

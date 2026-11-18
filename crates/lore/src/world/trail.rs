@@ -162,7 +162,10 @@ mod tests {
             trail.tick(&walker(step as f32 * 0.05), 0.0, (0.03, false), &mut treads);
         }
         assert_eq!(treads.len(), 2 * 5, "{treads:?}");
-        assert!(treads[0].place[1] * treads[2].place[1] < 0.0, "the other foot");
+        assert!(
+            treads[0].place[1] * treads[2].place[1] < 0.0,
+            "the other foot"
+        );
         // To the knee: a furrow as well, a tread every ten centimetres,
         // and nothing while they stand.
         treads.clear();
@@ -193,7 +196,12 @@ mod tests {
             velocity: [0.0; 3],
             ..walker(0.0)
         };
-        trail.tick(&standing, -std::f32::consts::FRAC_PI_2, (0.03, false), &mut treads);
+        trail.tick(
+            &standing,
+            -std::f32::consts::FRAC_PI_2,
+            (0.03, false),
+            &mut treads,
+        );
         assert_eq!(treads.len(), 4);
         assert!((treads[0].place[1] - treads[2].place[1]).abs() > 2.0 * FEET_APART - 1e-4);
         assert!((treads[1].place[0] - treads[0].place[0] - 2.0 * BOOT).abs() < 1e-4);

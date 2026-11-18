@@ -12,7 +12,7 @@ local water = require("./creek")
 -- The creek and the lake are not heard from one place each. A creek is
 -- heard all along it: its sound is kept at the place on it nearest to you,
 -- so it is beside you as you walk its bank and behind you as you leave it.
-local creek, lake, frogs
+local creek, lake
 
 -- The place on the creek nearest to `from`.
 local function nearestOnCreek(from: vector): vector
@@ -53,7 +53,7 @@ game.onStart(function()
     creek = game.audio.playAt("creek", nearestOnCreek(here), { range = 30, volume = 0.9, loop = true })
     lake = game.audio.playAt("rivulet", nearestOnLake(here), { range = 34, volume = 0.45, loop = true, pitch = 0.8 })
     -- Frogs at the lake.
-    frogs = game.audio.playAt("frogs", water.lake, { range = 60, volume = 0.5, loop = true })
+    game.audio.playAt("frogs", water.lake, { range = 60, volume = 0.5, loop = true })
     print("You are in the jungle. Follow the creek downhill to the lake.")
 end)
 

@@ -223,8 +223,8 @@ impl World {
         if away <= THUNDER_HEARD {
             if self.thunder.len() < MOST_THUNDER {
                 self.thunder.push(thunder);
-            } else if let Some(farthest) = (self.thunder.iter_mut())
-                .max_by(|one, other| one.2.total_cmp(&other.2))
+            } else if let Some(farthest) =
+                (self.thunder.iter_mut()).max_by(|one, other| one.2.total_cmp(&other.2))
                 && farthest.2 > away
             {
                 *farthest = thunder;
@@ -1166,7 +1166,9 @@ mod tests {
             let mut frame = Frame::new(0.0);
             game.frame(&mut frame);
             for stroke in frame.take_strikes() {
-                if (stroke.to[0] - stood[0] - 100.0).abs() < 0.5 && (stroke.to[2] - stood[2]).abs() < 0.5 {
+                if (stroke.to[0] - stood[0] - 100.0).abs() < 0.5
+                    && (stroke.to[2] - stood[2]).abs() < 0.5
+                {
                     seen += 1;
                 } else {
                     of_its_own += 1;

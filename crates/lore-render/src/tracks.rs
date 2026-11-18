@@ -125,7 +125,10 @@ impl Tracks {
     /// Where in the map the row numbered `row` from the square's corner
     /// begins, when that corner is at `corner` along z.
     fn row_at(corner: i32, row: i32) -> usize {
-        ((corner + row).rem_euclid(SIDE.cast_signed()).cast_unsigned() * SIDE) as usize
+        ((corner + row)
+            .rem_euclid(SIDE.cast_signed())
+            .cast_unsigned()
+            * SIDE) as usize
     }
 
     /// Moves the square to be round `eye`, along x and z: what leaves it
@@ -225,7 +228,8 @@ impl Tracks {
         // and a corner is a whole number far below where f32 stops being
         // exact.
         #[allow(clippy::cast_precision_loss)]
-        let within = [0, 1].map(|axis| (place[axis] / APART - corner[axis] as f32).clamp(-1e6, 1e6));
+        let within =
+            [0, 1].map(|axis| (place[axis] / APART - corner[axis] as f32).clamp(-1e6, 1e6));
         let reach = wide / APART;
         // Truncation is the point: whole points.
         #[allow(clippy::cast_possible_truncation)]
@@ -648,7 +652,10 @@ mod tests {
             tracks.follow([step as f32 * 0.1, 0.0]);
         }
         assert!(tracks.at([0.0, 0.0]) > 0.99);
-        assert!(tracks.at([-20.0, 5.0]) < 0.01, "that one is out of the square");
+        assert!(
+            tracks.at([-20.0, 5.0]) < 0.01,
+            "that one is out of the square"
+        );
         // What comes into the square in its place is untrodden.
         assert_eq!(tracks.at([44.0, 5.0]), 0.0);
         // And along z, there and back by another way.
@@ -658,7 +665,11 @@ mod tests {
         }
         assert!(tracks.at([0.0, 0.0]) > 0.99);
         assert_eq!(tracks.at([20.0, 25.0]), 0.0);
-        assert_eq!(tracks.at([20.0, 25.0 - 64.0]), 0.0, "nor where it would wrap to");
+        assert_eq!(
+            tracks.at([20.0, 25.0 - 64.0]),
+            0.0,
+            "nor where it would wrap to"
+        );
         // A long way off, and back: the square was wiped as it went.
         tracks.follow([500.0, 300.0]);
         tracks.follow([0.0, 0.0]);
@@ -693,7 +704,10 @@ mod tests {
             ];
             tracks.follow(eye);
             tracks.tread(foot(eye[0], eye[1]));
-            tracks.tread(foot(eye[0] + (dealt() - 0.5) * 50.0, eye[1] + (dealt() - 0.5) * 50.0));
+            tracks.tread(foot(
+                eye[0] + (dealt() - 0.5) * 50.0,
+                eye[1] + (dealt() - 0.5) * 50.0,
+            ));
             if step % 5 == 0 {
                 tracks.fill(0.02);
             }
