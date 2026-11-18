@@ -144,6 +144,19 @@ patch, and a little lighter and darker in patches. Brickwork is moved by
 whole bricks and whole courses, so that mortar meets mortar: the counts for
 each photograph are in `Looks.SHUFFLES` in `build.py`.
 
+## Painted, not pasted
+
+No surface here ends at a ruler line. Where two materials meet, one is
+painted over the other with LORE's `paint` property: the mesh says roughly
+where (the alpha of each point's colour), and the engine makes the edge
+ragged and seamless. On the ground the lane's asphalt is painted with tar
+where trenches were dug and where wheels have worn it, and the court's
+surface fades into the lane. Every building's wall has a second material:
+render that has come away from brick in islands, whitewash worn off towards
+the ground, soot and damp at the foot and under sills, or a different brick
+where the wall was mended. `WALL_PAINTS`, `wall_cover` and `tar_cover` in
+`build.py` say which and where.
+
 ## What is not there
 
 - Nothing moves but the hoop's net in the wind, and nobody is about.

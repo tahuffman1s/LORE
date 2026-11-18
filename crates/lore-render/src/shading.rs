@@ -831,3 +831,97 @@ fn a_shuffled_surface_is_a_little_lighter_and_darker_in_patches() {
     );
     finish(gpu);
 }
+
+/// A floor of blue with red painted over it, more and more from left to
+/// right: the mesh's colour has all its alpha on the left edge and none on
+/// the right. `how` is the rest of the blue's `paint`, after the name.
+fn painted_floor(how: &str) -> Scene {
+    let mut scene = floor(Material {
+        base_color: [0.0, 0.0, 1.0, 1.0],
+        extras: Some(format!(r#"{{"paint": {{"with": "red"{how}}}}}"#)),
+        ..Material::default()
+    });
+    // The floor's corners are left, right, right, left.
+    scene.meshes[0].parts[0].colors = Some(vec![
+        [1.0, 1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0, 1.0],
+    ]);
+    scene.materials.push(Material {
+        name: Some("red".to_owned()),
+        base_color: [1.0, 0.0, 0.0, 1.0],
+        ..Material::default()
+    });
+    scene
+}
+
+/// For each row of the picture looked at, how far along it the blue gives
+/// way to red: the first place that is more red than blue.
+fn edges(pixels: &[u8]) -> Vec<u32> {
+    (6..SIZE - 6)
+        .step_by(2)
+        .map(|y| {
+            (0..SIZE)
+                .find(|x| {
+                    let [red, _, blue] = pixel(pixels, *x, y);
+                    red > blue
+                })
+                .unwrap_or(SIZE)
+        })
+        .collect()
+}
+
+#[test]
+fn a_material_painted_over_another_meets_it_along_a_ragged_edge() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let pixels = draw(&gpu, &painted_floor(""), &above(), 0.0);
+    // Where the mesh says none of the paint there is the material's own
+    // blue, and where it says all of it the other's red.
+    let [red, _, blue] = pixel(&pixels, 2, SIZE / 2);
+    assert!(blue > 3 * red.max(1), "left: {red} red, {blue} blue");
+    let [red, _, blue] = pixel(&pixels, SIZE - 3, SIZE / 2);
+    assert!(red > 3 * blue.max(1), "right: {red} red, {blue} blue");
+    // Between, the edge is not the straight line the mesh's fade is: it
+    // wanders from row to row.
+    let ragged = edges(&pixels);
+    let (least, most) = (ragged.iter().min().copied(), ragged.iter().max().copied());
+    assert!(
+        most.unwrap_or(0) >= least.unwrap_or(0) + 4,
+        "the edge runs from {least:?} to {most:?}"
+    );
+    // The mesh's alpha was the paint, so the surface is not seen through:
+    // nowhere is the background's own colour.
+    assert!(!is_background(pixel(&pixels, SIZE / 2, SIZE / 2)));
+
+    // With no raggedness asked for, it is the mesh's fade: a straight edge
+    // down the middle.
+    let straight = edges(&draw(
+        &gpu,
+        &painted_floor(r#", "ragged": 0, "edge": 0"#),
+        &above(),
+        0.0,
+    ));
+    let (least, most) = (
+        straight.iter().min().copied(),
+        straight.iter().max().copied(),
+    );
+    assert!(
+        most.unwrap_or(SIZE) <= least.unwrap_or(0) + 1,
+        "the edge runs from {least:?} to {most:?}"
+    );
+    assert!(
+        least.is_some_and(|at| at.abs_diff(SIZE / 2) <= 2),
+        "the edge is at {least:?}"
+    );
+
+    // A material that names one the level has not got is drawn as itself.
+    let mut alone = painted_floor("");
+    alone.materials.truncate(1);
+    let pixels = draw(&gpu, &alone, &above(), 0.0);
+    let [red, _, blue] = pixel(&pixels, SIZE - 3, SIZE / 2);
+    assert!(blue > 3 * red.max(1), "unpainted: {red} red, {blue} blue");
+    finish(gpu);
+}

@@ -173,6 +173,17 @@ struct Material {
     // steps across and up one copy of them may be moved by (0 is any move).
     flags: vec4<u32>,
     placings: array<Placing, 5>,
+    // The same again for the material painted over this one, where the
+    // mesh's colour has its alpha rubbed out; it is this material itself
+    // when nothing is.
+    over_base_colour: vec4<f32>,
+    over_emissive: vec4<f32>,
+    over_factors: vec4<f32>,
+    over_flags: vec4<u32>,
+    over_placings: array<Placing, 5>,
+    // Whether anything is painted over it (1 or 0), then how soft the edge
+    // between the two is and how ragged, each from 0 to 1.
+    paint: vec4<f32>,
 }
 
 const BASE: u32 = 0u;
@@ -192,6 +203,15 @@ const EMISSIVE: u32 = 4u;
 @group(1) @binding(8) var normal_sampler: sampler;
 @group(1) @binding(9) var occlusion_sampler: sampler;
 @group(1) @binding(10) var emissive_sampler: sampler;
+// The pictures of the material painted over this one.
+@group(1) @binding(11) var over_base_texture: texture_2d<f32>;
+@group(1) @binding(12) var over_metal_rough_texture: texture_2d<f32>;
+@group(1) @binding(13) var over_normal_texture: texture_2d<f32>;
+@group(1) @binding(14) var over_occlusion_texture: texture_2d<f32>;
+@group(1) @binding(16) var over_base_sampler: sampler;
+@group(1) @binding(17) var over_metal_rough_sampler: sampler;
+@group(1) @binding(18) var over_normal_sampler: sampler;
+@group(1) @binding(19) var over_occlusion_sampler: sampler;
 
 // How deep the body of still water being drawn is, seen from above.
 @group(2) @binding(0) var body_water: texture_2d<f32>;
@@ -400,10 +420,26 @@ fn placed(texture: u32, corner: Corner) -> vec2<f32> {
     );
 }
 
+// The same two for the material painted over this one.
+fn over_has(texture: u32) -> bool {
+    return (material.over_flags.x & (1u << texture)) != 0u;
+}
+
+fn over_placed(texture: u32, corner: Corner) -> vec2<f32> {
+    let placing = material.over_placings[texture];
+    let uv = select(corner.uv.xy, corner.uv.zw, placing.u.w > 0.5);
+    return vec2<f32>(
+        dot(placing.u.xy, uv) + placing.u.z,
+        dot(placing.v.xy, uv) + placing.v.z,
+    );
+}
+
 // How a material's pictures are moved at one place to hide that they
 // repeat: two copies, each moved its own way, how much of the second there
 // is, and how light or dark this patch of the surface is.
 struct Shuffle {
+    // Whether the material is shuffled at all.
+    on: bool,
     first: vec2<f32>,
     second: vec2<f32>,
     share: f32,
@@ -449,12 +485,12 @@ fn shuffle_noise(at: vec3<f32>) -> f32 {
 // The move that goes with a whole number: a share of the picture across
 // and up, in whole steps of the material's pattern where it has one, so
 // that a course of bricks lands on a course of bricks.
-fn shuffle_move(number: f32) -> vec2<f32> {
+fn shuffle_move(number: f32, flags: vec4<u32>) -> vec2<f32> {
     // Each next number lands far from the last (the plastic number's
     // sequence), so neighbouring patches are moved quite differently.
     var shift = fract(vec2<f32>(0.754877666, 0.569840291) * (number + 1.0));
-    let across = f32(material.flags.y);
-    let up = f32(material.flags.z);
+    let across = f32(flags.y);
+    let up = f32(flags.z);
     if across > 0.0 {
         shift.x = floor(shift.x * across) / across;
     }
@@ -464,7 +500,8 @@ fn shuffle_move(number: f32) -> vec2<f32> {
     return shift;
 }
 
-// How the material's pictures are moved at `world`.
+// How a material's pictures are moved at `world`. `flags` are the
+// material's own, which say whether it is shuffled and by what steps.
 //
 // A photograph of two metres of brick laid over a wall of sixty shows the
 // same few bricks in a grid. So the wall is cut into patches by a smooth
@@ -475,21 +512,22 @@ fn shuffle_move(number: f32) -> vec2<f32> {
 // of one copy would run through the bricks of the other. Each patch is
 // also a little lighter or darker, as a wall built from different loads of
 // brick is.
-fn shuffle_of(world: vec3<f32>) -> Shuffle {
+fn shuffle_of(world: vec3<f32>, flags: vec4<u32>) -> Shuffle {
     var mixing: Shuffle;
+    mixing.on = flags.w != 0u;
     mixing.first = vec2<f32>(0.0);
     mixing.second = vec2<f32>(0.0);
     mixing.share = 0.0;
     mixing.tone = 1.0;
-    if material.flags.w == 0u {
+    if !mixing.on {
         return mixing;
     }
     let at = world / SHUFFLE_PATCH;
     let uneven = 0.65 * shuffle_noise(at) + 0.35 * shuffle_noise(at * 2.3 + vec3<f32>(7.1, 3.7, 5.3));
     let way = uneven * SHUFFLE_WAYS;
     let whole = floor(way);
-    mixing.first = shuffle_move(whole);
-    mixing.second = shuffle_move(whole + 1.0);
+    mixing.first = shuffle_move(whole, flags);
+    mixing.second = shuffle_move(whole + 1.0, flags);
     mixing.share = smoothstep(0.38, 0.62, way - whole);
     let tone = shuffle_noise(world / SHUFFLE_TONE_PATCH + vec3<f32>(13.0, 29.0, 17.0));
     mixing.tone = 1.0 + SHUFFLE_TONE * (2.0 * tone - 1.0);
@@ -499,7 +537,7 @@ fn shuffle_of(world: vec3<f32>) -> Shuffle {
 // The picture at `uv`, or for a shuffled material its two moved copies
 // blended.
 fn pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuffle) -> vec4<f32> {
-    if material.flags.w == 0u {
+    if !mixing.on {
         return textureSampleBias(picture, how, uv, view.eye.w);
     }
     // The picture's own slopes serve for both copies. Where two patches
@@ -521,13 +559,74 @@ fn pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuff
     );
 }
 
+// How much of the material painted over this one shows at a place, from
+// 0 to 1, and how that material's pictures are moved there.
+struct Painted {
+    share: f32,
+    mixing: Shuffle,
+}
+
+// How wide the islands and inlets of a painted edge are, in metres.
+const PAINT_GRAIN: f32 = 0.42;
+
+// How much of the other material shows at this corner of a mesh.
+//
+// The mesh says how much from point to point: the alpha of its colour,
+// rubbed out where the other material should be. Between a point that has
+// it and one that has not, that is a straight, even fade, which no worn
+// wall or patched road has. So the fade is used only to say how likely the
+// other material is, and fine noise through space says where it really is:
+// near the painted side nearly all of it, near the other side a few
+// islands, and a ragged line between (the noise stands in for the height
+// that terrain splatting blends by: Mishkinis, "Advanced terrain texture
+// splatting"). The noise is of the place in the world, so two meshes that
+// meet agree and there is no seam.
+fn paint_of(corner: Corner) -> Painted {
+    var painted: Painted;
+    painted.share = 0.0;
+    if material.paint.x == 0.0 {
+        painted.mixing = shuffle_of(corner.world, vec4<u32>(0u));
+        return painted;
+    }
+    painted.mixing = shuffle_of(corner.world, material.over_flags);
+    let asked = 1.0 - clamp(corner.colour.a, 0.0, 1.0);
+    if asked <= 0.002 {
+        return painted;
+    }
+    let at = corner.world / PAINT_GRAIN;
+    let grain = 0.6 * shuffle_noise(at + vec3<f32>(19.7, 4.3, 11.9))
+        + 0.4 * shuffle_noise(at * 3.1 + vec3<f32>(2.9, 23.1, 8.3));
+    // The noise counts for most half way, and for nothing where the mesh
+    // says all or none.
+    let between = 1.0 - abs(2.0 * asked - 1.0);
+    let ragged = asked + (grain - 0.5) * 1.6 * material.paint.z * between;
+    let soft = 0.01 + 0.3 * material.paint.y;
+    painted.share = smoothstep(0.5 - soft, 0.5 + soft, ragged);
+    // What the mesh painted all the way is all the other material.
+    painted.share = max(painted.share, smoothstep(0.96, 1.0, asked));
+    return painted;
+}
+
 // The surface's colour and alpha before any light.
-fn base_colour(corner: Corner, mixing: Shuffle) -> vec4<f32> {
-    var base = material.base_colour * corner.colour;
+fn base_colour(corner: Corner, mixing: Shuffle, painted: Painted) -> vec4<f32> {
+    // On a painted material the alpha of the mesh's colour is the paint,
+    // not how see-through the surface is.
+    let tint = vec4<f32>(corner.colour.rgb, select(corner.colour.a, 1.0, material.paint.x != 0.0));
+    var base = material.base_colour * tint;
     if has(BASE) {
         base *= pictured(base_texture, base_sampler, placed(BASE, corner), mixing);
     }
-    return vec4<f32>(base.rgb * mixing.tone, base.a);
+    var colour = base.rgb * mixing.tone;
+    if painted.share > 0.0 {
+        var over = material.over_base_colour.rgb * corner.colour.rgb;
+        if over_has(BASE) {
+            over *= pictured(
+                over_base_texture, over_base_sampler, over_placed(BASE, corner), painted.mixing,
+            ).rgb;
+        }
+        colour = mix(colour, over * painted.mixing.tone, painted.share);
+    }
+    return vec4<f32>(colour, base.a);
 }
 
 const PI: f32 = 3.14159265;
@@ -1284,7 +1383,7 @@ fn snow_tracks(place: vec3<f32>, upright: vec3<f32>, ragged: vec2<f32>) -> vec3<
 }
 
 // The light the surface sends to the eye.
-fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle) -> vec3<f32> {
+fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: Painted) -> vec3<f32> {
     var normal = normalize(corner.normal);
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
@@ -1302,18 +1401,34 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle) -> vec3<f3
     let sky = sky_and_slot(corner.world, corner.position.xy);
     let open = sky.x;
     let sky_seen = open * shade.y;
-    if has(NORMAL) {
-        let sample = pictured(
-            normal_texture, normal_sampler, placed(NORMAL, corner), mixing,
-        ).xyz * 2.0 - 1.0;
+    // Whether the other material's bumps are there to be mixed in.
+    let over_bumps = painted.share > 0.0 && over_has(NORMAL);
+    if has(NORMAL) || over_bumps {
+        // A material with no bumps of its own is flat: straight out.
+        var sample = vec3<f32>(0.0, 0.0, 1.0);
+        if has(NORMAL) {
+            sample = pictured(
+                normal_texture, normal_sampler, placed(NORMAL, corner), mixing,
+            ).xyz * 2.0 - 1.0;
+            sample = vec3<f32>(sample.xy * material.factors.z, sample.z);
+        }
+        if painted.share > 0.0 {
+            var over = vec3<f32>(0.0, 0.0, 1.0);
+            if over_has(NORMAL) {
+                over = pictured(
+                    over_normal_texture, over_normal_sampler, over_placed(NORMAL, corner), painted.mixing,
+                ).xyz * 2.0 - 1.0;
+                over = vec3<f32>(over.xy * material.over_factors.z, over.z);
+            }
+            sample = mix(sample, over, painted.share);
+        }
         // The tangent is kept at right angles to the smoothed normal.
         let leaning = corner.tangent.xyz - normal * dot(normal, corner.tangent.xyz);
         // A mesh with no tangents has nothing to bend its surface along.
         if dot(leaning, leaning) > 1e-12 {
             let along = normalize(leaning) * side;
             let across = cross(normal, along) * corner.tangent.w * side;
-            let bend = sample.xy * material.factors.z;
-            normal = normalize(along * bend.x + across * bend.y + normal * sample.z);
+            normal = normalize(along * sample.x + across * sample.y + normal * sample.z);
         }
     }
 
@@ -1325,6 +1440,20 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle) -> vec3<f3
         );
         roughness *= sample.g;
         metallic *= sample.b;
+    }
+    if painted.share > 0.0 {
+        var over_metallic = material.over_factors.x;
+        var over_roughness = material.over_factors.y;
+        if over_has(METAL_ROUGH) {
+            let sample = pictured(
+                over_metal_rough_texture, over_metal_rough_sampler, over_placed(METAL_ROUGH, corner),
+                painted.mixing,
+            );
+            over_roughness *= sample.g;
+            over_metallic *= sample.b;
+        }
+        metallic = mix(metallic, over_metallic, painted.share);
+        roughness = mix(roughness, over_roughness, painted.share);
     }
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, SMOOTHEST, 1.0);
@@ -1426,12 +1555,27 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle) -> vec3<f3
     // The sky and the ground, dimmed in crevices by the baked shadowing.
     var from_around = matte * surroundings(normal)
         + surroundings(reflect(-to_eye, normal)) * mirrored_share(mirror, roughness, n_eye);
+    // How much of the light from all round reaches into the surface's
+    // crevices: each material's own shading, mixed as the two are.
+    var reaches = 1.0;
     if has(OCCLUSION) {
         let shadowing = pictured(
             occlusion_texture, occlusion_sampler, placed(OCCLUSION, corner), mixing,
         ).r;
-        from_around *= 1.0 + material.factors.w * (shadowing - 1.0);
+        reaches = 1.0 + material.factors.w * (shadowing - 1.0);
     }
+    if painted.share > 0.0 {
+        var over_reaches = 1.0;
+        if over_has(OCCLUSION) {
+            let shadowing = pictured(
+                over_occlusion_texture, over_occlusion_sampler, over_placed(OCCLUSION, corner),
+                painted.mixing,
+            ).r;
+            over_reaches = 1.0 + material.over_factors.w * (shadowing - 1.0);
+        }
+        reaches = mix(reaches, over_reaches, painted.share);
+    }
+    from_around *= reaches;
 
     var glow = material.emissive.rgb;
     if has(EMISSIVE) {
@@ -1461,10 +1605,11 @@ fn motion(corner: Corner) -> vec2<f32> {
 // A solid surface.
 @fragment
 fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
-    let mixing = shuffle_of(corner.world);
-    let base = base_colour(corner, mixing);
+    let mixing = shuffle_of(corner.world, material.flags);
+    let painted = paint_of(corner);
+    let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), 1.0);
     pixel.motion = motion(corner);
     return pixel;
 }
@@ -1473,10 +1618,11 @@ fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
 // one, which can then be tested against the depth before it is shaded.
 @fragment
 fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
-    let mixing = shuffle_of(corner.world);
-    let base = base_colour(corner, mixing);
+    let mixing = shuffle_of(corner.world, material.flags);
+    let painted = paint_of(corner);
+    let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), 1.0);
     pixel.motion = motion(corner);
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
@@ -1498,10 +1644,11 @@ struct Mixed {
 // leaves what was there: the pixel moves with what is behind.
 @fragment
 fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
-    let mixing = shuffle_of(corner.world);
-    let base = base_colour(corner, mixing);
+    let mixing = shuffle_of(corner.world, material.flags);
+    let painted = paint_of(corner);
+    let base = base_colour(corner, mixing, painted);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), base.a);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted), corner.world), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }

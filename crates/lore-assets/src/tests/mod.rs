@@ -758,3 +758,40 @@ fn a_material_says_how_its_pictures_may_be_shuffled() {
     assert_eq!(says(r#"{"shuffle": ["a", 4]}"#), Some([0, 4]));
     assert_eq!(says(r#"{"shuffle": [8]}"#), Some([0, 0]));
 }
+
+#[test]
+fn a_material_says_what_is_painted_over_it() {
+    use crate::Material;
+
+    let says = |extras: &str| {
+        Material {
+            extras: Some(extras.to_owned()),
+            ..Material::default()
+        }
+        .paint()
+    };
+    // Not asked for, or nothing that names a material.
+    assert_eq!(Material::default().paint(), None);
+    assert_eq!(says(r#"{"shuffle": true}"#), None);
+    assert_eq!(says(r#"{"paint": true}"#), None);
+    assert_eq!(says(r#"{"paint": ""}"#), None);
+    assert_eq!(says(r#"{"paint": {"edge": 0.5}}"#), None);
+    // A name alone, with the usual edge.
+    let plain = says(r#"{"paint": " old plaster "}"#).unwrap();
+    assert_eq!(plain.with, "old plaster");
+    assert_eq!((plain.edge, plain.ragged), (0.15, 0.8));
+    // A name and how the edge is; numbers outside 0 to 1 are brought in,
+    // and what is not a number is the usual.
+    let said = says(r#"{"paint": {"with": "tar", "edge": 0.05, "ragged": 7}}"#).unwrap();
+    assert_eq!(said.with, "tar");
+    assert_eq!((said.edge, said.ragged), (0.05, 1.0));
+    let odd = says(r#"{"paint": {"with": "tar", "edge": "soft", "ragged": -1}}"#).unwrap();
+    assert_eq!((odd.edge, odd.ragged), (0.15, 0.0));
+    // It goes with shuffling.
+    let both = Material {
+        extras: Some(r#"{"shuffle": [8, 11], "paint": "soot"}"#.to_owned()),
+        ..Material::default()
+    };
+    assert_eq!(both.shuffle(), Some([8, 11]));
+    assert_eq!(both.paint().unwrap().with, "soot");
+}
