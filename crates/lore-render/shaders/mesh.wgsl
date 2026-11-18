@@ -992,7 +992,8 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let fixed = direction * cos(turn) - cross(pole, direction) * sin(turn)
         + pole * dot(pole, direction) * (1.0 - cos(turn));
     // The Milky Way: a band right round the sky, cloudy and uneven.
-    let band = exp(-pow(dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2, 2.0));
+    let off_band = dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2;
+    let band = exp(-off_band * off_band);
     let dust = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 1.7 + 0.2, 0.0).rg;
     let fine = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 6.1 + 0.6, 0.0).g;
     var light = vec3<f32>(0.75, 0.82, 1.0) * band * (0.2 + dust.r) * dust.g * (0.5 + fine) * 0.03;
@@ -1029,7 +1030,7 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         if layer == 2 {
             bright *= 0.3 + 2.2 * band;
         }
-        let twinkle = 1.0 + (0.12 + 0.4 * pow(1.0 - direction.y, 3.0))
+        let twinkle = 1.0 + (0.12 + 0.4 * pow(max(1.0 - direction.y, 0.0), 3.0))
             * sin(view.clouds.y * (3.0 + 6.0 * dice.y) + dice.x * 40.0);
         light += mix(vec3<f32>(1.0, 0.78, 0.58), vec3<f32>(0.7, 0.8, 1.0), dice.x)
             * bright * twinkle * exp(-dot(off, off) / (size * size));
@@ -1637,14 +1638,22 @@ fn snow_tracks(place: vec3<f32>, upright: vec3<f32>, ragged: vec2<f32>) -> vec3<
     return vec3<f32>(trodden(at), slope) * seen;
 }
 
+// `direction` made length one, or `otherwise` where it has no length to
+// speak of (two ways that cancel), which would make no number of it.
+fn towards_or(direction: vec3<f32>, otherwise: vec3<f32>) -> vec3<f32> {
+    let long = dot(direction, direction);
+    return select(direction * inverseSqrt(max(long, 1e-30)), otherwise, long < 1e-12);
+}
+
 // The light the surface sends to the eye.
 // `see_through` is true for what is drawn over the solid world, after
 // this frame's picture of it is copied.
 fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: Painted, see_through: bool) -> vec3<f32> {
-    var normal = normalize(corner.normal);
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
-    normal *= side;
+    // The way the surface faces as it is built, before anything bends it.
+    let built = towards_or(corner.normal, vec3<f32>(0.0, 1.0, 0.0)) * side;
+    var normal = built;
     // Shadows fall on the surface as it is built, not as its normal map
     // bends the light.
     // A leaf, a petal, a blade of grass: thin, with holes cut in it. The
@@ -1685,7 +1694,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         if dot(leaning, leaning) > 1e-12 {
             let along = normalize(leaning) * side;
             let across = cross(normal, along) * corner.tangent.w * side;
-            normal = normalize(along * sample.x + across * sample.y + normal * sample.z);
+            // A map that says no way at all (grey, or two that cancel)
+            // leaves the surface as it is built.
+            normal = towards_or(along * sample.x + across * sample.y + normal * sample.z, normal);
         }
     }
 
@@ -1752,11 +1763,10 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var banked_sun = 1.0;
     var banked_sky = 1.0;
     if view.weather[2].x > 0.0 {
-        let upright = normalize(corner.normal) * side;
-        let faces_up = smoothstep(0.25, 0.6, upright.y);
+        let faces_up = smoothstep(0.25, 0.6, built.y);
         banked_sun = mix(0.55, 1.0, faces_up);
         banked_sky = mix(0.85, 1.0, faces_up);
-        let found = snow_on(corner.world, upright.y, open);
+        let found = snow_on(corner.world, built.y, open);
         let patches = found.y;
         let small = found.z;
         snowed = found.x;
@@ -1770,7 +1780,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
             // darker and bluer, and the bottom of a deep track sees less
             // of the sky. A print in snow no deeper than a finger goes
             // through to the ground.
-            let track = snow_tracks(corner.world, upright, (vec2<f32>(small, patches) - 0.5) * 0.07);
+            let track = snow_tracks(corner.world, built, (vec2<f32>(small, patches) - 0.5) * 0.07);
             let depth = view.weather[6].x;
             let sunk = track.x * (0.14 + 0.4 * smoothstep(0.01, 0.25, depth));
             snow = mix(snow, vec3<f32>(0.55, 0.63, 0.78), 0.6 * track.x) * (1.0 - sunk);
@@ -1800,15 +1810,16 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         roughness = mix(roughness, 0.78, snowed);
         // What the snow hides has no bumps of its own; what is buried to
         // its side has snow banked on it, which faces up more than it does.
-        let banked = normalize(upright + vec3<f32>(0.0, 0.35 + 1.4 * (1.0 - clamp(upright.y, 0.0, 1.0)), 0.0));
-        normal = normalize(mix(normal, banked, snowed));
+        let banked = normalize(built + vec3<f32>(0.0, 0.35 + 1.4 * (1.0 - clamp(built.y, 0.0, 1.0)), 0.0));
+        // The underside of something buried faces the other way to the
+        // snow banked on it: half way between, the two cancel.
+        normal = towards_or(mix(normal, banked, snowed), banked);
         // The walls of a track face the way they slope.
-        normal = normalize(normal + tilt * snowed);
+        normal = towards_or(normal + tilt * snowed, normal);
     }
 
     // What the water laps at is soaked, and so is what the rain falls on:
     // whatever faces up with nothing over it, and has no snow on it.
-    let built = normalize(corner.normal) * side;
     var rained = view.weather[0].z * smoothstep(0.2, 0.7, built.y) * (1.0 - snowed);
     if rained > 0.0 {
         rained *= rained_on(corner.world, corner.position.xy);
@@ -1837,14 +1848,18 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
     if film > 0.0 {
         roughness = mix(roughness, min(roughness, FILM_ROUGHNESS), film);
-        normal = normalize(mix(normal, built, film * 0.85));
+        normal = towards_or(mix(normal, built, film * 0.85), built);
     }
     if puddle > 0.0 {
         let rings = rain_rings(corner.world.xz);
-        normal = normalize(mix(normal, normalize(vec3<f32>(-rings.x, 1.0, -rings.y)), puddle));
+        let ringed = normalize(vec3<f32>(-rings.x, 1.0, -rings.y));
+        normal = towards_or(mix(normal, ringed, puddle), ringed);
         roughness = mix(roughness, 0.03, puddle);
         metallic *= 1.0 - puddle;
     }
+    // A puddle is as smooth as anything is; what water does to roughness
+    // never takes it below that.
+    roughness = max(roughness, SMOOTHEST);
     // Metal mirrors light in its own colour and has no matte colour;
     // anything else mirrors a little white light, and water less.
     let matte = base_seen * (1.0 - metallic) * mix(1.0, darker, wet);
@@ -1852,7 +1867,9 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
 
     let to_eye = normalize(view.eye.xyz - corner.world);
     let to_sun = view.towards_sun.xyz;
-    let halfway = normalize(to_eye + to_sun);
+    // With the sun straight behind the surface the two cancel, and it
+    // gets no sunlight to shine with: any way serves.
+    let halfway = towards_or(to_eye + to_sun, normal);
     let n_eye = max(dot(normal, to_eye), 1e-4);
     let n_sun = clamp(dot(normal, to_sun), 0.0, 1.0);
     let n_half = clamp(dot(normal, halfway), 0.0, 1.0);
@@ -1873,8 +1890,10 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     if thin && snowed < 0.99 {
         let behind = clamp(-dot(normal, to_sun), 0.0, 1.0);
         let tinted = matte * mix(vec3<f32>(1.25, 1.2, 0.55), vec3<f32>(0.5), snowed);
+        // Edge on to the sun it comes through hardly at all, and not all
+        // at once as the sun goes behind it.
         from_behind = tinted / PI * view.sun.rgb * (0.25 + 0.75 * behind) * sunlit
-            * step(0.0001, behind) * 0.9 * (1.0 - snowed);
+            * smoothstep(0.0, 0.15, behind) * 0.9 * (1.0 - snowed);
     }
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
@@ -2125,7 +2144,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     let beside = cross(direction, view.heavens[0].xyz);
     let out = dot(beside, beside) / (0.00465 * 0.00465);
     if dot(direction, view.heavens[0].xyz) > 0.0 && out < 1.0 {
-        let rise = max(direction.y, 0.0);
+        let rise = clamp(direction.y, 0.0, 1.0);
         let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
         disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
             * exp(-vec3<f32>(0.066, 0.139, 0.285) * (air - 1.0));
