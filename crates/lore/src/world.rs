@@ -329,6 +329,20 @@ impl World {
         f64::from(self.tick) * f64::from(self.ground.step)
     }
 
+    /// What the sky's clock shows in a frame drawn `alpha` of the way from
+    /// the tick before the newest to the newest, as the view is: between
+    /// the two, so that clouds, rain and what sways move on every frame
+    /// drawn and not only on the frames a tick ran before. The rules
+    /// themselves only ever see whole ticks.
+    fn sky_seconds_drawn(&self, alpha: f32) -> f64 {
+        let alpha = if alpha.is_finite() {
+            f64::from(alpha.clamp(0.0, 1.0))
+        } else {
+            1.0
+        };
+        ((f64::from(self.tick) - 1.0 + alpha) * f64::from(self.ground.step)).max(0.0)
+    }
+
     /// How far the rain that has fallen has raised the level's still
     /// water, in metres.
     #[must_use]
@@ -659,8 +673,10 @@ impl Game for World {
 
     /// The script's own presenting, such as its HUD and its rumble.
     fn frame(&mut self, frame: &mut Frame) {
-        // The sky and the water are drawn where the rules have them.
-        frame.set_sky_clock(self.sky_seconds());
+        // The sky and the water are drawn where the rules have them, at
+        // the moment between the last two ticks the view is drawn at.
+        let alpha = frame.alpha();
+        frame.set_sky_clock(self.sky_seconds_drawn(alpha));
         frame.set_water_rise(self.climate.water_rise());
         // The world sends the bolts, so that it knows where each fell.
         frame.set_storm_bolts(false);
@@ -671,7 +687,7 @@ impl Game for World {
         self.game.frame(frame);
         // After the script's own frame, which says the weather as it
         // asked for it: this is the weather with what followed from it.
-        frame.set_weather(*self.climate.weather());
+        frame.set_weather(self.climate.weather_drawn(alpha));
     }
 }
 
@@ -1486,6 +1502,43 @@ mod tests {
         let after = drawn(&mut game, &input, 0.0);
         assert!(near(after.yaw, before.yaw) && near(after.pitch, before.pitch));
         assert_eq!((after.yaw, after.pitch), (game.yaw(), game.pitch()));
+    }
+
+    #[test]
+    fn the_sky_is_drawn_between_two_ticks_as_the_view_is() {
+        let (mut game, mut input) = playing_alone();
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        // The sky's clock and how far the wind has carried the air, as a
+        // frame `alpha` of the way between the last two ticks shows them.
+        let sky = |game: &mut Playing, input: &lore_input::Input, alpha: f32| {
+            let mut frame = Frame::between_ticks(input, alpha, STEP);
+            game.frame(&mut frame);
+            let clock = frame.take_water().1.unwrap();
+            let drift = frame.take_weather().unwrap().drift.unwrap();
+            (clock, drift)
+        };
+        let (start, carried) = sky(&mut game, &input, 0.0);
+        let (middle, half) = sky(&mut game, &input, 0.5);
+        let (end, all) = sky(&mut game, &input, 1.0);
+        let step = f64::from(STEP);
+        // Each frame is further on, by as much of a tick as it is.
+        assert!((start - 29.0 * step).abs() < 1e-9, "{start}");
+        assert!((middle - 29.5 * step).abs() < 1e-9, "{middle}");
+        assert!((end - 30.0 * step).abs() < 1e-9, "{end}");
+        let moved = (all[0] - carried[0]).hypot(all[1] - carried[1]);
+        assert!(moved > 0.0, "the wind blows");
+        for axis in 0..2 {
+            assert!((half[axis] - (carried[axis] + all[axis]) * 0.5).abs() < 1e-9);
+        }
+        // The next tick starts where the last frame before it was.
+        game.tick(input.tick(), STEP);
+        let (after, carried_after) = sky(&mut game, &input, 0.0);
+        assert!((after - end).abs() < 1e-9);
+        for axis in 0..2 {
+            assert!((carried_after[axis] - all[axis]).abs() < 1e-9);
+        }
     }
 
     #[test]
