@@ -276,9 +276,9 @@ impl Game for ScriptGame {
         if let Some(hour) = self.host.take_hour() {
             frame.set_hour(hour);
         }
-        if let Some(storminess) = self.host.take_storminess() {
-            frame.set_storminess(storminess);
-        }
+        // The weather as the script has said it. A world the script
+        // plays in says more after this: what has followed from it.
+        frame.set_weather(crate::world::said_weather(&self.host.weather()));
         for (at, number) in self.host.take_strikes() {
             frame.strike(lore_render::Lightning::down_to(
                 at,

@@ -39,7 +39,8 @@ pub struct RayHit {
 /// Every triangle of every placed mesh is solid, from both sides, unless the
 /// placement says it is not ([`Instance::is_solid`](lore_assets::Instance::is_solid)). Build it
 /// once when the level loads; it does not change afterwards, but for how
-/// high rain has raised its water ([`set_water_rise`](Self::set_water_rise)).
+/// high rain has raised its water ([`set_water_rise`](Self::set_water_rise))
+/// and how thick the ice on it is ([`set_ice`](Self::set_ice)).
 #[derive(Clone)]
 pub struct Level {
     /// `None` when there are no triangles, so nothing is ever hit.
@@ -50,11 +51,13 @@ pub struct Level {
     waters: Vec<Water>,
     /// How far rain has raised that water above where it was put.
     rise: Rise,
+    /// How thick the ice on that water is.
+    ice: Rise,
 }
 
 /// A height in metres that can be set through a level many hold: the level's
 /// shapes are shared, not copied, and whoever steps a world says how high
-/// its water stands before each step.
+/// its water stands, and how thick its ice is, before each step.
 #[derive(Default)]
 struct Rise(std::sync::atomic::AtomicU32);
 
@@ -79,6 +82,10 @@ impl std::fmt::Debug for Level {
 }
 
 impl Level {
+    /// How thick ice must be to bear someone walking on it, in metres: five
+    /// centimetres, which is where a careful person starts to trust it.
+    pub const ICE_BEARS: f32 = 0.05;
+
     /// The collision shapes of a loaded scene: every mesh, where it stands,
     /// but for those marked as not solid.
     ///
@@ -126,6 +133,9 @@ impl Level {
     /// is any there: a lake or a pond that the level marks as water.
     #[must_use]
     pub fn water_at(&self, x: f32, z: f32) -> Option<f32> {
+        if self.frozen() {
+            return None;
+        }
         let rise = self.rise.get();
         self.waters
             .iter()
@@ -153,12 +163,70 @@ impl Level {
         self.rise.get()
     }
 
+    /// Says how thick the ice on the level's still water is, in metres.
+    /// Once it is [`ICE_BEARS`](Self::ICE_BEARS) thick it bears whoever
+    /// walks on it: the surface of every lake and pond is ground, slippery
+    /// ground, and nobody wades or swims in it
+    /// ([`water_at`](Self::water_at) and the rest find no water). Thinner
+    /// than that it is only seen. Less than nothing, or what is no number,
+    /// is no ice.
+    ///
+    /// Like the water's rise this is shared by everyone who holds the
+    /// level: a world says it before each step it takes.
+    pub fn set_ice(&self, thickness: f32) {
+        let thickness = if thickness.is_finite() {
+            thickness.max(0.0)
+        } else {
+            0.0
+        };
+        (self.ice.0).store(thickness.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How thick the ice on the level's still water is, in metres.
+    #[must_use]
+    pub fn ice(&self) -> f32 {
+        self.ice.get()
+    }
+
+    /// Whether the ice on the level's still water is thick enough to walk
+    /// on.
+    #[must_use]
+    pub fn frozen(&self) -> bool {
+        self.ice.get() >= Self::ICE_BEARS
+    }
+
+    /// How high the ice that `point` is on, over or frozen into stands, if
+    /// there is still water at its `x` and `z` that is frozen thick enough
+    /// to walk on: the height of the water's surface. A point under the
+    /// water's own bed, in a cellar under a pool, has no ice over it that
+    /// matters to it.
+    #[must_use]
+    pub fn ice_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
+        if !self.frozen() {
+            return None;
+        }
+        // Feet rest a little in the bed they stand on.
+        let slack = 0.5;
+        let rise = self.rise.get();
+        self.waters
+            .iter()
+            .filter(|water| {
+                let deep = water.depth_at(x, z);
+                deep + rise > 0.0 && y > water.level - deep - slack
+            })
+            .map(|water| water.level + rise)
+            .reduce(f32::max)
+    }
+
     /// How high the surface of the still water that `point` is in or
     /// under the surface of stands, if it is in any: [`water_at`](Self::water_at)
     /// for a point that has a height. A point under the water's own bed,
     /// in a cellar under a pool or a cave under a lake, is not in it.
     #[must_use]
     pub fn water_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
+        if self.frozen() {
+            return None;
+        }
         // Feet rest a little in the bed they stand on.
         let slack = 0.5;
         let rise = self.rise.get();
@@ -177,6 +245,9 @@ impl Level {
     /// bed, in metres; nothing where there is none.
     #[must_use]
     pub fn water_depth(&self, x: f32, z: f32) -> f32 {
+        if self.frozen() {
+            return 0.0;
+        }
         let rise = self.rise.get();
         self.waters
             .iter()
@@ -218,6 +289,7 @@ impl Level {
             mesh,
             waters: Vec::new(),
             rise: Rise::default(),
+            ice: Rise::default(),
         }
     }
 

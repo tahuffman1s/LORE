@@ -14,8 +14,9 @@
 //! what happened is shown, worked out afresh on each computer.
 
 use crate::bolt::{Bolt, Lightning};
+use crate::sky;
 use crate::sky::Day;
-use crate::{clouds, sky};
+use crate::weather::{Weather, eased};
 use lore_assets::Water;
 
 use crate::water::{MOST_STIRS, Stir};
@@ -74,67 +75,103 @@ struct Bit {
     own: f32,
 }
 
-/// `value` between `low` and `high`, as a share from 0 to 1 that starts
-/// and ends gently.
-fn eased(low: f32, high: f32, value: f32) -> f32 {
-    let share = ((value - low) / (high - low)).clamp(0.0, 1.0);
-    share * share * (3.0 - 2.0 * share)
+/// How many rows of four numbers the weather is handed to the shader in.
+pub(crate) const WEATHER_ROWS: usize = 6;
+
+/// After how many metres what the wind carries near the eye is begun
+/// again: a whole number of the 70 metre squares gusts are laid out in,
+/// and of the 80, 160, 320 and 640 metre ones what falls is.
+const NEAR_AGAIN: f64 = 4_480.0;
+
+/// The weather as the shader takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Air {
+    /// At the eye: how hard it rains and how hard it hails, from 0 to 1,
+    /// how wet the ground has got, and how much of a storm is overhead.
+    /// Then how stormy the whole sky is, how far rain has raised the still
+    /// water in metres, and how hard it snows and sleets at the eye. Then
+    /// how much of the ground snow covers and how much of the still water
+    /// ice does, how warm the air is in degrees, and how hard it rains or
+    /// snows everywhere from a sky that is all cloud. Then how far the
+    /// wind has carried the air along x and z in metres, how gusty it is,
+    /// and how much of the sky is cloud. Then the tornado: where its foot
+    /// is and how far out its wall, how strong it is from 0 for none and
+    /// how far it has turned; and how far the wind has carried what is
+    /// near the eye, begun again every [`NEAR_AGAIN`] metres.
+    pub(crate) rows: [[f32; 4]; WEATHER_ROWS],
+    /// How much of the sky fair weather's clouds cover, as the shader
+    /// counts it.
+    pub(crate) cover: f32,
+    /// How much of what is behind a metre of the air at the ground is
+    /// hidden.
+    pub(crate) fog: f32,
+    /// The way the wind blows along x and z, and how fast in metres a
+    /// second.
+    pub(crate) wind: [f32; 3],
 }
 
-/// How much of a storm is over a place `time` seconds after the clouds
-/// set off, from 0 to 1, when the sky is as stormy as `storminess` says: as
-/// `weather_over` in the shader reads it.
-pub(crate) fn storm_over(x: f32, z: f32, time: f64, storminess: f32) -> f32 {
-    let [along_x, along_z, speed] = sky::WIND;
-    // As the shader carries the clouds: f32 holds all of it they need.
-    #[allow(clippy::cast_possible_truncation)]
-    let carried = speed * 2.4 * time as f32;
-    let more = storminess.clamp(0.0, 1.0) * 0.3;
-    let [place, kind] = clouds::read([
-        (x - along_x * carried) / 53_000.0,
-        (z - along_z * carried) / 53_000.0,
-        0.37,
-    ]);
-    eased(0.55 - more, 0.69 - more, place) * eased(0.38 - more, 0.6 - more, kind)
-}
-
-/// How much of a storm is over a place (its x and z, in metres), from 0 to
-/// 1, `seconds` after the clouds set off under a sky as stormy as
-/// `storminess` says: over a half, lightning strikes there. What is no
-/// number gives no storm.
-#[must_use]
-pub fn storm_at(place: [f32; 2], seconds: f64, storminess: f32) -> f32 {
-    if !(place[0].is_finite() && place[1].is_finite() && seconds.is_finite()) {
-        return 0.0;
+impl Default for Air {
+    /// Fair weather, at the moment a level begins.
+    fn default() -> Self {
+        Self::of(&Weather::default(), 0.0, [0.0; 4], [0.0; 2], 0.0)
     }
-    let storminess = if storminess.is_finite() {
-        storminess
-    } else {
-        0.0
-    };
-    storm_over(place[0], place[1], seconds, storminess)
 }
 
-/// How hard it rains at a place (its x and z, in metres), from 0 to 1,
-/// `seconds` after the clouds set off under a sky as stormy as
-/// `storminess` says: it rains under a thunder cloud. The same place, time
-/// and sky always give the same rain, which is what lets a game's rules
-/// count the rain that has fallen. What is no number gives no rain.
-#[must_use]
-pub fn rain_at(place: [f32; 2], seconds: f64, storminess: f32) -> f32 {
-    if !(place[0].is_finite() && place[1].is_finite() && seconds.is_finite()) {
-        return 0.0;
+impl Air {
+    /// `weather` as the shader takes it, `seconds` after the clouds set
+    /// off. At the eye, `here` is how hard it rains and hails, how wet the
+    /// ground has got and how much of a storm is overhead, and `cold` how
+    /// hard it snows and sleets; `rise` is how far rain has raised the
+    /// still water, in metres.
+    fn of(weather: &Weather, seconds: f64, here: [f32; 4], cold: [f32; 2], rise: f32) -> Self {
+        let [along_x, along_z] = weather.carried(seconds);
+        let [way_x, way_z] = weather.wind_way();
+        // What is near is drawn carried by the wind too, but begun again
+        // every so often, so that it is exact to the millimetre however
+        // long the wind has blown: gusts and falling snow are both laid
+        // out in squares that fit a whole number of times into this.
+        // Truncation is the point: an f32 holds what is left exactly.
+        #[allow(clippy::cast_possible_truncation)]
+        let [near_x, near_z] = [along_x, along_z].map(|far| far.rem_euclid(NEAR_AGAIN) as f32);
+        #[allow(clippy::cast_possible_truncation)]
+        let [along_x, along_z] = [along_x as f32, along_z as f32];
+        let (place, mut spin) = weather.tornado.map_or(([0.0; 4], [0.0; 4]), |tornado| {
+            let [x, y, z] = tornado.place;
+            (
+                [x, y, z, tornado.core()],
+                [
+                    tornado.strength.clamp(0.0, 1.0),
+                    // Only where on its way round it is counts.
+                    tornado.turned.rem_euclid(std::f32::consts::TAU * 400.0),
+                    0.0,
+                    0.0,
+                ],
+            )
+        });
+        (spin[2], spin[3]) = (near_x, near_z);
+        // A sky that rains steadily is all cloud.
+        let cover = weather
+            .cloud_cover
+            .max(eased(0.0, 0.3, weather.precipitation));
+        Self {
+            rows: [
+                here,
+                [weather.storminess, rise, cold[0], cold[1]],
+                [
+                    weather.snow_cover(),
+                    weather.ice_cover(),
+                    weather.temperature,
+                    weather.precipitation,
+                ],
+                [along_x, along_z, weather.gusts, cover],
+                place,
+                spin,
+            ],
+            cover,
+            fog: weather.fog_thickness(),
+            wind: [way_x, way_z, weather.wind_speed()],
+        }
     }
-    let storminess = if storminess.is_finite() {
-        storminess
-    } else {
-        0.0
-    };
-    eased(
-        0.25,
-        0.7,
-        storm_over(place[0], place[1], seconds, storminess),
-    )
 }
 
 /// The water under a place, as far as what flies needs to know it.
@@ -173,11 +210,13 @@ pub(crate) struct Effects {
     /// When, by the clouds' clock, the sky is next looked over for a
     /// storm to strike from.
     looks_next: f64,
-    /// How stormy the whole sky is, from 0 to 1.
-    storminess: f32,
+    /// The weather the game has said it is.
+    weather: Weather,
     /// At the eye: how hard it rains and hails, how wet the ground has
     /// got, and how much of a storm is overhead, each from 0 to 1.
     here: [f32; 4],
+    /// At the eye: how hard it snows and how hard it sleets, from 0 to 1.
+    cold: [f32; 2],
     /// The sky at the hour the game says it is, if it has said.
     day: Option<(f64, Day)>,
     /// How far rain has raised the still water, in metres.
@@ -206,8 +245,9 @@ impl Effects {
             dice: 0x2545_F491,
             bolts: [Bolt::new(), Bolt::new()],
             looks_next: 1.0,
-            storminess: 0.0,
+            weather: Weather::default(),
             here: [0.0; 4],
+            cold: [0.0; 2],
             day: None,
             rise: 0.0,
             bolts_of_its_own: true,
@@ -446,9 +486,17 @@ impl Effects {
             }
             // The ground is soaked by half a minute of hard rain, and
             // takes some minutes to dry.
+            // Sleet wets it as rain does; snow lies on it dry, and what
+            // lies melting keeps it wet.
             let [rain, _, wet, _] = self.here;
-            self.here[2] =
-                (wet + seconds.min(0.05) * (rain / 30.0 - (1.0 - rain) / 300.0)).clamp(0.0, 1.0);
+            let rain = rain.max(0.7 * self.cold[1]);
+            let thaw = if self.weather.temperature > 0.5 {
+                self.weather.snow_cover()
+            } else {
+                0.0
+            };
+            let dries = (1.0 - rain) * (1.0 - thaw) / 300.0;
+            self.here[2] = (wet + seconds.min(0.05) * (rain / 30.0 - dries)).clamp(0.0, 1.0);
         }
         self.pack();
     }
@@ -593,13 +641,23 @@ impl Effects {
         self.day.as_ref().map(|(_, day)| day)
     }
 
-    /// Says how stormy the whole sky is, from 0 to 1.
+    /// Says how stormy the whole sky is, from 0 to 1, and leaves the rest
+    /// of the weather as it is.
     pub(crate) fn set_storminess(&mut self, storminess: f32) {
-        self.storminess = if storminess.is_finite() {
-            storminess.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        self.set_weather(Weather {
+            storminess,
+            ..self.weather
+        });
+    }
+
+    /// Says what the weather is.
+    pub(crate) fn set_weather(&mut self, weather: Weather) {
+        self.weather = weather.cleaned();
+    }
+
+    /// The weather it was last said to be.
+    pub(crate) fn said(&self) -> &Weather {
+        &self.weather
     }
 
     /// Says whether storms send their own bolts to the ground. Flashes
@@ -613,10 +671,10 @@ impl Effects {
         self.rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
     }
 
-    /// The weather as the shader takes it: what it is at the eye, then how
-    /// stormy the whole sky is and how far rain has raised the water.
-    pub(crate) fn weather(&self) -> [[f32; 4]; 2] {
-        [self.here, [self.storminess, self.rise, 0.0, 0.0]]
+    /// The weather as the shader takes it, `seconds` after the clouds set
+    /// off.
+    pub(crate) fn air(&self, seconds: f64) -> Air {
+        Air::of(&self.weather, seconds, self.here, self.cold, self.rise)
     }
 
     /// Where the light of each stroke comes from, and how bright it is
@@ -632,18 +690,21 @@ impl Effects {
     /// in the cloud; one in four comes to the ground, and now and then one
     /// runs along under the cloud.
     pub(crate) fn storms(&mut self, time: f64, eye: [f32; 3]) {
-        let storminess = self.storminess;
-        let storm_over = |x: f32, z: f32| storm_over(x, z, time, storminess);
-        let step = eased;
-        // Under a storm it rains, and in the heart of one it hails.
+        let weather = self.weather;
+        let storm_over = |x: f32, z: f32| weather.storm_at([x, z], time);
+        // Under a storm it rains, and in the heart of one it hails; in the
+        // cold it snows.
         let overhead = if eye.iter().all(|part| part.is_finite()) {
             storm_over(eye[0], eye[2])
         } else {
             0.0
         };
-        self.here[0] = step(0.25, 0.7, overhead);
-        self.here[1] = step(0.85, 0.97, overhead);
+        // Nothing falls on an eye that is nowhere.
+        let falling = weather.falling_at([eye[0], eye[2]], time);
+        self.here[0] = falling.rain;
+        self.here[1] = falling.hail;
         self.here[3] = overhead;
+        self.cold = [falling.snow, falling.sleet];
         if time < self.looks_next {
             // The clock was put back: a new level.
             if time + 5.0 < self.looks_next {
@@ -766,37 +827,40 @@ mod tests {
         effects.set_storminess(1.0);
         let under = places.clone().find(|eye| {
             effects.storms(0.0, *eye);
-            effects.weather()[0][0] > 0.95
+            effects.air(0.0).rows[0][0] > 0.95
         });
         assert!(under.is_some(), "no storm anywhere");
         // The rules of a game are told the same rain.
         let [x, _, z] = under.unwrap_or_default();
-        assert!(rain_at([x, z], 0.0, 1.0) > 0.95);
-        assert_eq!(rain_at([f32::NAN, 0.0], 0.0, 1.0), 0.0);
-        assert!(effects.weather()[0][3] > 0.5, "and the wind blows harder");
+        assert!(effects.said().falling_at([x, z], 0.0).rain > 0.95);
+        assert_eq!(effects.said().falling_at([f32::NAN, 0.0], 0.0).rain, 0.0);
+        assert!(
+            effects.air(0.0).rows[0][3] > 0.5,
+            "and the wind blows harder"
+        );
         for _ in 0..2400 {
             effects.step(1.0 / 60.0, dry);
         }
         assert!(
-            effects.weather()[0][2] > 0.9,
+            effects.air(0.0).rows[0][2] > 0.9,
             "forty seconds of it soak the ground"
         );
         // And fair weather has dry places, where it dries again.
         effects.set_storminess(0.0);
         let clear = places.clone().find(|eye| {
             effects.storms(0.0, *eye);
-            effects.weather()[0][0] == 0.0
+            effects.air(0.0).rows[0][0] == 0.0
         });
         assert!(clear.is_some(), "storms everywhere in fair weather");
         for _ in 0..6000 {
             effects.step(1.0 / 60.0, dry);
         }
-        let wet = effects.weather()[0][2];
+        let wet = effects.air(0.0).rows[0][2];
         assert!(wet > 0.4 && wet < 0.75, "{wet}");
         effects.set_storminess(f32::NAN);
-        assert_eq!(effects.weather()[1][0], 0.0);
+        assert_eq!(effects.air(0.0).rows[1][0], 0.0);
         effects.storms(0.0, [f32::NAN, 0.0, 0.0]);
-        assert_eq!(effects.weather()[0][0], 0.0);
+        assert_eq!(effects.air(0.0).rows[0][0], 0.0);
     }
 
     /// Water at height 0 everywhere, or none at all.

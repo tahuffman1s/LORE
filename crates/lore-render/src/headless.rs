@@ -22,6 +22,7 @@ use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::SceneView;
 use crate::water::Stir;
+use crate::weather::Weather;
 
 /// The format of the picture nobody sees: what most windows use, without
 /// the sRGB curve built in.
@@ -256,6 +257,21 @@ impl Headless {
         self.effects.set_storminess(storminess);
     }
 
+    /// Says what the weather is: how much cloud, how stormy, how hard it
+    /// rains or snows, how warm the air is, the wind, the fog, the snow
+    /// that lies and the ice on the water, and the tornado if there is
+    /// one. See [`Weather`]. The picture is drawn in it from the next
+    /// frame on; numbers out of their range are brought into it.
+    pub fn set_weather(&mut self, weather: Weather) {
+        self.effects.set_weather(weather);
+    }
+
+    /// The weather it was last said to be: fair, until something is said.
+    #[must_use]
+    pub fn weather(&self) -> Weather {
+        *self.effects.said()
+    }
+
     /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
     /// midnight, and hours past 24 run on into the next day, which moves
     /// the moon a day further round its month. The sun and the moon stand
@@ -340,6 +356,7 @@ impl Headless {
         self.effects.storms(self.view.seconds(), camera.position);
         self.effects
             .step(passed, self.meshes.as_ref().map_or(&[][..], Meshes::waters));
+        let weather = self.effects.air(self.view.seconds());
         // SAFETY: every handle belongs to `self.gpu`'s device and is alive;
         // the last frame was waited for, so nothing here is still in use,
         // and this frame is waited for before anything can be destroyed.
@@ -365,7 +382,7 @@ impl Headless {
                     stirs: self.effects.stirs(),
                     bits: self.effects.bytes(),
                     flashes: self.effects.flashes(),
-                    weather: self.effects.weather(),
+                    weather,
                     day: self.effects.day(),
                 },
                 camera,

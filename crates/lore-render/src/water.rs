@@ -1174,8 +1174,9 @@ impl WaterWorks {
     /// what water there is.
     ///
     /// `near` is the still water the eye is in or nearest, `any` whether
-    /// the scene has water at all, and `stirs` whatever is stirring the
-    /// water during this frame.
+    /// the scene has water at all, `stirs` whatever is stirring the water
+    /// during this frame, and `wind` the way the wind blows along x and z
+    /// and how fast, in metres a second.
     ///
     /// # Safety
     ///
@@ -1190,7 +1191,7 @@ impl WaterWorks {
         eye: [f32; 3],
         (seconds, elapsed): (f64, f32),
         (near, any): (Option<&Body>, bool),
-        stirs: &[Stir],
+        (stirs, wind): (&[Stir], [f32; 3]),
     ) -> Result<WaterRows, RenderError> {
         let mut rows = [[0.0; 4]; 9];
         let Some(slot) = self.frames.get(frame % self.frames.len().max(1)) else {
@@ -1201,8 +1202,16 @@ impl WaterWorks {
         } else {
             0.0
         };
-        // The waves the wind raises on water as wide as what is near.
-        let [along_x, along_z, speed] = sky::WIND;
+        // The waves the wind raises on water as wide as what is near. They
+        // are worked out again when the wind has turned by a few degrees
+        // or changed by a tenth, not at every breath of it; the stillest
+        // air still ruffles water a little.
+        let [along_x, along_z, speed] = wind;
+        let speed = if speed.is_finite() {
+            speed.clamp(0.5, 60.0)
+        } else {
+            sky::WIND[2]
+        };
         // Sizes are far below the point where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
         let fetch = near.map_or(40.0, |body| {
@@ -1211,7 +1220,9 @@ impl WaterWorks {
         if let Ok(mut waves) = self.waves.try_borrow_mut() {
             let wanted = [along_x, along_z, speed, fetch];
             // A different water is a different width for the wind to work on.
-            if (waves.1[3] / fetch).ln().abs() > 0.2 || waves.1[..3] != wanted[..3] {
+            let turned = waves.1[0] * along_x + waves.1[1] * along_z < 0.995;
+            let changed = (waves.1[2] / speed).ln().abs() > 0.1;
+            if (waves.1[3] / fetch).ln().abs() > 0.2 || turned || changed {
                 *waves = (Waves::new([along_x, along_z], speed, fetch), wanted);
             }
             for (row, layer) in rows[3..7].iter_mut().zip(&waves.0.layers) {

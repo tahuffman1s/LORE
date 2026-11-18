@@ -22,12 +22,14 @@ use crate::shooting::Shooting;
 use crate::sound_output::SoundAsk;
 
 mod bodies;
+mod climate;
 mod ground;
 mod spawn;
 mod wet;
 
 pub(crate) use bodies::{Body, Dummy};
 pub use bodies::{DummyId, PlayerInput};
+pub(crate) use climate::said as said_weather;
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
 pub use wet::WaterMark;
@@ -69,9 +71,9 @@ pub struct World {
     marks: Vec<WaterMark>,
     /// How many times the player has been put at a spawn point.
     spawned: u32,
-    /// How far the rain that has fallen has raised the level's still
-    /// water, in metres.
-    rise: f32,
+    /// The weather, and what has followed from it: the snow that lies,
+    /// the ice, how far rain has raised the water, the tornado.
+    climate: climate::Climate,
     /// Lightning: when the sky is next looked over for a storm to strike
     /// from (a tick), the dice it is looked over with, the strokes that
     /// have fallen since the last frame, and the thunder still on its way:
@@ -86,21 +88,6 @@ pub struct World {
 const SOUND: f32 = 343.0;
 /// The most strokes kept for one frame, and the most thunder on its way.
 const MOST_STROKES: usize = 8;
-
-/// How fast a downpour raises the still water, and how fast it falls back
-/// when the rain stops, in metres a second; and the most it rises. Far
-/// faster than weather is, as a game's day is far shorter than a day: a
-/// storm fills a lake to its brim in a little over two minutes, and it is
-/// seven minutes going down.
-const WATER_RISES: f32 = 0.006;
-const WATER_FALLS: f32 = 0.002;
-const MOST_RISE: f32 = 0.8;
-
-/// The rise of the water after `seconds` more of rain as hard as `rain`,
-/// from 0 to 1.
-fn risen(rise: f32, rain: f32, seconds: f32) -> f32 {
-    (rise + seconds * (rain * WATER_RISES - (1.0 - rain) * WATER_FALLS)).clamp(0.0, MOST_RISE)
-}
 
 impl World {
     /// The world of `game` with its player in it, on a flat floor at
@@ -137,7 +124,7 @@ impl World {
             noises: Vec::new(),
             marks: Vec::new(),
             spawned,
-            rise: 0.0,
+            climate: climate::Climate::default(),
             looks_at: 60,
             dice: 0x2F6E_2B1D,
             strokes: Vec::with_capacity(MOST_STROKES),
@@ -213,6 +200,8 @@ impl World {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let ticks = (away / SOUND / self.ground.step.max(1e-4)).min(1e6) as u32;
         (self.thunder).push((self.tick.saturating_add(ticks), place, away));
+        // The script hears of it: where it struck.
+        self.game.host_mut().lightning_struck(place);
     }
 
     /// Lightning: every few seconds a few places within thirty kilometres of the player are
@@ -227,14 +216,14 @@ impl World {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let wait = ((1.6 + 2.4 * self.dealt()) / step) as u32;
         self.looks_at = self.tick.saturating_add(wait.max(1));
-        let (seconds, storminess) = (self.sky_seconds(), self.game.host().storminess());
+        let (seconds, weather) = (self.sky_seconds(), *self.climate.weather());
         let [x, _, z] = self.player.player.position;
         for _ in 0..4 {
             let spot = [
                 x + (self.dealt() - 0.5) * 60_000.0,
                 z + (self.dealt() - 0.5) * 60_000.0,
             ];
-            if lore_render::storm_at(spot, seconds, storminess) <= 0.5 {
+            if weather.storm_at(spot, seconds) <= 0.5 {
                 continue;
             }
             // The ground under it, or a little under where levels are
@@ -257,7 +246,16 @@ impl World {
     /// water, in metres.
     #[must_use]
     pub fn water_rise(&self) -> f32 {
-        self.rise
+        self.climate.water_rise()
+    }
+
+    /// The weather of the newest tick, with what has followed from it: how
+    /// far the wind has carried the clouds, the snow that lies, the ice on
+    /// the water and the tornado if there is one. The picture is drawn in
+    /// it ([`Playing`] hands it over each frame).
+    #[must_use]
+    pub fn weather(&self) -> &lore_render::Weather {
+        self.climate.weather()
     }
 
     /// How many ticks the world has run.
@@ -375,13 +373,18 @@ impl Game for World {
         // before they move.
         self.respawn();
         self.tick = self.tick.saturating_add(1);
-        // Where a storm stands over the player it rains, and rain raises
-        // the water: it is said to the level before anything is moved in
-        // it, since the level's shapes are shared.
-        let [x, _, z] = self.player.player.position;
-        let rain = lore_render::rain_at([x, z], self.sky_seconds(), self.game.host().storminess());
-        self.rise = risen(self.rise, rain, self.ground.step);
-        self.ground.level.set_water_rise(self.rise);
+        // The weather moves on: what falls on the player raises the water
+        // or settles as snow, the cold freezes the lakes, the tornado
+        // travels. It is said to the level before anything is moved in it,
+        // since the level's shapes are shared.
+        let seconds = self.sky_seconds();
+        self.climate.step(
+            self.game.host_mut(),
+            &self.ground.level,
+            self.player.player.position,
+            seconds,
+            self.ground.step,
+        );
         self.storm();
         let Ground {
             level,
@@ -390,8 +393,17 @@ impl Game for World {
             ..
         } = &self.ground;
         let Body { player, asked } = &mut self.player;
+        // A gale pushes the player, a tornado takes them off their feet,
+        // and deep snow is slow to walk through.
+        self.climate.blow(player, rules.gravity, seconds, *tick);
+        let mut moving = asked.movement;
+        if player.grounded {
+            let slowed = self.climate.snow_slows();
+            moving.forward *= slowed;
+            moving.right *= slowed;
+        }
         let before = *player;
-        player.step(level, rules, &asked.movement, *tick);
+        player.step(level, rules, &moving, *tick);
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick.
         self.game
@@ -456,13 +468,16 @@ impl Game for World {
     fn frame(&mut self, frame: &mut Frame) {
         // The sky and the water are drawn where the rules have them.
         frame.set_sky_clock(self.sky_seconds());
-        frame.set_water_rise(self.rise);
+        frame.set_water_rise(self.climate.water_rise());
         // The world sends the bolts, so that it knows where each fell.
         frame.set_storm_bolts(false);
         for stroke in self.strokes.drain(..) {
             frame.strike(stroke);
         }
         self.game.frame(frame);
+        // After the script's own frame, which says the weather as it
+        // asked for it: this is the weather with what followed from it.
+        frame.set_weather(*self.climate.weather());
     }
 }
 
@@ -858,27 +873,6 @@ mod tests {
     use std::f32::consts::TAU;
 
     use super::*;
-
-    #[test]
-    fn rain_raises_the_water_to_its_brim_and_it_falls_again_after() {
-        let mut rise = 0.0;
-        // Three minutes of downpour, a sixtieth of a second at a time.
-        for _ in 0..(180 * 60) {
-            rise = risen(rise, 1.0, 1.0 / 60.0);
-        }
-        assert_eq!(rise, MOST_RISE);
-        // A minute of drizzle neither fills nor empties it much.
-        let before = rise;
-        for _ in 0..(60 * 60) {
-            rise = risen(rise, 0.25, 1.0 / 60.0);
-        }
-        assert!((rise - before).abs() < 0.05, "{rise}");
-        // Eight dry minutes and it is back where it was put.
-        for _ in 0..(480 * 60) {
-            rise = risen(rise, 0.0, 1.0 / 60.0);
-        }
-        assert_eq!(rise, 0.0);
-    }
 
     #[test]
     fn lightning_a_script_asks_for_is_seen_at_once_and_heard_when_its_thunder_arrives() {

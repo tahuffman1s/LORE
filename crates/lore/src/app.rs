@@ -721,6 +721,7 @@ impl<G: Game> App<G> {
         let hour = frame.take_hour();
         let (water_rise, sky_clock) = frame.take_water();
         let storm_bolts = frame.take_storm_bolts();
+        let weather = frame.take_weather();
         if let Some(renderer) = &mut self.renderer {
             for splash in splashes {
                 renderer.splash(splash);
@@ -736,6 +737,9 @@ impl<G: Game> App<G> {
             }
             if let Some(storminess) = storminess {
                 renderer.set_storminess(storminess);
+            }
+            if let Some(weather) = weather {
+                renderer.set_weather(weather);
             }
             if hour.is_some() {
                 renderer.set_hour(hour);

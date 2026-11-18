@@ -55,7 +55,9 @@ struct View {
     sky_haze: array<vec4<f32>, 24>,
     // The fog: how much of what is behind a metre of it is hidden at the
     // height in the third number, and how fast it thins with each metre
-    // above that. The first is 0 if there is none.
+    // above that. The first is 0 if there is none. The fourth is how much
+    // a metre of a clear day's haze hides: what is thicker than that is
+    // weather.
     fog: vec4<f32>,
     // The wind: the way it blows along x and z, how fast in metres a
     // second, and how many seconds ago the last frame was drawn.
@@ -88,9 +90,19 @@ struct View {
     // The weather. At the eye: how hard it rains and how hard it hails,
     // from 0 to 1, how wet the ground has got, and how much of a storm
     // is overhead, which is how much harder the wind blows. Then how
-    // stormy the whole sky is, from 0 for fair weather to 1, and how far
-    // rain has raised the still water, in metres.
-    weather: array<vec4<f32>, 2>,
+    // stormy the whole sky is, from 0 for fair weather to 1, how far
+    // rain has raised the still water, in metres, and how hard it snows
+    // and sleets at the eye. Then how much of the ground snow covers and
+    // how much of the still water ice does, how warm the air is in degrees
+    // Celsius, and how hard it rains or snows everywhere from a sky that
+    // is all cloud. Then how far the wind has carried the air along x and
+    // z, in metres, how gusty the wind is from 0 to 1, and how much of the
+    // sky is cloud. Then the tornado: where its foot is and how far out
+    // from its middle its wall is; how strong it is, from 0 for none to 1,
+    // how far round it has turned in radians, and how far the wind has
+    // carried what is near, which is the same as before but begun again
+    // every few kilometres so that it stays exact.
+    weather: array<vec4<f32>, 6>,
     // The heavens (`sky.rs`): towards the sun itself, and how far the
     // night has come from 0 to 1; towards the moon, and how far the stars
     // have turned, in radians; the pole they turn about; the colour of the
@@ -209,38 +221,68 @@ fn unfolded(folded: vec2<f32>) -> vec3<f32> {
     return normalize(direction);
 }
 
-// How hard the wind blows at a place on the ground at a moment, from a
-// lull near 0.2 to a gust near 1.4. Gusts are patches of the block the
-// clouds are shaped from, carried along by the wind itself: so a gust
-// crosses the land as a front, and what it reaches first bends first.
-fn gust(place: vec2<f32>, seconds: f32) -> f32 {
-    let carried = place - view.wind.xy * view.wind.z * seconds;
-    let wide = textureSampleLevel(
-        cloud_volume, cloud_sampler, vec3<f32>(carried / 70.0, seconds * 0.013), 0.0,
-    ).r;
-    return 0.2 + 1.2 * wide;
+// How far the wind has carried the air near the ground, `ago` seconds
+// ago, along x and z.
+fn carried_near(ago: f32) -> vec2<f32> {
+    return view.weather[5].zw - view.wind.xy * view.wind.z * ago;
 }
 
-// Where the wind has a point of a mesh that sways: `world` is where it
-// stands in still air, `foot` where the mesh is rooted.
+// How hard the wind blows at a place on the ground `ago` seconds ago,
+// against how hard it blows on the whole: from a lull near 0.2 to a gust
+// near 1.4 in a wind of the usual gustiness, and always 1 in a steady one.
+// Gusts are patches of the block the clouds are shaped from, carried along
+// by the wind itself: so a gust crosses the land as a front, and what it
+// reaches first bends first.
+fn gust(place: vec2<f32>, ago: f32) -> f32 {
+    let wide = textureSampleLevel(
+        cloud_volume, cloud_sampler,
+        vec3<f32>((place - carried_near(ago)) / 70.0, (view.clouds.y - ago) * 0.013), 0.0,
+    ).r;
+    return max(1.0 + (1.2 * wide - 0.8) * 2.0 * view.weather[3].z, 0.05);
+}
+
+// How the air moves over the ground at a place, along x and z, in metres
+// a second: the wind, three times as hard under a storm, and round a
+// tornado what the tornado does to it (as `Tornado::wind_at` has it).
+fn air_at(place: vec3<f32>) -> vec2<f32> {
+    var air = view.wind.xy * view.wind.z * (1.0 + 2.0 * view.weather[0].w);
+    if view.weather[5].x > 0.0 {
+        let off = place.xz - view.weather[4].xz;
+        let far = max(length(off), 0.01);
+        let out = off / far;
+        let x = far / view.weather[4].w;
+        let round = (30.0 + 60.0 * view.weather[5].x) * 2.0 * x / (1.0 + x * x);
+        air += vec2<f32>(out.y, -out.x) * round - out * round * 0.45;
+    }
+    return air;
+}
+
+// Where the wind has a point of a mesh that sways, `ago` seconds ago:
+// `world` is where it stands in still air, `foot` where the mesh is
+// rooted.
 //
 // The whole of a tree leans with the gust at its foot, more the higher up,
 // and keeps its length; on top of that each leaf shivers on its own, more
-// the farther out from the trunk it is.
-fn blown(world: vec3<f32>, foot: vec3<f32>, seconds: f32) -> vec3<f32> {
-    let along = vec3<f32>(view.wind.x, 0.0, view.wind.y);
-    // Under a storm it blows three times as hard.
-    let strength = gust(foot.xz, seconds) * view.wind.z / 5.0 * draw.sway
-        * (1.0 + 2.0 * view.weather[0].w);
+// the farther out from the trunk it is. A breeze stirs it, a gale bends it
+// three times as far, and no wind bends it further than that: it would
+// break first.
+fn blown(world: vec3<f32>, foot: vec3<f32>, ago: f32) -> vec3<f32> {
+    let seconds = view.clouds.y - ago;
+    let air = air_at(foot);
+    let speed = length(air);
+    let along = vec3<f32>(air.x, 0.0, air.y) / max(speed, 0.001);
+    let strength = gust(foot.xz, ago) * 3.74 * (1.0 - exp(-speed / 16.0)) * draw.sway;
     let up = clamp(world.y - foot.y, 0.0, 30.0);
     let lean = 0.0045 * up * up * strength;
     var moved = world + along * lean;
     // What leans over is no taller than it was.
     moved.y -= lean * lean / max(2.0 * up, 0.5);
-    // Leaves: quick, small, and out of step with one another.
+    // Leaves: quick, small, and out of step with one another; the harder
+    // it blows the faster they shake.
     let out = min(length(world.xz - foot.xz) + 0.25 * up, 3.0);
     let own = dot(world, vec3<f32>(1.7, 2.3, 1.3));
-    let shiver = sin(seconds * 5.3 + own) * cos(seconds * 3.1 + own * 1.7);
+    let quick = 1.0 + 0.5 * smoothstep(8.0, 30.0, speed);
+    let shiver = sin(seconds * 5.3 * quick + own) * cos(seconds * 3.1 * quick + own * 1.7);
     moved += vec3<f32>(along.x, 0.5, along.z) * (shiver * 0.014 * out * strength);
 
     // Whoever is walking through pushes it aside: what is within a stride
@@ -277,9 +319,8 @@ fn vertex(
     var was = world;
     if draw.sway > 0.0 {
         let foot = draw.world_from_local[3].xyz;
-        let seconds = view.clouds.y;
-        was = vec4<f32>(blown(world.xyz, foot, seconds - view.wind.w), 1.0);
-        world = vec4<f32>(blown(world.xyz, foot, seconds), 1.0);
+        was = vec4<f32>(blown(world.xyz, foot, view.wind.w), 1.0);
+        world = vec4<f32>(blown(world.xyz, foot, 0.0), 1.0);
     }
     // A sheet of still water that its maker drew (marked by a sway of -1)
     // rises and falls with its waves. What floats on water (a sway of -2)
@@ -403,14 +444,11 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
 }
 
-// `colour` as it is seen from the eye through the fog between: far things
+// `colour` as it is seen from the eye through the air between: far things
 // fade into the colour of the sky low down in their direction, so hills
 // turn pale and blue with distance and the land meets the sky without a
-// line.
-//
-// The fog is thickest low down and thins evenly upwards, which lets how
-// much of it a line of sight crosses be worked out exactly, with no steps
-// (Quilez, "Better Fog").
+// line; and whatever is falling, and the tornado if there is one, is in
+// front of it (`weather.wgsl`).
 fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let line = world - view.eye.xyz;
     let far = length(line);
@@ -425,23 +463,13 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
         return colour;
     }
     let direction = line / far;
-    let thins = view.fog.y;
-    // How thick it is at the eye; an eye far below the fog's own height
-    // is in fog as thick as it gets.
-    // Rain fills the air: in a downpour nothing is seen past a few
-    // hundred metres.
-    let at_eye = view.fog.x * (1.0 + 4.0 * view.weather[0].x)
-        * exp(min((view.fog.z - view.eye.y) * thins, 3.0));
-    let climbs = direction.y * thins;
-    var crossed = at_eye * far;
-    if abs(climbs) > 0.00001 {
-        crossed = at_eye * (1.0 - exp(-climbs * far)) / climbs;
-    }
-    let hidden = 1.0 - exp(-max(crossed, 0.0));
+    let hidden = fog_hides(fog_thick(), direction, far);
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
     // Under a storm what things fade into is darker.
-    let faded = mix(colour, storm_haze(low), hidden);
-    return struck(rain_over(faded, direction, far), world);
+    var seen = mix(colour, storm_haze(low), hidden);
+    seen = tornado_over(seen, direction, far);
+    seen = falling_over(seen, direction, far);
+    return struck(seen, world);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
@@ -469,29 +497,57 @@ fn sent_towards(onwards: f32, to_sun: f32) -> f32 {
         / pow(1.0 + onwards * onwards - 2.0 * onwards * to_sun, 1.5);
 }
 
-// The weather over a place (given as where it was before the wind carried
-// it): how much of the sky is cloud there, how far up the layer its clouds
-// reach, and how much of a storm it is, each from 0 to 1.
+// How far the wind has carried the clouds along x and z, in metres: they
+// go 2.4 times as fast as the air at the ground.
+fn cloud_drift() -> vec2<f32> {
+    return view.weather[3].xy * 2.4;
+}
+
+// How dark and heavy the cloud of a sky that rains or snows steadily is,
+// from 0 to 1.
+fn rain_cloud() -> f32 {
+    return smoothstep(0.0, 0.5, view.weather[2].w);
+}
+
+// The weather over a place in the world (its x and z): how much of the
+// sky is cloud there, how far up the layer its clouds reach, and how much
+// of a storm it is, each from 0 to 1.
 //
 // The block the clouds are shaped from is read as a very large flat map,
-// so that weather comes in banks tens of kilometres across. Where the map
-// is low the cloud is a flat sheet (stratus), in the middle it is heaps
-// (cumulus), and where both its numbers are high it is a thunderstorm
-// (cumulonimbus).
-fn weather_over(carried: vec2<f32>) -> vec3<f32> {
+// carried along by the wind, so that weather comes in banks tens of
+// kilometres across. Where the map is low the cloud is a flat sheet
+// (stratus), in the middle it is heaps (cumulus), and where both its
+// numbers are high it is a thunderstorm (cumulonimbus). A sky said to be
+// more than three fifths cloud closes over into one grey sheet, thicker
+// if it rains from it (nimbostratus); and a tornado hangs from a storm of
+// its own.
+fn weather_over(place: vec2<f32>) -> vec3<f32> {
     let map = textureSampleLevel(
-        cloud_volume, cloud_sampler, vec3<f32>(carried / 53000.0, 0.37), 0.0,
+        cloud_volume, cloud_sampler, vec3<f32>((place - cloud_drift()) / 53000.0, 0.37), 0.0,
     ).rg;
     // The stormier the sky is said to be, the more of the map is storm.
     let more = view.weather[1].x * 0.3;
-    let storm = smoothstep(0.55 - more, 0.69 - more, map.r)
+    var storm = smoothstep(0.55 - more, 0.69 - more, map.r)
         * smoothstep(0.38 - more, 0.6 - more, map.g);
+    if view.weather[5].x > 0.0 {
+        let far = length(place - view.weather[4].xz);
+        storm = max(
+            storm,
+            (1.0 - smoothstep(2250.0, 9000.0, far)) * smoothstep(0.0, 0.25, view.weather[5].x),
+        );
+    }
     let sheet = 1.0 - smoothstep(0.2, 0.38, map.g);
-    let cover = view.clouds.x * (clamp(1.0 + (map.r - 0.45) * 2.4, 0.0, 2.0) + 0.5 * sheet);
+    let all = smoothstep(0.6, 1.0, view.clouds.x);
+    let cover = mix(
+        min(view.clouds.x, 0.75) * (clamp(1.0 + (map.r - 0.45) * 2.4, 0.0, 2.0) + 0.5 * sheet),
+        1.0,
+        all,
+    );
     let heaped = 0.2 + 0.25 * smoothstep(0.38, 0.7, map.g);
+    let high = mix(mix(heaped, 0.12, sheet), mix(0.2, 0.42, rain_cloud()), all);
     return vec3<f32>(
         mix(min(cover, 1.0), 1.0, storm * 0.85),
-        mix(mix(heaped, 0.12, sheet), 1.0, storm),
+        mix(high, 1.0, storm),
         storm,
     );
 }
@@ -512,8 +568,7 @@ fn cloud_kind(place: vec3<f32>, fine: bool) -> vec2<f32> {
     if up <= 0.0 || up >= 1.0 {
         return vec2<f32>(0.0);
     }
-    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
-    return cloud_in(place, weather_over(place.xz - drift), fine);
+    return cloud_in(place, weather_over(place.xz), fine);
 }
 
 // The same, for whoever already knows the weather over the place (what
@@ -525,8 +580,8 @@ fn cloud_in(place: vec3<f32>, weather: vec3<f32>, fine: bool) -> vec2<f32> {
         return vec2<f32>(0.0);
     }
     let seconds = view.clouds.y;
-    let aloft = vec3<f32>(view.wind.x, 0.0, view.wind.y) * view.wind.z * 2.4;
-    let carried = place - aloft * seconds;
+    let aloft = vec3<f32>(cloud_drift().x, 0.0, cloud_drift().y);
+    let carried = place - aloft;
     // Flat underneath, heaped on top: the higher up, the less of the sky
     // is cloud.
     let heap = 1.0 - smoothstep(0.3 * weather.y, weather.y, up);
@@ -544,7 +599,7 @@ fn cloud_in(place: vec3<f32>, weather: vec3<f32>, fine: bool) -> vec2<f32> {
     if fine && thick > 0.0 {
         // The small shapes drift faster and sink, so that clouds change
         // as they go.
-        let drifted = carried - (aloft * 0.5 + vec3<f32>(0.0, 2.0, 0.0)) * seconds;
+        let drifted = carried - aloft * 0.5 - vec3<f32>(0.0, 2.0, 0.0) * seconds;
         let small = textureSampleLevel(cloud_volume, cloud_sampler, drifted / 1300.0, 0.0).g;
         // At a cloud's base they tear it into wisps; higher up they round
         // it into billows.
@@ -563,7 +618,7 @@ fn cloud(place: vec3<f32>, fine: bool) -> f32 {
 // along the wind into streaks and fibres, in patches a long way across.
 fn high_cloud(place: vec3<f32>) -> f32 {
     let wind = vec2<f32>(view.wind.x, view.wind.y);
-    let carried = place.xz - wind * view.wind.z * 4.0 * view.clouds.y;
+    let carried = place.xz - view.weather[3].xy * 4.0;
     let along = dot(carried, wind);
     let across = dot(carried, vec2<f32>(-wind.y, wind.x));
     let up = (place.y - view.clouds.z - CLOUD_DEPTH - HIGH_CLOUD.x) / HIGH_CLOUD.y;
@@ -721,64 +776,22 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
 }
 
 // The colour far things fade into, low down towards `low`: the sky's
-// there, and under a storm greyer and darker, as the air is under one.
+// there, under a storm greyer and darker, as the air is under one, and in
+// fog or a blizzard the white of the fog itself.
 fn storm_haze(low: vec3<f32>) -> vec3<f32> {
     let clear = sky_colour(low);
     let storm = view.weather[0].w;
     let grey = vec3<f32>(dot(clear, vec3<f32>(0.2126, 0.7152, 0.0722)));
-    return mix(clear, grey, 0.7 * storm) * (1.0 - 0.62 * storm);
-}
-
-// `colour`, seen `far` along `direction`, with the rain and the hail that
-// fall between: streaks at five distances from the eye, each twice as far
-// as the last, and none of them beyond what is seen. A drop falls eight
-// metres a second and is seen as the streak it draws while the eye takes
-// it in, some tenth of a second; a hailstone falls twice as fast, and is white. The wind leans
-// them. They are lit by the sky.
-fn rain_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
-    let rain = view.weather[0].x;
-    let hail = view.weather[0].y;
-    if rain <= 0.001 {
-        return colour;
-    }
-    let run = max(length(direction.xz), 0.05);
-    let round = atan2(direction.x, direction.z);
-    // How far aside the wind carries a drop for each metre it falls, as
-    // the eye sees it across its line of sight.
-    let blown = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * (1.0 + 2.0 * view.weather[0].w);
-    let lean = dot(blown, vec2<f32>(cos(round), -sin(round))) / 8.0;
-    let light = (view.sky.rgb * 0.7 + view.sun.rgb / PI * 0.06) * (1.0 - 0.4 * view.weather[0].w);
-    // Straight up and straight down there are no streaks to see, only
-    // drops coming at the eye.
-    let level = smoothstep(0.1, 0.5, run);
-    var seen = colour;
-    var away = 1.6;
-    for (var layer = 0; layer < 5; layer++) {
-        if far < away {
-            break;
-        }
-        let up = view.eye.y + direction.y / run * away;
-        let along = round * away - up * lean + f32(layer) * 13.7;
-        // A column about two pixels wide, with a drop in some.
-        let wide = away * 0.006;
-        let column = floor(along / wide);
-        let dice = fract(sin(column * 12.9898 + f32(layer) * 78.233) * vec3<f32>(43758.5453, 22578.1459, 19642.349));
-        let within = abs(fract(along / wide) - 0.5);
-        if dice.x < rain * 0.75 && within < 0.3 {
-            let falling = fract((up + view.clouds.y * (7.0 + 2.0 * dice.z)) / 1.6 + dice.y);
-            if falling < 0.4 {
-                seen = mix(seen, light, 0.38 * level * (1.0 - falling / 0.4));
-            }
-        }
-        if dice.y < hail * 0.2 && within < 0.35 {
-            let falling = fract((up + view.clouds.y * (16.0 + 5.0 * dice.x)) / 3.7 + dice.z);
-            if falling < 0.05 {
-                seen = mix(seen, light * 1.6, 0.8 * level);
-            }
-        }
-        away *= 2.0;
-    }
-    return seen;
+    // Under a sky that is all cloud the horizon is the cloud's grey, not
+    // the blue-white of a clear day's; and darker if it rains from it.
+    let closed = smoothstep(0.6, 1.0, view.clouds.x);
+    let gloom = max(storm, 0.6 * rain_cloud());
+    let haze = mix(mix(clear, grey, 0.7 * storm), view.sky.rgb * 1.1, closed) * (1.0 - 0.62 * gloom);
+    // Fog and driven snow are lit by the whole sky, and by the sun if it
+    // is out: they are white, not the colour of the horizon.
+    let white = view.sky.rgb * (1.15 - 0.6 * gloom)
+        + view.sun.rgb / PI * max(view.towards_sun.y, 0.0) * 0.45 * (1.0 - closed) * (1.0 - storm);
+    return mix(haze, white, misted());
 }
 
 // The rings raindrops make on water: how much they tilt it at a place.
@@ -841,9 +854,8 @@ fn cloud_shade(world: vec3<f32>) -> vec2<f32> {
     var looks = array<vec2<f32>, 3>(
         vec2<f32>(CLOUD_MIDDLE, 800.0), vec2<f32>(1500.0, 1700.0), vec2<f32>(3800.0, 3000.0),
     );
-    let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
     let low = world + sun * ((view.clouds.z + CLOUD_MIDDLE - world.y) * slope);
-    let weather = weather_over(low.xz - drift);
+    let weather = weather_over(low.xz);
     var crossed = 0.0;
     var storm = 0.0;
     for (var look = 0; look < 3; look++) {
@@ -857,9 +869,15 @@ fn cloud_shade(world: vec3<f32>) -> vec2<f32> {
         storm = max(storm, found.y * step(0.001, found.x));
     }
     let shaded = 1.0 - exp(-crossed * slope * CLOUD_STOPS * 0.25);
+    // A sky that rains steadily is nearly as dark as a storm's; and under
+    // one that is all cloud the sun is no beam at all: its light comes
+    // from the whole sky (which is brighter for it), and casts no shadow.
+    let heavy = rain_cloud();
+    let closed = smoothstep(0.6, 1.0, view.clouds.x);
     return vec2<f32>(
-        mix(1.0, mix(0.3, 0.05, storm), shaded),
-        1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z),
+        mix(1.0, mix(mix(0.3, 0.04, closed), 0.05, max(storm, 0.7 * heavy)), shaded),
+        (1.0 - 0.65 * weather.z - 0.4 * max(weather.x - 0.5, 0.0) * (1.0 - weather.z))
+            * (1.0 - 0.2 * heavy * (1.0 - weather.z)),
     );
 }
 
@@ -1035,7 +1053,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
         * shade.x
         * light_through_water(corner.world);
-    let sky_seen = open_sky(corner.world, corner.position.xy) * shade.y;
+    let open = open_sky(corner.world, corner.position.xy);
+    let sky_seen = open * shade.y;
     if has(NORMAL) {
         let sample = textureSampleBias(
             normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
@@ -1063,22 +1082,47 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, SMOOTHEST, 1.0);
 
+    // Only what is out of the water shines, and only that is snowed on:
+    // under it there is no air for the wet to be a mirror against.
+    let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
+    // Snow lies on what faces up under an open sky: first on what is
+    // flattest and in patches, then, as it deepens, on all but what is
+    // steep. Under trees and ledges there is little or none. It is white,
+    // matte, and hides the fine shape of what it lies on.
+    var base_seen = base;
+    var snowed = 0.0;
+    if view.weather[2].x > 0.0 {
+        let lies = view.weather[2].x * smoothstep(0.3, 0.75, open);
+        let patches = textureSampleLevel(
+            cloud_volume, cloud_sampler, corner.world * vec3<f32>(0.13, 0.19, 0.13) + 0.21, 0.0,
+        ).r;
+        let small = textureSampleLevel(
+            cloud_volume, cloud_sampler, corner.world * 0.9 + 0.5, 0.0,
+        ).g;
+        let needs = mix(0.97, 0.3, lies);
+        let faces = mix(normalize(corner.normal).y * side, normal.y, 0.6)
+            + (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
+        snowed = smoothstep(needs - 0.1, needs + 0.1, faces) * smoothstep(0.0, 0.12, lies) * out;
+        base_seen = mix(base, vec3<f32>(0.9, 0.92, 0.95), snowed);
+        metallic *= 1.0 - snowed;
+        roughness = mix(roughness, 0.78, snowed);
+        normal = normalize(mix(normal, normalize(corner.normal) * side + vec3<f32>(0.0, 0.35, 0.0), 0.7 * snowed));
+    }
+
     // What the water laps at is soaked: darker, because light gets into
     // wet ground and less of it out again, and smooth enough to shine.
-    // So is what the rain falls on: whatever faces up under an open sky.
+    // So is what the rain falls on: whatever faces up under an open sky,
+    // and has no snow on it.
     let wet = max(
         shore_wet(corner.world),
         view.weather[0].z * smoothstep(0.2, 0.7, normal.y) * sky_seen,
-    );
-    // Only what is out of the water shines: under it there is no air for
-    // the wet to be a mirror against.
-    let out = smoothstep(-0.02, 0.0, corner.world.y - view.water.x);
+    ) * (1.0 - snowed);
     roughness = mix(roughness, min(roughness, 0.4), wet * out);
     roughness = mix(roughness, max(roughness, 0.9), wet * (1.0 - out));
     // Metal mirrors light in its own colour and has no matte colour;
     // anything else mirrors a little white light.
-    let matte = base * (1.0 - metallic) * mix(1.0, 0.55, wet);
-    let mirror = mix(vec3<f32>(0.04), base, metallic);
+    let matte = base_seen * (1.0 - metallic) * mix(1.0, 0.55, wet);
+    let mirror = mix(vec3<f32>(0.04), base_seen, metallic);
 
     let to_eye = normalize(view.eye.xyz - corner.world);
     let to_sun = view.towards_sun.xyz;
@@ -1107,7 +1151,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var from_behind = vec3<f32>(0.0);
     if thin {
         let behind = clamp(-dot(normal, to_sun), 0.0, 1.0);
-        let tinted = matte * vec3<f32>(1.25, 1.2, 0.55);
+        let tinted = matte * mix(vec3<f32>(1.25, 1.2, 0.55), vec3<f32>(0.5), snowed);
         from_behind = tinted / PI * view.sun.rgb * (0.25 + 0.75 * behind) * sunlit
             * step(0.0001, behind) * 0.9;
     }
@@ -1334,12 +1378,18 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         // colour.
         let overhead = sky_colour(vec3<f32>(0.0, 1.0, 0.0));
         let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+        // Under a sky that is all cloud there is no blue overhead: the
+        // cloud is lit by the sun's light that has come down through it.
+        let closed = smoothstep(0.6, 1.0, view.clouds.x);
         let around = mix(
-            view.sky.rgb, overhead * dot(view.sky.rgb, grey) / max(dot(overhead, grey), 0.00001), 0.5,
+            view.sky.rgb, overhead * dot(view.sky.rgb, grey) / max(dot(overhead, grey), 0.00001),
+            0.5 * (1.0 - closed),
         );
         // Far clouds fade into the air in front of them.
-        let haze = sky_colour(vec3<f32>(direction.x, 0.02, direction.z));
+        let haze = storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z)));
         let earth = 6360000.0 + eye_height;
+        // The cloud of a sky that rains steadily is thick and dark.
+        let heavy = 0.8 * rain_cloud();
 
         // The high cloud first, since it is behind the rest: thin enough
         // that two looks through it are enough, and that it does not
@@ -1373,11 +1423,10 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         let middle = clamp(
             to_clouds(direction.y, view.clouds.z + 0.5 * CLOUD_DEPTH - eye_height), enters, leaves,
         );
-        let drift = vec2<f32>(view.wind.x, view.wind.y) * view.wind.z * 2.4 * view.clouds.y;
         var stormy = false;
         for (var look = 0; look < 3 && leaves > middle; look++) {
             let away = middle + (leaves - middle) * (f32(look) + start) / 3.0;
-            if weather_over(view.eye.xz + direction.xz * away - drift).z > 0.0 {
+            if weather_over(view.eye.xz + direction.xz * away).z > 0.0 {
                 stormy = true;
                 break;
             }
@@ -1403,7 +1452,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             // The weather is read at every other step, and serves for the
             // step after and for the looks towards the sun.
             if number % 2 == 0 {
-                weather = weather_over(place.xz - drift);
+                weather = weather_over(place.xz);
             }
             let found = cloud_in(place, weather, true);
             // The furthest clouds thin away instead of ending at a line.
@@ -1420,7 +1469,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             for (var look = 0; look < 3; look++) {
                 // A storm is thicker cloud, and darker for it.
                 let shading = cloud_in(place + sun * (along + reach * 0.5), weather, false);
-                crossed += shading.x * (1.0 + 2.5 * shading.y) * reach;
+                crossed += shading.x * (1.0 + 2.5 * max(shading.y, heavy)) * reach;
                 along += reach;
                 reach *= 3.2;
             }
@@ -1433,9 +1482,10 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             let hollow = 1.0 - 0.6 * exp(-2.0 * depth - 3.0 * thick) * (0.5 - 0.5 * to_sun);
             let from_sun = view.sun.rgb / PI * 0.8 * lit * hollow;
             // The sky lights it from all round, the base least, and the
-            // base of a storm hardly at all.
-            let from_sky = around * (0.35 + 0.75 * min(up * 2.5, 1.0))
-                * (1.0 - 0.93 * found.y * (1.0 - up * up));
+            // base of a storm hardly at all. A sky that is all cloud is
+            // seen from underneath as bright as the light it gives.
+            let from_sky = around * mix(0.35 + 0.75 * min(up * 2.5, 1.0), 1.15, closed)
+                * (1.0 - 0.93 * max(found.y, 0.75 * heavy) * (1.0 - up * up));
             var from_flash = vec3<f32>(0.0);
             if found.y > 0.0 {
                 // Lightning lights the cloud round it from inside.
@@ -1466,13 +1516,25 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     // The sun shows through thin cloud and not through thick.
     colour += view.heavens[3].rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
 
-    // In rain the sky is seen through it: greyed, and streaked.
-    if view.weather[0].x > 0.0 {
-        let grey = storm_haze(vec3<f32>(direction.x, 0.02, direction.z));
-        colour = rain_over(
-            mix(colour, grey, 1.0 - exp(-view.weather[0].x * 0.7)), direction, 1000000000.0,
+    // Fog and falling snow hide the sky as they hide the land: all of it
+    // towards the horizon, and overhead as much as there is fog to look
+    // up through. The haze of a clear day and the rain are left out: the
+    // sky is worked out with the one in it, and greyed by the other below.
+    let mist = max(fog_thick() - view.fog.w * (1.0 + 4.0 * view.weather[0].x), 0.0);
+    if mist > 0.0 && view.fog.x > 0.0 {
+        let low = vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z);
+        colour = mix(
+            colour, storm_haze(normalize(low)),
+            fog_hides(mist, vec3<f32>(direction.x, max(direction.y, 0.004), direction.z), 1000000.0),
         );
     }
+    colour = tornado_over(colour, direction, 1000000000.0);
+    // In rain the sky is seen through it: greyed.
+    if view.weather[0].x > 0.0 {
+        let grey = storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z)));
+        colour = mix(colour, grey, 1.0 - exp(-view.weather[0].x * 0.7));
+    }
+    colour = falling_over(colour, direction, 1000000000.0);
 
     var pixel: Pixel;
     pixel.colour = vec4<f32>(colour, 1.0);
@@ -1486,3 +1548,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 
 //!include water.wgsl
 //!include particles.wgsl
+//!include weather.wgsl

@@ -13,7 +13,7 @@ use lore_assets::{AlphaMode, LightKind, Material, MeshPart, Scene, Water};
 use crate::buffer::Buffer;
 use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
-use crate::effects::{BIT_BYTES, MOST_BITS};
+use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
@@ -25,6 +25,7 @@ use crate::swapchain::COLOUR;
 use crate::water::{
     Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
 };
+use crate::weather::eased;
 
 /// The mesh shaders, compiled from `shaders/mesh.wgsl` by the build script.
 const SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mesh.spv"));
@@ -53,9 +54,9 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, two for the weather and five for the sun, the
+/// the light of lightning, six for the weather and five for the sun, the
 /// moon and the stars.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + 2 + 5);
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5);
 
 /// The number the next scene's meshes are known by.
 static NEXT_MESHES: AtomicU64 = AtomicU64::new(1);
@@ -116,11 +117,25 @@ impl View {
         // The picture is far smaller than where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
         let pixel = 1.0 / shadow::SIZE as f32;
+        // Under a sky that is all cloud the light from above is the
+        // cloud's: grey, where a clear sky's is blue.
+        // And what the sun sends is no longer a beam but comes from the
+        // whole of it: a little over half of what a surface facing up
+        // had, which is more than gets through real cloud and what an eye
+        // used to the grey makes of it.
+        let weigh = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        let closed = eased(0.6, 1.0, above.weather.cover);
+        let through =
+            weigh(lighting.sun) * lighting.towards_sun[1].max(0.0) / std::f32::consts::PI * 0.55;
+        let grey = weigh(lighting.sky);
+        let from_sky = lighting
+            .sky
+            .map(|part| part + (grey - part) * 0.85 * closed + through * closed);
         let rows = [
             row(self.eye, -self.sharper),
             row(lighting.towards_sun, 0.0),
             row(lighting.sun, 0.0),
-            row(lighting.sky, 0.0),
+            row(from_sky, 0.0),
             row(lighting.ground, 0.0),
             [
                 if shadows.is_some() { 1.0 } else { 0.0 },
@@ -135,18 +150,24 @@ impl View {
             reach[number] = [cascade.texel, cascade.depth, 0.0, 0.0];
             from_world[number] = cascade.clip;
         }
+        let air = &above.weather;
         let clouds = [
-            if sky.is_some() { sky::CLOUD_COVER } else { 0.0 },
+            if sky.is_some() { air.cover } else { 0.0 },
             self.time,
             sky::CLOUD_HEIGHT,
             if sky.is_some() { 1.0 } else { 0.0 },
         ];
         // Fog is the colour of the sky, so there is none without one.
-        let [thick, thins, height] = sky::FOG;
-        let fog = [if sky.is_some() { thick } else { 0.0 }, thins, height, 0.0];
+        let [_, thins, height] = sky::FOG;
+        let fog = [
+            if sky.is_some() { air.fog } else { 0.0 },
+            thins,
+            height,
+            sky::FOG[0],
+        ];
         // The wind, and how long ago the last frame was: what bends in it
         // was where the wind of that moment had it.
-        let [along_x, along_z, speed] = sky::WIND;
+        let [along_x, along_z, speed] = air.wind;
         let wind = [along_x, along_z, speed, self.elapsed];
         let mut scattered = [[0.0; 4]; 2 * sky::HEIGHTS];
         if let Some(sky) = sky {
@@ -174,7 +195,7 @@ impl View {
                 .chain(&[self.stir, 0.0, 0.0, 0.0])
                 .chain(water.iter().flatten())
                 .chain(above.flashes.iter().flatten())
-                .chain(above.weather.iter().flatten())
+                .chain(above.weather.rows.iter().flatten())
                 .chain(above.heavens.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
@@ -188,7 +209,7 @@ impl View {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
-    pub(crate) weather: [[f32; 4]; 2],
+    pub(crate) weather: Air,
     pub(crate) heavens: [[f32; 4]; 5],
 }
 
@@ -281,10 +302,9 @@ pub(crate) struct Contents<'a> {
     /// Where the light of each stroke of lightning comes from, and how
     /// bright it is now.
     pub(crate) flashes: [[f32; 4]; 2],
-    /// The weather: at the eye, how hard it rains and hails, how wet the
-    /// ground is and how much of a storm is overhead; then how stormy the
-    /// whole sky is.
-    pub(crate) weather: [[f32; 4]; 2],
+    /// The weather, as [`Effects::air`](crate::effects::Effects::air)
+    /// gives it.
+    pub(crate) weather: Air,
     /// The sky at the hour it is, if the game has said the hour: with
     /// none, the level's own light is the light.
     pub(crate) day: Option<&'a sky::Day>,
@@ -1417,7 +1437,7 @@ impl MeshPipeline {
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
         // All of it stands as high as rain has raised it.
-        let rise = weather[1][1];
+        let rise = weather.rows[1][1];
         let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
@@ -1431,7 +1451,7 @@ impl MeshPipeline {
                     view.eye,
                     (view.exact, view.elapsed),
                     (near, meshes.is_some_and(|meshes| meshes.has_water)),
-                    stirs,
+                    (stirs, weather.wind),
                 )
             }?;
             let depths = near.map_or(works.pictures()[3], Body::depths);
@@ -1679,7 +1699,7 @@ impl MeshPipeline {
                             self.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            &body_bytes(body, view.eye, grid, weather[1][1]),
+                            &body_bytes(body, view.eye, grid, weather.rows[1][1]),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
                     }
@@ -2397,20 +2417,32 @@ mod tests {
             &water,
             &Above {
                 flashes: [[1.0, 2.0, 3.0, 0.5], [0.0; 4]],
-                weather: [[0.25, 0.0, 0.5, 1.0], [0.75, 0.0, 0.0, 0.0]],
+                weather: Air {
+                    rows: [
+                        [0.25, 0.0, 0.5, 1.0],
+                        [0.75, 0.0, 0.0, 0.0],
+                        [0.0; 4],
+                        [0.0; 4],
+                        [0.0; 4],
+                        [0.3, 0.0, 0.0, 0.0],
+                    ],
+                    cover: 0.6,
+                    fog: 0.002,
+                    wind: [0.0, 1.0, 9.0],
+                },
                 heavens: [[9.0; 4]; 5],
             },
         );
-        assert_eq!(number(&bytes, 184), sky::CLOUD_COVER);
+        assert_eq!(number(&bytes, 184), 0.6, "how much of the sky is cloud");
         assert_eq!(number(&bytes, 187), 1.0, "a sky");
         assert_eq!(number(&bytes, 188), above.air[0][0]);
         assert_eq!(number(&bytes, 280), above.air[23][0]);
         assert_eq!(number(&bytes, 284), above.haze[0][0]);
         assert_eq!(number(&bytes, 378), above.haze[23][2]);
-        assert_eq!(number(&bytes, 380), sky::FOG[0], "the fog");
+        assert_eq!(number(&bytes, 380), 0.002, "the fog");
         assert_eq!(number(&bytes, 381), sky::FOG[1]);
-        assert_eq!(number(&bytes, 384), sky::WIND[0], "the wind");
-        assert_eq!(number(&bytes, 386), sky::WIND[2]);
+        assert_eq!(number(&bytes, 385), 1.0, "the wind");
+        assert_eq!(number(&bytes, 386), 9.0);
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
         assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
         assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
@@ -2422,8 +2454,9 @@ mod tests {
         assert_eq!(number(&bytes, 431), 0.5, "and how bright");
         assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
         assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
-        assert_eq!(number(&bytes, 444), 9.0, "the sun, the moon and the stars");
-        assert_eq!(bytes.len(), 464 * 4);
+        assert_eq!(number(&bytes, 456), 0.3, "how strong the tornado is");
+        assert_eq!(number(&bytes, 460), 9.0, "the sun, the moon and the stars");
+        assert_eq!(bytes.len(), 480 * 4);
     }
 
     #[test]

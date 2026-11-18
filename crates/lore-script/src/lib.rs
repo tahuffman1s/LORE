@@ -48,6 +48,7 @@ mod limit;
 mod modules;
 mod time_api;
 mod weapon_api;
+mod weather_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
 pub use character_api::CharacterId;
@@ -56,6 +57,7 @@ pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lore_weapons as weapons;
 pub use weapon_api::{HeldWeapon, WeaponHit};
+pub use weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 
 /// Type definitions for the script API, in the format the Luau language
 /// server reads, so editors can autocomplete and check `game`.

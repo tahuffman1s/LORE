@@ -233,7 +233,7 @@ pub(crate) fn frames(
                         stirs: &[],
                         bits: &[],
                         flashes: [[0.0; 4]; 2],
-                        weather: [[0.0; 4]; 2],
+                        weather: crate::effects::Air::default(),
                         day: None,
                     },
                     camera,

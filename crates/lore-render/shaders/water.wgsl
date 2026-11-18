@@ -43,8 +43,13 @@ fn layer_seen(layer: i32, grain: f32) -> f32 {
 // the bottom and die away. `deep` below nothing means "not known".
 fn wave_strength(place: vec2<f32>, deep: f32) -> vec4<f32> {
     // A storm overhead stands the short waves up.
-    let blowing = gust(place, view.clouds.y) / 0.8 * (1.0 + 1.5 * view.weather[0].w);
-    var strength = mix(vec4<f32>(1.0), vec4<f32>(blowing), vec4<f32>(0.35, 0.7, 1.0, 1.0));
+    // A wind of five metres a second is what the waves were worked out
+    // for; a gale stands the short ones up further and still air lets
+    // them lie.
+    let blowing = gust(place, 0.0) / 0.8 * (1.0 + 1.5 * view.weather[0].w);
+    // Ice holds it still.
+    var strength = mix(vec4<f32>(1.0), vec4<f32>(blowing), vec4<f32>(0.35, 0.7, 1.0, 1.0))
+        * (1.0 - view.weather[2].y);
     if deep >= 0.0 {
         strength *= vec4<f32>(
             smoothstep(0.0, view.waves[0].w * 0.5, deep),
@@ -532,14 +537,26 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         strength = vec4<f32>(0.25, 0.7, 1.0, 1.0) * (0.5 + 0.6 * fast);
         waves = swell_running(wet.rest, wet.flow, grain, strength);
     }
-    var ring = rings(wet.rest);
+    // Still water freezes over when the cold has made ice of it; water
+    // that runs stays open.
+    let frozen = view.weather[2].y * (1.0 - smoothstep(0.05, 0.5, fast));
+    var ring = rings(wet.rest) * (1.0 - frozen);
     // No ring is steeper than water stands before it breaks.
     let steep = length(ring.yz);
     ring = vec4<f32>(ring.x, ring.yz * min(1.0, 0.7 / max(steep, 0.001)), ring.w);
-    let slope = waves.slope + ring.yz + rain_rings(corner.world.xz);
+    let slope = waves.slope + ring.yz + rain_rings(corner.world.xz) * (1.0 - frozen);
     var normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
-    // How widely the waves too small to draw spread what the water mirrors.
-    let rough = clamp(sqrt(2.0 * max(waves.unseen, 0.0)), 0.015, 0.5);
+    // White ice: patches of it that froze with air in them, tens of
+    // metres across. The rest is clear.
+    let milky = smoothstep(
+        0.38, 0.62,
+        textureSampleLevel(cloud_volume, cloud_sampler, vec3<f32>(wet.rest / 37.0, 0.71), 0.0).r,
+    );
+    // How widely the waves too small to draw spread what the water mirrors;
+    // ice is smooth, but not as a mirror is, and white ice is matte.
+    let rough = mix(
+        clamp(sqrt(2.0 * max(waves.unseen, 0.0)), 0.015, 0.5), 0.07 + 0.3 * milky, frozen,
+    );
 
     let pixel_at = vec2<i32>(corner.position.xy);
     // How far in front of the eye the surface is, and what is behind it:
@@ -706,9 +723,40 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     let open = open_sky(corner.world, corner.position.xy);
     let body = wet.colour.rgb
         * (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit * 0.6);
-    let seen = bottom * passes + body * (1.0 - passes);
+    var seen = bottom * passes + body * (1.0 - passes);
+    var mirrors = mirror;
+    if frozen > 0.0 {
+        // Ice. Where it is clear the water shows through it, darker and
+        // bluer; where it froze with air in it, it is white. Cracks run
+        // through it, white where they are filled with frost: the walls
+        // between the packed cells of the block the clouds are shaped
+        // from, seen at the surface and again a hand's breadth down
+        // inside the ice, which is what shows it has thickness.
+        let down = to_eye.xz / max(to_eye.y, 0.3);
+        let wide_cracks = 1.0 - textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(wet.rest / 6.3, 0.33), 0.0,
+        ).g;
+        let fine_cracks = 1.0 - textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(wet.rest / 1.7 + 0.4, 0.57), 0.0,
+        ).g;
+        let sunk_cracks = 1.0 - textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>((wet.rest - down * 0.12) / 2.9 + 0.2, 0.83), 0.0,
+        ).g;
+        let cracked = max(
+            max(smoothstep(0.62, 0.8, wide_cracks), 0.6 * smoothstep(0.66, 0.82, fine_cracks)),
+            0.35 * smoothstep(0.6, 0.8, sunk_cracks),
+        );
+        let on_ice = view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit;
+        let clear_ice = seen * vec3<f32>(0.5, 0.72, 0.8) + on_ice * vec3<f32>(0.05, 0.1, 0.13);
+        let white_ice = on_ice * vec3<f32>(0.6, 0.72, 0.8);
+        let clouded = clamp(0.1 + 0.6 * milky + 0.9 * cracked, 0.0, 1.0);
+        seen = mix(seen, mix(clear_ice, white_ice, clouded), frozen);
+        // Ice is a poor mirror beside water: its surface is fine frost,
+        // and white ice hardly mirrors at all.
+        mirrors = mirror * mix(1.0, 0.42 - 0.3 * clouded, frozen);
+    }
 
-    var colour = mix(seen, mirrored, mirror) + glitter;
+    var colour = mix(seen, mirrored, mirrors) + glitter * (1.0 - 0.7 * milky * frozen);
 
     // White water: where whoever is in it churns it, and where running
     // water breaks, fast over a shelf or against a stone. Still water has
@@ -738,7 +786,19 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
             + smoothstep(0.3, 0.7, length(slope)) * 0.6;
         foam = max(foam, foam_cover(lace, breaking));
     }
-    colour = mix(colour, white, clamp(foam, 0.0, 1.0));
+    colour = mix(colour, white, clamp(foam, 0.0, 1.0) * (1.0 - frozen));
+    // Snow lies on ice as it does on land: thin where the wind has swept
+    // it, in drifts where it has not.
+    if frozen > 0.0 && view.weather[2].x > 0.0 {
+        let drifts = textureSampleLevel(
+            cloud_volume, cloud_sampler, vec3<f32>(wet.rest / 11.0 + 0.6, 0.18), 0.0,
+        ).r;
+        let lies = view.weather[2].x * frozen * smoothstep(0.3, 0.75, open);
+        let covered = smoothstep(0.62 - 0.36 * lies, 0.8 - 0.36 * lies, drifts) * smoothstep(0.0, 0.2, lies);
+        let snow = (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit)
+            * vec3<f32>(0.9, 0.92, 0.95);
+        colour = mix(colour, snow, covered);
+    }
 
     // The very edge fades out, so that the water does not end in a line.
     let edge = smoothstep(0.0, 0.012, deep);

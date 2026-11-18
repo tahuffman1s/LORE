@@ -11,6 +11,15 @@ use crate::slide::{SKIN, Slid, slide, unstick};
 /// How far below the feet counts as standing on something when landing.
 const LANDING_REACH: f32 = 0.02;
 
+/// How far above ice feet can be and still be standing on it, in metres.
+const ICE_REACH: f32 = 0.02;
+
+/// How much of the ground's grip ice has for stopping on, and how much for
+/// pushing off from: feet on it slide an eighth as hard against it, get
+/// going a twentieth as fast, and never reach a full walk.
+const ICE_GRIP: f32 = 0.12;
+const ICE_PUSH: f32 = 0.05;
+
 /// How far past an edge, and how far above it, to look for the surface
 /// the edge belongs to.
 const EDGE_PROBE: f32 = 0.03;
@@ -254,6 +263,17 @@ impl Player {
         let input = input.cleaned();
         let before = *self;
 
+        // Whether they stand on ice, which is slippery.
+        let on_ice = self.grounded
+            && level
+                .ice_around(feet.to_array())
+                .is_some_and(|ice| (feet.y - ice).abs() <= 2.0 * ICE_REACH);
+        let (grip, push_off) = if on_ice {
+            (ICE_GRIP, ICE_PUSH)
+        } else {
+            (1.0, 1.0)
+        };
+
         // The water the player is in, and whether it carries them.
         let water = Water::over(level, feet);
         let floats = Floats::of(settings);
@@ -373,13 +393,14 @@ impl Player {
         } else if self.grounded {
             self.rest_arms();
             velocity.y = 0.0;
-            velocity = slowed(velocity, settings, dt);
+            // Ice gives feet little to stop with or to push off from.
+            velocity = slowed(velocity, settings, dt * grip);
             velocity = sped_up(
                 velocity,
                 wish,
                 wish_speed,
                 top_speed,
-                settings.ground_acceleration,
+                settings.ground_acceleration * push_off,
                 dt,
             );
 
@@ -527,6 +548,21 @@ impl Player {
                 ground = found.normal;
                 self.grounded = true;
             }
+        }
+
+        // Ice bears whoever is on it: nobody goes down through the frozen
+        // surface of still water, and whoever was in the water when it
+        // froze is lifted onto it.
+        let came_to = middle - to_middle;
+        if self.hoist <= 0.0
+            && velocity.y <= 0.0
+            && let Some(ice) = level.ice_around(came_to.to_array())
+            && came_to.y <= ice + ICE_REACH
+        {
+            middle.y += ice - came_to.y;
+            velocity.y = 0.0;
+            ground = Vector::Y;
+            self.grounded = true;
         }
 
         let eyes = settings.eye_height(self.crouched);

@@ -92,6 +92,8 @@ pub struct Frame {
     sky_clock: Option<f64>,
     /// Whether storms send their own bolts, if the game said this frame.
     storm_bolts: Option<bool>,
+    /// The whole of the weather, if the game said it this frame.
+    weather: Option<lore_render::Weather>,
     /// Whether the ears are under water, if the game said.
     under_water: Option<bool>,
     /// The editor's panels: what they are made with, and what was made.
@@ -181,6 +183,7 @@ impl Frame {
             water_rise: None,
             sky_clock: None,
             storm_bolts: None,
+            weather: None,
             under_water: None,
             #[cfg(feature = "editor")]
             panels: None,
@@ -745,6 +748,21 @@ impl Frame {
     /// Whether storms send their own bolts, if the game said this frame.
     pub(crate) fn take_storm_bolts(&mut self) -> Option<bool> {
         self.storm_bolts.take()
+    }
+
+    /// Says what the weather is, all of it: how much cloud, how stormy,
+    /// how hard it rains or snows, how warm the air is, the wind, the fog,
+    /// the snow that lies and the ice on the water, and the tornado if
+    /// there is one. See [`lore_render::Weather`]. What is said last in a
+    /// frame is what is drawn; it takes the place of
+    /// [`set_storminess`](Self::set_storminess).
+    pub fn set_weather(&mut self, weather: lore_render::Weather) {
+        self.weather = Some(weather);
+    }
+
+    /// The weather, if the game said it this frame.
+    pub(crate) fn take_weather(&mut self) -> Option<lore_render::Weather> {
+        self.weather.take()
     }
 
     /// How far rain has raised the water and what the sky's clock shows,

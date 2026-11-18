@@ -2085,3 +2085,105 @@ fn nonsense_in_the_water_does_no_harm() {
         }
     }
 }
+
+#[test]
+fn a_frozen_lake_bears_whoever_walks_on_it_and_is_slippery() {
+    let level = lake(3.0);
+    // Open water: dropped onto it, they go in and swim.
+    let mut swimmer = Player::at([0.0, 0.5, 0.0], &MoveSettings::default());
+    run(&mut swimmer, &level, MoveInput::default(), 2 * SECOND);
+    assert!(
+        swimmer.swimming && swimmer.position[1] < -0.5,
+        "{swimmer:?}"
+    );
+
+    // Ice too thin to bear is no ice to the feet.
+    level.set_ice(Level::ICE_BEARS / 2.0);
+    assert!(!level.frozen() && level.water_at(0.0, 0.0) == Some(0.0));
+    // Thick enough, and the lake is ground: its surface, with no water in
+    // it for anyone to be in.
+    level.set_ice(0.1);
+    assert!(level.frozen());
+    assert_eq!(level.ice_around([0.0, 1.0, 0.0]), Some(0.0));
+    assert_eq!(level.water_at(0.0, 0.0), None);
+    assert_eq!(level.water_around([0.0, -1.0, 0.0]), None);
+    assert_eq!(level.water_depth(0.0, 0.0), 0.0);
+    // Whoever was in the water when it froze is lifted onto it.
+    run(&mut swimmer, &level, MoveInput::default(), SECOND);
+    assert!(!swimmer.swimming && swimmer.grounded, "{swimmer:?}");
+    assert!(close(swimmer.position[1], 0.0, 1.0e-4), "{swimmer:?}");
+    assert_eq!(swimmer.submerged, 0.0);
+
+    // Dropped onto it, they land and stand.
+    let mut walker = Player::at([0.0, 2.0, 0.0], &MoveSettings::default());
+    run(&mut walker, &level, MoveInput::default(), 2 * SECOND);
+    assert!(
+        walker.grounded && close(walker.position[1], 0.0, 1.0e-4),
+        "{walker:?}"
+    );
+    // It is slow to get going on: after a second they are not yet at half
+    // a walk.
+    run(&mut walker, &level, forward(), SECOND);
+    assert!(
+        walker.grounded && close(walker.position[1], 0.0, 1.0e-4),
+        "{walker:?}"
+    );
+    let going = speed(&walker);
+    assert!(going > 0.5 && going < 2.5, "{going}");
+    // And slow to stop on: a second after letting go they still slide,
+    // where on the ground they would have stood still at once.
+    run(&mut walker, &level, forward(), 4 * SECOND);
+    run(&mut walker, &level, MoveInput::default(), SECOND);
+    assert!(speed(&walker) > 1.0, "{walker:?}");
+    // They can jump on it and come down on it again.
+    let jump = MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    };
+    run(&mut walker, &level, jump, 10);
+    assert!(!walker.grounded && walker.position[1] > 0.2, "{walker:?}");
+    run(&mut walker, &level, MoveInput::default(), 2 * SECOND);
+    assert!(
+        walker.grounded && close(walker.position[1], 0.0, 1.0e-4),
+        "{walker:?}"
+    );
+
+    // When it thaws they are in the water again.
+    level.set_ice(0.0);
+    run(&mut walker, &level, MoveInput::default(), 2 * SECOND);
+    assert!(walker.swimming, "{walker:?}");
+    // Nonsense is no ice.
+    level.set_ice(f32::NAN);
+    assert_eq!(level.ice(), 0.0);
+    level.set_ice(-1.0);
+    assert_eq!(level.ice(), 0.0);
+}
+
+#[test]
+fn a_walker_goes_from_the_shore_onto_the_ice_and_back() {
+    let level = beach();
+    level.set_ice(0.2);
+    // From dry land down the bank and out over the deep water.
+    let mut walker = standing_at(&level, [0.0, 1.0, 8.0]);
+    run(&mut walker, &level, forward(), 8 * SECOND);
+    assert!(walker.position[2] < -8.0, "{walker:?}");
+    assert!(
+        walker.grounded && close(walker.position[1], 0.0, 1.0e-3),
+        "{walker:?}"
+    );
+    assert!(!walker.swimming && walker.submerged == 0.0);
+    // And back up the bank onto the land.
+    let back = MoveInput {
+        yaw: std::f32::consts::PI,
+        ..forward()
+    };
+    run(&mut walker, &level, back, 13 * SECOND);
+    assert!(
+        walker.position[2] > 4.0 && walker.position[2] < 28.0,
+        "{walker:?}"
+    );
+    assert!(
+        walker.grounded && close(walker.position[1], 1.0, 0.03),
+        "{walker:?}"
+    );
+}

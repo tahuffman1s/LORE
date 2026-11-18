@@ -18,6 +18,7 @@ use crate::limit::Interrupt;
 use crate::modules::{self, Modules};
 use crate::time_api::{self, Clock, Timer};
 use crate::weapon_api::{self, Kind, WeaponState};
+use crate::weather_api::{self, Climate};
 
 /// Every function directly on `game`. The type definitions shipped for editors
 /// are tested against this list.
@@ -40,32 +41,6 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
 
 /// What `game` holds that is neither a function nor a table of them.
 pub(crate) const GAME_VALUES: &[&str] = &["player"];
-
-/// Every function on `game.sky`.
-pub(crate) const SKY_FUNCTIONS: &[&str] = &["setHour", "hour"];
-
-/// Every function on `game.weather`.
-pub(crate) const WEATHER_FUNCTIONS: &[&str] = &["setStorminess", "storminess", "strike"];
-
-/// What the script has asked of the weather with `game.weather`. It
-/// outlives a version of the script: the sky stays as it was said to be
-/// when the script is read again.
-#[derive(Debug, Default)]
-pub struct WeatherAsked {
-    /// How stormy the sky was last said to be, from 0 to 1.
-    pub storminess: Cell<f32>,
-    /// Whether that has been said since the engine last took it.
-    pub changed: Cell<bool>,
-    /// Where lightning was asked to strike and the engine has not yet
-    /// taken, each with the number of the strike it is.
-    pub strikes: RefCell<Vec<([f32; 3], u32)>>,
-    /// How many strikes have been asked for.
-    pub struck: Cell<u32>,
-    /// The hour of the day the script last said it is, if it has said,
-    /// and whether it has said so since the engine last took it.
-    pub hour: Cell<Option<f64>>,
-    pub hour_changed: Cell<bool>,
-}
 
 /// Every function on `game.input`.
 pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
@@ -95,6 +70,7 @@ pub(crate) struct Handlers {
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
+    pub lightning: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -141,8 +117,8 @@ pub(crate) struct Shared {
     pub rumble: Cell<Option<Rumble>>,
     /// The action set the script chose.
     pub live_set: Rc<LiveSet>,
-    /// What the script asked of the weather.
-    pub weather: Rc<WeatherAsked>,
+    /// What the script said of the weather and the hour.
+    pub weather: Rc<Climate>,
     /// The sounds the game has and the ones asked for. It outlives this
     /// version of the script.
     pub audio: Rc<AudioState>,
@@ -331,43 +307,8 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 
-    let heavens = lua.create_table()?;
-    let asked = Rc::clone(&shared.weather);
-    heavens.set(
-        "setHour",
-        lua.create_function(move |lua, value: Value| {
-            #[allow(clippy::cast_precision_loss)]
-            let hour = match &value {
-                Value::Number(number) if number.is_finite() => *number,
-                Value::Integer(number) => *number as f64,
-                other => {
-                    return Err(fail(
-                        lua,
-                        format!(
-                            "game.sky.setHour needs a number, but it was given {}. It takes \
-                             the hour of the day: 12 is noon, 18 is the sun setting and 24 \
-                             is midnight. Write it like this: game.sky.setHour(18.5)",
-                            describe(other)
-                        ),
-                    ));
-                }
-            };
-            asked.hour.set(Some(hour.max(0.0)));
-            asked.hour_changed.set(true);
-            Ok(())
-        })?,
-    )?;
-    let said = Rc::clone(&shared.weather);
-    heavens.set(
-        "hour",
-        lua.create_function(move |_, ()| Ok(said.hour.get()))?,
-    )?;
-    strict(lua, &heavens, "game.sky", SKY_FUNCTIONS)?;
-    game.set("sky", heavens)?;
-
-    let sky = weather(lua, shared)?;
-    strict(lua, &sky, "game.weather", WEATHER_FUNCTIONS)?;
-    game.set("weather", sky)?;
+    game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set("weather", weather_api::weather(lua, shared)?)?;
 
     let sounds = audio::table(lua, shared)?;
     strict(lua, &sounds, "game.audio", AUDIO_FUNCTIONS)?;
@@ -424,7 +365,7 @@ const SPAWN_TAKES_NOTHING: &str = "game.onSpawn's function is not handed a playe
      game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)";
 
 /// `game.onTick` and friends: remember a function to call later.
-fn on_event(
+pub(crate) fn on_event(
     lua: &Lua,
     shared: &Rc<Shared>,
     name: &'static str,
@@ -544,74 +485,6 @@ fn reader<R: mlua::IntoLuaMulti + 'static>(
 
 /// `game.input.rumble(strong, weak, seconds)`: remember a rumble for the
 /// engine to play on the player's gamepad. `seconds` can be left out.
-/// `game.weather`: how stormy the sky is, and lightning where it is asked
-/// for.
-fn weather(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
-    /// The most strikes kept between two frames: no more could be seen.
-    const MOST: usize = 8;
-    let weather = lua.create_table()?;
-    let asked = Rc::clone(&shared.weather);
-    weather.set(
-        "setStorminess",
-        lua.create_function(move |lua, value: Value| {
-            // The sky needs no more precision than an f32 holds.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-            let amount = match &value {
-                Value::Number(number) => *number as f32,
-                Value::Integer(number) => *number as f32,
-                other => {
-                    return Err(fail(
-                        lua,
-                        format!(
-                            "game.weather.setStorminess needs a number, but it was given {}. \
-                             It takes how stormy the sky is, from 0 (fair weather) to 1 \
-                             (storms over most of it). Write it like this: \
-                             game.weather.setStorminess(0.8)",
-                            describe(other)
-                        ),
-                    ));
-                }
-            };
-            asked.storminess.set(if amount.is_finite() {
-                amount.clamp(0.0, 1.0)
-            } else {
-                0.0
-            });
-            asked.changed.set(true);
-            Ok(())
-        })?,
-    )?;
-    let said = Rc::clone(&shared.weather);
-    weather.set(
-        "storminess",
-        lua.create_function(move |_, ()| Ok(f64::from(said.storminess.get())))?,
-    )?;
-    let asked = Rc::clone(&shared.weather);
-    weather.set(
-        "strike",
-        lua.create_function(move |lua, value: Value| {
-            let Value::Vector(place) = &value else {
-                return Err(fail(
-                    lua,
-                    format!(
-                        "game.weather.strike needs a place, but it was given {}. It takes \
-                         where on the ground the lightning strikes. Write it like this: \
-                         game.weather.strike(game.player.position + vector.create(0, 0, -200))",
-                        describe(&value)
-                    ),
-                ));
-            };
-            let mut strikes = asked.strikes.borrow_mut();
-            if strikes.len() < MOST {
-                asked.struck.set(asked.struck.get().wrapping_add(1));
-                strikes.push(([place.x(), place.y(), place.z()], asked.struck.get()));
-            }
-            Ok(())
-        })?,
-    )?;
-    Ok(weather)
-}
-
 fn rumble(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     const NAMES: [&str; 3] = ["strong", "weak", "seconds"];
     let shared = Rc::clone(shared);
@@ -868,8 +741,8 @@ mod tests {
             ("HudBox.", hud::BOX_FIELDS),
             ("HudBox:", hud::PIECE_METHODS),
             ("game.input.", INPUT_FUNCTIONS),
-            ("game.sky.", SKY_FUNCTIONS),
-            ("game.weather.", WEATHER_FUNCTIONS),
+            ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),

@@ -43,10 +43,11 @@ mod upscale;
 mod view;
 mod water;
 mod waves;
+mod weather;
 
 pub use bolt::Lightning;
 pub use camera::Camera;
-pub use effects::{Splash, rain_at, storm_at};
+pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use font::Font;
 pub use gpu::{Gpu, validation_errors};
@@ -56,3 +57,4 @@ pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};
 pub use upscale::Upscaling;
 pub use water::Stir;
+pub use weather::{Falling, Tornado, Weather};
