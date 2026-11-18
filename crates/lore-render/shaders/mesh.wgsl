@@ -1052,7 +1052,7 @@ fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
 // How far from the eye tracks in the snow are drawn, in metres, how far
 // off they are still carved into it and not only shaded, and the side of
 // the square their map repeats in.
-const TRACKS_SEEN: f32 = 27.0;
+const TRACKS_SEEN: f32 = 25.0;
 const TRACKS_CARVED: f32 = 14.0;
 const TRACK_SQUARE: f32 = 64.0;
 

@@ -288,7 +288,7 @@ fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
         0.0,
     ).rg;
     let grain = mix(one, other, abs(2.0 * first - 1.0));
-    let ragged = far * (1.0 + (grain.r - 0.5) * 0.6);
+    let ragged = far * max(1.0 + (grain.r - 0.5) * 0.6, 0.77);
     // Lost in the cloud above its base, and thinner where it has flared
     // out into the lowering, which is cloud and not the funnel's wall.
     let into = 1.0 - smoothstep(base, top, off.y);

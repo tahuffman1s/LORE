@@ -55,7 +55,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, six for the weather and five for the sun, the
+/// the light of lightning, seven for the weather and five for the sun, the
 /// moon and the stars.
 const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5);
 
@@ -309,10 +309,9 @@ pub(crate) struct Contents<'a> {
     /// The sky at the hour it is, if the game has said the hour: with
     /// none, the level's own light is the light.
     pub(crate) day: Option<&'a sky::Day>,
-    /// The rows of the map of trodden snow that have changed: the first
-    /// of them and what is in them, as
+    /// The rows of the map of trodden snow that have changed, as
     /// [`Effects::tracks`](crate::effects::Effects::tracks) gives them.
-    pub(crate) tracks: Option<(u32, &'a [u8])>,
+    pub(crate) tracks: [Option<(u32, &'a [u8])>; 2],
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -1457,10 +1456,10 @@ impl MeshPipeline {
             )
         });
         // Where the snow has been trodden since the last frame.
-        if let (Some(map), Some((first, bytes))) = (&self.tracks, tracks) {
+        if let Some(map) = &self.tracks {
             // SAFETY: the caller's guarantees cover the map, which is this
             // pipeline's own, and no pass has been begun yet.
-            unsafe { map.record(commands, frame, first, bytes) }?;
+            unsafe { map.record(commands, frame, tracks) }?;
         }
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water

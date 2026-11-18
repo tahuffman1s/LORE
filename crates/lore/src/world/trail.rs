@@ -34,17 +34,17 @@ pub(crate) struct Trail {
 }
 
 impl Trail {
-    /// Adds to `treads` what `player`, who has just moved, did to snow
-    /// that lies `snow` metres deep in the tick just run. `landed` says
-    /// that they came down from a jump or a fall in it.
+    /// Adds to `treads` what `player`, who has just moved and faces
+    /// `yaw`, did to snow that lies `snow` metres deep in the tick just
+    /// run. `landed` says that they came down from a jump or a fall in it.
     ///
     /// Prints are a stride apart whatever is heard of the feet: the sound
     /// of a step is paced for the ear, and a trail is looked at.
     pub(crate) fn tick(
         &mut self,
         player: &Player,
-        snow: f32,
-        landed: bool,
+        yaw: f32,
+        (snow, landed): (f32, bool),
         treads: &mut Vec<Tread>,
     ) {
         // In the air, or in water, or on bare ground: no trail, and the
@@ -56,11 +56,14 @@ impl Trail {
         let [x, _, z] = player.position;
         let [along_x, _, along_z] = player.velocity;
         let speed = along_x.hypot(along_z);
-        // The way they are going, if they are going anywhere.
+        // The way they are going, or the way they face if they are
+        // standing: feet point somewhere.
         let way = if speed > 0.05 {
             [along_x / speed, along_z / speed]
+        } else if yaw.is_finite() {
+            [-yaw.sin(), -yaw.cos()]
         } else {
-            [0.0; 2]
+            [0.0, -1.0]
         };
         // How far they came in this tick: nothing if they have only now
         // come onto the snow, or were put somewhere else.
@@ -144,11 +147,11 @@ mod tests {
         let mut trail = Trail::default();
         let mut treads = Vec::new();
         // Bare ground takes no print.
-        trail.tick(&walker(0.0), 0.0, false, &mut treads);
+        trail.tick(&walker(0.0), 0.0, (0.0, false), &mut treads);
         assert!(treads.is_empty());
         // A dusting: both feet where they come onto it, a heel and a sole
         // to each, then a print a stride, left and right in turn.
-        trail.tick(&walker(0.0), 0.03, false, &mut treads);
+        trail.tick(&walker(0.0), 0.0, (0.03, false), &mut treads);
         assert_eq!(treads.len(), 4);
         assert!((treads[0].place[1] + treads[2].place[1]).abs() < 1e-6);
         assert!((treads[0].place[1].abs() - FEET_APART).abs() < 1e-6);
@@ -156,7 +159,7 @@ mod tests {
         treads.clear();
         // Three metres a second for five metres: a stride is 0.86 m.
         for step in 1..=100 {
-            trail.tick(&walker(step as f32 * 0.05), 0.03, false, &mut treads);
+            trail.tick(&walker(step as f32 * 0.05), 0.0, (0.03, false), &mut treads);
         }
         assert_eq!(treads.len(), 2 * 5, "{treads:?}");
         assert!(treads[0].place[1] * treads[2].place[1] < 0.0, "the other foot");
@@ -164,12 +167,12 @@ mod tests {
         // and nothing while they stand.
         treads.clear();
         for step in 101..=120 {
-            trail.tick(&walker(step as f32 * 0.05), 0.4, false, &mut treads);
+            trail.tick(&walker(step as f32 * 0.05), 0.0, (0.4, false), &mut treads);
         }
         let furrow = treads.iter().filter(|tread| tread.deep < 1.0).count();
         assert_eq!(furrow, 10);
         let stood = treads.len();
-        trail.tick(&walker(6.0), 0.4, false, &mut treads);
+        trail.tick(&walker(6.0), 0.0, (0.4, false), &mut treads);
         assert_eq!(treads.len(), stood);
         // Off the ground they press nothing, and where they come down
         // again is one deep mark.
@@ -177,10 +180,22 @@ mod tests {
             grounded: false,
             ..walker(7.0)
         };
-        trail.tick(&jumping, 0.4, false, &mut treads);
+        trail.tick(&jumping, 0.0, (0.4, false), &mut treads);
         assert_eq!(treads.len(), stood);
-        trail.tick(&walker(8.0), 0.4, true, &mut treads);
+        trail.tick(&walker(8.0), 0.0, (0.4, true), &mut treads);
         assert_eq!(treads.len(), stood + 1);
         assert!(treads[stood].wide > 0.25);
+        // Whoever stands still on new snow has two feet side by side,
+        // pointing the way they face: here along x.
+        let mut trail = Trail::default();
+        treads.clear();
+        let standing = Player {
+            velocity: [0.0; 3],
+            ..walker(0.0)
+        };
+        trail.tick(&standing, -std::f32::consts::FRAC_PI_2, (0.03, false), &mut treads);
+        assert_eq!(treads.len(), 4);
+        assert!((treads[0].place[1] - treads[2].place[1]).abs() > 2.0 * FEET_APART - 1e-4);
+        assert!((treads[1].place[0] - treads[0].place[0] - 2.0 * BOOT).abs() < 1e-4);
     }
 }

@@ -317,7 +317,7 @@ impl Headless {
 
     /// Presses the snow down at a place: a foot coming down in it, or a
     /// body wading through. The track stays, and is carved out of the snow
-    /// wherever it is drawn within some thirty metres of the eye, until
+    /// wherever it is drawn within twenty-five metres of the eye, until
     /// new snow has filled it in. Nothing is seen of it where no snow lies.
     pub fn tread(&mut self, tread: Tread) {
         self.effects.tread(tread);
@@ -394,7 +394,7 @@ impl Headless {
                     flashes: self.effects.flashes(),
                     weather,
                     day: self.effects.day(),
-                    tracks: tracks.map(|rows| self.effects.tracks(rows)),
+                    tracks: self.effects.tracks(tracks),
                 },
                 camera,
                 FRAME_SECONDS,

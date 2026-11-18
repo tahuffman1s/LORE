@@ -19,7 +19,10 @@
 //! world always falls on the same point of it, whatever the eye has done
 //! since (the square wraps round, as a globe's map does), so nothing is
 //! moved when the eye moves: the points that come into the square as
-//! others leave it are wiped, and that is all.
+//! others leave it are wiped, and that is all. Only the rows that have
+//! changed are handed to the graphics card, and only the rows that are
+//! trodden are gone over when snow fills them in: the map is four million
+//! points, and a walker's trail is in a few hundred rows of it.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -55,6 +58,10 @@ pub struct Tread {
     pub deep: f32,
 }
 
+/// Fewer steps of filling in than this are saved up: each filling goes
+/// over every trodden row and hands it to the graphics card again.
+const FILLS_BY: f32 = 4.0;
+
 /// The map of trodden snow, as it is kept between frames.
 pub(crate) struct Tracks {
     /// How far each point is trodden, a row of points along x for each
@@ -63,12 +70,35 @@ pub(crate) struct Tracks {
     /// The first point of the square along x and z, counted in points
     /// from the middle of the world: `None` until the eye is known.
     corner: Option<[i32; 2]>,
-    /// The rows changed since the graphics card was last handed them.
+    /// The rows changed since the graphics card was last handed them, and
+    /// the rows that have anything trodden in them: each from a first to
+    /// a last, counted from the square's corner, so that neither is ever
+    /// in two pieces.
     changed: Option<(u32, u32)>,
-    /// Whether any of it is trodden.
-    trodden: bool,
-    /// How much filling in is owed that is less than one step of a point.
+    trodden: Option<(u32, u32)>,
+    /// How much filling in is owed and not yet done.
     owed: f32,
+}
+
+/// `span` and the rows from `first` to `last`, as one span.
+fn joined(span: Option<(u32, u32)>, first: u32, last: u32) -> Option<(u32, u32)> {
+    Some(span.map_or((first, last), |(start, end)| {
+        (start.min(first), end.max(last))
+    }))
+}
+
+/// What is left of a span of rows inside the square once the square has
+/// moved on by `by` rows.
+fn moved(span: Option<(u32, u32)>, by: i32) -> Option<(u32, u32)> {
+    let (first, last) = span?;
+    let side = SIDE.cast_signed();
+    let (first, last) = (first.cast_signed() - by, last.cast_signed() - by);
+    (last >= 0 && first < side).then(|| {
+        (
+            first.max(0).cast_unsigned(),
+            last.min(side - 1).cast_unsigned(),
+        )
+    })
 }
 
 impl Tracks {
@@ -78,67 +108,104 @@ impl Tracks {
             map: vec![0; (SIDE * SIDE) as usize],
             corner: None,
             changed: None,
-            trodden: false,
+            trodden: None,
             owed: 0.0,
         }
     }
 
     /// Smooths every track away.
     pub(crate) fn clear(&mut self) {
-        if self.trodden {
+        if self.trodden.take().is_some() {
             self.map.fill(0);
             self.changed = Some((0, SIDE - 1));
-            self.trodden = false;
         }
         self.owed = 0.0;
     }
 
+    /// Where in the map the row numbered `row` from the square's corner
+    /// begins, when that corner is at `corner` along z.
+    fn row_at(corner: i32, row: i32) -> usize {
+        ((corner + row).rem_euclid(SIDE.cast_signed()).cast_unsigned() * SIDE) as usize
+    }
+
     /// Moves the square to be round `eye`, along x and z: what leaves it
-    /// is forgotten.
+    /// is forgotten. It moves a strip at a time, and not back again until
+    /// the eye has gone back most of a strip: someone pacing up and down
+    /// on one spot does not wipe and redraw it at every turn.
     pub(crate) fn follow(&mut self, eye: [f32; 2]) {
-        if !eye.iter().all(|part| part.is_finite() && part.abs() < 1e7) {
-            return;
-        }
-        // Truncation is the point: whole points, and the bound above
-        // keeps them far inside an i32.
-        #[allow(clippy::cast_possible_truncation)]
-        let wanted = eye.map(|part| {
-            let point = (part / APART).floor() as i32 - SIDE.cast_signed() / 2;
-            point.div_euclid(MOVES_BY) * MOVES_BY
-        });
-        let Some(corner) = self.corner.replace(wanted) else {
-            return;
-        };
-        if corner == wanted || !self.trodden {
+        if !eye.iter().all(|part| part.is_finite() && part.abs() < 1e6) {
             return;
         }
         let side = SIDE.cast_signed();
-        let moved = [wanted[0] - corner[0], wanted[1] - corner[1]];
-        if moved.iter().any(|by| by.abs() >= side) {
+        // Truncation is the point: whole points, and the bound above
+        // keeps them far inside an i32.
+        #[allow(clippy::cast_possible_truncation)]
+        let point = eye.map(|part| (part / APART).floor() as i32);
+        let round = |point: i32| (point - side / 2).div_euclid(MOVES_BY) * MOVES_BY;
+        let Some(corner) = self.corner else {
+            self.corner = Some(point.map(round));
+            return;
+        };
+        let mut wanted = corner;
+        for axis in 0..2 {
+            let from_middle = point[axis] - (corner[axis] + side / 2);
+            if !(-MOVES_BY / 2..MOVES_BY * 3 / 2).contains(&from_middle) {
+                wanted[axis] = round(point[axis]);
+            }
+        }
+        if wanted == corner {
+            return;
+        }
+        self.corner = Some(wanted);
+        let by = [wanted[0] - corner[0], wanted[1] - corner[1]];
+        if by.iter().any(|by| by.abs() >= side) {
             self.clear();
             return;
         }
-        // The points that have come in along x: the same in every row.
-        let entered = |by: i32, corner: i32| {
-            let first = if by > 0 { corner + side } else { corner + by };
-            (first..first + by.abs()).map(move |point| point.rem_euclid(side).cast_unsigned())
-        };
-        if moved[0] != 0 {
-            for row in self.map.as_chunks_mut::<{ SIDE as usize }>().0 {
-                for column in entered(moved[0], corner[0]) {
-                    row[column as usize] = 0;
-                }
+        // Along z whole rows leave. Those that were trodden are wiped, so
+        // that what comes into the square on the same points of the map
+        // is untrodden; the rest are nought already.
+        if by[1] != 0 {
+            let leaving = if by[1] > 0 {
+                0..by[1]
+            } else {
+                side + by[1]..side
+            };
+            let wiped = self.trodden.map_or(0..0, |(first, last)| {
+                leaving.start.max(first.cast_signed())..leaving.end.min(last.cast_signed() + 1)
+            });
+            for row in wiped.clone() {
+                let at = Self::row_at(corner[1], row);
+                self.map[at..at + SIDE as usize].fill(0);
+            }
+            self.trodden = moved(self.trodden, by[1]);
+            self.changed = moved(self.changed, by[1]);
+            if !wiped.is_empty() {
+                // Where those rows are counted from the new corner.
+                let now = |row: i32| (row - by[1]).rem_euclid(side).cast_unsigned();
+                self.changed = joined(self.changed, now(wiped.start), now(wiped.end - 1));
             }
         }
-        // And along z: whole rows.
-        for row in entered(moved[1], corner[1]) {
-            let first = (row * SIDE) as usize;
-            self.map[first..first + SIDE as usize].fill(0);
+        // Along x a strip of every trodden row leaves.
+        if by[0] != 0
+            && let Some((first, last)) = self.trodden
+        {
+            let leaving = if by[0] > 0 {
+                corner[0]..corner[0] + by[0]
+            } else {
+                corner[0] + side + by[0]..corner[0] + side
+            };
+            for row in first..=last {
+                let at = Self::row_at(wanted[1], row.cast_signed());
+                for point in leaving.clone() {
+                    self.map[at + point.rem_euclid(side).cast_unsigned() as usize] = 0;
+                }
+            }
+            self.changed = joined(self.changed, first, last);
         }
-        self.changed = Some((0, SIDE - 1));
     }
 
-    /// Presses the snow down: soft at its edge, and no less than it was
+    /// Presses the snow down: steep at its edge, and no less than it was
     /// pressed there before.
     pub(crate) fn tread(&mut self, tread: Tread) {
         let Some(corner) = self.corner else {
@@ -154,10 +221,11 @@ impl Tracks {
         }
         let side = SIDE.cast_signed();
         // In points, from the square's corner. A place far outside the
-        // square is nowhere near the bound of an i32 once it is clamped.
-        let within = [0, 1].map(|axis| {
-            (place[axis] / APART - corner[axis] as f32).clamp(-1e6, 1e6)
-        });
+        // square is nowhere near the bound of an i32 once it is clamped,
+        // and a corner is a whole number far below where f32 stops being
+        // exact.
+        #[allow(clippy::cast_precision_loss)]
+        let within = [0, 1].map(|axis| (place[axis] / APART - corner[axis] as f32).clamp(-1e6, 1e6));
         let reach = wide / APART;
         // Truncation is the point: whole points.
         #[allow(clippy::cast_possible_truncation)]
@@ -167,7 +235,7 @@ impl Tracks {
             first..=last
         };
         for z in span(within[1]) {
-            let row = (z + corner[1]).rem_euclid(side).cast_unsigned();
+            let at = Self::row_at(corner[1], z);
             let mut touched = false;
             for x in span(within[0]) {
                 // The middle of the point. Small whole numbers are exact.
@@ -181,18 +249,16 @@ impl Tracks {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let pressed = (pressed * 255.0).round() as u8;
                 let column = (x + corner[0]).rem_euclid(side).cast_unsigned();
-                let point = &mut self.map[(row * SIDE + column) as usize];
+                let point = &mut self.map[at + column as usize];
                 if pressed > *point {
                     *point = pressed;
                     touched = true;
                 }
             }
             if touched {
-                self.trodden = true;
-                self.changed = Some(match self.changed {
-                    Some((first, last)) => (first.min(row), last.max(row)),
-                    None => (row, row),
-                });
+                let row = z.cast_unsigned();
+                self.trodden = joined(self.trodden, row, row);
+                self.changed = joined(self.changed, row, row);
             }
         }
     }
@@ -200,39 +266,73 @@ impl Tracks {
     /// Fills every track in by `share` of the way from trodden to
     /// untrodden: what new snow does.
     pub(crate) fn fill(&mut self, share: f32) {
-        if !self.trodden || !share.is_finite() || share <= 0.0 {
+        let Some((first, last)) = self.trodden else {
             self.owed = 0.0;
+            return;
+        };
+        if !share.is_finite() || share <= 0.0 {
             return;
         }
         self.owed += share.min(1.0) * 255.0;
-        if self.owed < 1.0 {
+        if self.owed < FILLS_BY {
             return;
         }
         // Truncation is the point: whole steps, at most 255 of them.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let steps = self.owed.floor().min(255.0) as u8;
         self.owed -= f32::from(steps);
-        let mut left = 0;
-        for point in &mut self.map {
-            *point = point.saturating_sub(steps);
-            left |= *point;
+        let corner = self.corner.map_or(0, |corner| corner[1]);
+        // Only the rows that have anything in them, and from now on only
+        // those that still do.
+        let mut left: Option<(u32, u32)> = None;
+        for row in first..=last {
+            let at = Self::row_at(corner, row.cast_signed());
+            let mut any = 0;
+            for point in &mut self.map[at..at + SIDE as usize] {
+                *point = point.saturating_sub(steps);
+                any |= *point;
+            }
+            if any != 0 {
+                left = joined(left, row, row);
+            }
         }
-        self.trodden = left != 0;
-        self.changed = Some((0, SIDE - 1));
+        self.trodden = left;
+        self.changed = joined(self.changed, first, last);
     }
 
     /// The rows changed since this was last asked, from the first of
-    /// them to the last: `None` when nothing has changed.
+    /// them to the last, counted from the square's corner: `None` when
+    /// nothing has changed. [`pieces`](Self::pieces) gives what is in
+    /// them, and has to be asked before the square is moved again.
     pub(crate) fn take_changed(&mut self) -> Option<(u32, u32)> {
         self.changed.take()
     }
 
-    /// What is in the rows from `first` to `last`, whole rows one after
-    /// another: for the graphics card.
-    pub(crate) fn rows(&self, first: u32, last: u32) -> &[u8] {
+    /// What is in the rows from `first` to `last`, counted from the
+    /// square's corner, as the graphics card takes it: one piece of the
+    /// map, or two where the rows run off its end and on from its start.
+    /// Each piece is the row of the map it begins at, and whole rows one
+    /// after another.
+    pub(crate) fn pieces(&self, (first, last): (u32, u32)) -> [Option<(u32, &[u8])>; 2] {
         let (first, last) = (first.min(SIDE - 1), last.min(SIDE - 1));
-        (self.map).get((first * SIDE) as usize..((last + 1) * SIDE) as usize)
-            .unwrap_or(&[])
+        if last < first {
+            return [None; 2];
+        }
+        let corner = self.corner.map_or(0, |corner| corner[1]);
+        let begins = (corner + first.cast_signed())
+            .rem_euclid(SIDE.cast_signed())
+            .cast_unsigned();
+        let count = last - first + 1;
+        let rows = |from: u32, count: u32| {
+            (self.map)
+                .get((from * SIDE) as usize..((from + count) * SIDE) as usize)
+                .map(|bytes| (from, bytes))
+        };
+        if begins + count <= SIDE {
+            [rows(begins, count), None]
+        } else {
+            [rows(begins, SIDE - begins), rows(0, begins + count - SIDE)]
+        }
     }
 
     /// How far the snow at a place is trodden, from 0 to 1: 0 outside the
@@ -339,8 +439,9 @@ impl TrackMap {
         self.picture.view
     }
 
-    /// Records the commands that hand the graphics card the rows of the
-    /// map that `bytes` holds, whole rows from the one numbered `first`.
+    /// Records the commands that hand the graphics card `pieces` of the
+    /// map: each the row it begins at and whole rows one after another, as
+    /// [`Tracks::pieces`] gives them.
     ///
     /// # Safety
     ///
@@ -351,20 +452,34 @@ impl TrackMap {
         &self,
         commands: vk::CommandBuffer,
         frame: usize,
-        first: u32,
-        bytes: &[u8],
+        pieces: [Option<(u32, &[u8])>; 2],
     ) -> Result<(), RenderError> {
         let Some(buffer) = self.rows.get(frame % self.rows.len().max(1)) else {
             return Ok(());
         };
-        // No more rows than the map has below the first.
-        let count = u32::try_from(bytes.len() / SIDE as usize)
-            .unwrap_or(SIDE)
-            .min(SIDE.saturating_sub(first));
-        if count == 0 {
+        // No more rows of each piece than the map has below its first, and
+        // no more of both than the map has: that is what the buffer holds.
+        let mut parts: [&[u8]; 2] = [&[]; 2];
+        let mut copies = [vk::BufferImageCopy::default(); 2];
+        let (mut pieces_kept, mut rows_kept, mut bytes_kept) = (0, 0, 0_usize);
+        for (first, bytes) in pieces.into_iter().flatten() {
+            let count = u32::try_from(bytes.len() / SIDE as usize)
+                .unwrap_or(SIDE)
+                .min(SIDE.saturating_sub(first))
+                .min(SIDE - rows_kept);
+            if count == 0 {
+                continue;
+            }
+            let wanted = (count * SIDE) as usize;
+            parts[pieces_kept] = &bytes[..wanted];
+            copies[pieces_kept] = copy_of(first..first + count).buffer_offset(bytes_kept as u64);
+            pieces_kept += 1;
+            rows_kept += count;
+            bytes_kept += wanted;
+        }
+        if pieces_kept == 0 {
             return Ok(());
         }
-        let (rows, wanted) = (first..first + count, (count * SIDE) as usize);
         let device = self.gpu.device();
         let image = self.picture.image;
         let to_fill = [barrier(image)
@@ -382,13 +497,13 @@ impl TrackMap {
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
         // SAFETY: the buffer is writable and as large as the whole map, of
-        // which `bytes` is a part, and the caller guarantees the commands
-        // that read it last have finished. The picture is this map's own
-        // and was left for shaders to read when it was made and after
-        // every call of this. Every struct passed lives until its call
-        // returns.
+        // which the parts together are no more, and the caller guarantees
+        // the commands that read it last have finished. The picture is
+        // this map's own and was left for shaders to read when it was made
+        // and after every call of this. Every struct passed lives until
+        // its call returns.
         unsafe {
-            buffer.write(&bytes[..wanted])?;
+            buffer.write_parts(&parts[..pieces_kept])?;
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_fill),
@@ -398,7 +513,7 @@ impl TrackMap {
                 buffer.handle,
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[copy_of(rows)],
+                &copies[..pieces_kept],
             );
             device.cmd_pipeline_barrier2(
                 commands,
@@ -461,30 +576,65 @@ mod tests {
         }
     }
 
+    /// How many rows the graphics card would be handed, and whether what
+    /// it is handed is whole rows.
+    fn handed(tracks: &mut Tracks) -> u32 {
+        let Some(changed) = tracks.take_changed() else {
+            return 0;
+        };
+        let mut rows = 0;
+        for (first, bytes) in tracks.pieces(changed).into_iter().flatten() {
+            assert_eq!(bytes.len() % SIDE as usize, 0);
+            let count = (bytes.len() / SIDE as usize) as u32;
+            assert!(first + count <= SIDE, "{first} and {count} more");
+            rows += count;
+        }
+        rows
+    }
+
     #[test]
     fn a_foot_presses_the_snow_where_it_comes_down_and_nowhere_else() {
         let mut tracks = Tracks::new();
         // Before the eye is known there is nowhere to press.
         tracks.tread(foot(3.0, -7.0));
-        assert!(tracks.take_changed().is_none());
+        assert_eq!(handed(&mut tracks), 0);
         tracks.follow([3.0, -7.0]);
         tracks.tread(foot(3.0, -7.0));
         assert!(tracks.at([3.0, -7.0]) > 0.99);
-        // Soft at its edge, and gone a little past it.
+        // Steep at its edge, and gone a little past it.
         let edge = tracks.at([3.22, -7.0]);
         assert!(edge > 0.05 && edge < 0.9, "{edge}");
         assert_eq!(tracks.at([3.4, -7.0]), 0.0);
         // Only the rows it touched go to the graphics card.
-        let (first, last) = tracks.take_changed().unwrap();
-        assert!(last - first < 20 && last < SIDE, "{first} to {last}");
-        assert_eq!(tracks.rows(first, last).len(), ((last - first + 1) * SIDE) as usize);
-        assert!(tracks.take_changed().is_none());
+        let rows = handed(&mut tracks);
+        assert!((14..=18).contains(&rows), "{rows}");
+        assert_eq!(handed(&mut tracks), 0);
         // A lighter tread on a deeper one changes nothing.
         tracks.tread(Tread {
             deep: 0.3,
             ..foot(3.0, -7.0)
         });
-        assert!(tracks.take_changed().is_none());
+        assert_eq!(handed(&mut tracks), 0);
+    }
+
+    #[test]
+    fn a_tread_where_the_map_wraps_is_handed_over_in_two_small_pieces() {
+        // The map begins again every 64 metres, and at z = 0: a foot that
+        // comes down across that line touches its last rows and its first.
+        let mut tracks = Tracks::new();
+        tracks.follow([10.0, 0.0]);
+        tracks.tread(foot(10.0, 0.0));
+        let changed = tracks.take_changed().unwrap();
+        let pieces = tracks.pieces(changed);
+        let [Some((first, before)), Some((0, after))] = pieces else {
+            panic!("one piece, or none: {changed:?}");
+        };
+        let rows = (before.len() + after.len()) / SIDE as usize;
+        assert!((14..=18).contains(&rows), "{rows}");
+        assert_eq!(first as usize + before.len() / SIDE as usize, SIDE as usize);
+        assert!(before.contains(&255));
+        assert!(after.contains(&255));
+        assert!(tracks.at([10.0, -0.1]) > 0.99 && tracks.at([10.0, 0.1]) > 0.99);
     }
 
     #[test]
@@ -501,6 +651,14 @@ mod tests {
         assert!(tracks.at([-20.0, 5.0]) < 0.01, "that one is out of the square");
         // What comes into the square in its place is untrodden.
         assert_eq!(tracks.at([44.0, 5.0]), 0.0);
+        // And along z, there and back by another way.
+        tracks.tread(foot(20.0, 25.0));
+        for step in 0..=300 {
+            tracks.follow([20.0, -(step as f32) * 0.1]);
+        }
+        assert!(tracks.at([0.0, 0.0]) > 0.99);
+        assert_eq!(tracks.at([20.0, 25.0]), 0.0);
+        assert_eq!(tracks.at([20.0, 25.0 - 64.0]), 0.0, "nor where it would wrap to");
         // A long way off, and back: the square was wiped as it went.
         tracks.follow([500.0, 300.0]);
         tracks.follow([0.0, 0.0]);
@@ -512,18 +670,78 @@ mod tests {
     }
 
     #[test]
+    fn what_the_graphics_card_holds_is_what_the_map_holds_however_the_eye_wanders() {
+        // A copy of the map kept only from what is handed over, as the
+        // graphics card's is: after any walk the two are the same.
+        let mut tracks = Tracks::new();
+        let mut card = vec![0_u8; (SIDE * SIDE) as usize];
+        let mut dice = 0x2545_F491_u32;
+        let mut dealt = || {
+            dice ^= dice << 13;
+            dice ^= dice >> 17;
+            dice ^= dice << 5;
+            (dice >> 8) as f32 / 16_777_216.0
+        };
+        let mut eye = [3.0_f32, -2.0];
+        for step in 0..600 {
+            // A wandering walk with a jump now and then, treading as it
+            // goes and to the side, with snow falling some of the time.
+            let stride = if step % 97 == 96 { 40.0 } else { 1.7 };
+            eye = [
+                eye[0] + (dealt() - 0.45) * stride,
+                eye[1] + (dealt() - 0.55) * stride,
+            ];
+            tracks.follow(eye);
+            tracks.tread(foot(eye[0], eye[1]));
+            tracks.tread(foot(eye[0] + (dealt() - 0.5) * 50.0, eye[1] + (dealt() - 0.5) * 50.0));
+            if step % 5 == 0 {
+                tracks.fill(0.02);
+            }
+            if step == 300 {
+                tracks.clear();
+            }
+            if let Some(changed) = tracks.take_changed() {
+                for (first, bytes) in tracks.pieces(changed).into_iter().flatten() {
+                    let at = (first * SIDE) as usize;
+                    card[at..at + bytes.len()].copy_from_slice(bytes);
+                }
+            }
+            assert!(card == tracks.map, "after step {step}");
+        }
+        assert!(tracks.map.iter().any(|point| *point != 0));
+    }
+
+    #[test]
+    fn pacing_up_and_down_on_one_spot_does_not_move_the_square() {
+        let mut tracks = Tracks::new();
+        tracks.follow([3.9, 0.0]);
+        tracks.tread(foot(3.9, 0.0));
+        let _ = tracks.take_changed();
+        // Back and forth over where the square would move on, four
+        // metres along.
+        for step in 0..40 {
+            tracks.follow([if step % 2 == 0 { 4.1 } else { 3.9 }, 0.0]);
+        }
+        assert_eq!(handed(&mut tracks), 0);
+        // Going on is what moves it.
+        tracks.follow([12.0, 0.0]);
+        assert!(tracks.at([3.9, 0.0]) > 0.99);
+    }
+
+    #[test]
     fn falling_snow_fills_tracks_in() {
         let mut tracks = Tracks::new();
         tracks.follow([0.0, 0.0]);
         tracks.tread(foot(0.0, 0.0));
-        let _ = tracks.take_changed();
-        // A hundredth at a time, a little at each of many frames.
+        let rows = handed(&mut tracks);
+        // A thousandth at a time, a little at each of many frames.
         for _ in 0..500 {
             tracks.fill(0.001);
         }
         let half = tracks.at([0.0, 0.0]);
         assert!((half - 0.5).abs() < 0.02, "{half}");
-        assert!(tracks.take_changed().is_some());
+        // Only the rows the track is in are gone over and handed on.
+        assert_eq!(handed(&mut tracks), rows);
         for _ in 0..600 {
             tracks.fill(0.001);
         }
@@ -531,6 +749,6 @@ mod tests {
         // With nothing trodden there is nothing to hand over.
         let _ = tracks.take_changed();
         tracks.fill(0.5);
-        assert!(tracks.take_changed().is_none());
+        assert_eq!(handed(&mut tracks), 0);
     }
 }

@@ -433,7 +433,7 @@ impl Renderer {
 
     /// Presses the snow down at a place: a foot coming down in it, or a
     /// body wading through. The track stays, and is carved out of the snow
-    /// wherever it is drawn within some thirty metres of the eye, until
+    /// wherever it is drawn within twenty-five metres of the eye, until
     /// new snow has filled it in. Nothing is seen of it where no snow lies.
     pub fn tread(&mut self, tread: Tread) {
         self.effects.tread(tread);
@@ -664,7 +664,6 @@ impl Renderer {
             self.meshes.as_ref().map_or(&[][..], Meshes::waters),
         );
         let weather = self.effects.air(view.seconds());
-        let tracks = self.effects.take_tracks();
 
         // SAFETY: every handle used here belongs to `self.gpu`'s device and
         // is alive; the fence wait makes sure this slot's command buffer and
@@ -710,6 +709,10 @@ impl Renderer {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
+            // Only now is this frame sure to be drawn: what it hands the
+            // graphics card of the tracks in the snow is asked for once,
+            // and a frame given up before this would have lost it.
+            let tracks = self.effects.take_tracks();
             view.record(
                 slot.commands,
                 self.next,
@@ -723,7 +726,7 @@ impl Renderer {
                     flashes: self.effects.flashes(),
                     weather,
                     day: self.effects.day(),
-                    tracks: tracks.map(|rows| self.effects.tracks(rows)),
+                    tracks: self.effects.tracks(tracks),
                 },
                 &self.camera,
                 seconds,

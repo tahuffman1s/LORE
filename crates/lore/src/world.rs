@@ -196,17 +196,21 @@ impl World {
 
     /// Lets lightning fall at `place`, a place on the ground: the bolt is
     /// seen in the next frame, and its thunder is heard when the sound has
-    /// come from there. Only more than a frame can show are not seen; if
-    /// more thunder is on its way than is kept, the farthest gives way to
-    /// a nearer, and the bolt is seen all the same.
+    /// come from there. If more thunder is on its way than is kept, the
+    /// farthest gives way to a nearer, and the bolt is seen all the same.
+    ///
+    /// Only the picture of it waits for a frame. With no frame drawn for
+    /// a while, more bolts than one frame can show are not kept to be
+    /// seen: but the dice are thrown, the thunder is on its way and the
+    /// script is told all the same, so that the world is the same world
+    /// however often it is drawn.
     fn strike(&mut self, place: [f32; 3]) {
-        if self.strokes.len() == MOST_STROKES {
-            return;
-        }
         let seed = self.dice;
         self.dealt();
-        self.strokes
-            .push(lore_render::Lightning::down_to(place, seed));
+        if self.strokes.len() < MOST_STROKES {
+            self.strokes
+                .push(lore_render::Lightning::down_to(place, seed));
+        }
         let eye = self.player.player.position;
         let away = (0..3)
             .map(|axis| (place[axis] - eye[axis]).powi(2))
@@ -452,8 +456,12 @@ impl Game for World {
         self.treads.clear();
         let landed = (self.noises.last())
             .is_some_and(|noise| noise.kind == crate::noise::NoiseKind::Landing);
-        self.trail
-            .tick(player, self.climate.snow(), landed, &mut self.treads);
+        self.trail.tick(
+            player,
+            asked.movement.yaw,
+            (self.climate.snow(), landed),
+            &mut self.treads,
+        );
         // Thunder that has got here from a stroke that fell a while ago.
         let (now, noises) = (self.tick, &mut self.noises);
         self.thunder.retain(|(arrives, position, away)| {
@@ -1069,6 +1077,34 @@ mod tests {
         // thunder is a second behind the flash.
         assert_eq!(seen_at, Some(1));
         assert!(matches!(heard_at, Some(60..=62)), "{heard_at:?}");
+    }
+
+    #[test]
+    fn a_stormy_world_is_the_same_world_whether_or_not_it_is_drawn() {
+        use lore_input::Input;
+
+        // Two minutes of a sky full of storms, one drawn after every tick
+        // and one never drawn: more bolts fall than a frame could show.
+        let lived = |drawn: bool| {
+            let actions = ActionMap::default_fps();
+            let script = ScriptGame::from_source(r#"game.weather.set("storm", 0)"#, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = Input::new(actions);
+            let mut heard = Vec::new();
+            for tick in 0..7200_u32 {
+                game.tick(input.tick(), 1.0 / 60.0);
+                for noise in game.world.noises() {
+                    heard.push((tick, noise.kind, noise.position.map(f32::to_bits)));
+                }
+                if drawn {
+                    game.frame(&mut Frame::new(0.0));
+                }
+            }
+            (game.world.dice, heard)
+        };
+        let (dice, heard) = lived(true);
+        assert!(heard.len() > 8, "{}", heard.len());
+        assert_eq!(lived(false), (dice, heard));
     }
 
     #[test]

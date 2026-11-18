@@ -85,8 +85,9 @@ pub(crate) const WEATHER_ROWS: usize = 7;
 const NEAR_AGAIN: f64 = 4_480.0;
 
 /// How long snow falling as hard as it can takes to fill a track in, in
-/// seconds.
+/// seconds, and the most treads kept from one frame to the next.
 const TRACKS_FILL: f32 = 90.0;
+const MOST_TREADS: usize = 256;
 
 /// The weather as the shader takes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -231,8 +232,10 @@ pub(crate) struct Effects {
     /// Whether storms send their own bolts to the ground: not when the
     /// game does, so that it can hear them and know where they fell.
     bolts_of_its_own: bool,
-    /// Where the snow near the eye has been trodden.
+    /// Where the snow near the eye has been trodden, and the treads said
+    /// since the eye's place was last known, which wait until it is.
     tracks: Tracks,
+    treads: Vec<Tread>,
 }
 
 impl Default for Effects {
@@ -261,6 +264,7 @@ impl Effects {
             rise: 0.0,
             bolts_of_its_own: true,
             tracks: Tracks::new(),
+            treads: Vec::with_capacity(MOST_TREADS),
         }
     }
 
@@ -276,6 +280,7 @@ impl Effects {
             bolt.spend();
         }
         self.tracks.clear();
+        self.treads.clear();
     }
 
     /// A number from 0 to 1, different each time.
@@ -637,23 +642,26 @@ impl Effects {
         }
     }
 
-    /// Presses the snow down at a place, if any lies.
+    /// Presses the snow down at a place, if any lies there when the next
+    /// frame is drawn: it is not pressed until then, when the weather of
+    /// that frame and where its eye is are both known.
     pub(crate) fn tread(&mut self, tread: Tread) {
-        if self.weather.snow > 0.0 {
-            self.tracks.tread(tread);
+        if self.treads.len() < MOST_TREADS {
+            self.treads.push(tread);
         }
     }
 
     /// The rows of the map of trodden snow that have changed since this
-    /// was last asked, from the first of them to the last.
+    /// was last asked, from the first of them to the last. Ask only when
+    /// the frame that hands them to the graphics card is sure to be drawn.
     pub(crate) fn take_tracks(&mut self) -> Option<(u32, u32)> {
         self.tracks.take_changed()
     }
 
-    /// What is in those rows, for the graphics card: the first of them,
-    /// and whole rows one after another.
-    pub(crate) fn tracks(&self, (first, last): (u32, u32)) -> (u32, &[u8]) {
-        (first, self.tracks.rows(first, last))
+    /// What is in those rows, for the graphics card: as
+    /// [`Tracks::pieces`] gives it.
+    pub(crate) fn tracks(&self, rows: Option<(u32, u32)>) -> [Option<(u32, &[u8])>; 2] {
+        rows.map_or([None; 2], |rows| self.tracks.pieces(rows))
     }
 
     /// Lets a flash of lightning go.
@@ -742,8 +750,15 @@ impl Effects {
         self.here[1] = falling.hail;
         self.here[3] = overhead;
         self.cold = [falling.snow, falling.sleet];
-        // The map of trodden snow is kept round the eye.
+        // The map of trodden snow is kept round the eye, and what has
+        // trodden it since the last frame is pressed into it now.
         self.tracks.follow([eye[0], eye[2]]);
+        let lies = self.weather.snow > 0.0;
+        for tread in self.treads.drain(..) {
+            if lies {
+                self.tracks.tread(tread);
+            }
+        }
         if time < self.looks_next {
             // The clock was put back: a new level.
             if time + 5.0 < self.looks_next {
