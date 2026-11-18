@@ -297,8 +297,21 @@ fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
     let into = 1.0 - smoothstep(base, top, off.y);
     let thick = smoothstep(funnel, funnel * 0.72, ragged) * (0.35 + 1.3 * grain.g) * step(0.001, funnel)
         * into * (1.0 - 0.6 * flare);
-    let strewn = dust * smoothstep(skirt, skirt * 0.3, far * max(1.0 + (grain.r - 0.5) * 1.3, 0.77))
-        * (0.1 + 1.1 * grain.g) * smoothstep(0.02, 0.3, strength);
+    // The dust is thick at the funnel's wall, where the ground is being
+    // taken up, and thins fast towards its edge: from inside it the funnel
+    // is a darker thing looming through brown air, and only close to it is
+    // nothing else seen.
+    let ragged_far = far * max(1.0 + (grain.r - 0.5) * 1.3, 0.77);
+    let near = clamp((skirt - ragged_far) / (skirt - narrow), 0.0, 1.0);
+    // Finer than the rest and going round with the wind: the wisps and
+    // sheets that show, from inside it, that the brown air is turning.
+    let wisps = textureSampleLevel(
+        cloud_volume, cloud_sampler,
+        vec3<f32>(round * 18.0 - seconds * spins / TAU * 6.0, off.y / 16.0 - seconds * 0.5, far / 14.0),
+        0.0,
+    ).r;
+    let strewn = dust * near * near * near * near * (0.1 + 1.1 * grain.g) * (0.25 + 1.5 * wisps)
+        * smoothstep(0.02, 0.3, strength);
     return vec4<f32>(thick, strewn, outside, wide);
 }
 
@@ -382,7 +395,10 @@ fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32, sky: bool) ->
             along += max(rough.z * 0.5, 2.0);
             continue;
         }
-        let stride = clamp(rough.w * 0.22, 2.5, 40.0);
+        // No stride goes on past what is being looked at: a wall two
+        // metres off has two metres of dust in front of it, not a stride's
+        // worth.
+        let stride = min(clamp(rough.w * 0.22, 2.5, 40.0), leaves - along);
         var within = 0.5;
         if first {
             within = start;
