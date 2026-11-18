@@ -198,6 +198,19 @@ fn falling_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
     return seen;
 }
 
+// How far above a tornado's foot the base of the cloud it hangs from is, in
+// metres, and how far above that its funnel is lost in the cloud.
+const FUNNEL_INTO_CLOUD: f32 = 320.0;
+fn funnel_base(foot: vec3<f32>) -> f32 {
+    return max(view.clouds.z - foot.y, 200.0);
+}
+
+// How far below that base the cloud is lowered round the funnel (a wall
+// cloud), in metres: a fifth of the way up.
+fn funnel_lowering(base: f32) -> f32 {
+    return clamp(0.22 * base, 90.0, 340.0);
+}
+
 // The tornado at a place in the world: how thick its funnel is there and
 // how thick the dust and wreckage round its foot, each from 0 to 1; then
 // how far the place is outside the widest of it at that height, in metres,
@@ -205,28 +218,37 @@ fn falling_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
 //
 // The funnel is the part of the spinning air where it is so thin that
 // cloud forms in it: narrow at the ground, where its wall is, widening
-// upwards and flaring out into the lowered cloud it hangs from. Its
-// middle line wanders as it rises and leans downwind. One that is weak
-// has not come all the way down: its funnel hangs part of the way from
-// the cloud, over a whirl of dust on the ground. `fine` adds what gives
-// it its ragged edge and shows it turning: the block the clouds are
-// shaped from, wound round it, climbing, and turning faster low down
-// where it is narrow than high up where it is wide.
+// upwards and, in the last few hundred metres under the cloud it hangs
+// from, flaring out into a lowering of that cloud (a wall cloud). It is
+// part of the cloud from there up, so it thins away as it goes into it:
+// the cloud is drawn behind it and would otherwise be hidden by a funnel
+// that is inside it. Its middle line wanders as it rises and leans
+// downwind. One that is weak has not come all the way down: its funnel
+// hangs part of the way from the cloud, over a whirl of dust on the
+// ground. `fine` adds what gives it its ragged edge and shows it turning:
+// the block the clouds are shaped from, wound round it, climbing, and
+// turning faster low down where it is narrow than high up where it is
+// wide.
 fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
     let strength = view.weather[5].x;
     let foot = view.weather[4].xyz;
     let core = view.weather[4].w;
-    let top = max(view.clouds.z + 420.0 - foot.y, 300.0);
+    let base = funnel_base(foot);
+    let top = base + FUNNEL_INTO_CLOUD;
     let off = place - foot;
-    let up = clamp(off.y / top, 0.0, 1.0);
+    let up = clamp(off.y / base, 0.0, 1.0);
     let wander = sin(up * 3.14159) * (0.5 * core + 14.0);
     let slow = view.weather[5].y * 0.05;
     let middle = vec2<f32>(cos(up * 5.0 + slow), sin(up * 4.0 + slow * 1.3)) * wander
-        + view.wind.xy * (up * up * top * 0.1);
+        + view.wind.xy * (up * up * base * 0.1);
     let out = off.xz - middle;
     let far = length(out);
     let narrow = 0.6 * core;
-    let wide = narrow + (2.9 * core + 60.0) * pow(up, 2.6) + 420.0 * smoothstep(0.76, 0.97, up);
+    // The lowering it hangs from widens it by half as much again.
+    let lowering = funnel_lowering(base);
+    let flare = smoothstep(base - lowering, base + 0.3 * lowering, off.y);
+    let cone = 2.9 * core + 60.0;
+    let wide = narrow + cone * pow(up, 2.6) + (0.5 * cone + 50.0) * flare * flare;
     // How far down from the cloud the funnel has come.
     let down = 1.0 - smoothstep(0.0, 0.22, strength);
     let reached = smoothstep(down - 0.04, down + 0.16, up);
@@ -234,7 +256,9 @@ fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
     let skirt = 2.4 * core + 22.0;
     let skirt_high = 1.5 * core + 28.0;
     let dust = (1.0 - smoothstep(0.0, skirt_high, off.y)) * smoothstep(-3.0, 1.0, off.y);
-    let outside = far - max(funnel, skirt * step(off.y, skirt_high));
+    // Its edge is ragged by up to three tenths either way, so that is how
+    // far out of its shape there may be some of it.
+    let outside = far - 1.3 * max(funnel, skirt * step(off.y, skirt_high));
     if !fine || outside > 0.0 || off.y < -3.0 || off.y > top {
         return vec4<f32>(0.0, 0.0, outside, wide);
     }
@@ -265,8 +289,12 @@ fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
     ).rg;
     let grain = mix(one, other, abs(2.0 * first - 1.0));
     let ragged = far * (1.0 + (grain.r - 0.5) * 0.6);
-    let thick = smoothstep(funnel, funnel * 0.72, ragged) * (0.35 + 1.3 * grain.g) * step(0.001, funnel);
-    let strewn = dust * smoothstep(skirt, skirt * 0.3, far * (1.0 + (grain.r - 0.5) * 1.3))
+    // Lost in the cloud above its base, and thinner where it has flared
+    // out into the lowering, which is cloud and not the funnel's wall.
+    let into = 1.0 - smoothstep(base, top, off.y);
+    let thick = smoothstep(funnel, funnel * 0.72, ragged) * (0.35 + 1.3 * grain.g) * step(0.001, funnel)
+        * into * (1.0 - 0.6 * flare);
+    let strewn = dust * smoothstep(skirt, skirt * 0.3, far * max(1.0 + (grain.r - 0.5) * 1.3, 0.77))
         * (0.1 + 1.1 * grain.g) * smoothstep(0.02, 0.3, strength);
     return vec4<f32>(thick, strewn, outside, wide);
 }
@@ -280,16 +308,19 @@ fn tornado_at(place: vec3<f32>, fine: bool) -> vec4<f32> {
 // it the cloud there is lit by the sky, and by the sun as far as the
 // funnel itself does not shade it, and dims what is behind. Grey where it
 // is cloud; brown at its foot, where it is the ground it has taken up.
-fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> {
+fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32, sky: bool) -> vec3<f32> {
     let strength = view.weather[5].x;
     if strength <= 0.0 {
         return colour;
     }
     let foot = view.weather[4].xyz;
     let core = view.weather[4].w;
-    let top = max(view.clouds.z + 420.0 - foot.y, 300.0);
-    // The widest it is anywhere, with room for its wandering and its lean.
-    let widest = 3.5 * core + 60.0 + 420.0 + 0.5 * core + 14.0 + 0.1 * top + 20.0;
+    let base = funnel_base(foot);
+    let top = base + FUNNEL_INTO_CLOUD;
+    // The widest it is anywhere, with room for its ragged edge, its
+    // wandering and its lean.
+    let widest = 1.3 * (0.6 * core + 1.5 * (2.9 * core + 60.0) + 50.0) + 0.5 * core + 14.0 + 0.1 * base
+        + 20.0;
     let origin = view.eye.xyz - foot;
     let level = dot(direction.xz, direction.xz);
     let towards = dot(origin.xz, direction.xz);
@@ -317,12 +348,16 @@ fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
     if leaves <= begins {
         return colour;
     }
-    // It stands under its own storm: the sun gets to it only from the
-    // side, under the cloud, when it is low.
+    // It stands under its own storm, and is lit as the land there is: by
+    // as much of the sky as that lets through, and by the sun only when
+    // it is low enough to shine in under the cloud, and the sky it shines
+    // from is open. So under a sky that is all storm it is darker than the
+    // cloud it hangs from, and not a pale thing in front of it. Worked
+    // out once, half way up it, and only if the line of sight meets it.
     let sun = view.towards_sun.xyz;
-    let from_side = 1.0 - smoothstep(0.25, 0.6, sun.y);
-    let from_sun = view.sun.rgb / PI * (0.12 + 0.5 * from_side);
-    let around = view.sky.rgb * 0.34;
+    var from_sun = vec3<f32>(0.0);
+    var around = vec3<f32>(0.0);
+    var known = false;
     let beside = normalize(vec3<f32>(sun.x, 0.0, sun.z) + vec3<f32>(0.0001, 0.0, 0.0));
     let start = fract(
         sin(dot(direction, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453 + view.shadows.w * 0.618,
@@ -354,18 +389,34 @@ fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
         let found = tornado_at(place, true);
         let thick = found.x + found.y;
         if thick > 0.003 {
+            if !known {
+                let shade = cloud_shade(foot + vec3<f32>(0.0, 0.5 * base, 0.0));
+                from_sun = view.sun.rgb / PI * 0.62 * shade.x;
+                // Under a sky that is all cloud there is no bright sky
+                // beside its storm to light it from the side: it is the
+                // darkest thing in the picture, as one seen through rain
+                // is.
+                let closed = smoothstep(0.6, 1.0, view.clouds.x);
+                around = view.sky.rgb * shade.y * (1.0 - 0.55 * closed);
+                known = true;
+            }
             // How much of it the sun's light crossed to get here.
             let shading = tornado_at(place + beside * (rough.w * 0.5 + 6.0), true);
             let shaded = exp(-(shading.x + shading.y) * 2.2);
-            let height = clamp((place.y - foot.y) / top, 0.0, 1.0);
+            let height = clamp((place.y - foot.y) / base, 0.0, 1.0);
             let own = mix(
                 vec3<f32>(0.42, 0.44, 0.48), vec3<f32>(0.36, 0.27, 0.18), found.y / thick,
             );
             // Darker up where it is in the shadow of its cloud, and
             // streaked where it is thicker and thinner.
             let streaked = 0.55 + 0.45 * clamp(found.x + found.y, 0.0, 1.0);
-            let lit = own * streaked
+            var lit = own * streaked
                 * (around * (1.0 - 0.45 * height) * (0.45 + 0.55 * shaded) + from_sun * shaded);
+            // Where the cloud is lowered round it, it is that cloud, and
+            // takes the look of the cloud seen behind it: no line where
+            // one ends and the other begins, from the side or from below.
+            let joined = smoothstep(base - funnel_lowering(base), base, place.y - foot.y);
+            lit = mix(lit, colour, 0.85 * joined);
             // A thick one hides what is behind it in a few metres; a rope
             // is thin enough to see through.
             let passes = exp(-thick * stride * 0.11);
@@ -379,9 +430,20 @@ fn tornado_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
     if weight <= 0.0 {
         return colour;
     }
-    // The air between hides it as it hides the land.
+    // The air between hides it as it hides the land, but for the rain. A
+    // sky seen through rain is greyed by a share that does not depend on
+    // how far off its clouds are, and by less than land a few hundred
+    // metres off is hidden: a funnel hidden as land is would be paler
+    // than the cloud behind it, which no nearer thing can be. So rain
+    // greys it as it greys the sky: the sky's own picture does that to
+    // both after this, and here it is done for a funnel in front of land.
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
-    let hidden = fog_hides(fog_thick(), direction, away / weight);
+    let rain = view.weather[0].x;
+    let off = away / weight;
+    var hidden = fog_hides(max(fog_thick() - view.fog.w * 4.0 * rain, 0.0), direction, off);
+    if !sky {
+        hidden = 1.0 - (1.0 - hidden) * exp(-rain * 0.7 * (1.0 - exp(-off / 250.0)));
+    }
     light = mix(light, storm_haze(low) * (1.0 - clear), hidden);
     return colour * clear + light;
 }

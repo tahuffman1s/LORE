@@ -1454,6 +1454,11 @@ impl MeshPipeline {
                     (stirs, weather.wind),
                 )
             }?;
+            // The eye is under water when it is under the water as it
+            // stands now, not as the level was built.
+            if near.is_some() {
+                water[0][0] += rise;
+            }
             let depths = near.map_or(works.pictures()[3], Body::depths);
             let id = near.map_or(0, |body| body.id);
             if let Ok(mut bound) = self.near_water.try_borrow_mut()

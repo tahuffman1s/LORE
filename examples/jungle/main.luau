@@ -84,6 +84,8 @@ local kinds = { "clear", "fair", "cloudy", "overcast", "fog", "drizzle", "rain",
 -- How long a day can last, in minutes, for the line that says whether
 -- time passes: 0 is not at all.
 local days = { 0, 24, 8, 2 }
+-- How far ahead a tornado can be let down, in metres.
+local tornadoAways = { 100, 200, 300, 500, 800, 1200, 2000, 3000 }
 
 local panel = {
     open = false,
@@ -102,6 +104,8 @@ local panel = {
     -- The way the wind blows, in degrees: kept here because a wind of no
     -- speed has no direction to read back.
     windTurn = 20,
+    -- How far ahead the next tornado comes down: which of tornadoAways.
+    tornadoAway = 3,
 }
 
 -- The lines of the panel. A line with `slide` has a slider: `read` gives
@@ -345,16 +349,20 @@ local lines: { Line } = {
         end,
     },
     {
-        -- It comes down three hundred metres ahead and travels across
-        -- the way you face. Again, and it dies away.
+        -- It comes down as far ahead as the line says, which a push left
+        -- or right changes, and travels across the way you face. Again,
+        -- and it dies away.
         words = function()
             local at = game.weather.tornado()
             if not at then
-                return "A tornado, ahead"
+                return string.format("A tornado   < %d m ahead >", tornadoAways[panel.tornadoAway])
             end
             local here = game.player.position
             local away = math.sqrt((at.x - here.x) ^ 2 + (at.z - here.z) ^ 2)
             return string.format("The tornado is %d m off: stop it", math.floor(away + 0.5))
+        end,
+        push = function(way)
+            panel.tornadoAway = clamp(panel.tornadoAway + way, 1, #tornadoAways)
         end,
         choose = function()
             if game.weather.tornado() then
@@ -362,7 +370,7 @@ local lines: { Line } = {
                 return
             end
             local here, way = game.player.position, panel.heading
-            game.weather.startTornado(here + way * 300, {
+            game.weather.startTornado(here + way * tornadoAways[panel.tornadoAway], {
                 strength = 0.7,
                 heading = vector.create(-way.z, 0, way.x),
                 speed = 7,

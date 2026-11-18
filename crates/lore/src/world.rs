@@ -86,8 +86,15 @@ pub struct World {
 
 /// How fast sound goes, in metres a second.
 const SOUND: f32 = 343.0;
-/// The most strokes kept for one frame, and the most thunder on its way.
+/// The most strokes kept for one frame.
 const MOST_STROKES: usize = 8;
+/// The most thunder on its way at once, and how far off a stroke can fall
+/// and still be heard, in metres. A sky full of storms strikes somewhere
+/// within thirty kilometres every few seconds, and thunder from the far
+/// ones is a minute and more in coming: so there is room for all that is
+/// on its way from within hearing, and what is not heard is not kept.
+const MOST_THUNDER: usize = 32;
+const THUNDER_HEARD: f32 = 25_000.0;
 
 impl World {
     /// The world of `game` with its player in it, on a flat floor at
@@ -128,7 +135,7 @@ impl World {
             looks_at: 60,
             dice: 0x2F6E_2B1D,
             strokes: Vec::with_capacity(MOST_STROKES),
-            thunder: Vec::with_capacity(MOST_STROKES),
+            thunder: Vec::with_capacity(MOST_THUNDER),
         }
     }
 
@@ -182,9 +189,11 @@ impl World {
 
     /// Lets lightning fall at `place`, a place on the ground: the bolt is
     /// seen in the next frame, and its thunder is heard when the sound has
-    /// come from there.
+    /// come from there. Only more than a frame can show are not seen; if
+    /// more thunder is on its way than is kept, the farthest gives way to
+    /// a nearer, and the bolt is seen all the same.
     fn strike(&mut self, place: [f32; 3]) {
-        if self.strokes.len() == MOST_STROKES || self.thunder.len() == MOST_STROKES {
+        if self.strokes.len() == MOST_STROKES {
             return;
         }
         let seed = self.dice;
@@ -199,7 +208,17 @@ impl World {
         // Whole ticks: sound takes three seconds a kilometre.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let ticks = (away / SOUND / self.ground.step.max(1e-4)).min(1e6) as u32;
-        (self.thunder).push((self.tick.saturating_add(ticks), place, away));
+        let thunder = (self.tick.saturating_add(ticks), place, away);
+        if away <= THUNDER_HEARD {
+            if self.thunder.len() < MOST_THUNDER {
+                self.thunder.push(thunder);
+            } else if let Some(farthest) = (self.thunder.iter_mut())
+                .max_by(|one, other| one.2.total_cmp(&other.2))
+                && farthest.2 > away
+            {
+                *farthest = thunder;
+            }
+        }
         // The script hears of it: where it struck.
         self.game.host_mut().lightning_struck(place);
     }
@@ -1018,6 +1037,51 @@ mod tests {
         // thunder is a second behind the flash.
         assert_eq!(seen_at, Some(1));
         assert!(matches!(heard_at, Some(60..=62)), "{heard_at:?}");
+    }
+
+    #[test]
+    fn a_bolt_asked_for_in_a_sky_full_of_storms_is_always_seen_and_heard() {
+        use lore_input::Input;
+
+        let actions = ActionMap::default_fps();
+        // Two minutes into a sky that is all storm, when thunder from far
+        // strokes is on its way from all round, a stroke a hundred metres
+        // off every two seconds.
+        let script = ScriptGame::from_source(
+            r#"local ticks = 0
+            game.weather.set("storm", 0)
+            game.onTick(function()
+                ticks += 1
+                if ticks > 7200 and ticks % 120 == 0 then
+                    game.weather.strike(game.player.position + vector.create(100, 0, 0))
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = Input::new(actions);
+        let (mut seen, mut heard, mut of_its_own) = (0, 0, 0);
+        for _ in 1..=8460_u32 {
+            let stood = game.world.player.player.position;
+            game.tick(input.tick(), 1.0 / 60.0);
+            let mut frame = Frame::new(0.0);
+            game.frame(&mut frame);
+            for stroke in frame.take_strikes() {
+                if (stroke.to[0] - stood[0] - 100.0).abs() < 0.5 && (stroke.to[2] - stood[2]).abs() < 0.5 {
+                    seen += 1;
+                } else {
+                    of_its_own += 1;
+                }
+            }
+            heard += (game.world.noises().iter())
+                .filter(|noise| noise.kind == crate::noise::NoiseKind::Thunder)
+                .count();
+            assert!(game.world.thunder.len() <= MOST_THUNDER);
+        }
+        // The storm sent plenty of its own all the while.
+        assert!(of_its_own > 20, "{of_its_own}");
+        assert_eq!(seen, 10);
+        assert!(heard >= 10, "{heard}");
     }
 
     #[test]

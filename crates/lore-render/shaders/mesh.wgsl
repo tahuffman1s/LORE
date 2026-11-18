@@ -467,7 +467,7 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
     // Under a storm what things fade into is darker.
     var seen = mix(colour, storm_haze(low), hidden);
-    seen = tornado_over(seen, direction, far);
+    seen = tornado_over(seen, direction, far, false);
     seen = falling_over(seen, direction, far);
     return struck(seen, world);
 }
@@ -1528,7 +1528,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             fog_hides(mist, vec3<f32>(direction.x, max(direction.y, 0.004), direction.z), 1000000.0),
         );
     }
-    colour = tornado_over(colour, direction, 1000000000.0);
+    colour = tornado_over(colour, direction, 1000000000.0, true);
     // In rain the sky is seen through it: greyed.
     if view.weather[0].x > 0.0 {
         let grey = storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z)));
