@@ -153,6 +153,35 @@ out. So the picture adapts as an eye does.
 - Pictures drawn with no window do not adapt unless told to, so tests see
   fixed pixels.
 
+### Lit air (#106)
+
+Haze, mist, fog and dust scatter a little of the light that crosses them,
+and a sunbeam is that: air in sunlight beside air in shadow.
+
+- The fog's light (`through_fog`) is split into what its mist scatters of
+  the sun, which goes mostly onwards (Henyey–Greenstein, g = 0.6), and what
+  it scatters of the sky and the ground, which comes from all round.
+- After the picture is drawn, each line of sight is walked through up to
+  200 m of air, sixteen steps closer together near the eye, each started a
+  different part of a step in every pixel and frame for the upscaler to
+  blend. At each step the sun's shadow picture for that distance says
+  whether the sun reaches the air, and the clouds' shade is asked once.
+- The sun's share is taken away for the air in shadow. Beams stay as bright
+  as the fog was, the shade between them darkens, and mist in shade is left
+  with the sky's cooler light. Lamps' light scattered by the air is added: a
+  halo round a street lamp in mist.
+- The fog's thickness is the fog's own, so the beams never change how much
+  the air hides. By night the moon makes moonbeams the same way.
+- Where the most the beams could change a pixel is under 0.4%, and no lamp
+  is near, nothing is walked.
+
+The sun is drawn its real size, half a degree across: 0.0093 m of soft
+shadow edge for each metre between a thing and its shadow.
+
+Cost: lavapipe 43 ms against 36 ms without it (the bench's thin haze); about
+0.3 ms on the RX 7800 XT at 1280×720. A player can turn it off ("Light
+shafts").
+
 ## What comes next (#401)
 
 1. **Lamps cast shadows** (#400): the few that matter most, in one atlas
@@ -165,8 +194,7 @@ out. So the picture adapts as an eye does.
    distance-field copy of the level, with ray queries where the card has
    them (#120). This is the light that bounces off screen, and what keeps
    interiors from glowing.
-4. **Lit air** (#106): froxel fog lit by the sun, the sky and lamps.
-5. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
+4. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
    glass glows only while it is lit and as bright as it should.
 
 ## Sources

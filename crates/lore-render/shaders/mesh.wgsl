@@ -2249,3 +2249,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include weather.wgsl
 //!include fluid.wgsl
 //!include lamps.wgsl
+//!include air.wgsl

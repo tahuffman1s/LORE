@@ -34,10 +34,12 @@ const REACH: [f32; CASCADES] = [8.0, 24.0, 72.0, 216.0];
 /// How many pixels a square moves at a time: a sixteenth of its half-width.
 const STEP_PIXELS: f32 = 64.0;
 
-/// How wide the sun is taken to be: the width of a shadow's soft edge for
-/// each metre between what casts it and what it falls on. The real sun is
-/// about 0.0093; a little more reads better at the sizes games are seen at.
-pub(crate) const SUN_WIDTH: f32 = 0.02;
+/// How wide the sun is: the width of a shadow's soft edge for each metre
+/// between what casts it and what it falls on. The sun is half a degree
+/// across (0.53°), which is 0.0093 m of soft edge a metre, and it is drawn
+/// as it is: a pole's shadow is sharp at its foot and soft at its tip, as
+/// in life.
+pub(crate) const SUN_WIDTH: f32 = 0.0093;
 
 /// The format of the pictures: how far from the sun, as one float.
 pub(crate) const FORMAT: vk::Format = vk::Format::D32_SFLOAT;

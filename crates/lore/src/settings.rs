@@ -264,6 +264,10 @@ settings! {
     /// is round them. false shows only the colours of the sky and the
     /// ground in them, which is faster where much of the picture is wet.
     reflections: bool = true, Shape::Toggle, "Graphics", "Reflections";
+    /// true lights the air: beams of sun through gaps and leaves where
+    /// there is haze, mist or dust, and lamps that glow in fog. false draws
+    /// the fog as if all of it were in sunlight, which is faster.
+    light_shafts: bool = true, Shape::Toggle, "Graphics", "Light shafts";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -824,6 +828,7 @@ mod tests {
             vsync: false,
             frame_rate_limit: 144.0,
             reflections: false,
+            light_shafts: false,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -901,7 +906,7 @@ mod tests {
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit` and `reflections`.",
+                 `frame_rate_limit`, `reflections` and `light_shafts`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

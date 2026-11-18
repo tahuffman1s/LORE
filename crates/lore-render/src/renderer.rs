@@ -179,6 +179,8 @@ pub struct Renderer {
     view_for: (vk::Extent2D, Upscaling),
     /// When the last frame was drawn.
     last_frame: Option<Instant>,
+    /// Whether the air is lit: see [`set_light_shafts`](Self::set_light_shafts).
+    light_shafts: bool,
     /// What the scene's light is multiplied by before tone mapping: the
     /// player's brightness, and the game's own.
     exposure: f32,
@@ -258,6 +260,7 @@ impl Renderer {
             view_for: (vk::Extent2D::default(), config.upscaling),
             last_frame: None,
             exposure: 1.0,
+            light_shafts: true,
             game_exposure: 1.0,
             lamps: Vec::new(),
             eye: Eye::new(EyeAdaptation::default()),
@@ -575,6 +578,17 @@ impl Renderer {
         }
     }
 
+    /// Lights the air, or leaves it as the fog alone has it.
+    ///
+    /// On (the default), each line of sight is walked through the air to
+    /// find where the sun reaches it: beams through gaps between buildings,
+    /// windows and leaves, as bright as the haze, mist or dust is thick, and
+    /// lamps glow in the air round them. Off, the fog is drawn as if all
+    /// of the air were in sunlight, which costs nothing.
+    pub fn set_light_shafts(&mut self, on: bool) {
+        self.light_shafts = on;
+    }
+
     /// Lets wet ground, puddles and polished things mirror the world round
     /// them, or only the light of the sky.
     ///
@@ -787,6 +801,7 @@ impl Renderer {
                 self.eye.see(&self.measuring, per_lux, seconds, false);
             }
             view.measured = self.eye.adaptation.adapts();
+            view.shafts = self.light_shafts;
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,
