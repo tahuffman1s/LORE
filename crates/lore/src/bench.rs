@@ -61,6 +61,8 @@ pub struct Bench {
     pub lamps: u32,
     /// How many of them cast shadows.
     pub lamp_shadows: lore_render::LampShadows,
+    /// How light bounces.
+    pub bounce: lore_render::Bounce,
 }
 
 impl Default for Bench {
@@ -75,6 +77,7 @@ impl Default for Bench {
             upscaling: Upscaling::default(),
             lamps: 0,
             lamp_shadows: lore_render::LampShadows::default(),
+            bounce: lore_render::Bounce::default(),
         }
     }
 }
@@ -262,6 +265,7 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
         headless.set_lamps(&lamps(bench.lamps));
     }
     headless.set_lamp_shadows(bench.lamp_shadows);
+    headless.set_bounce(bench.bounce);
     for frame in 0..bench.warmup {
         headless.render(&camera(frame))?;
     }

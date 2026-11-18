@@ -139,6 +139,9 @@ pub(crate) fn frames(
     };
     let bytes = u64::from(size * size * 4);
     let mut scene_view = SceneView::new(gpu, extent, upscaling).unwrap();
+    // These pictures test what they name under the sky's own light; bounce
+    // light, which builds up over frames, has tests of its own.
+    scene_view.bounce = crate::bounce::Bounce::Off;
     let drawn = scene_view.render_size();
     let motion_bytes = u64::from(drawn.width * drawn.height * 4);
     let meshes = Meshes::new(gpu, scene).unwrap();

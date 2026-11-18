@@ -486,6 +486,33 @@ pub fn lamp_shadows(text: &str) -> Result<lore_render::LampShadows, String> {
         })
 }
 
+/// Reads how light bounces, as the settings file says it: `off`, `low`,
+/// `medium` or `high`.
+///
+/// # Errors
+///
+/// Fails, naming the four, for any other word.
+pub fn bounce(text: &str) -> Result<lore_render::Bounce, String> {
+    use lore_render::Bounce;
+    const ALL: [(Bounce, &str); 4] = [
+        (Bounce::Off, "off"),
+        (Bounce::Low, "low"),
+        (Bounce::Medium, "medium"),
+        (Bounce::High, "high"),
+    ];
+    let typed = text.trim().to_lowercase();
+    ALL.into_iter()
+        .find(|(_, name)| *name == typed)
+        .map(|(bounce, _)| bounce)
+        .ok_or_else(|| {
+            format!(
+                "`{}` is not a bounce light setting. Use off, low, medium or high, as in \
+                 --bounce off",
+                text.trim()
+            )
+        })
+}
+
 /// Reads a frame-time budget typed in milliseconds, such as `16.6`.
 ///
 /// # Errors

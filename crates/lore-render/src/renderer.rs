@@ -9,6 +9,7 @@ use lore_assets::Scene;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::bounce::Bounce;
 use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
 use crate::camera::Camera;
@@ -184,6 +185,8 @@ pub struct Renderer {
     light_shafts: bool,
     /// Which lamps cast shadows: see [`set_lamp_shadows`](Self::set_lamp_shadows).
     lamp_shadows: LampShadows,
+    /// How much light bounces: see [`set_bounce`](Self::set_bounce).
+    bounce: Bounce,
     /// What the scene's light is multiplied by before tone mapping: the
     /// player's brightness, and the game's own.
     exposure: f32,
@@ -265,6 +268,7 @@ impl Renderer {
             exposure: 1.0,
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
+            bounce: Bounce::default(),
             game_exposure: 1.0,
             lamps: Vec::new(),
             eye: Eye::new(EyeAdaptation::default()),
@@ -605,6 +609,19 @@ impl Renderer {
         self.lamp_shadows = shadows;
     }
 
+    /// How much light bounces off what it strikes, and how quickly the
+    /// bounced light follows a change.
+    ///
+    /// On (the default, `Medium`), a sunlit wall warms the shade across
+    /// from it, lamplight lights the ceiling above a lamp by what the floor
+    /// throws back, and a room with no window stays dark however bright the
+    /// day: probes round the player trace rays through a copy of the level.
+    /// `Off` lights shade from the sky and the ground alone, as before. A
+    /// card that cannot run it draws as `Off` does.
+    pub fn set_bounce(&mut self, bounce: Bounce) {
+        self.bounce = bounce;
+    }
+
     /// Lets wet ground, puddles and polished things mirror the world round
     /// them, or only the light of the sky.
     ///
@@ -823,6 +840,7 @@ impl Renderer {
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
             view.lamp_shadows = self.lamp_shadows;
+            view.bounce = self.bounce;
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,

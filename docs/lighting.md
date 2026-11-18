@@ -232,18 +232,74 @@ shadowed and 1.83 ms with sixteen. A scene with no lamps costs what it
 did (lavapipe: main 43.8 ms, this 41.0 ms). The atlas is made only when a
 lamp first needs it, and freed when the setting is off.
 
+### Bounce light (#287)
+
+Light that strikes one thing lights another: a sunlit wall warms the shade
+across from it, a lamp's light thrown back off the floor lights the wall
+behind a barrel, and a room with no window stays dark at noon. It is worked
+out as DDGI does (Majercik et al. 2019), with rays traced through a copy of
+the level kept as blocks, as Godot's SDFGI traces its distance fields: no
+ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
+
+- **The copy.** The level's solid parts are drawn into 128 × 64 × 128
+  blocks half a metre wide round the eye (64 × 32 × 64 m), redrawn each
+  time the eye has gone four metres. Each triangle is drawn looking along
+  the axis it faces most, two pixels a block, and each pixel stores its
+  block's colour (from the material and its texture), the way the surface
+  faces, and where its plane lies in the block. A ray is struck where it
+  crosses that plane, so a floor is where the floor is and not half a
+  metre up; a ray already behind a surface is struck at once from behind.
+  Drawing from a fragment shader needs `fragmentStoresAndAtomics`, which
+  every desktop card, lavapipe and MoltenVK have; without it light does
+  not bounce.
+- **The probes.** 24 × 12 × 24 probes a metre apart round the eye, each
+  keeping, as two 8 × 8 octahedral pictures, the light from every
+  direction and how far away what it sees is (its mean and mean square).
+  The grid wraps round as it follows the eye, so only the probes that come
+  into it are new; they are traced in the frame they appear, in place of
+  as many of the turn. A jump of more than half the grid clears it.
+- **Each frame** an eighth of the probes ("medium"; a sixteenth at "low",
+  a quarter at "high") send 64 rays (32, 128), turned a different way each
+  frame. What a ray strikes is lit by the sun (one look into its shadow
+  pictures), the 16 nearest lamps (with their shadows), and the light the
+  probes round it already hold, so light bounces once a frame and as often
+  as it likes over a few. A ray that strikes nothing sees the sky and the
+  ground as the engine's sky model gives them, so the open looks as it did.
+  The probe blends a fifth of what it finds into what it held.
+- **A probe inside something** (a quarter of its rays strike the backs of
+  surfaces) is never read: its distances are written as nought.
+- **A surface** takes its light from the eight probes round it, each
+  counted by how near it is, less if it is behind the surface, and almost
+  not at all if the point is farther than what the probe sees that way
+  (Chebyshev's bound on its distances), which is what stops light leaking
+  through walls. Its light replaces the sky-and-ground fill dimmed by how
+  much sky is seen and the guess at what a street's sides throw back,
+  fading to them at the grid's edge. The material's own baked shadowing
+  still darkens its crevices.
+- **Held still**, nothing is traced again until the eye, the level or the
+  setting changes, so the same view gives the same picture.
+
+Cost, `lore bench` at 1280×720: on lavapipe about 44 ms off and 54 ms on
+"medium" (most of it each pixel reading its probes, the rays about 4 ms);
+on an RX 7800 XT 1.22 ms off, 1.70 ms on "medium" and 1.82 ms on "high". A player's setting,
+"Bounce light", turns it off or changes how quickly it follows the light.
+CI's lavapipe budget was raised from 300 to 400 ms for it.
+
+Not done yet: emissive surfaces lighting what is round them, cascades of
+coarser probes for far land, moving things in the copy, and the light of
+lamps out of view.
+
 ## What comes next (#401)
 
 1. **Screen-space light** (#104, #338): a depth and normal pre-pass and
    the visibility bitmask. That gives contact shadows, ambient light
-   occluded by direction, and one bounce of what is on screen.
-2. **Bounce light from the world** (#287): probes of irradiance and depth
-   in cascades round the eye, traced in compute through a voxel or
-   distance-field copy of the level, with ray queries where the card has
-   them (#120). This is the light that bounces off screen, and what keeps
-   interiors from glowing.
-3. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
-   glass glows only while it is lit and as bright as it should.
+   occluded by direction, and fine detail the probes are too far apart
+   for.
+2. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
+   glass glows only while it is lit and as bright as it should, and lights
+   what is round it through the probes.
+3. Cascades of probes for far land, and ray queries where the card has
+   them (#120).
 
 ## Sources
 

@@ -7,6 +7,7 @@ use ash::vk;
 use lore_assets::Scene;
 use lore_ui::DrawList;
 
+use crate::bounce::Bounce;
 use crate::lamp_shadow::LampShadows;
 use crate::bolt::Lightning;
 use crate::buffer::Buffer;
@@ -99,6 +100,8 @@ pub struct Headless {
     light_shafts: bool,
     /// Which lamps cast shadows, as for a window.
     lamp_shadows: LampShadows,
+    /// How much light bounces, as for a window.
+    bounce: Bounce,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -203,6 +206,7 @@ impl Headless {
             reflections: true,
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
+            bounce: Bounce::default(),
             view,
             extent,
             image,
@@ -434,6 +438,13 @@ impl Headless {
         self.lamp_shadows = shadows;
     }
 
+    /// How much light bounces, as
+    /// [`Renderer::set_bounce`](crate::Renderer::set_bounce) says.
+    /// `Medium` to begin with.
+    pub fn set_bounce(&mut self, bounce: Bounce) {
+        self.bounce = bounce;
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -460,6 +471,22 @@ impl Headless {
     /// Fails if the graphics driver or the upscaler reports a failure; this
     /// should not be used afterwards.
     pub fn render(&mut self, camera: &Camera) -> Result<FrameTime, RenderError> {
+        let mut time = self.render_once(camera)?;
+        // Held still, the picture is drawn again until every probe of
+        // bounce light has traced, so that the same camera gives the same
+        // picture from the first time it is drawn.
+        let mut again = 0;
+        while self.view.still && !self.mesh.bounce_settled() && again < 8 {
+            let more = self.render_once(camera)?;
+            time.recording += more.recording;
+            time.drawing += more.drawing;
+            again += 1;
+        }
+        Ok(time)
+    }
+
+    /// Draws one frame, or two when a picture held still mirrors itself.
+    fn render_once(&mut self, camera: &Camera) -> Result<FrameTime, RenderError> {
         #[cfg(feature = "panels")]
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
         // What flies moves on by a frame, unless time is held still.
@@ -523,6 +550,7 @@ impl Headless {
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
             self.view.lamp_shadows = self.lamp_shadows;
+            self.view.bounce = self.bounce;
             self.view.record(
                 self.commands,
                 0,
@@ -1553,6 +1581,102 @@ mod tests {
         let rough = headless.screenshot(&camera).unwrap();
         headless.set_reflections(true);
         assert!(headless.screenshot(&camera).unwrap() == rough);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_room_with_no_window_stays_dark_at_noon_when_light_bounces() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A room six metres square and three high, shut on every side, its
+        // faces turned inwards, standing in the open at noon.
+        let (low, high) = ([-3.0_f32, 0.0, -3.0], [3.0_f32, 3.0, 3.0]);
+        let corner = |x: usize, y: usize, z: usize| {
+            [[low[0], high[0]][x], [low[1], high[1]][y], [low[2], high[2]][z]]
+        };
+        let mut part = lore_assets::MeshPart::default();
+        // Each side: its four corners and the way it faces; its triangles
+        // go round so that its front faces into the room.
+        let sides: [([[usize; 3]; 4], [f32; 3]); 6] = [
+            ([[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [0.0, 1.0, 0.0]),
+            ([[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]], [0.0, -1.0, 0.0]),
+            ([[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], [1.0, 0.0, 0.0]),
+            ([[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]], [-1.0, 0.0, 0.0]),
+            ([[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], [0.0, 0.0, 1.0]),
+            ([[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], [0.0, 0.0, -1.0]),
+        ];
+        for (corners, normal) in sides {
+            let first = u32::try_from(part.positions.len()).unwrap();
+            for [x, y, z] in corners {
+                part.positions.push(corner(x, y, z));
+                part.normals.push(normal);
+            }
+            part.indices
+                .extend([0, 2, 1, 0, 3, 2].map(|number| first + number));
+        }
+        part.bounds = lore_assets::Bounds { min: low, max: high };
+        let mut scene = fluid_scene(false, false);
+        scene.meshes[0].parts[0].bounds = lore_assets::Bounds {
+            min: [-50.0, 0.0, -50.0],
+            max: [50.0, 3.0, 50.0],
+        };
+        // Seen from inside, whichever way its corners go round.
+        part.material = u32::try_from(scene.materials.len()).unwrap();
+        scene.materials.push(lore_assets::Material {
+            base_color: [0.6, 0.6, 0.6, 1.0],
+            double_sided: true,
+            ..lore_assets::Material::default()
+        });
+        scene.meshes.push(lore_assets::Mesh {
+            name: None,
+            parts: vec![part],
+        });
+        let mut placed = scene.instances[0].clone();
+        placed.mesh = 1;
+        scene.instances.push(placed);
+        headless.set_scene(&scene).unwrap();
+        headless.set_hour(Some(12.0));
+        headless.set_weather(Weather {
+            cloud_cover: 0.0,
+            ..Weather::default()
+        });
+        let camera = Camera {
+            position: [0.0, 1.5, 1.5],
+            ..Camera::default()
+        };
+        let light = |picture: &[u8]| -> i64 {
+            picture
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|pixel| i64::from(pixel[0]) + i64::from(pixel[1]) + i64::from(pixel[2]))
+                .sum()
+        };
+        headless.set_bounce(Bounce::Off);
+        let guessed_picture = headless.screenshot(&camera).unwrap();
+        let guessed = light(&guessed_picture);
+        // Bounce light builds up over a few frames as the probes trace.
+        headless.set_bounce(Bounce::Medium);
+        headless.let_time_pass(true);
+        for _ in 0..12 {
+            headless.render(&camera).unwrap();
+        }
+        headless.let_time_pass(false);
+        let bounced = headless.screenshot(&camera).unwrap();
+        // Held still, the same view is the same picture.
+        assert!(headless.screenshot(&camera).unwrap() == bounced);
+        if let Ok(folder) = std::env::var("LORE_SAVE_PICTURES") {
+            let _ = std::fs::write(format!("{folder}/room-bounced.raw"), &bounced);
+            let _ = std::fs::write(format!("{folder}/room-guessed.raw"), &guessed_picture);
+        }
+        let bounced = light(&bounced);
+        assert!(
+            bounced * 3 < guessed,
+            "the shut room glows: {bounced} with light bouncing against {guessed} guessed"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

@@ -328,6 +328,9 @@ pub(crate) struct LampFrame {
     cells: Vec<u8>,
     /// The lamps that light what is seen: how far each is, and which it is.
     near: Vec<(f32, usize)>,
+    /// For each lamp the frame was given, whether it lights what is seen
+    /// (the rest of `near` are near the eye for bounce light alone).
+    viewed: Vec<bool>,
     /// Which lamps have shadows, kept from frame to frame.
     slots: ShadowSlots,
     /// The shadow of each of `near`, in the same order.
@@ -348,6 +351,7 @@ impl LampFrame {
             lamps: Vec::with_capacity(LAMP_BUFFER_BYTES),
             cells: Vec::with_capacity(CELL_BUFFER_BYTES),
             near: Vec::with_capacity(MOST_LAMPS),
+            viewed: Vec::new(),
             slots: ShadowSlots::default(),
             shadows: Vec::with_capacity(MOST_LAMPS),
         }
@@ -356,7 +360,9 @@ impl LampFrame {
     /// The shader's `Lamps` and `lamp_cells` for `lamps` seen as `seen`
     /// says, each drawn `per_lux` times as bright as the lux it gives, and
     /// the lamps that matter most given shadows as `shadowing` allows.
-    /// Lamps that light nothing in view are left out, and past
+    /// Lamps that light nothing in view are left out, unless their light
+    /// reaches within `around` metres of the eye (where bounce light's
+    /// probes are, which they light wherever the eye looks); past
     /// [`MOST_LAMPS`] the farthest. The shadows' pictures that have to be
     /// drawn before the lamps are read are then [`faces`](Self::faces).
     pub(crate) fn pack(
@@ -365,12 +371,15 @@ impl LampFrame {
         seen: &Seen,
         per_lux: f32,
         shadowing: &Shadowing,
+        around: f32,
     ) -> Packed<'_> {
         let [forward, right, up] = seen.rays;
         let across = length(right);
         let upward = length(up);
         let (right, up) = (scaled(right, 1.0 / across), scaled(up, 1.0 / upward));
         self.near.clear();
+        self.viewed.clear();
+        self.viewed.resize(lamps.len(), false);
         let per_lux = if per_lux.is_finite() {
             per_lux.max(0.0)
         } else {
@@ -388,8 +397,12 @@ impl LampFrame {
                     dot(from_eye, up),
                     dot(from_eye, forward),
                 ];
+                let far = length(from_eye);
                 if in_view(place, reach, across, upward) {
-                    self.near.push((length(from_eye), number));
+                    self.viewed[number] = true;
+                    self.near.push((far, number));
+                } else if far < reach + around {
+                    self.near.push((far, number));
                 }
             }
         }
@@ -398,7 +411,7 @@ impl LampFrame {
             .sort_by(|one, other| one.0.total_cmp(&other.0).then(one.1.cmp(&other.1)));
         self.near.truncate(MOST_LAMPS);
         self.slots
-            .choose(lamps, &self.near, shadowing, &mut self.shadows);
+            .choose(lamps, &self.near, &self.viewed, shadowing, &mut self.shadows);
 
         let count = self.near.len();
         let words = count.div_ceil(32);
@@ -452,6 +465,11 @@ impl LampFrame {
                 dot(from_eye, up),
                 dot(from_eye, forward),
             ];
+            // A lamp out of view lights only bounce light's probes, which
+            // find it in the list, not in the grid of the view.
+            if !self.viewed[number] {
+                continue;
+            }
             let columns = covered(place[0], place[2], reach, across, ACROSS, false);
             let rows = covered(place[1], place[2], reach, upward, UP, true);
             let deep = slice(place[2] - reach)..=slice(place[2] + reach);
@@ -603,7 +621,7 @@ mod tests {
     /// The bytes of both buffers of the frame, one after the other, and how
     /// many words each cell has.
     fn packed(frame: &mut LampFrame, lamps: &[Lamp], per_lux: f32) -> (Vec<u8>, Vec<u8>) {
-        let packed = frame.pack(lamps, &seen(), per_lux, &Shadowing::default());
+        let packed = frame.pack(lamps, &seen(), per_lux, &Shadowing::default(), 0.0);
         (packed.lamps.to_vec(), packed.cells.to_vec())
     }
 
@@ -673,6 +691,14 @@ mod tests {
         let (bytes, _) = packed(&mut frame, &[behind, aside], 1.0);
         assert_eq!(head(&bytes)[3], 0);
         assert_eq!(frame.count(), 0);
+
+        // With light bouncing, the one behind the eye is near enough to
+        // light the probes round it: it is in the list, but lights no cell
+        // of the view.
+        let packed = frame.pack(&[behind, aside], &seen(), 1.0, &Shadowing::default(), 18.0);
+        let (bytes, cell_bytes) = (packed.lamps.to_vec(), packed.cells.to_vec());
+        assert_eq!(head(&bytes)[3], 1);
+        assert!(cells(&cell_bytes, 0).is_empty());
     }
 
     #[test]

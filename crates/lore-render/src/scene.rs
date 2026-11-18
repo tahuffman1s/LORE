@@ -52,7 +52,40 @@ impl Picture {
         range: vk::ImageSubresourceRange,
         doing: &'static str,
     ) -> Result<(), RenderError> {
+        self.create_shaped(gpu, extent.into(), false, format, usage, range, doing)
+    }
+
+    /// The same for a block of pixels `extent` deep as well, which a
+    /// shader reads as one 3D picture.
+    pub(crate) fn create_block(
+        &mut self,
+        gpu: &Gpu,
+        extent: vk::Extent3D,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+        range: vk::ImageSubresourceRange,
+        doing: &'static str,
+    ) -> Result<(), RenderError> {
+        self.create_shaped(gpu, extent, true, format, usage, range, doing)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_shaped(
+        &mut self,
+        gpu: &Gpu,
+        extent: vk::Extent3D,
+        block: bool,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+        range: vk::ImageSubresourceRange,
+        doing: &'static str,
+    ) -> Result<(), RenderError> {
         let device = gpu.device();
+        let (image_type, view_type) = if block {
+            (vk::ImageType::TYPE_3D, vk::ImageViewType::TYPE_3D)
+        } else {
+            (vk::ImageType::TYPE_2D, vk::ImageViewType::TYPE_2D)
+        };
         // SAFETY: the device is alive, and each object is created from valid
         // settings and stored in `self` straight away. The memory is as
         // large as the image asks for and of a kind it allows.
@@ -60,9 +93,9 @@ impl Picture {
             self.image = device
                 .create_image(
                     &vk::ImageCreateInfo::default()
-                        .image_type(vk::ImageType::TYPE_2D)
+                        .image_type(image_type)
                         .format(format)
-                        .extent(extent.into())
+                        .extent(extent)
                         .mip_levels(range.level_count)
                         .array_layers(1)
                         .samples(vk::SampleCountFlags::TYPE_1)
@@ -98,7 +131,7 @@ impl Picture {
                 .create_image_view(
                     &vk::ImageViewCreateInfo::default()
                         .image(self.image)
-                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .view_type(view_type)
                         .format(format)
                         .subresource_range(range),
                     None,

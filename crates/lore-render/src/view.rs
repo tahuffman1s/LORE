@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::bounce::Bounce;
 use crate::lamp_shadow::LampShadows;
 use crate::camera::{Camera, Mat4, shifted};
 use crate::error::RenderError;
@@ -71,6 +72,8 @@ pub(crate) struct SceneView {
     pub(crate) shafts: bool,
     /// How many lamps cast shadows, and how sharp.
     pub(crate) lamp_shadows: LampShadows,
+    /// How much light bounces.
+    pub(crate) bounce: Bounce,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -130,6 +133,7 @@ impl SceneView {
             measured: false,
             shafts: true,
             lamp_shadows: LampShadows::default(),
+            bounce: Bounce::default(),
         })
     }
 
@@ -267,6 +271,7 @@ impl SceneView {
             copied: false,
             shafts: self.shafts,
             lamp_shadows: self.lamp_shadows,
+            bounce: self.bounce,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`
