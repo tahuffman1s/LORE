@@ -694,12 +694,20 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
 }
 
+// `colour`, at `world`, as it is seen from the eye, for what does not add
+// lightning's light to itself (`flash_falls`): as `through_air` sees it,
+// lit by the flash as a whole.
+fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    return through_air(struck(colour, world), world);
+}
+
 // `colour` as it is seen from the eye through the air between: far things
 // fade into the colour of the sky low down in their direction, so hills
 // turn pale and blue with distance and the land meets the sky without a
 // line; and whatever is falling, and the tornado if there is one, is in
-// front of it (`weather.wgsl`).
-fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+// front of it (`weather.wgsl`). Lightning lights the air between as it
+// lights the land.
+fn through_air(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let line = world - view.eye.xyz;
     let far = length(line);
     if far < 0.001 {
@@ -715,11 +723,11 @@ fn through_fog(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let direction = line / far;
     let hidden = fog_hides(fog_thick(), direction, far);
     let low = normalize(vec3<f32>(direction.x, 0.02 + 0.25 * max(direction.y, 0.0), direction.z));
-    // Under a storm what things fade into is darker.
-    var seen = mix(colour, storm_haze(low), hidden);
+    // Under a storm what things fade into is darker. The haze is lit by a
+    // flash as white things are.
+    var seen = mix(colour, storm_haze(low) + flash_falls(world), hidden);
     seen = tornado_over(seen, direction, far, false);
-    seen = falling_over(seen, direction, far);
-    return struck(seen, world);
+    return falling_over(seen, direction, far);
 }
 
 // How deep the layer of sky is that clouds form in, in metres, above the
@@ -894,22 +902,28 @@ fn flash_light() -> vec3<f32> {
         * max(dot(view.sun.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)) * 3.0, 1.0);
 }
 
-// `colour`, a surface at `world`, as lightning lights it: for kilometres
-// round a stroke the land is lit as by a lamp in the cloud. The bolts
-// themselves are drawn as what they are (`bolt.rs`, `particles.wgsl`).
-fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    var seen = colour;
-    // By night there is little light for a flash to be beside: it lights
-    // the land as bright as day.
-    let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
-    let dark = clamp(1.0 / max(dot(view.sun.rgb, grey) / PI + dot(view.sky.rgb, grey), 0.03), 1.0, 30.0);
+// The light lightning throws on a point of the world, as a matte white
+// surface facing up shows it: for kilometres round a stroke the land is lit
+// as by a lamp in the cloud, as brightly as by day. The bolts themselves
+// are drawn as what they are (`bolt.rs`, `particles.wgsl`).
+fn flash_falls(world: vec3<f32>) -> vec3<f32> {
+    var falls = vec3<f32>(0.0);
     for (var which = 0; which < 2; which++) {
         let flash = view.flashes[which];
         let off = world - flash.xyz;
-        seen += colour * vec3<f32>(0.8, 0.86, 1.0) * flash.w * 1.2 * dark
-            / (1.0 + dot(off, off) / 4000000.0);
+        falls += vec3<f32>(0.8, 0.86, 1.0) * (flash.w * 1.2 / (1.0 + dot(off, off) / 4000000.0));
     }
-    return seen;
+    return falls;
+}
+
+// `colour`, a surface at `world` that is lit only as a whole, as lightning
+// lights it: brightened as much as the flash outshines the light it
+// already has, which by night is little. Surfaces that are lit light by
+// light are lit by `flash_falls` instead, which knows what is under cover.
+fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let dark = clamp(1.0 / max(dot(view.sun.rgb, grey) / PI + dot(view.sky.rgb, grey), 0.03), 1.0, 30.0);
+    return colour + colour * flash_falls(world) * dark;
 }
 
 // `colour`, the clear sky towards `direction`, with the stars and the moon
@@ -1285,16 +1299,18 @@ fn open_sky(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
 // sky straight above and shut in at the sides, as the foot of a street
 // between tall buildings is, and the floor under a forest is not. Sunlight
 // comes down a slot and is thrown about between its sides, so what stands
-// in one is lit by its sides where it cannot see the sky.
-fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec2<f32> {
+// in one is lit by its sides where it cannot see the sky. Last, how much
+// of the sky the point sees with nothing let in under cover: what a flash
+// in the clouds reaches, which no bounce from a bright day carries in.
+fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     if view.shadows.x < 0.5 {
-        return vec2<f32>(1.0, 0.0);
+        return vec3<f32>(1.0, 0.0, 1.0);
     }
     let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
     if inside < 0.04 {
-        return vec2<f32>(1.0, 0.0);
+        return vec3<f32>(1.0, 0.0, 1.0);
     }
     let metres_a_pixel = view.shadow_reach[4].x;
     let depth_metres = view.shadow_reach[4].y;
@@ -1324,9 +1340,10 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec2<f32> {
     let seen = open / f32(CANOPY_LOOKS);
     let edge = clamp((inside - 0.04) / 0.08, 0.0, 1.0);
     // Light still finds its way in under the thickest cover.
-    return vec2<f32>(
+    return vec3<f32>(
         mix(1.0, 0.22 + 0.78 * seen, edge),
         (overhead / max(counted, 0.0001)) * (1.0 - seen) * edge,
+        mix(1.0, seen, edge),
     );
 }
 
@@ -1909,8 +1926,17 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     if probes.a > 0.0 {
         matte_around = mix(matte_around, matte * probes.rgb * crevices, probes.a);
     }
+    // Lightning lights what can see the sky, as the cloud it flashes in
+    // does: most what faces up, a wall less, and what is under cover not
+    // at all. Its light falls on the surface; what the surface glows, and
+    // what the lamps give it, the flash does not brighten.
+    var from_flash = vec3<f32>(0.0);
+    if view.flashes[0].w + view.flashes[1].w > 0.0 {
+        from_flash = matte * flash_falls(corner.world)
+            * (sky.z * mix(0.25, 1.0, normal.y * 0.5 + 0.5) * crevices);
+    }
     return from_sun + from_behind + matte_around + mirrored_around * sky_seen + glow + glints
-        + from_world + lamplight;
+        + from_world + lamplight + from_flash;
 }
 
 // How far the pixel moved since the last frame.
@@ -1931,7 +1957,7 @@ fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_air(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
     pixel.motion = motion(corner);
     return pixel;
 }
@@ -1944,7 +1970,7 @@ fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel 
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_air(lit(corner, front, base.rgb, mixing, painted, false), corner.world), 1.0);
     pixel.motion = motion(corner);
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
@@ -1970,7 +1996,7 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing, painted, true), corner.world), base.a);
+    pixel.colour = vec4<f32>(through_air(lit(corner, front, base.rgb, mixing, painted, true), corner.world), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }
