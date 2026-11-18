@@ -88,9 +88,10 @@ pub struct World {
     dice: u32,
     strokes: Vec<lore_render::Lightning>,
     thunder: Vec<(u32, [f32; 3], f32)>,
-    /// Whether the script put the player somewhere since this was last
-    /// taken, and the way it said to face there, if it said: yaw, then
-    /// pitch. [`Playing`] turns the view to match.
+    /// Whether the player was put somewhere since this was last taken, by
+    /// the script or by a respawn, and the way to face there, if that was
+    /// said: yaw, then pitch. [`Playing`] cuts to the new place and turns
+    /// the view to match.
     teleported: Option<Option<(f32, f32)>>,
     /// Every drop of fluid in the world, and what the script said of them.
     fluids: fluids::WorldFluids,
@@ -443,19 +444,31 @@ impl World {
     }
 
     /// Puts the player back at one of the map's spawn points, away from
-    /// any dummy standing on one, if they have died since the last tick.
+    /// any dummy standing on one, if they have died since the last tick:
+    /// facing the way the spawn point does, as at the start, and seen
+    /// there at once rather than glided to.
     fn respawn(&mut self) {
         if !self.game.host_mut().take_respawn() {
             return;
         }
         self.spawned = self.spawned.wrapping_add(1);
         let standing = self.dummies.iter().map(|dummy| dummy.feet);
-        self.player.player = self
+        let Body { player, asked } = &mut self.player;
+        *player = self
             .ground
             .spawn_in(self.game.map(), standing, self.spawned);
+        let facing = (self.ground)
+            .facing_at(self.game.map(), player.position)
+            .map(|yaw| (yaw, 0.0));
+        if let Some((yaw, pitch)) = facing {
+            asked.movement.yaw = yaw;
+            asked.movement.pitch = pitch;
+            asked.pitch = pitch;
+        }
         // The script is told this tick, and reads where they now are.
         // Being put somewhere is not a step taken or a fall ended.
         self.walking = Walking::default();
+        self.teleported = Some(facing);
     }
 
     /// Puts the player where the script moved them with
@@ -469,6 +482,11 @@ impl World {
         let Body { player, asked } = &mut self.player;
         player.position = teleport.position;
         player.velocity = [0.0; 3];
+        // Whatever they were doing where they were is over: a climb out of
+        // the water does not go on where they are now, and the first step
+        // there finds out whether they stand.
+        player.hoist = 0.0;
+        player.grounded = false;
         // Being put somewhere is not a step taken or a fall ended.
         self.walking = Walking::default();
         let facing = teleport
@@ -483,11 +501,14 @@ impl World {
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
         host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
-        self.teleported = Some(facing);
+        // A teleport that says no way to face, in the tick of a respawn
+        // that did, leaves the view facing the spawn's way.
+        self.teleported = Some(facing.or(self.teleported.flatten()));
     }
 
-    /// Whether the script put the player somewhere since this was last
-    /// asked, and the yaw and pitch it said to face there, if it said.
+    /// Whether the player was put somewhere since this was last asked, by
+    /// the script or by a respawn, and the yaw and pitch to face there, if
+    /// either said.
     pub(crate) fn take_teleported(&mut self) -> Option<Option<(f32, f32)>> {
         self.teleported.take()
     }
@@ -1121,13 +1142,14 @@ impl Game for Playing {
             .asked(input, step, &mut self.yaw, &mut self.pitch);
         self.world.ask(asked);
         self.world.tick(input, step);
-        // A script that put the player somewhere may have turned them too.
+        // A script or a respawn that put the player somewhere may have
+        // turned them too.
         let teleported = self.world.take_teleported();
         if let Some((yaw, pitch)) = teleported.flatten() {
             (self.yaw, self.pitch) = look::turned(yaw, pitch, [0.0; 2]);
         }
         self.eye = self.world.player().eye_position();
-        // A move by the script is a cut, not a glide.
+        // Being put somewhere is a cut, not a glide.
         self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises
         // always have room.
