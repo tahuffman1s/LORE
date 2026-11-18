@@ -2218,10 +2218,17 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     colour = night_sky(colour, direction, speck);
     // Under a sky said to be all cloud there is no clear sky to be seen
     // anywhere: where the clouds thin away with distance, and along the
-    // horizon below them, what shows is more of the cloud's grey.
+    // horizon below them, what shows is more of the cloud's grey. Under
+    // the horizon, where the level ends, that gives way to the dark ground
+    // as the clear sky does: no band of clear sky's sunset shows between.
+    var shut = 0.0;
     if view.clouds.x > 0.6 && view.clouds.w > 0.5 {
-        let shut = smoothstep(0.6, 1.0, view.clouds.x) * (1.0 - smoothstep(0.0, 0.1, -direction.y));
-        colour = mix(colour, storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z))), shut);
+        shut = smoothstep(0.6, 1.0, view.clouds.x);
+        let grey = mix(
+            storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z))), view.ground.rgb * 0.25,
+            smoothstep(0.0, 0.1, -direction.y),
+        );
+        colour = mix(colour, grey, shut);
     }
     let sun = view.towards_sun.xyz;
     let to_sun = dot(direction, sun);
@@ -2407,8 +2414,14 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             colour = colour * clear + light;
         }
     }
-    // The sun shows through thin cloud and not through thick.
-    colour += view.heavens[3].rgb * 40.0 * disc * clear * veil * smoothstep(-0.01, 0.0, direction.y);
+    // The sun shows through thin cloud and not through thick. Low down,
+    // within a degree or two of the horizon, the clouds are too far off to
+    // be walked, or thinned away into the air: there a sky that is all
+    // cloud, or the storm overhead, hides it all the same.
+    let low = 1.0 - smoothstep(0.01, 0.04, direction.y);
+    let hidden = max(shut, view.weather[0].w * low);
+    colour += view.heavens[3].rgb * 40.0 * disc * clear * veil * (1.0 - hidden)
+        * smoothstep(-0.01, 0.0, direction.y);
 
     // Fog and falling snow hide the sky as they hide the land: all of it
     // towards the horizon, and overhead as much as there is fog to look
