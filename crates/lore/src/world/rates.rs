@@ -33,7 +33,7 @@ impl Walker {
     /// A game with no rules on the flat floor, the player facing
     /// [`START_YAW`].
     fn new() -> Self {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         let mut game = Playing::start(script, None, &actions, TICK_RATE);
         game.yaw = START_YAW;

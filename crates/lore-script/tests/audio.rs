@@ -11,7 +11,7 @@ const SOUNDS: [&str; 5] = ["door", "explosion", "gunshot", "music", "ui/click"];
 /// Runs `body` on the first tick of a game that has [`SOUNDS`].
 fn started(body: &str) -> ScriptHost {
     let script = format!("game.onStart(function()\n{body}\nend)");
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     host.set_sounds(SOUNDS);
     host.tick(&InputFrame::default(), 1.0 / 60.0);
@@ -160,7 +160,7 @@ fn a_name_cannot_reach_outside_the_games_sounds() {
 #[test]
 fn many_sounds_are_not_all_listed() {
     let script = r#"game.onStart(function() game.audio.play("zzzzzzzzzzzz") end)"#;
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     host.set_sounds((0..30).map(|number| format!("take-{number:02}")));
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     let said = &host.last_error().unwrap().message;
@@ -277,7 +277,7 @@ fn wrong_arguments_say_how_to_write_the_call() {
 fn a_sound_cannot_be_played_while_the_script_loads() {
     let host = ScriptHost::from_source(
         "local music = game.audio.play(\"music\")",
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
     let error = host.last_error().unwrap();
     assert_eq!(
@@ -292,7 +292,7 @@ fn a_sound_cannot_be_played_while_the_script_loads() {
 #[test]
 fn a_host_that_names_no_sounds_takes_any_name() {
     let script = r#"game.onStart(function() game.audio.play("anything/at all") end)"#;
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     assert!(host.last_error().is_none());
     assert_eq!(asked(&mut host).len(), 1);
@@ -301,7 +301,7 @@ fn a_host_that_names_no_sounds_takes_any_name() {
 #[test]
 fn only_the_latest_requests_wait_when_nobody_takes_them() {
     let script = r#"game.onTick(function() game.audio.play("gunshot") end)"#;
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     for _ in 0..1000 {
         host.tick(&InputFrame::default(), 1.0 / 60.0);
     }

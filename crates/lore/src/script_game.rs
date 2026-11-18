@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn the_action_set_a_script_chooses_is_asked_of_the_window_once() {
         let script = "game.onStart(function() game.input.useSet(\"menu\") end)";
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let mut game = ScriptGame::from_source(script, &actions);
         game.tick(&InputFrame::default(), 1.0 / 60.0);
         let mut frame = Frame::new(0.0);

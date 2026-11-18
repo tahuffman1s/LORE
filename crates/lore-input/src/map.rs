@@ -199,7 +199,8 @@ impl ActionMap {
         self.actions.get(action.0).map(|a| a.set)
     }
 
-    /// The standard first-person controls, for keyboard and mouse and for gamepad.
+    /// The standard controls of an adventure, in first or third person, for
+    /// keyboard and mouse and for gamepad.
     ///
     /// | Action | Keyboard and mouse | Gamepad |
     /// | --- | --- | --- |
@@ -213,10 +214,18 @@ impl ActionMap {
     /// | `reload` | R | west button |
     /// | `interact` | E | north button |
     /// | `melee` | V | right stick press |
-    /// | `grenade` | G | right bumper |
-    /// | `next_weapon` | wheel down | d-pad right |
-    /// | `previous_weapon` | wheel up | d-pad left |
+    /// | `use_item` | G | right bumper |
+    /// | `next_item` | wheel down | d-pad right |
+    /// | `previous_item` | wheel up | d-pad left |
+    /// | `map` | M | d-pad up |
+    /// | `inventory` | Tab | d-pad down |
     /// | `pause` | Escape | start |
+    ///
+    /// The engine itself acts on `move`, `look`, `jump`, `crouch`, `sprint`,
+    /// `fire`, `aim`, `reload` and `pause`. `interact`, `melee`, `use_item`, `next_item`, `previous_item`,
+    /// `map` and `inventory` are there for a game's script to read, so that
+    /// every game calls them the same and a player binds them once. The
+    /// left bumper and Select are left for a game's own actions.
     ///
     /// A second set, `"menu"`, holds the actions menus are worked with. The
     /// mouse points in it, and a click needs no action. `pause` opens the
@@ -238,7 +247,7 @@ impl ActionMap {
     /// ```
     /// use lore_input::{ActionMap, MouseMode};
     ///
-    /// let mut map = ActionMap::default_fps();
+    /// let mut map = ActionMap::standard();
     /// let menu = map.set("menu")?;
     /// assert_eq!(map.mouse_mode(menu), Some(MouseMode::Pointer));
     /// assert_eq!(map.set_of(map.action("menu_confirm")?), Some(menu));
@@ -247,7 +256,7 @@ impl ActionMap {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn default_fps() -> Self {
+    pub fn standard() -> Self {
         const BUTTONS: &[(&str, [&str; 2])] = &[
             ("jump", ["Space", "GamepadSouth"]),
             ("crouch", ["LeftControl", "GamepadEast"]),
@@ -257,9 +266,11 @@ impl ActionMap {
             ("reload", ["R", "GamepadWest"]),
             ("interact", ["E", "GamepadNorth"]),
             ("melee", ["V", "RightStickPress"]),
-            ("grenade", ["G", "RightBumper"]),
-            ("next_weapon", ["MouseWheelDown", "DpadRight"]),
-            ("previous_weapon", ["MouseWheelUp", "DpadLeft"]),
+            ("use_item", ["G", "RightBumper"]),
+            ("next_item", ["MouseWheelDown", "DpadRight"]),
+            ("previous_item", ["MouseWheelUp", "DpadLeft"]),
+            ("map", ["M", "DpadUp"]),
+            ("inventory", ["Tab", "DpadDown"]),
             ("pause", ["Escape", "GamepadStart"]),
         ];
         const MENU_BUTTONS: &[(&str, [&str; 2])] = &[
@@ -633,7 +644,7 @@ impl ActionMap {
     /// ```
     /// use lore_input::ActionMap;
     ///
-    /// let mut map = ActionMap::default_fps();
+    /// let mut map = ActionMap::standard();
     /// let look = map.action("look")?;
     /// // Half as fast, with up and down swapped.
     /// map.set_sensitivity(look, [0.5, -0.5]);
@@ -941,14 +952,34 @@ mod tests {
 
     #[test]
     fn default_map_is_complete_on_both_devices() {
-        let map = ActionMap::default_fps();
-        assert_eq!(map.len(), 20);
+        let map = ActionMap::standard();
+        assert_eq!(map.len(), 22);
         // No scores are kept, so nothing shows them; Select is free for a
         // game to use.
         assert!(map.action("scoreboard").is_err());
         assert_eq!(map.parity_gaps(), Vec::new());
-        for name in ["move", "look", "jump", "fire", "pause", "previous_weapon"] {
-            assert!(map.action(name).is_ok(), "missing {name}");
+        // Nothing in the standard controls shares a key or a button.
+        assert_eq!(map.conflicts(), Vec::new());
+        for name in [
+            "move",
+            "look",
+            "jump",
+            "fire",
+            "pause",
+            "use_item",
+            "next_item",
+            "previous_item",
+            "map",
+            "inventory",
+        ] {
+            let action = map
+                .action(name)
+                .unwrap_or_else(|_| panic!("missing {name}"));
+            assert_eq!(map.set_of(action), Some(ActionMap::GAMEPLAY), "{name}");
+        }
+        // What a shooter called them is gone.
+        for name in ["grenade", "next_weapon", "previous_weapon"] {
+            assert!(map.action(name).is_err(), "{name} is still an action");
         }
         let look = map.action("look").unwrap();
         assert_eq!(map.kind(look), Some(ActionKind::Axis2D));
@@ -973,7 +1004,7 @@ mod tests {
 
     #[test]
     fn unknown_action_suggests_the_closest() {
-        let map = ActionMap::default_fps();
+        let map = ActionMap::standard();
         let error = map.action("jmup").unwrap_err();
         assert_eq!(
             error.to_string(),
@@ -1046,7 +1077,7 @@ mod tests {
 
     #[test]
     fn bindings_can_be_replaced_without_disturbing_other_actions() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         let before = map.clone();
         let jump = map.action("jump").unwrap();
         let wide: Vec<Binding> = ["F", "Enter", "GamepadNorth"]
@@ -1071,7 +1102,7 @@ mod tests {
 
     #[test]
     fn bindings_of_the_wrong_kind_are_refused_and_change_nothing() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         let before = map.clone();
         let jump = map.action("jump").unwrap();
         let error = map
@@ -1085,7 +1116,7 @@ mod tests {
 
     #[test]
     fn one_button_can_be_swapped_alone_or_inside_a_group() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         let jump = map.action("jump").unwrap();
         let movement = map.action("move").unwrap();
 
@@ -1104,7 +1135,7 @@ mod tests {
 
     #[test]
     fn shared_inputs_are_found_and_explained() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         assert_eq!(map.conflicts(), Vec::new());
 
         let jump = map.action("jump").unwrap();
@@ -1176,7 +1207,7 @@ mod tests {
 
     #[test]
     fn the_standard_controls_have_a_menu_set_where_the_mouse_points() {
-        let map = ActionMap::default_fps();
+        let map = ActionMap::standard();
         let menu = map.set("menu").unwrap();
         assert_eq!(map.sets().collect::<Vec<_>>(), [ActionMap::GAMEPLAY, menu]);
         assert_eq!(map.mouse_mode(menu), Some(MouseMode::Pointer));

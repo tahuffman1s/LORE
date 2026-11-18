@@ -1038,7 +1038,7 @@ mod tests {
     fn lightning_a_script_asks_for_is_seen_at_once_and_heard_when_its_thunder_arrives() {
         use lore_input::Input;
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         // On its first tick, a stroke 343 metres from the player: a second
         // off, as sound goes.
         let script = ScriptGame::from_source(
@@ -1086,7 +1086,7 @@ mod tests {
         // Two minutes of a sky full of storms, one drawn after every tick
         // and one never drawn: more bolts fall than a frame could show.
         let lived = |drawn: bool| {
-            let actions = ActionMap::default_fps();
+            let actions = ActionMap::standard();
             let script = ScriptGame::from_source(r#"game.weather.set("storm", 0)"#, &actions);
             let mut game = Playing::start(script, None, &actions, 60);
             let mut input = Input::new(actions);
@@ -1112,7 +1112,7 @@ mod tests {
         use lore_input::Input;
 
         let marks = |script: &str| {
-            let actions = ActionMap::default_fps();
+            let actions = ActionMap::standard();
             let script = ScriptGame::from_source(script, &actions);
             let mut game = Playing::start(script, None, &actions, 60);
             let mut input = Input::new(actions);
@@ -1142,7 +1142,7 @@ mod tests {
     fn a_bolt_asked_for_in_a_sky_full_of_storms_is_always_seen_and_heard() {
         use lore_input::Input;
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         // Two minutes into a sky that is all storm, when thunder from far
         // strokes is on its way from all round, a stroke a hundred metres
         // off every two seconds.
@@ -1189,7 +1189,7 @@ mod tests {
     fn a_script_played_alone_rumbles_the_players_gamepad() {
         use lore_input::{GamepadButton, Input, Rumble};
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source(
             r#"game.onTick(function()
                 if game.input.justPressed("fire") then game.input.rumble(0.2, 0.6, 0.1) end
@@ -1218,7 +1218,7 @@ mod tests {
     fn a_frame_between_two_ticks_is_seen_from_between_them() {
         use lore_input::{Input, Key};
 
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         let mut game = Playing::start(script, None, &actions, 60);
         let mut input = Input::new(actions);
@@ -1278,7 +1278,7 @@ mod tests {
 
     /// A game played alone, and its controls.
     fn playing_alone() -> (Playing, lore_input::Input) {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         let game = Playing::start(script, None, &actions, 60);
         (game, lore_input::Input::new(actions))

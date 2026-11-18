@@ -63,7 +63,7 @@ impl GameFolder {
     }
 
     fn open(&self) -> ScriptHost {
-        ScriptHost::open(&self.0, ActionMap::default_fps()).unwrap()
+        ScriptHost::open(&self.0, ActionMap::standard()).unwrap()
     }
 }
 
@@ -80,7 +80,7 @@ const PLAYER: CharacterId = CharacterId::PLAYER;
 fn with_bo(script: &str) -> (ScriptHost, CharacterId) {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     let bo = host.add_character("Bo");
     host.tick(&InputFrame::default(), 1.0 / 60.0);
@@ -90,7 +90,7 @@ fn with_bo(script: &str) -> (ScriptHost, CharacterId) {
 
 /// The message of the mistake `script` makes as it loads.
 fn load_error(script: &str) -> String {
-    let host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let host = ScriptHost::from_source(script, ActionMap::standard());
     host.last_error()
         .unwrap_or_else(|| panic!("no mistake in: {script}"))
         .message
@@ -100,7 +100,7 @@ fn load_error(script: &str) -> String {
 /// The message of the mistake `body` makes inside `game.onSpawn`.
 fn spawn_error(body: &str) -> String {
     let script = format!("game.onSpawn(function()\n{body}\nend)");
-    let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    let mut host = ScriptHost::from_source(script, ActionMap::standard());
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     host.last_error()
         .unwrap_or_else(|| panic!("no mistake in: {body}"))
@@ -433,7 +433,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
 
     let mut host = ScriptHost::from_source(
         "game.onStart(function() game.weapon(\"smg\", {}) end)",
-        ActionMap::default_fps(),
+        ActionMap::standard(),
     );
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     let said = host.last_error().unwrap().message.clone();

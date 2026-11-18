@@ -73,6 +73,12 @@ local speed = 5
 if game.input.pressed("sprint") then
     speed = 8
 end
+if game.input.justPressed("map") or game.input.justPressed("inventory") then
+    print("A screen of the game's own.")
+end
+if game.input.justPressed("use_item") or game.input.justPressed("next_item") or game.input.justPressed("previous_item") then
+    print("Something from the bag.")
+end
 if game.input.justPressed("jump") then
     print("Jump!", speed)
 end

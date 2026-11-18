@@ -110,7 +110,7 @@ pub(crate) fn play<G: Game, S>(
     frame_times: impl IntoIterator<Item = Duration>,
     state: impl FnMut(&G) -> S,
 ) -> Played<S> {
-    let mut input = Input::new(ActionMap::default_fps());
+    let mut input = Input::new(ActionMap::standard());
     let mut clock = TickClock::new(TICK_RATE);
     let step = clock.step().as_secs_f32();
     let mut watched = Watched {
@@ -276,7 +276,7 @@ mod tests {
     /// The script's game played at `frame_times`: what its rules had done
     /// after every tick, and its time.
     fn script_at(frame_times: impl IntoIterator<Item = Duration>) -> Played<(u64, u64)> {
-        let mut game = ScriptGame::from_source(SCRIPT, &ActionMap::default_fps());
+        let mut game = ScriptGame::from_source(SCRIPT, &ActionMap::standard());
         let played = play(&mut game, &presses(), frame_times, |game| {
             (
                 game.host().rules_fingerprint(),
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn a_different_recording_is_a_different_game() {
         // So that the tests above would notice input going astray.
-        let mut game = ScriptGame::from_source(SCRIPT, &ActionMap::default_fps());
+        let mut game = ScriptGame::from_source(SCRIPT, &ActionMap::standard());
         let mut other = presses();
         other[200].push(Did::Press(Key::Space.into()));
         let found = play(&mut game, &other, steady(144), |game| {

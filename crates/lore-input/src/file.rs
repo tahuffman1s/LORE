@@ -69,7 +69,18 @@ impl std::error::Error for BindingsError {}
 /// of these names is not affected.
 const TAKEN_OUT: [&str; 1] = ["scoreboard"];
 
-/// One entry of a bindings file that was left out, and why.
+/// Actions of the standard controls that have a new name, old name first.
+/// A bindings file written before still works: what it binds under the old
+/// name goes to the new one, and the player is told what to call the line.
+/// A game that makes an action of its own by an old name is not affected.
+const RENAMED: [(&str, &str); 3] = [
+    ("grenade", "use_item"),
+    ("next_weapon", "next_item"),
+    ("previous_weapon", "previous_item"),
+];
+
+/// One entry of a bindings file that was left out, or that the player
+/// should change, and why.
 ///
 /// The rest of the file is still used. Each one prints as a sentence saying
 /// what to change.
@@ -96,6 +107,22 @@ pub enum ProblemKind {
     TakenOut {
         /// The action that is gone.
         action: String,
+    },
+    /// The standard controls call this action something else now. What the
+    /// line binds is used, for the action under its new name.
+    Renamed {
+        /// The name the file uses.
+        old: String,
+        /// The name the action has now.
+        new: String,
+    },
+    /// The file lists an action under the name it used to have and under
+    /// the name it has now. The line with the old name is left out.
+    RenamedTwice {
+        /// The name the action used to have.
+        old: String,
+        /// The name the action has now.
+        new: String,
     },
     /// The entry is not a list of names.
     NotAList {
@@ -137,6 +164,16 @@ impl fmt::Display for BindingsProblem {
                 "\"{action}\" is no longer an action: LORE keeps no scores, so there is no \
                  scoreboard to show. Delete this line. The rest of the file is used."
             ),
+            ProblemKind::Renamed { old, new } => write!(
+                f,
+                "\"{old}\" is now called \"{new}\". What this line binds still works; \
+                 change the name at the start of the line to {new} and this note goes away."
+            ),
+            ProblemKind::RenamedTwice { old, new } => write!(
+                f,
+                "\"{old}\" is now called \"{new}\", and this file has a line for {new} \
+                 too, which is the one used. Delete this line."
+            ),
             ProblemKind::NotAList { action } => write!(
                 f,
                 "\"{action}\" needs a list of names in square brackets, like \
@@ -172,7 +209,7 @@ impl ActionMap {
     /// ```
     /// use lore_input::ActionMap;
     ///
-    /// let mut map = ActionMap::default_fps();
+    /// let mut map = ActionMap::standard();
     /// let problems = map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")?;
     /// assert!(problems.is_empty());
     /// # Ok::<(), lore_input::BindingsError>(())
@@ -198,7 +235,25 @@ impl ActionMap {
                 DeValue::Table(entries) if key.get_ref() == TABLE => {
                     for (action, list) in entries {
                         let line = position(text, action.span().start).0;
-                        if let Err(kind) = self.read_entry(action.get_ref(), list.get_ref()) {
+                        let name: &str = action.get_ref();
+                        let result = match self.renamed(name) {
+                            Some(new) if entries.keys().any(|key| key.get_ref() == new) => {
+                                Err(ProblemKind::RenamedTwice {
+                                    old: name.to_owned(),
+                                    new: new.to_owned(),
+                                })
+                            }
+                            // The line is read as if it had the new name,
+                            // and anything wrong in it is said of that name.
+                            Some(new) => self.read_entry(new, list.get_ref()).and(Err(
+                                ProblemKind::Renamed {
+                                    old: name.to_owned(),
+                                    new: new.to_owned(),
+                                },
+                            )),
+                            None => self.read_entry(name, list.get_ref()),
+                        };
+                        if let Err(kind) = result {
                             problems.push(BindingsProblem { line, kind });
                         }
                     }
@@ -214,6 +269,13 @@ impl ActionMap {
         // The reader hands entries over by name; a player reads top to bottom.
         problems.sort_by_key(|problem| problem.line);
         Ok(problems)
+    }
+
+    /// The name the standard controls now have for `name`, if `name` is what
+    /// one of them used to be called and this map has no action by it.
+    fn renamed(&self, name: &str) -> Option<&'static str> {
+        let &(_, new) = RENAMED.iter().find(|(old, _)| *old == name)?;
+        (self.action(name).is_err() && self.action(new).is_ok()).then_some(new)
     }
 
     /// Gives the action called `name` the bindings in `list`, or says why not.
@@ -264,7 +326,7 @@ impl ActionMap {
     /// ```
     /// use lore_input::ActionMap;
     ///
-    /// let defaults = ActionMap::default_fps();
+    /// let defaults = ActionMap::standard();
     /// let mut map = defaults.clone();
     /// map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")?;
     ///
@@ -346,7 +408,7 @@ mod tests {
 
     #[test]
     fn a_file_changes_only_the_actions_it_lists() {
-        let defaults = ActionMap::default_fps();
+        let defaults = ActionMap::standard();
         let mut map = defaults.clone();
         let problems = map
             .read_bindings(
@@ -373,22 +435,22 @@ mod tests {
 
     #[test]
     fn an_empty_file_changes_nothing() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         assert_eq!(map.read_bindings(""), Ok(Vec::new()));
         assert_eq!(map.read_bindings("[bindings]\n"), Ok(Vec::new()));
-        assert_eq!(map, ActionMap::default_fps());
+        assert_eq!(map, ActionMap::standard());
     }
 
     #[test]
     fn a_written_file_reads_back_to_the_same_map() {
-        let defaults = ActionMap::default_fps();
+        let defaults = ActionMap::standard();
         let mut map = defaults.clone();
         map.replace_button(
             map.action("move").unwrap(),
             Key::W.into(),
             Key::ArrowUp.into(),
         );
-        map.set_bindings(map.action("grenade").unwrap(), [])
+        map.set_bindings(map.action("use_item").unwrap(), [])
             .unwrap();
 
         let text = map.write_bindings(&defaults);
@@ -396,7 +458,7 @@ mod tests {
             text.contains("\nmove = [\"ArrowUp/S/A/D\", \"LeftStick\"]\n"),
             "{text}"
         );
-        assert!(text.contains("\ngrenade = []\n"), "{text}");
+        assert!(text.contains("\nuse_item = []\n"), "{text}");
         assert!(
             text.contains("\n# jump = [\"Space\", \"GamepadSouth\"]\n"),
             "{text}"
@@ -439,7 +501,7 @@ mod tests {
 
     #[test]
     fn entries_that_cannot_be_used_are_left_out_and_explained() {
-        let defaults = ActionMap::default_fps();
+        let defaults = ActionMap::standard();
         let mut map = defaults.clone();
         let problems = map
             .read_bindings(
@@ -483,7 +545,7 @@ mod tests {
 
     #[test]
     fn a_file_from_when_there_was_a_scoreboard_still_loads_and_says_to_delete_the_line() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         let problems = map
             .read_bindings(
                 "[bindings]\n\
@@ -505,7 +567,7 @@ mod tests {
         assert_eq!(bound(&map, "reload")[0].to_string(), "T");
 
         // A game with a scoreboard action of its own binds it as any other.
-        let mut own = ActionMap::default_fps();
+        let mut own = ActionMap::standard();
         own.button("scoreboard", ["Tab", "GamepadSelect"]).unwrap();
         let problems = own
             .read_bindings("[bindings]\nscoreboard = [\"M\", \"GamepadSelect\"]\n")
@@ -515,8 +577,115 @@ mod tests {
     }
 
     #[test]
+    fn a_file_with_the_old_names_of_actions_still_binds_them_and_says_the_new_names() {
+        let mut map = ActionMap::standard();
+        let problems = map
+            .read_bindings(
+                "[bindings]\n\
+                 grenade = [\"H\", \"LeftBumper\"]\n\
+                 jump = [\"F\", \"GamepadSouth\"]\n\
+                 next_weapon = [\"X\", \"DpadRight\"]\n\
+                 previous_weapon = [\"Z\", \"DpadLeft\"]\n",
+            )
+            .unwrap();
+        assert_eq!(
+            said(&problems),
+            [
+                "Line 2: \"grenade\" is now called \"use_item\". What this line binds still \
+                 works; change the name at the start of the line to use_item and this note \
+                 goes away.",
+                "Line 4: \"next_weapon\" is now called \"next_item\". What this line binds \
+                 still works; change the name at the start of the line to next_item and this \
+                 note goes away.",
+                "Line 5: \"previous_weapon\" is now called \"previous_item\". What this line \
+                 binds still works; change the name at the start of the line to \
+                 previous_item and this note goes away.",
+            ]
+        );
+        let bound = |map: &ActionMap, name: &str| -> Vec<String> {
+            (map.bindings(map.action(name).unwrap()).iter())
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(bound(&map, "use_item"), ["H", "LeftBumper"]);
+        assert_eq!(bound(&map, "next_item"), ["X", "DpadRight"]);
+        assert_eq!(bound(&map, "previous_item"), ["Z", "DpadLeft"]);
+        assert_eq!(bound(&map, "jump"), ["F", "GamepadSouth"]);
+        // The old names did not become actions.
+        assert!(map.action("grenade").is_err());
+
+        // Written out again, the file has the new names only, and reads
+        // back to the same controls with nothing to say.
+        let text = map.write_bindings(&ActionMap::standard());
+        assert!(
+            text.contains("\nuse_item = [\"H\", \"LeftBumper\"]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("grenade"), "{text}");
+        let mut again = ActionMap::standard();
+        assert_eq!(said(&again.read_bindings(&text).unwrap()), [] as [&str; 0]);
+        assert_eq!(again, map);
+
+        // A mistake in a line with an old name is said of the new name, and
+        // nothing is bound.
+        let mut map = ActionMap::standard();
+        let problems = map.read_bindings("[bindings]\ngrenade = \"H\"\n").unwrap();
+        assert_eq!(
+            said(&problems),
+            [
+                "Line 2: \"use_item\" needs a list of names in square brackets, like \
+                 use_item = [\"Space\", \"GamepadSouth\"]. It keeps the game's own controls."
+            ]
+        );
+        assert_eq!(map, ActionMap::standard());
+    }
+
+    #[test]
+    fn a_file_with_both_the_old_and_the_new_name_uses_the_new_one() {
+        // Whichever order the lines are in.
+        for text in [
+            "[bindings]\ngrenade = [\"H\"]\nuse_item = [\"K\", \"RightBumper\"]\n",
+            "[bindings]\nuse_item = [\"K\", \"RightBumper\"]\ngrenade = [\"H\"]\n",
+        ] {
+            let mut map = ActionMap::standard();
+            let problems = map.read_bindings(text).unwrap();
+            let line = if text.find("grenade") < text.find("use_item") {
+                2
+            } else {
+                3
+            };
+            assert_eq!(
+                said(&problems),
+                [format!(
+                    "Line {line}: \"grenade\" is now called \"use_item\", and this file has \
+                     a line for use_item too, which is the one used. Delete this line."
+                )]
+            );
+            let bound = map.bindings(map.action("use_item").unwrap());
+            assert_eq!(bound[0].to_string(), "K");
+        }
+    }
+
+    #[test]
+    fn a_game_with_an_action_of_its_own_by_an_old_name_keeps_it() {
+        let mut own = ActionMap::standard();
+        own.button("grenade", ["H", "LeftBumper"]).unwrap();
+        let problems = own
+            .read_bindings("[bindings]\ngrenade = [\"B\", \"LeftBumper\"]\n")
+            .unwrap();
+        assert_eq!(said(&problems), [] as [&str; 0]);
+        assert_eq!(
+            own.bindings(own.action("grenade").unwrap())[0].to_string(),
+            "B"
+        );
+        let standard = ActionMap::standard();
+        let use_item = standard.action("use_item").unwrap();
+        assert_eq!(own.bindings(use_item), standard.bindings(use_item));
+    }
+
+    #[test]
     fn text_that_is_not_toml_says_where_and_changes_nothing() {
-        let mut map = ActionMap::default_fps();
+        let mut map = ActionMap::standard();
         let error = map
             .read_bindings("[bindings]\njump = [\"F\"\nfire = [\"G\"]\n")
             .unwrap_err();
@@ -527,6 +696,6 @@ mod tests {
             said.ends_with("A binding is written like jump = [\"Space\", \"GamepadSouth\"]."),
             "{said}"
         );
-        assert_eq!(map, ActionMap::default_fps());
+        assert_eq!(map, ActionMap::standard());
     }
 }

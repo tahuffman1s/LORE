@@ -121,6 +121,60 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
     );
 }
 
+#[test]
+fn controls_from_before_actions_were_renamed_still_work_and_say_the_new_names() {
+    let folder = scratch("controls-renamed");
+    let file = folder.join("bindings.toml");
+    let old = "[bindings]\n\
+               grenade = [\"H\", \"RightBumper\"]\n\
+               next_weapon = [\"X\", \"DpadRight\"]\n";
+    fs::write(&file, old).unwrap();
+
+    let output = lore(&folder, &["controls"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("\n  use_item           H, RightBumper  (changed by you)\n"),
+        "{said}"
+    );
+    assert!(
+        said.contains("\n  next_item          X, DpadRight  (changed by you)\n"),
+        "{said}"
+    );
+    // Not in the old file, so as the engine has it.
+    assert!(
+        said.contains("\n  previous_item      MouseWheelUp, DpadLeft\n"),
+        "{said}"
+    );
+    assert!(
+        said.contains("\n  map                M, DpadUp\n"),
+        "{said}"
+    );
+    assert!(
+        said.contains("\n  inventory          Tab, DpadDown\n"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("grenade") && !said.contains("weapon"),
+        "{said}"
+    );
+    let warned = stderr(&output);
+    for (line, old, new) in [(2, "grenade", "use_item"), (3, "next_weapon", "next_item")] {
+        assert!(
+            warned.contains(&format!(
+                "{}: Line {line}: \"{old}\" is now called \"{new}\". What this line binds \
+                 still works; change the name at the start of the line to {new} and this \
+                 note goes away.",
+                file.display()
+            )),
+            "{warned}"
+        );
+    }
+    assert_eq!(warned.lines().count(), 2, "{warned}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), old, "left as written");
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
 }
@@ -617,7 +671,7 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
     assert!(!stderr(&output).contains("Jump number 3"));
     let said = stdout(&output);
     assert!(
-        said.contains("Each of the 20 actions was also pressed, held and let go"),
+        said.contains("Each of the 22 actions was also pressed, held and let go"),
         "{said}"
     );
     assert!(!said.contains("Nothing was pressed"), "{said}");

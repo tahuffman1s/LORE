@@ -46,7 +46,7 @@ impl<G: Game> PauseMenu<G> {
     /// changes to `file`, if there is one.
     ///
     /// The menu needs the `pause` action and the `menu` set of
-    /// [`ActionMap::default_fps`]. A game whose controls have neither gets
+    /// [`ActionMap::standard`]. A game whose controls have neither gets
     /// no menu, and is told how to get one in the log.
     pub(crate) fn over(
         game: G,
@@ -58,7 +58,7 @@ impl<G: Game> PauseMenu<G> {
         if menu.is_none() {
             log::info!(
                 "This game has no pause menu, because its controls have no `pause` action \
-                 or no menu controls. Build the controls with `ActionMap::default_fps()` \
+                 or no menu controls. Build the controls with `ActionMap::standard()` \
                  to get the menu. If the game has its own pause menu, set \
                  `Config::pause_menu` to false."
             );

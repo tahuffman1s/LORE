@@ -275,7 +275,7 @@ pub fn controls() -> Result<(String, Vec<String>), String> {
             crate::controls::FILE_VARIABLE
         )
     })?;
-    let defaults = ActionMap::default_fps();
+    let defaults = ActionMap::standard();
     let mut actions = defaults.clone();
     let mut problems = crate::controls::load(&path, &mut actions);
     // A game says this itself when it starts; here nothing else would. An
@@ -561,7 +561,7 @@ mod tests {
 
     /// What [`paced`] says of a game with this script.
     fn paced_with(script: &str) -> Paced {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let found = paced(
             || {
                 let game = ScriptGame::from_source(script, &actions);
@@ -621,7 +621,7 @@ mod tests {
         // A game that is not the same game every time it is opened, as one
         // that rolls dice is: here the run named differs from the others.
         let judged = |odd_one_out: usize| {
-            let actions = ActionMap::default_fps();
+            let actions = ActionMap::standard();
             let mut opened = 0;
             let open = || {
                 opened += 1;
@@ -647,7 +647,7 @@ mod tests {
                 if frames > 150 then local nothing = nil; nothing.x = 1 end
             end)
         "#;
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let open = || Some(ScriptGame::from_source(script, &actions));
         let Some(Paced::Mistake(error)) = paced(open, &actions) else {
             panic!("the mistake is found");
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn a_game_that_cannot_be_opened_again_is_not_judged() {
-        assert_eq!(paced(|| None, &ActionMap::default_fps()), None);
+        assert_eq!(paced(|| None, &ActionMap::standard()), None);
     }
 
     #[test]

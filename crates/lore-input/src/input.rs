@@ -142,7 +142,7 @@ impl Input {
     /// ```
     /// use lore_input::{ActionMap, Device, GamepadButton, Input, Key};
     ///
-    /// let mut input = Input::new(ActionMap::default_fps());
+    /// let mut input = Input::new(ActionMap::standard());
     /// assert_eq!(input.last_device(), Device::KeyboardAndMouse);
     /// input.press(GamepadButton::GamepadSouth);
     /// assert_eq!(input.last_device(), Device::Gamepad);
@@ -308,7 +308,7 @@ impl Input {
     /// ```
     /// use lore_input::{ActionMap, Input, Key};
     ///
-    /// let mut input = Input::new(ActionMap::default_fps());
+    /// let mut input = Input::new(ActionMap::standard());
     /// let jump = input.map().action("jump")?;
     ///
     /// input.start_rebind(jump, Key::Space.into())?;
@@ -1229,7 +1229,7 @@ mod tests {
         );
         assert!(!r.input.is_rebinding());
 
-        let foreign = Input::new(ActionMap::default_fps())
+        let foreign = Input::new(ActionMap::standard())
             .map()
             .action("pause")
             .unwrap();
@@ -1455,7 +1455,7 @@ mod tests {
 
     #[test]
     fn new_bindings_do_not_press_a_held_action_again_and_let_go_of_one_they_unbind() {
-        let mut input = Input::new(ActionMap::default_fps());
+        let mut input = Input::new(ActionMap::standard());
         let jump = input.map().action("jump").unwrap();
         let crouch = input.map().action("crouch").unwrap();
         input.press(Key::Space);
@@ -1464,7 +1464,7 @@ mod tests {
         assert!(frame.just_pressed(jump) && frame.just_pressed(crouch));
 
         // Jump keeps its key; crouch moves to another.
-        let mut saved = ActionMap::default_fps();
+        let mut saved = ActionMap::standard();
         saved
             .read_bindings("[bindings]\ncrouch = [\"C\", \"GamepadEast\"]")
             .unwrap();
@@ -1479,7 +1479,7 @@ mod tests {
 
     #[test]
     fn the_last_device_is_the_one_used_on_purpose() {
-        let mut input = Input::new(ActionMap::default_fps());
+        let mut input = Input::new(ActionMap::standard());
         assert_eq!(input.last_device(), Device::KeyboardAndMouse);
 
         // A stick that drifts and a trigger that rests off zero are not use.

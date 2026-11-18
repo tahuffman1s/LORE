@@ -57,7 +57,7 @@ fn world(script: &str) -> World {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     let map = Map::parse("map.toml", ONE_SPAWN).unwrap();
-    let game = ScriptGame::from_source(script, &ActionMap::default_fps()).with_map(map);
+    let game = ScriptGame::from_source(script, &ActionMap::standard()).with_map(map);
     assert!(
         game.host().last_error().is_none(),
         "{:?}",
@@ -68,7 +68,7 @@ fn world(script: &str) -> World {
 
 /// Runs `ticks` ticks, the player doing what was last asked of them.
 fn play(world: &mut World, ticks: u32) {
-    let nothing = Input::new(ActionMap::default_fps());
+    let nothing = Input::new(ActionMap::standard());
     for _ in 0..ticks {
         world.tick(nothing.frame(), STEP);
     }

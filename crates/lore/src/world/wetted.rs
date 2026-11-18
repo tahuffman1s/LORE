@@ -105,7 +105,7 @@ struct Swum {
 
 impl Swum {
     fn in_tank(deep: f32, over: f32) -> Self {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let script = ScriptGame::from_source("", &actions);
         Self {
             game: Playing::start(script, Some(&tank(deep, over)), &actions, 60),
@@ -281,7 +281,7 @@ fn the_same_swim_marks_the_water_the_same_way_every_time() {
 
 #[test]
 fn on_dry_land_nothing_is_said_of_water() {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let mut game = Playing::start(ScriptGame::from_source("", &actions), None, &actions, 60);
     let mut input = Input::new(actions);
     input.press(Key::W);

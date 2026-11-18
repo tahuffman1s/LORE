@@ -119,7 +119,7 @@ impl Watch {
 /// use lore_script::ScriptHost;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut host = ScriptHost::open("my-game", ActionMap::default_fps())?;
+/// let mut host = ScriptHost::open("my-game", ActionMap::standard())?;
 /// let input = InputFrame::default();
 /// loop {
 ///     host.poll_reload();
@@ -240,7 +240,7 @@ impl ScriptHost {
     ///         ("main.luau".to_owned(), "print(require('./weapons').rifle)".to_owned()),
     ///         ("weapons.luau".to_owned(), "return { rifle = 30 }".to_owned()),
     ///     ],
-    ///     ActionMap::default_fps(),
+    ///     ActionMap::standard(),
     /// );
     /// assert!(host.last_error().is_none());
     /// ```
@@ -427,7 +427,7 @@ impl ScriptHost {
     ///
     /// let script = "game.onTick(function() print(game.time()) end)";
     /// let run = || {
-    ///     let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    ///     let mut host = ScriptHost::from_source(script, ActionMap::standard());
     ///     host.tick(&InputFrame::default(), 1.0 / 60.0);
     ///     host.rules_fingerprint()
     /// };
@@ -560,7 +560,7 @@ impl ScriptHost {
     /// use lore_script::{AudioCommand, ScriptHost};
     ///
     /// let script = r#"game.onStart(function() game.audio.play("music", { loop = true }) end)"#;
-    /// let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    /// let mut host = ScriptHost::from_source(script, ActionMap::standard());
     /// host.tick(&InputFrame::default(), 1.0 / 60.0);
     /// let Some(AudioCommand::Play(sound)) = host.take_sound() else {
     ///     panic!("the script played a sound");
@@ -636,7 +636,7 @@ impl ScriptHost {
     /// use lore_script::CharacterId;
     ///
     /// let script = "game.onSpawn(function() game.player:giveWeapon(\"pistol\") end)";
-    /// let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+    /// let mut host = ScriptHost::from_source(script, ActionMap::standard());
     /// // The first tick starts the game and puts the player in the world.
     /// host.tick(&InputFrame::default(), 1.0 / 60.0);
     /// let player = CharacterId::PLAYER;

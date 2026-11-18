@@ -252,16 +252,16 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_not_a_problem() {
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
         let said = load(&scratch("missing").join("bindings.toml"), &mut actions);
         assert_eq!(said, Vec::<String>::new());
-        assert_eq!(actions, ActionMap::default_fps());
+        assert_eq!(actions, ActionMap::standard());
     }
 
     #[test]
     fn saved_controls_are_loaded_again() {
         let path = scratch("saved").join("deeper").join("bindings.toml");
-        let defaults = ActionMap::default_fps();
+        let defaults = ActionMap::standard();
         let mut changed = defaults.clone();
         changed
             .read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")
@@ -288,7 +288,7 @@ mod tests {
             "[bindings]\njmup = [\"F\"]\nreload = [\"E\", \"GamepadWest\"]\n",
         )
         .unwrap();
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
 
         let said = load(&path, &mut actions);
 
@@ -307,7 +307,7 @@ mod tests {
     fn a_file_that_is_not_toml_leaves_the_games_own_controls() {
         let path = scratch("broken").join("bindings.toml");
         fs::write(&path, "[bindings\njump = [\"F\"]\n").unwrap();
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
 
         let said = load(&path, &mut actions);
 
@@ -317,18 +317,18 @@ mod tests {
             "{said:?}"
         );
         assert!(said[0].ends_with("the game's own controls are in place."));
-        assert_eq!(actions, ActionMap::default_fps());
+        assert_eq!(actions, ActionMap::standard());
     }
 
     #[test]
     fn a_saved_file_is_read_again_and_a_line_taken_out_goes_back() {
         let path = scratch("live").join("bindings.toml");
         fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
         let (mut live, said) = Live::start(path.clone(), &mut actions);
         assert_eq!(said, Vec::<String>::new());
         let jump = actions.action("jump").unwrap();
-        assert_ne!(actions, ActionMap::default_fps());
+        assert_ne!(actions, ActionMap::standard());
         assert!(live.look().is_none(), "nothing was saved");
 
         // A different length, so the change shows whatever the clock says.
@@ -347,13 +347,13 @@ mod tests {
         fs::write(&path, "[bindings]\n").unwrap();
         assert!(live.look().is_none());
         let controls = live.look().unwrap().controls.unwrap();
-        assert_eq!(controls, ActionMap::default_fps());
+        assert_eq!(controls, ActionMap::standard());
     }
 
     #[test]
     fn a_file_saved_broken_or_taken_away_leaves_the_controls_as_they_were() {
         let path = scratch("live-broken").join("bindings.toml");
-        let mut actions = ActionMap::default_fps();
+        let mut actions = ActionMap::standard();
         let (mut live, said) = Live::start(path.clone(), &mut actions);
         assert_eq!(said, Vec::<String>::new());
         assert!(live.look().is_none(), "no file yet");
@@ -385,6 +385,6 @@ mod tests {
         fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
         assert!(live.look().is_none());
         let controls = live.look().unwrap().controls.unwrap();
-        assert_ne!(controls, ActionMap::default_fps());
+        assert_ne!(controls, ActionMap::standard());
     }
 }

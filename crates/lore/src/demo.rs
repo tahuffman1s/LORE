@@ -148,8 +148,8 @@ mod tests {
 
     #[test]
     fn fire_and_melee_ask_for_rumble_once_per_press() {
-        let mut demo = InputDemo::new(ActionMap::default_fps());
-        let mut input = Input::new(ActionMap::default_fps());
+        let mut demo = InputDemo::new(ActionMap::standard());
+        let mut input = Input::new(ActionMap::standard());
         // What the window does each frame: tick, then let the demo present.
         let asked = |demo: &mut InputDemo, input: &mut Input| {
             demo.tick(input.tick(), 1.0 / 60.0);
@@ -173,8 +173,8 @@ mod tests {
     fn the_hud_says_what_is_pressed() {
         use lore::ui::Draw;
 
-        let mut demo = InputDemo::new(ActionMap::default_fps());
-        let mut input = Input::new(ActionMap::default_fps());
+        let mut demo = InputDemo::new(ActionMap::standard());
+        let mut input = Input::new(ActionMap::standard());
         let texts = |demo: &mut InputDemo, input: &mut Input| -> Vec<String> {
             demo.tick(input.tick(), 1.0 / 60.0);
             demo.frame(&mut Frame::default());

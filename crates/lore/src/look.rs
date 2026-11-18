@@ -72,7 +72,7 @@ mod tests {
     /// the stick at `stick`, ticks run when they are due, and every frame
     /// is drawn from the newest tick plus what no tick has seen.
     fn look_for_a_second(frames: u32, counts: [f32; 2], stick: [f32; 2]) -> Ran {
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let look = actions.action("look").unwrap();
         let mut input = Input::new(actions);
         let mut clock = TickClock::new(60);
@@ -153,7 +153,7 @@ mod tests {
         // Most of the way to the left and a little up, for a second.
         let stick = {
             // What the dead zone and the curve leave of the push.
-            let mut input = Input::new(ActionMap::default_fps());
+            let mut input = Input::new(ActionMap::standard());
             let look = input.map().action("look").unwrap();
             input.set_stick(Stick::RightStick, StickAxis::X, -0.7);
             input.set_stick(Stick::RightStick, StickAxis::Y, 0.4);
@@ -191,7 +191,7 @@ mod tests {
             turn([10.0, -5.0], [0.0, 0.0], 0.0),
             [10.0 * MOUSE_TURN, -5.0 * MOUSE_TURN]
         );
-        let actions = ActionMap::default_fps();
+        let actions = ActionMap::standard();
         let look = actions.action("look").unwrap();
         let mut input = Input::new(actions);
         input.move_mouse(10.0, 0.0);

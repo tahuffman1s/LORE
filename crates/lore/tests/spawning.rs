@@ -68,7 +68,7 @@ fn game(script: &str) -> ScriptGame {
     log::set_max_level(log::LevelFilter::Info);
     printed();
     let map = Map::parse("map.toml", TWO_SPAWNS).unwrap();
-    let game = ScriptGame::from_source(script, &ActionMap::default_fps()).with_map(map);
+    let game = ScriptGame::from_source(script, &ActionMap::standard()).with_map(map);
     assert!(
         game.host().last_error().is_none(),
         "{:?}",
@@ -128,7 +128,7 @@ fn walk_about(game: &mut Playing, input: &mut Input, ticks: u32) -> Walk {
 
 #[test]
 fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let mut game = Playing::start(game(TELLS_ALL), None, &actions, TICK_RATE);
     let mut input = Input::new(actions);
 
@@ -196,7 +196,7 @@ fn a_player_is_put_at_a_spawn_point_once_and_then_left_alone() {
 #[test]
 fn a_dummy_put_in_the_world_moves_the_player_nowhere_and_tells_the_script_nothing() {
     let mut world = World::new(game(TELLS_ALL), TICK_RATE);
-    let nothing = Input::new(ActionMap::default_fps());
+    let nothing = Input::new(ActionMap::standard());
     let play = |world: &mut World, ticks: u32| {
         for _ in 0..ticks {
             world.tick(nothing.frame(), STEP);
@@ -225,7 +225,7 @@ fn a_player_who_dies_is_put_back_at_a_spawn_point_with_what_they_held() {
     use lore::script::CharacterId;
 
     let mut world = World::new(game(TELLS_ALL), TICK_RATE);
-    let nothing = Input::new(ActionMap::default_fps());
+    let nothing = Input::new(ActionMap::standard());
     let play = |world: &mut World, ticks: u32| {
         for _ in 0..ticks {
             world.tick(nothing.frame(), STEP);

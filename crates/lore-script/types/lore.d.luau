@@ -784,7 +784,16 @@ declare game: {
     ---
     --- The standard actions are: "move" and "look" (two directions), and the
     --- buttons "jump", "crouch", "sprint", "fire", "aim", "reload", "interact",
-    --- "melee", "grenade", "next_weapon", "previous_weapon" and "pause". Action names are lower case with underscores.
+    --- "melee", "use_item", "next_item", "previous_item", "map", "inventory"
+    --- and "pause". Action names are lower case with underscores.
+    ---
+    --- The engine moves, jumps, crouches, sprints, fires, aims, reloads and
+    --- pauses by itself. The rest are yours to give a meaning: "interact"
+    --- (E, or the top face button), "melee" (V), "use_item" (G, or the right
+    --- bumper), "next_item" and "previous_item" (the mouse wheel, or the
+    --- d-pad left and right), "map" (M, or d-pad up) and "inventory" (Tab,
+    --- or d-pad down).
+    --- Example: if game.input.justPressed("map") then mapShown = not mapShown end
     ---
     --- "pause" opens the menu every game has. While it is open, the actions
     --- above all read as let go, and the menu's own are heard instead:

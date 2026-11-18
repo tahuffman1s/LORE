@@ -341,7 +341,7 @@ mod tests {
     /// A world's weather under `script`, run for `ticks` on a level with
     /// nothing in it, the player at the middle of it.
     fn after(script: &str, ticks: u32) -> (Climate, ScriptHost) {
-        let mut host = ScriptHost::from_source(script, ActionMap::default_fps());
+        let mut host = ScriptHost::from_source(script, ActionMap::standard());
         let mut climate = Climate::default();
         let level = Level::from_triangles(&[]);
         for tick in 0..ticks {
@@ -404,7 +404,7 @@ mod tests {
         let (thin, _) = after(frost, 1800);
         assert!(thin.weather().ice > 0.02 && thin.weather().ice < Level::ICE_BEARS);
         // A minute of it bears a walker, and the level is told so.
-        let mut host = ScriptHost::from_source(frost, ActionMap::default_fps());
+        let mut host = ScriptHost::from_source(frost, ActionMap::standard());
         let mut climate = Climate::default();
         let level = Level::from_triangles(&[]);
         for _ in 0..3600 {

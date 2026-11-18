@@ -20,7 +20,7 @@ LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts wit
 - One world, stepped on the fixed tick with the player's input and giving the same result from the same input at any frame rate, with no network layer under it (#278)
 - No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead (#279)
 - One player, who is `game.player` to a script from its first line: no list of players, no joining or leaving, and a script that asks for them is told what to write instead. `lore check` tells a script of pretend shots at a training dummy and at a wall, and of the player dying (#280)
-- The standard controls have no `scoreboard` action (#313)
+- The standard controls are an adventure's: `use_item`, `next_item`, `previous_item`, `map` and `inventory`, and no `scoreboard` or `grenade` (#313, #317)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
 
 

@@ -132,7 +132,7 @@ pub struct Config {
     /// it; only the player's input stops reaching it.
     ///
     /// On unless a game says otherwise. It needs the `pause` action and
-    /// the `menu` action set of [`ActionMap::default_fps`]; a game with
+    /// the `menu` action set of [`ActionMap::standard`]; a game with
     /// other controls gets no menu. Turn it off for a game that has its
     /// own:
     ///
@@ -195,7 +195,7 @@ impl Default for Config {
             vsync: true,
             max_fps: 400,
             upscaling: Upscaling::default(),
-            actions: ActionMap::default_fps(),
+            actions: ActionMap::standard(),
             level: None,
             pause_menu: true,
             settings: Settings::default(),

@@ -20,13 +20,13 @@ fn new_game(test: &str) -> ScriptGame {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("world-{test}"));
     let _ = std::fs::remove_dir_all(&folder);
     scaffold::new_game(&folder).unwrap();
-    ScriptGame::open(&folder, &ActionMap::default_fps()).unwrap()
+    ScriptGame::open(&folder, &ActionMap::standard()).unwrap()
 }
 
 /// Runs `ticks` ticks of a world, the player doing what was last asked of
 /// them.
 fn run(world: &mut World, ticks: u32) {
-    let nothing = Input::new(ActionMap::default_fps());
+    let nothing = Input::new(ActionMap::standard());
     for _ in 0..ticks {
         world.tick(nothing.frame(), STEP);
     }
@@ -50,7 +50,7 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 #[test]
 fn a_player_walks_in_the_tick_the_key_goes_down() {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let mut game = Playing::start(new_game("walk"), None, &actions, TICK_RATE);
     let mut input = Input::new(actions);
 
@@ -107,7 +107,7 @@ fn starter_level() -> lore::assets::Scene {
 
 #[test]
 fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let level = starter_level();
     let mut game = Playing::start(new_game("level"), Some(&level), &actions, TICK_RATE);
     let mut input = Input::new(actions);
@@ -180,7 +180,7 @@ fn the_player_starts_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
     let first = [10.0, 0.0, -6.0];
     std::fs::write(&map_file, map_with_spawn(first)).unwrap();
 
-    let game = ScriptGame::open(&folder, &ActionMap::default_fps()).unwrap();
+    let game = ScriptGame::open(&folder, &ActionMap::standard()).unwrap();
     assert_eq!(game.map().spawns().count(), 1);
     let mut world = World::new(game, TICK_RATE);
 
@@ -236,7 +236,7 @@ fn a_player_faces_the_way_the_maps_spawn_point_does() {
     let at = [3.0, 0.0, -2.0];
     let map = format!("{}facing = 90.0\n", map_with_spawn(at));
     std::fs::write(folder.join(lore::map::MAP_FILE), map).unwrap();
-    let actions = ActionMap::default_fps();
+    let actions = ActionMap::standard();
     let game = ScriptGame::open(&folder, &actions).unwrap();
     assert_eq!(game.map().spawns().count(), 1);
 

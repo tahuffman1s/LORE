@@ -53,7 +53,7 @@ fn counted() -> usize {
 // Only what this test's own thread sets aside is counted.
 #[test]
 fn feeding_events_and_ticking_never_allocates() {
-    let map = ActionMap::default_fps();
+    let map = ActionMap::standard();
     let fire = map.action("fire").unwrap();
     let menu = map.set("menu").unwrap();
     let mut input = Input::new(map);
