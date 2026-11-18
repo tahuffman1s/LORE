@@ -16,7 +16,7 @@ return {
     -- On the ground under the fire escape on the east wall.
     fireEscape = vector.create(2.70, 0.10, -15.00),
     -- The biggest pothole full of rain water, in the south half of the alley.
-    puddle = vector.create(-1.35, -0.03, 15.60),
+    puddle = vector.create(-1.35, -0.12, 15.60),
     -- Everywhere a player can walk: both streets, the alley and the yard.
     bounds = { min = vector.create(-21.00, 0.00, -44.00), max = vector.create(21.00, 25.00, 44.00) },
     -- The alley and the yard alone, between the two streets.

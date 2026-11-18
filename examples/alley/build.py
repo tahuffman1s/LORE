@@ -673,10 +673,10 @@ SUN = (-0.158, 0.610, 0.776)
 DRAINS = [(0.0, -20.0), (0.0, 21.0), (-STREET + 6.0, -KERB - 0.25), (9.0, -KERB - 0.25),
           (-9.0, KERB + 0.25), (STREET - 7.0, KERB + 0.25)]
 POTHOLES = [  # x, z, reach, depth
-    (1.55, -24.6, 0.62, 0.075),
-    (-1.35, 15.6, 0.85, 0.09),
-    (-5.6, 7.3, 0.45, 0.05),
-    (2.4, 25.4, 0.38, 0.045),
+    (1.55, -24.6, 0.62, 0.17),
+    (-1.35, 15.6, 0.85, 0.19),
+    (-5.6, 7.3, 0.45, 0.14),
+    (2.4, 25.4, 0.38, 0.13),
 ]
 PUDDLE = POTHOLES[1]
 
@@ -1027,7 +1027,7 @@ STYLE = {
     "bands": False,       # a stone band at each floor
     "bricked": 0.08,      # how many windows are bricked up
     "boarded": 0.04,
-    "blind": 0.25,        # how many have a blind half down
+    "blind": 0.45,        # how many have a blind half down
     "shop": False,        # a street front: shop windows on the ground storey
     "blank": (),          # which bays have no windows (a stair, a chimney)
     "vents": 3,           # little grilles on the ground storey
@@ -1305,9 +1305,9 @@ class Looks(Buckets):
     buildings share."""
 
     # Textures seen close, from the alley's floor: kept sharper.
-    SHARP = {"brick_wall_10", "red_brick_plaster_patch_02", "yellow_bricks", "painted_brick", "brick_wall_006",
-             "factory_brick", "mixed_brick_wall", "concrete_wall_008", "large_red_bricks", "beige_wall_001",
-             "asphalt_02", "asphalt_04", "asphalt_06"}
+    SHARP = {"brick_wall_10", "red_brick_plaster_patch_02", "yellow_bricks", "slumped_mortar_brick", "brick_wall_006",
+             "factory_brick", "brick_wall_02", "concrete_wall_008", "large_red_bricks", "beige_wall_001",
+             "asphalt_02", "asphalt_04", "concrete_block_wall"}
 
     def __init__(self):
         super().__init__()
@@ -1318,8 +1318,14 @@ class Looks(Buckets):
         self.fascia = plain("fascia paint", (1.0, 1.0, 1.0, 1.0), 0.5)
         self.roof = plain("roof felt", (0.1, 0.1, 0.1, 1.0), 0.95)
 
+    # Photographs whose stated size makes their bricks twice as big as
+    # bricks are: the metres one copy covers, measured by counting courses
+    # (a course of bricks is about 75 mm).
+    SIZES = {"yellow_bricks": 1.0, "large_red_bricks": 1.05}
+
     def look(self, name, seed=0):
-        return texture_set(name, "2k" if name in self.SHARP else SIZE)
+        material, tile = texture_set(name, "2k" if name in self.SHARP else SIZE)
+        return material, self.SIZES.get(name, tile)
 
 
 # Each building of the alley, the streets and across them. Every one is
@@ -1333,10 +1339,10 @@ BUILDINGS = [
     Building("w5", -14.0, -ALLEY, 19.0, END, 18.4, "brick_wall_006", ("+x", "+z"), 15, {"bands": True}),
     # East of the alley.
     Building("e1", ALLEY, 14.0, -END, -21.0, 15.4, "factory_brick", ("-x", "-z"), 21, {"window": (1.4, 1.8), "frames": (0.12, 0.13, 0.14)}),
-    Building("e2", ALLEY, 14.0, -21.0, -YARD_END, 18.2, "mixed_brick_wall", ("-x", "+z"), 22, {"boarded": 0.08}),
+    Building("e2", ALLEY, 14.0, -21.0, -YARD_END, 18.2, "brick_wall_02", ("-x", "+z"), 22, {"boarded": 0.08}),
     # A workshop on the yard: tall and plain, windows high up, and the hoop
     # on its wall.
-    Building("e3", YARD, 17.0, -YARD_END, YARD_END, 11.2, "concrete_wall_008", ("-x",), 23,
+    Building("e3", YARD, 17.0, -YARD_END, YARD_END, 11.2, "concrete_block_wall", ("-x",), 23,
              {"ground": 5.2, "storey": 3.0, "bay": 3.6, "window": (2.2, 1.2), "bricked": 0.15, "blank": (2,), "vents": 0}),
     Building("e4", ALLEY, 14.0, YARD_END, 21.0, 19.6, "large_red_bricks", ("-x", "-z"), 24, {"bands": True}),
     Building("e5", ALLEY, 14.0, 21.0, END, 16.5, "beige_wall_001", ("-x", "+z"), 25, {"frames": (0.35, 0.18, 0.12)}),
@@ -1531,13 +1537,16 @@ PUDDLE_LOOK = {
 
 
 def puddle_level(px, pz, reach):
-    """How high a pothole's water stands: a little under the lowest point
-    of the ground round its rim, so that it stays in the hole."""
+    """How high a pothole's water stands: a hand's width under the lowest
+    point of the ground round its rim, so that it stays in the hole, and
+    so that the engine, which darkens ground standing up to nine
+    centimetres over still water near it, darkens the hole's sides and not
+    a square of the alley round it."""
     lowest = min(
         alley_height(px + math.cos(a) * reach * 1.55, pz + math.sin(a) * reach * 1.55, holes=False)
         for a in (k * math.tau / 72 for k in range(72))
     )
-    return lowest - 0.012
+    return lowest - 0.1
 
 
 def sheet(x, z, level, half=0.12):
@@ -1605,7 +1614,7 @@ def main():
     })))
     level.place("streets", level.mesh("streets", streets({
         "pavement": patched(looks.look("concrete_pavement"), 0.9),
-        "road": patched(looks.look("asphalt_01"), 1.0),
+        "road": patched(looks.look("asphalt_02"), 0.85),
     })))
     kerb_material, kerb_tile = looks.look("concrete_floor_02")
     level.place("kerbs", level.mesh("kerbs", [kerbs(kerb_material, kerb_tile)]))
@@ -2296,14 +2305,6 @@ def decorate(level, fronts, pictures, made):
                     (0.3, 6.0, 0.8), (2.0, -29.0, 0.9), (-1.5, 27.5, 1.0)):
         material, wide, deep = grime["oil"]
         ground_patch(decals(material), x, z, wide * k, deep * k, chooser.uniform(0, 6), lift=0.0035)
-    for (px, pz, reach, _) in POTHOLES:
-        material, wide, deep = grime["puddle-ring"]
-        ground_patch(decals(material), px, pz, reach * 3.2, reach * 3.0, chooser.uniform(0, 6), lift=0.0032)
-    for k in range(14):
-        material, wide, deep = chooser.choice(marks["crack"])
-        x, z = chooser.choice(((chooser.uniform(-3.0, 3.0), chooser.choice((-1, 1)) * chooser.uniform(10.0, 29.0)),
-                               (chooser.uniform(-7.5, 7.5), chooser.uniform(-8.5, 8.5))))
-        ground_patch(decals(material), x, z, wide * 1.4, deep * 1.4, chooser.uniform(0, 6), lift=0.0028 + 0.0001 * k)
     for k in range(16):
         material, wide, deep = chooser.choice(marks["paper"])
         x, z = chooser.choice(((-2.7, -13.0), (-2.6, 11.5), (2.8, 26.0), (2.7, 18.0), (0.0, -31.5), (-5.0, -7.5)))
