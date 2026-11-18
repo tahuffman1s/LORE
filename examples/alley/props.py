@@ -252,8 +252,7 @@ def ring_cap(shape, ring, out, colour=(1.0, 1.0, 1.0, 1.0)):
 
 
 def rod(shape, path, radius, sides=8, colour=(1.0, 1.0, 1.0, 1.0), caps=True):
-    """A round rod along `path` with closed ends. (kit's own tube caps face
-    inwards, so the caps are made here.)"""
+    """A round rod along `path` with closed ends, its caps made here."""
     first = len(shape.positions) // 3
     _tube(shape, path, radius, sides, colour)
     if not caps:

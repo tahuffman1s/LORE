@@ -99,10 +99,14 @@ def font(size, style="bold"):
     }[style]
     if style not in _font_paths:
         found = None
-        for root, _, files in os.walk("/usr/share/fonts"):
-            for candidate in wanted:
-                if candidate in files and found is None:
-                    found = os.path.join(root, candidate)
+        # The first of the wanted fonts that is anywhere, looked for in
+        # the same order on every run.
+        places = {}
+        for root, folders, files in os.walk("/usr/share/fonts"):
+            folders.sort()
+            for name in sorted(files):
+                places.setdefault(name, os.path.join(root, name))
+        found = next((places[c] for c in wanted if c in places), None)
         _font_paths[style] = found
     if _font_paths[style]:
         return ImageFont.truetype(_font_paths[style], size)

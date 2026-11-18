@@ -99,10 +99,11 @@ class Shape:
         for name, corners in faces.items():
             if name in skip:
                 continue
-            axis = name[1]
             uvs = []
             for x, y, z in corners:
-                u, v = {"x": (z, y), "y": (x, z), "z": (x, y)}[axis]
+                # Laid so that the picture reads the right way round from
+                # in front of each face, not mirrored.
+                u, v = {"+x": (-z, y), "-x": (z, y), "+y": (x, -z), "-y": (x, z), "+z": (x, y), "-z": (-x, y)}[name]
                 uvs.append((u / tile, -v / tile))
             self.quad(*corners, uvs=uvs, colour=colour)
 

@@ -21,6 +21,7 @@ named there are made here.
 """
 
 import array
+import http.client
 import json
 import math
 import os
@@ -63,15 +64,30 @@ def fetch(url, path, tries=8):
             with urllib.request.urlopen(request, timeout=120) as reply:
                 # A server that starts again from the beginning is believed.
                 mode = "ab" if have and reply.status == 206 else "wb"
+                expected = int(reply.headers.get("Content-Length") or -1)
+                got = 0
                 with open(part, mode) as out:
                     while True:
                         block = reply.read(1 << 20)
                         if not block:
                             break
                         out.write(block)
+                        got += len(block)
+            # A reply cut short ends as if it were whole: it is carried on
+            # with, not kept.
+            if expected >= 0 and got < expected:
+                raise OSError(f"only {got} of {expected} bytes came")
             os.replace(part, path)
             return path
-        except (OSError, urllib.error.URLError) as problem:
+        except urllib.error.HTTPError as problem:
+            if problem.code == 416 and have:
+                # Asked for what comes after the end: it had all come.
+                os.replace(part, path)
+                return path
+            wait = 30 + 30 * attempt if problem.code == 429 else 2 + 3 * attempt
+            print(f"  ({problem}; trying again in {wait} seconds)", file=sys.stderr)
+            time.sleep(wait)
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as problem:
             # A server that says it is being asked too often is given a
             # good while before it is asked again.
             wait = 30 + 30 * attempt if "429" in str(problem) else 2 + 3 * attempt
@@ -145,6 +161,9 @@ def model(name, size=SIZE):
     folder = os.path.join(CACHE, name)
     main = fetch(files["url"], os.path.join(folder, files["url"].rsplit("/", 1)[-1]))
     for inside, about in files["include"].items():
+        # Only into the model's own folder, whatever the list says.
+        if os.path.isabs(inside) or ".." in inside.replace("\\", "/").split("/"):
+            raise SystemExit(f"{name}'s file list names a file outside its folder: {inside}")
         fetch(about["url"], os.path.join(folder, inside))
     with open(main, encoding="utf-8") as text:
         gltf = json.load(text)
@@ -286,6 +305,13 @@ def ambientcg(name):
     so on) to where it is."""
     folder = os.path.join(CACHE, "ambientcg", name)
     packed = fetch(AMBIENTCG.format(name), os.path.join(folder, f"{name}_1K-JPG.zip"))
+    if not zipfile.is_zipfile(packed):
+        # A page served in place of the archive: fetched again, once.
+        os.remove(packed)
+        packed = fetch(AMBIENTCG.format(name), packed)
+        if not zipfile.is_zipfile(packed):
+            os.remove(packed)
+            raise SystemExit(f"ambientCG sent something that is not {name}'s archive. Run this again later.")
     found = {}
     with zipfile.ZipFile(packed) as archive:
         for inside in archive.namelist():
@@ -296,8 +322,9 @@ def ambientcg(name):
                 continue
             path = os.path.join(folder, base)
             if not os.path.exists(path):
-                with archive.open(inside) as data, open(path, "wb") as out:
+                with archive.open(inside) as data, open(path + ".part", "wb") as out:
                     out.write(data.read())
+                os.replace(path + ".part", path)
             kind = base.rsplit("_", 1)[-1].rsplit(".", 1)[0]
             found[kind] = path
     return found
@@ -666,12 +693,12 @@ HOARDING = 21.0      # the road works in front of that building
 # up. It shines straight down the length of the alley, so one wall and a
 # strip of floor are lit and everything across the alley throws a long
 # shadow along it. This is where the engine's sun is at that hour.
-HOUR = 9.5
+HOUR = 9.5  # what README.md and main.luau start the day at
 SUN = (-0.158, 0.610, 0.776)
 
 # Where the ground is lowest: the drains, and the potholes that hold water.
-DRAINS = [(0.0, -20.0), (0.0, 21.0), (-STREET + 6.0, -KERB - 0.25), (9.0, -KERB - 0.25),
-          (-9.0, KERB + 0.25), (STREET - 7.0, KERB + 0.25)]
+DRAINS = [(0.0, -20.0), (0.0, 21.0), (-STREET + 6.25, -KERB - 0.25), (9.25, -KERB - 0.25),
+          (-8.75, KERB + 0.25), (STREET - 6.75, KERB + 0.25)]
 POTHOLES = [  # x, z, reach, depth
     (1.55, -24.6, 0.62, 0.17),
     (-1.35, 15.6, 0.85, 0.19),
@@ -723,11 +750,14 @@ def pothole_depth(x, z):
 def alley_height(x, z, holes=True):
     """The height of the alley's and the yard's floor."""
     y = profile(z)
+    # In the last metre before each street the floor is laid level with
+    # the pavement it meets.
+    meets = min(max(END - abs(z), 0.0), 1.0)
     # The floor falls a little to a channel down the alley's middle.
-    y += 0.035 * min(abs(x), ALLEY) / ALLEY
+    y += 0.035 * min(abs(x), ALLEY) / ALLEY * meets
     # Laid by hand and sunk here and there over the years: a centimetre or
     # so of unevenness, and a dip round each drain.
-    y += 0.012 * rolling(x / 1.7, z / 1.7, seed=5, octaves=3)
+    y += 0.012 * rolling(x / 1.7, z / 1.7, seed=5, octaves=3) * meets
     for dx, dz in DRAINS[:2]:
         far = math.hypot(x - dx, z - dz)
         y -= 0.025 * max(0.0, 1.0 - far / 1.6) ** 2
@@ -945,7 +975,10 @@ def streets(kinds):
             def corner(x, z):
                 key = (round(x * 64), round(z * 64))
                 if key not in seen:
-                    y = street_height(x, z)
+                    # Heights at a band's edge are its own, not the next
+                    # band's: a kerb's face is the step between the two.
+                    inside = min(max(abs(z), z_from + 1e-4), z_to - 1e-4)
+                    y = street_height(x, side * inside)
                     e = 0.05
                     nz = (street_height(x, z - e) - street_height(x, z + e)) if abs(z) not in (KERB, FAR_KERB) else 0.0
                     length = math.sqrt(nz * nz + (2 * e) ** 2)
@@ -964,7 +997,7 @@ def streets(kinds):
                     x0 = -STREET + column * step
                     a0, a1 = z_from + row * step, z_from + (row + 1) * step
                     za, zb = side * a0, side * a1
-                    if any(abs(x0 + step / 2 - dx) < 0.3 and abs((za + zb) / 2 - dz) < 0.3 for dx, dz in DRAINS[2:]):
+                    if any(abs(x0 + step / 2 - dx) < 0.1 and abs((za + zb) / 2 - dz) < 0.1 for dx, dz in DRAINS[2:]):
                         continue
                     a, b = corner(x0, za), corner(x0 + step, za)
                     c, d = corner(x0, zb), corner(x0 + step, zb)
@@ -980,8 +1013,8 @@ def streets(kinds):
 def kerbs(material, tile):
     """Kerb stones along both sides of both roads: blocks 0.9 long with a
     joint between, each a little out of line with the next, their faces
-    standing PAVEMENT over the gutter. Not solid: one plain box each side
-    stops a player."""
+    standing PAVEMENT over the gutter. They are solid: a few thousand
+    triangles, and spilt water runs along their faces."""
     shape = Shape(material)
     chooser = random.Random(3)
     for side in (-1.0, 1.0):
@@ -1030,7 +1063,6 @@ STYLE = {
     "blind": 0.45,        # how many have a blind half down
     "shop": False,        # a street front: shop windows on the ground storey
     "blank": (),          # which bays have no windows (a stair, a chimney)
-    "vents": 3,           # little grilles on the ground storey
 }
 
 
@@ -1343,7 +1375,7 @@ BUILDINGS = [
     # A workshop on the yard: tall and plain, windows high up, and the hoop
     # on its wall.
     Building("e3", YARD, 17.0, -YARD_END, YARD_END, 11.2, "concrete_block_wall", ("-x",), 23,
-             {"ground": 5.2, "storey": 3.0, "bay": 3.6, "window": (2.2, 1.2), "bricked": 0.15, "blank": (2,), "vents": 0}),
+             {"ground": 5.2, "storey": 3.0, "bay": 3.6, "window": (2.2, 1.2), "bricked": 0.15, "blank": (2,)}),
     Building("e4", ALLEY, 14.0, YARD_END, 21.0, 19.6, "large_red_bricks", ("-x", "-z"), 24, {"bands": True}),
     Building("e5", ALLEY, 14.0, 21.0, END, 16.5, "beige_wall_001", ("-x", "+z"), 25, {"frames": (0.35, 0.18, 0.12)}),
     # On the streets beside the alley's mouths, with shops.
@@ -1818,7 +1850,12 @@ def fire_escape(props, wall, along, floors):
             put("stairs", -0.90, floor, (floors[number + 1] - floor) / 4.01)
     # The drop ladder, hanging from the lowest landing to a little over
     # a player's reach.
-    put("ladder_bottom", 4.33, floors[0] + 0.9, (floors[0] + 0.9 - 2.4) / 6.47)
+    ladder = piece(pieces, "ladder_bottom")
+    (lx0, _, _), (lx1, _, _) = box_of(ladder)
+    props.add(ladder, (x, 0.0, z), turn, (1.7 - (lx0 + lx1) / 2, 0.0, -wall_z))
+    for part in props.parts[-len(ladder):]:
+        for k in range(1, len(part.positions), 3):
+            part.positions[k] = (part.positions[k] - 4.33) * (floors[0] + 0.9 - 2.4) / 6.47 + floors[0] + 0.9
 
 
 def fence_line(props, start, end, gate_at=None):
@@ -1994,10 +2031,9 @@ def furnish(level, solids, fronts):
             props.solid((x, height(x, z), z), turn, size)
         return size
 
-    bags = list(kit_pieces("trashbag"))
     for x, z in ((-2.6, -15.8), (-2.2, -16.3), (-2.9, -16.6), (-2.75, -12.3), (-2.2, -12.0), (2.8, 26.7),
                  (2.4, 27.4), (2.9, 28.0), (-2.9, 10.3), (-3.0, 11.0), (-2.5, 10.7), (7.1, -8.1),
-                 (1.0, -33.6), (-6.0, 30.7)):
+                 (-4.4, -30.45), (-6.0, 30.7)):
         lay("trashbag", x, z, scale=chooser.uniform(0.8, 1.15), most=1500, tint=(0.9, 0.9, 0.9, 1.0))
     for x, z in ((-3.0, -17.4), (-2.7, -17.6), (2.95, 24.2), (-6.9, 8.3)):
         lay("cardboard_box_01", x, z, most=1200, scale=chooser.uniform(0.9, 1.3))
@@ -2024,7 +2060,6 @@ def furnish(level, solids, fronts):
     lay("utility_box_01", -15.5, -END - 0.45, math.pi, most=2500, solid=True)
     lay("WetFloorSign_01", 2.9, 26.0, 2.4)
     lay("dirty_football", -6.7, -7.7, most=2500)
-    rat = kit_pieces("street_rat")
     lay("street_rat", -2.95, -13.0, 2.0, most=2500, scale=1.9)
     lay("street_rat", 3.1, 17.4, -1.0, most=2500, scale=1.9)
     # Tyres: one lying, one leaning on the barrels.
@@ -2037,7 +2072,7 @@ def furnish(level, solids, fronts):
     for x in (-6.4,):
         props.model("modular_street_seating", (x, height(x, -YARD_END + 0.45), -YARD_END + 0.45), 0.0, nodes=chosen)
     # Ladders and a mattress against the walls.
-    (x, y, z), turn = on_wall("W", 13.8, 0.0, 0.2)
+    (x, y, z), turn = on_wall("W", 13.8, 0.0, 0.5)
     level.place("ladder", level.mesh("ladder", [p for n, ps in kit_pieces("ladder_sectioned_01").items() for p in thin("ladder", n, ps, 1500)]),
                 (x, height(x, z), z), turn, tilt=(-0.18, 0.0), solid=False)
 
@@ -2082,9 +2117,8 @@ def furnish(level, solids, fronts):
     lay("fire_hydrant", 6.0, -(KERB - 0.55), 0.0, nodes=[n for n in hydrant if "aged" in n.lower()] or None, most=4000, solid=True)
     for x, z in ((-8.0, -37.2), (10.5, -36.8), (4.0, 37.0), (-12.0, 36.6)):
         props.model("water_manhole_cover", (x, height(x, z) - 0.035, z), chooser.uniform(0, 1), most=2500)
-    car = kit_pieces("covered_car")
     for x, z, turn in ((-8.5, -(FAR_KERB - 1.2), math.pi / 2), (13.0, KERB + 1.2, -math.pi / 2 + 0.03)):
-        size = lay("covered_car", x, z, turn, most=6000)
+        lay("covered_car", x, z, turn, most=6000)
         props.solid((x, height(x, z), z), turn, (1.8, 1.4, 4.3))
 
     # ---- road works shutting each end of both streets: concrete barriers
@@ -2101,7 +2135,9 @@ def furnish(level, solids, fronts):
                 lay("concrete_road_barrier_02", x + end * 0.3, z, math.pi / 2, most=1500, solid=True)
             # The hoarding itself is made with the other props, below; here,
             # the box that stops a player at it.
-            props.solids.append(((end * HOARDING - 0.1, -0.5, min(side * END, side * FAR)), (end * HOARDING + 0.1, 3.0, max(side * END, side * FAR))))
+            # Behind its face, which is at x = ±HOARDING.
+            props.solids.append(((end * HOARDING + min(0.0, end * 0.2), -0.5, min(side * END, side * FAR)),
+                                 (end * HOARDING + max(0.0, end * 0.2), 3.0, max(side * END, side * FAR))))
 
     hooks = globals().get("made_props")
     if hooks:
@@ -2133,7 +2169,7 @@ def made_props(level, props, fronts, chooser):
     # ---- dumpsters, bins, pallets and a mattress
     for (x, z), turn, colour, seed in ((DUMPSTER, math.pi / 2, "green", 1), ((-2.85, 21.6), math.pi / 2 + 0.04, "blue", 2)):
         props.add(made.dumpster(tex, seed, colour), ground_at(x, z), turn)
-        props.solid(ground_at(x, z), turn, (1.42, 1.3, 1.12))
+        props.solid(ground_at(x, z), turn, (1.42, 1.12, 1.12))
     for z, colour, seed in ((11.6, "grey", 1), (12.3, "green", 2), (13.0, "blue", 3), (-10.9, "black", 4)):
         x = -ALLEY + 0.42
         turn = math.pi / 2 + chooser.uniform(-0.15, 0.15)
@@ -2145,10 +2181,11 @@ def made_props(level, props, fronts, chooser):
             props.add(pallet, (x + chooser.uniform(-0.03, 0.03), height(x, z) + 0.144 * k, z), turn + chooser.uniform(-0.05, 0.05))
         props.solid(ground_at(x, z), turn, (1.2, 0.144 * count, 0.8))
     # One leaning on the wall, and a mattress beside the bins.
-    (x, _, z), turn = on_wall("E", -19.4, 0.0, 0.42)
-    level.place("pallet leaning", level.mesh("pallet leaning", made.pallet(tex, 2)), (x, height(x, z), z), turn + math.pi / 2,
-                tilt=(0.0, 1.32), solid=False)
-    (x, _, z), turn = on_wall("E", 12.9, 0.0, 0.48)
+    # Stood on a long edge, leaning back on the wall at the top.
+    (x, _, z), turn = on_wall("E", -19.4, 0.0, 0.2)
+    level.place("pallet leaning", level.mesh("pallet leaning", made.pallet(tex, 2)), (x, height(x, z) + 0.4, z), turn,
+                tilt=(-1.33, 0.0), solid=False)
+    (x, _, z), turn = on_wall("E", 12.9, 0.0, 0.56)
     level.place("mattress", level.mesh("mattress", made.mattress(4)), (x, height(x, z), z), turn, tilt=(-0.26, 0.0), solid=False)
 
     # ---- back doors
@@ -2159,8 +2196,10 @@ def made_props(level, props, fronts, chooser):
     # ---- drains: in the alley's channel and in the streets' gutters
     for number, (x, z) in enumerate(DRAINS):
         y = height(x, z, holes=False) if abs(z) <= END else street_height(x, z)
-        # A little over the ground, and as wide as the hole left for it.
+        # A little over the ground, and as wide as the hole left for it;
+        # a plain box under its bars keeps a foot out of the hole.
         props.add(made.drain_grate(tex, number), (x, y + 0.002, z), 0.0, scale=1.12)
+        props.solids.append(((x - 0.25, y - 0.3, z - 0.25), (x + 0.25, y - 0.004, z + 0.25)))
     # Bollards at each mouth, so that no car takes the alley for a road.
     for side in (-1.0, 1.0):
         for x in (-2.75, 2.75):
@@ -2190,6 +2229,7 @@ def made_props(level, props, fronts, chooser):
     fence = made.barrier_fence(tex, 1)
     for x, z, turn in ((-HOARDING + 0.9, -31.6, math.pi / 2), (HOARDING - 0.9, 42.3, -math.pi / 2), (HOARDING - 0.9, -42.4, -math.pi / 2)):
         props.add(fence, ground_at(x, z), turn)
+        props.solid(ground_at(x, z), turn, (3.5, 2.0, 0.3))
 
     # ---- litter everywhere a broom has not been
     for k, (x, z, w, d) in enumerate(((0.0, -24.0, 6.4, 10.0), (0.0, -13.0, 6.4, 8.0), (0.0, 16.0, 6.4, 12.0),
