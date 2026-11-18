@@ -102,7 +102,7 @@ fn water_sprayed_by_the_script_reaches_the_frame_with_the_looks_once() {
     let first = fluid_frame(&mut world);
     assert!(first.said);
     assert!(!first.drops.is_empty());
-    assert_eq!(first.looks.as_ref().map(Vec::len), Some(32));
+    assert_eq!(first.looks.as_ref().map(|looks| looks.len()), Some(32));
     let second = fluid_frame(&mut world);
     assert!(second.said, "the drops are said every frame");
     assert!(second.looks.is_none(), "nothing about the looks changed");

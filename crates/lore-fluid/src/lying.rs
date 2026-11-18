@@ -35,6 +35,9 @@ const SPLIT_THICK: f32 = 2.0;
 /// the patch's volume joins it even when the two would be wider than a
 /// patch may be: the patch grows thicker, and then splits.
 const JOIN_SHARE: f32 = 0.25;
+/// The thickest a patch may grow by small drops joining it, in puddle
+/// thicknesses: past the split, so a patch splits before it stops taking.
+const JOIN_THICKEST: f32 = 2.0 * SPLIT_THICK;
 /// Trail drops leave this many store places free for the rest.
 const TRAIL_ROOM: usize = 256;
 /// How far above its surface a drop looks along its way, metres.
@@ -494,7 +497,13 @@ fn meet(
     let volume = a.volume + b.volume;
     let h = a.h.max(b.h);
     let wide = (volume / (PI * h)).sqrt();
-    let small_joins = a.volume.min(b.volume) <= JOIN_SHARE * a.volume.max(b.volume);
+    // A small drop joins a full patch only while the patch is not already
+    // as thick as a split makes it: with the store too full to split, the
+    // two push apart instead of piling up without end.
+    let h_eq = physics.get(usize::from(a.kind)).map_or(0.0, |f| f.h_eq);
+    let joined_h = h.max(volume / (PI * R_MAX * R_MAX));
+    let small_joins = a.volume.min(b.volume) <= JOIN_SHARE * a.volume.max(b.volume)
+        && joined_h <= JOIN_THICKEST * h_eq;
     if wide <= R_MAX || small_joins {
         // Never wider than a patch may be: what does not fit lies thicker.
         let h = h.max(volume / (PI * R_MAX * R_MAX));

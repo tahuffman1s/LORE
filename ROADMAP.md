@@ -149,6 +149,7 @@ One continuous world you can see across and walk into: land, sky, water and grow
 
 - Big worlds load as you walk: no loading screen between their pieces (#83)
 - Day, night and weather: the sun follows the clock, and rain is one word (#130)
+- Fluids a script controls: thirteen kinds that fly, splash, pool and change how the player walks (#375)
 - Editor: outdoor ground shaped with a few brushes, and painted by slope and height (#186)
 - A world is one place: a game's land is a grid of pieces on disk that the engine joins up (#281)
 - The whole world to the horizon: far land draws as stand-ins the engine makes by itself (#282)

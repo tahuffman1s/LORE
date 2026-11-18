@@ -1134,8 +1134,8 @@ impl UserData for FluidRef {
                 let mut spec = state.spec(kind).unwrap_or_else(Spec::water);
                 let label = format!("fluid.{key}");
                 let example = format!("{} = {}", key, field.sample);
-                apply(lua, &mut spec, field, &value, &label, &example)?;
                 rules_only(lua, &shared, &label)?;
+                apply(lua, &mut spec, field, &value, &label, &example)?;
                 state.replace(kind, spec);
                 Ok(())
             },

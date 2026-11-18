@@ -858,8 +858,15 @@ impl Frame {
 
     /// Says how each kind of fluid looks: the place in the list is the kind.
     /// Say it when it changes; the picture keeps it until then.
+    /// Kinds past the 32 the picture draws are left out.
     pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {
-        self.fluid.looks = Some(looks.to_vec());
+        let mut all = [FluidLook::default(); lore_render::MOST_FLUID_KINDS];
+        for (slot, look) in all.iter_mut().zip(looks) {
+            *slot = *look;
+        }
+        // Kept in the frame itself: a script that changes a colour on
+        // every tick costs no memory.
+        self.fluid.looks = Some(all);
     }
 
     /// Says how the level's own lakes and creeks are drawn: as `look`, or
@@ -888,8 +895,9 @@ pub struct FluidFrame {
     /// Whether the drops were said this frame. When not, draw what was
     /// drawn before.
     pub said: bool,
-    /// How each kind looks, by kind, if that changed.
-    pub looks: Option<Vec<FluidLook>>,
+    /// How each kind looks, by kind, if that changed: all 32, water's
+    /// look for kinds the game has not made.
+    pub looks: Option<[FluidLook; lore_render::MOST_FLUID_KINDS]>,
     /// How the level's water is drawn, if that changed: `Some(None)` is as
     /// the level says.
     pub water_look: Option<Option<FluidLook>>,
