@@ -1585,15 +1585,9 @@ mod tests {
         assert_eq!(validation_errors(), 0);
     }
 
-    #[test]
-    fn a_room_with_no_window_stays_dark_at_noon_when_light_bounces() {
-        let Some(mut headless) = headless(128, 72) else {
-            return;
-        };
-        headless.gpu().require_validation();
-        // A room six metres square and three high, shut on every side, its
-        // faces turned inwards, standing in the open at noon.
-        let (low, high) = ([-3.0_f32, 0.0, -3.0], [3.0_f32, 3.0, 3.0]);
+    /// A room from `low` to `high`, shut on every side, its faces turned
+    /// inwards, standing in the open on the floor of [`fluid_scene`].
+    fn shut_room(low: [f32; 3], high: [f32; 3]) -> Scene {
         let corner = |x: usize, y: usize, z: usize| {
             [
                 [low[0], high[0]][x],
@@ -1644,9 +1638,11 @@ mod tests {
             max: high,
         };
         let mut scene = fluid_scene(false, false);
+        // The sun's shadows span the level's bounds, and the room is in
+        // them.
         scene.meshes[0].parts[0].bounds = lore_assets::Bounds {
             min: [-50.0, 0.0, -50.0],
-            max: [50.0, 3.0, 50.0],
+            max: [50.0, high[1].max(3.0), 50.0],
         };
         // Seen from inside, whichever way its corners go round.
         part.material = u32::try_from(scene.materials.len()).unwrap();
@@ -1662,16 +1658,26 @@ mod tests {
         let mut placed = scene.instances[0].clone();
         placed.mesh = 1;
         scene.instances.push(placed);
-        headless.set_scene(&scene).unwrap();
+        scene
+    }
+
+    /// How much light a picture of `scene` from `camera` at a clear noon
+    /// shows, with light bouncing and with the old guess in its place, as
+    /// the sum of every pixel's red, green and blue; the pictures are saved
+    /// as `name-bounced.raw` and `name-guessed.raw` where
+    /// `LORE_SAVE_PICTURES` says.
+    fn noon_inside(
+        headless: &mut Headless,
+        scene: &Scene,
+        camera: &Camera,
+        name: &str,
+    ) -> (i64, i64) {
+        headless.set_scene(scene).unwrap();
         headless.set_hour(Some(12.0));
         headless.set_weather(Weather {
             cloud_cover: 0.0,
             ..Weather::default()
         });
-        let camera = Camera {
-            position: [0.0, 1.5, 1.5],
-            ..Camera::default()
-        };
         let light = |picture: &[u8]| -> i64 {
             picture
                 .as_chunks::<4>()
@@ -1681,26 +1687,69 @@ mod tests {
                 .sum()
         };
         headless.set_bounce(Bounce::Off);
-        let guessed_picture = headless.screenshot(&camera).unwrap();
+        let guessed_picture = headless.screenshot(camera).unwrap();
         let guessed = light(&guessed_picture);
         // Bounce light builds up over a few frames as the probes trace.
         headless.set_bounce(Bounce::Medium);
         headless.let_time_pass(true);
         for _ in 0..12 {
-            headless.render(&camera).unwrap();
+            headless.render(camera).unwrap();
         }
         headless.let_time_pass(false);
-        let bounced = headless.screenshot(&camera).unwrap();
+        let bounced = headless.screenshot(camera).unwrap();
         // Held still, the same view is the same picture.
-        assert!(headless.screenshot(&camera).unwrap() == bounced);
+        assert!(headless.screenshot(camera).unwrap() == bounced);
         if let Ok(folder) = std::env::var("LORE_SAVE_PICTURES") {
-            let _ = std::fs::write(format!("{folder}/room-bounced.raw"), &bounced);
-            let _ = std::fs::write(format!("{folder}/room-guessed.raw"), &guessed_picture);
+            let _ = std::fs::write(format!("{folder}/{name}-bounced.raw"), &bounced);
+            let _ = std::fs::write(format!("{folder}/{name}-guessed.raw"), &guessed_picture);
         }
-        let bounced = light(&bounced);
+        (light(&bounced), guessed)
+    }
+
+    #[test]
+    fn a_room_with_no_window_stays_dark_at_noon_when_light_bounces() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A room six metres square and three high, standing in the open at
+        // noon.
+        let scene = shut_room([-3.0, 0.0, -3.0], [3.0, 3.0, 3.0]);
+        let camera = Camera {
+            position: [0.0, 1.5, 1.5],
+            ..Camera::default()
+        };
+        let (bounced, guessed) = noon_inside(&mut headless, &scene, &camera, "room");
         assert!(
             bounced * 3 < guessed,
             "the shut room glows: {bounced} with light bouncing against {guessed} guessed"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_hall_larger_than_the_copy_of_the_level_stays_dark_at_noon() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A hall ninety metres square and twenty high, shut on every side: a
+        // ray from a probe goes farther than a ray may, or out of the copy
+        // of the level, before it strikes a wall or the roof. Under the
+        // roof that is not the sky.
+        let scene = shut_room([-45.0, 0.0, -45.0], [45.0, 20.0, 45.0]);
+        // Looking down at the floor round the eye, among the probes: the
+        // far walls are beyond them, lit by the old guess either way.
+        let camera = Camera {
+            position: [0.0, 1.7, 0.0],
+            pitch: -0.9,
+            ..Camera::default()
+        };
+        let (bounced, guessed) = noon_inside(&mut headless, &scene, &camera, "hall");
+        assert!(
+            bounced * 3 < guessed,
+            "the shut hall glows: {bounced} with light bouncing against {guessed} guessed"
         );
         drop(headless);
         assert_eq!(validation_errors(), 0);
