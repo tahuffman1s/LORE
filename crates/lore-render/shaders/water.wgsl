@@ -561,7 +561,8 @@ fn mirrored_land(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> vec
             open = false;
             break;
         }
-        let spot = vec2<i32>(uv * size);
+        // Just inside the far edge, uv times the size can round up to it.
+        let spot = min(vec2<i32>(uv * size), vec2<i32>(size) - 1);
         // Depth is larger the nearer; nothing at all is 0, the sky.
         let held = textureLoad(behind_depth, spot, 0);
         let ahead = clip.z / clip.w;
