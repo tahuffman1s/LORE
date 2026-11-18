@@ -1743,12 +1743,12 @@ fn grid(gpu: &Arc<Gpu>) -> Result<(Buffer, Buffer), RenderError> {
 /// points, a square at a time from the outermost ring of squares round
 /// its middle in to the innermost, each ring walked round.
 ///
-/// Water writes no depth that the rest of itself is tested against, so its
-/// own triangles are drawn over each other in the order they come. The
-/// grid's middle is where the eye is, and along every line of sight from
-/// there what is farther off is in an outer ring: drawn first, so that a
-/// near crest is drawn over the far side of the trough behind it and not
-/// the other way round. Neighbours in a ring share two points, as
+/// Water writes its depth and is tested against it, but it is blended at
+/// its soft edges, where what is drawn first shows through what is drawn
+/// over it; so it is drawn far to near. The grid's middle is where the eye
+/// is, and along every line of sight from there what is farther off is in
+/// an outer ring: drawn first, so that a near crest is drawn over the far
+/// side of the trough behind it and not the other way round. Neighbours in a ring share two points, as
 /// neighbours in a row do, so no point is worked out more often.
 fn grid_triangles() -> Vec<u32> {
     let across = GRID_SQUARES + 1;

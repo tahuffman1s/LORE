@@ -1425,7 +1425,18 @@ impl MeshPipeline {
             let bit_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bindings)
                 .vertex_attribute_descriptions(&attributes);
-            let info = info.stages(&stages).vertex_input_state(&bit_input);
+            // Bits are tested against depth but write none, as before
+            // still water wrote its own: each is a square of which only
+            // the middle is a drop, and a bit drawn later behind another's
+            // clear corners must still show.
+            let bit_depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::GREATER);
+            let info = info
+                .stages(&stages)
+                .vertex_input_state(&bit_input)
+                .depth_stencil_state(&bit_depth);
             // SAFETY: as for the pipelines above.
             let created = unsafe {
                 device.create_graphics_pipelines(
