@@ -39,6 +39,12 @@ pub struct Input {
     sticks: [[f32; 2]; Stick::COUNT],
     /// Mouse movement accumulated since the last tick.
     mouse: [f32; 2],
+    /// Where the free pointer is, if there is one.
+    pointer: Option<[f32; 2]>,
+    /// The size of the screen, in the pointer's units.
+    screen: [f32; 2],
+    /// Wheel notches rolled over the pointer since the last tick.
+    wheel: f32,
     frame: InputFrame,
     /// The action waiting for a new key or button, and the one it replaces.
     listening: Option<(ActionId, Button)>,
@@ -120,6 +126,9 @@ impl Input {
             amount: [0.0; GamepadButton::COUNT],
             sticks: [[0.0; 2]; Stick::COUNT],
             mouse: [0.0; 2],
+            pointer: None,
+            screen: crate::frame::DEFAULT_SCREEN,
+            wheel: 0.0,
             frame,
             listening: None,
             rebound: None,
@@ -511,7 +520,37 @@ impl Input {
         self.held = [false; Button::COUNT];
         self.latched = [false; Button::COUNT];
         self.mouse = [0.0; 2];
+        self.wheel = 0.0;
         self.release_gamepad();
+    }
+
+    /// Reports where the free pointer is and how big the screen is, both in
+    /// whatever units the window layer uses (LORE's engine uses HUD units:
+    /// pixels on a screen 1080 high). `at` is measured from the top-left
+    /// corner, right and down, and is `None` when there is no free pointer:
+    /// the mouse looks around, it is outside the window, or there is no window.
+    ///
+    /// The latest report wins, and every tick carries it in
+    /// [`InputFrame::pointer`] and [`InputFrame::screen`]. Numbers that are
+    /// not finite are ignored: a bad `at` becomes `None`, and a bad `screen`
+    /// leaves the last one in place.
+    pub fn set_pointer(&mut self, at: Option<[f32; 2]>, screen: [f32; 2]) {
+        self.pointer = at.filter(|at| at.iter().all(|n| n.is_finite()));
+        if screen.iter().all(|n| n.is_finite() && *n > 0.0) {
+            self.screen = screen;
+        }
+    }
+
+    /// Reports wheel notches rolled over the free pointer: above zero is away
+    /// from the player, and a touchpad gives parts of a notch.
+    ///
+    /// Rolls add up until the next tick shows the total in
+    /// [`InputFrame::wheel`], then start again from zero. The total is kept
+    /// within 1000 notches either way, and numbers that are not finite are ignored.
+    pub fn roll_wheel(&mut self, notches: f32) {
+        if notches.is_finite() {
+            self.wheel = (self.wheel + notches).clamp(-1000.0, 1000.0);
+        }
     }
 
     /// Lets go of every gamepad control, for example when the gamepad disconnects.
@@ -547,6 +586,9 @@ impl Input {
             self.latched[index] = false;
         }
         let mouse = std::mem::take(&mut self.mouse);
+        self.frame.pointer = self.pointer;
+        self.frame.screen = self.screen;
+        self.frame.wheel = std::mem::take(&mut self.wheel);
 
         // Taken out while it is filled, so the rest of `self` can be read.
         let mut states = std::mem::take(&mut self.frame.actions);
@@ -579,6 +621,9 @@ impl Input {
         }
         let (actions, _) = self.map.parts();
         frame.tick = self.frame.tick;
+        frame.pointer = self.pointer;
+        frame.screen = self.screen;
+        frame.wheel = self.wheel;
         frame.actions.clear();
         frame.actions.extend(
             actions
@@ -601,7 +646,7 @@ impl Input {
         repressed: &[bool; Button::COUNT],
         mouse: [f32; 2],
     ) -> ActionState {
-        if action.set != self.active {
+        if action.set != self.active && !action.own {
             return ActionState {
                 just_released: last.pressed,
                 ..ActionState::default()
@@ -1525,5 +1570,64 @@ mod tests {
         assert_eq!(input.last_device(), Device::KeyboardAndMouse);
         let jump = input.map().action("jump").unwrap();
         assert!(!input.tick().pressed(jump));
+    }
+
+    #[test]
+    fn an_own_action_is_live_in_every_set_and_the_opening_press_does_not_close() {
+        let mut map = ActionMap::new();
+        let menu = map.add_set("menu", MouseMode::Pointer).unwrap();
+        let toggle = map.own_button("toggle", ["F1"]).unwrap();
+        let mut input = Input::new(map);
+
+        input.press(Key::F1);
+        let frame = input.tick();
+        assert!(frame.just_pressed(toggle));
+
+        // The set changes while F1 is still down: that press was for gameplay.
+        input.set_active_set(menu);
+        let frame = input.tick();
+        assert!(!frame.pressed(toggle) && frame.just_released(toggle));
+
+        input.release(Key::F1);
+        input.tick();
+        input.press(Key::F1);
+        let frame = input.tick();
+        assert!(frame.just_pressed(toggle));
+    }
+
+    #[test]
+    fn the_wheel_shows_once_and_the_pointer_stays() {
+        let mut input = Input::new(ActionMap::new());
+        assert_eq!(input.tick().screen, [1920.0, 1080.0]);
+        assert_eq!(input.tick().pointer, None);
+
+        input.set_pointer(Some([100.0, 50.0]), [1280.0, 720.0]);
+        input.roll_wheel(1.0);
+        input.roll_wheel(0.5);
+        input.roll_wheel(f32::NAN);
+        let mut peeked = InputFrame::default();
+        input.peek(&mut peeked);
+        assert_eq!(peeked.wheel, 1.5);
+        assert_eq!(peeked.pointer, Some([100.0, 50.0]));
+
+        let frame = input.tick();
+        assert_eq!(frame.wheel, 1.5);
+        assert_eq!(frame.pointer, Some([100.0, 50.0]));
+        assert_eq!(frame.screen, [1280.0, 720.0]);
+        let frame = input.tick();
+        assert_eq!(frame.wheel, 0.0);
+        assert_eq!(frame.pointer, Some([100.0, 50.0]));
+
+        // Bad numbers are ignored; the pointer going away is reported.
+        input.set_pointer(Some([f32::NAN, 1.0]), [0.0, 720.0]);
+        let frame = input.tick();
+        assert_eq!(frame.pointer, None);
+        assert_eq!(frame.screen, [1280.0, 720.0]);
+
+        input.roll_wheel(5000.0);
+        input.release_all();
+        assert_eq!(input.tick().wheel, 0.0);
+        input.roll_wheel(5000.0);
+        assert_eq!(input.tick().wheel, 1000.0);
     }
 }

@@ -797,7 +797,7 @@ declare game: {
     ---
     --- "pause" opens the menu every game has. While it is open, the actions
     --- above all read as let go, and the menu's own are heard instead:
-    --- "menu_move", "menu_confirm", "menu_back", "menu_previous_tab",
+    --- "menu_move", "menu_confirm", "menu_click", "menu_back", "menu_previous_tab",
     --- "menu_next_tab" and "menu_close". Escape goes back one screen, and
     --- closes the menu from its first screen; "menu_close" (P, or Start on
     --- a gamepad) closes it from anywhere.

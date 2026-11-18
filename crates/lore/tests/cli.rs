@@ -107,7 +107,7 @@ fn controls_makes_the_file_then_shows_what_the_player_changed_in_it() {
     let warned = stderr(&output);
     assert!(
         warned.contains(&format!(
-            "{}: Line 21: \"GamepadWset\" is not a known binding. Did you mean \
+            "{}: Line 24: \"GamepadWset\" is not a known binding. Did you mean \
              \"GamepadWest\"? Action \"reload\" keeps the game's own controls.",
             file.display()
         )),
@@ -671,7 +671,7 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
     assert!(!stderr(&output).contains("Jump number 3"));
     let said = stdout(&output);
     assert!(
-        said.contains("Each of the 22 actions was also pressed, held and let go"),
+        said.contains("Each of the 23 actions was also pressed, held and let go"),
         "{said}"
     );
     assert!(!said.contains("Nothing was pressed"), "{said}");

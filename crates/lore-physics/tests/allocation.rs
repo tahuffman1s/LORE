@@ -102,3 +102,45 @@ fn stepping_a_player_does_not_allocate() {
     assert!(player.position[1] > 0.25, "climbed the stair: {player:?}");
     assert_eq!(allocated, 0, "allocations in 300 ticks");
 }
+
+#[test]
+fn flying_a_player_does_not_allocate() {
+    use lore_physics::MoveMode;
+    let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
+    let mut triangles = Vec::new();
+    triangles.extend(quad(
+        [-40.0, 0.0, 40.0],
+        [40.0, 0.0, 40.0],
+        [40.0, 0.0, -40.0],
+        [-40.0, 0.0, -40.0],
+    ));
+    triangles.extend(quad(
+        [2.0, 0.0, 40.0],
+        [2.0, 0.0, -40.0],
+        [2.0, 3.0, -40.0],
+        [2.0, 3.0, 40.0],
+    ));
+    let level = Level::from_triangles(&triangles);
+    let settings = MoveSettings::default();
+    let mut player = Player::at([0.0, 1.0, 0.0], &settings);
+
+    let before = counted();
+    for tick in 0..300_u32 {
+        let input = MoveInput {
+            forward: 1.0,
+            right: 0.6,
+            yaw: -1.0,
+            pitch: -0.2,
+            sprint: true,
+            mode: if tick < 150 {
+                MoveMode::Fly
+            } else {
+                MoveMode::Noclip
+            },
+            ..MoveInput::default()
+        };
+        player.step(&level, &settings, &input, 1.0 / 60.0);
+    }
+    let allocated = ALLOCATIONS.get() - before;
+    assert_eq!(allocated, 0, "allocations in 300 flying ticks");
+}

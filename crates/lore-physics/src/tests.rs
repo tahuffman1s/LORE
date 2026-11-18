@@ -531,6 +531,7 @@ fn the_same_inputs_replay_to_the_same_bits() {
         crouch: tick % 200 > 170,
         sprint: tick % 120 < 60,
         pitch: 0.0,
+        ..MoveInput::default()
     };
     let play = |mut player: Player, ticks: std::ops::Range<usize>| {
         let mut history = Vec::new();
@@ -889,6 +890,7 @@ fn a_long_erratic_run_never_ends_up_inside_or_outside_the_level() {
                 crouch: bits >> 18 & 7 == 0,
                 sprint: bits >> 21 & 1 == 0,
                 pitch: 0.0,
+                ..MoveInput::default()
             };
         } else {
             // Jump is pressed, not held, so it can fire again.
@@ -1925,6 +1927,7 @@ fn a_swim_replays_to_the_same_bits() {
         jump: tick % 300 > 280,
         crouch: (1000..1100).contains(&tick),
         sprint: tick % 400 < 150,
+        ..MoveInput::default()
     };
     let play = |mut player: Player, ticks: std::ops::Range<usize>| {
         let mut history = Vec::new();

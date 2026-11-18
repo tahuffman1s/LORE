@@ -3,7 +3,7 @@
 //! All of this is in "reference pixels": pixels on a screen 1080 high.
 //! The draw list is scaled to real pixels at the very end.
 
-use crate::node::{Kind, NONE, Node, Rect, children};
+use crate::node::{Anchor, Kind, NONE, Node, Rect, children};
 use crate::theme::{SMALLEST_TEXT, TextMeasure, Theme};
 
 /// Text is never drawn smaller than [`SMALLEST_TEXT`].
@@ -208,6 +208,54 @@ pub(crate) fn place_screen(nodes: &mut [Node], first: usize, end: usize, theme: 
     }
 }
 
+/// The size a HUD text of `height` takes: the height is raised to the
+/// smallest readable size, and the width comes from `measure`.
+///
+/// This is in UI units, pixels on a screen 1080 high, like everything a HUD
+/// piece is given.
+#[must_use]
+pub fn hud_text_size(text: &str, height: f32, measure: &dyn TextMeasure) -> [f32; 2] {
+    let height = text_size(height);
+    [measure.width(text, height), height]
+}
+
+/// Where a HUD piece of `size` pinned at `anchor` and moved by `offset` sits
+/// on a screen of `screen`, as `[x, y, width, height]`, all in UI units
+/// (pixels on a screen 1080 high). It stays inside the default theme's safe
+/// margin, exactly as the HUD of a [`Ui`](crate::Ui) does.
+///
+/// A script uses this to tell which HUD piece is under the pointer.
+#[must_use]
+pub fn hud_area(anchor: Anchor, offset: [f32; 2], size: [f32; 2], screen: [f32; 2]) -> [f32; 4] {
+    let safe = safe_area(screen, Theme::default().safe_margin);
+    let placed = pin(anchor, offset, size, safe);
+    [placed.x, placed.y, placed.w, placed.h]
+}
+
+/// The middle of a screen of `size` that a share `margin` of each edge is
+/// kept clear of.
+pub(crate) fn safe_area(size: [f32; 2], margin: f32) -> Rect {
+    let margin = margin.clamp(0.0, 0.25);
+    let [width, height] = size;
+    Rect {
+        x: width * margin,
+        y: height * margin,
+        w: width * (1.0 - 2.0 * margin),
+        h: height * (1.0 - 2.0 * margin),
+    }
+}
+
+/// Pins a box of `size` to `anchor` inside `safe`, then moves it by `offset`.
+fn pin(anchor: Anchor, offset: [f32; 2], size: [f32; 2], safe: Rect) -> Rect {
+    let [across, down] = anchor.fractions();
+    Rect {
+        x: safe.x + across * (safe.w - size[0]) + offset[0],
+        y: safe.y + down * (safe.h - size[1]) + offset[1],
+        w: size[0],
+        h: size[1],
+    }
+}
+
 /// Pins one HUD piece to its anchor inside the safe area.
 pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) {
     let (anchor, offset) = match &node.kind {
@@ -217,8 +265,7 @@ pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) 
             size,
             ..
         } => {
-            let size = text_size(*size);
-            node.size = [measure.width(&node.text, size), size];
+            node.size = hud_text_size(&node.text, *size, measure);
             (*anchor, *offset)
         }
         Kind::HudBar { anchor, offset, .. } | Kind::HudRect { anchor, offset, .. } => {
@@ -226,11 +273,5 @@ pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) 
         }
         _ => return,
     };
-    let [across, down] = anchor.fractions();
-    node.rect = Rect {
-        x: safe.x + across * (safe.w - node.size[0]) + offset[0],
-        y: safe.y + down * (safe.h - node.size[1]) + offset[1],
-        w: node.size[0],
-        h: node.size[1],
-    };
+    node.rect = pin(anchor, offset, node.size, safe);
 }
