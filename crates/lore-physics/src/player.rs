@@ -581,14 +581,19 @@ impl Player {
 
         // Ice bears whoever is on it: nobody goes down through the frozen
         // surface of still water, and whoever was in the water when it
-        // froze is lifted onto it.
+        // froze is lifted onto it, as far as there is room: under a dock
+        // they stay frozen in where they stood until they walk out.
         let came_to = middle - to_middle;
         if self.hoist <= 0.0
             && velocity.y <= 0.0
             && let Some(ice) = level.ice_around(came_to.to_array())
             && came_to.y <= ice + ICE_REACH
         {
-            middle.y += ice - came_to.y;
+            let lift = Vector::Y * (ice - came_to.y);
+            let room = level
+                .sweep(&body.shape, middle, lift, SKIN)
+                .map_or(1.0, |touch| touch.fraction);
+            middle += lift * room;
             velocity.y = 0.0;
             ground = Vector::Y;
             self.grounded = true;

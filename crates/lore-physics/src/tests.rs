@@ -2383,3 +2383,36 @@ fn a_walker_goes_from_the_shore_onto_the_ice_and_back() {
         "{walker:?}"
     );
 }
+
+#[test]
+fn a_wader_under_a_dock_when_the_lake_freezes_is_not_lifted_into_it() {
+    // A lake 1.2 m deep, and a dock whose underside is 0.7 m over the
+    // water: a wader stands under it with their head 0.1 m short of it.
+    let deck = 0.7;
+    let level = flooded(
+        &[bed(1.2), block([-2.0, deck, -2.0], [2.0, deck + 0.2, 2.0])],
+        [-40.0, -40.0],
+        [40.0, 40.0],
+        0.0,
+    );
+    let mut wader = standing_at(&level, [0.0, -1.2, 0.0]);
+    assert!(!wader.swimming, "{wader:?}");
+    level.set_ice(0.1);
+    // The ice lifts them only as far as the dock lets it.
+    run(&mut wader, &level, MoveInput::default(), SECOND / 2);
+    let rest = wader.position;
+    let head = rest[1] + 1.8;
+    assert!(head <= deck && head > deck - 0.03, "{wader:?}");
+    for _ in 0..SECOND {
+        wader.step(&level, &MoveSettings::default(), &MoveInput::default(), DT);
+        assert_eq!(wader.position, rest, "the wader jitters");
+    }
+    // Out from under it, the ice has them on top of it.
+    run(&mut wader, &level, forward(), 2 * SECOND);
+    assert!(wader.position[2] < -3.0, "{wader:?}");
+    run(&mut wader, &level, MoveInput::default(), SECOND);
+    assert!(
+        wader.grounded && close(wader.position[1], 0.0, 1.0e-4),
+        "{wader:?}"
+    );
+}
