@@ -262,10 +262,15 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             upscaling: lore_render::Upscaling::Native,
             vsync: false,
             frame_rate_limit: 390.0,
+            reflections: false,
         }
     );
     assert!((chosen.sensitivity - 0.9).abs() < 1e-6);
-    assert_eq!(played.changes, 12, "one change for each setting");
+    assert_eq!(
+        played.changes as usize,
+        told.len(),
+        "one change for each setting"
+    );
     // The menu shows what is in force.
     assert_eq!(played.value_of("Field of view"), "73");
     assert_eq!(played.value_of("Upscaling"), "<  native  >");
@@ -353,6 +358,7 @@ fn a_frame_rate_limit_of_0_is_shown_as_no_limit() {
         &MAIN.replace("{name}", "test"),
         Settings {
             frame_rate_limit: 30.0,
+            reflections: false,
             ..Settings::default()
         },
     );

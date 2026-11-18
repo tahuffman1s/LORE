@@ -260,6 +260,10 @@ settings! {
     /// game back.
     frame_rate_limit: f32 = 400.0, Shape::Limit(Settings::FRAME_RATE_LIMIT), "Graphics",
         "Frame rate limit";
+    /// true lets wet ground, puddles, glass and polished metal mirror what
+    /// is round them. false shows only the colours of the sky and the
+    /// ground in them, which is faster where much of the picture is wet.
+    reflections: bool = true, Shape::Toggle, "Graphics", "Reflections";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -819,6 +823,7 @@ mod tests {
             upscaling: Upscaling::UltraPerformance,
             vsync: false,
             frame_rate_limit: 144.0,
+            reflections: false,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -895,8 +900,8 @@ mod tests {
                 "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
-                 `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync` and \
-                 `frame_rate_limit`.",
+                 `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
+                 `frame_rate_limit` and `reflections`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",
@@ -1016,6 +1021,7 @@ mod tests {
         // script that asks for 20 from higher up gets the lowest limit.
         let mut settings = Settings {
             frame_rate_limit: 30.0,
+            reflections: false,
             ..Settings::default()
         };
         settings.change("frame_rate_limit", &SettingValue::Number(20.0));

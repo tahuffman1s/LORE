@@ -490,6 +490,7 @@ impl<G: Game> App<G> {
             renderer.set_upscaling(settings.upscaling);
             renderer.set_vsync(settings.vsync);
             renderer.set_exposure(settings.exposure_stops());
+            renderer.set_reflections(settings.reflections);
         }
         // The field of view is read when the camera is next placed, and
         // the size of the HUD by `follow_ui_size`.
@@ -929,6 +930,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                         }
                         renderer.set_grid(self.editing);
                         renderer.set_exposure(settings.exposure_stops());
+                        renderer.set_reflections(settings.reflections);
                         renderer.set_camera(Camera {
                             position: [0.0, STANDING_EYE, 0.0],
                             fov_degrees: settings.field_of_view,
