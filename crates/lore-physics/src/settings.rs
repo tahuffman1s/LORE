@@ -2,6 +2,8 @@
 
 use parry3d::shape::Capsule;
 
+use crate::footing::Footing;
+
 /// The furthest up or down a look counts, in radians: a little short of
 /// straight up, so that forward always points somewhere.
 const STEEPEST_LOOK: f32 = 1.5;
@@ -31,6 +33,9 @@ pub struct MoveInput {
     /// matters to a swimmer: under water forward is the way they look, and
     /// at the surface looking steeply down dives.
     pub pitch: f32,
+    /// What the ground underfoot does to walking. The default changes
+    /// nothing; see [`Footing`].
+    pub footing: Footing,
 }
 
 impl MoveInput {

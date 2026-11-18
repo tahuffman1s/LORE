@@ -584,6 +584,7 @@ impl Controls {
                 crouch: held(self.crouch),
                 sprint: held(self.sprint),
                 pitch: *pitch,
+                ..MoveInput::default()
             },
             pitch: *pitch,
             fire: held(self.fire),
