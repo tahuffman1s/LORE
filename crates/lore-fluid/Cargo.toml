@@ -1,0 +1,16 @@
+[package]
+name = "lore-fluid"
+description = "Fluids for LORE: sprays, splashes, pools and films that run down walls, and what they do underfoot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lore-physics = { path = "../lore-physics" }
+
+# Trig, exp, pow and cube roots that give the same digits on every machine.
+libm = "0.2"
+
+[lints]
+workspace = true
