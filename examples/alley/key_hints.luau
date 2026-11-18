@@ -5,7 +5,7 @@
 local hints = {}
 
 -- A faint band behind the words, so they read over a bright floor too.
-local band = game.hud.box({ at = "bottom", down = -2, width = 1120, height = 36, color = "#00000048" })
+local band = game.hud.box({ at = "bottom", down = -2, width = 1280, height = 36, color = "#00000060" })
 local line = game.hud.text("", { at = "bottom", down = -6, size = 24, color = "#ffffff99" })
 
 -- True while the player is on a gamepad. LORE has no call that says so, so
@@ -39,9 +39,10 @@ function hints.draw(shown: boolean)
         )
     else
         line.text = string.format(
-            "%s weather     %s debug     %s frame meter     %s clear fluids     %s change fluid     %s spray",
+            "%s weather     %s debug     %s fluid     %s frame meter     %s clear fluids     %s change fluid     %s spray",
             label("weather_menu"),
             label("debug_menu"),
+            label("fluid_menu"),
             label("frame_meter"),
             label("clear_fluids"),
             label("interact"),

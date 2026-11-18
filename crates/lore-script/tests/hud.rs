@@ -291,16 +291,16 @@ fn the_hud_can_be_changed_while_a_picture_is_drawn() {
 #[test]
 fn a_piece_made_on_every_tick_is_stopped_and_explained() {
     let mut host = running(r#"game.onTick(function() game.hud.text("Score: 0") end)"#);
-    for _ in 0..300 {
+    for _ in 0..1100 {
         tick(&mut host);
     }
     let error = host.last_error().expect("too many pieces");
     assert!(
-        error.message.contains("already has 256 pieces")
+        error.message.contains("already has 1024 pieces")
             && error.message.contains("at the top of the file"),
         "{error}"
     );
-    assert_eq!(pieces(&host).len(), 256);
+    assert_eq!(pieces(&host).len(), 1024);
 }
 
 #[test]

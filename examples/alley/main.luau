@@ -12,10 +12,13 @@
 --        places, and what the player is doing
 --   F12  the frame meter: off, one line, or numbers with a graph
 --   F8   clear away every fluid (while no menu is open)
---   E    change the fluid the gun shoots; the fire button shoots it
+--   E    change the fluid the gun shoots (the mouse wheel does too); the
+--        fire button shoots it
+--   F2   the fluid menu: change what the fluid in hand is, while it lies
+--        in the world: its colour, how thick, how slippery, how sticky...
 --
 -- A gamepad has only two buttons LORE leaves free for a game, Select and
--- the left bumper, so the two menus are tabs of one panel. Select opens
+-- the left bumper, so the three menus are tabs of one panel. Select opens
 -- it at the weather; while it is open the bumpers go from tab to tab and
 -- B closes it. The frame meter is a row of the debug menu. The left
 -- bumper clears the fluids while no menu is open. Y changes the fluid and
@@ -27,6 +30,7 @@
 
 game.input.bind("weather_menu", { "F1", "GamepadSelect" })
 game.input.bind("debug_menu", { "F7" })
+game.input.bind("fluid_menu", { "F2" })
 game.input.bind("frame_meter", { "F12" })
 game.input.bind("clear_fluids", { "F8", "LeftBumper" })
 
@@ -37,9 +41,10 @@ local meter = require("./frame_meter")
 local hints = require("./key_hints")
 local fluids = require("./fluids")
 local gun = require("./fluid_gun")
+local fluidMenu = require("./fluid_menu")
 
--- Both menus are tabs of one panel, so one gamepad button reaches both.
-local panel = menu.panel({ weatherMenu, debugMenu.menu })
+-- The menus are tabs of one panel, so one gamepad button reaches them all.
+local panel = menu.panel({ weatherMenu, debugMenu.menu, fluidMenu })
 
 -- The alley reads best under a grey sky early in the afternoon: in sun its
 -- shadowed walls are nearly black.
@@ -48,11 +53,13 @@ game.onStart(function()
     game.weather.set("overcast", 0)
 end)
 
-game.onTick(function()
+game.onTick(function(step)
     if game.input.justPressed("weather_menu") then
         panel:toggle(weatherMenu)
     elseif game.input.justPressed("debug_menu") then
         panel:toggle(debugMenu.menu)
+    elseif game.input.justPressed("fluid_menu") then
+        panel:toggle(fluidMenu)
     elseif game.input.justPressed("frame_meter") then
         meter.cycle()
     elseif game.input.justPressed("clear_fluids") and not panel.isOpen then
@@ -63,6 +70,7 @@ game.onTick(function()
     if not panel.isOpen then
         gun.update()
     end
+    fluids.update(step)
 end)
 
 game.onDraw(function()

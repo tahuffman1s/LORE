@@ -38,9 +38,11 @@ pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered"
 #[cfg(test)]
 pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
 
-/// The most pieces a HUD holds. Far more than a game shows at once:
-/// reaching it means pieces are being made over and over by mistake.
-const MAX_PIECES: usize = 256;
+/// The most pieces a HUD holds. Far more than a game shows at once, with
+/// room for a few menus of rows that are made once and hidden until they
+/// are opened: reaching it means pieces are being made over and over by
+/// mistake.
+const MAX_PIECES: usize = 1024;
 
 /// The most characters of a piece of text that are kept. Scripts write
 /// their own, so one can be any length.

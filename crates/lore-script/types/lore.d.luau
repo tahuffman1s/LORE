@@ -1084,7 +1084,7 @@ declare game: {
     --- Pieces made at the top of the file are made again when the script is
     --- saved, so the HUD follows the file as you edit it. For a list that
     --- grows and shrinks, make as many pieces as it can have and hide the
-    --- ones not in use; a HUD holds up to 256 pieces.
+    --- ones not in use; a HUD holds up to 1024 pieces.
     ---
     --- Every piece takes these options, all of which can be left out:
     ---   at: where on the screen it is pinned: "top left" (the default),

@@ -562,15 +562,65 @@ fn fluid_behind(uv: vec2<f32>) -> vec3<f32> {
     return textureSampleLevel(behind_colour, clamp_sampler, uv, 0.0).rgb;
 }
 
+// The sky as a surface at `origin` mirrors it along `way`: the clear sky's
+// light, the white of a cloud where the line comes to the clouds, and under
+// a sky that is all cloud the grey light the cloud gives, which is what
+// makes a wet road shine on a dull day. The level's water mirrors the sky
+// the same way.
+fn fluid_sky(origin: vec3<f32>, way: vec3<f32>) -> vec3<f32> {
+    let up = normalize(vec3<f32>(way.x, abs(way.y) + 0.012, way.z));
+    var mirrored = sky_colour(up);
+    if view.clouds.x > 0.0 {
+        let height = view.clouds.z + CLOUD_MIDDLE;
+        let over = origin + up * ((height - origin.y) / max(up.y, 0.06));
+        let white = view.sun.rgb / PI * 0.9 + view.sky.rgb;
+        mirrored = mix(mirrored, white, smoothstep(0.0, 0.5, cloud(over, false)) * 0.7);
+        let closed = smoothstep(0.6, 1.0, view.clouds.x);
+        mirrored = mix(mirrored, view.sky.rgb * 1.1, closed);
+    }
+    return mirrored;
+}
+
+// How much of a line from `start` along `way` comes out under the open sky,
+// from 0 (it runs into something) to 1. The picture knows nothing of what
+// is outside it, but the picture from above, which says how high the
+// highest thing over each place is, does: the line is walked over it in
+// steps that double, out to some fifty metres, and is stopped where it is
+// lower than what stands there.
+fn fluid_reaches_sky(start: vec3<f32>, way: vec3<f32>) -> f32 {
+    if view.shadows.x < 0.5 {
+        return 1.0;
+    }
+    let depth_metres = view.shadow_reach[4].y;
+    let size = vec2<f32>(textureDimensions(shadow_map));
+    var open = 1.0;
+    var far = 1.5;
+    for (var number = 0; number < 6; number++) {
+        let above = view.shadow_from_world[4] * vec4<f32>(start + way * far, 1.0);
+        far *= 2.0;
+        let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
+        if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.02 {
+            break;
+        }
+        let held = textureLoad(shadow_map, vec2<i32>(uv * size), 4, 0);
+        // How far over the line the highest thing there is.
+        let over = (above.z - held) * depth_metres;
+        open = min(open, 1.0 - smoothstep(0.3, 1.5, over));
+    }
+    return open;
+}
+
 // What a surface at `origin` mirrors along `bounced`: the line is walked
 // through the picture of the solid world in growing steps until it passes
-// behind something, which is then what is seen; the sky if it never does.
-// Rough surfaces blur it, more the farther what is mirrored. A line that
-// leaves the picture sees what is at its edge, which is most often more of
-// the wall or trees it was rising past.
+// behind something, which is then what is seen. A line that leaves the
+// picture, as most do from a puddle looked down on, goes on to the sky if
+// nothing stands in its way outside the picture, and that is what makes a
+// puddle bright on a dark road; if something does, it sees what is at the
+// picture's edge, which is most often more of the wall it was rising past.
+// Rough surfaces blur it, more the farther what is mirrored.
 fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, rough: f32) -> vec3<f32> {
     let size = vec2<f32>(textureDimensions(behind_colour));
-    let sky = sky_colour(bounced);
+    let sky = fluid_sky(origin, bounced);
     var stride = 0.03;
     var at = origin + bounced * (0.004 + stride * scattered(pixel));
     var before = at;
@@ -626,14 +676,17 @@ fn fluid_reflected(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>, roug
         }
         last = seen;
     }
+    let open = fluid_reaches_sky(at, bounced);
     if last.x < 0.0 {
-        return sky;
+        // It was never in the picture: what stands in its way is as dim as
+        // the shade it stands in.
+        return mix(surroundings(bounced) * 0.35, sky, open);
     }
     let edge = vec2<i32>(clamp(last.xy, vec2<f32>(0.0), vec2<f32>(0.9999)) * size);
     if textureLoad(behind_depth, edge, 0) <= 0.0 {
         return sky;
     }
-    return fluid_behind(last.xy);
+    return mix(fluid_behind(last.xy), sky, open);
 }
 
 // The sun's glint (GGX, with Smith's visibility): light sent to the eye
@@ -830,6 +883,10 @@ fn film_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32>)
     return seen;
 }
 
+// How much of a clear jet in the air is seen as white spray and not seen
+// through.
+const SPRAY_WHITE: f32 = 0.5;
+
 struct StreamSeen {
     colour: vec3<f32>,
     world: vec3<f32>,
@@ -903,7 +960,15 @@ fn stream_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32
     let sunlit = sunlight(seen.world, normal, pixel) * under_clouds(seen.world);
     let body = (scatters / max(takes + scatters, vec3<f32>(1.0e-4)))
         * fluid_lit(seen.world, normal, pixel, sunlit) * (vec3<f32>(1.0) - passes);
-    let into = (behind * passes + body) * (1.0 - metal);
+    // A jet of clear liquid in the air is not a rod of glass: it is ragged,
+    // full of air and breaking into drops, and every one of them turns
+    // light every way, which is why a hose's jet and a fountain are white.
+    // The clearer the liquid, the more of this there is to see; honey and
+    // paint show their own colour instead.
+    let clear = min(passes.r, min(passes.g, passes.b));
+    let ragged = SPRAY_WHITE * clear;
+    let white = fluid_lit(seen.world, normal, pixel, sunlit) * passes;
+    let into = (behind * passes * (1.0 - ragged) + white * ragged + body) * (1.0 - metal);
 
     let glass = ((bends - 1.0) / (bends + 1.0)) * ((bends - 1.0) / (bends + 1.0));
     let f0 = mix(vec3<f32>(glass), min(scatter_colour, vec3<f32>(1.0)), metal);

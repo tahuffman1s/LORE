@@ -216,8 +216,10 @@ const READY: [Ready; 13] = [
     // 1.2 g/cm³, about 35 mN/m.
     ready!("tar", 0x0a0a0a, 0.001, 0.0, 0.0, 0.9, 0.0, 1.6; 0.85, 1.2, 0.17, 0.0, 0.95, 0.0, 0.0, 0.0, false),
     // Battery acid (35 % sulfuric) 2.5 mPa·s, 1.26 g/cm³, about 75 mN/m,
-    // n 1.37; the faint yellow-green of acid that has eaten metal.
-    ready!("acid", 0xe6f5a0, 0.5, 0.0, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false),
+    // n 1.37. Clean acid is as clear as water and a player could not tell
+    // the two apart, so this is acid that has been at work: yellow-green
+    // and a little cloudy with what it has eaten.
+    ready!("acid", 0xcfe84a, 0.05, 0.3, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false),
     // Basalt melt 100-1000 Pa·s at eruption, 2.7 g/cm³, about 0.35 N/m;
     // glows at about 1100 °C.
     ready!("lava", 0xe77c27, 0.001, 0.75, 1.0, 0.51, 0.0, 1.5; 0.75, 2.7, 0.89, 0.0, 0.5, 0.0, 1.0, 0.0, false),
