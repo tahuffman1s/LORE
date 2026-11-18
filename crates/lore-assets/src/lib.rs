@@ -35,6 +35,6 @@ pub use error::AssetError;
 pub use load::LoadOptions;
 pub use scene::{
     AlphaMode, Animation, Bounds, Filter, Image, Instance, Interpolation, Joint, Keys, Light,
-    LightKind, MAX_JOINTS, Marker, Material, Mesh, MeshPart, Node, Pose, Sampler, Scene, Skin,
-    Texture, TextureRef, TextureTransform, Track, Transform, Water, Wrap,
+    LightKind, MAX_JOINTS, Marker, Material, Mesh, MeshPart, Node, Paint, Pose, Sampler, Scene,
+    Skin, Texture, TextureRef, TextureTransform, Track, Transform, Water, Wrap,
 };

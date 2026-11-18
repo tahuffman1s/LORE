@@ -687,6 +687,93 @@ impl Material {
     }
 }
 
+/// What a material says of the other material painted over it: see
+/// [`Material::paint`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paint {
+    /// The name of the material that is painted over this one.
+    pub with: String,
+    /// How soft the edge between the two is, from 0 (a knife's edge) to 1
+    /// (a slow fade). It is 0.15 unless the material says.
+    pub edge: f32,
+    /// How ragged the edge is, from 0 (it follows the mesh's own fade from
+    /// point to point, straight and even) to 1 (broken into islands and
+    /// inlets, as plaster comes away from brick). It is 0.8 unless the
+    /// material says.
+    pub ragged: f32,
+}
+
+impl Material {
+    /// The other material painted over this one, if its maker asked for one
+    /// with the custom property `paint`.
+    ///
+    /// A real wall is not one material with a rectangle of another stuck on
+    /// it: plaster has come away from brick in patches, and a road is
+    /// asphalt with tar patches. A material with `paint` shows the other
+    /// material wherever the alpha of the mesh's colour attribute is rubbed
+    /// out (0 is all the other material, 1 none of it, which is what a mesh
+    /// that was never painted has). All of the other material is used: its
+    /// colour, bumps, roughness and shading. The edge between the two is
+    /// broken up by fine noise, so it is ragged and has no seam.
+    ///
+    /// `paint` is the other material's name, or `with` its name and how
+    /// `edge` (soft) and `ragged` the edge is, each from 0 to 1.
+    ///
+    /// ```
+    /// use lore_assets::Material;
+    ///
+    /// let brick = Material {
+    ///     extras: Some(r#"{"paint": "old plaster"}"#.to_owned()),
+    ///     ..Material::default()
+    /// };
+    /// let paint = brick.paint().unwrap();
+    /// assert_eq!(paint.with, "old plaster");
+    /// assert_eq!((paint.edge, paint.ragged), (0.15, 0.8));
+    ///
+    /// let road = Material {
+    ///     extras: Some(r#"{"paint": {"with": "tar", "edge": 0.05, "ragged": 1}}"#.to_owned()),
+    ///     ..Material::default()
+    /// };
+    /// assert_eq!(road.paint().unwrap().edge, 0.05);
+    /// assert_eq!(Material::default().paint(), None);
+    /// ```
+    #[must_use]
+    pub fn paint(&self) -> Option<Paint> {
+        use gltf::json::{Value, deserialize::from_str};
+
+        const EDGE: f32 = 0.15;
+        const RAGGED: f32 = 0.8;
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return None;
+        };
+        // A share from 0 to 1, or `usual` for anything else.
+        let share = |value: Option<&Value>, usual: f32| match value.and_then(Value::as_f64) {
+            // A setting, and no finer than an f32.
+            #[allow(clippy::cast_possible_truncation)]
+            Some(said) if said.is_finite() => (said as f32).clamp(0.0, 1.0),
+            _ => usual,
+        };
+        match properties.get("paint")? {
+            Value::String(with) if !with.trim().is_empty() => Some(Paint {
+                with: with.trim().to_owned(),
+                edge: EDGE,
+                ragged: RAGGED,
+            }),
+            Value::Object(said) => match said.get("with") {
+                Some(Value::String(with)) if !with.trim().is_empty() => Some(Paint {
+                    with: with.trim().to_owned(),
+                    edge: share(said.get("edge"), EDGE),
+                    ragged: share(said.get("ragged"), RAGGED),
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 impl Default for Material {
     /// Matte white: what a shape with no material is drawn with.
     fn default() -> Self {

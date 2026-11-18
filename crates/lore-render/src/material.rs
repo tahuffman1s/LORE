@@ -15,9 +15,18 @@ use crate::texture::Textures;
 /// base colour, metallic-roughness, normal, occlusion and emissive.
 const SLOTS: usize = 5;
 
-/// The size in bytes of the shader's `Material`: four rows of four numbers,
-/// then two rows for each texture's placing.
-pub(crate) const MATERIAL_BYTES: usize = 64 + SLOTS * 32;
+/// The size in bytes of one material's numbers as the shader has them: four
+/// rows of four numbers, then two rows for each texture's placing.
+const LAYER_BYTES: usize = 64 + SLOTS * 32;
+
+/// The size in bytes of the shader's `Material`: the material's own
+/// numbers, those of the material painted over it, and a row that says how
+/// the two meet.
+pub(crate) const MATERIAL_BYTES: usize = 2 * LAYER_BYTES + 16;
+
+/// Which textures of a material are really there to be read, in the
+/// shader's order.
+type Present = [bool; SLOTS];
 
 const DOING: &str = "copying the level's materials to the graphics card";
 
@@ -58,8 +67,36 @@ fn placing(texture: Option<&TextureRef>) -> [[f32; 4]; 2] {
 }
 
 /// The shader's `Material` for `material`. `present` says which of its
-/// textures are really there to be read, in the shader's order.
-pub(crate) fn material_bytes(material: &Material, present: [bool; SLOTS]) -> [u8; MATERIAL_BYTES] {
+/// textures are really there to be read, in the shader's order. `over` is
+/// the material painted over it, if it names one that the scene has, with
+/// which of that one's textures are there.
+pub(crate) fn material_bytes(
+    material: &Material,
+    present: Present,
+    over: Option<(&Material, Present)>,
+) -> [u8; MATERIAL_BYTES] {
+    let mut bytes = [0_u8; MATERIAL_BYTES];
+    bytes[..LAYER_BYTES].copy_from_slice(&layer_bytes(material, present));
+    // With nothing painted over it, the second layer is the material
+    // itself: a shader that read it by mistake would draw nothing odd.
+    let (other, there) = over.unwrap_or((material, present));
+    bytes[LAYER_BYTES..2 * LAYER_BYTES].copy_from_slice(&layer_bytes(other, there));
+    if let (Some(_), Some(paint)) = (over, material.paint()) {
+        let how = [1.0_f32, paint.edge, paint.ragged, 0.0];
+        for (slot, number) in bytes[2 * LAYER_BYTES..]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(how)
+        {
+            *slot = number.to_ne_bytes();
+        }
+    }
+    bytes
+}
+
+/// One material's numbers as the shader has them.
+fn layer_bytes(material: &Material, present: Present) -> [u8; LAYER_BYTES] {
     let cutoff = match material.alpha_mode {
         AlphaMode::Mask { cutoff } => cutoff,
         AlphaMode::Opaque | AlphaMode::Blend => 0.0,
@@ -83,7 +120,7 @@ pub(crate) fn material_bytes(material: &Material, present: [bool; SLOTS]) -> [u8
     }
     let placings = slots(material).map(|(texture, _)| placing(texture));
 
-    let mut bytes = [0_u8; MATERIAL_BYTES];
+    let mut bytes = [0_u8; LAYER_BYTES];
     let (rows, _) = bytes.as_chunks_mut::<4>();
     for (slot, number) in rows.iter_mut().zip(numbers.iter().flatten()) {
         *slot = number.to_ne_bytes();
@@ -106,18 +143,21 @@ pub(crate) fn material_bytes(material: &Material, present: [bool; SLOTS]) -> [u8
 }
 
 /// Makes the layout of a material's descriptor set: its block of numbers,
-/// its five textures, and a sampler for each.
+/// its five textures and a sampler for each, then the five textures of the
+/// material painted over it and a sampler for each of those.
 ///
 /// The mesh pipeline and every scene's materials make one each; Vulkan
 /// treats two layouts made the same way as the same.
 pub(crate) fn set_layout(gpu: &Gpu) -> Result<vk::DescriptorSetLayout, RenderError> {
-    let mut bindings = [vk::DescriptorSetLayoutBinding::default(); 1 + 2 * SLOTS];
+    let mut bindings = [vk::DescriptorSetLayoutBinding::default(); 1 + 4 * SLOTS];
     for (number, binding) in (0_u32..).zip(&mut bindings) {
         *binding = binding
             .binding(number)
             .descriptor_type(match number as usize {
                 0 => vk::DescriptorType::UNIFORM_BUFFER,
-                slot if slot <= SLOTS => vk::DescriptorType::SAMPLED_IMAGE,
+                // Pictures, samplers, then the same again for what is
+                // painted over.
+                slot if ((slot - 1) / SLOTS).is_multiple_of(2) => vk::DescriptorType::SAMPLED_IMAGE,
                 _ => vk::DescriptorType::SAMPLER,
             })
             .descriptor_count(1)
@@ -187,6 +227,20 @@ impl Materials {
             }
             reads.push((read, present));
         }
+        // The material painted over each, by the name it gives: the first
+        // of the scene's materials with that name. One that names itself,
+        // or a material that is not there, has nothing painted over it.
+        let over: Vec<Option<usize>> = all()
+            .enumerate()
+            .map(|(own, material)| {
+                let wanted = material.paint()?.with;
+                scene
+                    .materials
+                    .iter()
+                    .position(|other| other.name.as_deref() == Some(wanted.as_str()))
+                    .filter(|found| *found != own)
+            })
+            .collect();
 
         // Every material's numbers in one buffer, each starting where the
         // graphics card allows a block to start.
@@ -200,27 +254,32 @@ impl Materials {
         .max(1);
         let stride = (MATERIAL_BYTES as u64).next_multiple_of(step);
         let mut numbers = vec![0_u8; usize::try_from(stride).unwrap_or(MATERIAL_BYTES) * count];
-        for ((material, (_, present)), block) in all()
+        for (((material, (_, present)), over), block) in all()
             .zip(&reads)
+            .zip(&over)
             .zip(numbers.chunks_mut(usize::try_from(stride).unwrap_or(MATERIAL_BYTES)))
         {
-            block[..MATERIAL_BYTES].copy_from_slice(&material_bytes(material, *present));
+            let other =
+                over.and_then(|other| Some((scene.materials.get(other)?, reads.get(other)?.1)));
+            block[..MATERIAL_BYTES].copy_from_slice(&material_bytes(material, *present, other));
         }
         let buffer = Buffer::holding(gpu, &numbers, vk::BufferUsageFlags::UNIFORM_BUFFER, DOING)?;
 
         materials.layout = set_layout(gpu)?;
         let sets = u32::try_from(count).map_err(|_| RenderError::OutOfMemory { doing: DOING })?;
         let per_set = SLOTS as u32;
+        // Each set holds its material's pictures and samplers and those of
+        // what is painted over it.
         let sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(sets),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(sets.saturating_mul(per_set)),
+                .descriptor_count(sets.saturating_mul(2 * per_set)),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLER)
-                .descriptor_count(sets.saturating_mul(per_set)),
+                .descriptor_count(sets.saturating_mul(2 * per_set)),
         ];
         let layouts = vec![materials.layout; count];
         // SAFETY: the device is alive; the pool is stored straight away and
@@ -244,7 +303,7 @@ impl Materials {
                 )
                 .map_err(RenderError::driver(DOING))?;
             let mut offset = 0;
-            for (set, (read, _)) in materials.sets.iter().zip(&reads) {
+            for ((set, (read, _)), over) in materials.sets.iter().zip(&reads).zip(&over) {
                 let block = [vk::DescriptorBufferInfo::default()
                     .buffer(buffer.handle)
                     .offset(offset)
@@ -257,6 +316,18 @@ impl Materials {
                 });
                 let samplers =
                     read.map(|(_, sampler)| vk::DescriptorImageInfo::default().sampler(sampler));
+                // What is painted over it, or itself again: every binding
+                // of a set must hold something that can be read.
+                let other = over
+                    .and_then(|other| reads.get(other))
+                    .map_or(*read, |(read, _)| *read);
+                let over_pictures = other.map(|(view, _)| {
+                    vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                });
+                let over_samplers =
+                    other.map(|(_, sampler)| vk::DescriptorImageInfo::default().sampler(sampler));
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
@@ -274,6 +345,16 @@ impl Materials {
                         .dst_binding(1 + per_set)
                         .descriptor_type(vk::DescriptorType::SAMPLER)
                         .image_info(&samplers),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(1 + 2 * per_set)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&over_pictures),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(1 + 3 * per_set)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&over_samplers),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
             }
@@ -335,7 +416,7 @@ mod tests {
             alpha_mode: AlphaMode::Mask { cutoff: 0.3 },
             ..Material::default()
         };
-        let bytes = material_bytes(&material, [true, false, true, false, false]);
+        let bytes = material_bytes(&material, [true, false, true, false, false], None);
         assert_eq!(
             [0, 1, 2, 3].map(|at| number(&bytes, at)),
             material.base_color
@@ -363,14 +444,14 @@ mod tests {
         let whole = |bytes: &[u8], row: usize| {
             u32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[row * 4 + byte]))
         };
-        let plain = material_bytes(&Material::default(), [false; SLOTS]);
+        let plain = material_bytes(&Material::default(), [false; SLOTS], None);
         assert_eq!([13, 14, 15].map(|row| whole(&plain, row)), [0, 0, 0]);
 
         let bricks = Material {
             extras: Some(r#"{"shuffle": [8, 11]}"#.to_owned()),
             ..Material::default()
         };
-        let bytes = material_bytes(&bricks, [true, false, false, false, false]);
+        let bytes = material_bytes(&bricks, [true, false, false, false, false], None);
         assert_eq!([13, 14, 15].map(|row| whole(&bytes, row)), [8, 11, 1]);
         // The textures' bits are where they were.
         assert_eq!(whole(&bytes, 12), 1);
@@ -379,8 +460,61 @@ mod tests {
             extras: Some(r#"{"shuffle": true}"#.to_owned()),
             ..Material::default()
         };
-        let bytes = material_bytes(&asphalt, [false; SLOTS]);
+        let bytes = material_bytes(&asphalt, [false; SLOTS], None);
         assert_eq!([13, 14, 15].map(|row| whole(&bytes, row)), [0, 0, 1]);
+    }
+
+    #[test]
+    fn a_painted_material_carries_the_other_and_how_they_meet() {
+        let rows = LAYER_BYTES / 4;
+        let brick = Material {
+            base_color: [0.6, 0.2, 0.1, 1.0],
+            roughness: 0.9,
+            extras: Some(
+                r#"{"paint": {"with": "plaster", "edge": 0.25, "ragged": 0.5}}"#.to_owned(),
+            ),
+            ..Material::default()
+        };
+        let plaster = Material {
+            name: Some("plaster".to_owned()),
+            base_color: [0.8, 0.8, 0.7, 1.0],
+            roughness: 0.4,
+            extras: Some(r#"{"shuffle": true}"#.to_owned()),
+            ..Material::default()
+        };
+        let whole = |bytes: &[u8], row: usize| {
+            u32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[row * 4 + byte]))
+        };
+
+        // Painted: the second layer is the plaster's numbers, its textures'
+        // bits and its own shuffling, then how the two meet.
+        let present = [true, false, false, false, false];
+        let bytes = material_bytes(&brick, [false; SLOTS], Some((&plaster, present)));
+        assert_eq!(
+            [0, 1, 2, 3].map(|at| number(&bytes, rows + at)),
+            plaster.base_color
+        );
+        assert_eq!(number(&bytes, rows + 9), 0.4);
+        assert_eq!(whole(&bytes, rows + 12), 1);
+        assert_eq!(whole(&bytes, rows + 15), 1);
+        assert_eq!(
+            [0, 1, 2, 3].map(|at| number(&bytes, 2 * rows + at)),
+            [1.0, 0.25, 0.5, 0.0]
+        );
+        // Its own numbers are where they always were.
+        assert_eq!([0, 1, 2, 3].map(|at| number(&bytes, at)), brick.base_color);
+
+        // It names a material the scene has not got: nothing is painted,
+        // and the second layer is the material itself.
+        let bytes = material_bytes(&brick, [false; SLOTS], None);
+        assert_eq!(
+            [0, 1, 2, 3].map(|at| number(&bytes, rows + at)),
+            brick.base_color
+        );
+        assert_eq!(
+            [0, 1, 2, 3].map(|at| number(&bytes, 2 * rows + at)),
+            [0.0; 4]
+        );
     }
 
     #[test]
