@@ -462,8 +462,8 @@ declare extern type Fluid with
     --- Example: game.fluid("goo").density = 1.2
     density: number
 
-    --- How much it pulls itself into beads, from 0 (spreads thin, like
-    --- alcohol) through 0.13 (oil) and 0.4 (water) to 1 (mercury, which
+    --- How much it pulls itself into beads (its surface tension), from 0
+    --- (spreads thin, like alcohol) through 0.13 (oil) and 0.4 (water) to 1 (mercury, which
     --- beads up and rolls).
     --- Example: game.fluid("goo").beading = 0.5
     beading: number
@@ -519,7 +519,9 @@ declare extern type FluidTouch with
     --- Example: if touch.depth > 1 then print("Out of your depth") end
     depth: number
 
-    --- How much it has hurt them this tick: how corrosive the fluid is
+    --- How much it has hurt them this tick, already scaled by the tick:
+    --- add it up each tick, and never multiply it by time yourself. It is
+    --- how corrosive the fluid is
     --- (weighted by `cover`) times the tick's seconds, so a whole second in
     --- strong acid adds up to 1. 0 for a harmless fluid.
     --- Example: health -= touch.harm * 20
@@ -534,6 +536,7 @@ end
 --- What `game.fluid` takes to make or change a kind. `from` is a kind to
 --- start from (a ready-made name, a kind the game has, or a `Fluid`); each
 --- other setting replaces one thing, and is also a field of `Fluid`.
+--- Example: game.fluid("goo", { from = "honey", color = "green" })
 type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean? }
 
 declare game: {
@@ -1296,16 +1299,18 @@ declare game: {
     --- yet a kind (see `game.fluid`) is made for you by `spray`; any other
     --- name that is not a kind is a mistake that says the nearest one.
     fluids: {
-        --- Lets fluid out this tick at `from`, moving at `velocity` in
-        --- metres a second: the vector's length is the speed. Options:
-        --- `litres` is how much this call lets out (0 to 10, default 0.01:
-        --- called every tick while a button is held, 0.01 is a strong water
-        --- pistol, 0.6 litres a second), and `spread` is how far the drops
-        --- fan out either side of `velocity`, in degrees (0 to 180, default
-        --- 3).
+        --- Lets fluid out at `from` for this tick, moving at `velocity` in
+        --- metres a second: the vector's length is the speed. Call it on
+        --- every tick while a button is held, and it flows. Options:
+        --- `litresPerSecond` is how much comes out while it flows (0 to 600,
+        --- default 0.6, a strong water pistol; 15 is a fire hose), and
+        --- `spread` is how far the drops fan out either side of `velocity`,
+        --- in degrees (0 to 180, default 3).
+        --- Prefer a `Fluid` kept in a local to a name: a mistyped local is
+        --- caught by your editor.
         --- Example: game.fluids.spray("water", game.player.eye, game.player.aim * 12)
-        --- Example: game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litres = 0.02, spread = 10 })
-        spray: (kind: string | Fluid, from: vector, velocity: vector, options: { litres: number?, spread: number? }?) -> (),
+        --- Example: game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litresPerSecond = 1.5, spread = 10 })
+        spray: (kind: string | Fluid, from: vector, velocity: vector, options: { litresPerSecond: number?, spread: number? }?) -> (),
 
         --- Takes every drop of one kind out of the world, or of every kind
         --- when no kind is given.

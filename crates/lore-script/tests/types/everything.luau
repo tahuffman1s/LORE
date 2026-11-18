@@ -343,7 +343,7 @@ print(honey.viscosity, honey.density, honey.beading, honey.slippery, honey.stick
 game.onTick(function()
     if game.input.pressed("fire") then
         game.fluids.spray("water", game.player.eye, game.player.aim * 12)
-        game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litres = 0.02, spread = 10 })
+        game.fluids.spray(goo, game.player.eye, game.player.aim * 8, { litresPerSecond = 1.5, spread = 10 })
     end
     if game.fluids.amount() > 100 or game.fluids.amount("water") > 50 then
         game.fluids.clear("oil")

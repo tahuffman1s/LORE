@@ -770,7 +770,7 @@ impl FluidState {
                 format!(
                     "There are already {MOST_KINDS} kinds of fluid, the most a game can have, \
                      so game.fluid(\"{name}\") could not make another. Change a kind the game \
-                     has instead, for example: game.fluid(\"oil\", {{ from = \"honey\" }})"
+                     has instead, for example: game.fluid(\"water\", {{ color = \"#203040\" }})"
                 ),
             ));
         }
@@ -974,8 +974,8 @@ fn fluid_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function
                 }
             },
             Value::Table(settings) => {
-                let spec = specified(lua, state, &name, &settings)?;
                 rules_only(lua, &shared, "game.fluid")?;
+                let spec = specified(lua, state, &name, &settings)?;
                 // A kind of this name that the game has is changed; any other
                 // is made.
                 match existing {
@@ -1175,13 +1175,26 @@ fn vector_of(
 }
 
 /// `game.fluids.spray`.
+/// How many litres a second a spray lets out when the script does not say:
+/// a strong water pistol.
+const USUAL_FLOW: f32 = 0.6;
+
 fn spray(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function> {
     const EXAMPLE: &str = "game.fluids.spray(\"water\", game.player.eye, game.player.aim * 12)";
-    const OPTIONS: [&str; 2] = ["litres", "spread"];
+    const OPTIONS: [&str; 2] = ["litresPerSecond", "spread"];
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, values: Variadic<Value>| {
         let nothing = Value::Nil;
         let at = |index: usize| values.get(index).unwrap_or(&nothing);
+        rules_only(lua, &shared, "game.fluids.spray")?;
+        let kind = kind_of(
+            lua,
+            &shared.fluids,
+            at(0),
+            true,
+            "game.fluids.spray",
+            EXAMPLE,
+        )?;
         let from = vector_of(
             lua,
             "game.fluids.spray",
@@ -1196,7 +1209,7 @@ fn spray(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function> {
             at(2),
             EXAMPLE,
         )?;
-        let (mut litres, mut spread) = (0.01_f32, 3.0_f32);
+        let (mut per_second, mut spread) = (USUAL_FLOW, 3.0_f32);
         match at(3) {
             Value::Nil => {}
             Value::Table(options) => {
@@ -1204,16 +1217,17 @@ fn spray(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function> {
                     let (key, value) = pair?;
                     let key = key_text(&key);
                     match key.as_str() {
-                        "litres" => {
-                            litres = number(
+                        "litresPerSecond" => {
+                            per_second = number(
                                 lua,
-                                "game.fluids.spray's `litres`",
+                                "game.fluids.spray's `litresPerSecond`",
                                 Some(&value),
-                                "how many litres this call lets out, from 0 to 10: called \
-                                 every tick, 0.01 is a strong water pistol",
-                                "game.fluids.spray(\"water\", game.player.eye, game.player.aim * 12, { litres = 0.02 })",
+                                "how many litres a second come out while it is called on \
+                                 every tick, from 0 to 600: 0.6 is a strong water pistol \
+                                 and 15 a fire hose",
+                                "game.fluids.spray(\"water\", game.player.eye, game.player.aim * 12, { litresPerSecond = 1.5 })",
                             )?
-                            .clamp(0.0, 10.0);
+                            .clamp(0.0, 600.0);
                         }
                         "spread" => {
                             spread = number(
@@ -1236,21 +1250,20 @@ fn spray(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<mlua::Function> {
                     format!(
                         "game.fluids.spray needs its options in a table, but it was given \
                          {}. Write it like this: game.fluids.spray(\"water\", \
-                         game.player.eye, game.player.aim * 12, {{ litres = 0.02 }})",
+                         game.player.eye, game.player.aim * 12, {{ litresPerSecond = 1.5 }})",
                         describe(other)
                     ),
                 ));
             }
         }
-        rules_only(lua, &shared, "game.fluids.spray")?;
-        let kind = kind_of(
-            lua,
-            &shared.fluids,
-            at(0),
-            true,
-            "game.fluids.spray",
-            EXAMPLE,
-        )?;
+        // Litres a second, let out over this tick: the same flow at any
+        // tick rate. A spray while the file loads counts as one tick of
+        // the usual sixtieth of a second.
+        let rate = shared.clock.rate();
+        let tick = if rate > 0.0 { 1.0 / rate } else { 1.0 / 60.0 };
+        // A tick's length is far within an f32.
+        #[allow(clippy::cast_possible_truncation)]
+        let litres = per_second * tick as f32;
         if let Some(kind) = kind {
             shared.fluids.queue(FluidAsk::Spray {
                 kind,
@@ -1391,6 +1404,20 @@ pub(crate) fn fluids(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         )?,
     )?;
     strict(lua, &table, "game.fluids", FLUIDS_FUNCTIONS)?;
+    // `game.fluids("honey")` is one letter from `game.fluid("honey")`.
+    if let Some(meta) = table.metatable() {
+        meta.set(
+            "__call",
+            lua.create_function(|lua, _: Variadic<Value>| -> mlua::Result<()> {
+                Err(fail(
+                    lua,
+                    "game.fluids holds what is done with fluids (spray, clear, amount, under, \
+                     onTouch) and cannot be called. To make or find a kind of fluid, write \
+                     game.fluid with no s: game.fluid(\"honey\")",
+                ))
+            })?,
+        )?;
+    }
     Ok(table)
 }
 

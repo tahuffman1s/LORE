@@ -236,7 +236,7 @@ fn the_thirty_third_kind_is_an_error_that_says_what_to_do() {
         message.contains(
             "There are already 32 kinds of fluid, the most a game can have, so \
              game.fluid(\"kind31\") could not make another. Change a kind the game has \
-             instead, for example: game.fluid(\"oil\", { from = \"honey\" })"
+             instead, for example: game.fluid(\"water\", { color = \"#203040\" })"
         ),
         "{message}"
     );
@@ -282,7 +282,7 @@ fn a_spray_is_queued_in_radians_and_in_order_with_clears() {
             game.fluids.spray("water", vector.create(1, 2, 3), vector.create(0, 0, -10))
             game.fluids.clear("water")
             game.fluids.spray(game.fluid("oil"), vector.create(0, 0, 0), vector.create(1, 0, 0),
-                { litres = 0.5, spread = 180 })
+                { litresPerSecond = 30, spread = 180 })
             game.fluids.clear()
         end)
         "#,
@@ -336,11 +336,11 @@ fn spraying_a_ready_made_name_makes_it_and_a_bad_option_is_named() {
     assert!(all[1].1.look.glows[0] > 0.0);
     let mut host = game(
         r#"game.onTick(function()
-            game.fluids.spray("water", vector.create(0, 0, 0), vector.create(0, 1, 0), { litre = 1 })
+            game.fluids.spray("water", vector.create(0, 0, 0), vector.create(0, 1, 0), { litresPerSec = 1 })
         end)"#,
     );
     run(&mut host, 1);
-    assert!(mistake(&host).contains("Did you mean litres?"));
+    assert!(mistake(&host).contains("Did you mean litresPerSecond?"));
 }
 
 #[test]
@@ -538,4 +538,10 @@ fn the_queue_is_capped_but_a_clear_always_gets_in() {
     );
     let all = asks(&mut host);
     assert_eq!(all, [FluidAsk::Clear { kind: Some(0) }]);
+}
+
+#[test]
+fn calling_the_fluids_table_says_to_write_game_fluid() {
+    let message = load_mistake("game.fluids(\"honey\")");
+    assert!(message.contains("game.fluid(\"honey\")"), "{message}");
 }
