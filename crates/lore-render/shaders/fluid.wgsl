@@ -654,7 +654,9 @@ fn mirror_walk(
         if seen.z < 0.0 || any(seen.xy < vec2<f32>(0.0)) || any(seen.xy >= vec2<f32>(1.0)) {
             break;
         }
-        let held = textureLoad(behind_depth, vec2<i32>(seen.xy * size), 0);
+        let held = textureLoad(
+            behind_depth, min(vec2<i32>(seen.xy * size), vec2<i32>(size) - 1), 0,
+        );
         if held > seen.z && held > 0.0 {
             // How far in front of the line what is drawn there stands: a
             // thing far in front is passed behind, not struck.
@@ -995,7 +997,8 @@ fn stream_seen(at: vec2<i32>, size: vec2<i32>, pixel: vec2<f32>, under: vec3<f32
     let picture = vec2<f32>(size);
     var look_at = (vec2<f32>(at) + 0.5 + shift) / picture;
     look_at = clamp(look_at, vec2<f32>(0.0), vec2<f32>(1.0));
-    let there = textureLoad(behind_depth, vec2<i32>(look_at * picture), 0);
+    // At the picture's far edge the pixel is the last one, not one past.
+    let there = textureLoad(behind_depth, min(vec2<i32>(look_at * picture), size - 1), 0);
     if away > 0.0 && there > view.lens.x / away {
         look_at = (vec2<f32>(at) + 0.5) / picture;
     }

@@ -118,12 +118,18 @@ impl Level {
                 continue;
             };
             for part in &mesh.parts {
-                // Both sides of a triangle are solid, so a mirrored
-                // placement, which turns triangles inside out, needs no care.
-                triangles.extend(
-                    part.triangles()
-                        .map(|corners| corners.map(|point| place(&instance.transform, point))),
-                );
+                // Both sides of a triangle are solid, but which way it faces
+                // says which side of it is the inside of a closed shape
+                // ([`met_from_behind`](Self::met_from_behind)): a mirrored
+                // placement turns triangles inside out, and is turned back.
+                triangles.extend(part.triangles().map(|corners| {
+                    let [a, b, c] = corners.map(|point| place(&instance.transform, point));
+                    if instance.mirrored {
+                        [a, c, b]
+                    } else {
+                        [a, b, c]
+                    }
+                }));
             }
         }
         Self::from_triangles(&triangles)
@@ -328,6 +334,32 @@ impl Level {
             point: (from + heading * distance).to_array(),
             normal: normal.to_array(),
         })
+    }
+
+    /// Whether the first surface a ray from `from` along `direction` meets,
+    /// no further off than `reach` metres, is met from behind: from the
+    /// side its triangles do not face, which is the inside of a closed
+    /// shape (a rock, a block of ground) or the rock over a cave's roof.
+    /// `None` if nothing is met.
+    pub(crate) fn met_from_behind(
+        &self,
+        from: [f32; 3],
+        direction: [f32; 3],
+        reach: f32,
+    ) -> Option<bool> {
+        let mesh = self.mesh.as_ref()?;
+        let from = Vector::from_array(from);
+        let heading = Vector::from_array(direction).try_normalize()?;
+        if !(from.is_finite() && heading.is_finite() && reach > 0.0) {
+            return None;
+        }
+        let ray = Ray::new(from.as_dvec3(), heading.as_dvec3());
+        let reach = f64::from(reach.min(FARTHEST_RAY));
+        let hit = mesh.cast_local_ray_and_get_normal(&ray, reach, false)?;
+        // The way the triangle faces as it was wound, not the way the hit
+        // reports, which is always towards the ray.
+        let faces = mesh.triangle(hit.subshape).scaled_normal();
+        Some(faces.dot(heading.as_dvec3()) > 0.0)
     }
 
     /// Moves `shape` from `centre` along `travel` and reports the first

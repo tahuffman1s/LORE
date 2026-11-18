@@ -242,10 +242,47 @@ fn near_depth(place: vec2<f32>) -> f32 {
     return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
 }
 
+// How far the waves and rings can lift or lower the still water nearest
+// the eye, at the most: every wave at its crest at once, as strong as the
+// wind can stand them up, and the tallest ring. The engine adds up how
+// high the waves stand with the wind at its usual strength
+// (`view.water_colour.w`); a gust and a storm stand them taller.
+fn waves_reach() -> f32 {
+    let gusts = 1.0 + 0.8 * max(view.weather[3].z, 0.0);
+    let blowing = gusts / 0.8 * (1.0 + 1.5 * max(view.weather[0].w, 0.0));
+    return view.water_colour.w * max(blowing, 1.0) + 0.15;
+}
+
+// How far the wind's waves carry the surface at `place`, as `swell` has it,
+// along x, up and along z.
+fn swell_shift(place: vec2<f32>, grain: f32, strength: vec4<f32>) -> vec3<f32> {
+    var shift = vec3<f32>(0.0);
+    for (var layer = 0; layer < 4; layer++) {
+        let seen = layer_seen(layer, grain) * strength[layer];
+        if seen <= 0.001 {
+            continue;
+        }
+        let uv = place / view.waves[layer].x;
+        shift += textureSampleLevel(wave_shift, wave_sampler, uv, layer, 0.0).xyz * seen;
+    }
+    return shift;
+}
+
+// How high the waves and rings stand the still water nearest the eye over
+// `place`, where it is `deep` deep. A wave carries the surface sideways as
+// it lifts it, so what stands over a place rested a little way off, where
+// the waves at the place would have carried it from.
+fn lifted_at(place: vec2<f32>, deep: f32) -> f32 {
+    let strength = wave_strength(place, deep);
+    let rest = place - swell_shift(place, 0.02, strength).xz;
+    return swell_shift(rest, 0.02, strength).y + rings(place).x;
+}
+
 // Whether a point of the world is under the surface of the still water
 // nearest the eye, waves and rings and all.
 fn under_water(point: vec3<f32>) -> bool {
-    if view.water.z < 0.5 || point.y > view.water.x + 0.5 {
+    let reach = waves_reach();
+    if view.water.z < 0.5 || point.y > view.water.x + reach {
         return false;
     }
     let deep = near_depth(point.xz);
@@ -254,11 +291,10 @@ fn under_water(point: vec3<f32>) -> bool {
     if deep <= 0.0 || point.y < view.water.x - deep - 0.5 {
         return false;
     }
-    if point.y < view.water.x - 0.5 {
+    if point.y < view.water.x - reach {
         return true;
     }
-    let lifted = swell(point.xz, 0.02, wave_strength(point.xz, deep)).shift.y + rings(point.xz).x;
-    return point.y < view.water.x + lifted;
+    return point.y < view.water.x + lifted_at(point.xz, deep);
 }
 
 // Whether the line of sight to `world` starts under water. With the eye
@@ -273,18 +309,18 @@ fn sight_starts_under(world: vec3<f32>) -> bool {
     }
     let eye = view.eye.xyz;
     let over = eye.y - view.water.x;
-    if over > 0.5 {
+    let reach = waves_reach();
+    if over > reach {
         return false;
     }
     let deep = near_depth(eye.xz);
     if deep <= 0.0 || over < -deep - 0.5 {
         return false;
     }
-    if over < -0.5 {
+    if over < -reach {
         return true;
     }
-    let lifted = swell(eye.xz, 0.02, wave_strength(eye.xz, deep)).shift.y + rings(eye.xz).x;
-    let clear = over - lifted;
+    let clear = over - lifted_at(eye.xz, deep);
     if abs(clear) > 0.035 {
         return clear < 0.0;
     }
@@ -525,7 +561,8 @@ fn mirrored_land(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> vec
             open = false;
             break;
         }
-        let spot = vec2<i32>(uv * size);
+        // Just inside the far edge, uv times the size can round up to it.
+        let spot = min(vec2<i32>(uv * size), vec2<i32>(size) - 1);
         // Depth is larger the nearer; nothing at all is 0, the sky.
         let held = textureLoad(behind_depth, spot, 0);
         let ahead = clip.z / clip.w;
@@ -617,8 +654,23 @@ struct Wet {
     flow: vec2<f32>,
     // How deep the water is there if that is known, or below nothing.
     deep: f32,
+    // How high its surface stands at rest.
+    level: f32,
     // The colour of the water itself, and how clear it is.
     colour: vec4<f32>,
+}
+
+// How far behind the surface of water, along the way the eye looks, what
+// was drawn at the pixel `at` before the water is: below nothing if it is
+// in front of the surface, or if it stands higher than `waterline` and so
+// out of the water, where it cannot be seen through it. The surface is
+// `surface` ahead of the eye, and `nearest` is its depth times that.
+fn under_surface(at: vec2<i32>, size: vec2<i32>, nearest: f32, surface: f32, waterline: f32) -> f32 {
+    let ahead = nearest / max(textureLoad(behind_depth, at, 0), 0.0000001);
+    if view.eye.y + fluid_ray(at, size).y * ahead > waterline {
+        return -1.0;
+    }
+    return ahead - surface;
 }
 
 // The surface of water, and the water under it.
@@ -734,7 +786,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         let mirrored = mix(dim, bottom.rgb, bottom.a * 0.85);
         var seen: Mixed;
         seen.colour = vec4<f32>(through_fog(mix(out, mirrored, mirror), corner.world), 1.0);
-        seen.motion = vec4<f32>(0.0);
+        seen.motion = vec4<f32>(motion(corner), 0.0, 1.0);
         return seen;
     }
 
@@ -808,18 +860,32 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     var seen_at = pixel_at + vec2<i32>(bend);
     let outside = any(seen_at < vec2<i32>(0)) || any(seen_at >= size);
     seen_at = clamp(seen_at, vec2<i32>(0), size - vec2<i32>(1));
-    var under = nearest / max(textureLoad(behind_depth, seen_at, 0), 0.0000001) - surface;
+    // Nothing that stands out of the water is seen through it: not the
+    // dry part of a leg or a stone in it, nor a leaf floating on it.
+    let waterline = max(corner.world.y, wet.level);
+    var under = under_surface(seen_at, size, nearest, surface, waterline);
     var parted = vec2<i32>(bend * 0.06);
-    // Bent onto something in front of the water, or off the picture, it
-    // is not bent at all.
+    // Bent onto something in front of the water or out of it, or off the
+    // picture, it is not bent at all.
     if under <= 0.0 || outside {
         seen_at = pixel_at;
         under = straight;
         parted = vec2<i32>(0);
     }
     under = max(under, 0.0);
-    let red_at = clamp(seen_at - parted, vec2<i32>(0), size - vec2<i32>(1));
-    let blue_at = clamp(seen_at + parted, vec2<i32>(0), size - vec2<i32>(1));
+    // Each colour is taken from where it was bent to if that is under the
+    // water too, and from where green was if not: no red or blue fringe
+    // of what stands in the water is seen beside it.
+    var red_at = clamp(seen_at - parted, vec2<i32>(0), size - vec2<i32>(1));
+    var blue_at = clamp(seen_at + parted, vec2<i32>(0), size - vec2<i32>(1));
+    if any(parted != vec2<i32>(0)) {
+        if under_surface(red_at, size, nearest, surface, waterline) <= 0.0 {
+            red_at = seen_at;
+        }
+        if under_surface(blue_at, size, nearest, surface, waterline) <= 0.0 {
+            blue_at = seen_at;
+        }
+    }
     let bottom = vec3<f32>(
         textureLoad(behind_colour, red_at, 0).r,
         textureLoad(behind_colour, seen_at, 0).g,
@@ -845,6 +911,9 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // What the liquid gives off itself is added after the light, so that
     // shade does not darken it.
     var seen = bottom * passes + (body + water_glows() * crusted(wet.rest)) * (1.0 - passes);
+    // How much of the colour is the bottom's, as it was drawn: it was seen
+    // through the air when it was, and is not seen through it again.
+    var of_bottom = passes;
     var mirrors = mirror;
     if frozen > 0.0 {
         // Ice. Where it is clear the water shows through it, darker and
@@ -872,12 +941,14 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         let white_ice = on_ice * vec3<f32>(0.6, 0.72, 0.8);
         let clouded = clamp(0.1 + 0.6 * milky + 0.9 * cracked, 0.0, 1.0);
         seen = mix(seen, mix(clear_ice, white_ice, clouded), frozen);
+        of_bottom *= mix(vec3<f32>(1.0), vec3<f32>(0.5, 0.72, 0.8) * (1.0 - clouded), frozen);
         // Ice is a poor mirror beside water: its surface is fine frost,
         // and white ice hardly mirrors at all.
         mirrors = mirror * mix(1.0, 0.42 - 0.3 * clouded, frozen);
     }
 
     var colour = mix(seen, mirrored, mirrors) + glitter * (1.0 - 0.7 * milky * frozen);
+    of_bottom *= 1.0 - mirrors;
 
     // White water: where whoever is in it churns it, and where running
     // water breaks, fast over a shelf or against a stone. Still water has
@@ -907,7 +978,9 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
             + smoothstep(0.3, 0.7, length(slope)) * 0.6;
         foam = max(foam, foam_cover(lace, breaking));
     }
-    colour = mix(colour, white, clamp(foam, 0.0, 1.0) * (1.0 - frozen));
+    let whitened = clamp(foam, 0.0, 1.0) * (1.0 - frozen);
+    colour = mix(colour, white, whitened);
+    of_bottom *= 1.0 - whitened;
     // Snow lies on ice as it does on land: thin where the wind has swept
     // it, in drifts where it has not.
     if frozen > 0.0 && view.weather[2].x > 0.0 {
@@ -919,14 +992,28 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         let snow = (view.sky.rgb * open + view.sun.rgb / PI * max(sun.y, 0.0) * sunlit)
             * vec3<f32>(0.9, 0.92, 0.95);
         colour = mix(colour, snow, covered);
+        of_bottom *= 1.0 - covered;
     }
 
     // The very edge fades out, so that the water does not end in a line.
     let edge = smoothstep(0.0, 0.012, deep);
 
+    // The air between the eye and the surface hides some of what the
+    // surface sends, and the mist's own light takes its place, but for the
+    // bottom's share: that was seen through all the air to the bottom when
+    // it was drawn. Every way the air changes a colour (mist, falling rain
+    // and snow, a tornado, lightning) mixes it with or adds to its own, so
+    // the share left is changed as if it were the whole and then mixed with
+    // the bottom, which comes to the same as changing only it.
+    let kept = clamp(of_bottom, vec3<f32>(0.0), vec3<f32>(0.999));
+    let rest = (colour - bottom * kept) / (vec3<f32>(1.0) - kept);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(colour, corner.world), edge);
-    pixel.motion = vec4<f32>(0.0);
+    pixel.colour = vec4<f32>(mix(through_fog(rest, corner.world), bottom, kept), edge);
+    // The surface moves on the picture as the surface does, where it is
+    // the surface that is seen; where the bottom is seen through it, as
+    // the bottom does, which was drawn there already.
+    let of_surface = 1.0 - (kept.r + kept.g + kept.b) / 3.0;
+    pixel.motion = vec4<f32>(motion(corner), 0.0, edge * of_surface);
     return pixel;
 }
 
@@ -967,6 +1054,7 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     wet.rest = corner.world.xz;
     wet.flow = corner.uv.xy;
     wet.deep = -1.0;
+    wet.level = corner.world.y;
     wet.colour = vec4<f32>(material.base_colour.rgb * corner.colour.rgb, material.base_colour.a);
     return water_pixel(corner, front, wet);
 }
@@ -1032,10 +1120,11 @@ fn fragment_body(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let squares = draw.world_from_local[0].z;
     // Each grid but the finest has the next finer one lying over its
     // middle: there this one is not drawn. The finer grid's middle is the
-    // eye, to the nearest point of this one. They overlap by one square
-    // of this grid, so that no gap opens between them.
+    // eye, to the nearest point of this one, as the engine worked it out
+    // to lay that grid. They overlap by one square of this grid, so that
+    // no gap opens between them.
     if finest < 0.5 {
-        let finer = round(view.eye.xz / apart) * apart;
+        let finer = draw.world_from_local[1].xy;
         let off = max(abs(rest.x - finer.x), abs(rest.y - finer.y));
         if off < squares * apart * 0.25 - apart {
             discard;
@@ -1050,6 +1139,7 @@ fn fragment_body(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     wet.rest = rest;
     wet.flow = vec2<f32>(0.0);
     wet.deep = max(deep, 0.0);
+    wet.level = draw.normal_from_local[1].z;
     wet.colour = vec4<f32>(draw.normal_from_local[2].xyz, draw.handedness);
     return water_pixel(corner, front, wet);
 }

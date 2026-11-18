@@ -1350,9 +1350,14 @@ impl MeshPipeline {
             let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bindings)
                 .vertex_attribute_descriptions(&attributes);
+            // Its depth is written: what is drawn after it (see-through
+            // things, spray, the light in the air) stops at the surface
+            // as it does at the ground, and the upscaler reads the surface
+            // where it reads the surface's movement. What is under the
+            // water was copied aside for it before.
             let depth = vk::PipelineDepthStencilStateCreateInfo::default()
                 .depth_test_enable(true)
-                .depth_write_enable(false)
+                .depth_write_enable(true)
                 .depth_compare_op(vk::CompareOp::GREATER);
             let attachments = [vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -1851,7 +1856,12 @@ impl MeshPipeline {
                     frame,
                     view.eye,
                     (view.exact, view.elapsed),
-                    (near, meshes.is_some_and(|meshes| meshes.has_water)),
+                    (
+                        near,
+                        meshes.is_some_and(|meshes| meshes.has_water),
+                        meshes.map_or(f32::NAN, |meshes| meshes.bodies.fetch()),
+                        rise,
+                    ),
                     (stirs, weather.wind),
                 )
             }?;
@@ -3102,21 +3112,26 @@ fn picture_write(
 ///
 /// Where the mesh shader keeps how a mesh stands, this keeps how the grid
 /// is laid (how far apart its points are, whether it is the finest, how
-/// many squares it has a side, and where its middle is: the eye, to the
-/// nearest two points, so that the grid moves by whole squares and its
-/// points stay where they were); and where the shader keeps how surface
-/// directions turn, the body itself: where its grid of depths starts and
-/// how far apart its points are, how many there are and how high the water
-/// stands, and the water's colour. Its clearness is the number after.
+/// many squares it has a side, where the next finer grid's middle is,
+/// round which this one is left out, and where its own middle is: the
+/// eye, to the nearest two points, so that the grid moves by whole squares
+/// and its points stay where they were); and where the shader keeps how
+/// surface directions turn, the body itself: where its grid of depths
+/// starts and how far apart its points are, how many there are and how
+/// high the water stands, and the water's colour. Its clearness is the
+/// number after.
 fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
+    let finer = grid
+        .checked_sub(1)
+        .map_or(middle, |finer| grid_laid(eye, finer).1);
     // Sizes are far below the point where f32 stops being exact.
     #[allow(clippy::cast_precision_loss)]
     let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
     let finest = if grid == 0 { 1.0 } else { 0.0 };
     let numbers = [
         [apart, finest, squares, 0.0],
-        [0.0; 4],
+        [finer[0], finer[1], 0.0, 0.0],
         [0.0; 4],
         [middle[0], body.level + rise, middle[1], 1.0],
         [body.origin[0], body.origin[1], body.cell, 0.0],

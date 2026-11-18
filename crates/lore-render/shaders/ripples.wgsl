@@ -28,7 +28,8 @@ struct Step {
     // seconds, how fast rings die away, and how many are stirring.
     grid: vec4<f32>,
     // The still water these rings are on: how high its surface is, how far
-    // apart the points of its grid of depths are, and 1 if there is any.
+    // apart the points of its grid of depths are, 1 if there is any, and
+    // how far rain has raised it.
     water: vec4<f32>,
     // The x and z of the first point of that grid, and how many points it
     // has along each.
@@ -66,6 +67,8 @@ fn weight(across: i32, down: i32) -> f32 {
 }
 
 // How deep the still water is at a place; below nothing where it is dry.
+// Rain has raised it, and it is that much deeper everywhere: rings run up
+// to the shore as it is now.
 fn depth_at(place: vec2<f32>) -> f32 {
     if step.water.z < 0.5 {
         return 1.0;
@@ -74,7 +77,7 @@ fn depth_at(place: vec2<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return -2.0;
     }
-    return textureSampleLevel(depths, smooth_sampler, uv, 0.0).r;
+    return textureSampleLevel(depths, smooth_sampler, uv, 0.0).r + step.water.w;
 }
 
 @fragment

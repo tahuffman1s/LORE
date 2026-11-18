@@ -102,28 +102,45 @@ fn rate_of(turns: f32) -> f32 {
 /// How the waves of one rate are shared out over directions: `off` is the
 /// angle from the wind's. The waves the wind raises most of run nearly
 /// with it; shorter ones spread wide (Mitsuyasu and others 1975).
-fn spread(off: f32, rate: f32, peak: f32) -> f32 {
+/// `narrow` and `whole` are what [`narrowness`] and [`all_ways`] give for
+/// the rate.
+fn spread(off: f32, narrow: f32, whole: f32) -> f32 {
+    spread_shape(off, narrow) / whole.max(1e-6)
+}
+
+/// How narrowly the waves of `rate` keep to the wind's direction, when
+/// the wind raises most of those of rate `peak`.
+fn narrowness(rate: f32, peak: f32) -> f32 {
     let ratio = (rate / peak).max(0.01);
-    let narrow = if ratio < 1.0 {
+    if ratio < 1.0 {
         6.97 * ratio.powi(5)
     } else {
         9.77 * ratio.powf(-2.5)
     }
-    .clamp(0.75, 12.0);
-    // Shared out so that all directions together make 1: worked out by
-    // adding up, which is exact enough for this.
-    let shape = |angle: f32| (angle / 2.0).cos().abs().powf(2.0 * narrow);
+    .clamp(0.75, 12.0)
+}
+
+/// How much of the waves of one rate run at `angle` from the wind, before
+/// they are shared out so that all directions together make 1.
+fn spread_shape(angle: f32, narrow: f32) -> f32 {
+    (angle / 2.0).cos().abs().powf(2.0 * narrow)
+}
+
+/// What all directions together come to for waves as narrow as `narrow`:
+/// worked out by adding up, which is exact enough for this. It is the slow
+/// part of sharing waves out, and is the same for every wave of a length,
+/// so it is worked out once for each length.
+fn all_ways(narrow: f32) -> f32 {
     let steps = 48;
-    let whole: f32 = (0..steps)
+    (0..steps)
         .map(|step| {
             #[allow(clippy::cast_precision_loss)]
             let angle = -PI + TAU * (step as f32 + 0.5) / steps as f32;
-            shape(angle)
+            spread_shape(angle, narrow)
         })
         .sum::<f32>()
         * TAU
-        / 48.0;
-    shape(off) / whole.max(1e-6)
+        / 48.0
 }
 
 /// A number from 0 to 1 with no pattern to it, for each `n`.
@@ -171,6 +188,12 @@ impl Waves {
             // each way, with how much energy the wind gives it.
             let mut fitting = Vec::new();
             let mut whole = 0.0;
+            // How all directions add up for each length of wave, by how
+            // many times it fits along and down, squared and added: each
+            // is worked out the first time it is needed. (Waves of one
+            // length that run different ways can have rates a rounding
+            // apart; they share the first one's.)
+            let mut all_round = vec![f32::NAN; MOST_FITS.unsigned_abs().pow(2) as usize];
             for along in -MOST_FITS..MOST_FITS {
                 for down in -MOST_FITS..MOST_FITS {
                     let fits = along * along + down * down;
@@ -182,10 +205,22 @@ impl Waves {
                     let size = turns[0].hypot(turns[1]);
                     let rate = rate_of(size);
                     let off = turns[1].atan2(turns[0]) - heading;
+                    let narrow = narrowness(rate, peak);
+                    let ways = match usize::try_from(fits)
+                        .ok()
+                        .and_then(|at| all_round.get_mut(at))
+                    {
+                        Some(known) if known.is_nan() => {
+                            *known = all_ways(narrow);
+                            *known
+                        }
+                        Some(known) => *known,
+                        None => all_ways(narrow),
+                    };
                     // Energy for each rate, shared over directions, and
                     // then counted for each square of the grid of waves.
                     let gathers = (GRAVITY + 3.0 * SKIN * size * size) / (2.0 * rate);
-                    let share = energy(rate, speed, fetch) * spread(off, rate, peak) * gathers
+                    let share = energy(rate, speed, fetch) * spread(off, narrow, ways) * gathers
                         / size
                         * step
                         * step
@@ -254,6 +289,16 @@ impl Waves {
             layer.steepness = steepness(layer);
         }
         Self { layers }
+    }
+
+    /// How far the waves can lift or lower the water from where it rests,
+    /// at the most: every one of them at its crest at once.
+    pub(crate) fn reach(&self) -> f32 {
+        self.layers
+            .iter()
+            .flat_map(|layer| &layer.waves)
+            .map(|wave| wave.height.abs())
+            .sum()
     }
 
     /// How high the water stands at `x`, `z` after `seconds`, over where it
@@ -370,6 +415,21 @@ mod tests {
         );
         // Each layer's square is a quarter of the one before.
         assert!((waves.layers[0].tile / waves.layers[1].tile - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn no_wave_stands_the_water_higher_than_its_reach() {
+        let waves = Waves::new([0.6, 0.8], 12.0, 3000.0);
+        let reach = waves.reach();
+        let mut highest = 0.0_f32;
+        for step in 0..400 {
+            let at = f64::from(step) * 0.37;
+            #[allow(clippy::cast_possible_truncation)]
+            let (x, z) = ((at * 3.1) as f32, (at * -1.7) as f32);
+            highest = highest.max(waves.height_at(x, z, at).abs());
+        }
+        assert!(highest > 0.05, "{highest}");
+        assert!(highest <= reach, "{highest} over {reach}");
     }
 
     #[test]

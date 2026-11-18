@@ -7,6 +7,10 @@
 //! goes on until it is held in on every side. A lake stops at its banks, a
 //! pool at its walls, the water in a trough at the trough.
 //!
+//! Where the middle of the sheet is inside the ground (an island stands
+//! there, or a rock), the water starts from another point of the sheet
+//! that is not, so that it fills the lake and not the inside of the rock.
+//!
 //! What it covered is written down as a grid seen from above
 //! ([`Water`]), which the player swims by and the renderer draws from.
 
@@ -67,7 +71,8 @@ pub fn fill(scene: &mut Scene) {
         scene.warnings.push(format!(
             "The water \"{name}\" has no ground under it to hold it, so it is drawn as the \
              flat sheet it is and cannot be swum in. Put it over the hollow it should fill, \
-             at the height the water should stand; its middle has to be over the hollow."
+             at the height the water should stand, with its middle or a corner over the \
+             hollow."
         ));
     }
 }
@@ -84,9 +89,12 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
         let Some(sheet) = Sheet::of(scene, instance) else {
             continue;
         };
-        // The middle first, then each corner point: the first of them
-        // that is over a bottom is where the water starts from.
-        let found = sheet.seeds.iter().find_map(|seed| {
+        // The middle first, then each corner point, then the points half
+        // way between: the first of them that is over a bottom and not
+        // inside the ground is where the water starts from. Only if every
+        // one of them is inside the ground is the first with a bottom
+        // under it taken, as if none were.
+        let start = |seed: &[f32; 2]| {
             // A sheet laid over water that is already there adds nothing
             // but itself: it is that water's too.
             let already = waters.iter().position(|water| {
@@ -97,7 +105,13 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
                 return Some(Err(already));
             }
             body(level, *seed, sheet.level).map(Ok)
-        });
+        };
+        let found = sheet
+            .seeds
+            .iter()
+            .filter(|seed| !in_ground(level, **seed, sheet.level))
+            .find_map(start)
+            .or_else(|| sheet.seeds.iter().find_map(start));
         match found {
             Some(Ok(mut water)) => {
                 water.name.clone_from(&instance.name);
@@ -151,7 +165,15 @@ impl Sheet {
         if !sound || high[1] - low[1] >= LEVEL_WITHIN {
             return None;
         }
-        seeds[0] = [(low[0] + high[0]) / 2.0, (low[2] + high[2]) / 2.0];
+        let middle = [(low[0] + high[0]) / 2.0, (low[2] + high[2]) / 2.0];
+        seeds[0] = middle;
+        // Half way from the middle to each corner: over the water round an
+        // island in the middle of a sheet that reaches into the banks.
+        let halfway: Vec<[f32; 2]> = seeds[1..]
+            .iter()
+            .map(|corner| [0, 1].map(|axis| (middle[axis] + corner[axis]) / 2.0))
+            .collect();
+        seeds.extend(halfway);
         let colour = mesh
             .parts
             .first()
@@ -371,6 +393,27 @@ fn depth_under(level: &Level, [x, z]: [f32; 2], surface: f32) -> Option<f32> {
         .filter(|depth| *depth > SHALLOWEST)
 }
 
+/// Whether water standing at `surface` and starting from `x`, `z` would
+/// start inside the ground: inside a closed shape such as a rock or an
+/// island, which every way across is met from within, or in the rock over
+/// a cave's roof or a cellar's ceiling, which straight down is met from
+/// behind. A room's ceiling and a block's top look the same to a ray from
+/// below, so up is not asked.
+fn in_ground(level: &Level, [x, z]: [f32; 2], surface: f32) -> bool {
+    let from = [x, surface - UNDER, z];
+    if level.met_from_behind(from, [0.0, -1.0, 0.0], DEEPEST) == Some(true) {
+        return true;
+    }
+    [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ]
+    .into_iter()
+    .all(|way| level.met_from_behind(from, way, DEEPEST) == Some(true))
+}
+
 #[cfg(test)]
 mod tests {
     use lore_assets::{Mesh, MeshPart};
@@ -451,6 +494,100 @@ mod tests {
             wall([e, n], [w, n], bottom, top),
             wall([w, n], [w, s], bottom, top),
         ]
+    }
+
+    /// A closed block from `low` to `high` (x and z), from `bottom` up to
+    /// `top`, its faces turned outwards as a modeller's solids are: the
+    /// tank's turned inside out, with a bottom.
+    fn block(low: [f32; 2], high: [f32; 2], bottom: f32, top: f32) -> Vec<MeshPart> {
+        let ([w, s], [e, n]) = (low, high);
+        let mut under = floor(low, high, bottom);
+        under.indices = vec![0, 2, 1, 0, 3, 2];
+        vec![
+            floor(low, high, top),
+            under,
+            wall([e, s], [w, s], bottom, top),
+            wall([e, n], [e, s], bottom, top),
+            wall([w, n], [e, n], bottom, top),
+            wall([w, s], [w, n], bottom, top),
+        ]
+    }
+
+    #[test]
+    fn a_sheet_whose_middle_is_over_an_island_fills_the_lake_round_it() {
+        // A tank eight metres across with an island in the middle that
+        // stands a metre out of the water, and a sheet over most of the
+        // tank with its middle over the island. The island stands on the
+        // floor, or is sunk into it so that straight down from inside it
+        // the floor is met first; and it is placed mirrored, as a negative
+        // scale places it, which turns its faces inside out.
+        for (sunk, mirrored) in [(0.0, false), (1.0, false), (1.0, true)] {
+            let mut scene = scene(tank([0.0, 0.0], 4.0, -2.0, 1.0), [0.0, 0.0, 0.0]);
+            scene.meshes[1].parts = vec![floor([-3.5, -3.5], [3.5, 3.5], 0.0)];
+            scene.meshes.push(Mesh {
+                name: None,
+                parts: block([-1.1, -1.1], [1.1, 1.1], -2.0 - sunk, 1.0),
+            });
+            let mut transform = STILL;
+            if mirrored {
+                transform[0][0] = -1.0;
+            }
+            scene.instances.push(Instance {
+                mesh: 2,
+                transform,
+                mirrored,
+                name: Some("island".to_owned()),
+                extras: None,
+            });
+            fill(&mut scene);
+            assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+            let [water] = &scene.waters[..] else {
+                panic!("one body of water: {:?}", scene.waters.len());
+            };
+            assert!(
+                water.depth_at(0.0, 0.0) < 0.0,
+                "inside the island is dry (sunk {sunk}, mirrored {mirrored})"
+            );
+            for place in [[2.5, 0.0], [-2.5, 0.0], [0.0, 3.0], [-3.0, -3.0]] {
+                let depth = water.depth_at(place[0], place[1]);
+                assert!(
+                    (depth - 2.0).abs() < 0.01,
+                    "{place:?} is {depth} deep (sunk {sunk}, mirrored {mirrored})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_sheet_whose_middle_is_over_a_cellar_fills_the_pool_and_not_the_ground() {
+        // A pool eight metres across in flat ground a metre over the water,
+        // and beside it, under the ground, a cellar whose ceiling is two
+        // metres down. The sheet's middle is over the cellar, one end of
+        // it over the pool.
+        let mut parts = tank([0.0, 0.0], 4.0, -2.0, 1.0);
+        parts.extend([
+            floor([-20.0, 4.0], [20.0, 20.0], 1.0),
+            floor([-20.0, -20.0], [20.0, -4.0], 1.0),
+            floor([-20.0, -4.0], [-4.0, 4.0], 1.0),
+            floor([4.0, -4.0], [20.0, 4.0], 1.0),
+        ]);
+        // The cellar is a room: its faces turned inwards.
+        let mut cellar = tank([8.0, 0.0], 2.0, -5.0, -2.0);
+        let mut ceiling = floor([6.0, -2.0], [10.0, 2.0], -2.0);
+        ceiling.indices = vec![0, 2, 1, 0, 3, 2];
+        cellar.push(ceiling);
+        parts.extend(cellar);
+        let mut scene = scene(parts, [0.0, 0.0, 0.0]);
+        scene.meshes[1].parts = vec![floor([-3.0, -3.0], [19.0, 3.0], 0.0)];
+        fill(&mut scene);
+        assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+        let [water] = &scene.waters[..] else {
+            panic!("one body of water: {:?}", scene.waters.len());
+        };
+        assert!((water.depth_at(0.0, 0.0) - 2.0).abs() < 0.01, "the pool");
+        assert!(water.depth_at(8.0, 0.0) < 0.0, "over the cellar");
+        let level = Level::from_scene(&scene);
+        assert_eq!(level.water_at(8.0, 0.0), None);
     }
 
     #[test]
