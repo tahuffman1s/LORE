@@ -89,6 +89,13 @@ pub(crate) fn material_bytes(material: &Material, present: [bool; SLOTS]) -> [u8
         *slot = number.to_ne_bytes();
     }
     rows[12] = flags.to_ne_bytes();
+    // Whether the pictures are shuffled to hide that they repeat, and in
+    // how many steps across and up they may be moved (0 is any move).
+    if let Some([across, up]) = material.shuffle() {
+        rows[13] = across.to_ne_bytes();
+        rows[14] = up.to_ne_bytes();
+        rows[15] = 1_u32.to_ne_bytes();
+    }
     for (slot, number) in rows[16..]
         .iter_mut()
         .zip(placings.iter().flatten().flatten())
@@ -349,6 +356,31 @@ mod tests {
             (16..24).map(|at| number(&bytes, at)).collect::<Vec<_>>(),
             [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn a_shuffled_material_says_so_and_in_what_steps() {
+        let whole = |bytes: &[u8], row: usize| {
+            u32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[row * 4 + byte]))
+        };
+        let plain = material_bytes(&Material::default(), [false; SLOTS]);
+        assert_eq!([13, 14, 15].map(|row| whole(&plain, row)), [0, 0, 0]);
+
+        let bricks = Material {
+            extras: Some(r#"{"shuffle": [8, 11]}"#.to_owned()),
+            ..Material::default()
+        };
+        let bytes = material_bytes(&bricks, [true, false, false, false, false]);
+        assert_eq!([13, 14, 15].map(|row| whole(&bytes, row)), [8, 11, 1]);
+        // The textures' bits are where they were.
+        assert_eq!(whole(&bytes, 12), 1);
+
+        let asphalt = Material {
+            extras: Some(r#"{"shuffle": true}"#.to_owned()),
+            ..Material::default()
+        };
+        let bytes = material_bytes(&asphalt, [false; SLOTS]);
+        assert_eq!([13, 14, 15].map(|row| whole(&bytes, row)), [0, 0, 1]);
     }
 
     #[test]

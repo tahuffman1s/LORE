@@ -492,7 +492,9 @@ class Level:
 
     def material(self, about):
         """The number of the material `about` says, written the first time.
-        It may have pictures ("base", "arm", "normal"), a "colour" that
+        It may have pictures ("base", "arm", "normal"), "shuffle" to hide
+        that they repeat (True, or the steps across and up one copy that
+        they may be moved by: see Looks.SHUFFLES), a "colour" that
         multiplies the base picture, "rough" and "metal" numbers (which
         multiply the arm picture's when there is one), "cut" for holes cut
         by alpha, "blend" for a see-through surface mixed by alpha,
@@ -536,6 +538,10 @@ class Level:
                 made["doubleSided"] = True
             elif about.get("blend"):
                 made["alphaMode"] = "BLEND"
+            if about.get("shuffle"):
+                # The engine draws the pictures blended with themselves
+                # moved elsewhere, so that their repetition is not seen.
+                made["extras"] = {"shuffle": about["shuffle"]}
             self.materials.append(made)
             self.material_numbers[name] = len(self.materials) - 1
         return self.material_numbers[name]
@@ -1355,8 +1361,48 @@ class Looks(Buckets):
     # (a course of bricks is about 75 mm).
     SIZES = {"yellow_bricks": 1.0, "large_red_bricks": 1.05}
 
+    # How each photograph may be moved over itself without breaking its
+    # pattern, so that the engine can hide its repetition on a long wall
+    # (the material's "shuffle": see lore_assets::Material::shuffle).
+    # Brickwork is given as the steps across one copy and the steps up it:
+    # the bricks along a course where they are all of a length (0 where
+    # they are not, and any move along will do), and the courses, or half
+    # of them where every other course is set half a brick along and the
+    # bricks are regular. Counted from each picture: the courses from the
+    # strongest whole-number frequency down it, checked by eye.
+    # Asphalt, plaster and concrete have no pattern: True.
+    SHUFFLES = {
+        "brick_wall_10": [8, 11],
+        "brick_wall_006": [0, 39],
+        "brick_wall_02": [0, 20],
+        "factory_brick": [0, 16],
+        "slumped_mortar_brick": [0, 21],
+        "red_bricks_02": [0, 26],
+        "whitewashed_brick": [9, 14],
+        "yellow_bricks": [0, 11],
+        "large_red_bricks": [3, 6],
+        "painted_brick": [0, 22],
+        "red_brick_plaster_patch_02": [0, 19],
+        "concrete_block_wall": [0, 8],
+        "mixed_brick_wall": True,
+        "beige_wall_001": True,
+        "worn_plaster_wall": True,
+        "red_plaster_weathered": True,
+        "yellow_plaster": True,
+        "painted_plaster_wall": True,
+        "concrete_wall_008": True,
+        "concrete_floor_02": True,
+        "dirty_concrete": True,
+        "asphalt_01": True,
+        "asphalt_02": True,
+        "asphalt_04": True,
+        "asphalt_06": True,
+    }
+
     def look(self, name, seed=0):
         material, tile = texture_set(name, "2k" if name in self.SHARP else SIZE)
+        if name in self.SHUFFLES:
+            material = dict(material, shuffle=self.SHUFFLES[name])
         return material, self.SIZES.get(name, tile)
 
 

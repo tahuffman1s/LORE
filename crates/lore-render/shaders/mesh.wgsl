@@ -168,7 +168,9 @@ struct Material {
     // Metallic, roughness, the normal map's strength and the occlusion's.
     factors: vec4<f32>,
     // In the first number, one bit for each texture the material has, in
-    // the order below.
+    // the order below. In the fourth, whether its pictures are shuffled to
+    // hide that they repeat, and in the second and third how many equal
+    // steps across and up one copy of them may be moved by (0 is any move).
     flags: vec4<u32>,
     placings: array<Placing, 5>,
 }
@@ -398,13 +400,134 @@ fn placed(texture: u32, corner: Corner) -> vec2<f32> {
     );
 }
 
+// How a material's pictures are moved at one place to hide that they
+// repeat: two copies, each moved its own way, how much of the second there
+// is, and how light or dark this patch of the surface is.
+struct Shuffle {
+    first: vec2<f32>,
+    second: vec2<f32>,
+    share: f32,
+    tone: f32,
+}
+
+// How wide the patches are that are moved alike, in metres, and how wide
+// the patches of lighter and darker tone.
+const SHUFFLE_PATCH: f32 = 2.3;
+const SHUFFLE_TONE_PATCH: f32 = 6.1;
+// How many ways of moving the picture the patches go through.
+const SHUFFLE_WAYS: f32 = 7.0;
+// How much lighter and darker the patches are.
+const SHUFFLE_TONE: f32 = 0.1;
+
+// A number from 0 to 1 for each point of a grid in space, the same every
+// time it is asked.
+fn shuffle_dice(at: vec3<f32>) -> f32 {
+    let spread = fract(at * vec3<f32>(0.1031, 0.1030, 0.0973));
+    let stirred = spread + dot(spread, spread.yxz + 33.33);
+    return fract((stirred.x + stirred.y) * stirred.z);
+}
+
+// Those numbers eased from one grid point to the next: a smooth unevenness
+// through space, from 0 to 1.
+fn shuffle_noise(at: vec3<f32>) -> f32 {
+    let cell = floor(at);
+    let within = fract(at);
+    let ease = within * within * (3.0 - 2.0 * within);
+    let near = mix(
+        mix(shuffle_dice(cell), shuffle_dice(cell + vec3<f32>(1.0, 0.0, 0.0)), ease.x),
+        mix(shuffle_dice(cell + vec3<f32>(0.0, 1.0, 0.0)), shuffle_dice(cell + vec3<f32>(1.0, 1.0, 0.0)), ease.x),
+        ease.y,
+    );
+    let far = mix(
+        mix(shuffle_dice(cell + vec3<f32>(0.0, 0.0, 1.0)), shuffle_dice(cell + vec3<f32>(1.0, 0.0, 1.0)), ease.x),
+        mix(shuffle_dice(cell + vec3<f32>(0.0, 1.0, 1.0)), shuffle_dice(cell + vec3<f32>(1.0, 1.0, 1.0)), ease.x),
+        ease.y,
+    );
+    return mix(near, far, ease.z);
+}
+
+// The move that goes with a whole number: a share of the picture across
+// and up, in whole steps of the material's pattern where it has one, so
+// that a course of bricks lands on a course of bricks.
+fn shuffle_move(number: f32) -> vec2<f32> {
+    // Each next number lands far from the last (the plastic number's
+    // sequence), so neighbouring patches are moved quite differently.
+    var shift = fract(vec2<f32>(0.754877666, 0.569840291) * (number + 1.0));
+    let across = f32(material.flags.y);
+    let up = f32(material.flags.z);
+    if across > 0.0 {
+        shift.x = floor(shift.x * across) / across;
+    }
+    if up > 0.0 {
+        shift.y = floor(shift.y * up) / up;
+    }
+    return shift;
+}
+
+// How the material's pictures are moved at `world`.
+//
+// A photograph of two metres of brick laid over a wall of sixty shows the
+// same few bricks in a grid. So the wall is cut into patches by a smooth
+// unevenness in space, each patch draws the picture moved its own way, and
+// where two patches meet the two are blended over a narrow band (after
+// Quilez, "texture repetition"). A stochastic picture can be moved
+// anywhere; brickwork is moved by whole bricks and courses, or the mortar
+// of one copy would run through the bricks of the other. Each patch is
+// also a little lighter or darker, as a wall built from different loads of
+// brick is.
+fn shuffle_of(world: vec3<f32>) -> Shuffle {
+    var mixing: Shuffle;
+    mixing.first = vec2<f32>(0.0);
+    mixing.second = vec2<f32>(0.0);
+    mixing.share = 0.0;
+    mixing.tone = 1.0;
+    if material.flags.w == 0u {
+        return mixing;
+    }
+    let at = world / SHUFFLE_PATCH;
+    let uneven = 0.65 * shuffle_noise(at) + 0.35 * shuffle_noise(at * 2.3 + vec3<f32>(7.1, 3.7, 5.3));
+    let way = uneven * SHUFFLE_WAYS;
+    let whole = floor(way);
+    mixing.first = shuffle_move(whole);
+    mixing.second = shuffle_move(whole + 1.0);
+    mixing.share = smoothstep(0.38, 0.62, way - whole);
+    let tone = shuffle_noise(world / SHUFFLE_TONE_PATCH + vec3<f32>(13.0, 29.0, 17.0));
+    mixing.tone = 1.0 + SHUFFLE_TONE * (2.0 * tone - 1.0);
+    return mixing;
+}
+
+// The picture at `uv`, or for a shuffled material its two moved copies
+// blended.
+fn pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuffle) -> vec4<f32> {
+    if material.flags.w == 0u {
+        return textureSampleBias(picture, how, uv, view.eye.w);
+    }
+    // The picture's own slopes serve for both copies. Where two patches
+    // meet the moved place jumps, and a slope worked out across the jump
+    // would pick a copy of the picture made for far away.
+    let sharper = exp2(view.eye.w);
+    let along = dpdx(uv) * sharper;
+    let down = dpdy(uv) * sharper;
+    if mixing.share <= 0.0 {
+        return textureSampleGrad(picture, how, uv + mixing.first, along, down);
+    }
+    if mixing.share >= 1.0 {
+        return textureSampleGrad(picture, how, uv + mixing.second, along, down);
+    }
+    return mix(
+        textureSampleGrad(picture, how, uv + mixing.first, along, down),
+        textureSampleGrad(picture, how, uv + mixing.second, along, down),
+        mixing.share,
+    );
+}
+
 // The surface's colour and alpha before any light.
-fn base_colour(corner: Corner) -> vec4<f32> {
+fn base_colour(corner: Corner, mixing: Shuffle) -> vec4<f32> {
     var base = material.base_colour * corner.colour;
     if has(BASE) {
-        base *= textureSampleBias(base_texture, base_sampler, placed(BASE, corner), view.eye.w);
+        base *= pictured(base_texture, base_sampler, placed(BASE, corner), mixing);
     }
-    return base;
+    return vec4<f32>(base.rgb * mixing.tone, base.a);
 }
 
 const PI: f32 = 3.14159265;
@@ -1161,7 +1284,7 @@ fn snow_tracks(place: vec3<f32>, upright: vec3<f32>, ragged: vec2<f32>) -> vec3<
 }
 
 // The light the surface sends to the eye.
-fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
+fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle) -> vec3<f32> {
     var normal = normalize(corner.normal);
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
@@ -1180,8 +1303,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     let open = sky.x;
     let sky_seen = open * shade.y;
     if has(NORMAL) {
-        let sample = textureSampleBias(
-            normal_texture, normal_sampler, placed(NORMAL, corner), view.eye.w,
+        let sample = pictured(
+            normal_texture, normal_sampler, placed(NORMAL, corner), mixing,
         ).xyz * 2.0 - 1.0;
         // The tangent is kept at right angles to the smoothed normal.
         let leaning = corner.tangent.xyz - normal * dot(normal, corner.tangent.xyz);
@@ -1197,8 +1320,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var metallic = material.factors.x;
     var roughness = material.factors.y;
     if has(METAL_ROUGH) {
-        let sample = textureSampleBias(
-            metal_rough_texture, metal_rough_sampler, placed(METAL_ROUGH, corner), view.eye.w,
+        let sample = pictured(
+            metal_rough_texture, metal_rough_sampler, placed(METAL_ROUGH, corner), mixing,
         );
         roughness *= sample.g;
         metallic *= sample.b;
@@ -1304,8 +1427,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>) -> vec3<f32> {
     var from_around = matte * surroundings(normal)
         + surroundings(reflect(-to_eye, normal)) * mirrored_share(mirror, roughness, n_eye);
     if has(OCCLUSION) {
-        let shadowing = textureSampleBias(
-            occlusion_texture, occlusion_sampler, placed(OCCLUSION, corner), view.eye.w,
+        let shadowing = pictured(
+            occlusion_texture, occlusion_sampler, placed(OCCLUSION, corner), mixing,
         ).r;
         from_around *= 1.0 + material.factors.w * (shadowing - 1.0);
     }
@@ -1338,9 +1461,10 @@ fn motion(corner: Corner) -> vec2<f32> {
 // A solid surface.
 @fragment
 fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
-    let base = base_colour(corner);
+    let mixing = shuffle_of(corner.world);
+    let base = base_colour(corner, mixing);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), 1.0);
     pixel.motion = motion(corner);
     return pixel;
 }
@@ -1349,9 +1473,10 @@ fn fragment(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
 // one, which can then be tested against the depth before it is shaded.
 @fragment
 fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel {
-    let base = base_colour(corner);
+    let mixing = shuffle_of(corner.world);
+    let base = base_colour(corner, mixing);
     var pixel: Pixel;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), 1.0);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), 1.0);
     pixel.motion = motion(corner);
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
@@ -1373,9 +1498,10 @@ struct Mixed {
 // leaves what was there: the pixel moves with what is behind.
 @fragment
 fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
-    let base = base_colour(corner);
+    let mixing = shuffle_of(corner.world);
+    let base = base_colour(corner, mixing);
     var pixel: Mixed;
-    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb), corner.world), base.a);
+    pixel.colour = vec4<f32>(through_fog(lit(corner, front, base.rgb, mixing), corner.world), base.a);
     pixel.motion = vec4<f32>(0.0);
     return pixel;
 }

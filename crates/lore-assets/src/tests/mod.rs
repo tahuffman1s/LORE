@@ -727,3 +727,34 @@ mod textures {
         }
     }
 }
+
+#[test]
+fn a_material_says_how_its_pictures_may_be_shuffled() {
+    use crate::Material;
+
+    let says = |extras: &str| {
+        Material {
+            extras: Some(extras.to_owned()),
+            ..Material::default()
+        }
+        .shuffle()
+    };
+    // Not asked for, or asked not to.
+    assert_eq!(Material::default().shuffle(), None);
+    assert_eq!(says(r#"{"wind": 1}"#), None);
+    assert_eq!(says(r#"{"shuffle": false}"#), None);
+    assert_eq!(says(r#"{"shuffle": 0}"#), None);
+    assert_eq!(says(r#"{"shuffle": "yes"}"#), None);
+    assert_eq!(says("not json"), None);
+    // Any move will do: a ticked box, which Blender may write as 1.
+    assert_eq!(says(r#"{"shuffle": true}"#), Some([0, 0]));
+    assert_eq!(says(r#"{"shuffle": 1}"#), Some([0, 0]));
+    // Steps across and up; a number that is no count of steps is no
+    // pattern that way, and a list of the wrong length is none either way.
+    assert_eq!(says(r#"{"shuffle": [8, 11]}"#), Some([8, 11]));
+    assert_eq!(says(r#"{"shuffle": [0, 39]}"#), Some([0, 39]));
+    assert_eq!(says(r#"{"shuffle": [2.5, -3]}"#), Some([0, 0]));
+    assert_eq!(says(r#"{"shuffle": [1e9, 4]}"#), Some([0, 4]));
+    assert_eq!(says(r#"{"shuffle": ["a", 4]}"#), Some([0, 4]));
+    assert_eq!(says(r#"{"shuffle": [8]}"#), Some([0, 0]));
+}

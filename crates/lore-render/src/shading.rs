@@ -705,3 +705,129 @@ fn a_cut_out_surface_casts_a_shadow_only_where_it_is_not_cut_away() {
 
     finish(gpu);
 }
+
+/// Twenty times as wide and as deep: the two-metre floor made forty metres
+/// square.
+const WIDE: lore_assets::Transform = [
+    [20.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 20.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// A floor forty metres wide with a small picture of sixteen colours laid
+/// over it eight times each way, seen whole from above.
+fn tiled_floor(extras: Option<&str>) -> (Scene, Camera) {
+    let mut scene = floor(Material {
+        extras: extras.map(str::to_owned),
+        ..Material::default()
+    });
+    scene.instances[0].transform = WIDE;
+    // Sixteen colours, no two alike.
+    let colours: Vec<[u8; 4]> = (0..16_u8)
+        .map(|n| [40 + 50 * (n % 4), 40 + 50 * (n / 4), 255 - 14 * n, 255])
+        .collect();
+    let repeating = Sampler {
+        wrap_u: Wrap::Repeat,
+        wrap_v: Wrap::Repeat,
+        ..SHARP
+    };
+    let mut placing = texture(&mut scene, 4, &colours, repeating);
+    placing.transform = Some(TextureTransform {
+        offset: [0.0, 0.0],
+        rotation: 0.0,
+        scale: [8.0, 8.0],
+    });
+    scene.materials[0].base_color_texture = Some(placing);
+    (scene, over_the_wide_floor())
+}
+
+/// A camera that sees the whole of the forty-metre floor: the camera of
+/// `above` sees two metres from one metre up with room to spare (a metre
+/// and a half across), so forty metres are seen from this high.
+fn over_the_wide_floor() -> Camera {
+    Camera {
+        position: [0.0, 80.0 / 3.0, 0.0],
+        pitch: -FRAC_PI_2,
+        ..Camera::default()
+    }
+}
+
+/// How many of the places looked at show the same colour one copy of the
+/// picture farther along, out of how many were looked at. One copy is an
+/// eighth of the picture's width.
+fn repeats(pixels: &[u8]) -> (u32, u32) {
+    let copy = SIZE / 8;
+    let (mut same, mut looked) = (0, 0);
+    for y in (4..SIZE - 4).step_by(3) {
+        for x in (4..SIZE - 4 - copy).step_by(3) {
+            looked += 1;
+            if near(pixel(pixels, x, y), pixel(pixels, x + copy, y), 6) {
+                same += 1;
+            }
+        }
+    }
+    (same, looked)
+}
+
+#[test]
+fn a_shuffled_picture_does_not_come_round_in_a_grid() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    // As it is laid, every copy of the picture is the same as the next.
+    let (plain, camera) = tiled_floor(None);
+    let (same, looked) = repeats(&draw(&gpu, &plain, &camera, 0.0));
+    assert_eq!(same, looked, "a tiled picture repeats");
+
+    // Shuffled, with no pattern to keep: most places differ from the place
+    // one copy along.
+    let (shuffled, camera) = tiled_floor(Some(r#"{"shuffle": true}"#));
+    let free = draw(&gpu, &shuffled, &camera, 0.0);
+    let (same, looked) = repeats(&free);
+    assert!(same * 2 < looked, "{same} of {looked} places still repeat");
+
+    // Shuffled in whole steps of its four squares: it still does not come
+    // round, and it is drawn the same way every time.
+    let (stepped, camera) = tiled_floor(Some(r#"{"shuffle": [4, 4]}"#));
+    let first = draw(&gpu, &stepped, &camera, 0.0);
+    let (same, looked) = repeats(&first);
+    assert!(same * 2 < looked, "{same} of {looked} places still repeat");
+    assert_eq!(first, draw(&gpu, &stepped, &camera, 0.0));
+    finish(gpu);
+}
+
+#[test]
+fn a_shuffled_surface_is_a_little_lighter_and_darker_in_patches() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let grey = |extras: Option<&str>| {
+        let mut scene = floor(Material {
+            base_color: [0.5, 0.5, 0.5, 1.0],
+            extras: extras.map(str::to_owned),
+            ..Material::default()
+        });
+        scene.instances[0].transform = WIDE;
+        scene
+    };
+    let camera = over_the_wide_floor();
+    let plain = draw(&gpu, &grey(None), &camera, 0.0);
+    let even = light(pixel(&plain, SIZE / 2, SIZE / 2));
+    let toned = draw(&gpu, &grey(Some(r#"{"shuffle": true}"#)), &camera, 0.0);
+    let (mut least, mut most) = (u32::MAX, 0);
+    for y in (4..SIZE - 4).step_by(2) {
+        for x in (4..SIZE - 4).step_by(2) {
+            let here = light(pixel(&toned, x, y));
+            least = least.min(here);
+            most = most.max(here);
+        }
+    }
+    // Patches differ, and none by more than a seventh from the even grey.
+    assert!(most > least + 6, "from {least} to {most}");
+    assert!(
+        least * 7 >= even * 6 && most * 7 <= even * 8,
+        "from {least} to {most} round {even}"
+    );
+    finish(gpu);
+}
