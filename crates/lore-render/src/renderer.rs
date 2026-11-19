@@ -386,13 +386,13 @@ impl Renderer {
     /// one is given by [`take_shader_reports`](Self::take_shader_reports).
     /// Changing only a shader's `values` never compiles anything.
     ///
-    /// A surface shader changes the colour, normal, roughness, metallic,
+    /// A surface shader changes the color, normal, roughness, metallic,
     /// emission and alpha of every material of the level with the given
     /// name (an exact match; if two shaders name one material, the first
     /// in the list is drawn and the other is reported). Lighting, fog and
     /// weather still apply to what it gives. Shadows, bounce light and water
     /// are not changed by a surface shader: a shadow is cast by the
-    /// level's own surface, and bounce light sees the level's own colours.
+    /// level's own surface, and bounce light sees the level's own colors.
     /// A material the level lacks is reported once for each level.
     ///
     /// With an empty list nothing is made and nothing is drawn.
