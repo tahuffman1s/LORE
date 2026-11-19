@@ -47,13 +47,14 @@ pub(crate) struct SurfaceDraws {
 
 impl SurfaceDraws {
     /// The variant that draws the material numbered `material` (as
-    /// [`Meshes`] numbers them), and its number.
+    /// [`Meshes`] numbers them), and its number. `None` when its variant
+    /// has no set to draw with.
     pub(crate) fn of(&self, material: u32) -> Option<(u8, &Variant)> {
         let number = *self.by_material.get(material as usize)?;
         let variant = self
             .variants
             .get(usize::from(number))
-            .filter(|_| number != NONE)?;
+            .filter(|variant| number != NONE && variant.set != vk::DescriptorSet::null())?;
         Some((number, variant))
     }
 }
@@ -168,10 +169,21 @@ pub(super) struct SurfaceTable {
     drawn: bool,
     /// Whether the table must be made again.
     stale: bool,
-    /// The entries already told about for this level, and the revision
-    /// each was told about at: each is told once, and again when a new
-    /// version of it is drawn (whose own report says it works).
-    told: Vec<(u64, u64)>,
+    /// The problems told about for this level, as (entry, revision,
+    /// problem): each is told once, and again when a new version of the
+    /// shader is drawn. When one goes away, the shader is told to work.
+    told: Vec<(u64, u64, Problem)>,
+    /// Whether every problem still there is told again at the next rebuild.
+    resay: bool,
+}
+
+/// What can keep a surface shader from drawing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Problem {
+    /// The level has no material of its name.
+    Missing,
+    /// An earlier shader has its material.
+    Taken,
 }
 
 impl SurfaceTable {
@@ -191,6 +203,7 @@ impl SurfaceTable {
             drawn: false,
             stale: true,
             told: Vec::new(),
+            resay: false,
         }
     }
 
@@ -198,7 +211,7 @@ impl SurfaceTable {
     /// and what is wrong with it is said again.
     pub(super) fn scene_changed(&mut self) {
         self.stale = true;
-        self.told.clear();
+        self.resay = true;
     }
 
     /// Makes the table again if what is live or the level changed, and
@@ -212,19 +225,18 @@ impl SurfaceTable {
             self.stale = false;
             self.rebuild(book, meshes);
         }
+        // Each variant is given the set of its own entry, or none, which
+        // leaves its material drawn as the level's own.
         let draws = &mut self.draws;
-        let variants = draws.variants.iter_mut().zip(draws.owners);
-        for ((variant, owner), entry) in variants.zip(book.surfaces()) {
-            if owner != entry.id() {
-                continue;
-            }
-            if let Some(set) = entry
-                .live()
+        for (variant, owner) in draws.variants[..draws.count].iter_mut().zip(draws.owners) {
+            variant.set = book
+                .surfaces()
+                .find(|entry| entry.id() == owner)
+                .and_then(|entry| entry.live())
                 .and_then(|live| live.built.surface())
                 .and_then(|shader| shader.sets.get(slot))
-            {
-                variant.set = *set;
-            }
+                .copied()
+                .unwrap_or_default();
         }
     }
 
@@ -263,21 +275,38 @@ impl SurfaceTable {
         self.drawn = plan.by_material.iter().any(|&number| number != NONE);
         draws.by_material = plan.by_material;
 
+        // What is wrong now, and what was said about it before.
+        let mut found: Vec<(u64, u64, Problem)> = Vec::new();
         let mut said = Vec::new();
+        let again = std::mem::take(&mut self.resay);
         for &shader in &plan.missing {
             let w = &wanted[shader];
-            if !self.told.contains(&(w.id, w.revision)) {
-                self.told.push((w.id, w.revision));
-                said.push(w.says(missing_error(&w.file, &w.material, names)));
+            let key = (w.id, w.revision, Problem::Missing);
+            if again || !self.told.contains(&key) {
+                said.push(w.says(Err(missing_error(&w.file, &w.material, names))));
             }
+            found.push(key);
         }
         for &(shader, first) in &plan.taken {
             let (w, other) = (&wanted[shader], &wanted[first]);
-            if !self.told.contains(&(w.id, w.revision)) {
-                self.told.push((w.id, w.revision));
-                said.push(w.says(taken_error(&w.file, &w.material, &other.name)));
+            let key = (w.id, w.revision, Problem::Taken);
+            if again || !self.told.contains(&key) {
+                said.push(w.says(Err(taken_error(&w.file, &w.material, &other.name))));
+            }
+            found.push(key);
+        }
+        // A problem told before whose cause is gone: the shader draws now.
+        for &(id, revision, _) in &self.told {
+            let gone = !found.iter().any(|&(i, r, _)| (i, r) == (id, revision));
+            let drawn = wanted.iter().find(|w| (w.id, w.revision) == (id, revision));
+            if let (true, Some(w)) = (gone, drawn) {
+                let told = said.iter().any(|r| r.name == w.name && r.outcome.is_ok());
+                if !told {
+                    said.push(w.says(Ok(())));
+                }
             }
         }
+        self.told = found;
         for report in said {
             book.report(report);
         }
@@ -300,14 +329,14 @@ struct Wanted {
 }
 
 impl Wanted {
-    /// The report that says `error` about this shader.
-    fn says(&self, error: ShaderError) -> ShaderReport {
+    /// The report that says `outcome` about this shader.
+    fn says(&self, outcome: Result<(), ShaderError>) -> ShaderReport {
         ShaderReport {
             name: self.name.clone(),
             file: self.file.clone(),
             material: Some(self.material.clone()),
             revision: self.revision,
-            outcome: Err(error),
+            outcome,
         }
     }
 }
@@ -315,9 +344,22 @@ impl Wanted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ash::vk::Handle;
 
     fn names(list: &[&str]) -> Vec<Option<String>> {
         list.iter().map(|name| Some((*name).to_owned())).collect()
+    }
+
+    #[test]
+    fn a_variant_with_no_set_draws_nothing() {
+        let layout = vk::PipelineLayout::null();
+        let mut table = SurfaceTable::new(layout);
+        table.draws.variants[1].set = vk::DescriptorSet::from_raw(7);
+        table.draws.by_material = vec![0, 1, NONE];
+        assert!(table.draws.of(0).is_none());
+        assert!(table.draws.of(1).is_some_and(|(number, _)| number == 1));
+        assert!(table.draws.of(2).is_none());
+        assert!(table.draws.of(9).is_none());
     }
 
     #[test]
