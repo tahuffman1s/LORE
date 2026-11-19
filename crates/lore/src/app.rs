@@ -851,6 +851,7 @@ impl<G: Game> App<G> {
             self.lighting_given = true;
         }
         let (water_rise, sky_clock) = frame.take_water();
+        let ground_water = frame.take_ground_water();
         let storm_bolts = frame.take_storm_bolts();
         let weather = frame.take_weather();
         let fluid = frame.take_fluid();
@@ -891,6 +892,9 @@ impl<G: Game> App<G> {
             }
             if let Some(rise) = water_rise {
                 renderer.set_water_rise(rise);
+            }
+            if let Some(ground) = ground_water {
+                renderer.set_ground_water(ground);
             }
             if sky_clock.is_some() {
                 renderer.set_sky_clock(sky_clock);

@@ -70,4 +70,4 @@ pub use renderer::{RenderConfig, Renderer};
 pub use tracks::Tread;
 pub use upscale::Upscaling;
 pub use water::Stir;
-pub use weather::{Falling, Tornado, Weather};
+pub use weather::{Falling, GroundWater, Tornado, Weather};

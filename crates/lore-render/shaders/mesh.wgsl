@@ -112,7 +112,7 @@ struct View {
     // how far round it has turned in radians, and how far the wind has
     // carried what is near, which is the same as before but begun again
     // every few kilometres so that it stays exact. Last, how deep the snow
-    // lies, in metres.
+    // lies, in metres, and how full rain has filled the puddles, from 0 to 1.
     weather: array<vec4<f32>, 7>,
     // The heavens (`sky.rs`): towards the sun itself, and how far the
     // night has come from 0 to 1; towards the moon, and how far the stars
@@ -1407,8 +1407,10 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
 // How much of the rain reaches a point, from 0 (something is over it) to 1.
 // Rain falls nearly straight, so what matters is what is right overhead,
 // not how much of the whole sky is seen: the floor of a street between
-// tall buildings sees little sky and is rained on all the same.
-fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+// tall buildings sees little sky and is rained on all the same. Snow lying
+// `buried` metres deep has buried whatever is over the point no higher
+// than that: it covers nothing, and the snow lies over it.
+fn rained_on(world: vec3<f32>, pixel: vec2<f32>, buried: f32) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
@@ -1428,7 +1430,7 @@ fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
     for (var look = 0; look < 2; look++) {
         let at = uv + beside * (f32(look) * 2.0 - 1.0) / metres_a_pixel / size;
         let held = overhead_at(at, size);
-        open += 1.0 - smoothstep(0.35, 0.9, (above.z - held) * depth_metres);
+        open += 1.0 - smoothstep(0.35 + buried, 0.9 + buried, (above.z - held) * depth_metres);
     }
     return open * 0.5;
 }
@@ -1480,11 +1482,11 @@ fn solid_mirrored(
 // across: the dips every road has, which no level's maker builds. The
 // material's own crevices, where its shading says the light reaches least,
 // fill first, so a puddle's edge follows the cracks of the asphalt and the
-// joints between stones. `wetness` is how wet the rain has made the
-// ground, from 0 to 1: the first puddles are in the deepest dips, and after
-// long rain a good part of level ground is under water. `crevice` is how
+// joints between stones. `full` is how full the rain has filled the
+// puddles, from 0 to 1: the first are in the deepest dips, and after a
+// downpour a good part of level ground is under water. `crevice` is how
 // deep in a crevice the point is, from 0 to 1.
-fn puddle_at(world: vec3<f32>, wetness: f32, crevice: f32) -> vec2<f32> {
+fn puddle_at(world: vec3<f32>, full: f32, crevice: f32) -> vec2<f32> {
     let wide = textureSampleLevel(
         cloud_volume, cloud_sampler, vec3<f32>(world.x * 0.045, 0.61, world.z * 0.045), 0.0,
     ).r;
@@ -1496,7 +1498,7 @@ fn puddle_at(world: vec3<f32>, wetness: f32, crevice: f32) -> vec2<f32> {
     ).g;
     // How deep the water stands over the point, in metres.
     let dip = (wide * 0.6 + broad * 0.4 - PUDDLES_FROM) * 0.05;
-    let deep = dip + (fine - 0.5) * 0.004 + crevice * 0.004 - (1.0 - wetness) * 0.012;
+    let deep = dip + (fine - 0.5) * 0.004 + crevice * 0.004 - (1.0 - full) * 0.012;
     return vec2<f32>(smoothstep(0.0, 0.0025, deep), smoothstep(-0.01, 0.0, deep));
 }
 // Where the noise of `puddle_at` has to be for water to lie there.
@@ -1565,11 +1567,14 @@ fn snow_buries(world: vec3<f32>, deep: f32) -> f32 {
 // How much of a point of the world is snow, from 0 to 1, and the two
 // grains of noise that make its edge ragged. `faces_up` is how far the
 // surface there faces up, as it is built (-1 to 1), and `open` how much of
-// the sky it sees.
+// what falls reaches it (`rained_on`).
 //
-// Snow lies on what faces up under an open sky: first on what is flattest
-// and in patches, then, as it deepens, on all but what is steep. Under
-// trees and ledges there is little or none. And it buries what is in it:
+// Snow lies on what faces up with nothing over it: first on what is
+// flattest and in patches, then, as it deepens, on all but what is steeper
+// than it clings to, sixty degrees. It comes nearly straight down, so under
+// trees, ledges and roofs there is little or none however much of the sky
+// is in sight round about, and the floor of a narrow street between tall
+// buildings is as white as an open square. And it buries what is in it:
 // whatever is no higher over the ground than the snow is deep has as much
 // snow as the ground beside it, whichever way it faces. What a surface's
 // normal map says plays no part: snow settles on a road, not between its
@@ -1580,7 +1585,7 @@ fn snow_on(world: vec3<f32>, faces_up: f32, open: f32) -> vec3<f32> {
         cloud_volume, cloud_sampler, world * vec3<f32>(0.13, 0.19, 0.13) + 0.21, 0.0,
     ).r;
     let small = textureSampleLevel(cloud_volume, cloud_sampler, world * 0.9 + 0.5, 0.0).g;
-    let needs = mix(0.97, 0.3, lies);
+    let needs = mix(0.97, 0.5, lies);
     let ragged = (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
     let own = smoothstep(needs - 0.1, needs + 0.1, faces_up + ragged);
     let level = smoothstep(needs - 0.1, needs + 0.1, 1.0 + ragged);
@@ -1810,11 +1815,20 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // has a good half of the light, and what faces up has all it had.
     var banked_sun = 1.0;
     var banked_sky = 1.0;
+    // How much of what falls reaches the point, asked only while snow lies
+    // or the rain has left the ground wet: what lies and what wets come
+    // nearly straight down, so what is over the point counts, not how
+    // much of the sky it sees.
+    var reached = 1.0;
+    let puddled = view.weather[6].y;
+    if view.weather[2].x > 0.0 || ((view.weather[0].z > 0.0 || puddled > 0.0) && built.y > 0.2) {
+        reached = rained_on(corner.world, corner.position.xy, view.weather[6].x);
+    }
     if view.weather[2].x > 0.0 {
         let faces_up = smoothstep(0.25, 0.6, built.y);
         banked_sun = mix(0.55, 1.0, faces_up);
         banked_sky = mix(0.85, 1.0, faces_up);
-        let found = snow_on(corner.world, built.y, open);
+        let found = snow_on(corner.world, built.y, reached);
         let patches = found.y;
         let small = found.z;
         snowed = found.x;
@@ -1868,10 +1882,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
 
     // What the water laps at is soaked, and so is what the rain falls on:
     // whatever faces up with nothing over it, and has no snow on it.
-    var rained = view.weather[0].z * smoothstep(0.2, 0.7, built.y) * (1.0 - snowed);
-    if rained > 0.0 {
-        rained *= rained_on(corner.world, corner.position.xy);
-    }
+    let rain_reaches = smoothstep(0.2, 0.7, built.y) * (1.0 - snowed) * reached;
+    let rained = view.weather[0].z * rain_reaches;
     let wet = max(shore_wet(corner.world) * (1.0 - snowed), rained);
     // Water fills the pores of what has them, which is what is rough
     // (Lagarde, "Water drop 3b", 2013): that is darker, because light gets
@@ -1884,13 +1896,15 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // Rain water lies on what is level: puddles, a sheet of water over the
     // ground, flat whatever the ground's own bumps and ringed by the drops
     // that fall in it, and round them and over more of the ground the
-    // longer it rains, a film too thin to hide the bumps but smooth enough
-    // to mirror the street.
+    // fuller the rain has filled them, a film too thin to hide the bumps
+    // but smooth enough to mirror the street. How full they are is counted
+    // as the rain falls (`GroundWater`): a downpour fills them in a minute,
+    // a drizzle leaves a few in the deepest dips.
     var puddle = 0.0;
     var film = 0.0;
-    if rained > 0.01 && built.y > 0.9 && draw.sway == 0.0 {
-        let found = puddle_at(corner.world, smoothstep(0.1, 1.0, view.weather[0].z), 1.0 - reaches);
-        let level = smoothstep(0.93, 0.985, built.y) * smoothstep(0.0, 0.5, rained) * out;
+    if puddled > 0.0 && rain_reaches > 0.01 && built.y > 0.9 && draw.sway == 0.0 {
+        let found = puddle_at(corner.world, puddled, 1.0 - reaches);
+        let level = smoothstep(0.93, 0.985, built.y) * smoothstep(0.0, 0.5, rain_reaches) * out;
         puddle = found.x * level;
         film = found.y * level;
     }

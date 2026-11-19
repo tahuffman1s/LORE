@@ -130,6 +130,80 @@ impl Falling {
     }
 }
 
+/// How long hard rain takes to soak dry ground, and how long soaked ground
+/// takes to dry with none, in seconds.
+const WET_SOAKS: f32 = 30.0;
+const WET_DRIES: f32 = 300.0;
+
+/// How full the puddles get for how hard it rains: a downpour, falling at
+/// eight tenths of as hard as it can, fills them to the brim. Then about how
+/// long they take to fill towards that, and to drain once the rain eases or
+/// stops, in seconds.
+const PUDDLES_PER_RAIN: f32 = 1.25;
+const PUDDLES_FILL: f32 = 45.0;
+const PUDDLES_DRAIN: f32 = 120.0;
+
+/// What rain leaves on the ground: how wet it is, and how full the puddles
+/// in the dips of level ground are.
+///
+/// Both are counted as the rain falls ([`after`](Self::after)), so that they
+/// follow how hard it has rained and for how long, not only how hard it
+/// rains now. Hard rain soaks the ground in half a minute, a drizzle in a
+/// few minutes. The
+/// puddles fill towards how hard it rains: a downpour fills them to the
+/// brim in about a minute, a drizzle leaves a few in the deepest dips, and
+/// when the rain eases they drain towards what it now fills; after it stops
+/// they are mostly gone in four minutes. Snow lying and melting on warm
+/// ground keeps both as they are.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct GroundWater {
+    /// How wet the ground is, from 0, dry, to 1, soaked: what is rough is
+    /// darker, and everything shines.
+    pub wet: f32,
+    /// How full the puddles are, from 0, none, to 1, as full as a downpour
+    /// leaves them, when a good part of level ground is under water.
+    pub puddles: f32,
+}
+
+impl GroundWater {
+    /// The same with every number from 0 to 1, and what is not a number
+    /// at all dry.
+    #[must_use]
+    pub fn cleaned(&self) -> Self {
+        Self {
+            wet: sound(self.wet, 0.0).clamp(0.0, 1.0),
+            puddles: sound(self.puddles, 0.0).clamp(0.0, 1.0),
+        }
+    }
+
+    /// The ground `seconds` later, with `falling` falling on it in
+    /// `weather`. Sleet wets it nearly as rain does; snow lies on it dry.
+    #[must_use]
+    pub fn after(&self, seconds: f32, weather: &Weather, falling: &Falling) -> Self {
+        let now = self.cleaned();
+        let seconds = sound(seconds, 0.0).max(0.0);
+        let rain = sound(falling.rain, 0.0)
+            .max(0.7 * sound(falling.sleet, 0.0))
+            .clamp(0.0, 1.0);
+        // Snow that lies melting keeps it wet, and its puddles full.
+        let thaw = if weather.temperature > 0.5 {
+            weather.snow_cover()
+        } else {
+            0.0
+        };
+        let dries = (1.0 - rain) * (1.0 - thaw) / WET_DRIES;
+        let wet = now.wet + seconds * (rain / WET_SOAKS - dries);
+        let fills = rain * PUDDLES_PER_RAIN;
+        let pace = if fills > now.puddles {
+            seconds / PUDDLES_FILL
+        } else {
+            seconds * (1.0 - thaw) / PUDDLES_DRAIN
+        };
+        let puddles = now.puddles + (fills - now.puddles) * pace.min(1.0);
+        Self { wet, puddles }.cleaned()
+    }
+}
+
 /// The weather, as a game says it.
 ///
 /// [`Weather::default`] is what a level has until a game says otherwise:
@@ -403,6 +477,65 @@ mod tests {
             .find(|place| fair.storm_at(*place, 0.0) == 0.0)
             .unwrap();
         (under, clear)
+    }
+
+    /// The ground after `seconds` of rain falling `hard`, counted a
+    /// sixtieth of a second at a time from `from`.
+    fn rained(from: GroundWater, hard: f32, seconds: u32) -> GroundWater {
+        let falling = Falling {
+            rain: hard,
+            ..Falling::default()
+        };
+        (0..seconds * 60).fold(from, |ground, _| {
+            ground.after(1.0 / 60.0, &Weather::default(), &falling)
+        })
+    }
+
+    #[test]
+    fn puddles_fill_as_fast_and_as_full_as_it_rains_and_drain_when_it_stops() {
+        let dry = GroundWater::default();
+        // Half a minute of a downpour fills them over half way, and in a
+        // minute and a quarter to the brim; the ground is soaked.
+        let poured = rained(dry, 1.0, 30);
+        assert!((0.55..0.65).contains(&poured.puddles), "{poured:?}");
+        assert_eq!(poured.wet, 1.0);
+        assert_eq!(rained(dry, 1.0, 75).puddles, 1.0);
+        // A drizzle fills them a quarter as fast, and never past a few in
+        // the deepest dips.
+        let drizzled = rained(dry, 0.25, 30);
+        let pace = poured.puddles / drizzled.puddles;
+        assert!((3.5..4.5).contains(&pace), "{pace}");
+        let most = rained(dry, 0.25, 600).puddles;
+        assert!((0.3..0.32).contains(&most), "{most}");
+        // When the downpour eases to a drizzle they drain towards what that
+        // fills; when it stops they drain away, half in under a minute and
+        // a half, nearly all in five minutes; the ground dries over five.
+        let full = rained(dry, 1.0, 120);
+        let eased = rained(full, 0.25, 600).puddles;
+        assert!((0.3..0.33).contains(&eased), "{eased}");
+        let stopped = rained(full, 0.0, 85);
+        assert!((0.48..0.52).contains(&stopped.puddles), "{stopped:?}");
+        assert!(rained(full, 0.0, 300).puddles < 0.1);
+        assert!(stopped.wet > 0.6 && rained(full, 0.0, 300).wet < 0.01);
+        // Counted again, it comes to the same to the last bit.
+        assert_eq!(rained(dry, 0.7, 50), rained(dry, 0.7, 50));
+        // What is no number neither wets nor dries it.
+        let falling = Falling {
+            rain: f32::NAN,
+            ..Falling::default()
+        };
+        let kept = poured.after(f32::NAN, &Weather::default(), &falling);
+        assert_eq!(kept, poured);
+        // Snow melting on warm ground keeps the puddles as they were.
+        let thawing = Weather {
+            temperature: 5.0,
+            snow: 0.2,
+            ..Weather::default()
+        };
+        let held = (0..600).fold(poured, |ground, _| {
+            ground.after(1.0 / 60.0, &thawing, &Falling::default())
+        });
+        assert_eq!(held, poured);
     }
 
     #[test]

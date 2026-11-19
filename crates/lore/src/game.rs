@@ -103,6 +103,9 @@ pub struct Frame {
     /// if the game said them this frame.
     water_rise: Option<f32>,
     sky_clock: Option<f64>,
+    /// How wet the ground is and how full its puddles, if the game said
+    /// this frame.
+    ground_water: Option<lore_render::GroundWater>,
     /// Whether storms send their own bolts, if the game said this frame.
     storm_bolts: Option<bool>,
     /// The whole of the weather, if the game said it this frame.
@@ -208,6 +211,7 @@ impl Frame {
             lighting: None,
             water_rise: None,
             sky_clock: None,
+            ground_water: None,
             storm_bolts: None,
             weather: None,
             under_water: None,
@@ -909,6 +913,19 @@ impl Frame {
     /// that it is drawn as high as the game's rules have it.
     pub fn set_water_rise(&mut self, rise: f32) {
         self.water_rise = Some(rise);
+    }
+
+    /// Says how wet the ground is and how full its puddles, as the game's
+    /// rules count them from the rain that has fallen: from then on they
+    /// are drawn as the rules have them, and not counted by the picture.
+    pub fn set_ground_water(&mut self, ground: lore_render::GroundWater) {
+        self.ground_water = Some(ground);
+    }
+
+    /// How wet the ground is and how full its puddles, if the game said
+    /// this frame.
+    pub(crate) fn take_ground_water(&mut self) -> Option<lore_render::GroundWater> {
+        self.ground_water.take()
     }
 
     /// Says what time the sky's clock shows, in seconds of the game's own
