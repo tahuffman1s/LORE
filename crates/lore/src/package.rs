@@ -1058,11 +1058,17 @@ mod tests {
         image
             .files()
             .filter_map(|node| {
+                // Joined with `/` whatever this system uses: the image keeps
+                // each part of a path apart.
                 let name = node
                     .fullpath
-                    .to_string_lossy()
-                    .trim_start_matches('/')
-                    .to_owned();
+                    .components()
+                    .filter_map(|part| match part {
+                        std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let what = match &node.inner {
                     backhand::InnerNode::File(file) => {
                         let mut bytes = Vec::new();
