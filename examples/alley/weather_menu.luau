@@ -10,7 +10,7 @@ local kinds = { "clear", "fair", "cloudy", "overcast", "fog", "drizzle", "rain",
 -- Kept here because the weather does not say which kind it was last told,
 -- and a wind of no speed has no direction to read back. game.keep holds
 -- them while the script is saved and loaded again, as the weather is.
-local kept = game.keep("weather menu", { kind = "overcast", windTurn = 225 })
+local kept = game.keep("weather menu", { kind = "fair", windTurn = 225 })
 
 -- How long a whole day lasts, in minutes, by name.
 local dayLengths = { stopped = 0, ["a day in 24 min"] = 24, ["a day in 8 min"] = 8, ["a day in 2 min"] = 2 }
@@ -102,11 +102,27 @@ return menu.new("Weather", {
             game.weather.set(kind, 8)
         end,
     }),
-    menu.slider("Cloud", { get = game.weather.cloudCover, set = game.weather.setCloudCover, format = menu.percent }),
-    menu.slider("Storms", { get = game.weather.storminess, set = game.weather.setStorminess, format = menu.percent }),
+    -- The weather's own functions also take a number of seconds to change
+    -- over; a slider hands only the new value, so each is wrapped.
+    menu.slider("Cloud", {
+        get = game.weather.cloudCover,
+        set = function(cover)
+            game.weather.setCloudCover(cover)
+        end,
+        format = menu.percent,
+    }),
+    menu.slider("Storms", {
+        get = game.weather.storminess,
+        set = function(storms)
+            game.weather.setStorminess(storms)
+        end,
+        format = menu.percent,
+    }),
     menu.slider("Rain", {
         get = game.weather.rain,
-        set = game.weather.setRain,
+        set = function(rain)
+            game.weather.setRain(rain)
+        end,
         -- What falls is the same rain as sleet near freezing and snow below.
         format = function(rain)
             local warm = game.weather.temperature()
@@ -120,7 +136,9 @@ return menu.new("Weather", {
         max = 35,
         step = 1,
         get = game.weather.temperature,
-        set = game.weather.setTemperature,
+        set = function(degrees)
+            game.weather.setTemperature(degrees)
+        end,
         format = function(degrees)
             return string.format("%d C", math.floor(degrees + 0.5))
         end,
@@ -151,8 +169,22 @@ return menu.new("Weather", {
         format = compassPoint,
         color = "#b8e6c9",
     }),
-    menu.slider("Gusts", { get = game.weather.gusts, set = game.weather.setGusts, format = menu.percent, color = "#b8e6c9" }),
-    menu.slider("Fog", { get = game.weather.fog, set = game.weather.setFog, format = menu.percent, color = "#d8d8d8" }),
+    menu.slider("Gusts", {
+        get = game.weather.gusts,
+        set = function(gusts)
+            game.weather.setGusts(gusts)
+        end,
+        format = menu.percent,
+        color = "#b8e6c9",
+    }),
+    menu.slider("Fog", {
+        get = game.weather.fog,
+        set = function(fog)
+            game.weather.setFog(fog)
+        end,
+        format = menu.percent,
+        color = "#d8d8d8",
+    }),
     menu.slider("Hour", {
         min = 0,
         max = 24,
@@ -241,11 +273,12 @@ return menu.new("Weather", {
         end,
     }),
     menu.button("Start again", {
-        -- The alley's own day: overcast, one in the afternoon, mild.
+        -- The alley's own day, as main.luau starts it: fair, one in the
+        -- afternoon, mild.
         press = function()
-            kept.kind = "overcast"
-            game.weather.set("overcast", 4)
-            game.weather.setTemperature(15, 4)
+            kept.kind = "fair"
+            game.weather.set("fair", 4)
+            game.weather.setTemperature(20, 4)
             game.weather.setGusts(0.5)
             game.weather.setSnowDepth(0)
             game.weather.setIce(0)
@@ -254,7 +287,7 @@ return menu.new("Weather", {
             game.sky.setHour(13)
         end,
         text = function()
-            return "overcast, 13:00"
+            return "fair, 13:00"
         end,
     }),
     menu.info("Falling now", {

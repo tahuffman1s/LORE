@@ -1,2 +1,4 @@
 # Built by build.py.
 /level.glb
+# Written by `lore package`.
+/dist/

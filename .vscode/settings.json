@@ -1,0 +1,6 @@
+{
+    "luau-lsp.platform.type": "standard",
+    "luau-lsp.types.definitionFiles": {
+        "lore": "crates/lore-script/types/lore.d.luau"
+    }
+}

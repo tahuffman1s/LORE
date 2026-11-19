@@ -211,9 +211,12 @@ local news = game.hud.text("", { at = "top left", right = 40, down = 214, size =
 local within = game.hud.text("", { at = "bottom left", right = 24, down = -74, size = 24, color = "#ffffffc0" })
 local burn = game.hud.bar(0, { at = "bottom left", right = 24, down = -50, width = 220, height = 12, color = "#ff5a1a" })
 
+-- One fluid of a mix: how much of the pool it is, and the words for that.
+type Part = { share: number, text: string }
+
 -- What a pool holds, in words: "honey", or "water 72%, honey 28%".
 local function mix(pool: Pool): string
-    local said = {}
+    local said: { Part } = {}
     for _, fluid in kinds.list do
         local share = pool:share(fluid.kind)
         if share >= 0.995 then
@@ -225,7 +228,7 @@ local function mix(pool: Pool): string
     if #said == 0 then
         return pool.fluid.name
     end
-    table.sort(said, function(a, b)
+    table.sort(said, function(a: Part, b: Part)
         return a.share > b.share
     end)
     local words = {}

@@ -35,7 +35,7 @@ local menu = require("./menu")
 local pauseMenu = {}
 
 -- Where the menu is, in pixels on a screen 1080 high.
-local PLACE = { right = 40, down = 40, width = 820 }
+local PLACE: { right: number?, down: number?, width: number? } = { right = 40, down = 40, width = 820 }
 
 -- What the gamepad does when the rumble setting is changed, so the player
 -- feels how strong they have made it: both motors, then seconds.
