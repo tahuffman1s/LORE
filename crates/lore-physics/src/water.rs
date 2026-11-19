@@ -24,7 +24,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 
-use lore_assets::{Instance, Scene, Water};
+use lore_assets::{Instance, Scene, Spill, Water};
 
 use crate::level::{Level, Vector, place};
 
@@ -138,6 +138,8 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
                 water.name.clone_from(&instance.name);
                 water.sources = vec![number];
                 water.colour = sheet.colour;
+                water.fluid = instance.fluid();
+                water.amount = instance.amount();
                 waters.push(water);
             }
             Some(Err(already)) => {
@@ -263,6 +265,8 @@ struct Raised {
     /// the risen water covers.
     low: (i32, i32),
     high: (i32, i32),
+    /// Where it runs out once it is over its brim, if it found a way out.
+    spill: Option<Spill>,
 }
 
 /// Water spreading from a seed over a grid of points `cell` apart.
@@ -382,7 +386,9 @@ impl Flood {
             top: self.surface + Level::MOST_WATER_RISE,
             grounds: HashMap::new(),
             queue: BinaryHeap::new(),
+            found: 0,
             reached: HashMap::new(),
+            way_out: None,
         };
         // A sea filled only as far as its grid could hold has no rim to
         // fill to.
@@ -391,6 +397,22 @@ impl Flood {
         } else {
             rising.brim().max(0.0)
         };
+        // Where it ran out: over the first ground past the lowest point
+        // of its rim, as high as the rim, and the way it was going when it
+        // got there.
+        let spill = rising.way_out.map(|(crest, here, from, wide)| {
+            let [x, z] = self.at(here);
+            #[allow(clippy::cast_precision_loss)]
+            let (along, down) = ((here.0 - from.0) as f32, (here.1 - from.1) as f32);
+            let far = along.hypot(down).max(1.0);
+            #[allow(clippy::cast_precision_loss)]
+            let wide = wide.max(1) as f32 * self.cell;
+            Spill {
+                place: [x, self.surface + crest, z],
+                way: [along / far, down / far],
+                wide,
+            }
+        });
         // What the water got to on its way out and does not cover until
         // it is over its brim is ground like any other.
         let mut reached = rising.reached;
@@ -405,6 +427,7 @@ impl Flood {
             brim: self.surface + brim,
             low,
             high,
+            spill,
         }
     }
 
@@ -451,6 +474,9 @@ impl Flood {
             size,
             depths,
             colour: [0.0; 4],
+            fluid: None,
+            amount: 1.0,
+            spill: raised.spill,
         }
     }
 
@@ -471,6 +497,19 @@ impl Flood {
     }
 }
 
+/// A point of a flood's grid: its column and row.
+type Point = (i32, i32);
+/// A way over a rim: how high the rim stands there, the first point past
+/// it, the point the water came to that one from, and how many points
+/// wide the stretch of rim it gets over is.
+type WayOut = (f32, Point, Point, i32);
+/// A point the water can get to next: how far over the surface at rest it
+/// has to stand to (as the whole number of its bits), how many were found
+/// before it (so that of points as low as each other the first found is
+/// the first gone to, and the water spreads evenly from its rim), the
+/// point's column and row, and those of the point it would get there from.
+type Next = Reverse<(u32, u64, i32, i32, i32, i32)>;
+
 /// Water rising out of the hollow a flood filled.
 struct Rising<'a> {
     flood: &'a Flood,
@@ -483,10 +522,16 @@ struct Rising<'a> {
     /// The points the water can get to next, each with how far over the
     /// surface at rest it has to stand to, the lowest first: a height that
     /// is never less than nothing orders as the whole number of its bits.
-    queue: BinaryHeap<Reverse<(u32, i32, i32)>>,
+    queue: BinaryHeap<Next>,
+    /// How many points have been put in the queue.
+    found: u64,
     /// Each point it has got to beyond the water at rest, with how far
     /// over the surface at rest the lowest way to it stands.
     reached: HashMap<(i32, i32), f32>,
+    /// The way out of the hollow, once [`brim`](Self::brim) has found the
+    /// water running away: how high the rim stands there, the first point
+    /// past it, and the point the water came to that one from.
+    way_out: Option<WayOut>,
 }
 
 impl Rising<'_> {
@@ -494,7 +539,10 @@ impl Rising<'_> {
     /// runs out, filling [`reached`](Self::reached) on the way.
     fn brim(&mut self) -> f32 {
         let flood = self.flood;
-        for &here in flood.wet.keys() {
+        // In an order that is the same every time, which a map's is not.
+        let mut wet: Vec<Point> = flood.wet.keys().copied().collect();
+        wet.sort_unstable();
+        for here in wet {
             self.spread(here, flood.surface);
         }
         // Ground the water runs down onto past a rim, more of it than
@@ -502,8 +550,15 @@ impl Rising<'_> {
         // the way.
         let hollow = (flood.wet.len() / 8).clamp(16, 4096);
         let mut past_rim = 0;
+        // Where the water gets over the rim it runs away past: each point
+        // past it that was come to from the rim itself, and how high the
+        // rim stands. A rim that is level along a stretch, as a wall's top
+        // is, is crossed all along it: the middle of them is where it
+        // runs out.
+        let mut crossings: Vec<(Point, Point)> = Vec::new();
+        let mut rim = f32::NEG_INFINITY;
         let (mut low, mut high) = (flood.low, flood.high);
-        while let Some(Reverse((over, column, row))) = self.queue.pop() {
+        while let Some(Reverse((over, _, column, row, from_column, from_row))) = self.queue.pop() {
             let here = (column, row);
             if self.reached.contains_key(&here) {
                 continue;
@@ -518,7 +573,20 @@ impl Rising<'_> {
             let ground = self.grounds.get(&here).copied().flatten();
             if ground.is_some_and(|ground| ground < flood.surface + crest - PAST_RIM) {
                 past_rim += 1;
+                if crest > rim + PAST_RIM {
+                    rim = crest;
+                    crossings.clear();
+                }
+                let from = (from_column, from_row);
+                let from_rim = flood.wet.contains_key(&from)
+                    || (self.grounds.get(&from).copied().flatten())
+                        .is_none_or(|ground| ground >= flood.surface + crest - PAST_RIM);
+                if from_rim && crossings.len() < 4096 {
+                    crossings.push((here, from));
+                }
                 if past_rim > hollow {
+                    self.way_out =
+                        middle_of(&crossings).map(|(here, from, wide)| (rim, here, from, wide));
                     return crest - UNDER_RIM;
                 }
             }
@@ -547,7 +615,15 @@ impl Rising<'_> {
                 // orders after every height.
                 let over = height - self.flood.surface;
                 let over = if over > 0.0 { over } else { 0.0 };
-                self.queue.push(Reverse((over.to_bits(), to.0, to.1)));
+                self.found += 1;
+                self.queue.push(Reverse((
+                    over.to_bits(),
+                    self.found,
+                    to.0,
+                    to.1,
+                    from.0,
+                    from.1,
+                )));
             }
         }
     }
@@ -593,6 +669,58 @@ impl Rising<'_> {
         }
         Some(high)
     }
+}
+
+/// Where water gets over a rim, from `crossings` (each a point past the
+/// rim and the point it was come to from): the middle of the stretch of
+/// rim it gets over, the point that one was come to from, and how many
+/// points wide the stretch is. The stretch is the run of crossings side
+/// by side, all made the same way, through the crossing nearest the
+/// middle of them all: the length of a wall's top, or a notch one point
+/// wide.
+fn middle_of(crossings: &[(Point, Point)]) -> Option<(Point, Point, i32)> {
+    let count = i64::try_from(crossings.len())
+        .ok()
+        .filter(|count| *count > 0)?;
+    let (mut column, mut row) = (0_i64, 0_i64);
+    for ((along, down), _) in crossings {
+        column += i64::from(*along);
+        row += i64::from(*down);
+    }
+    // Twice how far it is from the middle, squared, in whole numbers: no
+    // rounding decides between two.
+    let away = |((along, down), _): &(Point, Point)| {
+        let (x, z) = (
+            i64::from(*along) * count - column,
+            i64::from(*down) * count - row,
+        );
+        (x * x + z * z, *along, *down)
+    };
+    let (nearest, from) = crossings.iter().copied().min_by_key(away)?;
+    let step = (nearest.0 - from.0, nearest.1 - from.1);
+    let made_so: std::collections::HashSet<Point> = crossings
+        .iter()
+        .filter(|(here, from)| (here.0 - from.0, here.1 - from.1) == step)
+        .map(|(here, _)| *here)
+        .collect();
+    // Along the rim is across the way over it.
+    let side = (step.1.abs(), step.0.abs());
+    let reach = |sign: i32| {
+        (1..)
+            .take_while(|far| {
+                made_so.contains(&(
+                    nearest.0 + side.0 * sign * far,
+                    nearest.1 + side.1 * sign * far,
+                ))
+            })
+            .count()
+    };
+    // A run is a few thousand points at the very most.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let (back, on) = (reach(-1) as i32, reach(1) as i32);
+    let shift = (on - back) / 2;
+    let here = (nearest.0 + side.0 * shift, nearest.1 + side.1 * shift);
+    Some((here, (here.0 - step.0, here.1 - step.1), back + on + 1))
 }
 
 /// Whether a grid from column and row `low` to `high`, with the dry ground
@@ -1000,12 +1128,32 @@ mod tests {
                 (brim - (notch - UNDER_RIM)).abs() < 0.01,
                 "a notch {notch} over the water lets it rise {brim}"
             );
+            // And the notch is where it runs out: from its middle, as
+            // high as it, going out through it, over its whole width.
+            let spill = water.spill.expect("a way out");
+            let [x, y, z] = spill.place;
+            assert!(x > 4.0 && x < 4.0 + 3.0 * water.cell, "{spill:?}");
+            assert!((y - (water.level + notch)).abs() < 0.01, "{spill:?}");
+            assert!(z.abs() < 0.1, "{spill:?}");
+            assert_eq!(spill.way, [1.0, 0.0]);
+            assert!((spill.wide - 1.0).abs() < 0.15, "{spill:?}");
         }
-        // Without the notch it rises as far as rain raises any water.
+        // Without the notch it rises as far as rain raises any water, and
+        // has no way out.
         let mut scene = notched(1.0);
         fill(&mut scene);
         let water = &scene.waters[0];
         assert_eq!(water.brim - water.level, Level::MOST_WATER_RISE);
+        assert_eq!(water.spill, None);
+        // The same hollow is filled the same way every time.
+        let again = {
+            let mut scene = notched(0.3);
+            fill(&mut scene);
+            scene.waters[0].clone()
+        };
+        let mut scene = notched(0.3);
+        fill(&mut scene);
+        assert_eq!(scene.waters[0], again);
     }
 
     #[test]

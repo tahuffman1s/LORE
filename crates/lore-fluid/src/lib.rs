@@ -52,6 +52,7 @@ mod flow;
 mod grid;
 mod lying;
 mod math;
+mod pools;
 mod random;
 mod store;
 #[cfg(test)]
@@ -65,6 +66,7 @@ use math::{add, finite, frame, length, normalize, scale};
 use store::{Particle, ball_radius};
 
 pub use flow::Flow;
+pub use pools::{MOST_POOL_HITS, Pool, PoolHit};
 
 /// How many kinds of fluid there can be. Kinds are numbered from 0.
 pub const MOST_KINDS: usize = 32;
@@ -169,6 +171,8 @@ pub struct Fluids {
     born: u64,
     /// How many steps have been taken: it staggers the slow drops.
     tick: u32,
+    /// The fluid that stands: the level's lakes, ponds and tanks.
+    pools: pools::Pools,
 }
 
 impl Fluids {
@@ -187,6 +191,7 @@ impl Fluids {
             rolls: random::Rolls::new(seed),
             born: 0,
             tick: 0,
+            pools: pools::Pools::default(),
         }
     }
 
@@ -352,17 +357,24 @@ impl Fluids {
     ///
     /// Drops in flight fall and are swept against the level; those that
     /// land splash or lie. Lying drops cover, merge, spread, run, trail,
-    /// sleep and dry. Drops that fall into the level's still water are gone.
+    /// sleep and dry. Drops that fall or run into a pool join it, and a
+    /// pool that is over its brim runs out as drops ([`Pool`]).
     pub fn step(&mut self, level: &Level, dt: f32) {
         if !(dt.is_finite() && dt > 0.0) {
             return;
         }
         self.tick = self.tick.wrapping_add(1);
+        // The pools stand where they were left, whatever else was said to
+        // the level since; nothing has gone into them yet this tick.
+        self.pools.hits.clear();
+        self.stand_pools(level);
         self.fly(level, dt);
         self.grid.build(&self.parts);
         self.settle_landings();
         self.lie(level, dt);
+        self.soak_pools(level);
         self.dry(dt);
+        self.step_pools(level, dt);
         self.parts.retain(|p| !p.dead);
         // The store has moved up: the grid must point at the new places.
         self.grid.build(&self.parts);

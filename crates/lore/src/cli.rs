@@ -196,6 +196,16 @@ pub fn find_game(folder: &Path, command: &str) -> Result<(), String> {
     }
 }
 
+/// Tells `host` what pools `level` has (its still water, by name) and how
+/// each stands before anything has happened, as a world playing the level
+/// would, and says how many there are. `lore check` runs a game with no
+/// world: this is what lets a script's lines about its pools run there.
+pub fn tell_pools(level: &lore_assets::Scene, host: &mut lore_script::ScriptHost) -> usize {
+    let level = lore_physics::Level::from_scene(level);
+    crate::world::tell_pools(&level, host);
+    level.waters().len()
+}
+
 /// Loads the level of the game in `folder`, its `level.glb`, and passes on
 /// what the file's maker should know about it. `None` if the game has no
 /// level of its own, which is said too.

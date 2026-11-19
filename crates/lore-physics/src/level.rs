@@ -1,6 +1,8 @@
 //! The level's triangles, and the few questions the player asks of them.
 
 use lore_assets::{Scene, Transform, Water};
+
+use crate::medium::Medium;
 use parry3d::glamx::Vec3;
 use parry3d::math::{Pose, Vector as Wide};
 use parry3d::query::{self, Ray, RayCast, ShapeCastOptions};
@@ -53,6 +55,72 @@ pub struct Level {
     rise: Rise,
     /// How thick the ice on that water is.
     ice: Rise,
+    /// How each of the waters stands now, in their order.
+    standing: Vec<Standing>,
+}
+
+/// How one body of still fluid stands, said through a level many hold.
+#[derive(Clone)]
+struct Standing {
+    /// How far over where it was put its surface is; under it, below
+    /// nothing.
+    shift: Rise,
+    /// How heavy and how thick what it holds is.
+    density: Rise,
+    viscosity: Rise,
+    /// Whether it is frozen thick enough to walk on: 1 if so.
+    frozen: Rise,
+}
+
+impl Default for Standing {
+    fn default() -> Self {
+        let standing = Self {
+            shift: Rise::default(),
+            density: Rise::default(),
+            viscosity: Rise::default(),
+            frozen: Rise::default(),
+        };
+        standing.density.set(Medium::WATER.density);
+        standing.viscosity.set(Medium::WATER.viscosity);
+        standing
+    }
+}
+
+/// How one body of still fluid stands: what [`Level::set_pool`] takes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stand {
+    /// How far over where its maker put it the surface is, in metres;
+    /// under it, below nothing. It is kept between empty and the body's
+    /// brim ([`Water::stood`]).
+    pub shift: f32,
+    /// Whether it is frozen thick enough to walk on.
+    pub frozen: bool,
+    /// What it holds, to someone in it.
+    pub medium: Medium,
+}
+
+impl Default for Stand {
+    /// Water, where its maker put it, not frozen.
+    fn default() -> Self {
+        Self {
+            shift: 0.0,
+            frozen: false,
+            medium: Medium::WATER,
+        }
+    }
+}
+
+/// The still fluid at a place: what [`Level::pool_around`] finds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PoolHere {
+    /// Which of [`Level::waters`] it is.
+    pub index: usize,
+    /// How high its surface stands, in metres.
+    pub surface: f32,
+    /// How deep it is there from its surface to its bed, in metres.
+    pub deep: f32,
+    /// What it holds, to someone in it.
+    pub medium: Medium,
 }
 
 /// A height in metres that can be set through a level many hold: the level's
@@ -64,6 +132,10 @@ struct Rise(std::sync::atomic::AtomicU32);
 impl Rise {
     fn get(&self) -> f32 {
         f32::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn set(&self, value: f32) {
+        (self.0).store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -103,12 +175,152 @@ impl Level {
         // in: it fills the hollow it is over. A scene that was filled
         // when it was loaded says where; one that was not is filled here.
         // Water that slopes is a stream: too shallow to matter here.
-        level.waters = if scene.waters.is_empty() {
+        let waters = if scene.waters.is_empty() {
             crate::water::filled(&level, scene).0
         } else {
             scene.waters.clone()
         };
+        level.set_waters(waters);
         level
+    }
+
+    /// Says what still water the level has, each body standing where it
+    /// was put, as water, not frozen.
+    pub(crate) fn set_waters(&mut self, waters: Vec<Water>) {
+        self.standing = waters.iter().map(|_| Standing::default()).collect();
+        self.waters = waters;
+        // What was said of all of them still holds.
+        self.set_water_rise(self.rise.get());
+        self.set_ice(self.ice.get());
+    }
+
+    /// The bodies of still fluid that are not frozen over, each with which
+    /// it is and how far over where it was put its surface stands.
+    fn open(&self) -> impl Iterator<Item = (usize, &Water, f32)> {
+        self.waters
+            .iter()
+            .zip(&self.standing)
+            .enumerate()
+            .filter(|(_, (_, standing))| standing.frozen.get() < 0.5)
+            .map(|(index, (water, standing))| (index, water, standing.shift.get()))
+    }
+
+    /// The bodies of still fluid that are frozen thick enough to walk on,
+    /// each with how far over where it was put its surface stands.
+    fn iced(&self) -> impl Iterator<Item = (&Water, f32)> {
+        self.waters
+            .iter()
+            .zip(&self.standing)
+            .filter(|(_, standing)| standing.frozen.get() >= 0.5)
+            .map(|(water, standing)| (water, standing.shift.get()))
+    }
+
+    /// What body `index` of [`waters`](Self::waters) holds, to someone in it.
+    fn medium(&self, index: usize) -> Medium {
+        self.standing
+            .get(index)
+            .map_or(Medium::WATER, |standing| Medium {
+                density: standing.density.get(),
+                viscosity: standing.viscosity.get(),
+            })
+    }
+
+    /// Says how body `index` of [`waters`](Self::waters) stands: how far
+    /// from where it was put, whether it is frozen, and what it holds.
+    /// A body there is none of is nobody's to say.
+    ///
+    /// Like the rise and the ice this is shared by everyone who holds the
+    /// level: a world says it before each step it takes, after
+    /// [`set_water_rise`](Self::set_water_rise) and
+    /// [`set_ice`](Self::set_ice), which say the same of every body.
+    pub fn set_pool(&self, index: usize, stand: Stand) {
+        let (Some(water), Some(standing)) = (self.waters.get(index), self.standing.get(index))
+        else {
+            return;
+        };
+        let medium = stand.medium.cleaned();
+        standing.shift.set(water.stood(stand.shift));
+        standing.frozen.set(f32::from(u8::from(stand.frozen)));
+        standing.density.set(medium.density);
+        standing.viscosity.set(medium.viscosity);
+    }
+
+    /// How body `index` of [`waters`](Self::waters) stands, if there is
+    /// one.
+    #[must_use]
+    pub fn pool(&self, index: usize) -> Option<Stand> {
+        let standing = self.standing.get(index)?;
+        Some(Stand {
+            shift: standing.shift.get(),
+            frozen: standing.frozen.get() >= 0.5,
+            medium: self.medium(index),
+        })
+    }
+
+    /// The still fluid that `point` is in or under the surface of, if it
+    /// is in any that is not frozen over: the one whose surface stands
+    /// highest. A point under the fluid's own bed, in a cellar under a
+    /// pool or a cave under a lake, is not in it.
+    #[must_use]
+    pub fn pool_around(&self, [x, y, z]: [f32; 3]) -> Option<PoolHere> {
+        // Feet rest a little in the bed they stand on.
+        let slack = 0.5;
+        self.open()
+            .filter_map(|(index, water, shift)| {
+                // The bed is where it was; the surface is higher or lower.
+                let deep = water.depth_at(x, z);
+                (deep + shift > 0.0 && y > water.level - deep - slack).then(|| PoolHere {
+                    index,
+                    surface: water.level + shift,
+                    deep: deep + shift,
+                    medium: self.medium(index),
+                })
+            })
+            .reduce(|one, other| {
+                if other.surface > one.surface {
+                    other
+                } else {
+                    one
+                }
+            })
+    }
+
+    /// The hollow of still fluid that `x`, `z` is over, whether or not
+    /// anything stands in it now: which of [`waters`](Self::waters) it is,
+    /// and how high its bed is there. Of several, the one whose bed is
+    /// highest; none that is frozen over. An empty basin is found by this
+    /// and by nothing else here.
+    #[must_use]
+    pub fn hollow_at(&self, x: f32, z: f32) -> Option<(usize, f32)> {
+        self.open()
+            .filter_map(|(index, water, _)| {
+                let deep = water.depth_at(x, z);
+                (deep > 0.0).then_some((index, water.level - deep))
+            })
+            .reduce(|one, other| if other.1 > one.1 { other } else { one })
+    }
+
+    /// The still fluid over `x`, `z`, if there is any that is not frozen
+    /// over: the one whose surface stands highest.
+    #[must_use]
+    pub fn pool_at(&self, x: f32, z: f32) -> Option<PoolHere> {
+        self.open()
+            .filter_map(|(index, water, shift)| {
+                let deep = water.depth_at(x, z);
+                (deep + shift > 0.0).then(|| PoolHere {
+                    index,
+                    surface: water.level + shift,
+                    deep: deep + shift,
+                    medium: self.medium(index),
+                })
+            })
+            .reduce(|one, other| {
+                if other.surface > one.surface {
+                    other
+                } else {
+                    one
+                }
+            })
     }
 
     /// The solid shapes of `scene`, with no water in them yet.
@@ -144,15 +356,7 @@ impl Level {
     /// is any there: a lake or a pond that the level marks as water.
     #[must_use]
     pub fn water_at(&self, x: f32, z: f32) -> Option<f32> {
-        if self.frozen() {
-            return None;
-        }
-        let rise = self.rise.get();
-        self.waters
-            .iter()
-            .filter(|water| water.depth_at(x, z) + water.risen(rise) > 0.0)
-            .map(|water| water.level + water.risen(rise))
-            .reduce(f32::max)
+        self.pool_at(x, z).map(|pool| pool.surface)
     }
 
     /// Says that rain has raised the level's still water `rise` metres
@@ -167,7 +371,10 @@ impl Level {
     /// this: a world says it before each step it takes.
     pub fn set_water_rise(&self, rise: f32) {
         let rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
-        (self.rise.0).store(rise.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        self.rise.set(rise);
+        for (water, standing) in self.waters.iter().zip(&self.standing) {
+            standing.shift.set(water.risen(rise));
+        }
     }
 
     /// How far rain has raised the level's still water, in metres.
@@ -192,7 +399,11 @@ impl Level {
         } else {
             0.0
         };
-        (self.ice.0).store(thickness.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        self.ice.set(thickness);
+        let frozen = f32::from(u8::from(thickness >= Self::ICE_BEARS));
+        for standing in &self.standing {
+            standing.frozen.set(frozen);
+        }
     }
 
     /// How thick the ice on the level's still water is, in metres.
@@ -215,19 +426,14 @@ impl Level {
     /// matters to it.
     #[must_use]
     pub fn ice_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
-        if !self.frozen() {
-            return None;
-        }
         // Feet rest a little in the bed they stand on.
         let slack = 0.5;
-        let rise = self.rise.get();
-        self.waters
-            .iter()
-            .filter(|water| {
+        self.iced()
+            .filter(|(water, shift)| {
                 let deep = water.depth_at(x, z);
-                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
+                deep + shift > 0.0 && y > water.level - deep - slack
             })
-            .map(|water| water.level + water.risen(rise))
+            .map(|(water, shift)| water.level + shift)
             .reduce(f32::max)
     }
 
@@ -236,35 +442,16 @@ impl Level {
     /// for a point that has a height. A point under the water's own bed,
     /// in a cellar under a pool or a cave under a lake, is not in it.
     #[must_use]
-    pub fn water_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
-        if self.frozen() {
-            return None;
-        }
-        // Feet rest a little in the bed they stand on.
-        let slack = 0.5;
-        let rise = self.rise.get();
-        self.waters
-            .iter()
-            .filter(|water| {
-                // The bed is where it was; the surface is higher.
-                let deep = water.depth_at(x, z);
-                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
-            })
-            .map(|water| water.level + water.risen(rise))
-            .reduce(f32::max)
+    pub fn water_around(&self, point: [f32; 3]) -> Option<f32> {
+        self.pool_around(point).map(|pool| pool.surface)
     }
 
     /// How deep the still water at `x`, `z` is from its surface to its
     /// bed, in metres; nothing where there is none.
     #[must_use]
     pub fn water_depth(&self, x: f32, z: f32) -> f32 {
-        if self.frozen() {
-            return 0.0;
-        }
-        let rise = self.rise.get();
-        self.waters
-            .iter()
-            .map(|water| water.depth_at(x, z) + water.risen(rise))
+        self.open()
+            .map(|(_, water, shift)| water.depth_at(x, z) + shift)
             .fold(0.0, f32::max)
     }
 
@@ -303,6 +490,7 @@ impl Level {
             waters: Vec::new(),
             rise: Rise::default(),
             ice: Rise::default(),
+            standing: Vec::new(),
         }
     }
 
@@ -502,7 +690,7 @@ mod rise_tests {
         let mut level = Level::from_triangles(&[]);
         // A pond a metre deep with a bank 0.3 m over it on one side and a
         // wall on the other, as three points a metre apart.
-        level.waters = vec![Water {
+        level.set_waters(vec![Water {
             name: None,
             sources: Vec::new(),
             level: 2.0,
@@ -512,7 +700,10 @@ mod rise_tests {
             size: [3, 1],
             depths: vec![-0.3, 1.0, Water::DRY],
             colour: [0.0; 4],
-        }];
+            fluid: None,
+            amount: 1.0,
+            spill: None,
+        }]);
         assert_eq!(level.water_at(1.0, 0.0), Some(2.0));
         assert_eq!(level.water_at(0.0, 0.0), None, "the bank is dry");
         level.set_water_rise(0.5);

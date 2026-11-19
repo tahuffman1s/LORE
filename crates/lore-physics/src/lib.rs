@@ -35,6 +35,7 @@
 mod fly;
 mod footing;
 mod level;
+mod medium;
 mod player;
 mod settings;
 mod slide;
@@ -43,7 +44,8 @@ mod tests;
 mod water;
 
 pub use footing::Footing;
-pub use level::{Level, RayHit};
+pub use level::{Level, PoolHere, RayHit, Stand};
+pub use medium::Medium;
 pub use player::Player;
 pub use settings::{MoveInput, MoveMode, MoveSettings};
 pub use water::fill;

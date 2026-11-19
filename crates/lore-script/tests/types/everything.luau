@@ -320,7 +320,8 @@ end)
 local honey: Fluid = game.fluid("honey")
 local goo: Fluid = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
 local pond = game.fluid("pond", { from = goo, color = "#203040", clarity = 2, cloudiness = 0.3, shine = 0.9, metal = 0, refraction = 1.34, viscosity = 0.1, density = 1, beading = 0.4, slippery = 0.5, sticky = 0, bouncy = 0, corrosive = 0, dries = 120, washes = true })
-game.fluid("blob", { from = "water", color = "red" })
+game.fluid("blob", { from = "water", color = "red", freezes = false })
+local tub: Pool = game.fluids.pool("Tub")
 honey.viscosity = 0.6
 honey.color = "#f6bf59"
 honey.clarity = 0.02
@@ -398,6 +399,24 @@ game.onTick(function()
     if wet then
         print(wet.seconds)
     end
+    -- Pools: what one holds, and filling, draining and moving it.
+    local name: string, holds: Fluid = tub.name, tub.fluid
+    print(name, holds.freezes, tub.level, tub.depth, tub.litres / tub.capacity, tub.brim)
+    if tub.overflowing or tub.frozen then
+        tub:drain(5)
+    elseif tub:share("honey") < 0.5 then
+        tub:fill(2, honey)
+        tub:fill(1)
+    end
+    tub:setLevel(1.5, 10)
+    tub:setLevel(0.5)
+    tub:splash(game.player.position, { litres = 3, speed = 5 })
+    tub.fluid = game.fluid("lava")
+    tub.level = 1
+    tub.litres = 200
+    for _, pool: Pool in game.fluids.pools() do
+        print(pool.name)
+    end
 end)
 
 game.fluids.onTouch(function(touch)
@@ -405,6 +424,10 @@ game.fluids.onTouch(function(touch)
     local kind: Fluid = touch.fluid
     if kind == game.fluid("acid") and who == game.player then
         print(touch.harm * 20, touch.cover, touch.depth, touch.seconds)
+    end
+    local swum: Pool? = touch.pool
+    if swum and touch.submerged > 0.9 then
+        print(swum.name)
     end
 end)
 

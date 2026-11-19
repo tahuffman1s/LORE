@@ -416,6 +416,7 @@ fn under_is_nil_until_the_engine_says_and_nil_again_after() {
             cover: 0.5,
             depth: 0.25,
             corrosive: 0.0,
+            ..FluidUnder::default()
         }),
         STEP,
     );
@@ -453,6 +454,7 @@ fn on_touch_is_told_the_harm_and_how_long_they_have_stood_there() {
         cover: 1.0,
         depth: 0.1,
         corrosive: 0.5,
+        ..FluidUnder::default()
     };
     let step = 0.5;
     host.stand_in_fluid(PLAYER, Some(acid), step);
@@ -533,6 +535,7 @@ fn the_queue_is_capped_but_a_clear_always_gets_in() {
             cover: 1.0,
             depth: 0.1,
             corrosive: 0.0,
+            ..FluidUnder::default()
         }),
         STEP,
     );

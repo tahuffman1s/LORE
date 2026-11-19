@@ -107,6 +107,38 @@ impl FluidLook {
     }
 }
 
+/// How one body of still fluid stands and looks: what
+/// [`Renderer::set_pools`](crate::Renderer::set_pools) takes for each of
+/// the scene's waters, in their order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PoolDrawn {
+    /// How far over where the level's maker put it the surface stands, in
+    /// metres; under it, below nothing. It is kept between empty and the
+    /// body's brim.
+    pub shift: f32,
+    /// What it is drawn as: with `None`, water in the colour the level
+    /// gave it.
+    pub look: Option<FluidLook>,
+    /// Whether the weather's ice shows on it: lava does not freeze.
+    pub freezes: bool,
+    /// How still its surface lies, from 0 (as water: the wind raises
+    /// waves on it and whoever wades leaves rings) to 1 (tar: nothing
+    /// does). Thick liquids lie still.
+    pub calm: f32,
+}
+
+impl Default for PoolDrawn {
+    /// Where it was put, as the level's own water.
+    fn default() -> Self {
+        Self {
+            shift: 0.0,
+            look: None,
+            freezes: true,
+            calm: 0.0,
+        }
+    }
+}
+
 /// What the renderer has been told of fluids, ready for the graphics card.
 pub(crate) struct FluidScene {
     /// Every drop, [`DROP_BYTES`] each: where it is and how large; which

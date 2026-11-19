@@ -150,6 +150,12 @@ const MOST_STROKES: usize = 8;
 const MOST_THUNDER: usize = 32;
 const THUNDER_HEARD: f32 = 25_000.0;
 
+/// Tells `host` what pools `level` has and how each stands before
+/// anything has happened in it, as a world that plays the level does.
+pub(crate) fn tell_pools(level: &lore_physics::Level, host: &mut lore_script::ScriptHost) {
+    fluids::WorldFluids::default().take_level(level, host);
+}
+
 impl World {
     /// The world of `game` with its player in it, on a flat floor at
     /// height zero until it is given a level
@@ -226,7 +232,11 @@ impl World {
             .host_mut()
             .set_level_lamps(&crate::lamps::of_level(level));
         let ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
-        Self::on(self.game, ground, None)
+        let mut world = Self::on(self.game, ground, None);
+        // The level's still water is the world's pools, of the kinds its
+        // sheets say.
+        (world.fluids).take_level(&world.ground.level, world.game.host_mut());
+        world
     }
 
     /// The game being played.
@@ -578,7 +588,8 @@ impl Game for World {
         self.fluids.step(
             &self.ground.level,
             self.ground.step,
-            self.player.player.position,
+            &self.player.player,
+            (self.climate.water_rise(), self.climate.ice()),
         );
         let Ground {
             level,
@@ -607,12 +618,9 @@ impl Game for World {
             }
             // Fluid underfoot: oil slides, honey drags, glue holds, slime
             // bounces.
+            // What a pool does to someone in it, by how heavy and how
+            // thick it is, is the level's to say as they move.
             moving.footing = self.fluids.footing();
-            // A lake the script made thicker than water is slow to wade
-            // and swim through.
-            let waded = self.fluids.wading(player.submerged);
-            moving.forward *= waded;
-            moving.right *= waded;
         }
         let before = *player;
         let walking = moving.mode == MoveMode::Walk;
@@ -668,6 +676,8 @@ impl Game for World {
             &mut self.noises,
             &mut self.marks,
         );
+        // What they threw up is drops of what they are in.
+        self.fluids.splash(level, &self.marks);
         // The weapon the player holds, by what they are pressing. The
         // script hears of every shot, hit and reload here.
         self.shooting.tick(
@@ -684,7 +694,12 @@ impl Game for World {
         // stands in, before its own tick. Only someone walking with their
         // feet down stands in anything.
         let standing = self.player.player.grounded && walking;
-        self.fluids.tell(self.game.host_mut(), *tick, standing);
+        self.fluids.tell(
+            self.game.host_mut(),
+            level,
+            *tick,
+            (&self.player.player, standing),
+        );
         self.game.tick(input, step);
         // The script may have put the player somewhere.
         self.teleport();
@@ -1023,6 +1038,11 @@ impl Playing {
     fn show_water(&mut self, frame: &mut Frame, eye: [f32; 3]) {
         for mark in self.marks.drain(..) {
             match mark {
+                // The white spray of a splash is water's. What is thrown
+                // out of honey or lava is drops of that, which the world's
+                // fluids have already thrown.
+                WaterMark::Splash { place, .. }
+                    if !(self.world.fluids).mostly_water(&self.world.ground.level, place) => {}
                 WaterMark::Splash {
                     place,
                     moving,

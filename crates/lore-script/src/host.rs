@@ -20,7 +20,7 @@ use crate::api::{self, Handlers, LiveSet, Shared};
 use crate::audio::{AudioCommand, AudioState};
 use crate::character_api::{CharacterId, Characters, Handles};
 use crate::error::{OpenError, ScriptError, is_time_limit};
-use crate::fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder};
+use crate::fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, PoolTold};
 use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::lamp_api::LampLight;
@@ -788,6 +788,41 @@ impl ScriptHost {
     /// called, oldest first, and forgets them. Allocates nothing.
     pub fn take_fluid_asks(&mut self, see: impl FnMut(FluidAsk)) {
         self.fluids.take_asks(see);
+    }
+
+    /// Says what pools the level has, by the names their sheets have in
+    /// it and in the order of its waters (`lore_physics::Level::waters`): a
+    /// pool with no name is "pool 1", "pool 2" and so on. Say it when a
+    /// world takes its level; until then `game.fluids.pool` cannot tell a
+    /// wrong name from a right one, and says so when the pool is used.
+    pub fn name_pools(&mut self, names: &[Option<&str>]) {
+        self.fluids.name_pools(names);
+    }
+
+    /// Says how each pool stands now, in the same order: what a script
+    /// reads from a pool (`pool.level`, `pool.litres`, `pool.fluid`).
+    /// Allocates nothing once there has been room for them.
+    pub fn set_pools(&mut self, pools: impl IntoIterator<Item = PoolTold>) {
+        self.fluids.set_pools(pools);
+    }
+
+    /// The kind of fluid a level's pool is, from the name its sheet gives
+    /// (`None` is water): a kind the game has, or a ready-made such as
+    /// "lava", which is made. `Err` holds what to tell the level's maker
+    /// about a name that is neither.
+    ///
+    /// # Errors
+    ///
+    /// When no kind has that name and none is ready-made, or when the game
+    /// already has as many kinds as it can.
+    pub fn pool_kind(&mut self, fluid: Option<&str>) -> Result<u8, String> {
+        self.fluids.kind_for_pool(fluid)
+    }
+
+    /// How many kinds of fluid the game has.
+    #[must_use]
+    pub fn fluid_kinds(&self) -> usize {
+        self.fluids.kinds()
     }
 
     /// Says how many litres of each kind there now are (the index is the

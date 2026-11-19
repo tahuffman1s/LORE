@@ -75,6 +75,8 @@ game.fluid("goo", { viscosity = "thick" }) -- wrong: how thick is a number
 game.fluid(5) -- wrong: a kind is named in quotes
 game.fluids.spray("water", game.player.eye) -- wrong: it needs a velocity too
 game.fluids.under("player") -- wrong: it takes a character
+game.fluids.pool(1) -- wrong: a pool is named in quotes
+game.fluids.pool("Tub"):fill("lots") -- wrong: litres are a number
 local sticky: string = game.fluid("goo").sticky -- wrong: stickiness is a number
 game.settings.set("volume") -- wrong: it needs what to set it to
 game.settings.set("volume", { 40 }) -- wrong: a number, true or false, or a word

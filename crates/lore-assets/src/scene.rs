@@ -250,6 +250,78 @@ impl Instance {
         }
     }
 
+    /// The kind of fluid a sheet of still water is, if its maker said: the
+    /// custom property `fluid` holds the kind's name, such as `"lava"` or
+    /// `"honey"` (a ready-made kind, or one the game's script makes with
+    /// `game.fluid`). With none it is water.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let pit = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"water": true, "fluid": " Lava "}"#.to_owned()),
+    /// };
+    /// assert_eq!(pit.fluid().as_deref(), Some("lava"));
+    /// ```
+    #[must_use]
+    pub fn fluid(&self) -> Option<String> {
+        use gltf::json::{Value, deserialize::from_str};
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return None;
+        };
+        match properties.get("fluid")? {
+            Value::String(name) => {
+                let name = name.trim().to_lowercase();
+                (!name.is_empty()).then_some(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// How full a sheet of still water starts, from 0 (an empty basin that
+    /// can be filled) to 1 (full to where the sheet lies, which is what it
+    /// is when its maker says nothing): the custom property `amount`.
+    ///
+    /// ```
+    /// use lore_assets::Instance;
+    ///
+    /// let tub = Instance {
+    ///     mesh: 0,
+    ///     transform: [[0.0; 4]; 4],
+    ///     mirrored: false,
+    ///     name: None,
+    ///     extras: Some(r#"{"water": true, "amount": 0.25}"#.to_owned()),
+    /// };
+    /// assert_eq!(tub.amount(), 0.25);
+    /// ```
+    #[must_use]
+    pub fn amount(&self) -> f32 {
+        use gltf::json::{Value, deserialize::from_str};
+
+        let Some(Ok(Value::Object(properties))) = self.extras.as_deref().map(from_str::<Value>)
+        else {
+            return 1.0;
+        };
+        // The number is a setting, and no finer than an f32.
+        #[allow(clippy::cast_possible_truncation)]
+        let amount = match properties.get("amount") {
+            Some(Value::Number(amount)) => amount.as_f64().unwrap_or(1.0) as f32,
+            Some(Value::Bool(false)) => 0.0,
+            _ => 1.0,
+        };
+        if amount.is_finite() {
+            amount.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
     /// What the custom property `name` says, if it is there and is true,
     /// false or a number: Blender writes a ticked box as 1 and an unticked
     /// one as 0 when the property was made as a whole number.
@@ -305,6 +377,30 @@ pub struct Water {
     /// The colour of the water itself, and in the fourth number how clear
     /// it is: 1 is clear water, less is murkier.
     pub colour: [f32; 4],
+    /// The kind of fluid it is, by name, if its sheet said
+    /// ([`Instance::fluid`]): `None` is water.
+    pub fluid: Option<String>,
+    /// How full it starts, from 0 (empty) to 1 (up to
+    /// [`level`](Self::level)): see [`Instance::amount`].
+    pub amount: f32,
+    /// Where it runs out when it is filled past its
+    /// [`brim`](Self::brim), if a way out of its hollow was found.
+    pub spill: Option<Spill>,
+}
+
+/// Where a body of still fluid runs out of its hollow: the lowest point of
+/// its rim.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spill {
+    /// A point just outside the rim and as high as it, in metres: what
+    /// runs out falls from here.
+    pub place: [f32; 3],
+    /// Which way out of the hollow is there, along x and z, one unit long.
+    pub way: [f32; 2],
+    /// How wide the stretch of rim it runs out over is, in metres, with
+    /// `place` at its middle: the length of a wall's level top, or next to
+    /// nothing for a notch.
+    pub wide: f32,
 }
 
 impl Water {
@@ -345,6 +441,9 @@ impl Water {
     ///     size: [1, 1],
     ///     depths: vec![0.5],
     ///     colour: [0.0, 0.1, 0.1, 1.0],
+    ///     fluid: None,
+    ///     amount: 1.0,
+    ///     spill: None,
     /// };
     /// assert_eq!(pond.risen(0.125), 0.125);
     /// assert_eq!(pond.risen(0.8), 0.25, "it runs out over the rim");
@@ -358,6 +457,30 @@ impl Water {
         } else {
             0.0
         }
+    }
+
+    /// How far over where it was put (below nothing: under it) the surface
+    /// stands when it is `shift` metres from there: no higher than its
+    /// [`brim`](Self::brim), where it runs out, and no lower than its
+    /// deepest point, where it is empty. What is no number is nothing.
+    ///
+    /// Unlike [`risen`](Self::risen) this goes down as well as up: a pool
+    /// that is drained stands lower than its maker put it.
+    #[must_use]
+    pub fn stood(&self, shift: f32) -> f32 {
+        let room = (self.brim - self.level).max(0.0);
+        if shift.is_finite() {
+            shift.clamp(-self.deepest(), room)
+        } else {
+            0.0
+        }
+    }
+
+    /// How deep it is at its deepest point when it stands where it was
+    /// put, in metres: nothing for a body with no water in it.
+    #[must_use]
+    pub fn deepest(&self) -> f32 {
+        self.depths.iter().copied().fold(0.0, f32::max)
     }
 
     /// How deep the water is at `x`, `z`, in metres, read between the
@@ -377,6 +500,9 @@ impl Water {
     ///     size: [2, 1],
     ///     depths: vec![0.5, -0.5],
     ///     colour: [0.0, 0.1, 0.1, 1.0],
+    ///     fluid: None,
+    ///     amount: 1.0,
+    ///     spill: None,
     /// };
     /// assert!((trough.depth_at(0.25, 0.0) - 0.25).abs() < 1e-6);
     /// assert!(trough.depth_at(0.75, 0.0) < 0.0);

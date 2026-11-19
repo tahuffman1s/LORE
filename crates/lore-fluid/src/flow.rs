@@ -76,6 +76,9 @@ pub struct Flow {
     /// Whether it washes other kinds away where it lands, as water does.
     /// When it does not, the newest fluid lies on top and covers the rest.
     pub washes: bool,
+    /// Whether a pool of it freezes over when the weather's ice is thick
+    /// enough to walk on, as water does. Lava and honey do not.
+    pub freezes: bool,
 }
 
 impl Default for Flow {
@@ -91,6 +94,7 @@ impl Default for Flow {
             corrosive: 0.0,
             dries: 0.0,
             washes: true,
+            freezes: true,
         }
     }
 }
@@ -126,6 +130,7 @@ impl Flow {
                 0.0
             },
             washes: self.washes,
+            freezes: self.freezes,
         }
     }
 }

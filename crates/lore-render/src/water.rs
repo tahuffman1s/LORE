@@ -24,6 +24,7 @@ use lore_assets::{Scene, Water};
 
 use crate::buffer::{Buffer, once};
 use crate::error::RenderError;
+use crate::fluid::{FluidLook, PoolDrawn};
 use crate::gpu::Gpu;
 use crate::scene::Picture;
 use crate::sky;
@@ -379,6 +380,11 @@ pub(crate) struct Body {
     pub(crate) colour: [f32; 4],
     /// The water itself, to ask how deep it is at a place.
     water: Water,
+    /// Which of the scene's waters it is.
+    index: usize,
+    /// How it stands and looks, once a game has said: until then, as
+    /// high as rain has raised it and as the level's own water.
+    stand: Option<PoolDrawn>,
     /// How deep it is at each point of its grid, as a picture.
     depths: Picture,
     pub(crate) set: vk::DescriptorSet,
@@ -390,10 +396,75 @@ impl Body {
         self.depths.view
     }
 
-    /// How far rain that has raised still water `rise` metres raises
-    /// this body: no higher than its brim, where it runs out.
+    /// How far from where it was put this body's surface stands: where
+    /// its game says, or, until one has, as far as rain that has raised
+    /// still water `rise` metres raises it. No higher than its brim,
+    /// where it runs out.
     pub(crate) fn risen(&self, rise: f32) -> f32 {
-        self.water.risen(rise)
+        self.stand.map_or_else(
+            || self.water.risen(rise),
+            |stand| self.water.stood(stand.shift),
+        )
+    }
+
+    /// What it is drawn as, if its game has said: `None` is the level's
+    /// own water, or whatever every water of the level is drawn as.
+    pub(crate) fn look(&self) -> Option<FluidLook> {
+        self.stand.and_then(|stand| stand.look)
+    }
+
+    /// A body of water `size` points `cell` metres apart from `origin`,
+    /// standing at height 0, with nothing on the graphics card.
+    #[cfg(test)]
+    pub(crate) fn bare(origin: [f32; 2], cell: f32, size: [u32; 2]) -> Self {
+        Self {
+            id: 0,
+            level: 0.0,
+            origin,
+            cell,
+            size,
+            colour: [0.0; 4],
+            index: 0,
+            stand: None,
+            water: Water {
+                name: None,
+                sources: Vec::new(),
+                level: 0.0,
+                brim: 0.0,
+                origin,
+                cell,
+                size,
+                depths: Vec::new(),
+                colour: [0.0; 4],
+                fluid: None,
+                amount: 1.0,
+                spill: None,
+            },
+            depths: Picture::null(),
+            set: vk::DescriptorSet::null(),
+        }
+    }
+
+    /// Says how it stands and looks, as a game does.
+    #[cfg(test)]
+    pub(crate) fn said(mut self, stand: PoolDrawn) -> Self {
+        self.stand = Some(stand);
+        self
+    }
+
+    /// Whether the weather's ice shows on it.
+    pub(crate) fn freezes(&self) -> bool {
+        self.stand.is_none_or(|stand| stand.freezes)
+    }
+
+    /// How still its surface lies, from 0 (as water) to just under 1.
+    pub(crate) fn calm(&self) -> f32 {
+        let calm = self.stand.map_or(0.0, |stand| stand.calm);
+        if calm.is_finite() {
+            calm.clamp(0.0, 0.99)
+        } else {
+            0.0
+        }
     }
 
     /// The x and z of the corner of its grid with the most of both.
@@ -498,10 +569,11 @@ impl Bodies {
             layout: vk::DescriptorSetLayout::null(),
             pool: vk::DescriptorPool::null(),
         };
-        let sound: Vec<&Water> = scene
+        let sound: Vec<(usize, &Water)> = scene
             .waters
             .iter()
-            .filter(|water| {
+            .enumerate()
+            .filter(|(_, water)| {
                 let [across, deep] = water.size;
                 across >= 2
                     && deep >= 2
@@ -531,7 +603,7 @@ impl Bodies {
             )
         }
         .map_err(RenderError::driver(DOING))?;
-        for water in sound {
+        for (index, water) in sound {
             let depths = picture_of(gpu, water.size, vk::Format::R16_SFLOAT, &water.depths)?;
             let layouts = [bodies.layout];
             // SAFETY: the pool has room for one set for each body, and the
@@ -569,6 +641,8 @@ impl Bodies {
                 size: water.size,
                 colour: water.colour,
                 water: water.clone(),
+                index,
+                stand: None,
                 depths,
                 set: vk::DescriptorSet::null(),
             });
@@ -578,6 +652,15 @@ impl Bodies {
             }
         }
         Ok(bodies)
+    }
+
+    /// Says how each body stands and looks: `pools` holds one for each of
+    /// the scene's waters, in their order. A body it has none for goes
+    /// back to standing as high as rain has raised it.
+    pub(crate) fn set_pools(&mut self, pools: &[PoolDrawn]) {
+        for body in &mut self.list {
+            body.stand = pools.get(body.index).copied();
+        }
     }
 
     /// How far the wind blows over water in this scene, in metres: across
@@ -1915,27 +1998,46 @@ mod tests {
     /// A body of water `size` points `cell` metres apart from `origin`,
     /// with nothing on the graphics card.
     fn body(origin: [f32; 2], cell: f32, size: [u32; 2]) -> Body {
-        Body {
-            id: 0,
-            level: 0.0,
-            origin,
-            cell,
-            size,
-            colour: [0.0; 4],
-            water: Water {
-                name: None,
-                sources: Vec::new(),
-                level: 0.0,
-                brim: 0.0,
-                origin,
-                cell,
-                size,
-                depths: Vec::new(),
-                colour: [0.0; 4],
-            },
-            depths: Picture::null(),
-            set: vk::DescriptorSet::null(),
-        }
+        Body::bare(origin, cell, size)
+    }
+
+    #[test]
+    fn a_body_stands_and_looks_as_its_game_says_and_else_as_rain_left_it() {
+        let mut pond = body([0.0, 0.0], 1.0, [2, 2]);
+        pond.water.depths = vec![1.5, 0.5, -0.1, Water::DRY];
+        pond.water.brim = 0.25;
+        // Nothing said: as high as rain raised it, no higher than its
+        // brim, as the level's own water, which freezes and has waves.
+        assert_eq!((pond.risen(0.1), pond.risen(0.6)), (0.1, 0.25));
+        assert_eq!(
+            (pond.look(), pond.freezes(), pond.calm()),
+            (None, true, 0.0)
+        );
+        // Said: where its game has it, whatever the rain, between empty
+        // and its brim.
+        let lava = FluidLook {
+            glows: [4.0, 1.0, 0.1],
+            ..FluidLook::default()
+        };
+        let said = |shift: f32| PoolDrawn {
+            shift,
+            look: Some(lava),
+            freezes: false,
+            calm: 5.0,
+        };
+        pond.stand = Some(said(-0.5));
+        assert_eq!((pond.risen(0.0), pond.risen(0.6)), (-0.5, -0.5));
+        assert_eq!((pond.look(), pond.freezes()), (Some(lava), false));
+        assert_eq!(pond.calm(), 0.99, "never a whole one");
+        pond.stand = Some(said(9.0));
+        assert_eq!(pond.risen(0.0), 0.25);
+        pond.stand = Some(said(-9.0));
+        assert_eq!(pond.risen(0.0), -1.5, "empty");
+        pond.stand = Some(PoolDrawn {
+            calm: f32::NAN,
+            ..PoolDrawn::default()
+        });
+        assert_eq!((pond.risen(0.6), pond.calm()), (0.0, 0.0));
     }
 
     #[test]

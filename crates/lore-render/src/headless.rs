@@ -14,7 +14,7 @@ use crate::camera::Camera;
 use crate::effects::{Air, Effects, Splash};
 use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
-use crate::fluid::{FluidDrop, FluidLook};
+use crate::fluid::{FluidDrop, FluidLook, PoolDrawn};
 use crate::font::Font;
 use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
@@ -416,6 +416,15 @@ impl Headless {
     /// (`Level::set_water_rise` in the physics); this shows it.
     pub fn set_water_rise(&mut self, rise: f32) {
         self.effects.set_rise(rise);
+    }
+
+    /// Says how each body of still fluid stands and looks, one for each of
+    /// the scene's waters in their order: how far from where it was put,
+    /// and what it is drawn as. See [`Renderer::set_pools`](crate::Renderer::set_pools).
+    pub fn set_pools(&mut self, pools: &[PoolDrawn]) {
+        if let Some(meshes) = &mut self.meshes {
+            meshes.set_pools(pools);
+        }
     }
 
     /// Says how each kind of fluid looks, by its number: the first look is
@@ -1289,6 +1298,9 @@ mod tests {
             size: [points, points],
             depths,
             colour: [0.0, 0.02, 0.02, 0.3],
+            fluid: None,
+            amount: 1.0,
+            spill: None,
         });
         headless.set_scene(&scene).unwrap();
         let light = |picture: &[u8], [x, y]: [usize; 2]| {

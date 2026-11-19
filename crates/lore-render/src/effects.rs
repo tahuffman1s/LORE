@@ -14,7 +14,7 @@
 //! what happened is shown, worked out afresh on each computer.
 
 use crate::bolt::{Bolt, Lightning};
-use crate::fluid::FluidScene;
+use crate::fluid::{FluidScene, PoolDrawn};
 use crate::sky;
 use crate::sky::Day;
 use crate::tracks::{Tracks, Tread};
@@ -201,10 +201,38 @@ pub(crate) trait Surface {
 
 impl Surface for [Water] {
     fn water_at(&self, x: f32, z: f32, rise: f32) -> Option<f32> {
-        // Each body no higher than its brim.
-        self.iter()
-            .filter(|water| water.depth_at(x, z) + water.risen(rise) > 0.0)
-            .map(|water| water.level + water.risen(rise))
+        Standing {
+            waters: self,
+            stands: &[],
+        }
+        .water_at(x, z, rise)
+    }
+}
+
+/// The still water of a scene and how each body of it stands, if a game
+/// has said ([`PoolDrawn`]): the bodies in the scene's order.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Standing<'a> {
+    pub(crate) waters: &'a [Water],
+    pub(crate) stands: &'a [Option<PoolDrawn>],
+}
+
+impl Surface for Standing<'_> {
+    fn water_at(&self, x: f32, z: f32, rise: f32) -> Option<f32> {
+        // Each body where its game says it stands, or as high as rain
+        // has raised it and no higher than its brim.
+        let shift = |index: usize, water: &Water| {
+            self.stands
+                .get(index)
+                .copied()
+                .flatten()
+                .map_or_else(|| water.risen(rise), |stand| water.stood(stand.shift))
+        };
+        self.waters
+            .iter()
+            .enumerate()
+            .filter(|(index, water)| water.depth_at(x, z) + shift(*index, water) > 0.0)
+            .map(|(index, water)| water.level + shift(index, water))
             .reduce(f32::max)
     }
 }

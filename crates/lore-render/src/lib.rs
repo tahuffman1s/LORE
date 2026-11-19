@@ -62,7 +62,7 @@ pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use eye::EyeAdaptation;
-pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS};
+pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS, PoolDrawn};
 pub use font::Font;
 pub use game_shaders::{
     GameShader, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport, ShaderUse,

@@ -273,6 +273,11 @@ impl Climate {
         self.rise
     }
 
+    /// How thick the ice on still water is, in metres.
+    pub(crate) fn ice(&self) -> f32 {
+        self.ice
+    }
+
     /// How deep the snow lies, in metres.
     pub(crate) fn snow(&self) -> f32 {
         self.snow
@@ -373,10 +378,9 @@ impl Climate {
         // falls where the player is; snow melting on it keeps them.
         self.ground = self.ground.after(step, &self.weather, &falling);
         self.falling = falling;
-        // Said to the level before anything is moved in it: its shapes
-        // are shared, and each world says its own.
-        level.set_water_rise(self.rise);
-        level.set_ice(self.ice);
+        // The rise and the ice are said to the level by the world's
+        // fluids, pool by pool, before anything is moved in it: rain
+        // raises water and ice covers what freezes (`WorldFluids::step`).
         host.set_weather_here(WeatherHere {
             snow_depth: self.snow,
             ice: self.ice,
@@ -498,7 +502,7 @@ mod tests {
         // Half a minute at five below: ice, but not to walk on.
         let (thin, _) = after(frost, 1800);
         assert!(thin.weather().ice > 0.02 && thin.weather().ice < Level::ICE_BEARS);
-        // A minute of it bears a walker, and the level is told so.
+        // A minute of it bears a walker.
         let mut host = ScriptHost::from_source(frost, ActionMap::standard());
         let mut climate = Climate::default();
         let level = Level::from_triangles(&[]);
@@ -506,8 +510,8 @@ mod tests {
             host.tick(&InputFrame::default(), STEP);
             climate.step(&mut host, &level, [0.0; 3], 0.0, STEP);
         }
-        assert!(level.frozen(), "{}", level.ice());
-        assert!((level.ice() - 0.06).abs() < 2e-3, "{}", level.ice());
+        assert!(climate.ice() >= Level::ICE_BEARS, "{}", climate.ice());
+        assert!((climate.ice() - 0.06).abs() < 2e-3, "{}", climate.ice());
         // A script can freeze it at once, and reads back how thick it is;
         // in the warm it thaws.
         let (kept, host) = after(
