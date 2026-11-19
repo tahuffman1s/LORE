@@ -10,7 +10,10 @@ use std::mem;
 use lore_shader::{Hook, ParamBlock, ParamValue, ShaderError};
 
 use super::worker::Done;
-use super::{GameShader, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport, ShaderUse};
+use super::{
+    GameShader, MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport,
+    ShaderUse,
+};
 
 /// One text to build.
 pub(crate) struct Job {
@@ -40,6 +43,9 @@ pub(crate) struct Live<T> {
 pub(crate) struct Entry<T> {
     id: u64,
     hook: Hook,
+    /// For a fluid shader, the kind of fluid it draws, as the looks number
+    /// them.
+    kind: u8,
     name: String,
     file: String,
     material: Option<String>,
@@ -75,6 +81,11 @@ impl<T> Entry<T> {
     /// The entry's id, which is never used for another.
     pub(crate) fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The kind of fluid a fluid shader is for, as the looks number them.
+    pub(crate) fn kind(&self) -> u8 {
+        self.kind
     }
 
     /// The file as errors show it.
@@ -156,11 +167,14 @@ impl<T> Book<T> {
     ) {
         self.calls += 1;
         let calls = self.calls;
-        let (mut screens, mut surfaces) = (0, 0);
+        let (mut screens, mut surfaces, mut fluids) = (0, 0, 0);
         for (position, shader) in shaders.iter().enumerate() {
-            let (hook, material) = match shader.used_as {
-                ShaderUse::Screen => (Hook::Screen, None),
-                ShaderUse::Surface { material } => (Hook::Surface, Some(material)),
+            let (hook, material, kind) = match shader.used_as {
+                ShaderUse::Screen => (Hook::Screen, None, 0),
+                ShaderUse::Surface { material } => (Hook::Surface, Some(material), 0),
+                // A fluid shader is known by its fluid, as a surface
+                // shader is by its material.
+                ShaderUse::Fluid { kind, fluid } => (Hook::Fluid, Some(fluid), kind),
             };
             let found = self
                 .entries
@@ -187,6 +201,7 @@ impl<T> Book<T> {
                     self.entries.push(Entry {
                         id: self.next_id,
                         hook,
+                        kind,
                         name: shader.name.to_owned(),
                         file: shader.file.to_owned(),
                         material: material.map(str::to_owned),
@@ -206,6 +221,10 @@ impl<T> Book<T> {
             let entry = &mut self.entries[at];
             entry.seen_in = calls;
             entry.position = position;
+            if entry.kind != kind {
+                entry.kind = kind;
+                self.changed = true;
+            }
             if entry.file != shader.file {
                 shader.file.clone_into(&mut entry.file);
             }
@@ -218,6 +237,7 @@ impl<T> Book<T> {
             let (count, most, what) = match hook {
                 Hook::Screen => (&mut screens, MOST_SCREEN_EFFECTS, "screen effects"),
                 Hook::Surface => (&mut surfaces, MOST_SURFACE_SHADERS, "surface shaders"),
+                Hook::Fluid => (&mut fluids, MOST_FLUID_SHADERS, "fluid shaders"),
             };
             *count += 1;
             let over = *count > most;
@@ -344,6 +364,9 @@ impl<T> Book<T> {
                     (true, _) => "The last version that worked is still drawn.",
                     (false, Hook::Screen) => "Nothing is drawn for it until it works.",
                     (false, Hook::Surface) => "The level's own material is drawn until it works.",
+                    (false, Hook::Fluid) => {
+                        "The fluid is drawn as its own settings make it until it works."
+                    }
                 };
                 Err(error.with_note(note))
             }
@@ -365,6 +388,11 @@ impl<T> Book<T> {
     /// The surface shaders that can be drawn, in the game's order.
     pub(crate) fn surfaces(&self) -> impl Iterator<Item = &Entry<T>> {
         self.live_of(Hook::Surface)
+    }
+
+    /// The fluid shaders that draw, in the game's order.
+    pub(crate) fn fluids(&self) -> impl Iterator<Item = &Entry<T>> {
+        self.live_of(Hook::Fluid)
     }
 
     fn live_of(&self, hook: Hook) -> impl Iterator<Item = &Entry<T>> {

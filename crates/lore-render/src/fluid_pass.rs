@@ -15,7 +15,8 @@ use ash::vk;
 
 use crate::buffer::Buffer;
 use crate::error::RenderError;
-use crate::fluid::{DROP_BYTES, FluidScene, LOOKS_BYTES, MOST_FLUID_DROPS};
+use crate::fluid::{DROP_BYTES, DropRuns, FluidScene, LOOKS_BYTES, MOST_FLUID_DROPS};
+use crate::game_shaders::FluidDraws;
 use crate::gpu::Gpu;
 use crate::scene::{DEPTH, Picture, SceneTarget};
 use crate::swapchain::COLOUR;
@@ -189,6 +190,11 @@ pub(crate) struct FluidFrame<'a> {
     /// on a surface.
     count: u32,
     lying: u32,
+    /// Where the drops of each kind are among them.
+    runs: DropRuns,
+    /// The game's fluid shaders, if any draws: each draws the drops of
+    /// its own kind.
+    shaders: Option<&'a FluidDraws>,
     extent: vk::Extent2D,
 }
 
@@ -473,9 +479,28 @@ impl FluidWorks {
             .map_err(RenderError::driver(WORKS))
     }
 
+    /// What a game's fluid shader for a kind reads: the looks and the
+    /// pictures, as the engine's own passes do, in a set bound after the
+    /// mesh pipelines' three.
+    pub(crate) fn set_layout(&self) -> vk::DescriptorSetLayout {
+        self.set_layout
+    }
+
     /// Makes one pipeline from `stage` with the dynamic state they all share.
     fn build(
         device: &ash::Device,
+        layout: vk::PipelineLayout,
+        module: vk::ShaderModule,
+        stage: &Stage<'_>,
+    ) -> Result<vk::Pipeline, vk::Result> {
+        Self::build_cached(device, vk::PipelineCache::null(), layout, module, stage)
+    }
+
+    /// As [`build`](Self::build), with a pipeline cache of this device
+    /// that no other thread is using, or null.
+    fn build_cached(
+        device: &ash::Device,
+        cache: vk::PipelineCache,
         layout: vk::PipelineLayout,
         module: vk::ShaderModule,
         stage: &Stage<'_>,
@@ -526,13 +551,8 @@ impl FluidWorks {
         // SAFETY: `info` and everything it points to are alive for the
         // call; the shader module holds both entry points named in
         // `stages`.
-        let created = unsafe {
-            device.create_graphics_pipelines(
-                vk::PipelineCache::null(),
-                std::slice::from_ref(&info),
-                None,
-            )
-        };
+        let created =
+            unsafe { device.create_graphics_pipelines(cache, std::slice::from_ref(&info), None) };
         match created {
             Ok(pipelines) => pipelines.first().copied().ok_or(vk::Result::ERROR_UNKNOWN),
             Err((_, code)) => Err(code),
@@ -557,6 +577,7 @@ impl FluidWorks {
         frame: usize,
         scene: &FluidScene,
         target: &'a SceneTarget,
+        shaders: Option<&'a FluidDraws>,
     ) -> Result<Option<FluidFrame<'a>>, RenderError> {
         let bytes = scene.drops();
         let count = (bytes.len() / DROP_BYTES).min(MOST_FLUID_DROPS);
@@ -632,8 +653,91 @@ impl FluidWorks {
             drops: drops.handle,
             count,
             lying,
+            runs: *scene.runs(),
+            shaders,
             extent: target.extent,
         }))
+    }
+}
+
+/// Makes the two pipelines a game's fluid shader draws drops with, from
+/// its `module`: the one that adds up what drops in flight take and
+/// scatter, and the one that adds up the film that lying drops make.
+///
+/// # Safety
+///
+/// `module` must be a live shader module of `device` that holds the fluid
+/// functions of the mesh shaders, and `layout` a live pipeline layout that
+/// is (or is compatible with) the fluid's own in sets 0 to 3 and its push
+/// constants. `cache` is a pipeline cache of this device that no other
+/// thread is using, or null.
+pub(crate) unsafe fn variant_pipelines(
+    device: &ash::Device,
+    cache: vk::PipelineCache,
+    layout: vk::PipelineLayout,
+    module: vk::ShaderModule,
+) -> Result<[vk::Pipeline; 2], vk::Result> {
+    let added = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::ONE)
+        .dst_color_blend_factor(vk::BlendFactor::ONE)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+        .alpha_blend_op(vk::BlendOp::ADD);
+    let no_depth = vk::PipelineDepthStencilStateCreateInfo::default();
+    let bindings = [vk::VertexInputBindingDescription::default()
+        .binding(0)
+        .stride(DROP_BYTES as u32)
+        .input_rate(vk::VertexInputRate::INSTANCE)];
+    let attributes = [0_u32, 1, 2].map(|row| {
+        vk::VertexInputAttributeDescription::default()
+            .location(row)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .offset(row * 16)
+    });
+    let per_drop = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+    let amount = FluidWorks::build_cached(
+        device,
+        cache,
+        layout,
+        module,
+        &Stage {
+            vertex: c"vertex_fluid",
+            fragment: c"fragment_fluid_amount",
+            input: &per_drop,
+            colours: &[SUMS_FORMAT; 3],
+            depth_format: vk::Format::UNDEFINED,
+            depth: &no_depth,
+            blends: &[added; 3],
+        },
+    )?;
+    let film = FluidWorks::build_cached(
+        device,
+        cache,
+        layout,
+        module,
+        &Stage {
+            vertex: c"vertex_film",
+            fragment: c"fragment_film",
+            input: &per_drop,
+            colours: &[SUMS_FORMAT; 4],
+            depth_format: vk::Format::UNDEFINED,
+            depth: &no_depth,
+            blends: &[added; 4],
+        },
+    );
+    match film {
+        Ok(film) => Ok([amount, film]),
+        Err(code) => {
+            // SAFETY: the pipeline was just made on this device and
+            // nothing has used it.
+            unsafe { device.destroy_pipeline(amount, None) };
+            Err(code)
+        }
     }
 }
 
@@ -841,15 +945,13 @@ impl FluidFrame<'_> {
             // What every drop in flight adds up to, over other pictures.
             device.cmd_begin_rendering(commands, &sums_pass);
             if flying > 0 {
-                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.amount);
-                device.cmd_draw(commands, BOX_CORNERS, flying, 0, self.lying);
+                self.draw_by_kind(commands, works.amount, 1, |shader| shader.amount);
             }
             device.cmd_end_rendering(commands);
             // And the films the lying ones make, over four more.
             device.cmd_begin_rendering(commands, &film_pass);
             if self.lying > 0 {
-                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, works.film);
-                device.cmd_draw(commands, BOX_CORNERS, self.lying, 0, 0);
+                self.draw_by_kind(commands, works.film, 0, |shader| shader.film);
             }
             device.cmd_end_rendering(commands);
             device.cmd_pipeline_barrier2(commands, &dependency(&after_drops));
@@ -908,6 +1010,64 @@ impl FluidFrame<'_> {
     /// # Safety
     ///
     /// As for [`record_passes`](Self::record_passes), inside a render pass.
+    /// Draws the drops that lie (`group` 0) or fly (1), each kind's by the
+    /// game's shader for it, if it has one, and the rest by `own`. With no
+    /// shader that draws, all of them at once, as before.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record_passes`](Self::record_passes), inside the pass the
+    /// pipelines draw into, with the sets and the drops bound.
+    unsafe fn draw_by_kind(
+        &self,
+        commands: vk::CommandBuffer,
+        own: vk::Pipeline,
+        group: usize,
+        of: impl Fn(&crate::game_shaders::FluidVariant) -> vk::Pipeline,
+    ) {
+        let device = self.works.gpu.device();
+        let (first, count) = if group == 0 {
+            (0, self.lying)
+        } else {
+            (self.lying, self.count - self.lying)
+        };
+        // SAFETY: the caller's guarantees cover the commands and what is
+        // bound; a shader's pipeline is alive for as long as its table is
+        // lent, its layout agrees with the fluid's in the sets bound, and
+        // its own set is bound after them.
+        unsafe {
+            let Some(shaders) = self.shaders else {
+                device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, own);
+                device.cmd_draw(commands, BOX_CORNERS, count, 0, first);
+                return;
+            };
+            let mut bound = vk::Pipeline::null();
+            let runs = self.runs.get(group).map_or(&[][..], |runs| &runs[..]);
+            for (kind, (first, count)) in (0_u8..).zip(runs.iter().copied()) {
+                if count == 0 {
+                    continue;
+                }
+                let shader = shaders.of(kind);
+                let pipeline = shader.map_or(own, &of);
+                if pipeline != bound {
+                    device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                    bound = pipeline;
+                }
+                if let Some(shader) = shader {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        shaders.layout,
+                        4,
+                        &[shader.set],
+                        &[],
+                    );
+                }
+                device.cmd_draw(commands, BOX_CORNERS, count, 0, first);
+            }
+        }
+    }
+
     unsafe fn bind_sets(&self, commands: vk::CommandBuffer, view_set: vk::DescriptorSet) {
         // SAFETY: the caller guarantees the command buffer is recording;
         // both sets are alive and fit the layout.

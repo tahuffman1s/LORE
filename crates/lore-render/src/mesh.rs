@@ -19,7 +19,7 @@ use crate::error::RenderError;
 use crate::eye::EyePass;
 use crate::fluid::{FluidLook, FluidScene, PoolDrawn};
 use crate::fluid_pass::FluidWorks;
-use crate::game_shaders::SurfaceDraws;
+use crate::game_shaders::{FluidDraws, SurfaceDraws};
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
@@ -381,6 +381,9 @@ pub(crate) struct Contents<'a> {
     /// What the game's surface shaders draw, and which materials they draw
     /// them on: `None` when none is live, which draws exactly as before.
     pub(crate) surfaces: Option<&'a SurfaceDraws>,
+    /// The game's fluid shaders, and which kind of fluid each draws:
+    /// `None` when none is live, which draws exactly as before.
+    pub(crate) fluids: Option<&'a FluidDraws>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -960,6 +963,16 @@ impl MeshPipeline {
     /// The three set layouts of the pipeline layout (the view, a material,
     /// a body of water), which a game's surface shaders put their own set
     /// after, and its push-constant range.
+    /// The layout of the set the poured fluid's passes read (its looks and
+    /// its pictures), which goes after the three of
+    /// [`surface_base`](Self::surface_base): a game's fluid shaders put
+    /// their own set after it.
+    pub(crate) fn fluid_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.fluid
+            .as_ref()
+            .map_or_else(vk::DescriptorSetLayout::null, FluidWorks::set_layout)
+    }
+
     pub(crate) fn surface_base(&self) -> ([vk::DescriptorSetLayout; 3], vk::PushConstantRange) {
         (
             [self.set_layout, self.material_layout, self.body_layout],
@@ -1446,75 +1459,12 @@ impl MeshPipeline {
         // the eye, two numbers each, mixed over what is behind it as other
         // water is.
         if failed.is_none() {
-            let stages = [
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::VERTEX)
-                    .module(module)
-                    .name(c"vertex_body"),
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::FRAGMENT)
-                    .module(module)
-                    .name(c"fragment_body"),
-            ];
-            let bindings = [vk::VertexInputBindingDescription::default()
-                .binding(0)
-                .stride(8)
-                .input_rate(vk::VertexInputRate::VERTEX)];
-            let attributes = [vk::VertexInputAttributeDescription::default()
-                .location(0)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(0)];
-            let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
-                .vertex_binding_descriptions(&bindings)
-                .vertex_attribute_descriptions(&attributes);
-            // Its depth is written: what is drawn after it (see-through
-            // things, spray, the light in the air) stops at the surface
-            // as it does at the ground, and the upscaler reads the surface
-            // where it reads the surface's movement. What is under the
-            // water was copied aside for it before.
-            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-                .depth_test_enable(true)
-                .depth_write_enable(true)
-                .depth_compare_op(vk::CompareOp::GREATER);
-            let attachments = [vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(true)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(vk::BlendOp::ADD)
-                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
-                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
-                .alpha_blend_op(vk::BlendOp::ADD); 2];
-            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
-            let mut rendering = vk::PipelineRenderingCreateInfo::default()
-                .color_attachment_formats(&formats)
-                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
-            let info = vk::GraphicsPipelineCreateInfo::default()
-                .stages(&stages)
-                .vertex_input_state(&grid_input)
-                .input_assembly_state(&assembly)
-                .viewport_state(&viewport)
-                .rasterization_state(&raster)
-                .multisample_state(&multisample)
-                .depth_stencil_state(&depth)
-                .color_blend_state(&blend)
-                .dynamic_state(&dynamic)
-                .layout(layout)
-                .push_next(&mut rendering);
             // SAFETY: as for the pipelines above.
-            let created = unsafe {
-                device.create_graphics_pipelines(
-                    vk::PipelineCache::null(),
-                    std::slice::from_ref(&info),
-                    None,
-                )
-            };
+            let created =
+                unsafe { make_body_pipeline(device, vk::PipelineCache::null(), layout, module) };
             match created {
-                Ok(pipelines) if !pipelines.is_empty() => mesh.body_pipeline = pipelines[0],
-                other => {
-                    failed =
-                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
-                }
+                Ok(made) => mesh.body_pipeline = made,
+                Err(code) => failed = Some(code),
             }
             // Drops, spray and bubbles: a square for each, which the
             // shader makes the corners of, from two rows of four numbers
@@ -1550,10 +1500,32 @@ impl MeshPipeline {
                 .depth_test_enable(true)
                 .depth_write_enable(false)
                 .depth_compare_op(vk::CompareOp::GREATER);
-            let info = info
+            // Mixed over what is behind them, as still water is.
+            let attachments = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD); 2];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+            let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                .color_attachment_formats(&formats)
+                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+            let info = vk::GraphicsPipelineCreateInfo::default()
                 .stages(&stages)
                 .vertex_input_state(&bit_input)
-                .depth_stencil_state(&bit_depth);
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&bit_depth)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(layout)
+                .push_next(&mut rendering);
             // SAFETY: as for the pipelines above.
             let created = unsafe {
                 device.create_graphics_pipelines(
@@ -1895,6 +1867,7 @@ impl MeshPipeline {
             fluid,
             lamps,
             surfaces,
+            fluids: fluid_shaders,
         } = contents;
         // How wet rain has made the ground, or how full its puddles, from
         // 0 to 1.
@@ -1919,10 +1892,13 @@ impl MeshPipeline {
         // Fluid is worked out in pictures of its own, made now so that
         // nothing fails once rendering has begun; a frame with none draws
         // exactly what it did before.
+        let fluid_scene = fluid;
         let fluid = match (&self.fluid, fluid) {
-            // SAFETY: the caller's guarantees cover this frame's buffers
-            // and set, and the target.
-            (Some(works), Some(scene)) => unsafe { works.prepare(frame, scene, target) }?,
+            (Some(works), Some(scene)) => {
+                // SAFETY: the caller's guarantees cover this frame's
+                // buffers and set, and the target.
+                unsafe { works.prepare(frame, scene, target, fluid_shaders) }?
+            }
             _ => None,
         };
         // What flies is handed over before anything is recorded.
@@ -2426,7 +2402,37 @@ impl MeshPipeline {
                 device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
                 device.cmd_bind_vertex_buffers(commands, 0, &[points.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, triangles.handle, 0, vk::IndexType::UINT32);
+                let mut bound = self.body_pipeline;
                 for body in &meshes.bodies.list {
+                    // A game's fluid shader for what the body mostly
+                    // holds draws it, with its values in a set of its own.
+                    let shader = fluid_shaders.and_then(|shaders| {
+                        shaders.of(body.kind()).map(|shader| (shaders, shader))
+                    });
+                    let pipeline = shader.map_or(self.body_pipeline, |(_, shader)| shader.body);
+                    if pipeline != bound {
+                        device.cmd_bind_pipeline(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline,
+                        );
+                        bound = pipeline;
+                    }
+                    if let Some((shaders, shader)) = shader {
+                        device.cmd_bind_descriptor_sets(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            shaders.layout,
+                            4,
+                            &[shader.set],
+                            &[],
+                        );
+                    }
+                    // A shader is handed the look of what it draws, so
+                    // water it draws has water's look and not none.
+                    let shaded = shader
+                        .and(fluid_scene)
+                        .map(|scene| scene.look_of(body.kind()));
                     device.cmd_bind_descriptor_sets(
                         commands,
                         vk::PipelineBindPoint::GRAPHICS,
@@ -2450,7 +2456,7 @@ impl MeshPipeline {
                                 view.eye,
                                 grid,
                                 body.risen(rise),
-                                body.look().or(every_water),
+                                body.look().or(every_water).or(shaded),
                             ),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
@@ -3693,6 +3699,108 @@ pub(crate) fn vertex_layout() -> (
     (bindings, attributes)
 }
 
+/// Makes the pipeline a body of still fluid is drawn with (`vertex_body`
+/// and `fragment_body` of `module`): a grid of points laid round the eye,
+/// two numbers each, mixed over what is behind it as other water is. The
+/// engine's own is made with this, and so is the one for each fluid
+/// shader a game brings.
+///
+/// # Safety
+///
+/// `module` must be a live shader module of `device` that holds both
+/// functions, and `layout` a live pipeline layout that is (or is compatible
+/// with) the mesh pipeline's in sets 0 to 2 and its push constants.
+/// `cache` is a pipeline cache of this device that no other thread is
+/// using, or null.
+pub(crate) unsafe fn make_body_pipeline(
+    device: &ash::Device,
+    cache: vk::PipelineCache,
+    layout: vk::PipelineLayout,
+    module: vk::ShaderModule,
+) -> Result<vk::Pipeline, vk::Result> {
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(module)
+            .name(c"vertex_body"),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(module)
+            .name(c"fragment_body"),
+    ];
+    let bindings = [vk::VertexInputBindingDescription::default()
+        .binding(0)
+        .stride(8)
+        .input_rate(vk::VertexInputRate::VERTEX)];
+    let attributes = [vk::VertexInputAttributeDescription::default()
+        .location(0)
+        .format(vk::Format::R32G32_SFLOAT)
+        .offset(0)];
+    let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+    let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let viewport = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let raster = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let dynamic_states = [
+        vk::DynamicState::VIEWPORT,
+        vk::DynamicState::SCISSOR,
+        vk::DynamicState::CULL_MODE,
+        vk::DynamicState::FRONT_FACE,
+    ];
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+    // Its depth is written: what is drawn after it (see-through things,
+    // spray, the light in the air) stops at the surface as it does at the
+    // ground, and the upscaler reads the surface where it reads the
+    // surface's movement. What is under the water was copied aside for it
+    // before.
+    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::GREATER);
+    let attachments = [vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+        .alpha_blend_op(vk::BlendOp::ADD); 2];
+    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+    let formats = SCENE_FORMATS;
+    let mut rendering = vk::PipelineRenderingCreateInfo::default()
+        .color_attachment_formats(&formats)
+        .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+    let info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&stages)
+        .vertex_input_state(&grid_input)
+        .input_assembly_state(&assembly)
+        .viewport_state(&viewport)
+        .rasterization_state(&raster)
+        .multisample_state(&multisample)
+        .depth_stencil_state(&depth)
+        .color_blend_state(&blend)
+        .dynamic_state(&dynamic)
+        .layout(layout)
+        .push_next(&mut rendering);
+    // SAFETY: the caller's guarantees cover the module, the layout and the
+    // cache; the settings live until the call returns.
+    let created =
+        unsafe { device.create_graphics_pipelines(cache, std::slice::from_ref(&info), None) };
+    match created {
+        Ok(pipelines) => pipelines.first().copied().ok_or(vk::Result::ERROR_UNKNOWN),
+        Err((_, code)) => Err(code),
+    }
+}
+
 /// Makes the pipeline that draws mesh parts of one kind of [`Surface`] with
 /// the vertex function `vertex` and the fragment function `fragment` of
 /// `module`: the states the built-in pipelines have, and the rendering
@@ -4017,6 +4125,7 @@ mod tests {
             look: Some(lava),
             freezes: false,
             calm: 0.5,
+            kind: 3,
         });
         let own = body_bytes(&pool, [0.0; 3], 1, -0.5, pool.look());
         assert_eq!(number(&own, 1), 0.0, "a coarser grid");

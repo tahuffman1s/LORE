@@ -457,6 +457,12 @@ impl Body {
         self.stand.is_none_or(|stand| stand.freezes)
     }
 
+    /// The kind of fluid there is most of in it, as the looks number
+    /// them: water until its game says.
+    pub(crate) fn kind(&self) -> u8 {
+        self.stand.map_or(0, |stand| stand.kind)
+    }
+
     /// How still its surface lies, from 0 (as water) to just under 1.
     pub(crate) fn calm(&self) -> f32 {
         let calm = self.stand.map_or(0.0, |stand| stand.calm);
@@ -2024,6 +2030,7 @@ mod tests {
             look: Some(lava),
             freezes: false,
             calm: 5.0,
+            kind: 2,
         };
         pond.stand = Some(said(-0.5));
         assert_eq!((pond.risen(0.0), pond.risen(0.6)), (-0.5, -0.5));

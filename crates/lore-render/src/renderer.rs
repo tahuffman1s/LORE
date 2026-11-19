@@ -1135,6 +1135,7 @@ impl Renderer {
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
                     surfaces: self.shaders.surface_draws(),
+                    fluids: self.shaders.fluid_draws(),
                 },
                 &self.camera,
                 seconds,

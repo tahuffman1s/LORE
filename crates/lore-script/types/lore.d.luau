@@ -1107,8 +1107,9 @@ declare game: {
     --- the shader's own. Without `code` the text is the file's. A shader
     --- turned on at the top of the file is turned off when that line is
     --- deleted and the file saved; one turned on inside a function stays on
-    --- until `:remove()`. A game can have 8 screen effects and 8 surface
-    --- shaders on at once, each with up to 32 values, and 64 KiB of text.
+    --- until `:remove()`. A game can have 8 screen effects, 8 surface
+    --- shaders and 8 fluid shaders on at once, each with up to 32 values,
+    --- and 64 KiB of text.
     --- They change only what is drawn, so `game.onDraw` may call them. Saving
     --- the shader's own file changes the running game and keeps the values
     --- that still fit.
@@ -1125,6 +1126,18 @@ declare game: {
         --- another replaces it.
         --- Example: local lava = game.shaders.surface("lava", "Lava", { glow = 2, tint = "orange" })
         surface: (name: string, material: string, values: ShaderValues?) -> Shader,
+
+        --- Turns on a fluid shader from `shaders/<name>.wgsl`: it changes how
+        --- a kind of fluid looks wherever that kind is, in a pool and
+        --- poured, puddles and drops alike. `fluid` is a `Fluid` or the name
+        --- of one. The file holds `fn fluid(in: FluidIn) -> Fluid`, which is
+        --- handed the fluid as its own settings make it and gives back what
+        --- it should be at that place: what it takes and scatters of light,
+        --- its glow, how rough and how metallic it is, and which way a
+        --- pool's surface faces. A kind has one fluid shader; asking for
+        --- another replaces it.
+        --- Example: local crust = game.shaders.fluid("crust", "lava", { speed = 0.2 })
+        fluid: (name: string, fluid: string | Fluid, values: ShaderValues?) -> Shader,
     },
 
     --- Calls `handler` each time this file is saved and loaded again while

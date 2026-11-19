@@ -125,6 +125,9 @@ pub struct PoolDrawn {
     /// waves on it and whoever wades leaves rings) to 1 (tar: nothing
     /// does). Thick liquids lie still.
     pub calm: f32,
+    /// The kind there is most of in it, as the looks number them: a
+    /// game's fluid shader for that kind draws it.
+    pub kind: u8,
 }
 
 impl Default for PoolDrawn {
@@ -135,9 +138,15 @@ impl Default for PoolDrawn {
             look: None,
             freezes: true,
             calm: 0.0,
+            kind: 0,
         }
     }
 }
+
+/// Where the drops of each kind are among the drops handed to the
+/// graphics card: for those lying on a surface and then for those in
+/// flight, the first drop of each kind and how many there are.
+pub(crate) type DropRuns = [[(u32, u32); MOST_FLUID_KINDS]; 2];
 
 /// What the renderer has been told of fluids, ready for the graphics card.
 pub(crate) struct FluidScene {
@@ -147,8 +156,14 @@ pub(crate) struct FluidScene {
     drops: Vec<u8>,
     /// How many of `drops`, at the start, lie on a surface.
     lying: usize,
+    /// Where the drops of each kind are in `drops`, which keeps the lying
+    /// ones of a kind together and the flying ones of a kind together:
+    /// the first drop and how many, for the lying and then the flying.
+    runs: DropRuns,
     /// The look of each kind, three rows of four numbers each.
     looks: [u8; LOOKS_BYTES],
+    /// The same looks as they were said.
+    said: [FluidLook; MOST_FLUID_KINDS],
     /// What every lake and creek of the level is drawn as, if not as the
     /// level says.
     water: Option<FluidLook>,
@@ -166,7 +181,9 @@ impl FluidScene {
         let mut scene = Self {
             drops: Vec::with_capacity(MOST_FLUID_DROPS * DROP_BYTES),
             lying: 0,
+            runs: [[(0, 0); MOST_FLUID_KINDS]; 2],
             looks: [0; LOOKS_BYTES],
+            said: [FluidLook::default(); MOST_FLUID_KINDS],
             water: None,
         };
         scene.set_looks(&[]);
@@ -176,6 +193,9 @@ impl FluidScene {
     /// Says how each kind looks, by index; kinds not given look like water.
     pub(crate) fn set_looks(&mut self, looks: &[FluidLook]) {
         let water = FluidLook::default();
+        for (kind, said) in self.said.iter_mut().enumerate() {
+            *said = looks.get(kind).copied().unwrap_or(water);
+        }
         for (kind, slot) in self.looks.as_chunks_mut::<48>().0.iter_mut().enumerate() {
             let look = looks.get(kind).unwrap_or(&water);
             for (place, number) in slot
@@ -191,44 +211,77 @@ impl FluidScene {
 
     /// Says which drops are drawn from now on, in place of those before.
     pub(crate) fn set_drops(&mut self, drops: &[FluidDrop]) {
-        self.drops.clear();
+        // The numbers of a drop as the graphics card takes them, and its
+        // kind. A drop with a number that is not a number, or no size, is
+        // not drawn rather than drawn wrong, and takes no room.
+        let packed = |drop: &FluidDrop| {
+            let kind = drop.kind.min((MOST_FLUID_KINDS - 1) as u8);
+            let numbers = [
+                drop.place[0],
+                drop.place[1],
+                drop.place[2],
+                drop.radius,
+                drop.facing[0],
+                drop.facing[1],
+                drop.facing[2],
+                drop.flat,
+                drop.long,
+                drop.thick,
+                f32::from(kind),
+                0.0,
+            ];
+            let sound = numbers.iter().all(|number| number.is_finite()) && drop.radius > 0.0;
+            sound.then_some((usize::from(drop.flat < LYING), usize::from(kind), numbers))
+        };
         // Drops lying on a surface first, then drops in flight: the two are
-        // drawn by different passes, each over its own run of the list.
-        for lying in [true, false] {
-            for drop in drops {
-                if self.drops.len() >= MOST_FLUID_DROPS * DROP_BYTES {
-                    break;
-                }
-                if (drop.flat >= LYING) != lying {
-                    continue;
-                }
-                let numbers = [
-                    drop.place[0],
-                    drop.place[1],
-                    drop.place[2],
-                    drop.radius,
-                    drop.facing[0],
-                    drop.facing[1],
-                    drop.facing[2],
-                    drop.flat,
-                    drop.long,
-                    drop.thick,
-                    f32::from(drop.kind.min((MOST_FLUID_KINDS - 1) as u8)),
-                    0.0,
-                ];
-                // A drop with a number that is not a number, or no size, is
-                // not drawn rather than drawn wrong, and takes no room.
-                if numbers.iter().any(|number| !number.is_finite()) || drop.radius <= 0.0 {
-                    continue;
-                }
-                for number in numbers {
-                    self.drops.extend_from_slice(&number.to_ne_bytes());
-                }
-            }
-            if lying {
-                self.lying = self.drops.len() / DROP_BYTES;
+        // drawn by different passes, each over its own run of the list. In
+        // each, the drops of a kind are together, so that a game's shader
+        // for a kind can draw its own. How many of each first, then each
+        // into its place.
+        let mut counts = [[0_u32; MOST_FLUID_KINDS]; 2];
+        let mut kept = 0;
+        for (flying, kind, _) in drops.iter().filter_map(packed).take(MOST_FLUID_DROPS) {
+            kept += 1;
+            if let Some(count) = counts.get_mut(flying).and_then(|of| of.get_mut(kind)) {
+                *count += 1;
             }
         }
+        let mut next = 0_u32;
+        for (runs, counts) in self.runs.iter_mut().zip(&counts) {
+            for (run, count) in runs.iter_mut().zip(counts) {
+                *run = (next, 0);
+                next += count;
+            }
+        }
+        self.lying = counts[0].iter().map(|count| *count as usize).sum();
+        self.drops.clear();
+        self.drops.resize(kept * DROP_BYTES, 0);
+        for (flying, kind, numbers) in drops.iter().filter_map(packed).take(kept) {
+            let Some(run) = self.runs.get_mut(flying).and_then(|of| of.get_mut(kind)) else {
+                continue;
+            };
+            let at = (run.0 + run.1) as usize * DROP_BYTES;
+            run.1 += 1;
+            if let Some(room) = self.drops.get_mut(at..at + DROP_BYTES) {
+                for (place, number) in room.as_chunks_mut::<4>().0.iter_mut().zip(numbers) {
+                    *place = number.to_ne_bytes();
+                }
+            }
+        }
+    }
+
+    /// Where the drops of each kind are in [`drops`](Self::drops).
+    pub(crate) fn runs(&self) -> &DropRuns {
+        &self.runs
+    }
+
+    /// How kind `kind` looks, as it was said: water's for a kind there is
+    /// none of.
+    pub(crate) fn look_of(&self, kind: u8) -> FluidLook {
+        self.said
+            .get(usize::from(kind))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// How many of the drops, at the start of [`drops`](Self::drops), lie

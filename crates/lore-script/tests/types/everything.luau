@@ -366,6 +366,8 @@ local heat: Shader = game.shaders.screen("heat", { strength = 0.3, tint = "orang
 local lava = game.shaders.surface("lava", "Lava", { glow = 2, offset = vector.create(0, 1, 0), spots = { 1, 2 } })
 game.shaders.screen("pulse", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color * 2.0; }" })
 game.shaders.surface("shine", "Gold", { code = "fn surface(in: SurfaceIn) -> Surface { return in.surface; }" })
+game.shaders.fluid("crust", "lava", { speed = 0.2 })
+game.shaders.fluid("film", honey, { code = "fn fluid(in: FluidIn) -> Fluid { return in.fluid; }" })
 game.shaders.screen("heat")
 heat:set("strength", 0.8)
 heat:set("tint", "#ff6020")

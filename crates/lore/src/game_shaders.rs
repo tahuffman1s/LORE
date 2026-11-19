@@ -9,7 +9,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lore_render::{GameShader, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport};
+use lore_render::{
+    GameShader, MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport,
+};
 use lore_script::{ScriptHost, ShaderUse};
 use lore_shader::{ParamValue, ShaderError};
 
@@ -19,8 +21,11 @@ struct Kept {
     name: String,
     file: String,
     text: String,
-    /// The material of a surface shader; `None` for a screen effect.
+    /// The material of a surface shader, or the name of the kind of fluid
+    /// a fluid shader is for; `None` for a screen effect.
     material: Option<String>,
+    /// The kind of fluid a fluid shader is for, by number.
+    fluid: Option<u8>,
     values: Vec<(String, ParamValue)>,
     /// Raised only when `text` or `file` changes. Never reused.
     revision: u64,
@@ -35,16 +40,18 @@ struct Kept {
 const DRIVER_FAULT: u64 = 0;
 
 impl Kept {
-    fn is(&self, name: &str, material: Option<&str>) -> bool {
-        self.name == name && self.material.as_deref() == material
+    fn is(&self, name: &str, (material, fluid): (Option<&str>, Option<u8>)) -> bool {
+        self.name == name && self.material.as_deref() == material && self.fluid == fluid
     }
 }
 
-/// The material a shader is used on, if it is a surface shader.
-fn material_of(used_as: &ShaderUse) -> Option<&str> {
+/// The material a shader is used on, if it is a surface shader, or the
+/// fluid's name and its kind, if it is a fluid shader.
+fn material_of(used_as: &ShaderUse) -> (Option<&str>, Option<u8>) {
     match used_as {
-        ShaderUse::Screen => None,
-        ShaderUse::Surface { material } => Some(material),
+        ShaderUse::Screen => (None, None),
+        ShaderUse::Surface { material } => (Some(material), None),
+        ShaderUse::Fluid { fluid, kind } => (Some(fluid), Some(*kind)),
     }
 }
 
@@ -149,7 +156,8 @@ impl ShaderList {
                 name: said.name.clone(),
                 file: said.file.clone(),
                 text: said.text.clone(),
-                material: material.map(str::to_owned),
+                material: material.0.map(str::to_owned),
+                fluid: material.1,
                 values: said.values.clone(),
                 revision,
                 problem: said.problem.clone(),
@@ -180,19 +188,24 @@ impl ShaderList {
             values: &[],
             revision: 0,
         };
-        let mut list = [NONE; MOST_SCREEN_EFFECTS + MOST_SURFACE_SHADERS];
-        let (mut screens, mut surfaces, mut count) = (0, 0, 0);
+        let mut list = [NONE; MOST_SCREEN_EFFECTS + MOST_SURFACE_SHADERS + MOST_FLUID_SHADERS];
+        let (mut screens, mut surfaces, mut fluids, mut count) = (0, 0, 0, 0);
         for kept in &self.kept {
             // The script refuses more than the most of each kind, so
             // nothing is left out here in practice; the check keeps the
             // array from overflowing all the same.
-            let (used_as, taken, most) = match &kept.material {
-                None => (
+            let (used_as, taken, most) = match (&kept.material, kept.fluid) {
+                (None, _) => (
                     lore_render::ShaderUse::Screen,
                     &mut screens,
                     MOST_SCREEN_EFFECTS,
                 ),
-                Some(material) => (
+                (Some(fluid), Some(kind)) => (
+                    lore_render::ShaderUse::Fluid { kind, fluid },
+                    &mut fluids,
+                    MOST_FLUID_SHADERS,
+                ),
+                (Some(material), None) => (
                     lore_render::ShaderUse::Surface { material },
                     &mut surfaces,
                     MOST_SURFACE_SHADERS,
@@ -233,7 +246,8 @@ impl ShaderList {
                 Err(_) => {}
             }
             let Some(kept) = self.kept.iter_mut().find(|kept| {
-                kept.is(&report.name, report.material.as_deref())
+                kept.name == report.name
+                    && kept.material.as_deref() == report.material.as_deref()
                     && kept.revision == report.revision
             }) else {
                 continue;
@@ -478,6 +492,7 @@ mod tests {
     fn the_script_and_the_renderer_allow_the_same_number_of_shaders() {
         assert_eq!(lore_script::MOST_SCREEN_EFFECTS, MOST_SCREEN_EFFECTS);
         assert_eq!(lore_script::MOST_SURFACE_SHADERS, MOST_SURFACE_SHADERS);
+        assert_eq!(lore_script::MOST_FLUID_SHADERS, MOST_FLUID_SHADERS);
     }
 
     #[test]
