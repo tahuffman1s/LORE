@@ -5,6 +5,7 @@ use std::f32::consts::{PI, TAU};
 use parry3d::shape::Capsule;
 
 use crate::level::{Level, Vector};
+use crate::medium::Medium;
 use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
 use crate::slide::{SKIN, Slid, fits, slide, unstick};
 
@@ -48,8 +49,23 @@ const WADING_DRAG: f32 = 0.75;
 
 /// How many times its own weight the water a body pushes aside weighs:
 /// fresh water at 1000 kg a cubic metre against a body with full lungs at
-/// 980. Under water the difference pushes the body up, gently.
+/// 980. Under water the difference pushes the body up, gently. Another
+/// fluid pushes as many times harder as it is heavier than water
+/// ([`Medium::density`]).
 const BUOYANCY: f32 = 1000.0 / 980.0;
+
+/// The most of their own weight a swimmer's legs can carry by treading:
+/// about what a water-polo player holds up for a while. Water asks for half
+/// of it. In a fluid so light that it asks for more, a swimmer sinks
+/// however they kick.
+const MOST_KICK: f32 = 0.3;
+
+/// How much a fluid's thickness slows a wader, for each second of speed
+/// it takes away ([`Medium::thick`]) at full depth: knee-deep honey takes
+/// a third of a walker's speed, waist-deep half, and tar all of it. A
+/// modelling choice: legs push with a force of their own, and what
+/// resists them grows with the thickness.
+const WADE_THICK: f32 = 1.0;
 
 /// What turns a drag area in square metres into slowing: half the 1000 kg
 /// that a cubic metre of water weighs, over the 85 kg that has to be slowed
@@ -281,7 +297,7 @@ impl Player {
 
         // The water the player is in, and whether it carries them.
         let water = Water::over(level, feet);
-        let floats = Floats::of(settings);
+        let floats = Floats::of(settings, water.medium);
         self.float_or_stand(water.depth(feet.y), &floats);
 
         // Stance next: it decides the shape everything else moves. A
@@ -355,9 +371,12 @@ impl Player {
         } else {
             settings.walk_speed
         });
-        // Water round the legs slows a walker, more the deeper it is.
+        // Water round the legs slows a walker, more the deeper it is: by
+        // its weight, as water does, and by its thickness, as honey does.
         let waded = (depth / floats.depth).min(1.0);
-        let top_speed = top_speed * (1.0 - WADING_DRAG * waded * waded);
+        let heavy = water.medium.density.min(1.25);
+        let top_speed = top_speed * (1.0 - WADING_DRAG * heavy * waded * waded)
+            / (1.0 + WADE_THICK * water.medium.thick() * waded);
         let wish_speed = top_speed * push * footing.top_speed();
 
         let mut ground = Vector::from_array(self.ground_normal);
@@ -507,7 +526,13 @@ impl Player {
                     if speed > 0.0 {
                         let going = (velocity - water.flow).dot(toward) / speed;
                         let grip = (HAND_SPEED - going.clamp(0.0, HAND_SPEED)) / (HAND_SPEED - 1.0);
-                        thrust = toward * (posture.along.loss(speed) * pull * grip * grip);
+                        // The pull is what holds that speed in water, and
+                        // no more in anything thicker: a swimmer is as
+                        // strong as they are. A heavier fluid gives the
+                        // hands more to push on, as it gives the body more
+                        // to push through.
+                        let hold = water.medium.density.clamp(0.25, 2.0);
+                        thrust = toward * (posture.along.loss(speed) * pull * grip * grip * hold);
                     }
                     kicking &= !under && toward.y > -DIVE_SLOPE;
                     self.tread = 0.0;
@@ -542,8 +567,10 @@ impl Player {
                 } else {
                     0.0
                 };
-                gravity * (part * BUOYANCY - 1.0 + afloat)
+                gravity * (part * floats.lift - 1.0 + afloat)
             };
+            // The fluid slows them as heavily and as thickly as it is.
+            let posture = posture.within(water.medium);
             let pushed = |part: f32| thrust * part + Vector::Y * lift(part);
 
             // Half of every push before the move and half after, with the
@@ -618,6 +645,7 @@ impl Player {
         feet = middle - to_middle;
         let water = Water::over(level, feet);
         let depth = water.depth(feet.y);
+        let floats = Floats::of(settings, water.medium);
         self.float_or_stand(depth, &floats);
         if !self.grounded {
             ground = Vector::Y;
@@ -771,17 +799,21 @@ struct Water {
     /// Drag and strokes are measured against it, so it carries a swimmer
     /// along. Every water stands still for now.
     flow: Vector,
+    /// How heavy and how thick it is.
+    medium: Medium,
 }
 
 impl Water {
     /// The water over `place`, however high `place` is, unless it is
     /// under the water's own bed.
     fn over(level: &Level, place: Vector) -> Self {
+        let pool = level
+            .pool_around(place.to_array())
+            .filter(|pool| pool.surface.is_finite());
         Self {
-            surface: level
-                .water_around(place.to_array())
-                .filter(|surface| surface.is_finite()),
+            surface: pool.map(|pool| pool.surface),
             flow: Vector::ZERO,
+            medium: pool.map_or(Medium::WATER, |pool| pool.medium.cleaned()),
         }
     }
 
@@ -793,30 +825,38 @@ impl Water {
     }
 }
 
-/// Where the water holds a swimmer who is left alone.
+/// Where the fluid holds a swimmer who is left alone.
 struct Floats {
-    /// How deep the water over their feet is when they rest in it: their
-    /// eyes are just over the surface.
+    /// How deep the fluid over their feet is when they rest in it: in
+    /// water their eyes are just over the surface, and a heavier fluid
+    /// carries them higher than that.
     depth: f32,
+    /// How many times its own weight the fluid a body pushes aside weighs.
+    lift: f32,
 }
 
 impl Floats {
-    fn of(settings: &MoveSettings) -> Self {
+    fn of(settings: &MoveSettings, medium: Medium) -> Self {
         let tall = settings.height(false);
+        let lift = BUOYANCY * medium.density;
+        // Where their legs hold them, or where the fluid by itself does
+        // if that is higher: on mercury, with little more than the feet in.
+        let held = (settings.eye_height(false) - EYES_OVER_WATER).clamp(tall / 2.0, tall);
         Self {
-            depth: (settings.eye_height(false) - EYES_OVER_WATER).clamp(tall / 2.0, tall),
+            depth: held.min(tall / lift),
+            lift,
         }
     }
 
-    /// The share of a body `height` tall that is under water at rest.
+    /// The share of a body `height` tall that is under the fluid at rest.
     fn share(&self, height: f32) -> f32 {
-        (self.depth / height).min(1.0 / BUOYANCY)
+        (self.depth / height).min(1.0 / self.lift)
     }
 
     /// How much of their weight a swimmer's legs carry at rest: what the
-    /// water, by itself, does not.
+    /// fluid, by itself, does not, as far as legs can.
     fn kick(&self, height: f32) -> f32 {
-        (1.0 - BUOYANCY * self.share(height)).max(0.0)
+        (1.0 - self.lift * self.share(height)).clamp(0.0, MOST_KICK)
     }
 }
 
@@ -835,6 +875,16 @@ impl Slowing {
         Self {
             square: area * DRAG_PER_AREA,
             linear,
+        }
+    }
+
+    /// The same slowing in a fluid that is not water: as many times harder
+    /// by the square of the speed as the fluid is heavier, and steadily
+    /// harder by how thick it is.
+    fn within(self, medium: Medium) -> Self {
+        Self {
+            square: self.square * medium.density,
+            linear: self.linear + medium.thick(),
         }
     }
 
@@ -891,6 +941,15 @@ impl Posture {
             axis: toward,
             along: if under { GLIDE_UNDER } else { GLIDE_AT_SURFACE },
             across: ACROSS,
+        }
+    }
+
+    /// The same posture in a fluid that is not water.
+    fn within(self, medium: Medium) -> Self {
+        Self {
+            axis: self.axis,
+            along: self.along.within(medium),
+            across: self.across.within(medium),
         }
     }
 

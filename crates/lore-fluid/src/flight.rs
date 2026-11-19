@@ -94,12 +94,17 @@ impl Fluids {
             });
             end = point;
         }
-        // Under the surface of the water it is in, not of water over it: a
-        // drop in a cellar under a pool is in the air.
+        if p.flight_time > FLIGHT_LIMIT || !end.iter().all(|c| c.is_finite()) {
+            p.dead = true;
+            return p;
+        }
+        // Under the surface of the fluid it is in, not of fluid over it: a
+        // drop in a cellar under a pool is in the air. The pool takes it
+        // in, and fast drops throw a little of the pool back up.
         let drowned = level
             .water_around(end)
             .is_some_and(|surface| end[1] < surface);
-        if drowned || p.flight_time > FLIGHT_LIMIT || !end.iter().all(|c| c.is_finite()) {
+        if drowned && self.joins_pool(level, end, p.kind, p.volume, p.vel, p.thrown) {
             p.dead = true;
             return p;
         }

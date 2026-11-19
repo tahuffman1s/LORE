@@ -3,7 +3,7 @@
 use lore_assets::{Instance, Mesh, MeshPart, Scene};
 
 use crate::slide::SKIN;
-use crate::{Level, MoveInput, MoveSettings, Player};
+use crate::{Level, Medium, MoveInput, MoveSettings, Player, Stand};
 
 const DT: f32 = 1.0 / 60.0;
 const SECOND: usize = 60;
@@ -2477,4 +2477,190 @@ fn a_wader_under_a_dock_when_the_lake_freezes_is_not_lifted_into_it() {
         wader.grounded && close(wader.position[1], 0.0, 1.0e-4),
         "{wader:?}"
     );
+}
+
+/// A lake `depth` metres deep that holds `medium` and not water.
+fn lake_of(depth: f32, medium: Medium) -> Level {
+    let level = lake(depth);
+    level.set_pool(
+        0,
+        Stand {
+            medium,
+            ..Stand::default()
+        },
+    );
+    level
+}
+
+const BRINE: Medium = Medium {
+    density: 1.24,
+    viscosity: 0.001,
+};
+const OIL: Medium = Medium {
+    density: 0.9,
+    viscosity: 0.06,
+};
+const HONEY: Medium = Medium {
+    density: 1.4,
+    viscosity: 10.0,
+};
+const TAR: Medium = Medium {
+    density: 1.2,
+    viscosity: 6000.0,
+};
+const MERCURY: Medium = Medium {
+    density: 13.5,
+    viscosity: 0.0015,
+};
+
+#[test]
+fn a_heavier_fluid_carries_a_swimmer_higher_and_mercury_nearly_on_top() {
+    // What floats sinks until it has pushed aside its own weight: 79% of a
+    // body in the Dead Sea's brine, 7% in mercury.
+    let water = floating_at(&lake(8.0), 60.0);
+    let brine = floating_at(&lake_of(8.0, BRINE), 60.0);
+    let mercury = floating_at(&lake_of(8.0, MERCURY), 60.0);
+    assert!(close(water.submerged, 0.82, 0.02), "{water:?}");
+    assert!(close(brine.submerged, 0.79, 0.02), "{brine:?}");
+    assert!(close(mercury.submerged, 0.073, 0.01), "{mercury:?}");
+    // With so little of the body in it, mercury hardly stills a bob.
+    for swimmer in [brine, mercury] {
+        assert!(!swimmer.head_under && !swimmer.grounded, "{swimmer:?}");
+        assert!(swimmer.velocity[1].abs() < 0.2, "{swimmer:?}");
+    }
+}
+
+#[test]
+fn oil_is_trodden_harder_and_a_fluid_too_light_cannot_be() {
+    // Olive oil is a tenth lighter than water: legs make up for it.
+    let oil = floating_at(&lake_of(8.0, OIL), 60.0);
+    assert!(!oil.head_under, "{oil:?}");
+    assert!(close(eyes_over(&oil), 0.12, 0.04), "{oil:?}");
+    // Something half as heavy as water (a foam, a spirit) holds nobody
+    // up: they go under and down to the bed, however they kick.
+    let level = lake_of(
+        8.0,
+        Medium {
+            density: 0.5,
+            viscosity: 0.001,
+        },
+    );
+    let mut sinker = Player::at([0.0, -1.5, 0.0], &MoveSettings::default());
+    run(&mut sinker, &level, MoveInput::default(), 10 * SECOND);
+    assert!(sinker.head_under && sinker.breath < 0.8, "{sinker:?}");
+    assert!(close(sinker.position[1], -8.0, 0.05), "{sinker:?}");
+}
+
+#[test]
+fn water_twice_as_thick_is_swum_as_fast_honey_at_a_crawl_and_tar_not_at_all() {
+    let swum = |medium: Medium| {
+        let level = lake_of(8.0, medium);
+        let mut swimmer = floating_at(&level, 60.0);
+        let from = swimmer.position;
+        run(&mut swimmer, &level, forward(), 12 * SECOND);
+        flat_distance_of(swimmer.position, from) / 12.0
+    };
+    let water = swum(Medium::WATER);
+    // Cussler and Gettelfinger's swimmers, in guar syrup twice as thick as
+    // water, were no slower.
+    let syrup = swum(Medium {
+        density: 1.0,
+        viscosity: 0.002,
+    });
+    assert!(close(syrup / water, 1.0, 0.01), "{syrup} against {water}");
+    // A heavier fluid is as much harder to push through as it is better
+    // to push on.
+    let brine = swum(BRINE);
+    assert!(close(brine / water, 1.0, 0.15), "{brine} against {water}");
+    let honey = swum(HONEY);
+    assert!(
+        (0.25..0.6).contains(&(honey / water)),
+        "{honey} against {water}"
+    );
+    let tar = swum(TAR);
+    assert!(tar < 0.02, "{tar} m/s through tar");
+}
+
+#[test]
+fn honey_is_waded_slowly_and_tar_holds_the_legs() {
+    let waded = |medium: Medium| {
+        let level = lake_of(0.9, medium);
+        let mut wader = standing_at(&level, [0.0, -0.9, 0.0]);
+        assert!(wader.grounded && !wader.swimming, "{wader:?}");
+        run(&mut wader, &level, forward(), 3 * SECOND);
+        assert!(wader.grounded, "{wader:?}");
+        speed(&wader)
+    };
+    let water = waded(Medium::WATER);
+    let honey = waded(HONEY);
+    let tar = waded(TAR);
+    assert!(water > 2.0, "{water} m/s through water");
+    assert!(
+        (0.15..0.5).contains(&(honey / water)),
+        "{honey} against {water}"
+    );
+    assert!(tar < 0.01, "{tar} m/s through tar");
+}
+
+#[test]
+fn falling_into_honey_stops_sooner_and_comes_to_rest_higher_than_in_water() {
+    let settings = MoveSettings::default();
+    let fallen = |level: &Level| {
+        let mut player = Player::at([0.0, 3.0, 0.0], &settings);
+        let mut lowest = 0.0_f32;
+        for _ in 0..10 * SECOND {
+            player.step(level, &settings, &MoveInput::default(), DT);
+            lowest = lowest.min(player.position[1]);
+        }
+        (lowest, player)
+    };
+    let (in_water, _) = fallen(&lake(8.0));
+    let (in_honey, rest) = fallen(&lake_of(8.0, HONEY));
+    assert!(
+        in_honey > in_water + 0.5,
+        "{in_honey} down into honey, {in_water} into water"
+    );
+    assert!(!rest.head_under && rest.swimming, "{rest:?}");
+    assert!(close(rest.submerged, 0.70, 0.03), "{rest:?}");
+}
+
+#[test]
+fn a_pool_stands_where_it_is_said_to_between_empty_and_its_brim() {
+    let level = lake(2.0);
+    let said = |shift: f32| {
+        level.set_pool(
+            0,
+            Stand {
+                shift,
+                ..Stand::default()
+            },
+        );
+        level.water_at(0.0, 0.0)
+    };
+    assert_eq!(said(-0.5), Some(-0.5), "half a metre drained");
+    assert!(close(level.water_depth(0.0, 0.0), 1.5, 1.0e-4));
+    assert_eq!(said(-5.0), None, "empty");
+    assert_eq!(
+        level.water_around([0.0, -1.9, 0.0]),
+        None,
+        "nothing to be in"
+    );
+    let brim = level.waters()[0].brim;
+    assert_eq!(said(50.0), Some(brim), "no higher than its brim");
+    assert_eq!(said(f32::NAN), Some(0.0));
+    // Frozen, it is ice to stand on and nothing to swim in.
+    level.set_pool(
+        0,
+        Stand {
+            frozen: true,
+            ..Stand::default()
+        },
+    );
+    assert_eq!(level.water_at(0.0, 0.0), None);
+    assert_eq!(level.ice_around([0.0, 0.0, 0.0]), Some(0.0));
+    // What is said of every body is said of this one again.
+    level.set_ice(0.0);
+    assert_eq!(level.water_at(0.0, 0.0), Some(0.0));
+    assert_eq!(level.pool(0).map(|stand| stand.medium), Some(Medium::WATER));
+    assert_eq!(level.pool(3), None);
 }
