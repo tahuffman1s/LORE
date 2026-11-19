@@ -96,6 +96,8 @@ pub struct Frame {
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
+    /// The game's own shaders, kept between frames.
+    shaders: crate::game_shaders::ShaderList,
     /// The game's own exposure in stops and how the eye adapts, if the
     /// game said them this frame.
     lighting: Option<(f32, lore_render::EyeAdaptation)>,
@@ -208,6 +210,7 @@ impl Frame {
             hour: None,
             lamps: Vec::new(),
             lamps_said: false,
+            shaders: crate::game_shaders::ShaderList::default(),
             lighting: None,
             water_rise: None,
             sky_clock: None,
@@ -902,6 +905,24 @@ impl Frame {
     /// The memory the lamps were said in, to lend the next frame.
     pub(crate) fn lamp_buffer(&mut self) -> Vec<lore_render::Lamp> {
         std::mem::take(&mut self.lamps)
+    }
+
+    /// Lends the frame the game's shaders as they were left, so that
+    /// following the script's takes no new memory.
+    #[must_use]
+    pub(crate) fn with_shader_list(mut self, list: crate::game_shaders::ShaderList) -> Self {
+        self.shaders = list;
+        self
+    }
+
+    /// The game's shaders, for the game to follow its script's.
+    pub(crate) fn shader_list(&mut self) -> &mut crate::game_shaders::ShaderList {
+        &mut self.shaders
+    }
+
+    /// The game's shaders, to lend the next frame and to hand the renderer.
+    pub(crate) fn take_shader_list(&mut self) -> crate::game_shaders::ShaderList {
+        std::mem::take(&mut self.shaders)
     }
 
     /// The lamps, if the game said them this frame.

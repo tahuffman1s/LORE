@@ -1544,6 +1544,7 @@ dependencies = [
  "lore-physics",
  "lore-render",
  "lore-script",
+ "lore-shader",
  "lore-ui",
  "lore-weapons",
  "png",

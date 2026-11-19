@@ -702,6 +702,8 @@ impl Game for Editor {
             play.frame(frame);
             return;
         }
+        // A game that was played leaves its shaders behind it.
+        frame.shader_list().clear();
         frame.use_action_set(self.controls.set);
         frame.show_grid(true);
         if std::mem::take(&mut self.hush) {
