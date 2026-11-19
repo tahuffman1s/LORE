@@ -257,6 +257,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   faces, and where its plane lies in the block. A ray is struck where it
   crosses that plane, so a floor is where the floor is and not half a
   metre up; a ray already behind a surface is struck at once from behind.
+  A block that holds leaves (a surface with holes cut in it) stops one ray
+  in seven that crosses it and lets the rest through: half a metre of a
+  crown is mostly air, and counted as solid it kept the sky from the
+  probes under trees that the sun's shadows, which see every hole, showed
+  light coming through. One in seven is what lets the sun through the
+  jungle example's crowns as often as its shadow pictures do.
   Drawing from a fragment shader needs `fragmentStoresAndAtomics`, which
   every desktop card, lavapipe and MoltenVK have; without it light does
   not bounce.
