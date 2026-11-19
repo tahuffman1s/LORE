@@ -44,6 +44,7 @@ local hints = require("./key_hints")
 local fluids = require("./fluids")
 local gun = require("./fluid_gun")
 local fluidMenu = require("./fluid_menu")
+local warning = require("./testing_warning")
 require("./lamps")
 
 -- The menus are tabs of one panel, so one gamepad button reaches them all.
@@ -52,11 +53,10 @@ local panel = menu.panel({ weatherMenu, debugMenu.menu, fluidMenu })
 -- The pause menu, made last so that it is drawn over everything else.
 local pauseMenu = require("./pause_menu")
 
--- The alley reads best under a grey sky early in the afternoon: in sun its
--- shadowed walls are nearly black.
+-- The alley starts early in the afternoon, in fair weather.
 game.onStart(function()
     game.sky.setHour(13)
-    game.weather.set("overcast", 0)
+    game.weather.set("fair", 0)
 end)
 
 game.onTick(function(step)
@@ -90,4 +90,5 @@ game.onDraw(function()
     debugMenu.draw(playing)
     gun.draw(playing)
     hints.draw(playing)
+    warning.draw(playing)
 end)
