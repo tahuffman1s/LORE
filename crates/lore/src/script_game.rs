@@ -390,6 +390,9 @@ impl Game for ScriptGame {
             );
             frame.set_ambient_occlusion(occlusion.strength, occlusion.radius);
         }
+        if let Some((look, seconds)) = self.host.take_look() {
+            frame.set_look(look_of(&look), seconds);
+        }
         // Once the game knows of any lamp, it says which are lit.
         if self.host.has_lamps() {
             let lamps = frame.say_lamps();
@@ -437,8 +440,38 @@ impl Game for ScriptGame {
 #[cfg(test)]
 mod menus;
 
+/// The look a script said, as the renderer takes it.
+fn look_of(said: &lore_script::LookSaid) -> lore_render::Look {
+    lore_render::Look {
+        tone_mapping: match said.tone_mapping {
+            lore_script::ToneMappingSaid::AgX => lore_render::ToneMapping::AgX,
+            lore_script::ToneMappingSaid::Neutral => lore_render::ToneMapping::Neutral,
+        },
+        bloom: said.bloom,
+        warmth: said.warmth,
+        tint: said.tint,
+        contrast: said.contrast,
+        saturation: said.saturation,
+        shadows: said.shadows,
+        midtones: said.midtones,
+        highlights: said.highlights,
+        vignette: said.vignette,
+        grain: said.grain,
+        chromatic_aberration: said.chromatic_aberration,
+        night: said.night,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_script_that_says_no_look_is_drawn_with_the_engines_own() {
+        assert_eq!(
+            super::look_of(&lore_script::LookSaid::default()),
+            lore_render::Look::default()
+        );
+    }
+
     use std::fs;
     use std::time::{Duration, Instant};
 

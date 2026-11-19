@@ -20,6 +20,7 @@ use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
+use crate::look::{Fade, Look, LookShares, Said};
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
@@ -111,6 +112,12 @@ pub struct Headless {
     filtering: AnisotropicFiltering,
     /// The shade in corners, as for a window but off to begin with.
     shade: Shade,
+    /// How the picture is graded: [`Look::plain`] to begin with, unlike a
+    /// window, so that tests see the colours a scene was given.
+    look: Fade,
+    look_shares: LookShares,
+    /// Counts finished frames, so the film grain moves.
+    frame_count: u32,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -171,11 +178,11 @@ impl Headless {
         // The same camera gives the same picture, whenever it is drawn.
         view.still = true;
         let mesh = MeshPipeline::new(&gpu, 1)?;
-        let tonemap = TonemapPipeline::new(&gpu, FORMAT)?;
+        let mut tonemap = TonemapPipeline::new(&gpu, FORMAT)?;
         let ui = UiPass::new(&gpu, FORMAT, 1)?;
         // SAFETY: the picture is `view`'s, which lives as long as `tonemap`
         // does, and nothing is being drawn yet.
-        unsafe { tonemap.read_from(view.picture()) };
+        unsafe { tonemap.read_from(view.picture(), view.output_size()) }?;
 
         let mut raw = Raw {
             image: vk::Image::null(),
@@ -219,6 +226,9 @@ impl Headless {
             bounce: Bounce::default(),
             filtering: AnisotropicFiltering::default(),
             shade: Shade::default(),
+            look: Fade::new(Look::plain()),
+            look_shares: LookShares::default(),
+            frame_count: 0,
             view,
             extent,
             image,
@@ -515,6 +525,22 @@ impl Headless {
         self.shade = self.shade.said(strength, radius);
     }
 
+    /// Grades the picture with `look`, fading to it over `seconds` of the
+    /// picture's time, as [`Renderer::set_look`](crate::Renderer::set_look)
+    /// does. [`Look::plain`] to begin with, unlike a window: pass
+    /// [`Look::default`] to see what a player sees. A picture drawn with no
+    /// window moves its time on only when it is not still.
+    pub fn set_look(&mut self, look: Look, seconds: f32) {
+        self.look.start(look, seconds);
+    }
+
+    /// How much of the look's glow, vignette, grain and fringes is drawn,
+    /// as [`Renderer::set_look_shares`](crate::Renderer::set_look_shares)
+    /// takes it.
+    pub fn set_look_shares(&mut self, shares: LookShares) {
+        self.look_shares = shares;
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -625,6 +651,7 @@ impl Headless {
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
             let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
+            self.look.step(passed);
             self.shaders.start_frame(
                 0,
                 passed,
@@ -670,7 +697,16 @@ impl Headless {
                         view: self.image_view,
                         extent: self.extent,
                     },
-                    self.eye.multiplier(),
+                    &Said {
+                        look: self.look.now(),
+                        shares: self.look_shares,
+                        exposure: self.eye.multiplier(),
+                        frame: self.frame_count,
+                        per_lux: self
+                            .effects
+                            .day()
+                            .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux),
+                    },
                     Over {
                         ui: Some(&self.ui),
                         #[cfg(feature = "panels")]
@@ -679,6 +715,9 @@ impl Headless {
                     read,
                     Then::Copy,
                 )?;
+                if !self.view.still {
+                    self.frame_count = self.frame_count.wrapping_add(1);
+                }
             }
             device
                 .end_command_buffer(self.commands)
@@ -914,6 +953,7 @@ impl Drop for Headless {
 mod tests {
     use super::*;
     use crate::gpu::validation_errors;
+    use crate::look::{Look, LookShares, ToneMapping};
 
     /// Something to draw `width` by `height` pictures with, or `None` on a
     /// computer that cannot draw, unless `LORE_REQUIRE_VULKAN` says it must.
@@ -2737,6 +2777,221 @@ mod tests {
         assert_eq!(without, headless.screenshot(&Camera::default()).unwrap());
         // A frame can be drawn after one was read back.
         headless.render(&Camera::default()).unwrap();
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// The camera that looks straight at the usual sun.
+    fn at_the_sun() -> Camera {
+        let towards = [0.399_44_f32, 0.768_92, 0.499_3];
+        Camera {
+            yaw: (-towards[0]).atan2(-towards[2]),
+            pitch: towards[1].asin(),
+            ..Camera::default()
+        }
+    }
+
+    /// Red, green and blue of the pixel at `x`, `y` of a `width`-wide picture.
+    fn pixel(picture: &[u8], width: usize, x: usize, y: usize) -> [i32; 3] {
+        let at = (y * width + x) * 4;
+        [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+    }
+
+    fn sum(colour: [i32; 3]) -> i32 {
+        colour.iter().sum()
+    }
+
+    #[test]
+    fn the_glow_spreads_the_suns_light_and_without_it_the_picture_is_as_it_was() {
+        const WIDTH: usize = 128;
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // Below the sun, where the sky is lit but the sun is not drawn.
+        let camera = Camera {
+            pitch: at_the_sun().pitch - 0.35,
+            ..at_the_sun()
+        };
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_look(
+            Look {
+                bloom: 0.0,
+                ..Look::plain()
+            },
+            0.0,
+        );
+        assert_eq!(
+            headless.screenshot(&camera).unwrap(),
+            plain,
+            "no glow, the same picture"
+        );
+        headless.set_look(
+            Look {
+                bloom: 1.0,
+                ..Look::plain()
+            },
+            0.0,
+        );
+        let glowing = headless.screenshot(&camera).unwrap();
+        // Round the brightest pixel, the sun, the picture glows brighter.
+        let brightest = (0..plain.len() / 4)
+            .max_by_key(|index| sum(pixel(&plain, WIDTH, index % WIDTH, index / WIDTH)))
+            .unwrap_or_default();
+        let (x, y) = (brightest % WIDTH, brightest / WIDTH);
+        let ring = |picture: &[u8]| {
+            [
+                (x.saturating_sub(6), y),
+                ((x + 6).min(WIDTH - 1), y),
+                (x, (y + 6).min(71)),
+            ]
+            .into_iter()
+            .map(|(x, y)| sum(pixel(picture, WIDTH, x, y)))
+            .sum::<i32>()
+        };
+        let (before, after) = (ring(&plain), ring(&glowing));
+        assert!(
+            after > before + 6,
+            "round the sun at {x}, {y}: {before} became {after}"
+        );
+        // The player can turn the glow off whatever the game says.
+        headless.set_look_shares(LookShares {
+            bloom: 0.0,
+            ..LookShares::default()
+        });
+        assert_eq!(
+            headless.screenshot(&camera).unwrap(),
+            plain,
+            "the player's share"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn the_vignette_darkens_the_corners_and_leaves_the_middle() {
+        const WIDTH: usize = 128;
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = Camera {
+            yaw: 0.9,
+            pitch: 1.0,
+            ..Camera::default()
+        };
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_look(
+            Look {
+                vignette: 1.0,
+                ..Look::plain()
+            },
+            0.0,
+        );
+        let vignetted = headless.screenshot(&camera).unwrap();
+        let (before, after) = (pixel(&plain, WIDTH, 0, 0), pixel(&vignetted, WIDTH, 0, 0));
+        assert!(
+            sum(after) * 10 < sum(before) * 8,
+            "the corner: {before:?} became {after:?}"
+        );
+        let (before, after) = (
+            pixel(&plain, WIDTH, 64, 36),
+            pixel(&vignetted, WIDTH, 64, 36),
+        );
+        assert!(
+            (sum(after) - sum(before)).abs() <= 6,
+            "the middle: {before:?} became {after:?}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn warmth_turns_the_sky_orange_and_no_saturation_turns_it_grey() {
+        const WIDTH: usize = 128;
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = Camera {
+            yaw: 0.9,
+            pitch: 1.0,
+            ..Camera::default()
+        };
+        let middle = |headless: &mut Headless, look: Look| {
+            headless.set_look(look, 0.0);
+            pixel(&headless.screenshot(&camera).unwrap(), WIDTH, 64, 36)
+        };
+        let [red, _, blue] = middle(&mut headless, Look::plain());
+        let [warm_red, _, warm_blue] = middle(
+            &mut headless,
+            Look {
+                warmth: 1.0,
+                ..Look::plain()
+            },
+        );
+        assert!(
+            warm_red - warm_blue > red - blue + 20,
+            "{red} {blue} became {warm_red} {warm_blue}"
+        );
+        let [r, g, b] = middle(
+            &mut headless,
+            Look {
+                saturation: 0.0,
+                ..Look::plain()
+            },
+        );
+        assert!(
+            (r - g).abs() <= 3 && (g - b).abs() <= 3,
+            "grey: {r} {g} {b}"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn each_curve_grain_and_fringes_draw_a_picture_of_their_own() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = Camera {
+            pitch: 0.1,
+            ..Camera::default()
+        };
+        let plain = headless.screenshot(&camera).unwrap();
+        let mean = |picture: &[u8]| {
+            picture.iter().map(|byte| u64::from(*byte)).sum::<u64>() / picture.len() as u64
+        };
+        for look in [
+            Look::default(),
+            Look {
+                tone_mapping: ToneMapping::AgX,
+                ..Look::plain()
+            },
+            Look {
+                grain: 1.0,
+                ..Look::plain()
+            },
+            Look {
+                chromatic_aberration: 1.0,
+                ..Look::plain()
+            },
+            Look {
+                contrast: 1.5,
+                shadows: [0.5, 0.6, 1.0],
+                highlights: [1.0, 0.8, 0.6],
+                tint: 0.3,
+                ..Look::plain()
+            },
+        ] {
+            headless.set_look(look, 0.0);
+            let picture = headless.screenshot(&camera).unwrap();
+            assert_ne!(picture, plain, "{look:?}");
+            // Nothing makes the picture black or white.
+            let mean = mean(&picture);
+            assert!((40..230).contains(&mean), "{look:?}: a mean of {mean}");
+        }
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

@@ -268,6 +268,11 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             bounce: lore_render::Bounce::Low,
             ambient_occlusion: lore_render::AmbientOcclusion::Low,
             anisotropic_filtering: lore_render::AnisotropicFiltering::X8,
+            bloom: 95.0,
+            vignette: 95.0,
+            film_grain: 95.0,
+            chromatic_aberration: 95.0,
+            sharpening: 25.0,
         }
     );
     assert!((chosen.sensitivity - 0.9).abs() < 1e-6);

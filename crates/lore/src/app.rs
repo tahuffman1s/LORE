@@ -297,6 +297,8 @@ fn start(
         renderer: None,
         lighting: None,
         occlusion: None,
+        game_look: None,
+        look_given: false,
         lighting_given: false,
         lamps: Vec::new(),
         shaders: crate::game_shaders::ShaderList::default(),
@@ -370,6 +372,10 @@ struct App<G> {
     /// renderer made later, or made again.
     lighting: Option<(f32, lore_render::EyeAdaptation)>,
     occlusion: Option<(f32, f32)>,
+    /// The look the game last said, and over how many seconds to fade to
+    /// it the first time the renderer hears it.
+    game_look: Option<(lore_render::Look, f32)>,
+    look_given: bool,
     lighting_given: bool,
     /// The memory the last frame's lamps were said in, lent to the next.
     lamps: Vec<lore_render::Lamp>,
@@ -512,6 +518,8 @@ impl<G: Game> App<G> {
             renderer.set_bounce(settings.bounce);
             renderer.set_ambient_occlusion(settings.ambient_occlusion);
             renderer.set_anisotropic_filtering(settings.anisotropic_filtering);
+            renderer.set_look_shares(settings.look_shares());
+            renderer.set_sharpness(settings.sharpness());
         }
         // The field of view is read when the camera is next placed, and
         // the size of the HUD by `follow_ui_size`.
@@ -864,6 +872,10 @@ impl<G: Game> App<G> {
             self.occlusion = Some(said);
             self.lighting_given = false;
         }
+        if let Some(said) = frame.take_look() {
+            self.game_look = Some(said);
+            self.look_given = false;
+        }
         if let (Some(renderer), false) = (&mut self.renderer, self.lighting_given) {
             if let Some((stops, eye)) = self.lighting {
                 renderer.set_game_exposure(stops);
@@ -873,6 +885,13 @@ impl<G: Game> App<G> {
                 renderer.set_game_occlusion(strength, radius);
             }
             self.lighting_given = true;
+        }
+        if let (Some(renderer), false) = (&mut self.renderer, self.look_given) {
+            if let Some((look, seconds)) = &mut self.game_look {
+                // Faded to once; a renderer made again starts with it.
+                renderer.set_look(*look, std::mem::take(seconds));
+            }
+            self.look_given = true;
         }
         let (water_rise, sky_clock) = frame.take_water();
         let ground_water = frame.take_ground_water();
@@ -995,6 +1014,8 @@ impl<G: Game> ApplicationHandler for App<G> {
                         renderer.set_lamp_shadows(settings.lamp_shadows);
                         renderer.set_bounce(settings.bounce);
                         renderer.set_ambient_occlusion(settings.ambient_occlusion);
+                        renderer.set_look_shares(settings.look_shares());
+                        renderer.set_sharpness(settings.sharpness());
                         renderer.set_camera(Camera {
                             position: [0.0, STANDING_EYE, 0.0],
                             fov_degrees: settings.field_of_view,
@@ -1005,8 +1026,10 @@ impl<G: Game> ApplicationHandler for App<G> {
                 match renderer {
                     Ok(renderer) => {
                         self.renderer = Some(renderer);
-                        // A new renderer has not heard the game's lighting.
+                        // A new renderer has not heard the game's lighting
+                        // or its look.
                         self.lighting_given = false;
+                        self.look_given = false;
                     }
                     Err(error) => {
                         self.error = Some(AppError::Render(error));

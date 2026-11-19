@@ -151,6 +151,7 @@ pub struct ScriptHost {
     /// The game shaders the script turned on; they outlive a reload too.
     shaders: Rc<ShaderState>,
     lighting: Rc<crate::lighting_api::LightingState>,
+    look: Rc<crate::look_api::LookState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -308,6 +309,7 @@ impl ScriptHost {
             fluids: Rc::default(),
             lamps: Rc::default(),
             lighting: Rc::default(),
+            look: Rc::default(),
             versions: 0,
             tools: Rc::default(),
             settings: Rc::new(SettingsState::new(settings)),
@@ -757,6 +759,13 @@ impl ScriptHost {
         crate::lighting_api::OcclusionSaid,
     )> {
         self.lighting.take()
+    }
+
+    /// How the picture is graded, and over how many seconds to fade to it,
+    /// if the script said it since this was last asked (`game.look.set`,
+    /// `game.look.reset`).
+    pub fn take_look(&mut self) -> Option<(crate::look_api::LookSaid, f32)> {
+        self.look.take()
     }
 
     /// Whether the game has said anything of lamps: made one, or been told
@@ -1265,6 +1274,7 @@ impl ScriptHost {
             lamps: Rc::clone(&self.lamps),
             shaders: Rc::clone(&self.shaders),
             lighting: Rc::clone(&self.lighting),
+            look: Rc::clone(&self.look),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             modules: Modules::new(Rc::clone(&self.files)),

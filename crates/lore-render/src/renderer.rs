@@ -21,6 +21,7 @@ use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
+use crate::look::{Fade, Look, LookShares, Said};
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
@@ -205,6 +206,14 @@ pub struct Renderer {
     /// player's brightness, and the game's own.
     exposure: f32,
     game_exposure: f32,
+    /// How the game grades its picture, perhaps on its way to another look.
+    look: Fade,
+    /// How much of the glow, vignette, grain and fringes the player wants.
+    look_shares: LookShares,
+    /// Counts frames drawn, so the film grain moves.
+    frame_count: u32,
+    /// How much FSR sharpens what it upscales: the player's setting.
+    sharpness: f32,
     /// The lamps lit: the level's own, or what the game said last.
     lamps: Vec<Lamp>,
     /// What the eye has got used to, and the last measuring of the picture
@@ -290,6 +299,10 @@ impl Renderer {
                 ..Shade::default()
             },
             game_exposure: 1.0,
+            look: Fade::default(),
+            look_shares: LookShares::default(),
+            frame_count: 0,
+            sharpness: crate::upscale::SHARPNESS,
             lamps: Vec::new(),
             eye: Eye::new(EyeAdaptation::default()),
             measuring: Vec::new(),
@@ -675,6 +688,34 @@ impl Renderer {
         }
     }
 
+    /// Grades the picture with `look` (see [`Look`]), fading to it from
+    /// the look before over `seconds` of the picture's time: 0 changes it
+    /// at once. The engine's own is [`Look::default`].
+    pub fn set_look(&mut self, look: Look, seconds: f32) {
+        self.look.start(look, seconds);
+    }
+
+    /// The look the picture is graded with, or is fading to.
+    pub fn look(&self) -> Look {
+        self.look.target()
+    }
+
+    /// How much of the glow, the darkened corners, the film grain and the
+    /// coloured fringes the game's look asks for the player wants to see:
+    /// the player's settings. All of each to begin with.
+    pub fn set_look_shares(&mut self, shares: LookShares) {
+        self.look_shares = shares;
+    }
+
+    /// How much FSR sharpens the picture it upscales, from 0 (not at all)
+    /// to 1: the player's setting. 0.3 to begin with. With no upscaling it
+    /// changes nothing.
+    pub fn set_sharpness(&mut self, sharpness: f32) {
+        if sharpness.is_finite() {
+            self.sharpness = sharpness.clamp(0.0, 1.0);
+        }
+    }
+
     /// Lights the air, or leaves it as the fog alone has it.
     ///
     /// On (the default), each line of sight is walked through the air to
@@ -897,10 +938,10 @@ impl Renderer {
                     extent.height
                 );
             }
-            if let Some(tonemap) = &self.tonemap {
+            if let Some(tonemap) = &mut self.tonemap {
                 // SAFETY: the picture is the new view's, which is stored next
                 // to the pipeline and replaced only here; the card is idle.
-                unsafe { tonemap.read_from(view.picture()) };
+                unsafe { tonemap.read_from(view.picture(), view.output_size()) }?;
             }
             self.view = Some(view);
             self.view_for = wanted;
@@ -971,6 +1012,8 @@ impl Renderer {
             self.meshes.as_ref().map_or(&[][..], Meshes::waters),
         );
         let weather = self.effects.air(view.seconds());
+        self.look.step(seconds);
+        self.frame_count = self.frame_count.wrapping_add(1);
 
         // SAFETY: every handle used here belongs to `self.gpu`'s device and
         // is alive; the fence wait makes sure this slot's command buffer and
@@ -1010,6 +1053,7 @@ impl Renderer {
             view.lamp_shadows = self.lamp_shadows;
             view.bounce = self.bounce;
             view.shade = self.shade;
+            view.sharpness = self.sharpness;
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,
@@ -1089,7 +1133,16 @@ impl Renderer {
                     view: target.view,
                     extent: swapchain.extent,
                 },
-                self.exposure * self.game_exposure * self.eye.multiplier(),
+                &Said {
+                    look: self.look.now(),
+                    shares: self.look_shares,
+                    exposure: self.exposure * self.game_exposure * self.eye.multiplier(),
+                    frame: self.frame_count,
+                    per_lux: self
+                        .effects
+                        .day()
+                        .map_or(crate::lamps::DAYLIGHT_PER_LUX, |day| day.per_lux),
+                },
                 Over {
                     ui: Some(ui),
                     #[cfg(feature = "panels")]

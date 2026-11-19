@@ -442,6 +442,70 @@ over four runs each, taken in turn.
 Not done yet: light taken from the open side (bent normals, #442), and
 the one bounce of light the hidden sectors could give (#443).
 
+### The look (#101)
+
+The last thing done to the picture is one pass that grades it, after a
+short chain that blurs it for the glow (`look.rs`, `tonemap.rs`,
+`tonemap.wgsl`). A game says its look with `game.look.set`; a new game
+starts with the engine's own and needs to say nothing.
+
+- **The glow (bloom)** is the picture blurred at up to six sizes, from
+  half the picture down, and added together, as Jimenez did for Call of
+  Duty: Advanced Warfare: each step halves the one before with a 13-tap
+  filter, the first weighting each group of four by one over one more than
+  its brightness (Karis) so a single bright pixel cannot flicker, then
+  each size is enlarged with a 3×3 tent and added to the one above. It is
+  mixed into the picture, not added, so light is kept, and there is no
+  threshold, so nothing pops in and out of glowing (Bevy's choice too).
+  A script's `bloom` runs from 0 to 1, where 1 makes a quarter of the
+  picture glow (a dream's haze); 0.15 as made, so only what is far
+  brighter than round it shows a halo.
+- **The order** in the final pass: coloured fringes (chromatic aberration:
+  red read further out, blue further in), the glow, moonlight's loss of
+  colour, the darkened corners (a cos⁴ fall-off, at most two stops),
+  exposure, white balance and saturation (one 3×3 matrix made on the CPU),
+  contrast in stops round middle grey, tints for shadows, middle tones and
+  highlights by how far each pixel is from middle grey, the curve, film
+  grain, and the dither against banding.
+- **The curve** is AgX by default, as Benjamin Wrensch fitted it for
+  iolite, with a look like Blender's "Punchy" (power 1.2, saturation 1.3).
+  The power puts middle grey where Khronos PBR Neutral puts it (0.42
+  against 0.41 encoded), so the eye's exposure suits both. AgX keeps the
+  hue of fire, magic and a low sun as they brighten towards white, and
+  compresses highlights harder than Neutral (a light of 1 is drawn at 0.74
+  against 0.94). "neutral" is still there for a game that wants colours
+  exactly as made.
+- **White balance** moves the white along the line of daylight (warmth)
+  and across it (tint), and scales the cone responses (von Kries in LMS)
+  so that white of that colour is seen as white, as Unity's does.
+- **Night**: rods take over from cones between a few candela a square
+  metre and a few thousandths (mesopic vision, CIE 191), and rods see no
+  colour and see blue-green best. Each pixel's real brightness is known
+  from the hour's `per_lux`, so a moonlit field turns blue-grey while a
+  lamplit street and daylight shade keep their colour.
+- **Grain** is the same for red, green and blue, strongest in the middle
+  tones and none in black or white, and new every frame.
+- **The player** has five settings: "Bloom", "Vignette", "Film grain" and
+  "Chromatic aberration" each say how much of what the game asks for they
+  see (0 to 100 %), and "Sharpening" is FSR's RCAS (30 % as before).
+- **Fades**: `game.look.set(settings, seconds)` eases from the look now to
+  the new one; a fade begun mid-fade starts from where the picture is. The
+  curve changes half way, since there is nothing between two curves.
+- Pictures drawn with no window begin with the plain look (Neutral and
+  nothing else), as they begin with no eye adaptation and no shade, so
+  the drawing tests see the colours a scene was given; `Headless::set_look`
+  gives them any other, and `lore bench` draws the engine's own look with
+  grain and fringes on, so every part is timed.
+
+Cost, `lore bench`: on an RX 7800 XT at 1920×1080 no change that the bench
+can tell (2.22 to 2.30 ms a frame against 2.26 to 2.35 on main, three runs
+each), well under the issue's 1 ms; on lavapipe at 1280×720 about 5 ms
+(60.3 to 65.8 ms, two runs each).
+
+Not done yet: depth of field (#448) and camera motion blur (#449) for
+menus and cutscenes, looks kept as named files with zones that blend (#102), and a
+lookup texture for a look made in a colour grading program.
+
 ## What comes next (#401)
 
 1. **Screen-space light**: the sun's contact shadows, found in the same
@@ -456,6 +520,17 @@ the one bounce of light the hidden sectors could give (#443).
 
 ## Sources
 
+- J. Jimenez, "Next Generation Post Processing in Call of Duty: Advanced
+  Warfare", SIGGRAPH 2014 Advances course.
+- B. Wrensch, "Minimal AgX Implementation", iolite engine blog, 2023:
+  https://iolite-engine.com/blog_posts/minimal_agx_implementation
+- Khronos, PBR Neutral tone mapper:
+  https://github.com/KhronosGroup/ToneMapping
+- Unity, Post Processing Stack v2, white balance (`ColorUtilities`).
+- CIE 191:2010, "Recommended System for Mesopic Photometry Based on
+  Visual Performance".
+- Bevy, `bevy_core_pipeline` bloom ("energy-conserving" mix) and Godot's
+  `Environment` (flat, named settings for scripts).
 - B. Karis, "Real Shading in Unreal Engine 4", SIGGRAPH 2013 course notes.
 - Filament, "Physically Based Rendering in Filament":
   https://google.github.io/filament/main/filament.html

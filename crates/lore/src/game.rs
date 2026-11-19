@@ -104,6 +104,9 @@ pub struct Frame {
     /// How dark the shade in corners is drawn and how far round it is
     /// searched for, in metres, if the game said them this frame.
     occlusion: Option<(f32, f32)>,
+    /// How the picture is graded and how many seconds to fade to it over,
+    /// if the game said it this frame.
+    look: Option<(lore_render::Look, f32)>,
     /// How far rain has raised the water and what the sky's clock shows,
     /// if the game said them this frame.
     water_rise: Option<f32>,
@@ -216,6 +219,7 @@ impl Frame {
             shaders: crate::game_shaders::ShaderList::default(),
             lighting: None,
             occlusion: None,
+            look: None,
             water_rise: None,
             sky_clock: None,
             ground_water: None,
@@ -903,6 +907,18 @@ impl Frame {
     /// its strength, then its radius in metres.
     pub fn take_ambient_occlusion(&mut self) -> Option<(f32, f32)> {
         self.occlusion.take()
+    }
+
+    /// Says how the picture is graded from this frame on (see
+    /// [`lore_render::Look`]), fading to it from the look before over
+    /// `seconds`. Until a game says, it is [`Look::default`](lore_render::Look::default).
+    pub fn set_look(&mut self, look: lore_render::Look, seconds: f32) {
+        self.look = Some((look, seconds));
+    }
+
+    /// How the picture is graded, if the game said it this frame.
+    pub fn take_look(&mut self) -> Option<(lore_render::Look, f32)> {
+        self.look.take()
     }
 
     /// Lends the frame the memory of an earlier frame's lamps, so that

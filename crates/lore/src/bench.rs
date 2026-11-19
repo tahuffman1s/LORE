@@ -270,6 +270,16 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     headless.set_lamp_shadows(bench.lamp_shadows);
     headless.set_bounce(bench.bounce);
     headless.set_ambient_occlusion(bench.ambient_occlusion);
+    // The engine's own look, with every part of the last pass at work, so
+    // the glow, the grading and each lens touch are all timed.
+    headless.set_look(
+        lore_render::Look {
+            grain: 0.2,
+            chromatic_aberration: 0.2,
+            ..lore_render::Look::default()
+        },
+        0.0,
+    );
     for frame in 0..bench.warmup {
         headless.render(&camera(frame))?;
     }
