@@ -86,6 +86,11 @@ impl Level {
     /// centimetres, which is where a careful person starts to trust it.
     pub const ICE_BEARS: f32 = 0.05;
 
+    /// The most rain raises still water over where its maker put it, in
+    /// metres. A body whose rim is lower than that runs out over it, and
+    /// stands no higher ([`Water::brim`]).
+    pub const MOST_WATER_RISE: f32 = 0.8;
+
     /// The collision shapes of a loaded scene: every mesh, where it stands,
     /// but for those marked as not solid.
     ///
@@ -145,8 +150,8 @@ impl Level {
         let rise = self.rise.get();
         self.waters
             .iter()
-            .filter(|water| water.depth_at(x, z) + rise > 0.0)
-            .map(|water| water.level + rise)
+            .filter(|water| water.depth_at(x, z) + water.risen(rise) > 0.0)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -154,7 +159,9 @@ impl Level {
     /// above where its maker put it. Each lake and pond stands that much
     /// higher, and spreads over whatever ground beside it is lower than
     /// that: a body of water knows how far above it the ground round it
-    /// stands. Less than nothing, or what is no number, is nothing.
+    /// stands. One whose rim is lower runs out over it, and stands at its
+    /// brim ([`Water::risen`]). Less than nothing, or what is no number,
+    /// is nothing.
     ///
     /// The level's shapes are shared by everyone who holds it, and so is
     /// this: a world says it before each step it takes.
@@ -218,9 +225,9 @@ impl Level {
             .iter()
             .filter(|water| {
                 let deep = water.depth_at(x, z);
-                deep + rise > 0.0 && y > water.level - deep - slack
+                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
             })
-            .map(|water| water.level + rise)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -241,9 +248,9 @@ impl Level {
             .filter(|water| {
                 // The bed is where it was; the surface is higher.
                 let deep = water.depth_at(x, z);
-                deep + rise > 0.0 && y > water.level - deep - slack
+                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
             })
-            .map(|water| water.level + rise)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -257,7 +264,7 @@ impl Level {
         let rise = self.rise.get();
         self.waters
             .iter()
-            .map(|water| water.depth_at(x, z) + rise)
+            .map(|water| water.depth_at(x, z) + water.risen(rise))
             .fold(0.0, f32::max)
     }
 
@@ -499,6 +506,7 @@ mod rise_tests {
             name: None,
             sources: Vec::new(),
             level: 2.0,
+            brim: 2.0 + Level::MOST_WATER_RISE,
             origin: [0.0, 0.0],
             cell: 1.0,
             size: [3, 1],

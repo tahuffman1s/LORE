@@ -19,10 +19,11 @@ use lore_script::{ScriptHost, TornadoAsk, WeatherHere, WeatherSaid};
 /// How fast a downpour raises the still water, and how fast it falls back
 /// when the rain stops, in metres a second; and the most it rises: a storm
 /// fills a lake to its brim in a little over two minutes, and it is seven
-/// minutes going down.
+/// minutes going down. A lake whose rim is lower runs out over it sooner
+/// (`lore_assets::Water::brim`).
 const WATER_RISES: f32 = 0.006;
 const WATER_FALLS: f32 = 0.002;
-const MOST_RISE: f32 = 0.8;
+const MOST_RISE: f32 = Level::MOST_WATER_RISE;
 
 /// How fast snow that falls as hard as it can settles, in metres a second:
 /// the land is white in half a minute and knee-deep in four. Then how fast

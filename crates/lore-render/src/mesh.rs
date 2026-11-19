@@ -1853,9 +1853,11 @@ impl MeshPipeline {
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
-        // All of it stands as high as rain has raised it.
+        // All of it stands as high as rain has raised it, each body no
+        // higher than its brim.
         let rise = weather.rows[1][1];
         let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
+        let near_rise = near.map_or(0.0, |body| body.risen(rise));
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
             // SAFETY: the caller's guarantees cover the water's pictures,
@@ -1871,7 +1873,7 @@ impl MeshPipeline {
                         near,
                         meshes.is_some_and(|meshes| meshes.has_water),
                         meshes.map_or(f32::NAN, |meshes| meshes.bodies.fetch()),
-                        rise,
+                        near_rise,
                     ),
                     (stirs, weather.wind),
                 )
@@ -1879,7 +1881,7 @@ impl MeshPipeline {
             // The eye is under water when it is under the water as it
             // stands now, not as the level was built.
             if near.is_some() {
-                water[0][0] += rise;
+                water[0][0] += near_rise;
             }
             let depths = near.map_or(works.pictures()[3], Body::depths);
             let id = near.map_or(0, |body| body.id);
@@ -1926,7 +1928,13 @@ impl MeshPipeline {
                 &water,
                 &Above {
                     flashes,
-                    weather,
+                    // The shader reads the water nearest the eye as risen
+                    // as far as that water is.
+                    weather: {
+                        let mut seen = weather;
+                        seen.rows[1][1] = near_rise;
+                        seen
+                    },
                     heavens,
                     water_look,
                 },
@@ -2199,7 +2207,7 @@ impl MeshPipeline {
                             self.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            &body_bytes(body, view.eye, grid, weather.rows[1][1]),
+                            &body_bytes(body, view.eye, grid, body.risen(rise)),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
                     }
@@ -3129,8 +3137,9 @@ fn picture_write(
 /// and its points stay where they were); and where the shader keeps how
 /// surface directions turn, the body itself: where its grid of depths
 /// starts and how far apart its points are, how many there are and how
-/// high the water stands, and the water's colour. Its clearness is the
-/// number after.
+/// high the water stands, risen `rise` metres by rain, and the water's
+/// colour. Its clearness is the number after. The rise itself is kept
+/// beside where the finer grid's middle is.
 fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
     let finer = grid
@@ -3142,7 +3151,7 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYT
     let finest = if grid == 0 { 1.0 } else { 0.0 };
     let numbers = [
         [apart, finest, squares, 0.0],
-        [finer[0], finer[1], 0.0, 0.0],
+        [finer[0], finer[1], rise, 0.0],
         [0.0; 4],
         [middle[0], body.level + rise, middle[1], 1.0],
         [body.origin[0], body.origin[1], body.cell, 0.0],

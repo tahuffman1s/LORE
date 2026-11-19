@@ -237,8 +237,9 @@ fn near_depth(place: vec2<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return -2.0;
     }
-    // Rain has raised the water, and it is that much deeper everywhere,
-    // and wet where the ground stood less than that above it.
+    // Rain has raised the water, no higher than its brim, and it is that
+    // much deeper everywhere, and wet where the ground stood less than
+    // that above it.
     return textureSampleLevel(near_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
 }
 
@@ -1062,6 +1063,8 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
 // -------------------------------------------- still water that was filled
 
 // How deep the body of water being drawn is at a place; see `near_depth`.
+// It is risen as far as rain has raised it, which is kept beside where the
+// finer grid's middle is.
 fn body_depth(place: vec2<f32>) -> f32 {
     let origin = draw.normal_from_local[0].xy;
     let cell = draw.normal_from_local[0].z;
@@ -1070,7 +1073,7 @@ fn body_depth(place: vec2<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return -2.0;
     }
-    return textureSampleLevel(body_water, clamp_sampler, uv, 0.0).r + view.weather[1].y;
+    return textureSampleLevel(body_water, clamp_sampler, uv, 0.0).r + draw.world_from_local[1].z;
 }
 
 // One point of the grid a body of still water is drawn with. The grid is

@@ -1153,6 +1153,7 @@ mod tests {
             // No sheet stands for it.
             sources: Vec::new(),
             level: 0.0,
+            brim: 0.0,
             origin: [-5.0, -5.0],
             cell: 0.25,
             size: [points, points],

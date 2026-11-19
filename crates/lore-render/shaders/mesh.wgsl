@@ -100,7 +100,8 @@ struct View {
     // from 0 to 1, how wet the ground has got, and how much of a storm
     // is overhead, which is how much harder the wind blows. Then how
     // stormy the whole sky is, from 0 for fair weather to 1, how far
-    // rain has raised the still water, in metres, and how hard it snows
+    // rain has raised the still water nearest the eye, in metres (no
+    // higher than its brim, where it runs out), and how hard it snows
     // and sleets at the eye. Then how much of the ground snow covers and
     // how much of the still water ice does, how warm the air is in degrees
     // Celsius, and how hard it rains or snows everywhere from a sky that

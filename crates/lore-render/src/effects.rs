@@ -185,15 +185,17 @@ impl Air {
 
 /// The water under a place, as far as what flies needs to know it.
 pub(crate) trait Surface {
-    /// How high the still water at `x`, `z` stands, if there is any there.
-    fn water_at(&self, x: f32, z: f32) -> Option<f32>;
+    /// How high the still water at `x`, `z` stands, if there is any there,
+    /// rain having raised still water `rise` metres.
+    fn water_at(&self, x: f32, z: f32, rise: f32) -> Option<f32>;
 }
 
 impl Surface for [Water] {
-    fn water_at(&self, x: f32, z: f32) -> Option<f32> {
+    fn water_at(&self, x: f32, z: f32, rise: f32) -> Option<f32> {
+        // Each body no higher than its brim.
         self.iter()
-            .filter(|water| water.depth_at(x, z) > 0.0)
-            .map(|water| water.level)
+            .filter(|water| water.depth_at(x, z) + water.risen(rise) > 0.0)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 }
@@ -561,7 +563,7 @@ impl Effects {
             }
             let mut gone = bit.age >= bit.lasts;
             // The water stands as high as rain has raised it.
-            let level = (water.water_at(bit.place[0], bit.place[2])).map(|level| level + rise);
+            let level = water.water_at(bit.place[0], bit.place[2], rise);
             match bit.kind {
                 Kind::Drop => {
                     bit.moving[1] -= FALL * seconds;
@@ -951,8 +953,8 @@ mod tests {
     struct Sea(bool);
 
     impl Surface for Sea {
-        fn water_at(&self, _: f32, _: f32) -> Option<f32> {
-            self.0.then_some(0.0)
+        fn water_at(&self, _: f32, _: f32, rise: f32) -> Option<f32> {
+            self.0.then_some(rise)
         }
     }
 

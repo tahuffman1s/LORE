@@ -390,6 +390,12 @@ impl Body {
         self.depths.view
     }
 
+    /// How far rain that has raised still water `rise` metres raises
+    /// this body: no higher than its brim, where it runs out.
+    pub(crate) fn risen(&self, rise: f32) -> f32 {
+        self.water.risen(rise)
+    }
+
     /// The x and z of the corner of its grid with the most of both.
     fn far_corner(&self) -> [f32; 2] {
         // Sizes are far below the point where f32 stops being exact.
@@ -592,14 +598,16 @@ impl Bodies {
             .map_or(40.0, |wide| wide.clamp(10.0, 20_000.0))
     }
 
-    /// The body `eye` is in or over, or else the one it is nearest to.
-    /// (A pool inside the square a moat lies in is told from the moat by
-    /// which of them there is water of at the eye.)
+    /// The body `eye` is in or over, or else the one it is nearest to,
+    /// with rain having raised still water `rise` metres. (A pool inside
+    /// the square a moat lies in is told from the moat by which of them
+    /// there is water of at the eye.)
     pub(crate) fn nearest(&self, eye: [f32; 3], rise: f32) -> Option<&Body> {
+        let stands = |body: &Body| body.level + body.risen(rise);
         self.list
             .iter()
-            .filter(|body| body.water.depth_at(eye[0], eye[2]) + rise > 0.0)
-            .max_by(|one, other| one.level.total_cmp(&other.level))
+            .filter(|body| body.water.depth_at(eye[0], eye[2]) + body.risen(rise) > 0.0)
+            .max_by(|one, other| stands(one).total_cmp(&stands(other)))
             .or_else(|| {
                 self.list
                     .iter()
@@ -1217,9 +1225,9 @@ impl WaterWorks {
     /// `near` is the still water the eye is in or nearest, `any` whether
     /// the scene has water at all, `fetch` how far the wind blows over the
     /// widest of it ([`Bodies::fetch`]) and `rise` how far rain has raised
-    /// it, in metres; `stirs` is whatever is stirring the water during this
-    /// frame, and `wind` the way the wind blows along x and z and how fast,
-    /// in metres a second.
+    /// `near`, in metres; `stirs` is whatever is stirring the water during
+    /// this frame, and `wind` the way the wind blows along x and z and how
+    /// fast, in metres a second.
     ///
     /// # Safety
     ///
@@ -1918,6 +1926,7 @@ mod tests {
                 name: None,
                 sources: Vec::new(),
                 level: 0.0,
+                brim: 0.0,
                 origin,
                 cell,
                 size,
