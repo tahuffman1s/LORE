@@ -334,20 +334,25 @@ impl Seen {
         if ahead < -radius {
             return false;
         }
-        [right, up].into_iter().all(|side| {
-            // How far a line of sight leans that way at the picture's edge,
-            // and a hundredth more for the part of a pixel the upscaler
-            // shifts the picture by.
-            let long = side.iter().map(|part| part * part).sum::<f32>().sqrt();
-            if long <= 0.0 {
-                return true;
-            }
-            let across = along(side) / long;
-            let edge = long * 1.01;
-            // The edge of the picture is a plane through the eye; the ball
-            // is off the picture if all of it is beyond that plane.
-            across.abs() - ahead * edge <= radius * (1.0 + edge * edge).sqrt()
-        })
+        [right, up]
+            .into_iter()
+            .zip(self.size)
+            .all(|(side, pixels)| {
+                let long = side.iter().map(|part| part * part).sum::<f32>().sqrt();
+                if long <= 0.0 {
+                    return true;
+                }
+                let across = along(side) / long;
+                // How far a line of sight leans that way at the picture's edge,
+                // and two pixels more: the upscaler shifts the picture by up
+                // to half of one.
+                // A picture is far narrower than where f32 stops being exact.
+                #[allow(clippy::cast_precision_loss)]
+                let edge = long * (1.0 + 4.0 / pixels.max(1) as f32);
+                // The edge of the picture is a plane through the eye; the ball
+                // is off the picture if all of it is beyond that plane.
+                across.abs() - ahead * edge <= radius * (1.0 + edge * edge).sqrt()
+            })
     }
 }
 

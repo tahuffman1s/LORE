@@ -13,6 +13,8 @@
 //!   turn them into a uniform block, and check the values a script gives.
 //! - [`refuse_endless_loops`] turns away `loop`, `while` and a `for` with no
 //!   condition, so a slip cannot freeze the picture.
+//! - [`refuse_discard`] turns away `discard`, which would leave a hole in a
+//!   picture drawn over depth that is already there.
 //! - [`hooked_module`] puts the engine's template, the values and the
 //!   maker's function (a [`Hook`]: `screen` or `surface`) together, after
 //!   checking that the function is there and has the right shape.
@@ -37,7 +39,7 @@ pub use compile::{Bounds, Compiled, compile};
 pub use error::{ShaderError, closest};
 pub use hook::{Hook, hooked_module};
 pub use params::{Given, Param, ParamBlock, ParamKind, ParamValue, params_of};
-pub use scan::refuse_endless_loops;
+pub use scan::{refuse_discard, refuse_endless_loops};
 pub use source::{Owner, Place, Source};
 
 /// The most values (`//! param` lines) one shader can declare.

@@ -241,12 +241,14 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     lighting.set(
         "setAmbientOcclusion",
         lua.create_function(move |lua, value: Value| {
-            const EXAMPLE: &str = "game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })";
+            const EXAMPLE: &str =
+                "game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })";
             let Value::Table(settings) = &value else {
                 return Err(fail(
                     lua,
                     format!(
-                        "game.lighting.setAmbientOcclusion needs its settings in a table, but                          it was given {}. Write it like this: {EXAMPLE}",
+                        "game.lighting.setAmbientOcclusion needs its settings in a table, but it \
+                         was given {}. Write it like this: {EXAMPLE}",
                         describe(&value)
                     ),
                 ));
@@ -260,7 +262,8 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         return Err(fail(
                             lua,
                             format!(
-                                "game.lighting.setAmbientOcclusion's settings are named, but                                  one was written as {}. Write it like this: {EXAMPLE}",
+                                "game.lighting.setAmbientOcclusion's settings are named, but one \
+                                 was written as {}. Write it like this: {EXAMPLE}",
                                 describe(other)
                             ),
                         ));
@@ -273,7 +276,8 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                             lua,
                             &label,
                             Some(&value),
-                            "how dark the shade in corners and under things is drawn, from 0                              (none) to 4: 1 is as much as really arrives",
+                            "how dark the shade in corners and under things is drawn, from 0 \
+                             (none) to 4: 1 is as much as really arrives",
                             EXAMPLE,
                         )?
                         .clamp(0.0, 4.0);
@@ -283,7 +287,8 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                             lua,
                             &label,
                             Some(&value),
-                            "how far round each point is searched for what shades it, in                              metres, from 0.05 to 4",
+                            "how far round each point is searched for what shades it, in \
+                             metres, from 0.05 to 4",
                             EXAMPLE,
                         )?
                         .clamp(0.05, 4.0);

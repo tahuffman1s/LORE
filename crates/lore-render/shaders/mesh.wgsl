@@ -2094,10 +2094,11 @@ fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel 
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
     // and they would pick the wrong size of texture along a hole's edge.
-    // When the surface was drawn for its depth before the picture
-    // (`occlusion.wgsl`) its holes were cut then, and only what is left of
-    // it gets as far as here.
-    if view.lens.y <= 0.0 && base.a < material.emissive.w {
+    // (When the surface was drawn for its depth before the picture, as
+    // `occlusion.wgsl` has it, its holes were cut then and few pixels of
+    // one get as far as here: only where something else lies exactly as
+    // far away behind the hole.)
+    if base.a < material.emissive.w {
         discard;
     }
     return pixel;

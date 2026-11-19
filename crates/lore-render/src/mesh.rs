@@ -444,18 +444,48 @@ impl Draw {
             return true;
         }
         let moves = if self.sway > 0.0 {
-            // The most `blown` in mesh.wgsl leans a thing as tall as this
-            // in the hardest gust, and what a walker and its own shiver
-            // add.
-            let tall = (2.0 * self.radius).min(30.0);
-            0.031 * tall * tall * self.sway + 1.5
+            // The most `blown` in mesh.wgsl moves a point: it leans what
+            // stands `tall` metres above where the mesh is rooted (never
+            // counted as more than 30) by 0.0045 of that squared for each
+            // unit of the wind's strength, which in the hardest gust is
+            // 1.8 times 3.74 for each unit of sway; on top of that its
+            // leaves shiver, snow presses it down and a walker pushes it
+            // aside.
+            let tall = (self.middle[1] + self.radius - self.world[3][1]).clamp(0.0, 30.0);
+            0.031 * tall * tall * self.sway + 0.4 * self.sway + 2.0
         } else if self.sway < 0.0 {
-            // Water's waves, and what rides them.
-            3.0
+            // Water's waves, and what rides them, which tips as the water
+            // slopes: the farther from its middle, the more.
+            3.0 + self.radius
         } else {
             0.0
         };
         seen.holds(self.middle, self.radius + moves)
+    }
+}
+
+/// The most `transform` stretches anything it places: no distance between
+/// two points of a shape comes out longer than this many times what it was.
+///
+/// For a shape that is only turned and made larger or smaller along its own
+/// axes, that is the longest of the three axes. One that is also leant over
+/// (sheared, as a child of a parent stretched unevenly can be) may reach
+/// farther along a diagonal, but never farther than the three taken together.
+fn most_stretch(transform: &Mat4) -> f32 {
+    let axes = [0, 1, 2].map(|column| {
+        let [x, y, z, _] = transform[column];
+        [x, y, z]
+    });
+    let dot =
+        |one: [f32; 3], other: [f32; 3]| -> f32 { one.iter().zip(other).map(|(a, b)| a * b).sum() };
+    let squares = axes.map(|axis| dot(axis, axis));
+    let square = [(0, 1), (0, 2), (1, 2)].into_iter().all(|(one, other)| {
+        dot(axes[one], axes[other]).abs() <= 1e-4 * (squares[one] * squares[other]).sqrt()
+    });
+    if square {
+        squares.into_iter().fold(0.0, f32::max).sqrt()
+    } else {
+        squares.iter().sum::<f32>().sqrt()
     }
 }
 
@@ -562,12 +592,7 @@ impl Meshes {
                     .map(|axis| ((high[axis] - low[axis]) * 0.5).powi(2))
                     .sum::<f32>()
                     .sqrt();
-                let stretch = (0..3)
-                    .map(|column| {
-                        let [x, y, z, _] = instance.transform[column];
-                        (x * x + y * y + z * z).sqrt()
-                    })
-                    .fold(0.0, f32::max);
+                let stretch = most_stretch(&instance.transform);
                 draws.push(Draw {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
@@ -3124,7 +3149,9 @@ impl MeshPipeline {
                         self.shade.depth[usize::from(cut_out)],
                     );
                 }
-                // Only a surface with holes reads its material.
+                // Only a surface with holes reads its material. (A material
+                // is one kind of surface, so the part before, if it had the
+                // same material, was cut out too and bound it.)
                 if cut_out && changed(|last, draw| last.material != draw.material) {
                     device.cmd_bind_descriptor_sets(
                         commands,
@@ -3765,6 +3792,74 @@ mod tests {
 
     fn number(bytes: &[u8], at: usize) -> f32 {
         f32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[at * 4 + byte]))
+    }
+
+    /// A part a metre across its middle at `middle`, rooted at `foot`,
+    /// that the wind moves by `sway`.
+    fn part_at(middle: [f32; 3], foot: [f32; 3], sway: f32) -> Draw {
+        let mut world = [[0.0; 4]; 4];
+        for (axis, column) in world.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        world[3] = [foot[0], foot[1], foot[2], 1.0];
+        Draw {
+            world,
+            normal: normal_matrix(&world),
+            material: 0,
+            surface: Surface::Solid,
+            middle,
+            radius: 1.0,
+            first_index: 0,
+            index_count: 3,
+            first_vertex: 0,
+            mirrored: false,
+            double_sided: false,
+            sway,
+        }
+    }
+
+    #[test]
+    fn a_part_off_the_picture_is_not_drawn_unless_the_wind_could_blow_it_in() {
+        // Looking along -z, a quarter turn from top to bottom and from side
+        // to side: at 20 m ahead the picture's edge is 20 m to the side.
+        let seen = Seen {
+            eye: [0.0; 3],
+            rays: [[0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            size: [900, 900],
+        };
+        // Still things: in the picture, and just off its side.
+        assert!(part_at([0.0, 0.0, -20.0], [0.0; 3], 0.0).in_sight(&seen));
+        assert!(part_at([19.0, 0.0, -20.0], [19.0, 0.0, -20.0], 0.0).in_sight(&seen));
+        assert!(!part_at([24.0, 0.0, -20.0], [24.0, 0.0, -20.0], 0.0).in_sight(&seen));
+        // The same just off the side, but the top of something ten metres
+        // tall that sways: a gale leans it more than three metres.
+        let top = part_at([24.0, 9.0, -20.0], [24.0, -1.0, -20.0], 1.0);
+        assert!(top.in_sight(&seen));
+        // Its foot leans hardly at all, and far enough off it is not drawn.
+        assert!(!part_at([27.0, 0.0, -20.0], [27.0, -1.0, -20.0], 1.0).in_sight(&seen));
+        // Nor is the top, far enough off for any wind.
+        assert!(!part_at([50.0, 9.0, -20.0], [50.0, -1.0, -20.0], 1.0).in_sight(&seen));
+        // A part of no known size is drawn wherever the eye looks.
+        let mut unknown = part_at([500.0, 0.0, 20.0], [0.0; 3], 0.0);
+        unknown.radius = 0.0;
+        assert!(unknown.in_sight(&seen));
+    }
+
+    #[test]
+    fn a_leaning_transform_is_counted_as_reaching_farther() {
+        let mut plain = [[0.0; 4]; 4];
+        plain[0][0] = 2.0;
+        plain[1][1] = 3.0;
+        plain[2][2] = 1.0;
+        assert!((most_stretch(&plain) - 3.0).abs() < 1e-6);
+        // x leant over along y: a point at (1, 1, 0) is moved to (1, 2, 0),
+        // which is 1.58 times as far from the middle, more than either axis
+        // is long by itself.
+        let mut leant = [[0.0; 4]; 4];
+        leant[0] = [1.0, 1.0, 0.0, 0.0];
+        leant[1][1] = 1.0;
+        leant[2][2] = 1.0;
+        assert!(most_stretch(&leant) >= 5.0_f32.sqrt() / 2.0_f32.sqrt());
     }
 
     #[test]

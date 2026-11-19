@@ -131,8 +131,10 @@ impl Shade {
 }
 
 /// What is found before smoothing: the share of light that arrives, and
-/// the depth it was found at, which the smoothing tells surfaces apart by.
-pub(crate) const FOUND_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
+/// the depth it was found at, which the smoothing tells surfaces apart by
+/// to a hundredth: sixteen-bit floats round by a twentieth of that, which
+/// over the two pixels the smoothing reaches is half of it.
+pub(crate) const FOUND_FORMAT: vk::Format = vk::Format::R32G32_SFLOAT;
 /// The smoothed share, as the picture reads it: 256 steps are finer than
 /// an eye tells shade apart.
 pub(crate) const FORMAT: vk::Format = vk::Format::R8_UNORM;

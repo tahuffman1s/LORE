@@ -1,6 +1,6 @@
 //! A game's shader and the engine's template around it.
 
-use crate::scan::{Token, blank_comments, error_at, refuse_endless_loops, tokens};
+use crate::scan::{Token, blank_comments, error_at, refuse_discard, refuse_endless_loops, tokens};
 use crate::{MAX_TEXT_BYTES, Owner, ParamBlock, ShaderError, Source};
 
 /// What a game shader is used for, which decides the function it must hold.
@@ -117,6 +117,7 @@ pub fn hooked_module(
     }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     refuse_endless_loops(file, text)?;
+    refuse_discard(file, text)?;
     check_entry(hook, file, text)?;
     let mut module = engine.clone();
     module.push(

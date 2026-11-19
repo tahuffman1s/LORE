@@ -38,31 +38,31 @@
 @group(0) @binding(27) var occlusion_map: texture_2d<f32>;
 
 // How many sectors a slice has: the bits of a u32.
-const SECTORS: f32 = 32.0;
+const SHADE_SECTORS: f32 = 32.0;
 // How far apart the things found are taken to be from front to back, as a
 // share of how far round a point is searched, for each step taken along a
 // line: with fewer steps what is found stands for more of what is there,
 // so each setting finds about as much shade.
-const THICK_SHARE: f32 = 1.5;
+const SHADE_THICK: f32 = 1.5;
 // Two things found one after the other along a line are one surface if the
 // second is no farther ahead or behind the first than the thickness, and
 // this many times how far across it they are apart: a surface may slope
 // away that steeply and still be one.
-const JOINED_SLOPE: f32 = 3.0;
+const SHADE_JOINED: f32 = 3.0;
 // The sine of how far above a pixel's own surface a thing must stand to be
 // looked at any further.
-const LEVEL: f32 = 0.05;
+const SHADE_LEVEL: f32 = 0.05;
 // The widest the search is on the picture, as a share of its height: what
 // is right in front of the eye would otherwise be searched across half of
 // the picture.
-const WIDEST: f32 = 0.2;
+const SHADE_WIDEST: f32 = 0.2;
 // What is so far off that the search is narrower than this many pixels has
 // no shade found for it: it fades out before that.
-const NARROWEST: f32 = 1.5;
+const SHADE_NARROWEST: f32 = 1.5;
 
 // The angle whose cosine is `x`, in radians, to within 0.0001 (Abramowitz
 // and Stegun 4.4.45).
-fn angle_of(x: f32) -> f32 {
+fn shade_angle(x: f32) -> f32 {
     let size = abs(x);
     let part = sqrt(max(1.0 - size, 0.0))
         * (1.5707288 + size * (-0.2121144 + size * (0.0742610 - size * 0.0187293)));
@@ -70,50 +70,70 @@ fn angle_of(x: f32) -> f32 {
 }
 
 // Where the solid thing drawn at pixel `at` is from the eye, in metres, and
-// in w the depth it was drawn with: 0 if nothing was.
-fn seen_at(at: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
-    let depth = textureLoad(scene_depth, clamp(at, vec2<i32>(0), size - 1), 0);
+// in w the depth it was drawn with: 0 if nothing was, or the pixel is off
+// the picture.
+fn shade_seen(at: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    if any(at < vec2<i32>(0)) || any(at >= size) {
+        return vec4<f32>(0.0);
+    }
+    let depth = textureLoad(scene_depth, at, 0);
     if depth <= 0.0 {
         return vec4<f32>(0.0);
     }
     return vec4<f32>(fluid_ray(at, size) * (view.lens.x / depth), depth);
 }
 
-// Which of two neighbours on either side of a pixel lies on its surface:
-// the depth is even across a flat surface, so the neighbour whose own
-// neighbour points at the pixel's depth is on it (Turánszki, "Improved
-// normal reconstruction from depth", 2019).
-fn nearer_side(middle: f32, back: f32, back_twice: f32, on: f32, on_twice: f32) -> bool {
-    return abs(2.0 * back - back_twice - middle) < abs(2.0 * on - on_twice - middle);
+// The step along a surface from one pixel to the next, from the pixel
+// `here` and its neighbours on either side (`back` and `on`, and the depths
+// one pixel beyond each). The depth is even across a flat surface, so the
+// neighbour whose own neighbour points at the pixel's depth lies on its
+// surface, and the other may be on something else (Turánszki, "Improved
+// normal reconstruction from depth", 2019). The sky and what is off the
+// picture are no neighbours; with none on either side there is no step.
+fn shade_step(here: vec4<f32>, back: vec4<f32>, back_twice: f32, on: vec4<f32>, on_twice: f32) -> vec3<f32> {
+    let back_there = back.w > 0.0;
+    let on_there = on.w > 0.0;
+    if !back_there && !on_there {
+        return vec3<f32>(0.0);
+    }
+    var take_back = abs(2.0 * back.w - back_twice - here.w) < abs(2.0 * on.w - on_twice - here.w);
+    if !on_there {
+        take_back = true;
+    } else if !back_there {
+        take_back = false;
+    }
+    return select(on.xyz - here.xyz, here.xyz - back.xyz, take_back);
 }
 
 // The way the surface at `at` faces, from the depth round it.
-fn facing_at(at: vec2<i32>, size: vec2<i32>, here: vec4<f32>) -> vec3<f32> {
-    let left = seen_at(at - vec2<i32>(1, 0), size);
-    let right = seen_at(at + vec2<i32>(1, 0), size);
-    let up = seen_at(at - vec2<i32>(0, 1), size);
-    let down = seen_at(at + vec2<i32>(0, 1), size);
-    let left_twice = textureLoad(scene_depth, clamp(at - vec2<i32>(2, 0), vec2<i32>(0), size - 1), 0);
-    let right_twice = textureLoad(scene_depth, clamp(at + vec2<i32>(2, 0), vec2<i32>(0), size - 1), 0);
-    let up_twice = textureLoad(scene_depth, clamp(at - vec2<i32>(0, 2), vec2<i32>(0), size - 1), 0);
-    let down_twice = textureLoad(scene_depth, clamp(at + vec2<i32>(0, 2), vec2<i32>(0), size - 1), 0);
-    var across = right.xyz - here.xyz;
-    if nearer_side(here.w, left.w, left_twice, right.w, right_twice) {
-        across = here.xyz - left.xyz;
-    }
-    var along = down.xyz - here.xyz;
-    if nearer_side(here.w, up.w, up_twice, down.w, down_twice) {
-        along = here.xyz - up.xyz;
-    }
+fn shade_facing(at: vec2<i32>, size: vec2<i32>, here: vec4<f32>) -> vec3<f32> {
+    let last = size - 1;
+    let left = shade_seen(at - vec2<i32>(1, 0), size);
+    let right = shade_seen(at + vec2<i32>(1, 0), size);
+    let up = shade_seen(at - vec2<i32>(0, 1), size);
+    let down = shade_seen(at + vec2<i32>(0, 1), size);
+    let left_twice = textureLoad(scene_depth, clamp(at - vec2<i32>(2, 0), vec2<i32>(0), last), 0);
+    let right_twice = textureLoad(scene_depth, clamp(at + vec2<i32>(2, 0), vec2<i32>(0), last), 0);
+    let up_twice = textureLoad(scene_depth, clamp(at - vec2<i32>(0, 2), vec2<i32>(0), last), 0);
+    let down_twice = textureLoad(scene_depth, clamp(at + vec2<i32>(0, 2), vec2<i32>(0), last), 0);
+    let across = shade_step(here, left, left_twice, right, right_twice);
+    let along = shade_step(here, up, up_twice, down, down_twice);
     let faces = cross(along, across);
+    // A step is a pixel wide, a millimetre or less near the eye, and this
+    // is two of them multiplied: any length that is not nothing counts.
+    // With no neighbour to tell (a wire against the sky), towards the eye.
+    let long = dot(faces, faces);
+    if long < 1e-30 {
+        return normalize(-here.xyz);
+    }
+    let towards = faces * inverseSqrt(long);
     // Towards the eye, whichever way the two were taken.
-    let towards = towards_or(faces, -here.xyz);
     return select(towards, -towards, dot(towards, here.xyz) > 0.0);
 }
 
 // One slice through the half of the world a surface faces: the plane of
 // the line of sight and one direction across it.
-struct Slice {
+struct ShadeSlice {
     // How far the surface's own direction is turned from the line of
     // sight within the slice, towards the direction across, in radians,
     // and that angle's sine and cosine.
@@ -129,12 +149,12 @@ struct Slice {
 
 // The slice in which a surface facing `faces` leans by the two parts given
 // of that direction: along the line of sight and across it.
-fn slice_of(faces_ahead: f32, faces_across: f32) -> Slice {
-    var cut: Slice;
+fn shade_slice(faces_ahead: f32, faces_across: f32) -> ShadeSlice {
+    var cut: ShadeSlice;
     let long = max(length(vec2<f32>(faces_ahead, faces_across)), 1e-6);
     cut.lean_cos = clamp(faces_ahead / long, 0.0, 1.0);
     cut.lean_sin = clamp(faces_across / long, -1.0, 1.0);
-    cut.lean = angle_of(cut.lean_cos) * sign(faces_across + 1e-12);
+    cut.lean = shade_angle(cut.lean_cos) * sign(faces_across + 1e-12);
     cut.low_share = -0.5 * (cut.lean_cos + (cut.lean - 0.5 * PI) * cut.lean_sin);
     cut.whole = cut.lean_cos + cut.lean * cut.lean_sin;
     return cut;
@@ -145,8 +165,8 @@ fn slice_of(faces_ahead: f32, faces_across: f32) -> Slice {
 // `turn_cos`, on the side the slice's direction across is: from 0 to 1.
 // The light is the cosine to the surface times the slice's width at that
 // angle, summed, so equal shares are equal light to a matte surface.
-fn share_by(turn_cos: f32, slice: Slice) -> f32 {
-    let angle = angle_of(turn_cos);
+fn shade_share(turn_cos: f32, slice: ShadeSlice) -> f32 {
+    let angle = shade_angle(turn_cos);
     if angle >= slice.lean + 0.5 * PI {
         return 1.0;
     }
@@ -160,9 +180,9 @@ fn share_by(turn_cos: f32, slice: Slice) -> f32 {
 
 // The sectors of a slice between `one` and `other`, each a share of the slice
 // from 0 to 1.
-fn sectors(one: f32, other: f32) -> u32 {
-    let first = u32(round(clamp(min(one, other), 0.0, 1.0) * SECTORS));
-    let last = u32(round(clamp(max(one, other), 0.0, 1.0) * SECTORS));
+fn shade_sectors(one: f32, other: f32) -> u32 {
+    let first = u32(round(clamp(min(one, other), 0.0, 1.0) * SHADE_SECTORS));
+    let last = u32(round(clamp(max(one, other), 0.0, 1.0) * SHADE_SECTORS));
     if last <= first {
         return 0u;
     }
@@ -170,19 +190,19 @@ fn sectors(one: f32, other: f32) -> u32 {
     return select((1u << count) - 1u, 0xFFFFFFFFu, count >= 32u) << first;
 }
 
-struct Found {
+struct ShadeFound {
     @location(0) found: vec4<f32>,
 }
 
 // How much of the light from all round reaches what is drawn at each
 // pixel, from the depth of what is solid.
 @fragment
-fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
-    var out: Found;
+fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> ShadeFound {
+    var out: ShadeFound;
     out.found = vec4<f32>(1.0, 0.0, 0.0, 0.0);
     let pixel = vec2<i32>(at.xy);
     let size = vec2<i32>(textureDimensions(scene_depth));
-    let here = seen_at(pixel, size);
+    let here = shade_seen(pixel, size);
     if here.w <= 0.0 {
         return out;
     }
@@ -192,15 +212,15 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
     let rise = length(view.sky_rays[2].xyz);
     let per_metre = view.sky_rays[0].w / (2.0 * rise * ahead);
     let reach = view.lens.z;
-    let wide = min(reach * per_metre, WIDEST * view.sky_rays[0].w);
-    if wide < NARROWEST {
+    let wide = min(reach * per_metre, SHADE_WIDEST * view.sky_rays[0].w);
+    if wide < SHADE_NARROWEST {
         return out;
     }
     let slices = i32(view.lens.w) / 16;
     let steps = i32(view.lens.w) % 16;
-    let thick = reach * THICK_SHARE / f32(steps);
+    let thick = reach * SHADE_THICK / f32(steps);
     let to_eye = normalize(-here.xyz);
-    let faces = facing_at(pixel, size, here);
+    let faces = shade_facing(pixel, size, here);
     let right = normalize(view.sky_rays[1].xyz);
     let up = view.sky_rays[2].xyz / rise;
     // Two numbers that differ from pixel to pixel, and from frame to frame
@@ -223,7 +243,7 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
         if long < 1e-4 {
             continue;
         }
-        let whole = slice_of(dot(in_slice, to_eye), dot(in_slice, aside)).whole;
+        let whole = shade_slice(dot(in_slice, to_eye), dot(in_slice, aside)).whole;
         var hidden = 0u;
         for (var side = -1.0; side < 2.0; side += 2.0) {
             // The thing found before on this side: how much closer to the
@@ -243,7 +263,7 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
                 if any(there_at < vec2<i32>(0)) || any(there_at >= size) {
                     break;
                 }
-                let there = seen_at(there_at, size);
+                let there = shade_seen(there_at, size);
                 if there.w <= 0.0 {
                     // The sky: nothing there, and nothing joined across it.
                     last_closer = -1e9;
@@ -267,30 +287,30 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
                 // nothing: on open ground that is every step, and the rest
                 // of the sum is spared. (Under three degrees above it, it
                 // would hide less than a thousandth of the slice.)
-                if dot(front, faces) < LEVEL * length(front) {
+                if dot(front, faces) < SHADE_LEVEL * length(front) {
                     last_closer = closer;
                     last_off = off_long;
                     last_share = select(1.0, 0.0, side < 0.0);
                     continue;
                 }
-                let cut = slice_of(dot(faces, to_eye), dot(faces, off) / off_long);
+                let cut = shade_slice(dot(faces, to_eye), dot(faces, off) / off_long);
                 // Its front, and its back `thick` metres behind.
                 let behind = closer - thick;
-                var nearer = share_by(closer * inverseSqrt(closer * closer + off_long * off_long), cut);
-                var farther = share_by(behind * inverseSqrt(behind * behind + off_long * off_long), cut);
+                var nearer = shade_share(closer * inverseSqrt(closer * closer + off_long * off_long), cut);
+                var farther = shade_share(behind * inverseSqrt(behind * behind + off_long * off_long), cut);
                 // The sectors run from one side of the slice to the other.
                 if side < 0.0 {
                     nearer = 1.0 - nearer;
                     farther = 1.0 - farther;
                 }
-                hidden |= sectors(nearer, farther);
+                hidden |= shade_sectors(nearer, farther);
                 // Two things found one after the other with no jump in
                 // depth between them are one surface, and hide all that is
                 // between them, as a wall hides all the way down to its
                 // foot. A jump (a post before a far wall) parts them, and
                 // each hides only its own thickness.
-                if abs(closer - last_closer) < thick + JOINED_SLOPE * abs(off_long - last_off) {
-                    hidden |= sectors(last_share, nearer);
+                if abs(closer - last_closer) < thick + SHADE_JOINED * abs(off_long - last_off) {
+                    hidden |= shade_sectors(last_share, nearer);
                 }
                 last_closer = closer;
                 last_off = off_long;
@@ -299,15 +319,37 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
         }
         // A slice counts for as much light as it holds.
         let weight = long * whole;
-        arrives += weight * (1.0 - f32(countOneBits(hidden)) / SECTORS);
+        arrives += weight * (1.0 - f32(countOneBits(hidden)) / SHADE_SECTORS);
         counted += weight;
     }
     if counted > 0.0 {
         // Fading out where the search is too narrow to find anything.
-        let fade = smoothstep(NARROWEST, NARROWEST * 2.0, wide);
+        let fade = smoothstep(SHADE_NARROWEST, SHADE_NARROWEST * 2.0, wide);
         out.found.r = mix(1.0, arrives / counted, fade);
     }
     return out;
+}
+
+// The depth kept beside what was found at the pixel `at`: 0 for the sky, and
+// for a pixel off the picture.
+fn shade_found(at: vec2<i32>, size: vec2<i32>) -> f32 {
+    if any(at < vec2<i32>(0)) || any(at >= size) {
+        return 0.0;
+    }
+    return textureLoad(occlusion_found, at, 0).g;
+}
+
+// How much that depth changes from one pixel to the next along a surface,
+// from the pixel's own and its two neighbours': the smaller change of the
+// two, and the only one where a neighbour is the sky or off the picture.
+fn shade_slope(here: f32, back: f32, on: f32) -> f32 {
+    if back <= 0.0 && on <= 0.0 {
+        return 0.0;
+    }
+    if on <= 0.0 || (back > 0.0 && abs(here - back) < abs(on - here)) {
+        return here - back;
+    }
+    return on - here;
 }
 
 // Each pixel's share mixed with those of the pixels round it that are on
@@ -323,13 +365,9 @@ fn fragment_occlusion_smooth(@builtin(position) at: vec4<f32>) -> @location(0) v
     }
     // How the depth changes across the surface, from whichever neighbour
     // on each side changes it least: the other may be on something else.
-    let left = textureLoad(occlusion_found, max(pixel - vec2<i32>(1, 0), vec2<i32>(0)), 0).g - here.g;
-    let right = textureLoad(occlusion_found, min(pixel + vec2<i32>(1, 0), size - 1), 0).g - here.g;
-    let up = textureLoad(occlusion_found, max(pixel - vec2<i32>(0, 1), vec2<i32>(0)), 0).g - here.g;
-    let down = textureLoad(occlusion_found, min(pixel + vec2<i32>(0, 1), size - 1), 0).g - here.g;
     let slope = vec2<f32>(
-        select(right, -left, abs(left) < abs(right)),
-        select(down, -up, abs(up) < abs(down)),
+        shade_slope(here.g, shade_found(pixel - vec2<i32>(1, 0), size), shade_found(pixel + vec2<i32>(1, 0), size)),
+        shade_slope(here.g, shade_found(pixel - vec2<i32>(0, 1), size), shade_found(pixel + vec2<i32>(0, 1), size)),
     );
     // Two surfaces are told apart when they are this share of their
     // distance apart: a centimetre at a metre.

@@ -357,7 +357,7 @@ fn the_shade_s_settings_say_what_to_write() {
     );
     let message = load_mistake("game.lighting.setAmbientOcclusion(1.5)");
     assert!(
-        message.contains("needs its settings in a table")
+        message.contains("needs its settings in a table, but it was given")
             && message
                 .contains("game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })"),
         "{message}"

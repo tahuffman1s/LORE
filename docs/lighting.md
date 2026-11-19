@@ -323,14 +323,17 @@ picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
   picture and marked `@invariant`, so it lands exactly where the picture
   draws it. The picture is then drawn only where its depth equals that
   depth, and writes none: nothing hidden behind something else is shaded
-  at all, and a leaf's holes are cut once, in the cheap pass.
+  at all, and all but a few of a leaf's holes are cut in the cheap pass.
+  A pixel thrown away after that would show nothing rather than what is
+  behind it, so a game's shaders may not `discard` (`docs/shaders.md`).
 - **The asking** is Jimenez's ground-truth ambient occlusion (2016), laid
   out as Intel's XeGTAO does: each pixel cuts the half of the world its
   surface faces into slices through the line of sight (2, 3 or 4 of them:
   the player's "Ambient occlusion" setting), and reads the depth at 2, 3
   or 4 steps either way along each, closer together near the pixel. The
   way the surface faces is worked out from the depth round it, taking on
-  each side the neighbour that lies on the same surface (Turánszki 2019).
+  each side the neighbour that lies on the same surface (Turánszki 2019),
+  and never the sky or a pixel off the picture.
 - **The keeping** is Therrien's visibility bitmask (2023). A slice is 32
   sectors, and each thing found hides the sectors from its front to its
   back, taken to be a fixed thickness behind. So a railing or a chair's
@@ -352,9 +355,11 @@ picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
 - The slices are turned differently in each pixel (Jimenez's interleaved
   gradient noise), and each frame when the upscaler mixes frames. Each
   pixel is then averaged with the 5 × 5 round it that lie on its surface:
-  16 over the distance ahead is kept beside the shade, which is even
-  across a flat surface, so a neighbour belongs if it is where the slope
-  at the pixel says it should be to within a hundredth.
+  16 over the distance ahead is kept beside the shade (as 32-bit floats:
+  16-bit ones round by enough to push neighbours on a flat surface half
+  way out), which is even across a flat surface, so a neighbour belongs
+  if it is where the slope at the pixel says it should be to within a
+  hundredth.
 - **What it dims.** Only light from all round: the sky's and the ground's,
   the probes', what a street's sides throw back, and what a rough surface
   mirrors of them. Never the sun's or a lamp's, which have shadows of
@@ -372,12 +377,14 @@ picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
   no wider than a fifth of the picture's height.
 - **Only what can be seen is drawn.** The picture and the depth pass skip
   every part whose bounds are wholly outside the view (the sun's and the
-  lamps' shadows already did), with room for how far the wind can move it.
+  lamps' shadows already did), with room for how far the hardest gust can
+  lean something as tall as it stands above its root, and for the part of
+  a pixel the upscaler shifts the picture by.
 
 Cost, `lore bench --ambient-occlusion LEVEL` at 1280×720, the graphics
-card's part of a usual frame: on an RX 7800 XT 1.41 ms off, 1.48 ms low,
-1.55 ms medium and 1.66 ms high (main 1.38 ms); on lavapipe 50.0 ms off,
-55.0 ms medium and 62.6 ms high (main 51.3 ms). Recording the depth pass
+card's part of a usual frame: on an RX 7800 XT 1.39 ms off, 1.48 ms low,
+1.55 ms medium and 1.61 ms high (main 1.38 ms); on lavapipe 49.8 ms off,
+55.3 ms medium and 63.2 ms high (main 51.3 ms). Recording the depth pass
 adds about 0.13 ms of the engine's own work in that scene's 1 600 blocks.
 A step that finds nothing above its pixel's own surface is dropped after
 one read, so open ground costs little: before that, medium was 61 ms on
@@ -386,8 +393,8 @@ lavapipe.
 Where much is hidden behind other things the depth pass more than pays
 for the shade. The jungle example from its lake shore, RX 7800 XT: 22.4
 ms a frame on main at 1280×720; 11.4 ms with only what is in view drawn;
-8.4 ms with the shade on medium, because no leaf behind another is shaded.
-At 2560×1440: 32.7 ms, 21.5 ms and 13.8 ms. The alley example, which has
+8.5 ms with the shade on medium, because no leaf behind another is shaded.
+At 2560×1440: 32.7 ms, 21.6 ms and 13.8 ms. The alley example, which has
 little overdraw, is 3.8 ms off and 3.9 ms on medium.
 
 Not done yet: depth read from smaller copies for far steps (XeGTAO's
