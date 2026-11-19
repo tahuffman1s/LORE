@@ -345,6 +345,55 @@ mod tests {
     }
 
     #[test]
+    fn a_fluid_shader_can_use_every_field_and_the_helpers() {
+        let text = "//! param speed: f32 = 0.2 range 0..2\n\
+                    fn fluid(in: FluidIn) -> Fluid {\n\
+                    \x20   var made = in.fluid;\n\
+                    \x20   let wave = sin(in.time * params.speed + in.position.x + in.distance * 0.01);\n\
+                    \x20   made.absorption = in.fluid.absorption * (1.0 + in.depth);\n\
+                    \x20   made.scattering = in.fluid.scattering + fluid_color(in.fluid) * in.pool;\n\
+                    \x20   made.emission = vec3f(wave * wave);\n\
+                    \x20   made.roughness = in.fluid.roughness;\n\
+                    \x20   made.metallic = in.fluid.metallic;\n\
+                    \x20   made.normal = normalize(in.fluid.normal + in.view * 0.01);\n\
+                    \x20   return fluid_colored(made, vec3f(0.9, 0.3, 0.05));\n\
+                    }\n";
+        let params = check_game_shader(Hook::Fluid, "shaders/every.wgsl", text).unwrap();
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn a_slip_in_a_fluid_shader_is_reported_in_the_makers_line() {
+        let text = "fn fluid(in: FluidIn) -> Fluid {\n    var made = in.fluid;\n    made.glow = vec3f(1.0);\n    return made;\n}\n";
+        let error = check_game_shader(Hook::Fluid, "shaders/crust.wgsl", text).unwrap_err();
+        assert_eq!(error.file, "shaders/crust.wgsl");
+        assert_eq!(error.line, Some(3));
+        assert!(!error.lore_fault, "{error}");
+    }
+
+    #[test]
+    fn a_fluid_shaders_markers_are_each_there_once_and_swapped_on_their_own_lines() {
+        let water = swapped(&included("water.wgsl").unwrap(), &FLUID_MARKERS);
+        let fluid = swapped(&included("fluid.wgsl").unwrap(), &FLUID_MARKERS);
+        assert_eq!(
+            water.lines().count(),
+            included("water.wgsl").unwrap().lines().count()
+        );
+        assert!(water.contains("normal = lore_fluid_pool(corner, wet, normal);"));
+        assert!(fluid.contains("absorbs = lore_made.absorption;"));
+        assert!(fluid.contains("glows = vec4<f32>(lore_made.emission, glows.w);"));
+        for text in [&water, &fluid] {
+            assert!(
+                text.lines()
+                    .all(|line| !line.trim().starts_with("//!fluid "))
+            );
+        }
+        // A surface shader's module leaves them as the comments they are.
+        let surface = surface_engine_from(MESH).unwrap();
+        assert!(surface.text().contains("//!fluid pool"));
+    }
+
+    #[test]
     fn a_surface_shader_can_use_every_field() {
         let text = "fn surface(in: SurfaceIn) -> Surface {\n\
                     \x20   var made: Surface;\n\

@@ -46,6 +46,7 @@ keys as they are bound, for keyboard or gamepad.
 | `kinds.luau` | The fluids the gun shoots, two of them made here, and the burn. |
 | `gun.luau` | The fluid gun and its crosshair. |
 | `lab.luau` | The machines (pump, tap, lever) and the panel. All of it is done through `game.fluids.pool`. |
+| `shaders/` | Three fluid shaders, one function each: `crust.wgsl` (a crust of dark rock drifting on the lava), `slick.wgsl` (the colored bands of a thin film on the oil) and `pulse.wgsl` (bubbles under the slime's skin). `main.luau` turns each on for its kind with one line; they draw the pits and whatever of those kinds the gun pours. Save one while the game runs and it changes. |
 | `places.luau` | Where things are. Written by `build.py`. |
 | `build.py` | Makes the level out of boxes, and lays a small sheet marked `water` over each hollow: that is all a pool needs. |
 | `menu.luau`, `pause_menu.luau` | The pause menu every new game starts with. |
@@ -69,6 +70,4 @@ object.
 
 - A hollow nobody marked with a sheet does not become a pool when fluid is
   poured into it (#455): on the yard's floor fluid lies as puddles.
-- Fluid shaders (#453): lava's crust is the engine's own, and nothing here
-  brings a shader of its own yet.
 - The level is plain boxes. It is a lab, not a place.

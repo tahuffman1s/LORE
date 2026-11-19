@@ -871,3 +871,199 @@ fn a_removed_surface_shader_leaves_nothing_kept_and_can_come_back() {
     drop(headless);
     assert_eq!(validation_errors(), 0);
 }
+
+// ------------------------------------------------------------ fluid shaders
+
+/// A fluid shader that makes the fluid glow green.
+const GLOW: &str = "fn fluid(in: FluidIn) -> Fluid {\n    var made = in.fluid;\n    \
+                    made.emission = vec3f(0.0, 6.0, 0.0);\n    return made;\n}\n";
+
+/// A fluid shader called `glow` for kind 1, which the game calls `goo`.
+fn goo<'a>(text: &'a str, revision: u64) -> GameShader<'a> {
+    GameShader {
+        name: "glow",
+        file: "shaders/glow.wgsl",
+        text,
+        used_as: ShaderUse::Fluid {
+            kind: 1,
+            fluid: "goo",
+        },
+        values: &[],
+        revision,
+    }
+}
+
+/// A dark liquid that lets no light through: what it glows is what shows.
+fn dark() -> crate::FluidLook {
+    crate::FluidLook {
+        absorbs: [900.0; 3],
+        scatters: [1.0; 3],
+        glows: [0.0; 3],
+        roughness: 0.6,
+        metal: 0.0,
+        bends: 1.4,
+    }
+}
+
+/// The floor with two pools standing on it, a quarter of a metre deep: one
+/// over its left half and one over its right.
+fn two_pools() -> Scene {
+    let mut scene = floor(named("Floor", [0.5; 3]));
+    for middle in [-0.5_f32, 0.5] {
+        let points = 21_u32;
+        let cell = 0.05;
+        let origin = [middle - 0.5, -0.5];
+        let depths = (0..points * points)
+            .map(|at| {
+                #[allow(clippy::cast_precision_loss)]
+                let (x, z) = (
+                    (at % points) as f32 * cell - 0.5,
+                    (at / points) as f32 * cell - 0.5,
+                );
+                if x.hypot(z) < 0.35 {
+                    0.25
+                } else {
+                    lore_assets::Water::DRY
+                }
+            })
+            .collect();
+        scene.waters.push(lore_assets::Water {
+            name: None,
+            sources: Vec::new(),
+            level: 0.25,
+            brim: 0.25,
+            origin,
+            cell,
+            size: [points, points],
+            depths,
+            colour: [0.0, 0.02, 0.02, 0.3],
+            fluid: None,
+            amount: 1.0,
+            spill: None,
+        });
+    }
+    scene
+}
+
+/// How the two pools stand: the left one of kind 1, the right of kind 2,
+/// both dark.
+fn two_kinds() -> [crate::PoolDrawn; 2] {
+    [1, 2].map(|kind| crate::PoolDrawn {
+        look: Some(dark()),
+        kind,
+        ..crate::PoolDrawn::default()
+    })
+}
+
+#[test]
+fn a_fluid_shader_draws_the_pool_of_its_kind_and_no_other() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless.set_scene(&two_pools()).unwrap();
+    headless.set_fluid_looks(&[crate::FluidLook::default(), dark(), dark()]);
+    headless.set_pools(&two_kinds());
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+    let [_, green, _] = pixel(&plain, LAVA_AT.0, LAVA_AT.1);
+    assert!(green < 90, "a dark pool: {green}");
+
+    headless.set_game_shaders(&[goo(GLOW, 1)]);
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].outcome, Ok(()));
+    assert_eq!(reports[0].material.as_deref(), Some("goo"));
+    headless.set_pools(&two_kinds());
+    let shaded = headless.screenshot(&camera).unwrap();
+    let [red, green, blue] = pixel(&shaded, LAVA_AT.0, LAVA_AT.1);
+    assert!(
+        green > 150 && green > red + 60 && green > blue + 60,
+        "the pool of goo glows green: {red} {green} {blue}"
+    );
+    assert!(
+        same_from(WIDTH / 2 + 2, &shaded, &plain),
+        "the other pool changed"
+    );
+
+    // A pool that is no longer mostly that kind is drawn as itself again.
+    let mut other = two_kinds();
+    other[0].kind = 2;
+    headless.set_pools(&other);
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+
+    headless.set_pools(&two_kinds());
+    headless.set_game_shaders(&[]);
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+    assert!(headless.take_shader_reports().is_empty());
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_fluid_shader_draws_the_puddles_of_its_kind_and_no_other() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless
+        .set_scene(&floor(named("Floor", [0.5; 3])))
+        .unwrap();
+    headless.set_fluid_looks(&[crate::FluidLook::default(), dark(), dark()]);
+    let puddle = |x: f32, kind: u8| crate::FluidDrop {
+        place: [x, 0.0, 0.0],
+        radius: 0.3,
+        facing: [0.0, 1.0, 0.0],
+        flat: 1.0,
+        long: 1.0,
+        thick: 0.02,
+        kind,
+    };
+    // Said out of order: each kind's drops are drawn together all the same.
+    headless.set_fluid(&[puddle(0.5, 2), puddle(-0.5, 1)]);
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+
+    headless.set_game_shaders(&[goo(GLOW, 1)]);
+    assert_eq!(headless.take_shader_reports()[0].outcome, Ok(()));
+    let shaded = headless.screenshot(&camera).unwrap();
+    let [red, green, blue] = pixel(&shaded, LAVA_AT.0, LAVA_AT.1);
+    let [_, before, _] = pixel(&plain, LAVA_AT.0, LAVA_AT.1);
+    assert!(
+        green > before + 60 && green > red + 40 && green > blue + 40,
+        "the puddle of goo glows green: {red} {green} {blue}, from {before}"
+    );
+    assert!(
+        same_from(WIDTH / 2 + 4, &shaded, &plain),
+        "the other puddle changed"
+    );
+
+    headless.set_game_shaders(&[]);
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_broken_fluid_shader_says_where_and_the_fluid_is_drawn_as_itself() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless.set_scene(&two_pools()).unwrap();
+    headless.set_fluid_looks(&[crate::FluidLook::default(), dark(), dark()]);
+    headless.set_pools(&two_kinds());
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+    let slip = "fn fluid(in: FluidIn) -> Fluid {\n    var made = in.fluid;\n    \
+                made.glow = vec3f(1.0);\n    return made;\n}\n";
+    headless.set_game_shaders(&[goo(slip, 1)]);
+    let reports = headless.take_shader_reports();
+    let error = reports[0].outcome.as_ref().unwrap_err();
+    assert_eq!(
+        (error.file.as_str(), error.line),
+        ("shaders/glow.wgsl", Some(3))
+    );
+    assert!(!error.lore_fault, "{error}");
+    headless.set_pools(&two_kinds());
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}

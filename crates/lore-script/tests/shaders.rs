@@ -1187,3 +1187,125 @@ fn a_surface_shader_written_with_its_name_and_material_swapped_is_explained() {
          in.surface; }"
     );
 }
+
+// ------------------------------------------------------------ fluid shaders
+
+const CRUST: &str = "//! param speed: f32 = 0.2 range 0..2\n\
+    fn fluid(in: FluidIn) -> Fluid { return in.fluid; }\n";
+
+/// A game with this script and a `crust` fluid shader beside the usual two.
+fn fluid_game(script: &str) -> ScriptHost {
+    let host = ScriptHost::from_sources(
+        files(script, &[("heat", HEAT), ("lava", LAVA), ("crust", CRUST)]),
+        ActionMap::standard(),
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    host
+}
+
+#[test]
+fn a_fluid_shader_belongs_to_a_kind_of_fluid() {
+    let host = fluid_game(
+        r#"
+        local goo = game.fluid("goo", { from = "honey" })
+        game.shaders.fluid("crust", " Lava ", { speed = 0.5 })
+        game.shaders.fluid("crust", goo)
+        "#,
+    );
+    let said = on(&host);
+    assert_eq!(said.len(), 2);
+    // "lava" is a ready-made kind, made for the shader as a spray makes it:
+    // the game's second kind, after water and goo.
+    assert_eq!(
+        said[0].used_as,
+        ShaderUse::Fluid {
+            fluid: "lava".to_owned(),
+            kind: 2
+        }
+    );
+    assert_eq!(said[0].file, "shaders/crust.wgsl");
+    assert_eq!(said[0].values, [("speed".to_owned(), ParamValue::F32(0.5))]);
+    assert_eq!(
+        said[1].used_as,
+        ShaderUse::Fluid {
+            fluid: "goo".to_owned(),
+            kind: 1
+        }
+    );
+    assert_eq!(said[1].used_as.hook(), lore_shader::Hook::Fluid);
+}
+
+#[test]
+fn a_kind_takes_one_fluid_shader_and_a_game_eight() {
+    // Another shader for the same kind replaces the first, where it was.
+    let host = ScriptHost::from_sources(
+        files(
+            r#"
+            game.shaders.fluid("crust", "lava")
+            game.shaders.fluid("crust", "oil")
+            game.shaders.fluid("glass", "lava")
+            "#,
+            &[("crust", CRUST), ("glass", CRUST)],
+        ),
+        ActionMap::standard(),
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(names(&host), ["glass", "crust"]);
+    // The ninth kind with a shader is one too many.
+    let message = mistake_with(
+        r#"
+        for _, kind in { "water", "oil", "honey", "slime", "tar", "acid", "lava", "mercury", "milk" } do
+            game.shaders.fluid("crust", kind)
+        end
+        "#,
+        &[("crust", CRUST)],
+    );
+    assert!(message.contains("9th fluid shader"), "{message}");
+    assert!(
+        message.contains("one for each of 8 kinds of fluid"),
+        "{message}"
+    );
+}
+
+#[test]
+fn mistakes_with_a_fluid_shader_say_what_to_write() {
+    let with = |script: &str| mistake_with(script, &[("crust", CRUST), ("lava", LAVA)]);
+    let message = with(r#"game.shaders.fluid("crust")"#);
+    assert!(
+        message.contains("needs the kind of fluid it is for")
+            && message.contains("game.shaders.fluid(\"crust\", \"lava\""),
+        "{message}"
+    );
+    let message = with(r#"game.shaders.fluid("crust", "lavva")"#);
+    assert!(message.contains("Did you mean \"lava\"?"), "{message}");
+    let message = with(r#"game.shaders.fluid("crust", 7)"#);
+    assert!(message.contains("needs a kind of fluid"), "{message}");
+    let message = with(r#"game.shaders.fluid("crust", "lava", { sped = 1 })"#);
+    assert!(message.contains("Did you mean `speed`?"), "{message}");
+    let message = with(r#"game.shaders.fluid("crusty", "lava")"#);
+    assert!(
+        message.contains("game.shaders.fluid(\"crust\", \"lava\")"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_fluid_shader_is_removed_and_says_what_it_is() {
+    let mut host = fluid_game(
+        r#"
+        local crust = game.shaders.fluid("crust", "lava")
+        print(tostring(crust))
+        game.onTick(function()
+            crust:set("speed", 1.5)
+            if game.time() > 0.04 then crust:remove() end
+        end)
+        "#,
+    );
+    run(&mut host, 1);
+    assert_eq!(
+        on(&host)[0].values,
+        [("speed".to_owned(), ParamValue::F32(1.5))]
+    );
+    run(&mut host, 4);
+    assert!(on(&host).is_empty());
+}

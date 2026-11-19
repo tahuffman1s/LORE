@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Game shaders — LORE</title>
-<meta name="description" content="Change how your game looks with a few lines of WGSL: a screen effect over the whole picture, or a surface shader for one material of your level. Saving the file changes the running game.">
+<meta name="description" content="Change how your game looks with a few lines of WGSL: a screen effect over the whole picture, a surface shader for one material of your level, or a fluid shader for one kind of fluid. Saving the file changes the running game.">
 <meta property="og:title" content="Game shaders — LORE">
-<meta property="og:description" content="A screen effect or a surface shader in a few lines of WGSL, changed while the game runs.">
+<meta property="og:description" content="A screen effect, a surface shader or a fluid shader in a few lines of WGSL, changed while the game runs.">
 <meta name="color-scheme" content="dark light">
 <link rel="stylesheet" href="docs.css">
 </head>
@@ -34,9 +34,10 @@
   <nav class="toc" aria-label="On this page">
     <p>On this page</p>
     <ol>
-      <li><a href="#kinds">Two kinds of shader</a></li>
+      <li><a href="#kinds">Three kinds of shader</a></li>
       <li><a href="#screen">A first screen effect</a></li>
       <li><a href="#surface">A first surface shader</a></li>
+      <li><a href="#fluid">A first fluid shader</a></li>
       <li><a href="#inputs">Everything a shader is given</a></li>
       <li><a href="#params">Values you can change</a></li>
       <li><a href="#script">Setting values from the script</a></li>
@@ -47,10 +48,11 @@
     </ol>
   </nav>
 
-  <h2 id="kinds">Two kinds of shader</h2>
+  <h2 id="kinds">Three kinds of shader</h2>
   <p>A <b>screen effect</b> changes the finished picture: it is handed each pixel of what the game drew, and says what color to show instead. Black and white, a vignette, a heat haze and a sepia photograph are screen effects. Several can be on at once, and they run in the order you turned them on.</p>
   <p>A <b>surface shader</b> changes one material of your level: everything in the level that wears that material. It is handed what the material looks like at that spot (its color, which way it faces, how shiny it is, how much light it gives off) and says what it should look like instead. The engine still does the lighting, shadows, fog and weather.</p>
-  <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file. A file holds one function, `screen` or `surface`; if you need both, put the other in its own file.</p>
+  <p>A <b>fluid shader</b> changes one kind of fluid, wherever that kind is: a pool of it in the level, a puddle of it on the floor, drops of it in the air. It is handed what the fluid is at that spot (what it takes and scatters of light, its glow, how rough it is) and says what it should be instead. The engine still does what is mirrored in it, what is seen through it, the waves and the light.</p>
+  <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file. A file holds one function, <code>screen</code>, <code>surface</code> or <code>fluid</code>; if you need two, put the other in its own file.</p>
 
   <h2 id="screen">A first screen effect</h2>
   <p>Make a folder called <code>shaders</code> in your game's folder, and in it a file called <code>gray.wgsl</code>:</p>
@@ -95,6 +97,26 @@
   </div>
   <p>Only what the camera sees changes: a glowing surface does not light the room around it, and it casts the same shadows as before.</p>
 
+  <h2 id="fluid">A first fluid shader</h2>
+  <p>A fluid shader needs a kind of fluid: one of the ready-made ones (<code>"water"</code>, <code>"lava"</code>, <code>"honey"</code>…) or one your script made with <code>game.fluid</code>. This one makes slime glow in slow pulses, in a pool and wherever it is poured:</p>
+  <div class="code">
+    <span class="label">shaders/pulse.wgsl</span>
+    <pre data-file="shaders/pulse.wgsl" tabindex="0"><code>fn fluid(in: FluidIn) -> Fluid {
+    // Start from what the kind's own settings make it here.
+    var out = in.fluid;
+    // A slow beat that runs across it.
+    let beat = 0.5 + 0.5 * sin(in.time * 1.6 + in.position.x * 0.4);
+    out.emission = vec3f(0.3, 1.0, 0.2) * beat;
+    return out;
+}</code></pre>
+  </div>
+  <div class="code">
+    <span class="label">main.luau</span>
+    <pre data-file="main.luau" tabindex="0"><code>game.shaders.fluid("pulse", "slime")</code></pre>
+  </div>
+  <p>A fluid's color is said as two things, as the engine says it: how much of each of red, green and blue a metre of it takes away (<code>absorption</code>), and how much it scatters back (<code>scattering</code>). A clear liquid mostly takes; a cloudy one scatters. If you only want to say a color, <code>fluid_colored(out, vec3f(0.9, 0.3, 0.05))</code> gives the fluid back with a deep body of it showing that color, and <code>fluid_color(in.fluid)</code> reads the color it shows now.</p>
+  <p>A kind has one fluid shader. Three to read and copy are in the fluid lab example: a crust of dark rock drifting on lava, the colored bands of an oil slick, and bubbles under the skin of slime.</p>
+
   <h2 id="inputs">Everything a shader is given</h2>
   <p>A screen effect is handed <code>in</code>, a <code>ScreenIn</code>, and returns a <code>vec3f</code>, the color to show. Light is linear and not limited to 1: a bright lamp or the sun is far above 1, and tone mapping brings it down afterwards.</p>
   <table>
@@ -133,6 +155,33 @@
     </tbody>
   </table>
   <p>Anything you return is tidied: negative color and emission become 0, alpha is held between 0 and 1.</p>
+  <p>A fluid shader is handed a <code>FluidIn</code> and returns a <code>Fluid</code>. It usually starts from <code>in.fluid</code> and changes some fields.</p>
+  <table>
+    <thead><tr><th scope="col">In a fluid shader</th><th scope="col">What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>in.fluid</code></td><td>What the kind's own settings make it here (in a pool, its mix): a <code>Fluid</code>, below.</td></tr>
+      <tr><td><code>in.position</code></td><td>Where this point of its surface is in the world, in metres.</td></tr>
+      <tr><td><code>in.view</code></td><td>A unit vector from there to the eye.</td></tr>
+      <tr><td><code>in.distance</code></td><td>Metres from the eye.</td></tr>
+      <tr><td><code>in.depth</code></td><td>Metres of the fluid here: how deep a pool is, how thick a puddle or a drop.</td></tr>
+      <tr><td><code>in.pool</code></td><td>1 in a pool, 0 for a drop or a puddle.</td></tr>
+      <tr><td><code>in.time</code></td><td>Seconds on the renderer's own clock: the same as in a screen effect.</td></tr>
+      <tr><td><code>fluid_color(fluid)</code></td><td>The color a deep body of it shows, as a <code>vec3f</code>.</td></tr>
+      <tr><td><code>fluid_colored(fluid, color)</code></td><td>The fluid, made to show <code>color</code> where it is deep.</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th scope="col">A <code>Fluid</code> has</th><th scope="col">What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>absorption</code></td><td>How much of red, green and blue light a metre of it takes away.</td></tr>
+      <tr><td><code>scattering</code></td><td>How much of red, green and blue light a metre of it scatters back.</td></tr>
+      <tr><td><code>emission</code></td><td>Light it gives off itself.</td></tr>
+      <tr><td><code>roughness</code></td><td>0 is a mirror, 1 is chalk.</td></tr>
+      <tr><td><code>metallic</code></td><td>0 is not metal, 1 is a liquid metal such as mercury, which mirrors in the color it scatters.</td></tr>
+      <tr><td><code>normal</code></td><td>Which way its surface faces, in the world, length one. A pool uses what you return; a drop or a puddle does not.</td></tr>
+    </tbody>
+  </table>
+  <p>What you return is tidied here too: nothing is negative, roughness is held between 0.02 and 1 and metallic between 0 and 1.</p>
 
   <h2 id="params">Values you can change</h2>
   <p>A value is a number or color the shader declares, so the script can change it without touching the shader. Declare each with a line near the top that starts <code>//! param</code>, and read it in your function as <code>params.</code> and its name:</p>
@@ -205,17 +254,18 @@ fn screen(in: ScreenIn) -> vec3f {
   Fix this and save the file: the game picks it up by itself.</code></pre>
   </div>
   <p>A shader with no <code>//! param</code> lines says instead how to add one.</p>
-  <p><code>lore check</code> also compiles the other files in <code>shaders</code> that the script did not turn on, so a shader that a menu turns on is checked too, and warns about a file with neither a <code>screen</code> nor a <code>surface</code> function in it.</p>
+  <p><code>lore check</code> also compiles the other files in <code>shaders</code> that the script did not turn on, so a shader that a menu turns on is checked too, and warns about a file with none of a <code>screen</code>, a <code>surface</code> and a <code>fluid</code> function in it.</p>
 
   <h2 id="limits">Limits, and what is not possible yet</h2>
   <ul>
-    <li>8 screen effects and 8 surface shaders at once, with 32 values and 64 KiB of text each.</li>
+    <li>8 screen effects, 8 surface shaders and 8 fluid shaders at once, with 32 values and 64 KiB of text each.</li>
     <li>No <code>loop</code> and no <code>while</code>, and no <code>for</code> without an end: a shader that never finishes would freeze the picture. Use <code>for</code> with a fixed count, as in <code>for (var i = 0; i &lt; 8; i++) { … }</code>.</li>
-    <li>A material has one surface shader: asking for another on the same material replaces it.</li>
+    <li>A material has one surface shader, and a kind of fluid one fluid shader: asking for another replaces it.</li>
+    <li>A fluid shader draws a pool whose fluid is mostly its kind, and the puddles and drops of that kind. A stream of drops in the air takes its color from the shader but not its glow or its shine.</li>
     <li>A screen effect's color is held between 0 and 65504.</li>
   </ul>
-  <p>Not possible yet: pictures (textures) as values, shaders for the sky, water or the HUD, moving a level's vertices, and a library of helpers such as noise. A surface shader changes only what the camera sees: not the shadows a surface casts, the light it bounces, or its reflection in water.</p>
-  <p>Two shaders to read and copy are in the alley example: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/old_photo.wgsl"><code>old_photo.wgsl</code></a>, a screen effect with values, and <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/glow_bands.wgsl"><code>glow_bands.wgsl</code></a>, a surface shader whose bands slide up with the time. Its debug menu turns them on from a function: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/debug_menu.luau"><code>debug_menu.luau</code></a>.</p>
+  <p>Not possible yet: pictures (textures) as values, shaders for the sky or the HUD, moving a level's vertices, and a library of helpers such as noise. A surface shader changes only what the camera sees: not the shadows a surface casts, the light it bounces, or its reflection in water.</p>
+  <p>Two shaders to read and copy are in the alley example: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/old_photo.wgsl"><code>old_photo.wgsl</code></a>, a screen effect with values, and <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/glow_bands.wgsl"><code>glow_bands.wgsl</code></a>, a surface shader whose bands slide up with the time. Three fluid shaders are in the fluid lab: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/fluids/shaders/crust.wgsl"><code>crust.wgsl</code></a>, <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/fluids/shaders/slick.wgsl"><code>slick.wgsl</code></a> and <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/fluids/shaders/pulse.wgsl"><code>pulse.wgsl</code></a>. The alley's debug menu turns its two on from a function: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/debug_menu.luau"><code>debug_menu.luau</code></a>.</p>
 </article>
 </div>
 </main>

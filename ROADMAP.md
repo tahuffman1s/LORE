@@ -185,6 +185,7 @@ Lighting, upscaling, effects and a steady frame rate on mid-range hardware.
 - Sounds are muffled by walls, and distant gunfire sounds distant (#94)
 - Graphics settings: one list for the menu, scripts and the editor, split into "same for everyone" and "player's choice" (#95)
 - Know the graphics card at startup: pick the right one, switch on what it supports, and say so in plain words (#96)
+- Fluid shaders: a game's own WGSL for how a kind of fluid looks, pools and drops alike (#453)
 - No shader hitching: every pipeline is built before play starts, and kept on disk (#97)
 - Hold the frame rate the player asks for: resolution first, then effects, in a measured order (#98)
 - Anti-aliasing as one choice: Smooth, Sharp or Off (#99)
