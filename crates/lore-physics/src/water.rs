@@ -125,7 +125,7 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
             if let Some(already) = already {
                 return Some(Err(already));
             }
-            body(level, *seed, sheet.level).map(Ok)
+            body(level, *seed, sheet.level, AT_LOAD).map(Ok)
         };
         let found = sheet
             .seeds
@@ -210,9 +210,88 @@ impl Sheet {
     }
 }
 
+/// How finely a body is filled: the most points its water may reach, the
+/// fewest points across below which it is filled again finer, and how many
+/// across that finer filling aims at.
+#[derive(Clone, Copy)]
+struct Fineness {
+    most: usize,
+    fewest: i32,
+    wanted: f32,
+}
+
+/// As a level's own water is filled when the level is loaded: once, and as
+/// finely as a lake needs.
+const AT_LOAD: Fineness = Fineness {
+    most: MOST_POINTS,
+    fewest: FEWEST_ACROSS,
+    wanted: WANTED_ACROSS,
+};
+
+/// As a hollow is filled that fluid is found lying in while a game runs:
+/// coarser, so that finding it costs a few thousand rays and not a pause.
+const WHILE_PLAYING: Fineness = Fineness {
+    most: 6000,
+    fewest: 40,
+    wanted: 64.0,
+};
+
+/// How far over the ground fluid found lying in a hollow is taken to
+/// stand, to find the hollow it lies in, in metres.
+const LYING_DEEP: f32 = 0.02;
+/// How far round a place a hollow's sides are looked for, in metres: fluid
+/// lying on a floor with nothing this near to hold it is on a floor, not
+/// in a hollow.
+const HOLLOW_REACH: f32 = 4.0;
+/// How many ways round they are looked for.
+const HOLLOW_WAYS: u8 = 16;
+/// A hollow shallower than this to its brim is a dip in a floor.
+const SHALLOWEST_HOLLOW: f32 = 0.03;
+
+/// The hollow that fluid lying at `place` (a point on the ground, in
+/// metres) lies in, if it lies in one: something that holds it in on every
+/// side within a few metres, as a ditch, a cart, a crater or a bucket does,
+/// and not a floor. It is given as a level's own still water is
+/// ([`fill`]), standing a little over the ground at `place`, with its brim
+/// and where it runs out.
+///
+/// This is for hollows nobody marked, found while a game runs: it looks no
+/// further than a few metres and fills no more finely than a few thousand
+/// points. `level` is asked only about its solid shapes.
+#[must_use]
+pub fn hollow(level: &Level, place: [f32; 3]) -> Option<Water> {
+    if !place.iter().all(|part| part.is_finite()) {
+        return None;
+    }
+    let [x, y, z] = place;
+    let surface = y + LYING_DEEP;
+    // Something has to be in the way on every side, a little over where
+    // the fluid would stand: a rim, a wall, or the ground rising.
+    let from = [x, surface + 0.01, z];
+    let held = (0..HOLLOW_WAYS).all(|way| {
+        let turn = std::f32::consts::TAU * f32::from(way) / f32::from(HOLLOW_WAYS);
+        level
+            .raycast(
+                from,
+                [libm::cosf(turn), 0.0, libm::sinf(turn)],
+                HOLLOW_REACH,
+            )
+            .is_some()
+    });
+    // And the place has to be in the open: fluid that got inside a solid
+    // shape, between two faces that lie together, is in no hollow.
+    if !held || in_ground(level, [x, z], surface) {
+        return None;
+    }
+    let water = body(level, [x, z], surface, WHILE_PLAYING)?;
+    let holds =
+        water.deepest() >= LYING_DEEP * 0.5 && water.brim - water.level >= SHALLOWEST_HOLLOW;
+    holds.then_some(water)
+}
+
 /// The body of water that stands at `surface` and starts from `seed`, or
 /// `None` if there is no bottom under the seed for it to stand on.
-fn body(level: &Level, seed: [f32; 2], surface: f32) -> Option<Water> {
+fn body(level: &Level, seed: [f32; 2], surface: f32, fineness: Fineness) -> Option<Water> {
     let mut cell = FIRST_CELL;
     let mut coarsened = false;
     let mut last = None;
@@ -220,7 +299,7 @@ fn body(level: &Level, seed: [f32; 2], surface: f32) -> Option<Water> {
         // On the coarsest grid there is, water too wide even for that is
         // kept as far as it got: a sea has no far shore to find.
         let coarsest = cell >= COARSEST_CELL;
-        match Flood::run(level, seed, surface, cell, coarsest) {
+        match Flood::run(level, seed, surface, cell, (fineness.most, coarsest)) {
             // Too large for this grid: a coarser one, and no finer again.
             None => {
                 cell = (cell * 2.0).min(COARSEST_CELL);
@@ -233,10 +312,10 @@ fn body(level: &Level, seed: [f32; 2], surface: f32) -> Option<Water> {
             }
             Some(flood) => {
                 let across = flood.across();
-                let fine_enough = across >= FEWEST_ACROSS || cell <= FINEST_CELL || coarsened;
+                let fine_enough = across >= fineness.fewest || cell <= FINEST_CELL || coarsened;
                 // Sizes here are a few hundred at most.
                 #[allow(clippy::cast_precision_loss)]
-                let next = (cell * across.max(1) as f32 / WANTED_ACROSS).max(FINEST_CELL);
+                let next = (cell * across.max(1) as f32 / fineness.wanted).max(FINEST_CELL);
                 last = Some(flood);
                 if fine_enough {
                     break;
@@ -274,6 +353,8 @@ struct Flood {
     seed: [f32; 2],
     surface: f32,
     cell: f32,
+    /// The most points it may reach.
+    most: usize,
     /// How deep the water is at each point it reached. The seed is point
     /// 0, 0.
     wet: HashMap<(i32, i32), f32>,
@@ -309,14 +390,21 @@ impl Flood {
         sprawls(self.low, self.high)
     }
 
-    /// Lets the water run. `None` if it reached more points than a grid
-    /// this fine may have; unless `capped`, when it is kept as far as it
-    /// got.
-    fn run(level: &Level, seed: [f32; 2], surface: f32, cell: f32, capped: bool) -> Option<Self> {
+    /// Lets the water run. `None` if it reached more than `most` points,
+    /// more than a grid this fine may have; unless `capped`, when it is
+    /// kept as far as it got.
+    fn run(
+        level: &Level,
+        seed: [f32; 2],
+        surface: f32,
+        cell: f32,
+        (most, capped): (usize, bool),
+    ) -> Option<Self> {
         let mut flood = Self {
             seed,
             surface,
             cell,
+            most,
             wet: HashMap::new(),
             held: HashMap::new(),
             low: (0, 0),
@@ -360,7 +448,7 @@ impl Flood {
                 flood.wet.insert(there, depth);
                 flood.low = (flood.low.0.min(there.0), flood.low.1.min(there.1));
                 flood.high = (flood.high.0.max(there.0), flood.high.1.max(there.1));
-                if flood.wet.len() > MOST_POINTS {
+                if flood.wet.len() > most {
                     if capped {
                         return Some(flood);
                     }
@@ -392,7 +480,7 @@ impl Flood {
         };
         // A sea filled only as far as its grid could hold has no rim to
         // fill to.
-        let brim = if self.wet.len() > MOST_POINTS {
+        let brim = if self.wet.len() > self.most {
             0.0
         } else {
             rising.brim().max(0.0)

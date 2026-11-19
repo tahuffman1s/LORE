@@ -588,3 +588,93 @@ fn pools_play_out_the_same_every_time() {
     assert!(!first.3.is_empty());
     assert_eq!(first, second);
 }
+
+#[test]
+fn fluid_poured_into_a_tub_nobody_marked_fills_it_and_runs_over() {
+    // The same tub, with no sheet over it: nothing says it is a pool.
+    let mut solid = block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]);
+    solid.extend(tub(0.0, 0.0));
+    let level = level_with(solid, &[]);
+    assert!(level.waters().is_empty());
+    let mut fluids = world(&level);
+    assert!(fluids.pools().is_empty());
+    // A tap over its middle, 60 litres a second.
+    let mut poured = 0.0;
+    let mut found_at = None;
+    for tick in 0..70 * 60 {
+        fluids.spray(HONEY, [0.0, 1.5, 0.0], [0.0, -2.0, 0.0], 60.0 * DT, 0.1);
+        poured += 60.0 * DT;
+        fluids.step(&level, DT);
+        if found_at.is_none() && !fluids.pools().is_empty() {
+            found_at = Some((tick, poured));
+        }
+    }
+    // It was found once enough lay in it to have nowhere to go: a pool of
+    // what was poured, the shape of the tub, with the low wall its way out.
+    let (tick, by_then) = found_at.expect("the tub became a pool");
+    assert!(by_then < 200.0, "found after {by_then} litres, tick {tick}");
+    assert_eq!((fluids.pools().len(), fluids.found().len()), (1, 1));
+    assert_eq!(level.found(), 1);
+    let pool = &fluids.pools()[0];
+    assert_eq!(pool.kind(), HONEY);
+    assert!(close(pool.brim(), 0.77, 0.03), "{}", pool.brim());
+    assert!(close(pool.capacity(), 3080.0, 150.0), "{}", pool.capacity());
+    let spill = pool.spill().expect("a way out");
+    assert!(spill[0] > 1.19 && spill[2].abs() < 0.3, "{spill:?}");
+    // 4200 litres went in, faster than a rim lets out: it is full, with
+    // what waits to run out standing over its brim, and the rest ran out
+    // over the low wall. Whoever wades in is told it is honey.
+    let over = pool.litres() - pool.capacity();
+    assert!((0.0..=501.0).contains(&over), "{over} litres over its brim");
+    assert!(pool.spilled() > 0.0);
+    let here = level.pool_at(0.0, 0.0).expect("honey in the tub");
+    assert!(close(here.surface, pool.brim(), 0.01), "{here:?}");
+    assert!(close(here.medium.density, 1.4, 1.0e-3), "{here:?}");
+    let outside = fluids
+        .drops()
+        .iter()
+        .filter(|drop| drop.place[0] > 1.19)
+        .count();
+    assert!(outside > 20, "{outside} drops outside");
+    // Nothing was made: what is in the tub and what ran out is no more
+    // than was poured.
+    let all = pool.litres() + fluids.litres(None);
+    assert!(all <= poured + 1.0, "{all} of {poured}");
+}
+
+#[test]
+fn fluid_poured_on_an_open_floor_stays_puddles() {
+    let level = level_with(block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]), &[]);
+    let mut fluids = world(&level);
+    for _ in 0..10 * 60 {
+        fluids.spray(0, [0.0, 1.5, 0.0], [0.0, -2.0, 0.0], 30.0 * DT, 0.1);
+        fluids.step(&level, DT);
+    }
+    assert!(fluids.pools().is_empty(), "a floor is no hollow");
+    assert!(fluids.litres(Some(0)) > 250.0, "{}", fluids.litres(Some(0)));
+}
+
+#[test]
+fn a_found_hollow_plays_out_the_same_every_time() {
+    let played = || {
+        let mut solid = block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]);
+        solid.extend(tub(0.0, 0.0));
+        let level = level_with(solid, &[]);
+        let mut fluids = world(&level);
+        for _ in 0..600 {
+            fluids.spray(0, [0.2, 1.5, 0.1], [0.0, -2.0, 0.0], 40.0 * DT, 0.2);
+            fluids.step(&level, DT);
+        }
+        let pool = fluids.pools().first().map(|pool| {
+            (
+                pool.litres().to_bits(),
+                pool.surface().to_bits(),
+                pool.brim().to_bits(),
+            )
+        });
+        (pool, fluids.drops().to_vec())
+    };
+    let (first, second) = (played(), played());
+    assert!(first.0.is_some(), "the tub was found");
+    assert_eq!(first, second);
+}

@@ -57,6 +57,30 @@ pub struct Level {
     ice: Rise,
     /// How each of the waters stands now, in their order.
     standing: Vec<Standing>,
+    /// The hollows found while a game runs, and how each stands.
+    found: Found,
+}
+
+/// Hollows that fluid was found lying in while a game ran, each with how
+/// it stands: said through a level many hold, as the rise and the ice are.
+#[derive(Default)]
+struct Found(std::sync::RwLock<Vec<(std::sync::Arc<Water>, Standing)>>);
+
+impl Found {
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<(std::sync::Arc<Water>, Standing)>> {
+        // A holder that panicked while it had the list left it whole.
+        (self.0.read()).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Vec<(std::sync::Arc<Water>, Standing)>> {
+        (self.0.write()).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Clone for Found {
+    fn clone(&self) -> Self {
+        Self(std::sync::RwLock::new(self.read().clone()))
+    }
 }
 
 /// How one body of still fluid stands, said through a level many hold.
@@ -194,67 +218,123 @@ impl Level {
         self.set_ice(self.ice.get());
     }
 
-    /// The bodies of still fluid that are not frozen over, each with which
-    /// it is and how far over where it was put its surface stands.
-    fn open(&self) -> impl Iterator<Item = (usize, &Water, f32)> {
-        self.waters
-            .iter()
-            .zip(&self.standing)
+    /// Lends every body of still fluid the level has, the level's own and
+    /// then the hollows found since ([`set_found`](Self::set_found)): each
+    /// with which it is, its shape, and how it stands now.
+    fn bodies<R>(
+        &self,
+        with: impl FnOnce(&mut dyn Iterator<Item = (usize, &Water, &Standing)>) -> R,
+    ) -> R {
+        let found = self.found.read();
+        let mut all = (self.waters.iter().zip(&self.standing))
+            .chain(found.iter().map(|(water, standing)| (&**water, standing)))
             .enumerate()
-            .filter(|(_, (_, standing))| standing.frozen.get() < 0.5)
-            .map(|(index, (water, standing))| (index, water, standing.shift.get()))
+            .map(|(index, (water, standing))| (index, water, standing));
+        with(&mut all)
     }
 
-    /// The bodies of still fluid that are frozen thick enough to walk on,
-    /// each with how far over where it was put its surface stands.
-    fn iced(&self) -> impl Iterator<Item = (&Water, f32)> {
-        self.waters
-            .iter()
-            .zip(&self.standing)
-            .filter(|(_, standing)| standing.frozen.get() >= 0.5)
-            .map(|(water, standing)| (water, standing.shift.get()))
+    /// The still fluid there is at a place, of the bodies that are not
+    /// frozen over: the one whose surface stands highest, of those `there`
+    /// says how deep they are for (their own depth where they were put).
+    fn highest(&self, there: impl Fn(&Water, f32) -> Option<f32>) -> Option<PoolHere> {
+        self.bodies(|all| {
+            all.filter(|(_, _, standing)| standing.frozen.get() < 0.5)
+                .filter_map(|(index, water, standing)| {
+                    let shift = standing.shift.get();
+                    there(water, shift).map(|deep| PoolHere {
+                        index,
+                        surface: water.level + shift,
+                        deep: deep + shift,
+                        medium: Medium {
+                            density: standing.density.get(),
+                            viscosity: standing.viscosity.get(),
+                        },
+                    })
+                })
+                .reduce(|one, other| {
+                    if other.surface > one.surface {
+                        other
+                    } else {
+                        one
+                    }
+                })
+        })
     }
 
-    /// What body `index` of [`waters`](Self::waters) holds, to someone in it.
-    fn medium(&self, index: usize) -> Medium {
-        self.standing
-            .get(index)
-            .map_or(Medium::WATER, |standing| Medium {
-                density: standing.density.get(),
-                viscosity: standing.viscosity.get(),
-            })
-    }
-
-    /// Says how body `index` of [`waters`](Self::waters) stands: how far
-    /// from where it was put, whether it is frozen, and what it holds.
-    /// A body there is none of is nobody's to say.
+    /// Says how body `index` stands: how far from where it was put,
+    /// whether it is frozen, and what it holds. The level's own waters
+    /// ([`waters`](Self::waters)) are numbered first, then the hollows
+    /// found since ([`set_found`](Self::set_found)). A body there is none
+    /// of is nobody's to say.
     ///
     /// Like the rise and the ice this is shared by everyone who holds the
     /// level: a world says it before each step it takes, after
     /// [`set_water_rise`](Self::set_water_rise) and
     /// [`set_ice`](Self::set_ice), which say the same of every body.
     pub fn set_pool(&self, index: usize, stand: Stand) {
-        let (Some(water), Some(standing)) = (self.waters.get(index), self.standing.get(index))
-        else {
-            return;
-        };
         let medium = stand.medium.cleaned();
-        standing.shift.set(water.stood(stand.shift));
-        standing.frozen.set(f32::from(u8::from(stand.frozen)));
-        standing.density.set(medium.density);
-        standing.viscosity.set(medium.viscosity);
+        self.bodies(|all| {
+            if let Some((_, water, standing)) = all.nth(index) {
+                standing.shift.set(water.stood(stand.shift));
+                standing.frozen.set(f32::from(u8::from(stand.frozen)));
+                standing.density.set(medium.density);
+                standing.viscosity.set(medium.viscosity);
+            }
+        });
     }
 
-    /// How body `index` of [`waters`](Self::waters) stands, if there is
-    /// one.
+    /// How body `index` stands, if there is one.
     #[must_use]
     pub fn pool(&self, index: usize) -> Option<Stand> {
-        let standing = self.standing.get(index)?;
-        Some(Stand {
-            shift: standing.shift.get(),
-            frozen: standing.frozen.get() >= 0.5,
-            medium: self.medium(index),
+        self.bodies(|all| {
+            all.nth(index).map(|(_, _, standing)| Stand {
+                shift: standing.shift.get(),
+                frozen: standing.frozen.get() >= 0.5,
+                medium: Medium {
+                    density: standing.density.get(),
+                    viscosity: standing.viscosity.get(),
+                },
+            })
         })
+    }
+
+    /// Says which hollows have been found since the level was made: fluid
+    /// lay in them, and they hold it as the level's own waters do
+    /// ([`hollow`](crate::hollow) finds one). They are numbered after the
+    /// level's own waters, in this order. One that was already said keeps
+    /// how it stands; a new one stands empty until it is said otherwise.
+    ///
+    /// Shared by everyone who holds the level, as how the waters stand is:
+    /// a world says it before each step it takes.
+    pub fn set_found(&self, hollows: &[std::sync::Arc<Water>]) {
+        let mut found = self.found.write();
+        if found.len() == hollows.len()
+            && (found.iter().zip(hollows)).all(|((have, _), new)| std::sync::Arc::ptr_eq(have, new))
+        {
+            return;
+        }
+        let mut next = Vec::with_capacity(hollows.len());
+        for hollow in hollows {
+            let standing = found
+                .iter()
+                .find(|(have, _)| std::sync::Arc::ptr_eq(have, hollow))
+                .map_or_else(
+                    || {
+                        let standing = Standing::default();
+                        standing.shift.set(-hollow.deepest());
+                        standing
+                    },
+                    |(_, standing)| standing.clone(),
+                );
+            next.push((std::sync::Arc::clone(hollow), standing));
+        }
+        *found = next;
+    }
+
+    /// How many hollows have been found since the level was made.
+    #[must_use]
+    pub fn found(&self) -> usize {
+        self.found.read().len()
     }
 
     /// The still fluid that `point` is in or under the surface of, if it
@@ -265,62 +345,38 @@ impl Level {
     pub fn pool_around(&self, [x, y, z]: [f32; 3]) -> Option<PoolHere> {
         // Feet rest a little in the bed they stand on.
         let slack = 0.5;
-        self.open()
-            .filter_map(|(index, water, shift)| {
-                // The bed is where it was; the surface is higher or lower.
-                let deep = water.depth_at(x, z);
-                (deep + shift > 0.0 && y > water.level - deep - slack).then(|| PoolHere {
-                    index,
-                    surface: water.level + shift,
-                    deep: deep + shift,
-                    medium: self.medium(index),
-                })
-            })
-            .reduce(|one, other| {
-                if other.surface > one.surface {
-                    other
-                } else {
-                    one
-                }
-            })
+        self.highest(|water, shift| {
+            // The bed is where it was; the surface is higher or lower.
+            let deep = water.depth_at(x, z);
+            (deep + shift > 0.0 && y > water.level - deep - slack).then_some(deep)
+        })
     }
 
     /// The hollow of still fluid that `x`, `z` is over, whether or not
-    /// anything stands in it now: which of [`waters`](Self::waters) it is,
-    /// and how high its bed is there. Of several, the one whose bed is
-    /// highest; none that is frozen over. An empty basin is found by this
-    /// and by nothing else here.
+    /// anything stands in it now: which body it is, and how high its bed
+    /// is there. Of several, the one whose bed is highest; none that is
+    /// frozen over. An empty basin is found by this and by nothing else
+    /// here.
     #[must_use]
     pub fn hollow_at(&self, x: f32, z: f32) -> Option<(usize, f32)> {
-        self.open()
-            .filter_map(|(index, water, _)| {
-                let deep = water.depth_at(x, z);
-                (deep > 0.0).then_some((index, water.level - deep))
-            })
-            .reduce(|one, other| if other.1 > one.1 { other } else { one })
+        self.bodies(|all| {
+            all.filter(|(_, _, standing)| standing.frozen.get() < 0.5)
+                .filter_map(|(index, water, _)| {
+                    let deep = water.depth_at(x, z);
+                    (deep > 0.0).then_some((index, water.level - deep))
+                })
+                .reduce(|one, other| if other.1 > one.1 { other } else { one })
+        })
     }
 
     /// The still fluid over `x`, `z`, if there is any that is not frozen
     /// over: the one whose surface stands highest.
     #[must_use]
     pub fn pool_at(&self, x: f32, z: f32) -> Option<PoolHere> {
-        self.open()
-            .filter_map(|(index, water, shift)| {
-                let deep = water.depth_at(x, z);
-                (deep + shift > 0.0).then(|| PoolHere {
-                    index,
-                    surface: water.level + shift,
-                    deep: deep + shift,
-                    medium: self.medium(index),
-                })
-            })
-            .reduce(|one, other| {
-                if other.surface > one.surface {
-                    other
-                } else {
-                    one
-                }
-            })
+        self.highest(|water, shift| {
+            let deep = water.depth_at(x, z);
+            (deep + shift > 0.0).then_some(deep)
+        })
     }
 
     /// The solid shapes of `scene`, with no water in them yet.
@@ -372,6 +428,8 @@ impl Level {
     pub fn set_water_rise(&self, rise: f32) {
         let rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
         self.rise.set(rise);
+        // The level's own waters: a hollow found since holds what was
+        // poured into it, and rain does not fill it.
         for (water, standing) in self.waters.iter().zip(&self.standing) {
             standing.shift.set(water.risen(rise));
         }
@@ -401,9 +459,11 @@ impl Level {
         };
         self.ice.set(thickness);
         let frozen = f32::from(u8::from(thickness >= Self::ICE_BEARS));
-        for standing in &self.standing {
-            standing.frozen.set(frozen);
-        }
+        self.bodies(|all| {
+            for (_, _, standing) in all {
+                standing.frozen.set(frozen);
+            }
+        });
     }
 
     /// How thick the ice on the level's still water is, in metres.
@@ -428,13 +488,15 @@ impl Level {
     pub fn ice_around(&self, [x, y, z]: [f32; 3]) -> Option<f32> {
         // Feet rest a little in the bed they stand on.
         let slack = 0.5;
-        self.iced()
-            .filter(|(water, shift)| {
-                let deep = water.depth_at(x, z);
-                deep + shift > 0.0 && y > water.level - deep - slack
-            })
-            .map(|(water, shift)| water.level + shift)
-            .reduce(f32::max)
+        self.bodies(|all| {
+            all.filter(|(_, _, standing)| standing.frozen.get() >= 0.5)
+                .filter_map(|(_, water, standing)| {
+                    let (deep, shift) = (water.depth_at(x, z), standing.shift.get());
+                    (deep + shift > 0.0 && y > water.level - deep - slack)
+                        .then_some(water.level + shift)
+                })
+                .reduce(f32::max)
+        })
     }
 
     /// How high the surface of the still water that `point` is in or
@@ -450,9 +512,11 @@ impl Level {
     /// bed, in metres; nothing where there is none.
     #[must_use]
     pub fn water_depth(&self, x: f32, z: f32) -> f32 {
-        self.open()
-            .map(|(_, water, shift)| water.depth_at(x, z) + shift)
-            .fold(0.0, f32::max)
+        self.bodies(|all| {
+            all.filter(|(_, _, standing)| standing.frozen.get() < 0.5)
+                .map(|(_, water, standing)| water.depth_at(x, z) + standing.shift.get())
+                .fold(0.0, f32::max)
+        })
     }
 
     /// The still water of the level: each lake, pond and pool in the
@@ -491,6 +555,7 @@ impl Level {
             rise: Rise::default(),
             ice: Rise::default(),
             standing: Vec::new(),
+            found: Found::default(),
         }
     }
 
