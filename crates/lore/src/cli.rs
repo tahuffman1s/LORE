@@ -589,6 +589,7 @@ pub fn packaged(packaged: &crate::package::Packaged) -> String {
         size,
         files,
         icon,
+        appimage,
         left_out,
     } = packaged;
     let mut said = format!(
@@ -600,6 +601,24 @@ pub fn packaged(packaged: &crate::package::Packaged) -> String {
         size_text(*size),
         if *files == 1 { "file" } else { "files" },
     );
+    if let Some(appimage) = appimage {
+        let file = appimage.path.file_name().map_or_else(
+            || appimage.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        // Writing to a `String` cannot fail.
+        let _ = writeln!(
+            said,
+            "And as one file: {} ({}). A player downloads it and runs it.\n\
+             A file that was downloaded runs once it is allowed to: in the file manager, \
+             Properties, \"Allow executing file as program\"; in a terminal, \
+             `chmod +x {file}`.\n\
+             If it says it cannot mount itself, the system has no FUSE: \
+             `APPIMAGE_EXTRACT_AND_RUN=1 ./{file}` runs it all the same.",
+            appimage.path.display(),
+            size_text(appimage.size),
+        );
+    }
     if !icon {
         // Writing to a `String` cannot fail.
         let _ = writeln!(
@@ -832,6 +851,7 @@ mod tests {
             size: 13_000_000,
             files: 1,
             icon: true,
+            appimage: None,
             left_out: Vec::new(),
         };
         let said = super::packaged(&packaged);

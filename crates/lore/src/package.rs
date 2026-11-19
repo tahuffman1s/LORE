@@ -14,13 +14,30 @@
 //!   Game.desktop    for adding the game to the applications menu
 //!   licenses/       the licence of the font the program draws text in
 //! ```
+//!
+//! Asked for, there is also `Game-x86_64.AppImage`: one file a player
+//! downloads and runs. It is AppImage's own runtime (`crates/lore/appimage/`)
+//! followed by a squashfs image of the game, written here with no outside
+//! tool:
+//!
+//! ```text
+//! AppRun            -> usr/bin/Game, which the runtime starts
+//! Game.desktop      what the game is called, for the applications menu
+//! Game.png          its icon, or a plain one if the game has none
+//! .DirIcon          -> Game.png
+//! usr/bin/Game      the program; it plays the pack beside it
+//! usr/bin/Game.lpk  the game's files
+//! licenses/         the font's licence and the runtime's
+//! ```
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use backhand::compression::Compressor;
+use backhand::{BackhandError, FilesystemCompressor, FilesystemWriter, NodeHeader};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use lore_pack::{EXTENSION, PackError, Source};
@@ -33,6 +50,13 @@ use crate::scaffold::TYPES_FILE;
 /// is built in are still to come (#144).
 const FONT_LICENSE: &str = include_str!("../../lore-render/fonts/OFL.txt");
 const FONT_LICENSE_FILE: &str = "licenses/AtkinsonHyperlegibleNext-OFL.txt";
+
+/// The AppImage runtime (type 2, release 20251108, MIT): the program at the
+/// front of an AppImage, which mounts the image behind it and starts the
+/// game. See `crates/lore/appimage/README.md` for where it is from.
+const APPIMAGE_RUNTIME: &[u8] = include_bytes!("../appimage/runtime-x86_64");
+const APPIMAGE_RUNTIME_LICENSE: &str = include_str!("../appimage/LICENSE");
+const APPIMAGE_RUNTIME_LICENSE_FILE: &str = "licenses/AppImage-runtime-MIT.txt";
 
 /// The folder inside a game's folder that packages are written to.
 pub const OUT_FOLDER: &str = "dist";
@@ -70,9 +94,20 @@ pub struct Packaged {
     pub files: usize,
     /// Whether the game has an icon.
     pub icon: bool,
+    /// The AppImage that was written, if one was asked for.
+    pub appimage: Option<AppImage>,
     /// Links and files with unreadable names in the game's folder, which
     /// were left out.
     pub left_out: Vec<PathBuf>,
+}
+
+/// A game packaged as one AppImage file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppImage {
+    /// The file that was written.
+    pub path: PathBuf,
+    /// Its size in bytes.
+    pub size: u64,
 }
 
 /// Why a game was not packaged.
@@ -115,6 +150,13 @@ pub enum PackageError {
     },
     /// The game's files could not be packed.
     Pack(PackError),
+    /// The image inside the AppImage could not be written.
+    AppImage {
+        /// The AppImage being written.
+        path: PathBuf,
+        /// What went wrong.
+        source: BackhandError,
+    },
 }
 
 impl fmt::Display for PackageError {
@@ -167,6 +209,13 @@ impl fmt::Display for PackageError {
                 path.display()
             ),
             Self::Pack(error) => error.fmt(f),
+            Self::AppImage { path, source } => write!(
+                f,
+                "Could not write the AppImage {}: {source}. The .tar.gz was written. \
+                 Check that the disk has room and that the game's dist folder can be \
+                 written to, or package without --appimage to make the .tar.gz alone.",
+                path.display()
+            ),
         }
     }
 }
@@ -176,6 +225,7 @@ impl std::error::Error for PackageError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Pack(error) => Some(error),
+            Self::AppImage { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -227,7 +277,8 @@ pub fn file_name(name: &str) -> String {
     }
 }
 
-/// Packages the game in `game` for Linux, into the folder `dist` inside it.
+/// Packages the game in `game` for Linux, into the folder `dist` inside it:
+/// a `.tar.gz`, and with `appimage` an AppImage as well.
 ///
 /// The engine program put in the package is `lore-linux-x86_64` from
 /// `runtime_dir` if one is given, and otherwise this running program, when
@@ -239,7 +290,11 @@ pub fn file_name(name: &str) -> String {
 /// to use, or something cannot be read or written. Nothing half-written is
 /// left behind, and an archive from an earlier run is only replaced by a
 /// whole new one.
-pub fn package_linux(game: &Path, runtime_dir: Option<&Path>) -> Result<Packaged, PackageError> {
+pub fn package_linux(
+    game: &Path,
+    runtime_dir: Option<&Path>,
+    appimage: bool,
+) -> Result<Packaged, PackageError> {
     let name = std::path::absolute(game)
         .ok()
         .as_deref()
@@ -261,33 +316,47 @@ pub fn package_linux(game: &Path, runtime_dir: Option<&Path>) -> Result<Packaged
     let out = game.join(OUT_FOLDER);
     fs::create_dir_all(&out).map_err(io_error(&out))?;
     let archive = out.join(format!("{file_name}-linux-x86_64.tar.gz"));
-    // Both are written under another name first, so a run that fails leaves
+    let image = out.join(format!("{file_name}-x86_64.AppImage"));
+    // All are written under another name first, so a run that fails leaves
     // no file that looks finished.
     let pack = out.join(format!("{file_name}.{EXTENSION}.part"));
     let part = out.join(format!("{file_name}-linux-x86_64.tar.gz.part"));
+    let image_part = out.join(format!("{file_name}-x86_64.AppImage.part"));
 
+    let parts = LinuxParts {
+        name: &name,
+        file_name: &file_name,
+        runtime: &runtime,
+        pack: &pack,
+        icon: icon.as_deref(),
+    };
     let written = lore_pack::write(&pack, &name, &files)
         .map_err(PackageError::from)
-        .and_then(|_| {
-            let parts = LinuxParts {
-                name: &name,
-                file_name: &file_name,
-                runtime: &runtime,
-                pack: &pack,
-                icon: icon.as_deref(),
-            };
-            write_archive(&part, &parts)
-        })
-        .and_then(|()| fs::rename(&part, &archive).map_err(io_error(&archive)));
+        .and_then(|_| write_archive(&part, &parts))
+        .and_then(|()| fs::rename(&part, &archive).map_err(io_error(&archive)))
+        .and_then(|()| {
+            if !appimage {
+                return Ok(());
+            }
+            write_appimage(&image_part, &parts)
+                .and_then(|()| fs::rename(&image_part, &image).map_err(io_error(&image)))
+        });
     // Best effort: the error worth reporting is the one that stopped the
     // package being made.
     let _ = fs::remove_file(&pack);
     if written.is_err() {
         let _ = fs::remove_file(&part);
+        let _ = fs::remove_file(&image_part);
     }
     written?;
 
     let size = fs::metadata(&archive).map_err(io_error(&archive))?.len();
+    let appimage = if appimage {
+        let size = fs::metadata(&image).map_err(io_error(&image))?.len();
+        Some(AppImage { path: image, size })
+    } else {
+        None
+    };
     Ok(Packaged {
         name,
         file_name,
@@ -295,6 +364,7 @@ pub fn package_linux(game: &Path, runtime_dir: Option<&Path>) -> Result<Packaged
         size,
         files: files.len(),
         icon: icon.is_some(),
+        appimage,
         left_out,
     })
 }
@@ -517,6 +587,152 @@ fn entry_header(kind: tar::EntryType, size: u64, mode: u32, time: u64) -> tar::H
     header
 }
 
+/// Writes the AppImage to `out`: the runtime, then a squashfs image holding
+/// the game (see the top of this file for what is where).
+///
+/// `AppRun` is a link to the program rather than the program itself, so the
+/// program's own path, which the system gives with links followed, ends in
+/// its own name, and it finds its pack beside it as it does unpacked.
+fn write_appimage(out: &Path, parts: &LinuxParts<'_>) -> Result<(), PackageError> {
+    let folder = parts.file_name;
+    let squashfs = |source| PackageError::AppImage {
+        path: out.to_owned(),
+        source,
+    };
+    // A squashfs keeps 32-bit times, which run out in 2106.
+    let time = u32::try_from(archive_time()).unwrap_or(u32::MAX);
+    let header = |mode| NodeHeader::new(mode, 0, 0, time);
+    let icon = match parts.icon {
+        Some(icon) => icon.to_vec(),
+        None => plain_icon().map_err(io_error(out))?,
+    };
+    let desktop = appimage_desktop_entry(parts.name, folder);
+    let program = format!("usr/bin/{folder}");
+    let picture = format!("{folder}.png");
+
+    let mut image = FilesystemWriter::default();
+    image.set_compressor(FilesystemCompressor::new(Compressor::Zstd, None).map_err(squashfs)?);
+    image.set_time(time);
+    image.set_root_mode(0o755);
+    image.set_only_root_id();
+    let pushed = image
+        .push_dir_all("usr/bin", header(0o755))
+        .and_then(|()| image.push_file_from_path(parts.runtime, &program, header(0o755)))
+        .and_then(|()| {
+            image.push_file_from_path(parts.pack, format!("{program}.{EXTENSION}"), header(0o644))
+        })
+        .and_then(|()| image.push_symlink(program.as_str(), "AppRun", header(0o777)))
+        .and_then(|()| {
+            image.push_file(
+                Cursor::new(desktop.as_bytes()),
+                format!("{folder}.desktop"),
+                header(0o644),
+            )
+        })
+        .and_then(|()| image.push_file(Cursor::new(&icon[..]), &picture, header(0o644)))
+        .and_then(|()| image.push_symlink(picture.as_str(), ".DirIcon", header(0o777)))
+        .and_then(|()| image.push_dir("licenses", header(0o755)))
+        .and_then(|()| {
+            image.push_file(
+                Cursor::new(FONT_LICENSE.as_bytes()),
+                FONT_LICENSE_FILE,
+                header(0o644),
+            )
+        })
+        .and_then(|()| {
+            image.push_file(
+                Cursor::new(APPIMAGE_RUNTIME_LICENSE.as_bytes()),
+                APPIMAGE_RUNTIME_LICENSE_FILE,
+                header(0o644),
+            )
+        });
+    pushed.map_err(squashfs)?;
+
+    let writing = io_error(out);
+    let mut file = BufWriter::new(File::create(out).map_err(&writing)?);
+    // The runtime looks for the image where its own section headers end,
+    // which is where its file ends.
+    file.write_all(APPIMAGE_RUNTIME).map_err(&writing)?;
+    image
+        .write_with_offset(&mut file, APPIMAGE_RUNTIME.len() as u64)
+        .map_err(squashfs)?;
+    let file = file
+        .into_inner()
+        .map_err(|error| writing(error.into_error()))?;
+    file.sync_all().map_err(&writing)?;
+    // A player runs it as it is.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o755))
+            .map_err(&writing)?;
+    }
+    Ok(())
+}
+
+/// The `.desktop` file inside an AppImage: the program and the icon are
+/// named, not given as paths, because the AppImage tools that add it to the
+/// applications menu fill in where they are.
+fn appimage_desktop_entry(name: &str, file_name: &str) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name={}\n\
+         Exec={file_name}\n\
+         Icon={file_name}\n\
+         Terminal=false\n\
+         Categories={CATEGORIES}\n",
+        shown_name(name)
+    )
+}
+
+/// The kind of program a game is, for the applications menu.
+const CATEGORIES: &str = "Game;AdventureGame;ActionGame;";
+
+/// A game's name as a desktop entry can hold it: on one line, and with its
+/// backslashes, which start an escape there, doubled.
+fn shown_name(name: &str) -> String {
+    name.chars()
+        .map(|letter| if letter.is_control() { ' ' } else { letter })
+        .collect::<String>()
+        .replace('\\', "\\\\")
+}
+
+/// The icon of a game that has none: a square of dusk sky over dark land,
+/// 256 pixels across. An AppImage must carry an icon, and a plain one is
+/// better than none in a menu.
+fn plain_icon() -> io::Result<Vec<u8>> {
+    const SIZE: u32 = 256;
+    const SKY_TOP: [f32; 3] = [38.0, 52.0, 98.0];
+    const SKY_LOW: [f32; 3] = [236.0, 150.0, 82.0];
+    const LAND: [f32; 3] = [28.0, 30.0, 36.0];
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 3) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            // A low hill: higher in the middle.
+            let across = (x as f32 / SIZE as f32 - 0.5) * 2.0;
+            let horizon = SIZE as f32 * (0.68 - 0.08 * (1.0 - across * across));
+            let colour = if (y as f32) >= horizon {
+                LAND
+            } else {
+                let share = y as f32 / horizon;
+                [0, 1, 2].map(|part| SKY_TOP[part] + (SKY_LOW[part] - SKY_TOP[part]) * share)
+            };
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            pixels.extend(colour.map(|part| part.round().clamp(0.0, 255.0) as u8));
+        }
+    }
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, SIZE, SIZE);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&pixels))
+        .map_err(io::Error::other)?;
+    Ok(out)
+}
+
 /// The time written on every file in an archive, in seconds since 1970:
 /// `SOURCE_DATE_EPOCH` if it is set, as tools that make the same build twice
 /// expect, and otherwise now. Never 0, which `tar` warns about on unpacking.
@@ -541,13 +757,7 @@ fn archive_time() -> u64 {
 /// are full paths or names the system already knows. So this one is ready to
 /// be copied into the applications menu, and its first lines say how.
 fn desktop_entry(name: &str, file_name: &str, icon: bool) -> String {
-    // A backslash starts an escape in a desktop entry, and a value ends at
-    // the end of its line.
-    let shown: String = name
-        .chars()
-        .map(|letter| if letter.is_control() { ' ' } else { letter })
-        .collect::<String>()
-        .replace('\\', "\\\\");
+    let shown = shown_name(name);
     let picture = if icon {
         format!(" and Icon to\n# the full path of {file_name}.png")
     } else {
@@ -565,7 +775,7 @@ fn desktop_entry(name: &str, file_name: &str, icon: bool) -> String {
     if icon {
         entry.push_str(&format!("Icon={file_name}\n"));
     }
-    entry.push_str("Terminal=false\nCategories=Game;ActionGame;Shooter;\n");
+    entry.push_str(&format!("Terminal=false\nCategories={CATEGORIES}\n"));
     entry
 }
 
@@ -642,7 +852,7 @@ mod tests {
         fs::create_dir(game.join("levels")).unwrap();
         fs::write(game.join("levels/dust.glb"), [1, 2, 3]).unwrap();
 
-        let packaged = package_linux(&game, Some(&runtime)).unwrap();
+        let packaged = package_linux(&game, Some(&runtime), false).unwrap();
 
         assert_eq!(packaged.name, "Zombie Night");
         assert_eq!(packaged.file_name, "Zombie-Night");
@@ -727,9 +937,9 @@ mod tests {
             fs::write(path, "x").unwrap();
         }
 
-        let first = package_linux(&game, Some(&runtime)).unwrap();
+        let first = package_linux(&game, Some(&runtime), false).unwrap();
         // A second run does not pack the first one's archive.
-        let second = package_linux(&game, Some(&runtime)).unwrap();
+        let second = package_linux(&game, Some(&runtime), false).unwrap();
 
         assert_eq!((first.files, second.files), (3, 3));
         let entries = unpacked(&second.archive);
@@ -749,7 +959,7 @@ mod tests {
         icon.extend_from_slice(b"pretend picture");
         fs::write(game.join(ICON_FILE), &icon).unwrap();
 
-        let packaged = package_linux(&game, Some(&runtime)).unwrap();
+        let packaged = package_linux(&game, Some(&runtime), false).unwrap();
 
         assert!(packaged.icon);
         let entries = unpacked(&packaged.archive);
@@ -764,7 +974,7 @@ mod tests {
         let (game, runtime) = game("bad-icon", "my-game");
         fs::write(game.join(ICON_FILE), "<svg/>").unwrap();
 
-        let said = package_linux(&game, Some(&runtime))
+        let said = package_linux(&game, Some(&runtime), false)
             .unwrap_err()
             .to_string();
 
@@ -777,7 +987,7 @@ mod tests {
         let (game, runtime) = game("no-script", "my-game");
         fs::remove_file(game.join("main.luau")).unwrap();
 
-        let said = package_linux(&game, Some(&runtime))
+        let said = package_linux(&game, Some(&runtime), false)
             .unwrap_err()
             .to_string();
 
@@ -790,13 +1000,13 @@ mod tests {
         let (game, runtime) = game("runtime", "my-game");
 
         fs::write(runtime.join(LINUX_RUNTIME), b"MZ a Windows program").unwrap();
-        let said = package_linux(&game, Some(&runtime))
+        let said = package_linux(&game, Some(&runtime), false)
             .unwrap_err()
             .to_string();
         assert!(said.contains("is not a Linux program"), "{said}");
 
         fs::remove_file(runtime.join(LINUX_RUNTIME)).unwrap();
-        let said = package_linux(&game, Some(&runtime))
+        let said = package_linux(&game, Some(&runtime), false)
             .unwrap_err()
             .to_string();
         assert!(said.contains("called lore-linux-x86_64"), "{said}");
@@ -806,7 +1016,7 @@ mod tests {
     #[test]
     fn a_failed_run_keeps_the_last_good_archive_and_leaves_no_parts() {
         let (game, runtime) = game("failed", "my-game");
-        let good = package_linux(&game, Some(&runtime)).unwrap();
+        let good = package_linux(&game, Some(&runtime), false).unwrap();
         let before = fs::read(&good.archive).unwrap();
         // A name a pack refuses, on every system that allows it in a file name.
         let awkward = game.join("bell\u{7}.txt");
@@ -814,7 +1024,7 @@ mod tests {
             return;
         }
 
-        let said = package_linux(&game, Some(&runtime))
+        let said = package_linux(&game, Some(&runtime), false)
             .unwrap_err()
             .to_string();
 
@@ -829,10 +1039,184 @@ mod tests {
         let (game, runtime) = game("links", "my-game");
         std::os::unix::fs::symlink("/etc/hostname", game.join("secret.txt")).unwrap();
 
-        let packaged = package_linux(&game, Some(&runtime)).unwrap();
+        let packaged = package_linux(&game, Some(&runtime), false).unwrap();
 
         assert_eq!(packaged.files, 1);
         assert_eq!(packaged.left_out, [game.join("secret.txt")]);
+    }
+
+    /// What is in the image of the AppImage at `path`, after the runtime:
+    /// each entry's path (from the root, with no leading `/`), mode, and
+    /// bytes for a file or where it points for a link.
+    fn in_appimage(path: &Path) -> BTreeMap<String, (u16, Vec<u8>)> {
+        let file = io::BufReader::new(File::open(path).unwrap());
+        let image = backhand::FilesystemReader::from_reader_with_offset(
+            file,
+            APPIMAGE_RUNTIME.len() as u64,
+        )
+        .unwrap();
+        image
+            .files()
+            .filter_map(|node| {
+                // Joined with `/` whatever this system uses: the image keeps
+                // each part of a path apart.
+                let name = node
+                    .fullpath
+                    .components()
+                    .filter_map(|part| match part {
+                        std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let what = match &node.inner {
+                    backhand::InnerNode::File(file) => {
+                        let mut bytes = Vec::new();
+                        image.file(file).reader().read_to_end(&mut bytes).unwrap();
+                        bytes
+                    }
+                    backhand::InnerNode::Symlink(link) => {
+                        link.link.to_string_lossy().into_owned().into_bytes()
+                    }
+                    backhand::InnerNode::Dir(_) => Vec::new(),
+                    _ => panic!("{name} is neither a file, a link nor a folder"),
+                };
+                (!name.is_empty()).then_some((name, (node.header.permissions, what)))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_appimage_is_the_runtime_then_the_game_with_the_program_beside_its_pack() {
+        let (game, runtime) = game("appimage", "Zombie Night");
+
+        let packaged = package_linux(&game, Some(&runtime), true).unwrap();
+
+        let appimage = packaged.appimage.clone().unwrap();
+        assert_eq!(
+            appimage.path,
+            game.join("dist/Zombie-Night-x86_64.AppImage")
+        );
+        assert_eq!(appimage.size, fs::metadata(&appimage.path).unwrap().len());
+        // The .tar.gz is made as well.
+        assert!(packaged.archive.is_file());
+        assert!(
+            fs::read_dir(game.join("dist")).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")),
+            "nothing half-written is left"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&appimage.path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755, "a player runs it as it is");
+        }
+        let bytes = fs::read(&appimage.path).unwrap();
+        assert!(bytes.starts_with(APPIMAGE_RUNTIME));
+
+        let entries = in_appimage(&appimage.path);
+        assert_eq!(
+            entries.keys().collect::<Vec<_>>(),
+            [
+                ".DirIcon",
+                "AppRun",
+                "Zombie-Night.desktop",
+                "Zombie-Night.png",
+                "licenses",
+                "licenses/AppImage-runtime-MIT.txt",
+                "licenses/AtkinsonHyperlegibleNext-OFL.txt",
+                "usr",
+                "usr/bin",
+                "usr/bin/Zombie-Night",
+                "usr/bin/Zombie-Night.lpk",
+            ]
+        );
+        // The runtime starts AppRun; it leads to the program, whose own path
+        // then ends in its name, with its pack beside it.
+        assert_eq!(entries["AppRun"].1, b"usr/bin/Zombie-Night");
+        assert_eq!(entries[".DirIcon"].1, b"Zombie-Night.png");
+        let (mode, program) = &entries["usr/bin/Zombie-Night"];
+        assert_eq!(*mode, 0o755);
+        assert_eq!(program, b"\x7fELF pretend program");
+        assert_eq!(
+            crate::player::pack_path(Path::new("/tmp/.mount_x/usr/bin/Zombie-Night")),
+            Path::new("/tmp/.mount_x/usr/bin/Zombie-Night.lpk")
+        );
+        assert_eq!(entries["usr/bin/Zombie-Night.lpk"].0, 0o644);
+        let pack = game.join("from-appimage.lpk");
+        fs::write(&pack, &entries["usr/bin/Zombie-Night.lpk"].1).unwrap();
+        assert_eq!(lore_pack::Pack::open(&pack).unwrap().name(), "Zombie Night");
+
+        let desktop = String::from_utf8(entries["Zombie-Night.desktop"].1.clone()).unwrap();
+        for line in [
+            "[Desktop Entry]\n",
+            "\nType=Application\n",
+            "\nName=Zombie Night\n",
+            "\nExec=Zombie-Night\n",
+            "\nIcon=Zombie-Night\n",
+            "\nCategories=Game;",
+        ] {
+            assert!(desktop.contains(line), "{line:?} in {desktop}");
+        }
+        // A game with no icon of its own gets a plain one: an AppImage needs
+        // one for the applications menu.
+        assert!(entries["Zombie-Night.png"].1.starts_with(PNG_START));
+        assert!(
+            String::from_utf8_lossy(&entries["licenses/AppImage-runtime-MIT.txt"].1)
+                .contains("MIT License"),
+            "the runtime's licence travels with it"
+        );
+    }
+
+    #[test]
+    fn an_appimage_carries_the_game_s_own_icon_and_none_is_made_unless_asked_for() {
+        let (game, runtime) = game("appimage-icon", "my-game");
+        let mut icon = PNG_START.to_vec();
+        icon.extend_from_slice(b"pretend picture");
+        fs::write(game.join(ICON_FILE), &icon).unwrap();
+
+        let packaged = package_linux(&game, Some(&runtime), false).unwrap();
+        assert_eq!(packaged.appimage, None);
+        assert!(!game.join("dist/my-game-x86_64.AppImage").exists());
+
+        let packaged = package_linux(&game, Some(&runtime), true).unwrap();
+        let entries = in_appimage(&packaged.appimage.unwrap().path);
+        assert_eq!(entries["my-game.png"].1, icon);
+    }
+
+    #[test]
+    fn the_runtime_finds_the_game_where_it_is_written_and_is_an_appimage_runtime() {
+        // The runtime takes its image to start where its section headers
+        // end (`appimage_get_elf_size` in its runtime.c), which must be the
+        // end of the file, since the image is written straight after it.
+        let at = |offset: usize, size: usize| {
+            let mut value = 0_u64;
+            for (place, byte) in APPIMAGE_RUNTIME[offset..offset + size].iter().enumerate() {
+                value |= u64::from(*byte) << (8 * place);
+            }
+            value
+        };
+        assert!(APPIMAGE_RUNTIME.starts_with(ELF_START));
+        assert_eq!(APPIMAGE_RUNTIME[4], 2, "64-bit");
+        assert_eq!(APPIMAGE_RUNTIME[5], 1, "little-endian");
+        assert_eq!(
+            &APPIMAGE_RUNTIME[8..11],
+            b"AI\x02",
+            "an AppImage type 2 runtime"
+        );
+        let headers_end = at(0x28, 8) + at(0x3a, 2) * at(0x3c, 2);
+        assert_eq!(headers_end, APPIMAGE_RUNTIME.len() as u64);
+    }
+
+    #[test]
+    fn the_plain_icon_is_a_square_png() {
+        let icon = plain_icon().unwrap();
+        let decoder = png::Decoder::new(Cursor::new(icon));
+        let reader = decoder.read_info().unwrap();
+        assert_eq!((reader.info().width, reader.info().height), (256, 256));
     }
 
     #[test]
