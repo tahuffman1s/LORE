@@ -843,10 +843,10 @@ impl BounceWorks {
             .src_alpha_blend_factor(vk::BlendFactor::ONE)
             .dst_alpha_blend_factor(vk::BlendFactor::ONE)
             .alpha_blend_op(vk::BlendOp::MAX);
-        let attachments = [
-            blended.color_write_mask(vk::ColorComponentFlags::RGBA),
-            blended.color_write_mask(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G),
-        ];
+        // The same for both: a card need not offer blending each picture
+        // its own way (`independentBlend`), and the distances' picture has
+        // only red and green to write anyway.
+        let attachments = [blended.color_write_mask(vk::ColorComponentFlags::RGBA); 2];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
         let info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
