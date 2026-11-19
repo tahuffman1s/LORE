@@ -23,6 +23,7 @@ mod eye;
 mod fluid;
 mod fluid_pass;
 mod font;
+mod game_shaders;
 mod gpu;
 mod grid;
 mod headless;
@@ -60,6 +61,10 @@ pub use error::{RenderError, Version};
 pub use eye::EyeAdaptation;
 pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS};
 pub use font::Font;
+pub use game_shaders::{
+    GameShader, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport, ShaderUse,
+    check_game_shader,
+};
 pub use gpu::{Gpu, validation_errors};
 pub use headless::{FrameTime, Headless};
 pub use lamp_shadow::LampShadows;
