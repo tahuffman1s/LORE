@@ -11,14 +11,39 @@ local gun = {}
 -- is saved and loaded again.
 local kept = game.keep("fluid gun", { fluid = 1 })
 
--- The crosshair: a dot with four short lines round it.
-local crosshair = {
-    game.hud.box({ at = "center", right = -2, down = -2, width = 4, height = 4, color = "#ffffffd0" }),
-    game.hud.box({ at = "center", right = -1, down = -16, width = 2, height = 8, color = "#ffffffb0" }),
-    game.hud.box({ at = "center", right = -1, down = 8, width = 2, height = 8, color = "#ffffffb0" }),
-    game.hud.box({ at = "center", right = -16, down = -1, width = 8, height = 2, color = "#ffffffb0" }),
-    game.hud.box({ at = "center", right = 8, down = -1, width = 8, height = 2, color = "#ffffffb0" }),
+-- The crosshair: a dot with four short lines round it, each with a thin
+-- dark edge so it shows on pale ground as well as dark. A piece pinned to
+-- "center" has its own middle there, so `right` and `down` say where the
+-- middle of each piece is.
+local crosshairPieces = {
+    { right = 0, down = 0, width = 4, height = 4, color = "#ffffffd0" },
+    { right = 0, down = -12, width = 2, height = 8, color = "#ffffffb0" },
+    { right = 0, down = 12, width = 2, height = 8, color = "#ffffffb0" },
+    { right = -12, down = 0, width = 8, height = 2, color = "#ffffffb0" },
+    { right = 12, down = 0, width = 8, height = 2, color = "#ffffffb0" },
 }
+local crosshair = {}
+-- The edges first: a piece made later is drawn on top.
+for _, piece in crosshairPieces do
+    table.insert(crosshair, game.hud.box({
+        at = "center",
+        right = piece.right,
+        down = piece.down,
+        width = piece.width + 2,
+        height = piece.height + 2,
+        color = "#00000080",
+    }))
+end
+for _, piece in crosshairPieces do
+    table.insert(crosshair, game.hud.box({
+        at = "center",
+        right = piece.right,
+        down = piece.down,
+        width = piece.width,
+        height = piece.height,
+        color = piece.color,
+    }))
+end
 
 -- Bottom right, above the line of keys: a swatch in a dark frame, and the
 -- fluid's name beside it.
