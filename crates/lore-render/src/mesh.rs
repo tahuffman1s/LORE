@@ -34,7 +34,8 @@ use crate::swapchain::COLOUR;
 use crate::texture::AnisotropicFiltering;
 use crate::tracks::TrackMap;
 use crate::water::{
-    Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
+    Bodies, Body, GRID_INDICES, GRID_SQUARES, MOST_FOUND_BODIES, Stir, WaterRows, WaterWorks,
+    body_layout, grid_laid,
 };
 use crate::weather::eased;
 
@@ -523,6 +524,10 @@ pub(crate) struct Meshes {
     waters: Vec<Water>,
     /// How each of those stands and looks, once a game has said.
     stands: Vec<Option<PoolDrawn>>,
+    /// How many of them are the level's own; the rest are hollows found
+    /// while a game ran, which are these, in their order.
+    own_waters: usize,
+    found: Vec<std::sync::Arc<Water>>,
     materials: Materials,
     /// The name of each of the scene's materials, in the order of the scene's:
     /// game shaders find the materials they change by it.
@@ -668,14 +673,15 @@ impl Meshes {
         }
         Ok(Self {
             buffers,
-            has_water: !scene.waters.is_empty()
-                || draws.iter().any(|draw| draw.surface == Surface::Water),
+            has_water: draws.iter().any(|draw| draw.surface == Surface::Water),
             // A picture of roughness can make any of it smooth.
             glossy: scene.materials.iter().any(|material| {
                 material.roughness < GLOSSY_BELOW || material.metallic_roughness_texture.is_some()
             }),
             bodies: Bodies::new(gpu, scene)?,
             stands: vec![None; scene.waters.len()],
+            own_waters: scene.waters.len(),
+            found: Vec::new(),
             waters: scene.waters.clone(),
             draws,
             see_through_from,
@@ -718,6 +724,13 @@ impl Meshes {
         &self.material_names
     }
 
+    /// Whether anything in the scene is water, which looks through a copy
+    /// of the picture behind it: a mesh marked so, or a body of still
+    /// water that is drawn.
+    pub(crate) fn has_water(&self) -> bool {
+        self.has_water || self.bodies.any_drawn()
+    }
+
     /// The still water of the scene, each body in the shape it took.
     pub(crate) fn waters(&self) -> &[Water] {
         &self.waters
@@ -729,6 +742,48 @@ impl Meshes {
             waters: &self.waters,
             stands: &self.stands,
         }
+    }
+
+    /// Whether `found` is the hollows this scene already draws: the same
+    /// ones in the same order.
+    pub(crate) fn has_found(&self, found: &[std::sync::Arc<Water>]) -> bool {
+        self.found.len() == found.len()
+            && (self.found.iter().zip(found)).all(|(have, new)| std::sync::Arc::ptr_eq(have, new))
+    }
+
+    /// Says which hollows were found since the level was made (fluid lay
+    /// in them, and they are pools since): they are drawn after the
+    /// scene's own waters, in this order, once their game says how each
+    /// stands. Those said before that are not among them are forgotten.
+    ///
+    /// # Safety
+    ///
+    /// The graphics card must have finished every frame drawn with this
+    /// scene: a hollow that is forgotten gives its picture back.
+    pub(crate) unsafe fn set_found(
+        &mut self,
+        found: &[std::sync::Arc<Water>],
+    ) -> Result<(), RenderError> {
+        let kept = (self.found.iter().zip(found))
+            .take_while(|(have, new)| std::sync::Arc::ptr_eq(have, new))
+            .count();
+        // SAFETY: the caller says nothing is drawing with this scene.
+        unsafe { self.bodies.forget_found_from(self.own_waters + kept) };
+        self.found.truncate(kept);
+        self.waters.truncate(self.own_waters + kept);
+        self.stands.truncate(self.own_waters + kept);
+        for hollow in found
+            .iter()
+            .skip(kept)
+            .take(MOST_FOUND_BODIES - kept.min(MOST_FOUND_BODIES))
+        {
+            let index = self.waters.len();
+            self.bodies.add(hollow, index, true)?;
+            self.waters.push(Water::clone(hollow));
+            self.stands.push(None);
+            self.found.push(std::sync::Arc::clone(hollow));
+        }
+        Ok(())
     }
 
     /// Says how each body of still water stands and looks: one for each
@@ -2015,7 +2070,7 @@ impl MeshPipeline {
                     (view.exact, view.elapsed),
                     (
                         near,
-                        meshes.is_some_and(|meshes| meshes.has_water),
+                        meshes.is_some_and(Meshes::has_water),
                         meshes.map_or(f32::NAN, |meshes| meshes.bodies.fetch()),
                         near_rise,
                     ),
@@ -2054,7 +2109,7 @@ impl MeshPipeline {
         // while the next is drawn.
         let mirrored =
             view.keeps && (wet_ground > 0.0 || meshes.is_some_and(|meshes| meshes.glossy));
-        let copies = meshes.is_some_and(|meshes| meshes.has_water)
+        let copies = meshes.is_some_and(Meshes::has_water)
             || !bits.is_empty()
             || fluid.is_some()
             || mirrored;
@@ -2391,7 +2446,7 @@ impl MeshPipeline {
             // coarsest of its grids first.
             if let (Some(meshes), Some((points, triangles))) =
                 (meshes, self.water.as_ref().and_then(WaterWorks::grid))
-                && !meshes.bodies.list.is_empty()
+                && meshes.bodies.any_drawn()
             {
                 device.cmd_bind_pipeline(
                     commands,
@@ -2403,7 +2458,7 @@ impl MeshPipeline {
                 device.cmd_bind_vertex_buffers(commands, 0, &[points.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, triangles.handle, 0, vk::IndexType::UINT32);
                 let mut bound = self.body_pipeline;
-                for body in &meshes.bodies.list {
+                for body in meshes.bodies.list.iter().filter(|body| body.drawn()) {
                     // A game's fluid shader for what the body mostly
                     // holds draws it, with its values in a set of its own.
                     let shader = fluid_shaders.and_then(|shaders| {

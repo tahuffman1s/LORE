@@ -605,6 +605,36 @@ impl Renderer {
         }
     }
 
+    /// Says which hollows were found since the level was set: places
+    /// nobody marked as water that fluid was found lying in, and that are
+    /// pools since (`lore_fluid::Fluids::found`). They are drawn after the
+    /// scene's own waters, in this order, as
+    /// [`set_pools`](Self::set_pools) says each stands; up to 32. Say it
+    /// when the list changes: the same list again costs nothing, and a
+    /// new one waits for the frames in progress.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the graphics card runs out of memory or its driver reports
+    /// a failure.
+    pub fn set_found_waters(
+        &mut self,
+        found: &[std::sync::Arc<lore_assets::Water>],
+    ) -> Result<(), RenderError> {
+        let Some(meshes) = &mut self.meshes else {
+            return Ok(());
+        };
+        if meshes.has_found(found) {
+            return Ok(());
+        }
+        // Frames still being drawn may use a hollow that is forgotten.
+        // SAFETY: the device is alive for as long as `self.gpu` is.
+        unsafe { self.gpu.device().device_wait_idle() }
+            .map_err(RenderError::driver("waiting for the graphics card"))?;
+        // SAFETY: nothing is being drawn with the scene.
+        unsafe { meshes.set_found(found) }
+    }
+
     /// Says how each kind of fluid looks, by its number: the first look is
     /// kind 0. Up to 32; kinds not given look like clear water.
     pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {

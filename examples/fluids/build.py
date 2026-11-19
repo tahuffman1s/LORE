@@ -218,6 +218,8 @@ CASCADE_STEP = 2.2
 SPAWN = (0.0, 0.1, 16.0)
 CASCADE_TAP = (15.0, 4.15, 1.1)
 TUB_TAP = (-17.0, 2.35, 3.0)
+# The middle of the floor of the trough nobody marked.
+TROUGH = (5.0, 0.1, 12.5)
 
 
 def layout():
@@ -319,6 +321,12 @@ def build():
     dark.box((-18.5, 0.0, 2.9), (-18.3, 2.6, 3.1))
     dark.box((-18.5, 2.4, 2.9), (-16.9, 2.6, 3.1))
 
+    # A trough that nothing marks as a pool: no sheet lies over it. Fluid
+    # sprayed into it lies as puddles until it covers the floor, and then
+    # the engine finds the hollow for itself.
+    basin(steel, TROUGH[0] - 0.6, TROUGH[0] + 0.6, TROUGH[2] - 0.6, TROUGH[2] + 0.6, 0.1, 0.6,
+          lip=("-x", 0.5), base=0.0)
+
     # The mixing vat: wide and waist-deep.
     basin(steel, -9.5, -6.5, 3.5, 6.5, 0.1, 1.0, lip=("+z", 0.9), base=0.0)
 
@@ -365,6 +373,8 @@ def build():
         f"    cascadeTap = {vector(CASCADE_TAP)},",
         "    -- The nozzle of the tap over the empty tub.",
         f"    tubTap = {vector(TUB_TAP)},",
+        "    -- The trough that no sheet marks as a pool: spray into it.",
+        f"    trough = {vector(TROUGH)},",
         "    -- Every pool: its name in the level, which part of the lab it",
         "    -- belongs to, what it holds at the start and where its middle is.",
         "    pools = {",

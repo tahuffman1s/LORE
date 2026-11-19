@@ -363,6 +363,21 @@ pub(crate) fn body_layout(gpu: &Gpu) -> Result<vk::DescriptorSetLayout, RenderEr
     .map_err(RenderError::driver(DOING))
 }
 
+/// How many hollows found while a game runs a scene has room to draw.
+pub(crate) const MOST_FOUND_BODIES: usize = 32;
+
+/// Whether a body's grid of depths is one the graphics card can be handed.
+fn is_sound(water: &Water) -> bool {
+    let [across, deep] = water.size;
+    across >= 2
+        && deep >= 2
+        && across <= 8192
+        && deep <= 8192
+        && water.depths.len() == across as usize * deep as usize
+        && water.cell > 0.0
+        && water.level.is_finite()
+}
+
 /// The number the next body of water is known by. None is 0, which stands
 /// for "no water near".
 static NEXT_BODY: AtomicU64 = AtomicU64::new(1);
@@ -382,6 +397,9 @@ pub(crate) struct Body {
     water: Water,
     /// Which of the scene's waters it is.
     index: usize,
+    /// Whether it is a hollow found while a game ran, and not one of the
+    /// level's own waters: drawn only while its game says how it stands.
+    found: bool,
     /// How it stands and looks, once a game has said: until then, as
     /// high as rain has raised it and as the level's own water.
     stand: Option<PoolDrawn>,
@@ -425,6 +443,7 @@ impl Body {
             size,
             colour: [0.0; 4],
             index: 0,
+            found: false,
             stand: None,
             water: Water {
                 name: None,
@@ -450,6 +469,12 @@ impl Body {
     pub(crate) fn said(mut self, stand: PoolDrawn) -> Self {
         self.stand = Some(stand);
         self
+    }
+
+    /// Whether it is drawn: one of the level's own always, a hollow found
+    /// while a game ran only while that game says how it stands.
+    pub(crate) fn drawn(&self) -> bool {
+        !self.found || self.stand.is_some()
     }
 
     /// Whether the weather's ice shows on it.
@@ -567,7 +592,8 @@ pub(crate) struct Bodies {
 }
 
 impl Bodies {
-    /// Copies the depths of each body of water in `scene` to the graphics card.
+    /// Copies the depths of each body of water in `scene` to the graphics
+    /// card, and makes room for the hollows found while a game runs.
     pub(crate) fn new(gpu: &Arc<Gpu>, scene: &Scene) -> Result<Self, RenderError> {
         let mut bodies = Self {
             gpu: Arc::clone(gpu),
@@ -579,30 +605,21 @@ impl Bodies {
             .waters
             .iter()
             .enumerate()
-            .filter(|(_, water)| {
-                let [across, deep] = water.size;
-                across >= 2
-                    && deep >= 2
-                    && across <= 8192
-                    && deep <= 8192
-                    && water.depths.len() == across as usize * deep as usize
-                    && water.cell > 0.0
-                    && water.level.is_finite()
-            })
+            .filter(|(_, water)| is_sound(water))
             .collect();
-        if sound.is_empty() {
-            return Ok(bodies);
-        }
         let device = gpu.device();
-        let count = u32::try_from(sound.len()).unwrap_or(u32::MAX);
+        let count = u32::try_from(sound.len() + MOST_FOUND_BODIES).unwrap_or(u32::MAX);
         let sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(count)];
         bodies.layout = body_layout(gpu)?;
         // SAFETY: the device is alive, and the pool is stored straight away.
+        // Its sets can be freed one at a time: a hollow found in one game
+        // is gone when the level is played again.
         bodies.pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
+                    .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
                     .max_sets(count)
                     .pool_sizes(&sizes),
                 None,
@@ -610,54 +627,104 @@ impl Bodies {
         }
         .map_err(RenderError::driver(DOING))?;
         for (index, water) in sound {
-            let depths = picture_of(gpu, water.size, vk::Format::R16_SFLOAT, &water.depths)?;
-            let layouts = [bodies.layout];
-            // SAFETY: the pool has room for one set for each body, and the
-            // picture written into the set was just made on this device.
-            let set = unsafe {
-                let set = device
-                    .allocate_descriptor_sets(
-                        &vk::DescriptorSetAllocateInfo::default()
-                            .descriptor_pool(bodies.pool)
-                            .set_layouts(&layouts),
-                    )
-                    .map(|sets| sets.first().copied().unwrap_or_default());
-                if let Ok(set) = set {
-                    let pictures = [vk::DescriptorImageInfo::default()
-                        .image_view(depths.view)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-                    device.update_descriptor_sets(
-                        &[vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(0)
-                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                            .image_info(&pictures)],
-                        &[],
-                    );
-                }
-                set
-            };
-            // Kept before the set is looked at, so that it is freed if
-            // there was none to be had.
-            bodies.list.push(Body {
-                id: NEXT_BODY.fetch_add(1, Ordering::Relaxed),
-                level: water.level,
-                origin: water.origin,
-                cell: water.cell,
-                size: water.size,
-                colour: water.colour,
-                water: water.clone(),
-                index,
-                stand: None,
-                depths,
-                set: vk::DescriptorSet::null(),
-            });
-            let set = set.map_err(RenderError::driver(DOING))?;
-            if let Some(body) = bodies.list.last_mut() {
-                body.set = set;
-            }
+            bodies.add(water, index, false)?;
         }
         Ok(bodies)
+    }
+
+    /// Copies the depths of `water`, which is the scene's water numbered
+    /// `index`, to the graphics card, and draws it from now on. `found`
+    /// says it is a hollow found while a game runs, which is drawn only
+    /// while its game says how it stands.
+    pub(crate) fn add(
+        &mut self,
+        water: &Water,
+        index: usize,
+        found: bool,
+    ) -> Result<(), RenderError> {
+        if !is_sound(water) {
+            return Ok(());
+        }
+        let device = self.gpu.device();
+        let depths = picture_of(&self.gpu, water.size, vk::Format::R16_SFLOAT, &water.depths)?;
+        let layouts = [self.layout];
+        // SAFETY: the pool has room for one set for each body, and the
+        // picture written into the set was just made on this device.
+        let set = unsafe {
+            let set = device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(self.pool)
+                        .set_layouts(&layouts),
+                )
+                .map(|sets| sets.first().copied().unwrap_or_default());
+            if let Ok(set) = set {
+                let pictures = [vk::DescriptorImageInfo::default()
+                    .image_view(depths.view)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                device.update_descriptor_sets(
+                    &[vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&pictures)],
+                    &[],
+                );
+            }
+            set
+        };
+        // Kept before the set is looked at, so that it is freed if there
+        // was none to be had.
+        self.list.push(Body {
+            id: NEXT_BODY.fetch_add(1, Ordering::Relaxed),
+            level: water.level,
+            origin: water.origin,
+            cell: water.cell,
+            size: water.size,
+            colour: water.colour,
+            water: water.clone(),
+            index,
+            found,
+            stand: None,
+            depths,
+            set: vk::DescriptorSet::null(),
+        });
+        let set = set.map_err(RenderError::driver(DOING))?;
+        if let Some(body) = self.list.last_mut() {
+            body.set = set;
+        }
+        Ok(())
+    }
+
+    /// Stops drawing the hollows found while a game ran that are numbered
+    /// `from` or more, and gives back their room.
+    ///
+    /// # Safety
+    ///
+    /// The graphics card must have finished every frame that drew them.
+    pub(crate) unsafe fn forget_found_from(&mut self, from: usize) {
+        let device = self.gpu.device();
+        let (gpu, pool) = (&self.gpu, self.pool);
+        self.list.retain(|body| {
+            if !(body.found && body.index >= from) {
+                return true;
+            }
+            // SAFETY: the caller says nothing is drawing with them; the
+            // pool lets its sets be freed one at a time.
+            unsafe {
+                body.depths.destroy(gpu);
+                if body.set != vk::DescriptorSet::null() {
+                    let _ = device.free_descriptor_sets(pool, &[body.set]);
+                }
+            }
+            false
+        });
+    }
+
+    /// Whether any body is drawn now: the level's own always, a found
+    /// hollow once its game has said how it stands.
+    pub(crate) fn any_drawn(&self) -> bool {
+        self.list.iter().any(Body::drawn)
     }
 
     /// Says how each body stands and looks: `pools` holds one for each of
@@ -693,15 +760,11 @@ impl Bodies {
     /// there is water of at the eye.)
     pub(crate) fn nearest(&self, eye: [f32; 3], rise: f32) -> Option<&Body> {
         let stands = |body: &Body| body.level + body.risen(rise);
-        self.list
-            .iter()
+        let drawn = || self.list.iter().filter(|body| body.drawn());
+        drawn()
             .filter(|body| body.water.depth_at(eye[0], eye[2]) + body.risen(rise) > 0.0)
             .max_by(|one, other| stands(one).total_cmp(&stands(other)))
-            .or_else(|| {
-                self.list
-                    .iter()
-                    .min_by(|one, other| one.away(eye).total_cmp(&other.away(eye)))
-            })
+            .or_else(|| drawn().min_by(|one, other| one.away(eye).total_cmp(&other.away(eye))))
     }
 }
 
