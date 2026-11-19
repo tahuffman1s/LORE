@@ -247,6 +247,7 @@ impl Headless {
     pub fn set_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
         // Every frame is waited for, so the old meshes are not in use.
         self.shaders.idle();
+        self.shaders.scene_changed();
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
         self.lamps.clear();
@@ -265,7 +266,7 @@ impl Headless {
     /// the next picture is the same every time.
     pub fn set_game_shaders(&mut self, shaders: &[GameShader<'_>]) {
         self.shaders.want(shaders);
-        self.shaders.settle();
+        self.shaders.settle(&self.mesh);
     }
 
     /// What became of the game's shaders since the last call, as
@@ -581,7 +582,13 @@ impl Headless {
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
             let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
-            self.shaders.start_frame(0, passed, self.view.output_size());
+            self.shaders.start_frame(
+                0,
+                passed,
+                self.view.output_size(),
+                &self.mesh,
+                self.meshes.as_ref(),
+            );
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
             self.view.lamp_shadows = self.lamp_shadows;
@@ -602,6 +609,7 @@ impl Headless {
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
+                    surfaces: self.shaders.surface_draws(),
                 },
                 camera,
                 FRAME_SECONDS,

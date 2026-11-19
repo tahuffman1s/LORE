@@ -13,11 +13,13 @@ use lore_shader::{Compiled, Hook, ParamBlock, ShaderError};
 use super::book::Job;
 use super::retire::Retiring;
 use super::screen::{ScreenPass, Targets};
+use super::surface::SurfaceTable;
 use super::template::fault;
 use super::worker::Worker;
 use crate::buffer::Buffer;
 use crate::error::RenderError;
 use crate::gpu::Gpu;
+use crate::mesh::{MeshPipeline, Surface, make_surface_pipeline};
 use crate::scene::SceneTarget;
 use crate::tonemap::set_bindings;
 
@@ -30,6 +32,18 @@ const THIS_FILE: &str = "crates/lore-render/src/game_shaders/works.rs";
 /// The entry points of a screen effect's module.
 const VERTEX: &std::ffi::CStr = c"lore_vertex";
 const FRAGMENT: &std::ffi::CStr = c"lore_fragment";
+
+/// The entry points of a surface shader's module: the mesh's vertex function,
+/// and a fragment function for each kind of surface it draws.
+const SURFACE_VERTEX: &std::ffi::CStr = c"vertex";
+const SURFACE_FRAGMENTS: [(Surface, &std::ffi::CStr); 3] = [
+    (Surface::Solid, c"lore_fragment"),
+    (Surface::CutOut, c"lore_fragment_cutout"),
+    (Surface::SeeThrough, c"lore_fragment_blend"),
+];
+
+/// The size in bytes of the clock a surface shader reads: a `vec4f`.
+const CLOCK_BYTES: u64 = 16;
 
 /// The size in bytes of what a screen effect is pushed with: `LoreScreen`.
 pub(super) const SCREEN_PUSH_BYTES: u32 = 24;
@@ -49,10 +63,17 @@ pub(super) struct Shared {
     pub(super) tonemap: vk::DescriptorSetLayout,
     pub(super) layout: vk::PipelineLayout,
     sampler: vk::Sampler,
+    /// Set 3 of a surface shader: its values, then the clock.
+    surface_values: vk::DescriptorSetLayout,
+    /// What a surface shader is drawn with: the mesh pipeline's three sets,
+    /// then set 3, and the mesh pipeline's push constants.
+    pub(super) surface_layout: vk::PipelineLayout,
+    /// The shader clock for each frame in flight, as the frame writes it.
+    pub(super) clocks: Vec<Buffer>,
 }
 
 impl Shared {
-    fn new(gpu: &Arc<Gpu>) -> Result<Self, RenderError> {
+    fn new(gpu: &Arc<Gpu>, frames: usize, mesh: &MeshPipeline) -> Result<Self, RenderError> {
         let device = gpu.device();
         let mut shared = Self {
             gpu: Arc::clone(gpu),
@@ -62,6 +83,9 @@ impl Shared {
             tonemap: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             sampler: vk::Sampler::null(),
+            surface_values: vk::DescriptorSetLayout::null(),
+            surface_layout: vk::PipelineLayout::null(),
+            clocks: Vec::with_capacity(frames),
         };
         // Dropping `shared` cleans up whatever was made; destroying a null handle is allowed.
         // SAFETY: the device is alive, and each object is made from valid
@@ -135,6 +159,38 @@ impl Shared {
                     None,
                 )
                 .map_err(RenderError::driver(DOING))?;
+            let bindings = [0, 1].map(|binding| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(binding)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            });
+            shared.surface_values = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                    None,
+                )
+                .map_err(RenderError::driver(DOING))?;
+            let ([view, material, body], push) = mesh.surface_base();
+            let sets = [view, material, body, shared.surface_values];
+            let ranges = [push];
+            shared.surface_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&sets)
+                        .push_constant_ranges(&ranges),
+                    None,
+                )
+                .map_err(RenderError::driver(DOING))?;
+        }
+        for _ in 0..frames {
+            shared.clocks.push(Buffer::writable(
+                gpu,
+                CLOCK_BYTES,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                DOING,
+            )?);
         }
         Ok(shared)
     }
@@ -146,6 +202,8 @@ impl Drop for Shared {
         // dropping this, and the compile thread has finished with it.
         unsafe {
             let device = self.gpu.device();
+            device.destroy_pipeline_layout(self.surface_layout, None);
+            device.destroy_descriptor_set_layout(self.surface_values, None);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_descriptor_set_layout(self.tonemap, None);
             device.destroy_descriptor_set_layout(self.values, None);
@@ -160,6 +218,8 @@ impl Drop for Shared {
 pub(crate) enum Built {
     /// An effect over the finished picture.
     Screen(ScreenShader),
+    /// A change to the surface of a level's material.
+    Surface(SurfaceShader),
 }
 
 impl Built {
@@ -167,6 +227,15 @@ impl Built {
     pub(super) fn screen(&self) -> Option<&ScreenShader> {
         match self {
             Self::Screen(shader) => Some(shader),
+            Self::Surface(_) => None,
+        }
+    }
+
+    /// The surface shader, if this is one.
+    pub(super) fn surface(&self) -> Option<&SurfaceShader> {
+        match self {
+            Self::Surface(shader) => Some(shader),
+            Self::Screen(_) => None,
         }
     }
 }
@@ -329,6 +398,147 @@ fn make_screen(
     Ok(shader)
 }
 
+/// A surface shader: its pipelines, one for each kind of surface it draws,
+/// and for each frame in flight its values in a buffer and the set (set 3)
+/// that points at it and at that frame's clock.
+pub(crate) struct SurfaceShader {
+    gpu: Arc<Gpu>,
+    /// For solid, cut-out and see-through surfaces, in that order.
+    pub(super) pipelines: [vk::Pipeline; 3],
+    pool: vk::DescriptorPool,
+    /// One for each frame in flight, written by the frame that uses it.
+    pub(super) buffers: Vec<Buffer>,
+    /// One for each frame in flight, written once here and never again.
+    pub(super) sets: Vec<vk::DescriptorSet>,
+}
+
+impl Drop for SurfaceShader {
+    fn drop(&mut self) {
+        // SAFETY: as for `ScreenShader`: the card is done with this.
+        unsafe {
+            let device = self.gpu.device();
+            for pipeline in self.pipelines {
+                device.destroy_pipeline(pipeline, None);
+            }
+            device.destroy_descriptor_pool(self.pool, None);
+        }
+    }
+}
+
+/// Makes a surface shader from its compiled module.
+fn make_surface(
+    gpu: &Arc<Gpu>,
+    shared: &Shared,
+    frames: usize,
+    compiled: &Compiled,
+    block: &ParamBlock,
+) -> Result<SurfaceShader, RenderError> {
+    let device = gpu.device();
+    let mut shader = SurfaceShader {
+        gpu: Arc::clone(gpu),
+        pipelines: [vk::Pipeline::null(); 3],
+        pool: vk::DescriptorPool::null(),
+        buffers: Vec::with_capacity(frames),
+        sets: Vec::new(),
+    };
+    // Dropping `shader` cleans up whatever was made.
+    // SAFETY: the SPIR-V was made and checked by `lore-shader`.
+    let module = unsafe {
+        device.create_shader_module(
+            &vk::ShaderModuleCreateInfo::default().code(&compiled.words),
+            None,
+        )
+    }
+    .map_err(RenderError::driver(DOING))?;
+    let mut failed = None;
+    for ((surface, fragment), pipeline) in SURFACE_FRAGMENTS.into_iter().zip(&mut shader.pipelines)
+    {
+        // SAFETY: the module holds the entry points named, written for the
+        // surface layout; only this thread uses the cache.
+        let made = unsafe {
+            make_surface_pipeline(
+                device,
+                shared.cache,
+                shared.surface_layout,
+                module,
+                SURFACE_VERTEX,
+                fragment,
+                surface,
+            )
+        };
+        match made {
+            Ok(made) => *pipeline = made,
+            Err(code) => {
+                failed = Some(code);
+                break;
+            }
+        }
+    }
+    // SAFETY: the module is only needed while pipelines are made.
+    unsafe { device.destroy_shader_module(module, None) };
+    if let Some(code) = failed {
+        return Err(RenderError::driver(DOING)(code));
+    }
+
+    let size = block.size() as u64;
+    for _ in 0..frames {
+        shader.buffers.push(Buffer::writable(
+            gpu,
+            size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            DOING,
+        )?);
+    }
+    let count = u32::try_from(frames).unwrap_or(u32::MAX);
+    let sizes = [vk::DescriptorPoolSize::default()
+        .ty(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(count.saturating_mul(2))];
+    let layouts = vec![shared.surface_values; frames];
+    // SAFETY: the device is alive; each object is made from valid settings
+    // that live until the call returns. The sets are written here, before
+    // anything can use them, and never again; the clocks live as long as
+    // `shared`, which outlives every shader.
+    unsafe {
+        shader.pool = device
+            .create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(count)
+                    .pool_sizes(&sizes),
+                None,
+            )
+            .map_err(RenderError::driver(DOING))?;
+        shader.sets = device
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(shader.pool)
+                    .set_layouts(&layouts),
+            )
+            .map_err(RenderError::driver(DOING))?;
+        for ((set, buffer), clock) in shader.sets.iter().zip(&shader.buffers).zip(&shared.clocks) {
+            let values = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer.handle)
+                .range(size)];
+            let time = [vk::DescriptorBufferInfo::default()
+                .buffer(clock.handle)
+                .range(CLOCK_BYTES)];
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&values),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&time),
+            ];
+            device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+    Ok(shader)
+}
+
 /// What the compile thread does after a job's module compiled.
 fn make(
     gpu: &Arc<Gpu>,
@@ -342,17 +552,9 @@ fn make(
         Hook::Screen => make_screen(gpu, shared, frames, compiled, block)
             .map(Built::Screen)
             .map_err(|error| fault(THIS_FILE, error.to_string())),
-        // Piece 3 of #431 draws these.
-        Hook::Surface => Err(ShaderError {
-            file: job.file.clone(),
-            line: None,
-            column: None,
-            message: "Surface shaders are not drawn yet.".to_owned(),
-            source_line: None,
-            hint: None,
-            note: None,
-            lore_fault: false,
-        }),
+        Hook::Surface => make_surface(gpu, shared, frames, compiled, block)
+            .map(Built::Surface)
+            .map_err(|error| fault(THIS_FILE, error.to_string())),
     }
 }
 
@@ -369,13 +571,20 @@ pub(super) struct Works {
     /// The pictures effects draw into, while any effect is live.
     pub(super) targets: Option<Targets>,
     pub(super) pass: ScreenPass,
+    /// Which surface shader draws which of the level's materials.
+    pub(super) surfaces: SurfaceTable,
 }
 
 impl Works {
     /// Starts the compile thread and makes what the frame needs.
-    pub(super) fn new(gpu: &Arc<Gpu>, frames: usize) -> Result<Self, RenderError> {
-        let shared = Arc::new(Shared::new(gpu)?);
+    pub(super) fn new(
+        gpu: &Arc<Gpu>,
+        frames: usize,
+        mesh: &MeshPipeline,
+    ) -> Result<Self, RenderError> {
+        let shared = Arc::new(Shared::new(gpu, frames, mesh)?);
         let pass = ScreenPass::new(gpu, &shared, frames)?;
+        let surface_layout = shared.surface_layout;
         let (theirs, their_gpu) = (Arc::clone(&shared), Arc::clone(gpu));
         let worker = Worker::new(move |job, compiled, block| {
             make(&their_gpu, &theirs, frames, job, compiled, block)
@@ -392,6 +601,7 @@ impl Works {
             old_targets: Retiring::new(delay),
             targets: None,
             pass,
+            surfaces: SurfaceTable::new(surface_layout),
         })
     }
 }

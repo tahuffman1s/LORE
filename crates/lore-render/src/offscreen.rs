@@ -246,6 +246,7 @@ pub(crate) fn frames(
                         tracks: [None; 2],
                         fluid: None,
                         lamps: &lamps,
+                        surfaces: None,
                     },
                     camera,
                     1.0 / 60.0,

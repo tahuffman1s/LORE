@@ -344,6 +344,7 @@ impl Renderer {
         unsafe { self.gpu.device().device_wait_idle() }
             .map_err(RenderError::driver("waiting for the graphics card"))?;
         self.shaders.idle();
+        self.shaders.scene_changed();
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
@@ -384,6 +385,15 @@ impl Renderer {
     /// and a shader that never worked draws nothing. What became of each
     /// one is given by [`take_shader_reports`](Self::take_shader_reports).
     /// Changing only a shader's `values` never compiles anything.
+    ///
+    /// A surface shader changes the colour, normal, roughness, metallic,
+    /// emission and alpha of every material of the level with the given
+    /// name (an exact match; if two shaders name one material, the first
+    /// in the list is drawn and the other is reported). Lighting, fog and
+    /// weather still apply to what it gives. Shadows, bounce light and water
+    /// are not changed by a surface shader: a shadow is cast by the
+    /// level's own surface, and bounce light sees the level's own colours.
+    /// A material the level lacks is reported once for each level.
     ///
     /// With an empty list nothing is made and nothing is drawn.
     ///
@@ -906,8 +916,13 @@ impl Renderer {
                     (weather, slot.flashed.get()),
                 );
             }
-            self.shaders
-                .start_frame(self.next, seconds, view.output_size());
+            self.shaders.start_frame(
+                self.next,
+                seconds,
+                view.output_size(),
+                mesh,
+                self.meshes.as_ref(),
+            );
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
             view.lamp_shadows = self.lamp_shadows;
@@ -975,6 +990,7 @@ impl Renderer {
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
+                    surfaces: self.shaders.surface_draws(),
                 },
                 &self.camera,
                 seconds,

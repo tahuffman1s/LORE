@@ -14,6 +14,7 @@
 mod book;
 mod retire;
 mod screen;
+mod surface;
 mod template;
 #[cfg(test)]
 mod tests;
@@ -33,8 +34,10 @@ use self::works::{Built, Works};
 use crate::camera::Camera;
 use crate::error::RenderError;
 use crate::gpu::Gpu;
+use crate::mesh::{MeshPipeline, Meshes};
 use crate::view::SceneView;
 
+pub(crate) use surface::SurfaceDraws;
 pub use template::check_game_shader;
 
 /// How many screen effects can be on at once.
@@ -187,12 +190,20 @@ impl GameShaders {
         });
     }
 
+    /// A level was set: which material each surface shader draws is
+    /// worked out again, and what is wrong with it is said again.
+    pub(crate) fn scene_changed(&mut self) {
+        if let Some(works) = &mut self.works {
+            works.surfaces.scene_changed();
+        }
+    }
+
     /// Makes the thread and what it builds with, if a game wants anything.
-    fn ensure_works(&mut self) {
+    fn ensure_works(&mut self, mesh: &MeshPipeline) {
         if self.works.is_some() || self.failed || self.book.is_empty() {
             return;
         }
-        match Works::new(&self.gpu, self.frames) {
+        match Works::new(&self.gpu, self.frames, mesh) {
             Ok(works) => self.works = Some(works),
             Err(error) => self.failed_with(&error),
         }
@@ -216,8 +227,8 @@ impl GameShaders {
 
     /// Waits for every shader the game wants to be built, and installs them:
     /// for pictures that must come out the same every time.
-    pub(crate) fn settle(&mut self) {
-        self.ensure_works();
+    pub(crate) fn settle(&mut self, mesh: &MeshPipeline) {
+        self.ensure_works(mesh);
         self.collect(true);
     }
 
@@ -225,14 +236,23 @@ impl GameShaders {
     /// finished: installs what was built, lets go of what the card is done
     /// with, writes the values and makes the pictures the effects need, for a
     /// picture `output` pixels in size. `seconds` is how long the frame took.
+    /// `meshes` is the level, whose materials the surface shaders are matched
+    /// to; `mesh` is what draws it.
     ///
     /// Never fails: if the graphics driver does, it is said, and the frame
     /// goes on without effects.
-    pub(crate) fn start_frame(&mut self, slot: usize, seconds: f32, output: vk::Extent2D) {
+    pub(crate) fn start_frame(
+        &mut self,
+        slot: usize,
+        seconds: f32,
+        output: vk::Extent2D,
+        mesh: &MeshPipeline,
+        meshes: Option<&Meshes>,
+    ) {
         if self.book.is_empty() && self.works.is_none() {
             return;
         }
-        self.ensure_works();
+        self.ensure_works(mesh);
         self.collect(false);
         let now = self.submitted;
         if seconds.is_finite() && seconds > 0.0 {
@@ -268,6 +288,43 @@ impl GameShaders {
                 failure = Some(error);
             }
         }
+
+        let mut surfaces = false;
+        for entry in self.book.surfaces() {
+            let Some(drawn) = entry.live() else {
+                continue;
+            };
+            let Some(shader) = drawn.built.surface() else {
+                continue;
+            };
+            surfaces = true;
+            let Some(out) = bytes.get_mut(..drawn.block.size()) else {
+                continue;
+            };
+            drawn.block.write(entry.values(), out);
+            let Some(buffer) = shader.buffers.get(slot) else {
+                continue;
+            };
+            // SAFETY: as for the screen effects' buffers above.
+            if let Err(error) = unsafe { buffer.write(out) } {
+                failure = Some(error);
+            }
+        }
+        if surfaces {
+            // A shader sees a fraction of a second of an hour, which an f32 holds.
+            #[allow(clippy::cast_possible_truncation)]
+            let time = (self.clock as f32).to_ne_bytes();
+            let mut clock = [0_u8; 16];
+            clock[..4].copy_from_slice(&time);
+            if let Some(buffer) = works.shared.clocks.get(slot) {
+                // SAFETY: this slot's last frame has finished, so the card is
+                // not reading the clock, and it is 16 bytes long.
+                if let Err(error) = unsafe { buffer.write(&clock) } {
+                    failure = Some(error);
+                }
+            }
+        }
+        works.surfaces.update(&mut self.book, meshes, slot);
 
         // The pictures exist while an effect is live, at the picture's size.
         let stale = live == 0 || works.targets.as_ref().is_some_and(|t| t.extent != output);
@@ -321,6 +378,13 @@ impl GameShaders {
                 .pass
                 .record(&works.shared, &self.book, targets, &frame)
         }
+    }
+
+    /// What the mesh pass draws the surface shaders with, for the frame given
+    /// to [`start_frame`](Self::start_frame): `None` when no shader draws
+    /// anything, so that the pass is exactly what it is without them.
+    pub(crate) fn surface_draws(&self) -> Option<&SurfaceDraws> {
+        self.works.as_ref()?.surfaces.draws()
     }
 
     /// Says that a frame was handed to the graphics card.

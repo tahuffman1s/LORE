@@ -1,7 +1,7 @@
 //! Game shaders drawn on the graphics card: the pictures a screen effect
 //! makes, checked pixel by pixel, with the validation layer watching.
 
-use lore_assets::Material;
+use lore_assets::{AlphaMode, Material, MeshPart, Scene};
 use lore_shader::ParamValue;
 
 use super::{GameShader, ShaderUse};
@@ -263,6 +263,338 @@ fn the_distance_is_far_for_the_sky_and_right_for_a_surface_in_front() {
             "{values:?} gave {seen}"
         );
     }
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+// Surface shaders: a floor of two halves, "Lava" on the left (x from -1 to 0)
+// and "Stone" on the right, seen from above.
+
+/// A material called `name`, in `color`.
+fn named(name: &str, color: [f32; 3]) -> Material {
+    Material {
+        name: Some(name.to_owned()),
+        base_color: [color[0], color[1], color[2], 1.0],
+        ..Material::default()
+    }
+}
+
+/// Half a floor, from `left` to `right` metres across, in material `material`.
+fn half(left: f32, right: f32, material: u32) -> MeshPart {
+    let corners = [[left, 1.0], [right, 1.0], [right, -1.0], [left, -1.0]];
+    MeshPart {
+        positions: corners.map(|[x, z]| [x, 0.0, z]).to_vec(),
+        normals: vec![[0.0, 1.0, 0.0]; 4],
+        tangents: Some(vec![[1.0, 0.0, 0.0, 1.0]; 4]),
+        uv0: Some(
+            corners
+                .map(|[x, z]| [(x + 1.0) / 2.0, (z + 1.0) / 2.0])
+                .to_vec(),
+        ),
+        indices: vec![0, 1, 2, 0, 2, 3],
+        material,
+        ..MeshPart::default()
+    }
+}
+
+/// The floor, with `lava` on the left half and `stone` on the right.
+fn two(lava: Material, stone: Material) -> Scene {
+    let mut scene = floor(lava);
+    scene.materials.push(stone);
+    scene.meshes[0].parts = vec![half(-1.0, 0.0, 0), half(0.0, 1.0, 1)];
+    scene
+}
+
+/// The picture over the half of the floor that is Lava, then Stone.
+const LAVA_AT: (usize, usize) = (WIDTH / 4, HEIGHT / 2);
+const STONE_AT: (usize, usize) = (3 * WIDTH / 4, HEIGHT / 2);
+
+/// A surface shader called `lava` for the material `Lava`.
+fn lava<'a>(text: &'a str, revision: u64) -> GameShader<'a> {
+    GameShader {
+        name: "lava",
+        file: "shaders/lava.wgsl",
+        text,
+        used_as: ShaderUse::Surface { material: "Lava" },
+        values: &[],
+        revision,
+    }
+}
+
+/// Whether two pictures are the same from column `from` on.
+fn same_from(from: usize, one: &[u8], other: &[u8]) -> bool {
+    (0..HEIGHT).all(|y| {
+        let row = (y * WIDTH + from) * 4..(y + 1) * WIDTH * 4;
+        one[row.clone()] == other[row]
+    })
+}
+
+const RED: &str = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                   made.color = vec3f(1.0, 0.0, 0.0);\n    return made;\n}\n";
+const PASS: &str = "fn surface(in: SurfaceIn) -> Surface { return in.surface; }";
+
+#[test]
+fn a_surface_shader_changes_only_its_material_and_removing_it_gives_the_plain_picture() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+    let [red, green, _] = pixel(&plain, LAVA_AT.0, LAVA_AT.1);
+    assert!(red > 20 && (red - green).abs() < 5, "{red} {green}");
+
+    headless.set_game_shaders(&[lava(RED, 1)]);
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].outcome, Ok(()));
+    assert_eq!(reports[0].material.as_deref(), Some("Lava"));
+    let shaded = headless.screenshot(&camera).unwrap();
+    let [red, green, blue] = pixel(&shaded, LAVA_AT.0, LAVA_AT.1);
+    assert!(red > 60 && green < 10 && blue < 10, "{red} {green} {blue}");
+    assert!(same_from(WIDTH / 2 + 2, &shaded, &plain), "Stone changed");
+    assert_ne!(shaded, plain);
+    assert_eq!(
+        pixel(&shaded, STONE_AT.0, STONE_AT.1),
+        pixel(&plain, STONE_AT.0, STONE_AT.1)
+    );
+
+    headless.set_game_shaders(&[]);
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+    assert!(headless.take_shader_reports().is_empty());
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_pass_through_surface_shader_draws_the_plain_picture() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    let cut_out = Material {
+        alpha_mode: AlphaMode::Mask { cutoff: 0.5 },
+        ..named("Lava", [0.6, 0.4, 0.2])
+    };
+    let see_through = Material {
+        alpha_mode: AlphaMode::Blend,
+        base_color: [0.6, 0.4, 0.2, 0.5],
+        ..named("Lava", [0.6, 0.4, 0.2])
+    };
+    for lava_material in [named("Lava", [0.6, 0.4, 0.2]), cut_out, see_through] {
+        headless.set_game_shaders(&[]);
+        headless
+            .set_scene(&two(lava_material, named("Stone", [0.3; 3])))
+            .unwrap();
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_game_shaders(&[lava(PASS, 1)]);
+        assert_eq!(headless.take_shader_reports().len(), 1);
+        let passed = headless.screenshot(&camera).unwrap();
+        assert!(most_different(&plain, &passed) <= 2);
+        assert!(same_from(WIDTH / 2 + 2, &passed, &plain));
+    }
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_surface_shader_gives_the_alpha_of_cut_out_and_see_through_surfaces() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    let gone = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.alpha = 0.0;\n    return made;\n}\n";
+    let cut_out = Material {
+        alpha_mode: AlphaMode::Mask { cutoff: 0.5 },
+        ..named("Lava", [0.6; 3])
+    };
+    let see_through = Material {
+        alpha_mode: AlphaMode::Blend,
+        ..named("Lava", [0.6; 3])
+    };
+    for lava_material in [cut_out, see_through] {
+        headless.set_game_shaders(&[]);
+        headless
+            .set_scene(&two(lava_material, named("Stone", [0.3; 3])))
+            .unwrap();
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_game_shaders(&[lava(gone, 1)]);
+        headless.take_shader_reports();
+        let faded = headless.screenshot(&camera).unwrap();
+        let (before, after) = (
+            pixel(&plain, LAVA_AT.0, LAVA_AT.1),
+            pixel(&faded, LAVA_AT.0, LAVA_AT.1),
+        );
+        assert_ne!(before, after);
+        assert!(same_from(WIDTH / 2 + 2, &faded, &plain));
+    }
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn surface_values_change_the_picture_with_no_report() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+    let text = "//! param glow: f32 = 0.0 range 0..10\n\
+                fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.emission = vec3f(params.glow, 0.0, 0.0);\n    return made;\n}\n";
+    let with = |glow: f32| [("glow".to_owned(), ParamValue::F32(glow))];
+    let (none, some, lots) = (with(0.0), with(1.0), with(4.0));
+    let shader = |values| GameShader {
+        values,
+        ..lava(text, 1)
+    };
+    headless.set_game_shaders(&[shader(&some)]);
+    assert_eq!(headless.take_shader_reports().len(), 1);
+    let dim = headless.screenshot(&camera).unwrap();
+    headless.set_game_shaders(&[shader(&lots)]);
+    let bright = headless.screenshot(&camera).unwrap();
+    headless.set_game_shaders(&[shader(&none)]);
+    let nothing = headless.screenshot(&camera).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
+    assert_ne!(dim, bright);
+    assert_ne!(dim, plain);
+    assert!(most_different(&nothing, &plain) <= 2);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_broken_surface_shader_says_where_and_the_plain_picture_is_drawn() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let camera = above();
+    let plain = headless.screenshot(&camera).unwrap();
+    let broken = "// Hot.\nfn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                  made.color = nope;\n    return made;\n}\n";
+    headless.set_game_shaders(&[lava(broken, 1)]);
+    assert_eq!(headless.screenshot(&camera).unwrap(), plain);
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1);
+    let Err(error) = &reports[0].outcome else {
+        panic!("a broken shader was taken");
+    };
+    assert_eq!(error.file, "shaders/lava.wgsl");
+    assert_eq!(error.line, Some(4));
+    let note = error.note.as_deref().unwrap_or_default();
+    assert!(note.contains("level's own material"), "{note}");
+
+    // A good version after it is drawn, and a broken one after that is not.
+    headless.set_game_shaders(&[lava(RED, 2)]);
+    headless.take_shader_reports();
+    let red = headless.screenshot(&camera).unwrap();
+    assert_ne!(red, plain);
+    headless.set_game_shaders(&[lava(broken, 3)]);
+    assert_eq!(headless.screenshot(&camera).unwrap(), red);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_material_the_level_lacks_is_said_once_for_each_level() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let misspelt = GameShader {
+        used_as: ShaderUse::Surface { material: "Lavva" },
+        ..lava(PASS, 1)
+    };
+    let none_like = GameShader {
+        used_as: ShaderUse::Surface { material: "Water" },
+        ..lava(PASS, 1)
+    };
+    let scene = two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3]));
+
+    // With no level, nothing is said.
+    headless.set_game_shaders(&[misspelt]);
+    assert!(
+        headless
+            .take_shader_reports()
+            .iter()
+            .all(|r| r.outcome.is_ok())
+    );
+    headless.screenshot(&above()).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
+
+    headless.set_scene(&scene).unwrap();
+    let plain = headless.screenshot(&above()).unwrap();
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    let Err(error) = &reports[0].outcome else {
+        panic!("a missing material was taken");
+    };
+    assert_eq!(error.message, "The level has no material named `Lavva`.");
+    assert_eq!(error.hint.as_deref(), Some("Did you mean `Lava`?"));
+    let note = error.note.as_deref().unwrap_or_default();
+    assert!(note.contains("until a level with that material"), "{note}");
+    assert_eq!(reports[0].material.as_deref(), Some("Lavva"));
+    headless.screenshot(&above()).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
+
+    headless.set_game_shaders(&[none_like]);
+    headless.screenshot(&above()).unwrap();
+    let reports = headless.take_shader_reports();
+    let hint = reports
+        .iter()
+        .find_map(|report| report.outcome.as_ref().err()?.hint.clone());
+    assert_eq!(
+        hint.as_deref(),
+        Some("The level's materials are: Lava, Stone.")
+    );
+    headless.set_scene(&scene).unwrap();
+    headless.screenshot(&above()).unwrap();
+    assert_eq!(headless.take_shader_reports().len(), 1);
+    assert!(most_different(&headless.screenshot(&above()).unwrap(), &plain) <= 2);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_material_takes_one_surface_shader_and_the_first_wins() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let camera = above();
+    let blue = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.color = vec3f(0.0, 0.0, 1.0);\n    return made;\n}\n";
+    let second = GameShader {
+        name: "second",
+        ..lava(blue, 1)
+    };
+    headless.set_game_shaders(&[lava(RED, 1), second]);
+    // The table is made at the first frame, which says what is wrong with it.
+    let picture = headless.screenshot(&camera).unwrap();
+    let reports = headless.take_shader_reports();
+    let said: Vec<_> = reports
+        .iter()
+        .filter_map(|r| r.outcome.as_ref().err())
+        .collect();
+    assert_eq!(said.len(), 1, "{reports:?}");
+    assert_eq!(
+        said[0].message,
+        "Material `Lava` already has the surface shader `lava`; a material takes one."
+    );
+    let [red, _, blue] = pixel(&picture, LAVA_AT.0, LAVA_AT.1);
+    assert!(red > blue, "{red} {blue}");
+    headless.screenshot(&camera).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
     drop(headless);
     assert_eq!(validation_errors(), 0);
 }
