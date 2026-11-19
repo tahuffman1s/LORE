@@ -460,12 +460,16 @@ Bevy's generated environment light do it.
 - **A face a frame.** One face is drawn again each frame, round and round,
   the smaller sizes are made from it (blits), and that face is blurred: a
   whole turn takes six frames. The whole cube is drawn at once when there
-  is none, when the sky jumps (the sun moves more than 3° in a frame, the
-  cloud cover, night or storm by more than a tenth, or the level's sky
-  light by a quarter), and in a picture held still whenever anything it is
-  drawn from changes, so a picture held still is the same however often it
-  is drawn. With no sky drawn the numbers are wiped and the light is the
-  two colours again.
+  is none, and when the sky has jumped since any face was drawn: the sun
+  has moved more than 3°, the cloud cover, night, storm, rain or snow by
+  more than a tenth, the level's sky light or the fog by a quarter, or the
+  eye more than 100 m. Measured against each face, a change too slow to be
+  a jump in one frame cannot leave the faces apart either. A picture held
+  still draws the whole cube on its first frame and whenever anything but
+  the eye changes, so it is the same however often it is drawn; a camera
+  moved while time is held still keeps the sky until it has gone 100 m.
+  With no sky drawn the numbers are wiped and the light is the two colours
+  again.
 - **Blurring.** Each face is blurred into five sizes (64 down to 4 pixels),
   one for each roughness 0, ¼, ½, ¾ and 1, and a surface reads the size its
   roughness says, between sizes as Filament and Bevy do (linear in the
@@ -478,7 +482,7 @@ Bevy's generated environment light do it.
   Ramamoorthi and Hanrahan 2001), from the 8-pixel size of the cube, added
   up in two steps: 528 pixels each sum one line of a face, then ten sum
   those (one pass of ten pixels summing everything took 0.5 ms on an RX
-  7800 XT, the two 0.05).
+  7800 XT; the two take too little to measure).
 - **Whose light.** A matte surface facing straight up still gets exactly
   the level's sky light, colour and all, so a level with no light of its
   own still shows its materials' own colours; the sky drawn says how that
@@ -503,7 +507,9 @@ Bevy's generated environment light do it.
 within a pixel, or it flickers as the eye moves:
 
 - Bumps a normal map has that are too small to see shorten the normal read
-  from a smaller size of it (Toksvig 2005). The shortness gives how widely
+  from a smaller size of it (Toksvig 2005). A shuffled material's two
+  copies are measured each before they are blended, or every seam between
+  patches would look rough. The shortness gives how widely
   they face as a von Mises–Fisher spread, κ = (3r − r³)/(1 − r²), and the
   highlight widens by α² += 2/κ times the square of the material's normal
   strength (for a GGX or Beckmann highlight, the spread of slopes each way
@@ -512,6 +518,8 @@ within a pixel, or it flickers as the eye moves:
 - Curves too tight for the pixels widen it by the turning of the built
   normal from pixel to pixel, as Filament does (Tokuyoshi and Kaplanyan
   2019): α² += min(2 × 0.15 × (|∂n/∂x|² + |∂n/∂y|²), 0.2).
+- Both are added after a game's surface shader has said how rough the
+  surface is, so what it says is spread too.
 - Measured on a polished floor of smooth dimples 40 mm across, toward a
   low sun, with no upscaler: the camera moved 4 mm changes the far floor's
   pixels by 3.7 on average out of 255 (15.1 before), and 1.1 % of them by
@@ -519,10 +527,17 @@ within a pixel, or it flickers as the eye moves:
   floor no longer turns into a mirror where the dimples become smaller
   than a pixel.
 
-Cost, `lore bench`: on an RX 7800 XT the graphics card's share of the
-usual frame is 1.69 to 1.70 ms against 1.66 to 1.67 on main (three runs
-each); on lavapipe no difference the bench can tell (63.6 and 66.7 ms
-against 65.5 and 65.1).
+Cost. `lore bench` holds time still, so after its first frame it draws
+no face and times the shading alone: on an RX 7800 XT 1.69 ms against
+1.68 at its usual size, and at 3840×2160 with no upscaling 5.60 to 5.65
+ms against 5.46 to 5.47 (3 %, three runs each); on lavapipe no difference
+it can tell (65.2 ms against 65.3). With time passing, a face drawn every
+frame (the screenshot tool, the starter arena with the test balls): on
+the RX 7800 XT at 2160p 4.0 ms against 3.8, of which the faces and their
+blurring take too little for it to tell (4.0 or 3.9 ms without them); on
+lavapipe at 720p 55.9 ms against 52.3 (7 %, three runs each), most of it
+the passes that draw and blur a face, which a software renderer pays for
+by the pass.
 
 ### The look (#101)
 

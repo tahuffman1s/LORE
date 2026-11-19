@@ -60,6 +60,9 @@ const SKYLIGHT_HARMONICS_SIDE: i32 = 8;
 const SKYLIGHT_PARTS: i32 = 48;
 // Where in the row of numbers the brightness is kept.
 const SKYLIGHT_BRIGHTNESS: i32 = 9;
+// The most the sky drawn is made brighter to be the level's sky light: only
+// so that a sky drawn all but black does not make a speck of it blinding.
+const SKYLIGHT_MOST: f32 = 1000.0;
 // How many looks round each pixel a blurred size is made from. Each look
 // reads a size of the drawn cube as blurred as its share of the highlight
 // is wide, so a few dozen make a smooth picture (Colbert and Křivánek,
@@ -303,18 +306,20 @@ fn fragment_skylight_harmonics(facing: Facing) -> @location(0) vec4<f32> {
     let ground_up = view.ground.rgb * up.a;
     // What the level says, against what was drawn: for each colour, so that
     // the harmonics give a surface facing up exactly the level's sky light,
-    // and for brightness alone. A sky drawn black, or no sky light, leaves
-    // the drawn sky as it is.
-    let wanted = view.sky.rgb;
+    // and for brightness alone. No sky light in a colour is none of it; a
+    // sky drawn black is left as it is. Night is drawn from the sky's own
+    // faint glow while the level's light is the moon's, drawn far brighter
+    // than it is, so the two can be a long way apart.
+    let wanted = max(view.sky.rgb, vec3<f32>(0.0));
     let colours = select(
         vec3<f32>(1.0),
-        clamp(max(wanted - ground_up, vec3<f32>(0.0)) / max(sky_up, vec3<f32>(1e-9)), vec3<f32>(0.0625), vec3<f32>(16.0)),
-        sky_up > vec3<f32>(1e-9) & wanted > vec3<f32>(0.0),
+        min(max(wanted - ground_up, vec3<f32>(0.0)) / max(sky_up, vec3<f32>(1e-9)), vec3<f32>(SKYLIGHT_MOST)),
+        sky_up > vec3<f32>(1e-9),
     );
     let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
     var brighter = 1.0;
-    if dot(from_above, grey) > 1e-9 && dot(wanted, grey) > 0.0 {
-        brighter = clamp(dot(wanted, grey) / dot(from_above, grey), 0.0625, 16.0);
+    if dot(from_above, grey) > 1e-9 {
+        brighter = min(dot(wanted, grey) / dot(from_above, grey), SKYLIGHT_MOST);
     }
     if which == SKYLIGHT_BRIGHTNESS {
         return vec4<f32>(brighter, 0.0, 0.0, 1.0);

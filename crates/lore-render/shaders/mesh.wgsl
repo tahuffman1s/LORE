@@ -591,6 +591,40 @@ fn pictured_along(
     );
 }
 
+// A normal map at `uv`, read as `pictured` reads any picture: in xyz the
+// way it leans, from -1 to 1 each way, and in w how long the normals read
+// are (`bumps_spread`). For a shuffled material that is each copy's length
+// blended, not the length of the two copies blended: two copies leaning
+// different ways would make it shorter, and the seams between patches
+// would look rough.
+fn bumps_pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuffle) -> vec4<f32> {
+    if !mixing.on {
+        let read = textureSampleBias(picture, how, uv, view.eye.w).xyz * 2.0 - 1.0;
+        return vec4<f32>(read, length(read));
+    }
+    let sharper = exp2(view.eye.w);
+    return bumps_along(picture, how, uv, dpdx(uv) * sharper, dpdy(uv) * sharper, mixing);
+}
+
+// The same, told how far `uv` changes from one pixel to the next, as
+// `pictured_along` is.
+fn bumps_along(
+    picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, along: vec2<f32>, down: vec2<f32>, mixing: Shuffle,
+) -> vec4<f32> {
+    if mixing.share >= 1.0 {
+        let second = textureSampleGrad(picture, how, uv + mixing.second, along, down).xyz * 2.0 - 1.0;
+        return vec4<f32>(second, length(second));
+    }
+    let first = textureSampleGrad(picture, how, uv + mixing.first, along, down).xyz * 2.0 - 1.0;
+    if mixing.share <= 0.0 {
+        return vec4<f32>(first, length(first));
+    }
+    let second = textureSampleGrad(picture, how, uv + mixing.second, along, down).xyz * 2.0 - 1.0;
+    return vec4<f32>(
+        mix(first, second, mixing.share), mix(length(first), length(second), mixing.share),
+    );
+}
+
 // How far the mesh's two UV maps change from one pixel to the next, across
 // the picture and down it.
 struct Slopes {
@@ -611,6 +645,25 @@ fn over_pictured(
     let sharper = exp2(view.eye.w);
     return pictured_along(
         picture, how, over_placed(texture, corner),
+        vec2<f32>(dot(placing.u.xy, across), dot(placing.v.xy, across)) * sharper,
+        vec2<f32>(dot(placing.u.xy, down), dot(placing.v.xy, down)) * sharper,
+        mixing,
+    );
+}
+
+// The normal map of the material painted over this one, read as
+// `bumps_pictured` reads one and `over_pictured` reads that material's
+// pictures.
+fn over_bumps_pictured(
+    picture: texture_2d<f32>, how: sampler, corner: Corner, mixing: Shuffle, slopes: Slopes,
+) -> vec4<f32> {
+    let placing = material.over_placings[NORMAL];
+    let second = placing.u.w > 0.5;
+    let across = select(slopes.across.xy, slopes.across.zw, second);
+    let down = select(slopes.down.xy, slopes.down.zw, second);
+    let sharper = exp2(view.eye.w);
+    return bumps_along(
+        picture, how, over_placed(NORMAL, corner),
         vec2<f32>(dot(placing.u.xy, across), dot(placing.v.xy, across)) * sharper,
         vec2<f32>(dot(placing.u.xy, down), dot(placing.v.xy, down)) * sharper,
         mixing,
@@ -1764,21 +1817,19 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         // A material with no bumps of its own is flat: straight out.
         var sample = vec3<f32>(0.0, 0.0, 1.0);
         if has(NORMAL) {
-            sample = pictured(
-                normal_texture, normal_sampler, placed(NORMAL, corner), mixing,
-            ).xyz * 2.0 - 1.0;
-            bumps = bumps_spread(length(sample), material.factors.z);
-            sample = vec3<f32>(sample.xy * material.factors.z, sample.z);
+            let read = bumps_pictured(normal_texture, normal_sampler, placed(NORMAL, corner), mixing);
+            bumps = bumps_spread(read.w, material.factors.z);
+            sample = vec3<f32>(read.xy * material.factors.z, read.z);
         }
         if painted.share > 0.0 {
             var over = vec3<f32>(0.0, 0.0, 1.0);
             var over_spread = 0.0;
             if over_has(NORMAL) {
-                over = over_pictured(
-                    over_normal_texture, over_normal_sampler, NORMAL, corner, painted.mixing, painted.slopes,
-                ).xyz * 2.0 - 1.0;
-                over_spread = bumps_spread(length(over), material.over_factors.z);
-                over = vec3<f32>(over.xy * material.over_factors.z, over.z);
+                let read = over_bumps_pictured(
+                    over_normal_texture, over_normal_sampler, corner, painted.mixing, painted.slopes,
+                );
+                over_spread = bumps_spread(read.w, material.over_factors.z);
+                over = vec3<f32>(read.xy * material.over_factors.z, read.z);
             }
             sample = mix(sample, over, painted.share);
             bumps = mix(bumps, over_spread, painted.share);
@@ -1820,10 +1871,6 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, SMOOTHEST, 1.0);
-    // Bumps and curves too small to see make the surface as much rougher
-    // as they spread its highlight.
-    let squared = roughness * roughness;
-    roughness = sqrt(sqrt(min(squared * squared + bumps + curving, 1.0)));
     // How much of the light from all round reaches into the surface's
     // crevices: each material's own shading, mixed as the two are.
     var reaches = 1.0;
@@ -1854,6 +1901,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var base_seen = base;
     // The `//!surface` lines are markers a game's surface shader swaps for calls (`game_shaders/template.rs`).
     //!surface settled
+    // Bumps and curves too small to see make the surface as much rougher
+    // as they spread its highlight: after a game's surface shader has said
+    // how rough it is, so that what it says is spread too.
+    let squared = roughness * roughness;
+    roughness = sqrt(sqrt(min(squared * squared + bumps + curving, 1.0)));
     var snowed = 0.0;
     var sparkle = 0.0;
     // How much light reaches snow banked against the side of a thing: it

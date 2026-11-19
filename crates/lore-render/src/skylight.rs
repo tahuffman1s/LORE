@@ -65,21 +65,24 @@ const FACES: u32 = 6;
 /// Every face, one bit each.
 const ALL_FACES: u8 = 0b11_1111;
 
-/// How far the sun can move from one frame to the next, as the cosine of
+/// How far the sun can have moved since a face was drawn, as the cosine of
 /// the angle, before the sky is said to have jumped: three degrees, which
 /// it takes a quarter of an hour of a real day to go, or a fraction of a
 /// second of a game's.
 const SUN_JUMPS: f32 = 0.998_63;
 /// How much the share of the sky that is cloud, how far the night has
-/// come, or how stormy the sky is can change in a frame before it has
-/// jumped.
+/// come, how stormy the sky is, or how hard it rains or snows at the eye
+/// can have changed since a face was drawn before the sky has jumped.
 const SHARE_JUMPS: f32 = 0.1;
-/// How much the level's sky light can grow or shrink in a frame, as a
-/// share of itself, before it has jumped.
+/// How much the level's sky light or the fog can have grown or shrunk, as
+/// a share of itself, before it has jumped.
 const LIGHT_JUMPS: f32 = 0.25;
+/// How far the eye can have gone, in metres: farther is a jump to another
+/// place, under other weather.
+const EYE_JUMPS: f32 = 100.0;
 
 /// What the sky is drawn from. A picture held still draws it again only if
-/// one of these has changed.
+/// one of these but the eye has changed, or the eye has gone far.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Heavens {
     pub(crate) lighting: Lighting,
@@ -89,9 +92,21 @@ pub(crate) struct Heavens {
     pub(crate) heavens: [[f32; 4]; 5],
     /// How many seconds the clouds have drifted.
     pub(crate) drift: f32,
+    /// Where the eye is: the clouds and the weather are drawn round it.
+    pub(crate) eye: [f32; 3],
 }
 
 impl Heavens {
+    /// Whether this is the same sky as `before`, wherever the eye is: a
+    /// camera moved about while time is held still sees the same sky, to
+    /// the cube's pixels, until it has gone far.
+    fn same_sky(&self, before: &Self) -> bool {
+        Self {
+            eye: before.eye,
+            ..*self
+        } == *before
+    }
+
     /// Whether the sky has changed too much since `before` to be drawn
     /// again a face at a time: the faces would disagree where they meet.
     fn jumped(&self, before: &Self) -> bool {
@@ -101,13 +116,25 @@ impl Heavens {
             [x, y, z]
         });
         let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-        let (light, before_light) = (grey(self.lighting.sky), grey(before.lighting.sky));
+        let grown = |now: f32, then: f32| (now - then).abs() > LIGHT_JUMPS * now.max(then);
+        let share = |now: f32, then: f32| (now - then).abs() > SHARE_JUMPS;
+        let gone = self
+            .eye
+            .iter()
+            .zip(before.eye)
+            .map(|(now, then)| (now - then) * (now - then));
+        let (rows, before_rows) = (&self.weather.rows, &before.weather.rows);
         along(self.lighting.towards_sun, before.lighting.towards_sun) < SUN_JUMPS
             || along(sun, before_sun) < SUN_JUMPS
-            || (self.heavens[0][3] - before.heavens[0][3]).abs() > SHARE_JUMPS
-            || (self.weather.cover - before.weather.cover).abs() > SHARE_JUMPS
-            || (self.weather.rows[1][0] - before.weather.rows[1][0]).abs() > SHARE_JUMPS
-            || (light - before_light).abs() > LIGHT_JUMPS * light.max(before_light)
+            || share(self.heavens[0][3], before.heavens[0][3])
+            || share(self.weather.cover, before.weather.cover)
+            // How stormy the sky is, how hard it rains and how hard it snows.
+            || share(rows[1][0], before_rows[1][0])
+            || share(rows[0][0], before_rows[0][0])
+            || share(rows[1][3], before_rows[1][3])
+            || grown(grey(self.lighting.sky), grey(before.lighting.sky))
+            || grown(self.weather.fog, before.weather.fog)
+            || gone.sum::<f32>() > EYE_JUMPS * EYE_JUMPS
     }
 }
 
@@ -125,12 +152,15 @@ pub(crate) struct Work {
 /// Which faces are drawn when.
 #[derive(Debug, Default)]
 pub(crate) struct Turns {
-    /// Whether the whole cube has been drawn since there was last no sky.
-    filled: bool,
+    /// What the sky was drawn from when each face was last drawn: none
+    /// since there was last no sky.
+    drawn: [Option<Heavens>; 6],
     /// The face whose turn it is next.
     next: u8,
-    /// What the sky was drawn from the frame before.
+    /// What the sky was drawn from the frame before, and whether time was
+    /// held still then.
     last: Option<Heavens>,
+    was_still: bool,
 }
 
 impl Turns {
@@ -138,13 +168,22 @@ impl Turns {
     /// none; `still` when time is held still.
     pub(crate) fn plan(&mut self, now: Option<&Heavens>, still: bool) -> Work {
         let Some(now) = now else {
-            let forget = self.filled;
+            let forget = self.drawn.iter().any(Option::is_some);
             *self = Self::default();
             return Work { faces: 0, forget };
         };
-        let changed = self.last.as_ref() != Some(now);
-        let jumped = self.last.as_ref().is_none_or(|last| now.jumped(last));
-        let faces = if !self.filled || jumped || (still && changed) {
+        // A face drawn so long ago that the sky has jumped since, measured
+        // against each face so that a change too slow to be a jump in one
+        // frame cannot leave the faces apart either.
+        let behind = self
+            .drawn
+            .iter()
+            .any(|drawn| drawn.as_ref().is_none_or(|drawn| now.jumped(drawn)));
+        // A picture held still is drawn from one sky, whatever the frames
+        // before it did.
+        let held =
+            still && (!self.was_still || self.last.as_ref().is_none_or(|last| !now.same_sky(last)));
+        let faces = if behind || held {
             ALL_FACES
         } else if still {
             0
@@ -153,8 +192,13 @@ impl Turns {
             self.next = (self.next + 1) % 6;
             face
         };
-        self.filled = true;
+        for (face, drawn) in self.drawn.iter_mut().enumerate() {
+            if faces & (1 << face) != 0 {
+                *drawn = Some(*now);
+            }
+        }
         self.last = Some(*now);
+        self.was_still = still;
         Work {
             faces,
             forget: false,
@@ -649,9 +693,16 @@ impl Skylight {
         if work.faces == 0 || !self.works() {
             return;
         }
-        let faces: Vec<u32> = (0..FACES)
-            .filter(|face| work.faces & (1 << face) != 0)
-            .collect();
+        // The faces drawn this frame: the first `count`.
+        let mut drawn_now = [0_u32; FACES as usize];
+        let mut count = 0;
+        for face in 0..FACES {
+            if work.faces & (1 << face) != 0 {
+                drawn_now[count] = face;
+                count += 1;
+            }
+        }
+        let faces = &drawn_now[..count];
         // SAFETY: as above; every struct lives until its call returns.
         unsafe {
             device.cmd_bind_descriptor_sets(
@@ -674,22 +725,19 @@ impl Skylight {
         };
 
         // The faces whose turn it is, drawn afresh.
-        let to_draw: Vec<_> = faces
-            .iter()
-            .map(|&face| {
-                change(
-                    self.drawn.image,
-                    Cube::face(0, face),
-                    vk::ImageLayout::UNDEFINED,
-                    drawing,
-                )
-                .src_stage_mask(read)
-                .dst_stage_mask(output)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            })
-            .collect();
-        barrier(&to_draw);
-        for &face in &faces {
+        let to_draw = drawn_now.map(|face| {
+            change(
+                self.drawn.image,
+                Cube::face(0, face),
+                vk::ImageLayout::UNDEFINED,
+                drawing,
+            )
+            .src_stage_mask(read)
+            .dst_stage_mask(output)
+            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        });
+        barrier(&to_draw[..count]);
+        for &face in faces {
             // SAFETY: as above; the view is of the face just made ready.
             unsafe {
                 begin_drawing(
@@ -708,26 +756,12 @@ impl Skylight {
         // The smaller sizes, each made from the one before. The faces not
         // drawn this frame are made again with the rest, which costs less
         // than telling them apart.
-        let to_shrink: Vec<_> = (0..FACES)
-            .map(|face| {
-                let drawn_now = faces.contains(&face);
-                change(
-                    self.drawn.image,
-                    Cube::face(0, face),
-                    if drawn_now { drawing } else { readable },
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                )
-                .src_stage_mask(if drawn_now { output } else { read })
-                .src_access_mask(if drawn_now {
-                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
-                } else {
-                    vk::AccessFlags2::NONE
-                })
-                .dst_stage_mask(transfer)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-            })
-            .chain(std::iter::once(
-                change(
+        let to_shrink: [_; FACES as usize + 1] = std::array::from_fn(|at| {
+            let Ok(face) = u32::try_from(at) else {
+                return vk::ImageMemoryBarrier2::default();
+            };
+            if face == FACES {
+                return change(
                     self.drawn.image,
                     Cube::sizes(1, DRAWN_SIZES - 1),
                     vk::ImageLayout::UNDEFINED,
@@ -735,9 +769,24 @@ impl Skylight {
                 )
                 .src_stage_mask(read)
                 .dst_stage_mask(transfer)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE),
-            ))
-            .collect();
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+            }
+            let just_drawn = faces.contains(&face);
+            change(
+                self.drawn.image,
+                Cube::face(0, face),
+                if just_drawn { drawing } else { readable },
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            )
+            .src_stage_mask(if just_drawn { output } else { read })
+            .src_access_mask(if just_drawn {
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+            } else {
+                vk::AccessFlags2::NONE
+            })
+            .dst_stage_mask(transfer)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        });
         barrier(&to_shrink);
         let corner = |size: u32| {
             let side = i32::try_from((SIDE >> size).max(1)).unwrap_or(1);
@@ -797,29 +846,23 @@ impl Skylight {
         .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)]);
 
         // The same faces blurred, every size of them.
-        let blurring = |old: vk::ImageLayout, new: vk::ImageLayout| -> Vec<_> {
-            faces
-                .iter()
-                .map(|&face| {
-                    let range = vk::ImageSubresourceRange {
-                        level_count: BLURRED_SIZES,
-                        ..Cube::face(0, face)
-                    };
-                    change(self.blurred.image, range, old, new)
-                })
-                .collect()
-        };
-        let to_blur: Vec<_> = blurring(vk::ImageLayout::UNDEFINED, drawing)
-            .into_iter()
-            .map(|barrier| {
-                barrier
-                    .src_stage_mask(read)
-                    .dst_stage_mask(output)
-                    .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        let blurring = |old: vk::ImageLayout, new: vk::ImageLayout| {
+            drawn_now.map(|face| {
+                let range = vk::ImageSubresourceRange {
+                    level_count: BLURRED_SIZES,
+                    ..Cube::face(0, face)
+                };
+                change(self.blurred.image, range, old, new)
             })
-            .collect();
-        barrier(&to_blur);
-        for &face in &faces {
+        };
+        let to_blur = blurring(vk::ImageLayout::UNDEFINED, drawing).map(|barrier| {
+            barrier
+                .src_stage_mask(read)
+                .dst_stage_mask(output)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        });
+        barrier(&to_blur[..count]);
+        for &face in faces {
             for size in 0..BLURRED_SIZES {
                 let side = SIDE >> size;
                 // SAFETY: as above; the view is of a face just made ready.
@@ -837,17 +880,14 @@ impl Skylight {
                 }
             }
         }
-        let blurred: Vec<_> = blurring(drawing, readable)
-            .into_iter()
-            .map(|barrier| {
-                barrier
-                    .src_stage_mask(output)
-                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                    .dst_stage_mask(read)
-                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-            })
-            .collect();
-        barrier(&blurred);
+        let blurred = blurring(drawing, readable).map(|barrier| {
+            barrier
+                .src_stage_mask(output)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(read)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+        });
+        barrier(&blurred[..count]);
 
         // The parts, from the whole sky as it now is, and the numbers from
         // them.
@@ -966,6 +1006,7 @@ mod tests {
                 [0.0; 4],
             ],
             drift: 0.0,
+            eye: [0.0; 3],
         }
     }
 
@@ -1027,6 +1068,56 @@ mod tests {
         wetter.weather.rows[0][0] = 0.01;
         assert_eq!(turns.plan(Some(&wetter), true).faces, ALL_FACES);
         assert_eq!(turns.plan(Some(&wetter), true).faces, 0);
+    }
+
+    #[test]
+    fn a_change_too_slow_for_one_frame_still_redraws_the_whole_sky_before_faces_drift_apart() {
+        let mut turns = Turns::default();
+        let mut now = clear_noon();
+        turns.plan(Some(&now), false);
+        // The cloud cover grows by 0.04 a frame: never a tenth in one frame,
+        // but a face drawn three frames ago is a tenth behind.
+        let mut whole = Vec::new();
+        for _ in 0..6 {
+            now = later(&now, 1.0 / 60.0);
+            now.weather.cover += 0.04;
+            whole.push(turns.plan(Some(&now), false).faces == ALL_FACES);
+        }
+        assert!(whole.iter().any(|&whole| whole), "{whole:?}");
+    }
+
+    #[test]
+    fn rain_beginning_or_the_eye_going_far_redraws_the_whole_sky() {
+        let mut turns = Turns::default();
+        let now = clear_noon();
+        turns.plan(Some(&now), false);
+        let mut raining = later(&now, 0.1);
+        raining.weather.rows[0][0] = 0.6;
+        assert_eq!(turns.plan(Some(&raining), false).faces, ALL_FACES);
+        let mut elsewhere = later(&raining, 0.1);
+        elsewhere.eye = [500.0, 0.0, 0.0];
+        assert_eq!(turns.plan(Some(&elsewhere), false).faces, ALL_FACES);
+    }
+
+    #[test]
+    fn the_first_picture_held_still_after_time_passed_draws_the_whole_sky() {
+        let mut turns = Turns::default();
+        let mut now = clear_noon();
+        for _ in 0..4 {
+            now = later(&now, 1.0 / 60.0);
+            turns.plan(Some(&now), false);
+        }
+        // The same sky as the frame before, but the faces were drawn at
+        // four different moments.
+        assert_eq!(turns.plan(Some(&now), true).faces, ALL_FACES);
+        assert_eq!(turns.plan(Some(&now), true).faces, 0);
+        // A camera moved a little while held still sees the same sky; one
+        // moved far is drawn from where it is.
+        let mut moved = now;
+        moved.eye = [3.0, 1.0, 0.0];
+        assert_eq!(turns.plan(Some(&moved), true).faces, 0);
+        moved.eye = [300.0, 1.0, 0.0];
+        assert_eq!(turns.plan(Some(&moved), true).faces, ALL_FACES);
     }
 
     #[test]

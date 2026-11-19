@@ -2153,6 +2153,7 @@ impl MeshPipeline {
                 weather,
                 heavens,
                 drift: view.time,
+                eye: view.eye,
             });
             let work = turns.plan(now.as_ref(), view.elapsed <= 0.0);
             drop(turns);
