@@ -361,6 +361,17 @@ for _, name in game.lamps.names() do
     game.lamp(name).on = false
 end
 game.lamp("candle"):remove()
+local heat: Shader = game.shaders.screen("heat", { strength = 0.3, tint = "orange" })
+local lava = game.shaders.surface("lava", "Lava", { glow = 2, offset = vector.create(0, 1, 0), spots = { 1, 2 } })
+game.shaders.screen("pulse", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color * 2.0; }" })
+game.shaders.surface("shine", "Gold", { code = "fn surface(in: SurfaceIn) -> Surface { return in.surface; }" })
+game.shaders.screen("heat")
+heat:set("strength", 0.8)
+heat:set("tint", "#ff6020")
+lava:set("spots", { 1, 2, 3 })
+lava:set("offset", vector.create(0, 2, 0))
+heat:remove()
+lava:remove()
 game.lighting.setExposure(-1.5)
 game.lighting.setEyeAdaptation({ opens = 1, closes = 6, seconds = 4 })
 print(game.lighting.exposure(), game.lighting.eyeAdaptation().opens, game.lighting.eyeAdaptation().closes, game.lighting.eyeAdaptation().seconds)

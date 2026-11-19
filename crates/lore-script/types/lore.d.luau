@@ -638,6 +638,33 @@ end
 --- Example: game.lamp("gate", { from = "street lamp", at = vector.create(0, 6, -12) })
 type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens: number?, color: string?, kelvin: number?, beam: number?, pointing: vector?, softness: number?, range: number?, radius: number?, flicker: string?, castsShadows: boolean? }
 
+--- A value a shader takes: a number, a colour or other text, a vector, or a
+--- list of up to four numbers.
+type ShaderValue = number | string | vector | {number}
+
+--- What `game.shaders` takes for a shader's values, by name, each a
+--- `ShaderValue` (the checker leaves them open). `code` is not a
+--- value: it is the shader's own text in quotes, used in place of the file.
+--- Example: game.shaders.screen("heat", { strength = 0.3, tint = "orange" })
+type ShaderValues = { [string]: any }
+
+--- A game shader that is on: a screen effect or a surface shader. What
+--- `game.shaders.screen` and `game.shaders.surface` give. It changes only
+--- what is drawn, so any function may use it, `game.onDraw` too.
+--- Example: local heat = game.shaders.screen("heat", { strength = 0.3 })
+declare extern type Shader with
+    --- Changes one of its values by name, any time. The value must be what
+    --- the shader's file says that value takes (a number in range, a colour,
+    --- a vector); a mistake says what it takes.
+    --- Example: heat:set("strength", 0.8)
+    --- Example: lava:set("tint", "#ff6020")
+    function set(self, name: string, value: ShaderValue): ()
+
+    --- Turns it off. Asking for it again with `game.shaders` turns it on.
+    --- Example: heat:remove()
+    function remove(self): ()
+end
+
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.
 --- Example: for _, setting in game.settings.list() do print(setting.label, setting.value) end
@@ -867,6 +894,33 @@ declare game: {
         --- script's, in the order they were made.
         --- Example: for _, name in game.lamps.names() do game.lamp(name).on = false end
         names: () -> {string},
+    },
+
+    --- Shaders written in WGSL that change how the game is drawn. The file
+    --- goes in the game's folder as `shaders/<name>.wgsl`. A shader is
+    --- named by its file without `.wgsl`, or gives its text itself with
+    --- `code`; calling again with new `code` replaces it. Values are set by
+    --- name. Asking for one that is on with no table changes nothing; with
+    --- a table its values start over (the rest go back to the shader's own).
+    --- A game can have 8 screen effects and 8 surface shaders on at once,
+    --- each with up to 32 values, and 64 KiB of text. They change only what
+    --- is drawn, so `game.onDraw` may call them. One asked for from a
+    --- function stays through a save of the script; one asked for at the
+    --- top of the file comes and goes with it. Saving the shader's own file
+    --- changes the running game and keeps the values that still fit.
+    shaders: {
+        --- Turns on a screen effect, drawn over the finished picture, from
+        --- `shaders/<name>.wgsl`, and gives it.
+        --- Example: local heat = game.shaders.screen("heat", { strength = 0.3 })
+        --- Example: game.shaders.screen("pulse", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color * 2.0; }" })
+        screen: (name: string, values: ShaderValues?) -> Shader,
+
+        --- Turns on a surface shader from `shaders/<name>.wgsl`: it changes
+        --- every surface whose material has the name `material` (capital
+        --- letters count). A material has one surface shader; asking for
+        --- another replaces it.
+        --- Example: local lava = game.shaders.surface("lava", "Lava", { glow = 2, tint = "orange" })
+        surface: (name: string, material: string, values: ShaderValues?) -> Shader,
     },
 
     --- Calls `handler` each time this file is saved and loaded again while
