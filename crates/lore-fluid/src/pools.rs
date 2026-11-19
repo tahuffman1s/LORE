@@ -37,6 +37,20 @@ const SPILL_SPEED: f32 = 0.5;
 const SPILL_LIFT: f32 = 0.02;
 /// How far either side of the way out it fans, radians.
 const SPILL_SPREAD: f32 = 0.5;
+/// Over a level rim it runs out as streams about this far apart, metres,
+/// and no more of them than this in a tick.
+const STREAMS_APART: f32 = 0.35;
+const MOST_STREAMS: usize = 6;
+/// How far short of each end of the rim the streams stop, metres.
+const RIM_ENDS: f32 = 0.1;
+/// What one drop of an overflow holds at the least, cubic metres (an
+/// eggcupful), and the most drops one stream lets go in a tick: more than
+/// that many eggcupfuls go as bigger drops.
+const BLOB: f64 = 4.0e-5;
+const MOST_BLOBS: usize = 4;
+/// An overflow leaves this many places in the store for what a game
+/// sprays.
+const SPILL_ROOM: usize = 500;
 
 /// Drops lying under a pool's surface join it; one in this many is looked
 /// at each tick.
@@ -228,8 +242,9 @@ pub struct Pool {
     /// How deep it is at its deepest when it stands where it was put.
     deepest: f32,
     curve: Arc<Curve>,
-    /// Where it runs out, and which way, if a way out was found.
-    spill: Option<([f32; 3], [f32; 2])>,
+    /// Where it runs out, which way, and over how wide a stretch of its
+    /// rim, if a way out was found.
+    spill: Option<([f32; 3], [f32; 2], f32)>,
     /// How many cubic metres of each kind it holds.
     parts: [f64; MOST_KINDS],
     /// The kind there is most of; what it last held when it is empty.
@@ -363,7 +378,7 @@ impl Pool {
     /// Where it runs out when it is over its brim, if it has a way out.
     #[must_use]
     pub fn spill(&self) -> Option<[f32; 3]> {
-        self.spill.map(|(place, _)| place)
+        self.spill.map(|(place, ..)| place)
     }
 
     /// How many cubic metres it holds.
@@ -517,7 +532,9 @@ impl Fluids {
                     brim: water.brim.max(water.level),
                     deepest: water.deepest(),
                     curve,
-                    spill: water.spill.map(|spill| (spill.place, spill.way)),
+                    spill: water
+                        .spill
+                        .map(|spill| (spill.place, spill.way, spill.wide)),
                     parts,
                     kind,
                     displaced: 0.0,
@@ -850,7 +867,7 @@ impl Fluids {
             if over <= 0.0 {
                 continue;
             }
-            let Some((place, way)) = pool.spill else {
+            let Some((place, way, wide)) = pool.spill else {
                 // No way out was found: what is over is lost.
                 pool.take((standing - full).max(0.0));
                 continue;
@@ -858,28 +875,86 @@ impl Fluids {
             let most = f64::from(MOST_SPILL * dt / 1000.0);
             let out = over.min(most);
             let from_pool = (standing - full).clamp(0.0, pool.held());
+            // It runs over the whole of a level rim, not out of one point
+            // of it: a few streams side by side, each somewhere else along
+            // the rim on every tick, and each a few drops the size of an
+            // egg. A spray's fine drops would be thousands.
+            let wide = if wide.is_finite() { wide.max(0.0) } else { 0.0 };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let streams = (libm::ceilf(wide / STREAMS_APART) as usize).clamp(1, MOST_STREAMS);
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let blobs = ((out / streams as f64 / BLOB).ceil() as usize).clamp(1, MOST_BLOBS);
+            // With no room in the store for them it waits, as far as it
+            // can wait.
+            if self.parts.len() + streams * blobs + SPILL_ROOM > crate::MOST_DROPS {
+                pool.take((from_pool - MOST_WAITING).max(0.0));
+                continue;
+            }
             // What goes over the rim is what the pool holds, in its mix:
-            // each drop is of one kind, chosen by the shares.
+            // each stream is of one kind, chosen by the shares.
             let shares = pool.shares();
+            let mostly = pool.kind;
             let taken = pool.take(out.min(from_pool));
             let waiting = (from_pool - taken - MOST_WAITING).max(0.0);
             pool.take(waiting);
             #[allow(clippy::cast_possible_truncation)]
-            let litres = (out * 1000.0) as f32;
-            pool.spilled = litres;
-            let roll = self.rolls.next();
-            let mut kind = pool.kind;
-            let mut passed = 0.0;
-            for (candidate, share) in shares.iter().enumerate() {
-                passed += share;
-                if roll < passed {
-                    kind = u8::try_from(candidate).unwrap_or(kind);
-                    break;
+            {
+                pool.spilled = (out * 1000.0) as f32;
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            let each = (out / (streams * blobs) as f64) as f32;
+            if each < crate::flow::MIN_VOLUME {
+                continue;
+            }
+            for _ in 0..streams {
+                let roll = self.rolls.next();
+                let mut kind = mostly;
+                let mut passed = 0.0;
+                for (candidate, share) in shares.iter().enumerate() {
+                    passed += share;
+                    if roll < passed {
+                        kind = u8::try_from(candidate).unwrap_or(kind);
+                        break;
+                    }
+                }
+                let dries = self
+                    .physics
+                    .get(usize::from(kind))
+                    .map_or(0.0, |phys| phys.dries);
+                // A little short of the rim's ends, where its corners are.
+                let along = (self.rolls.next() - 0.5) * (wide - 2.0 * RIM_ENDS).max(0.0);
+                let from = [
+                    place[0] - way[1] * along,
+                    place[1] + SPILL_LIFT,
+                    place[2] + way[0] * along,
+                ];
+                for blob in 0..blobs {
+                    let fast = SPILL_SPEED * (0.7 + 0.6 * self.rolls.next());
+                    let aside = (self.rolls.next() - 0.5) * SPILL_SPREAD * fast;
+                    let velocity = [
+                        way[0] * fast - way[1] * aside,
+                        0.0,
+                        way[1] * fast + way[0] * aside,
+                    ];
+                    self.born += 1;
+                    let mut drop =
+                        crate::store::Particle::flying(kind, from, velocity, each, self.born);
+                    // One after another through the tick, not all at once.
+                    #[allow(clippy::cast_precision_loss)]
+                    {
+                        drop.head_start = blob as f32 / blobs as f32;
+                    }
+                    // Water falling over a weir is spray enough: it throws
+                    // none of its own where it lands.
+                    drop.thrown = true;
+                    drop.dry_left = dries;
+                    self.parts.push(drop);
                 }
             }
-            let from = [place[0], place[1] + SPILL_LIFT, place[2]];
-            let velocity = [way[0] * SPILL_SPEED, 0.0, way[1] * SPILL_SPEED];
-            self.spray(kind, from, velocity, litres, SPILL_SPREAD);
         }
         self.stand_pools(level);
     }

@@ -397,6 +397,10 @@ pub struct Spill {
     pub place: [f32; 3],
     /// Which way out of the hollow is there, along x and z, one unit long.
     pub way: [f32; 2],
+    /// How wide the stretch of rim it runs out over is, in metres, with
+    /// `place` at its middle: the length of a wall's level top, or next to
+    /// nothing for a notch.
+    pub wide: f32,
 }
 
 impl Water {

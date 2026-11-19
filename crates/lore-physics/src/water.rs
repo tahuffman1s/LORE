@@ -400,14 +400,17 @@ impl Flood {
         // Where it ran out: over the first ground past the lowest point
         // of its rim, as high as the rim, and the way it was going when it
         // got there.
-        let spill = rising.way_out.map(|(crest, here, from)| {
+        let spill = rising.way_out.map(|(crest, here, from, wide)| {
             let [x, z] = self.at(here);
             #[allow(clippy::cast_precision_loss)]
             let (along, down) = ((here.0 - from.0) as f32, (here.1 - from.1) as f32);
             let far = along.hypot(down).max(1.0);
+            #[allow(clippy::cast_precision_loss)]
+            let wide = wide.max(1) as f32 * self.cell;
             Spill {
                 place: [x, self.surface + crest, z],
                 way: [along / far, down / far],
+                wide,
             }
         });
         // What the water got to on its way out and does not cover until
@@ -497,8 +500,9 @@ impl Flood {
 /// A point of a flood's grid: its column and row.
 type Point = (i32, i32);
 /// A way over a rim: how high the rim stands there, the first point past
-/// it, and the point the water came to that one from.
-type WayOut = (f32, Point, Point);
+/// it, the point the water came to that one from, and how many points
+/// wide the stretch of rim it gets over is.
+type WayOut = (f32, Point, Point, i32);
 /// A point the water can get to next: how far over the surface at rest it
 /// has to stand to (as the whole number of its bits), how many were found
 /// before it (so that of points as low as each other the first found is
@@ -581,7 +585,8 @@ impl Rising<'_> {
                     crossings.push((here, from));
                 }
                 if past_rim > hollow {
-                    self.way_out = middle_of(&crossings).map(|(here, from)| (rim, here, from));
+                    self.way_out =
+                        middle_of(&crossings).map(|(here, from, wide)| (rim, here, from, wide));
                     return crest - UNDER_RIM;
                 }
             }
@@ -666,9 +671,14 @@ impl Rising<'_> {
     }
 }
 
-/// The one of `crossings` (a point and where it was come to from) nearest
-/// the middle of them all.
-fn middle_of(crossings: &[(Point, Point)]) -> Option<(Point, Point)> {
+/// Where water gets over a rim, from `crossings` (each a point past the
+/// rim and the point it was come to from): the middle of the stretch of
+/// rim it gets over, the point that one was come to from, and how many
+/// points wide the stretch is. The stretch is the run of crossings side
+/// by side, all made the same way, through the crossing nearest the
+/// middle of them all: the length of a wall's top, or a notch one point
+/// wide.
+fn middle_of(crossings: &[(Point, Point)]) -> Option<(Point, Point, i32)> {
     let count = i64::try_from(crossings.len())
         .ok()
         .filter(|count| *count > 0)?;
@@ -686,7 +696,31 @@ fn middle_of(crossings: &[(Point, Point)]) -> Option<(Point, Point)> {
         );
         (x * x + z * z, *along, *down)
     };
-    crossings.iter().copied().min_by_key(away)
+    let (nearest, from) = crossings.iter().copied().min_by_key(away)?;
+    let step = (nearest.0 - from.0, nearest.1 - from.1);
+    let made_so: std::collections::HashSet<Point> = crossings
+        .iter()
+        .filter(|(here, from)| (here.0 - from.0, here.1 - from.1) == step)
+        .map(|(here, _)| *here)
+        .collect();
+    // Along the rim is across the way over it.
+    let side = (step.1.abs(), step.0.abs());
+    let reach = |sign: i32| {
+        (1..)
+            .take_while(|far| {
+                made_so.contains(&(
+                    nearest.0 + side.0 * sign * far,
+                    nearest.1 + side.1 * sign * far,
+                ))
+            })
+            .count()
+    };
+    // A run is a few thousand points at the very most.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let (back, on) = (reach(-1) as i32, reach(1) as i32);
+    let shift = (on - back) / 2;
+    let here = (nearest.0 + side.0 * shift, nearest.1 + side.1 * shift);
+    Some((here, (here.0 - step.0, here.1 - step.1), back + on + 1))
 }
 
 /// Whether a grid from column and row `low` to `high`, with the dry ground

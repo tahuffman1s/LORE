@@ -307,19 +307,26 @@ fn a_pool_filled_past_its_brim_runs_out_over_the_lowest_point_of_its_rim() {
     assert!(close(out, over, 2.0), "{out} litres outside");
     let drops = fluids.drops();
     assert!(!drops.is_empty());
-    // It falls from the low wall and nowhere else, and lies on the ground
-    // round the tub: none of it on the walls or back inside.
+    // It falls from the low wall and nowhere else, all along it, and runs
+    // down that wall's outside or lies on the ground round the tub: none
+    // of it on the other walls or back inside.
     for drop in drops {
         let falling = drop.flat == 0.0;
         assert!(
-            if falling {
-                drop.place[0] > 1.19
-            } else {
-                drop.place[1] < -0.19
-            },
+            drop.place[0] > 1.19 || (!falling && drop.place[1] < -0.19),
             "{drop:?}"
         );
     }
+    let spill = fluids.pools()[0].spill().unwrap();
+    assert!(
+        spill[2].abs() < 0.1,
+        "from the middle of the wall: {spill:?}"
+    );
+    assert!(
+        (level.waters()[0].spill.unwrap().wide - 2.0).abs() < 0.2,
+        "over the whole width of the hollow: {:?}",
+        level.waters()[0].spill
+    );
 }
 
 #[test]

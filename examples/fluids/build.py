@@ -241,9 +241,11 @@ def layout():
         pools.append(
             {
                 "name": f"Cascade {step + 1}",
-                "at": (15.0, floor + 0.36, 1.2 + CASCADE_STEP * step),
+                # A hand's breadth under its lip: full, so that what the
+                # tap adds runs straight over.
+                "at": (15.0, floor + 0.39, 1.2 + CASCADE_STEP * step),
                 "fluid": "water",
-                "amount": 1.0 if step == 0 else 0.6,
+                "amount": 1.0,
                 "group": "cascade",
             }
         )

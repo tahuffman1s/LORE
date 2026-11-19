@@ -46,15 +46,16 @@ local kept = game.keep("lab", { pump = true, tap = false, lockDown = false })
 -- the lowest and lets it out of the tap over the highest, which is then
 -- over its brim and runs out over its lip into the next, and so on down:
 -- nothing here moves the water from basin to basin but the water.
-local PUMPED = 9 -- litres a second
+local PUMPED = 24 -- litres a second
 local top, bottom = station("Cascade 1").pool, station("Cascade 4").pool
 
 local function pump(step: number)
     if not kept.pump then
         return
     end
-    -- Only what the lowest basin can spare, so that it is never pumped dry.
-    local spare = bottom.litres - 0.25 * bottom.capacity
+    -- Only what the lowest basin can spare: it is kept two thirds full, so
+    -- that what falls into it has water to fall into.
+    local spare = bottom.litres - 0.66 * bottom.capacity
     local litres = math.min(PUMPED * step, spare)
     if litres <= 0 then
         return
