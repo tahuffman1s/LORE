@@ -81,6 +81,9 @@ pub(crate) struct SceneView {
     pub(crate) bounce: Bounce,
     /// The shade in corners and under things.
     pub(crate) shade: Shade,
+    /// Whether what is solid is drawn for its depth before the picture:
+    /// always, but that a test may draw without and see the same picture.
+    pub(crate) depth_first: bool,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -162,6 +165,7 @@ impl SceneView {
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
             shade: Shade::default(),
+            depth_first: true,
         })
     }
 
@@ -320,6 +324,7 @@ impl SceneView {
             lamp_shadows: self.lamp_shadows,
             bounce: self.bounce,
             shade: self.shade,
+            depth_first: self.depth_first,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`

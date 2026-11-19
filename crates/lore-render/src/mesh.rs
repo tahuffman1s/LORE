@@ -137,6 +137,9 @@ pub(crate) struct View {
     pub(crate) bounce: Bounce,
     /// The shade in corners and under things.
     pub(crate) shade: Shade,
+    /// Whether what is solid is drawn for its depth before the picture:
+    /// always, but that a test may draw without and see the same picture.
+    pub(crate) depth_first: bool,
 }
 
 impl View {
@@ -1968,11 +1971,17 @@ impl MeshPipeline {
             || !bits.is_empty()
             || fluid.is_some()
             || mirrored;
-        // Shade in corners is found from the depth of what is solid: with
-        // nothing solid there is none to find, and the frame is drawn as
-        // one with no shade is.
-        let shading = view.shade.on()
+        // What is solid is drawn for its depth before the picture, and the
+        // picture then only where that depth is: nothing hidden behind
+        // something else is shaded. Shade in corners is found from that
+        // depth: with nothing solid there is none to find.
+        // That is done whether or not shade is asked for (#436): where much
+        // is hidden it saves far more than it costs (the jungle example,
+        // 11.5 ms a frame to 8.2), and where little is it costs next to
+        // nothing (the benchmark's blocks, 1.34 ms to 1.35).
+        let depth_first = view.depth_first
             && meshes.is_some_and(|meshes| meshes.buffers.is_some() && meshes.see_through_from > 0);
+        let shading = view.shade.on() && depth_first;
         let view = &View {
             copied: copies,
             shade: if shading {
@@ -2152,13 +2161,13 @@ impl MeshPipeline {
                     stencil: 0,
                 },
             });
-        // What is solid was drawn for its depth before the picture, if shade
-        // is found from it: the picture is drawn over that depth.
-        let depth_first = vk::RenderingInfo::default()
+        // The picture is drawn over the depth of what is solid, if that was
+        // drawn first.
+        let depth_alone = vk::RenderingInfo::default()
             .render_area(area)
             .layer_count(1)
             .depth_attachment(&depth);
-        let depth_then = if shading {
+        let depth_then = if depth_first {
             depth.load_op(vk::AttachmentLoadOp::LOAD)
         } else {
             depth
@@ -2189,8 +2198,8 @@ impl MeshPipeline {
                 &vk::DependencyInfo::default().image_memory_barriers(&to_draw),
             );
             let drawn = meshes.and_then(|meshes| Some((meshes, meshes.buffers.as_ref()?)));
-            if let (true, Some((meshes, (vertices, indices)))) = (shading, drawn) {
-                device.cmd_begin_rendering(commands, &depth_first);
+            if let (true, Some((meshes, (vertices, indices)))) = (depth_first, drawn) {
+                device.cmd_begin_rendering(commands, &depth_alone);
                 device.cmd_set_viewport(commands, 0, &[viewport]);
                 device.cmd_set_scissor(commands, 0, &[area]);
                 device.cmd_bind_descriptor_sets(
@@ -2205,8 +2214,10 @@ impl MeshPipeline {
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
                 self.draw_depths(commands, meshes, surfaces, &seen);
                 device.cmd_end_rendering(commands);
-                self.shade
-                    .record(device, commands, self.layout, *view_set, target);
+                if shading {
+                    self.shade
+                        .record(device, commands, self.layout, *view_set, target);
+                }
             }
             device.cmd_begin_rendering(commands, &rendering);
             device.cmd_set_viewport(commands, 0, &[viewport]);
@@ -2227,7 +2238,7 @@ impl MeshPipeline {
                 // Only what can be in the picture: the same parts whose
                 // depth was drawn before it, if any was.
                 for draw in solid.iter().filter(|draw| draw.in_sight(&seen)) {
-                    self.draw(commands, meshes, draw, last, surfaces, shading);
+                    self.draw(commands, meshes, draw, last, surfaces, depth_first);
                     last = Some(draw);
                 }
             }
@@ -3951,6 +3962,7 @@ mod tests {
                 strength: 1.25,
                 reach: 0.75,
             },
+            depth_first: true,
             copied: true,
             shafts: false,
             lamp_shadows: LampShadows::Off,

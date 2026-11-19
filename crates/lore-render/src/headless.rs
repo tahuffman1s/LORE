@@ -1908,6 +1908,35 @@ mod tests {
         assert_eq!(validation_errors(), 0);
     }
 
+    #[test]
+    fn the_picture_is_the_same_with_what_is_solid_drawn_for_its_depth_first() {
+        // A floor, a wall behind it, and over the floor a see-through pane
+        // or a sheet with half of it cut away: things in front of things,
+        // holes, and what is mixed over them. Drawn with the depth first,
+        // the picture is drawn only where that depth is; drawn without, as
+        // it used to be, each part is tested against what came before it.
+        // The two must be the same picture, bit for bit.
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = at_the_wall();
+        headless.set_bounce(Bounce::Off);
+        for sheet in [0, 1, 2] {
+            headless.set_scene(&wall_on_a_floor(sheet)).unwrap();
+            headless.view.depth_first = true;
+            let first = headless.screenshot(&camera).unwrap();
+            headless.view.depth_first = false;
+            let without = headless.screenshot(&camera).unwrap();
+            assert!(
+                first == without,
+                "sheet {sheet}: the picture differs with the depth drawn first"
+            );
+        }
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
     /// A room from `low` to `high`, shut on every side, its faces turned
     /// inwards, standing in the open on the floor of [`fluid_scene`].
     fn shut_room(low: [f32; 3], high: [f32; 3]) -> Scene {

@@ -393,6 +393,17 @@ and CI's lavapipe budget for a slow frame was raised from 400 to 450 ms
 for it: the slower of CI's two kinds of machine already took 373 ms on
 main, and this PR's run took 378 ms.
 
+The depth pass is drawn whether or not the shade is asked for (#436). With
+the shade off, RX 7800 XT, without the pass and with it: the jungle
+example 11.5 and 8.2 ms a frame at 1280×720, 21.6 and 12.7 ms at
+2560×1440; the alley example 3.8 and 3.6 ms, 12.9 and 11.8 ms; the
+benchmark's blocks 1.34 and 1.35 ms of the graphics card's work, and 50
+ms either way on lavapipe, with 0.13 ms more of the engine's own to record
+1 600 parts twice. The worst found is the jungle drawn 320 pixels wide,
+where there is next to nothing to shade and all its leaves to place
+twice: 5.5 and 6.1 ms. A test draws the same scenes both ways and asks for
+the same picture bit for bit.
+
 Where much is hidden behind other things the depth pass more than pays
 for the shade. The jungle example from its lake shore, RX 7800 XT: 22.4
 ms a frame on main at 1280×720; 11.4 ms with only what is in view drawn;
@@ -402,9 +413,8 @@ little overdraw, is 3.8 ms off and 3.9 ms on medium.
 
 Not done yet: depth read from smaller copies for far steps (XeGTAO's
 chain of five), without which a wide search reads memory far apart, bent
-normals, and the bitmask's one bounce of light (#438); the depth pass
-with the shade off, where it pays (#436); shade on a cut-out surface a
-game's own shader draws (#437).
+normals, and the bitmask's one bounce of light (#438); shade on a cut-out
+surface a game's own shader draws (#437).
 
 ## What comes next (#401)
 
