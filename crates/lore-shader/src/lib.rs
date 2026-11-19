@@ -9,6 +9,14 @@
 //! - [`ShaderError`] says what is wrong in the words of the person who has to
 //!   fix it, at the file and line they wrote, with a hint where one is known.
 //!
+//! - [`params_of`] and [`ParamBlock`] read the `//! param` lines of a shader and
+//!   turn them into a uniform block, and check the values a script gives.
+//! - [`refuse_endless_loops`] turns away `loop`, `while` and a `for` with no
+//!   condition, so a slip cannot freeze the picture.
+//! - [`hooked_module`] puts the engine's template, the values and the
+//!   maker's function (a [`Hook`]: `screen` or `surface`) together, after
+//!   checking that the function is there and has the right shape.
+//!
 //! Nothing here touches Vulkan, so `lore check` and the engine's build script
 //! can use it too.
 
@@ -19,12 +27,16 @@
 
 mod compile;
 mod error;
+mod hook;
 mod params;
+mod scan;
 mod source;
 
 pub use compile::{Bounds, Compiled, compile};
 pub use error::ShaderError;
+pub use hook::{Hook, hooked_module};
 pub use params::{Given, Param, ParamBlock, ParamKind, ParamValue, params_of};
+pub use scan::refuse_endless_loops;
 pub use source::{Owner, Place, Source};
 
 /// The most values (`//! param` lines) one shader can declare.
