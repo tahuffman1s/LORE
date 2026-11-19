@@ -68,6 +68,10 @@ pub(crate) struct WorldFluids {
     /// Where drops went into pools since the last frame: where, how wide
     /// and how hard.
     rings: Vec<Stir>,
+    /// How many pools the script has been told the names of, and which
+    /// change of the hollows found so far the picture has been told of.
+    named: usize,
+    found_said: Option<u32>,
 }
 
 impl Default for WorldFluids {
@@ -82,6 +86,9 @@ impl Default for WorldFluids {
             under: Underfoot::default(),
             stands: Vec::new(),
             rings: Vec::with_capacity(MOST_RINGS),
+            named: 0,
+            // The renderer may hold hollows from a world before this one.
+            found_said: None,
         }
     }
 }
@@ -160,13 +167,19 @@ impl WorldFluids {
         });
         // Making a pool's kind may have made a ready-made one.
         self.hear(host);
-        let names: Vec<Option<&str>> = level
-            .waters()
-            .iter()
-            .map(|water| water.name.as_deref())
+        self.name_pools(host);
+        self.tell_pools(host);
+    }
+
+    /// Tells the script what the pools are called: the level's own by the
+    /// names of their sheets, and a hollow found since by its place among
+    /// them all ("pool 4").
+    fn name_pools(&mut self, host: &mut ScriptHost) {
+        let names: Vec<Option<&str>> = (self.fluids.pools().iter())
+            .map(lore_fluid::Pool::name)
             .collect();
         host.name_pools(&names);
-        self.tell_pools(host);
+        self.named = names.len();
     }
 
     /// Puts into effect what the script said since the last tick: the
@@ -341,13 +354,17 @@ impl WorldFluids {
     /// nothing, whatever lies below. Someone in a pool is in it whether
     /// their feet are down or not.
     pub(crate) fn tell(
-        &self,
+        &mut self,
         host: &mut ScriptHost,
         level: &Level,
         step: f32,
         (player, standing): (&Player, bool),
     ) {
         host.set_fluid_litres(&self.fluids.litres_by_kind());
+        // A hollow that became a pool in this tick has a name from now on.
+        if self.named != self.fluids.pools().len() {
+            self.name_pools(host);
+        }
         self.tell_pools(host);
         let in_pool = (level.pool_around(player.position))
             .filter(|_| player.submerged > 0.0)
@@ -414,6 +431,12 @@ impl WorldFluids {
                 kind: pool.kind(),
             }
         }));
+        // The hollows found so far, when they have changed: before how the
+        // pools stand, which counts them in.
+        if self.found_said != Some(fluids.found_changes()) {
+            self.found_said = Some(fluids.found_changes());
+            frame.set_found_waters(fluids.found());
+        }
         frame.set_pools(stands);
         for ring in self.rings.drain(..) {
             frame.stir(ring);

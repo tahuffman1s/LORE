@@ -913,6 +913,12 @@ impl<G: Game> App<G> {
             if fluid.said {
                 renderer.set_fluid(&fluid.drops);
             }
+            // A hollow that became a pool is drawn from now on.
+            if let Some(found) = &fluid.found
+                && let Err(error) = renderer.set_found_waters(found)
+            {
+                log::warn!("A pool that formed in the level could not be drawn: {error}");
+            }
             // Each pool where the game's rules have it, as what it holds.
             if fluid.pools_said {
                 renderer.set_pools(&fluid.pools);

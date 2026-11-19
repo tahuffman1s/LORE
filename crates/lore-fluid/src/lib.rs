@@ -66,7 +66,7 @@ use math::{add, finite, frame, length, normalize, scale};
 use store::{Particle, ball_radius};
 
 pub use flow::Flow;
-pub use pools::{MOST_POOL_HITS, Pool, PoolHit};
+pub use pools::{MOST_FOUND, MOST_POOL_HITS, Pool, PoolHit};
 
 /// How many kinds of fluid there can be. Kinds are numbered from 0.
 pub const MOST_KINDS: usize = 32;
@@ -372,6 +372,8 @@ impl Fluids {
         self.grid.build(&self.parts);
         self.settle_landings();
         self.lie(level, dt);
+        self.find_hollow(level);
+        self.deepen_found(level);
         self.soak_pools(level);
         self.dry(dt);
         self.step_pools(level, dt);

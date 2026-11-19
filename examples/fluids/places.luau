@@ -7,6 +7,8 @@ return {
     cascadeTap = vector.create(15, 4.15, 1.1),
     -- The nozzle of the tap over the empty tub.
     tubTap = vector.create(-17, 2.35, 3),
+    -- The trough that no sheet marks as a pool: spray into it.
+    trough = vector.create(5, 0.1, 12.5),
     -- Every pool: its name in the level, which part of the lab it
     -- belongs to, what it holds at the start and where its middle is.
     pools = {

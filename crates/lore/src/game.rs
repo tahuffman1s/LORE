@@ -1105,6 +1105,14 @@ impl Frame {
         self.fluid.pools_said = true;
     }
 
+    /// Says which hollows nobody marked have been found with fluid lying
+    /// in them, and are pools since: they are drawn after the level's own
+    /// waters, in this order, as [`set_pools`](Self::set_pools) says each
+    /// stands. Say it when the list changes.
+    pub fn set_found_waters(&mut self, found: &[std::sync::Arc<lore_assets::Water>]) {
+        self.fluid.found = Some(found.to_vec());
+    }
+
     /// Says how the level's own lakes and creeks are drawn: as `look`, or
     /// with `None` as the level says. Say it when it changes.
     pub fn set_water_look(&mut self, look: Option<FluidLook>) {
@@ -1143,6 +1151,9 @@ pub struct FluidFrame {
     pub pools: Vec<PoolDrawn>,
     /// Whether the pools were said this frame.
     pub pools_said: bool,
+    /// The hollows found since the level was made, if that list changed:
+    /// hand it to the picture before the pools.
+    pub found: Option<Vec<std::sync::Arc<lore_assets::Water>>>,
 }
 
 #[cfg(test)]
