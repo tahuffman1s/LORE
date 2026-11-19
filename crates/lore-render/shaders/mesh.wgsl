@@ -1806,6 +1806,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // it (see `snow_on`). It is white, matte, and hides the fine shape of
     // what it lies on.
     var base_seen = base;
+    // The `//!surface` lines are markers a game's surface shader swaps for calls (`game_shaders/template.rs`).
+    //!surface settled
     var snowed = 0.0;
     var sparkle = 0.0;
     // How much light reaches snow banked against the side of a thing: it
@@ -1868,6 +1870,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
             sparkle = step(0.985, chance) * smoothstep(0.7, 1.0, turned) * (1.0 - smoothstep(3.0, 9.0, off));
         }
         base_seen = mix(base, snow, snowed);
+        //!surface snowed
         metallic *= 1.0 - snowed;
         roughness = mix(roughness, 0.78, snowed);
         // What the snow hides has no bumps of its own; what is buried to
@@ -2002,6 +2005,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         }
         glow = mix(glow, over_glow, painted.share);
     }
+    //!surface glows
     glow *= 1.0 - snowed;
     // In a slot between tall things the sides are lit by the sun and light
     // what stands in their shade: about a third of what falls on a wall of
