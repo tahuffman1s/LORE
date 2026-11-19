@@ -14,10 +14,10 @@ use crate::bounce::{self, Bounce, BounceWorks, colour_range};
 use crate::buffer::Buffer;
 use crate::camera::{Mat4, multiply, normal_matrix};
 use crate::clouds::CloudVolume;
-use crate::effects::{Air, BIT_BYTES, MOST_BITS, WEATHER_ROWS};
+use crate::effects::{Air, BIT_BYTES, MOST_BITS, Standing, WEATHER_ROWS};
 use crate::error::RenderError;
 use crate::eye::EyePass;
-use crate::fluid::FluidScene;
+use crate::fluid::{FluidLook, FluidScene, PoolDrawn};
 use crate::fluid_pass::FluidWorks;
 use crate::game_shaders::SurfaceDraws;
 use crate::gpu::Gpu;
@@ -518,6 +518,8 @@ pub(crate) struct Meshes {
     /// The same water as the level's maker's file gave it, for what flies
     /// to ask where the surface is.
     waters: Vec<Water>,
+    /// How each of those stands and looks, once a game has said.
+    stands: Vec<Option<PoolDrawn>>,
     materials: Materials,
     /// The name of each of the scene's materials, in the order of the scene's:
     /// game shaders find the materials they change by it.
@@ -670,6 +672,7 @@ impl Meshes {
                 material.roughness < GLOSSY_BELOW || material.metallic_roughness_texture.is_some()
             }),
             bodies: Bodies::new(gpu, scene)?,
+            stands: vec![None; scene.waters.len()],
             waters: scene.waters.clone(),
             draws,
             see_through_from,
@@ -715,6 +718,24 @@ impl Meshes {
     /// The still water of the scene, each body in the shape it took.
     pub(crate) fn waters(&self) -> &[Water] {
         &self.waters
+    }
+
+    /// The still water of the scene, and how each body of it stands.
+    pub(crate) fn standing(&self) -> Standing<'_> {
+        Standing {
+            waters: &self.waters,
+            stands: &self.stands,
+        }
+    }
+
+    /// Says how each body of still water stands and looks: one for each
+    /// of the scene's waters, in their order. Without one, a body stands
+    /// as high as rain has raised it and is the level's own water.
+    pub(crate) fn set_pools(&mut self, pools: &[PoolDrawn]) {
+        for (index, stand) in self.stands.iter_mut().enumerate() {
+            *stand = pools.get(index).copied();
+        }
+        self.bodies.set_pools(pools);
     }
 
     /// Whether any material is smooth enough to mirror the world round it.
@@ -1880,16 +1901,19 @@ impl MeshPipeline {
         let wet_ground = weather.rows[0][2].max(weather.rows[6][1]);
         // How the level's water looks, if its game has said: the first
         // row's last number is 1 when it has, and all is zero when not.
-        let water_look = fluid
-            .and_then(FluidScene::water)
-            .map_or([[0.0; 4]; 3], |look| {
+        // What every water of the level is drawn as, unless the body the
+        // eye is in or nearest has a look of its own.
+        let every_water = fluid.and_then(FluidScene::water);
+        let look_rows = |look: Option<FluidLook>| {
+            look.map_or([[0.0; 4]; 3], |look| {
                 let [takes, scatters, glows] = look.rows();
                 [
                     [takes[0], takes[1], takes[2], 1.0],
                     [scatters[0], scatters[1], scatters[2], takes[3]],
                     glows,
                 ]
-            });
+            })
+        };
         // Fluid is worked out in pictures of its own, made now so that
         // nothing fails once rendering has begun; a frame with none draws
         // exactly what it did before.
@@ -1999,6 +2023,7 @@ impl MeshPipeline {
         let rise = weather.rows[1][1];
         let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
         let near_rise = near.map_or(0.0, |body| body.risen(rise));
+        let water_look = look_rows(near.and_then(Body::look).or(every_water));
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
             // SAFETY: the caller's guarantees cover the water's pictures,
@@ -2418,7 +2443,13 @@ impl MeshPipeline {
                             self.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            &body_bytes(body, view.eye, grid, body.risen(rise)),
+                            &body_bytes(
+                                body,
+                                view.eye,
+                                grid,
+                                body.risen(rise),
+                                body.look().or(every_water),
+                            ),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
                     }
@@ -3533,10 +3564,23 @@ fn picture_write(
 /// and its points stay where they were); and where the shader keeps how
 /// surface directions turn, the body itself: where its grid of depths
 /// starts and how far apart its points are, how many there are and how
-/// high the water stands, risen `rise` metres by rain, and the water's
-/// colour. Its clearness is the number after. The rise itself is kept
-/// beside where the finer grid's middle is.
-fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
+/// high the water stands, `rise` metres from where it was put, and the
+/// water's colour. Its clearness is the number after. The rise itself is
+/// kept beside where the finer grid's middle is.
+///
+/// A body with a `look` of its own (lava, honey, a mix) keeps it in the
+/// numbers left over: what it takes and how rough it is in the third row,
+/// what it scatters where the water's colour would be, its glow in the
+/// last number of the first, second and fourth rows, and how much it
+/// bends light where a mesh's sway is, below nothing if it never freezes
+/// (`body_look` in the shader). With none, that last number is 0.
+fn body_bytes(
+    body: &Body,
+    eye: [f32; 3],
+    grid: u32,
+    rise: f32,
+    look: Option<FluidLook>,
+) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
     let finer = grid
         .checked_sub(1)
@@ -3545,15 +3589,30 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYT
     #[allow(clippy::cast_precision_loss)]
     let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
     let finest = if grid == 0 { 1.0 } else { 0.0 };
+    let [takes, scatters, glows] = look.map_or([[0.0; 4]; 3], |look| look.rows());
+    let (colour, last) = match look {
+        // Never 0: a look bends light at least as air does.
+        Some(_) => (
+            [scatters[0], scatters[1], scatters[2]],
+            [
+                0.0,
+                glows[3].max(1.0) * if body.freezes() { 1.0 } else { -1.0 },
+            ],
+        ),
+        None => (
+            [body.colour[0], body.colour[1], body.colour[2]],
+            [body.colour[3], 0.0],
+        ),
+    };
     let numbers = [
-        [apart, finest, squares, 0.0],
-        [finer[0], finer[1], rise, 0.0],
-        [0.0; 4],
-        [middle[0], body.level + rise, middle[1], 1.0],
+        [apart, finest, squares, glows[0]],
+        [finer[0], finer[1], rise, glows[1]],
+        takes,
+        [middle[0], body.level + rise, middle[1], glows[2]],
         [body.origin[0], body.origin[1], body.cell, 0.0],
         [size[0], size[1], body.level + rise, 0.0],
-        [body.colour[0], body.colour[1], body.colour[2], 0.0],
-        [body.colour[3], 0.0, 0.0, 0.0],
+        [colour[0], colour[1], colour[2], 0.0],
+        [last[0], last[1], 0.0, 0.0],
     ];
     let mut bytes = [0_u8; DRAW_BYTES];
     for (slot, number) in bytes

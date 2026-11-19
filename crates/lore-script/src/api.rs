@@ -816,7 +816,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 37] = [
+        let groups: [(&str, &[&str]); 39] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -847,6 +847,8 @@ mod tests {
             ("game.fluids.", crate::fluid_api::FLUIDS_FUNCTIONS),
             ("Fluid.", crate::fluid_api::FLUID_FIELDS),
             ("FluidTouch.", crate::fluid_api::TOUCH_FIELDS),
+            ("Pool.", crate::pool_api::POOL_FIELDS),
+            ("Pool:", crate::pool_api::POOL_METHODS),
             ("game.lamps.", crate::lamp_api::LAMPS_FUNCTIONS),
             ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
             ("game.look.", crate::look_api::LOOK_FUNCTIONS),

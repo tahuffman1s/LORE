@@ -1,7 +1,7 @@
 //! The interface a game implements to be driven by the engine.
 
 use lore_input::{ActionMap, ActionSetId, Device, GamepadStyle, InputFrame, Rumble};
-use lore_render::{FluidDrop, FluidLook, Lightning, Splash, Stir, Tread};
+use lore_render::{FluidDrop, FluidLook, Lightning, PoolDrawn, Splash, Stir, Tread};
 use lore_ui::{DrawBuffer, Ui};
 
 use crate::settings::Settings;
@@ -1086,6 +1086,25 @@ impl Frame {
         self.fluid.looks = Some(all);
     }
 
+    /// Lends the frame `buffer` to gather how the pools stand in: the last
+    /// frame's, from [`take_fluid`](Self::take_fluid), so that saying it
+    /// every frame allocates nothing.
+    #[must_use]
+    pub fn with_pool_buffer(mut self, mut buffer: Vec<PoolDrawn>) -> Self {
+        buffer.clear();
+        self.fluid.pools = buffer;
+        self
+    }
+
+    /// Says how each body of the level's still fluid stands and looks, in
+    /// the order of the level's waters: how far from where its maker put
+    /// it the surface is, and what it is drawn as. Say it every frame.
+    pub fn set_pools(&mut self, pools: &[PoolDrawn]) {
+        self.fluid.pools.clear();
+        self.fluid.pools.extend_from_slice(pools);
+        self.fluid.pools_said = true;
+    }
+
     /// Says how the level's own lakes and creeks are drawn: as `look`, or
     /// with `None` as the level says. Say it when it changes.
     pub fn set_water_look(&mut self, look: Option<FluidLook>) {
@@ -1118,6 +1137,12 @@ pub struct FluidFrame {
     /// How the level's water is drawn, if that changed: `Some(None)` is as
     /// the level says.
     pub water_look: Option<Option<FluidLook>>,
+    /// How each pool stands and looks, when
+    /// [`pools_said`](Self::pools_said); otherwise the empty buffer, to
+    /// lend to the next frame all the same.
+    pub pools: Vec<PoolDrawn>,
+    /// Whether the pools were said this frame.
+    pub pools_said: bool,
 }
 
 #[cfg(test)]

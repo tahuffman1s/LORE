@@ -313,6 +313,7 @@ fn start(
         last_view: None,
         ui: lore_ui::DrawBuffer::default(),
         fluid_drops: Vec::new(),
+        pools: Vec::new(),
         unseen: InputFrame::default(),
         sound,
         #[cfg(feature = "editor")]
@@ -404,6 +405,8 @@ struct App<G> {
     /// The fluid's drops the game asked for this frame. Kept from frame to
     /// frame for the same reason.
     fluid_drops: Vec<lore_render::FluidDrop>,
+    /// The buffer how the pools stand is gathered in, lent to each frame.
+    pools: Vec<lore_render::PoolDrawn>,
     /// What the player did that no tick has seen yet, read again for every
     /// frame. Kept from frame to frame for the same reason.
     unseen: InputFrame,
@@ -801,6 +804,7 @@ impl<G: Game> App<G> {
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
             .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
+            .with_pool_buffer(std::mem::take(&mut self.pools))
             .with_lamp_buffer(std::mem::take(&mut self.lamps))
             .with_shader_list(std::mem::take(&mut self.shaders))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
@@ -909,6 +913,10 @@ impl<G: Game> App<G> {
             if fluid.said {
                 renderer.set_fluid(&fluid.drops);
             }
+            // Each pool where the game's rules have it, as what it holds.
+            if fluid.pools_said {
+                renderer.set_pools(&fluid.pools);
+            }
             for splash in splashes {
                 renderer.splash(splash);
             }
@@ -947,6 +955,7 @@ impl<G: Game> App<G> {
             }
         }
         self.fluid_drops = fluid.drops;
+        self.pools = fluid.pools;
         // The ears are where the eyes are.
         if let Some(view) = frame.view() {
             self.sound.listen_from(view.position, view.yaw);

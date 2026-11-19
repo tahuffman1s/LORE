@@ -497,10 +497,106 @@ declare extern type Fluid with
     --- True if it washes other fluids away where it lands, as water does.
     --- Example: game.fluid("soap").washes = true
     washes: boolean
+
+    --- True if a pool of it freezes over in the cold, as water does: once
+    --- the weather's ice is thick enough to walk on, the pool is ice to
+    --- stand on and nothing to swim in. Lava and honey do not.
+    --- Example: game.fluid("brine").freezes = false
+    freezes: boolean
 end
 
---- What a character stands in: what a `game.fluids.onTouch` function is
---- handed, and what `game.fluids.under` gives.
+--- A pool: a body of fluid that stands in the level. A lake, a tank, a tub.
+--- What `game.fluids.pool` gives. In the level it is a flat sheet with the
+--- custom property `water` set to true, laid over a hollow at the height
+--- the fluid should stand; the engine fills the hollow. The sheet may also
+--- say `fluid` (a kind's name, such as "lava") and `amount` (how full it
+--- starts, from 0 for an empty basin to 1).
+---
+--- A pool holds an amount. What is sprayed or poured into it raises it, and
+--- kinds mix: honey poured into water makes it heavier, thicker and more
+--- golden by its share. Filled past its brim it runs out over the lowest
+--- point of its rim, as drops that run on downhill. A character wades and
+--- swims in it by what it holds: they ride high on mercury, sink in a
+--- light oil, and crawl through honey.
+---
+--- What you ask of a pool is done on the next tick, so what you read from
+--- it straight after asking is still what it was.
+--- Example: local pond = game.fluids.pool("Pond"); pond:fill(200, "honey")
+declare extern type Pool with
+    --- The name its sheet has in the level. One with no name is "pool 1",
+    --- "pool 2" and so on, in the level's order.
+    --- Example: print(game.fluids.pool("pond").name)
+    name: string
+
+    --- The kind of fluid there is most of in it. Set it, and all it holds
+    --- becomes that kind.
+    --- Example: game.fluids.pool("Moat").fluid = "lava"
+    fluid: Fluid
+
+    --- How high its surface stands, in metres. Set it, and the pool is
+    --- filled or drained to there at once (no higher than `brim`); to take
+    --- some seconds over it, use `setLevel`.
+    --- Example: if pond.level > 2 then print("The cellar floods") end
+    level: number
+
+    --- How deep it is at its deepest, in metres: 0 when it is empty.
+    --- Example: if pond.depth < 0.3 then print("You can wade across") end
+    depth: number
+
+    --- How many litres it holds, of every kind together. Set it, and the
+    --- pool is filled or drained to that, in the mix it has.
+    --- Example: tank.litres = 500
+    litres: number
+
+    --- How many litres it holds when it is full to its brim.
+    --- Example: bar.value = tank.litres / tank.capacity
+    capacity: number
+
+    --- How high its surface stands when it is full, in metres: a little
+    --- under the lowest point of its rim. More than that runs out.
+    --- Example: if pond.level >= pond.brim then print("Full") end
+    brim: number
+
+    --- True on a tick when it ran out over its rim.
+    --- Example: if tub.overflowing then print("Turn the tap off!") end
+    overflowing: boolean
+
+    --- True while it is frozen thick enough to walk on.
+    --- Example: if pond.frozen then print("You can cross") end
+    frozen: boolean
+
+    --- Pours `litres` in: of what the pool holds, or of `fluid` (a `Fluid`
+    --- or the name of one). Call it on every tick for a tap, with the
+    --- litres of one tick. A bucket is 10 litres and a bath 150.
+    --- Example: tub:fill(2 * step)
+    --- Example: vat:fill(50, "paint")
+    function fill(self, litres: number, fluid: (string | Fluid)?): ()
+
+    --- Takes `litres` out, of each kind in it by its share.
+    --- Example: tub:drain(5 * step)
+    function drain(self, litres: number): ()
+
+    --- Sends its surface to `height` metres, filling or draining it over
+    --- `seconds` (at once with none): a lock, a tide, a flooded cellar.
+    --- Example: lock:setLevel(4, 20)
+    function setLevel(self, height: number, seconds: number?): ()
+
+    --- How much of what it holds is `fluid`, from 0 to 1. A read: fine in
+    --- `game.onDraw`.
+    --- Example: if vat:share("paint") > 0.5 then print("Mostly paint") end
+    function share(self, fluid: string | Fluid): number
+
+    --- Throws some of the pool up at `place` as drops of what it holds,
+    --- which land as that. Options: `litres` is how much is thrown (default
+    --- 2) and `speed` how fast it leaves, in metres a second (0.5 to 12,
+    --- default 4). The player's own splashes are made already.
+    --- Example: pond:splash(rock.position, { litres = 5, speed = 6 })
+    function splash(self, place: vector, options: { litres: number?, speed: number? }?): ()
+end
+
+--- What a character stands, wades or swims in: what a
+--- `game.fluids.onTouch` function is handed, and what `game.fluids.under`
+--- gives.
 --- Example: game.fluids.onTouch(function(touch) if touch.harm > 0 then print(touch.fluid.name .. " burns") end end)
 declare extern type FluidTouch with
     --- Who stands in it.
@@ -531,13 +627,24 @@ declare extern type FluidTouch with
     --- included.
     --- Example: if touch.seconds > 5 then print("You are drenched") end
     seconds: number
+
+    --- The pool they wade or swim in, or nil when it is a puddle or a film
+    --- they stand in.
+    --- Example: if touch.pool and touch.pool.name == "Moat" then print("In the moat") end
+    pool: Pool?
+
+    --- How much of their body is under, from 0 to 1: about 0.3 at the knees
+    --- and 0.5 at the waist. 0 in a puddle. In a pool `harm` is scaled by
+    --- this, and `depth` is how deep it is over their feet.
+    --- Example: if touch.submerged > 0.9 then print("Over your head") end
+    submerged: number
 end
 
 --- What `game.fluid` takes to make or change a kind. `from` is a kind to
 --- start from (a ready-made name, a kind the game has, or a `Fluid`); each
 --- other setting replaces one thing, and is also a field of `Fluid`.
 --- Example: game.fluid("goo", { from = "honey", color = "green" })
-type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean? }
+type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean?, freezes: boolean? }
 
 --- A lamp: light from a point, every way (a bulb, a candle, a fire) or in a
 --- beam (a torch, a street lamp). What `game.lamp` gives. Every setting
@@ -1774,16 +1881,26 @@ declare game: {
         --- Example: if game.fluids.amount("water") > 50 then print("Flooded") end
         amount: (kind: (string | Fluid)?) -> number,
 
-        --- What a character stands in, or nil when they stand in nothing.
-        --- A read: fine in `game.onDraw`.
+        --- What a character stands, wades or swims in, or nil when they are
+        --- in nothing. A read: fine in `game.onDraw`.
         --- Example: local wet = game.fluids.under(game.player)
         under: (character: Character) -> FluidTouch?,
 
-        --- Calls `handler` every tick a character stands in fluid, with
-        --- what they stand in. Nothing is hurt for you: `touch.harm` says
-        --- how much the fluid hurt this tick, and your game decides what
-        --- that costs.
+        --- Calls `handler` every tick a character stands in fluid or is in
+        --- a pool, with what they are in. Nothing is hurt for you:
+        --- `touch.harm` says how much the fluid hurt this tick, and your
+        --- game decides what that costs.
         --- Example: game.fluids.onTouch(function(touch) if touch.fluid == game.fluid("acid") then print(touch.harm) end end)
         onTouch: (handler: (touch: FluidTouch) -> ()) -> (),
+
+        --- The pool called `name`: the name its sheet has in the level, in
+        --- any case. Keep it in a local at the top of the file. A name the
+        --- level has not got is a mistake that says the nearest one.
+        --- Example: local pond = game.fluids.pool("Pond")
+        pool: (name: string) -> Pool,
+
+        --- Every pool of the level, in the level's order.
+        --- Example: for _, pool in game.fluids.pools() do print(pool.name, pool.litres) end
+        pools: () -> { Pool },
     },
 }

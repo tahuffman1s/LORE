@@ -28,7 +28,9 @@ use crate::time_api::rules_only;
 use crate::weather_api::number;
 
 /// Every function on `game.fluids`.
-pub(crate) const FLUIDS_FUNCTIONS: &[&str] = &["spray", "clear", "amount", "under", "onTouch"];
+pub(crate) const FLUIDS_FUNCTIONS: &[&str] = &[
+    "spray", "clear", "amount", "under", "onTouch", "pool", "pools",
+];
 
 /// What can be read from a kind of fluid.
 pub(crate) const FLUID_FIELDS: &[&str] = &[
@@ -49,13 +51,22 @@ pub(crate) const FLUID_FIELDS: &[&str] = &[
     "corrosive",
     "dries",
     "washes",
+    "freezes",
 ];
 
 /// What can be read from what a character touches. The type definitions
 /// are tested against it.
 #[cfg(test)]
-pub(crate) const TOUCH_FIELDS: &[&str] =
-    &["character", "fluid", "cover", "depth", "harm", "seconds"];
+pub(crate) const TOUCH_FIELDS: &[&str] = &[
+    "character",
+    "fluid",
+    "cover",
+    "depth",
+    "harm",
+    "seconds",
+    "pool",
+    "submerged",
+];
 
 /// The most things asked of the fluids that are kept between two takes.
 /// Past it a spray is dropped: nobody could see that many more.
@@ -112,6 +123,79 @@ pub enum FluidAsk {
         /// The kind to take away, or all of them.
         kind: Option<u8>,
     },
+    /// Pour `litres` of `kind` into pool `pool`.
+    PoolFill {
+        /// Which pool, in the order of the level's waters.
+        pool: u16,
+        /// The kind poured in.
+        kind: u8,
+        /// How much, in litres.
+        litres: f32,
+    },
+    /// Take `litres` out of pool `pool`, of each kind by its share.
+    PoolDrain {
+        /// Which pool.
+        pool: u16,
+        /// How much, in litres.
+        litres: f32,
+    },
+    /// Make pool `pool` hold `litres`, of each kind by its share.
+    PoolLitres {
+        /// Which pool.
+        pool: u16,
+        /// How much it is to hold, in litres.
+        litres: f32,
+    },
+    /// Make everything pool `pool` holds `kind`.
+    PoolKind {
+        /// Which pool.
+        pool: u16,
+        /// The kind it all becomes.
+        kind: u8,
+    },
+    /// Send the surface of pool `pool` to `height` over `seconds`.
+    PoolLevel {
+        /// Which pool.
+        pool: u16,
+        /// How high the surface is to stand, in metres.
+        height: f32,
+        /// How long it takes to get there; 0 is at once.
+        seconds: f32,
+    },
+    /// Throw `litres` out of pool `pool` at `place` as drops.
+    PoolSplash {
+        /// Which pool.
+        pool: u16,
+        /// Where on it, in metres.
+        place: [f32; 3],
+        /// How much is thrown, in litres.
+        litres: f32,
+        /// How fast it leaves, in metres a second.
+        speed: f32,
+    },
+}
+
+/// One pool as the engine tells the script: what `game.fluids.pool` reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PoolTold {
+    /// The kind there is most of in it.
+    pub kind: u8,
+    /// How high its surface stands, in metres.
+    pub level: f32,
+    /// How deep it is at its deepest, in metres.
+    pub depth: f32,
+    /// How many litres it holds.
+    pub litres: f32,
+    /// How many litres it holds when it is full.
+    pub capacity: f32,
+    /// How high its surface stands when it is full, in metres.
+    pub brim: f32,
+    /// Whether it ran over its rim in the newest tick.
+    pub overflowing: bool,
+    /// Whether it is frozen thick enough to walk on.
+    pub frozen: bool,
+    /// How much of what it holds each kind is, from 0 to 1, by kind.
+    pub shares: [f32; MOST_KINDS],
 }
 
 /// What a character stands in, as the engine tells the script.
@@ -125,6 +209,10 @@ pub struct FluidUnder {
     pub depth: f32,
     /// From 0 to 1, already weighted by cover.
     pub corrosive: f32,
+    /// The pool they wade or swim in, if it is a pool and not a puddle.
+    pub pool: Option<u16>,
+    /// How much of their body is under, from 0 to 1: nothing in a puddle.
+    pub submerged: f32,
 }
 
 /// One kind of fluid in the words of a script: the numbers a game maker
@@ -169,13 +257,15 @@ struct Ready {
     corrosive: f32,
     dries: f32,
     washes: bool,
+    freezes: bool,
 }
 
 /// Shorthand for a row of [`READY`].
 macro_rules! ready {
     ($name:literal, $color:literal, $clarity:literal, $cloud:literal, $glow:literal, $shine:literal,
      $metal:literal, $bends:literal; $visc:literal, $density:literal, $bead:literal,
-     $slip:literal, $sticky:literal, $bouncy:literal, $corr:literal, $dries:literal, $washes:literal) => {
+     $slip:literal, $sticky:literal, $bouncy:literal, $corr:literal, $dries:literal, $washes:literal,
+     $freezes:literal) => {
         Ready {
             name: $name,
             color: $color,
@@ -194,6 +284,7 @@ macro_rules! ready {
             corrosive: $corr,
             dries: $dries,
             washes: $washes,
+            freezes: $freezes,
         }
     };
 }
@@ -209,41 +300,41 @@ const GLOW_AT_MOST: f32 = 1.5;
 const READY: [Ready; 13] = [
     // Absorption 0.35/0.06/0.01 per m (Pope & Fry 1997) seen through 10 m;
     // 1.0 mPa·s; 72.8 mN/m; wet concrete grip.
-    ready!("water", 0x30c3f4, 10.0, 0.0, 0.0, 1.0, 0.0, 1.333; 0.0, 1.0, 0.4, 0.45, 0.0, 0.0, 0.0, 0.0, true),
+    ready!("water", 0x30c3f4, 10.0, 0.0, 0.0, 1.0, 0.0, 1.333; 0.0, 1.0, 0.4, 0.45, 0.0, 0.0, 0.0, 0.0, true, true),
     // Olive oil 56 mPa·s, 0.91 g/cm³, 32 mN/m, n 1.47; an oiled floor grips
     // about as a banana skin does.
-    ready!("oil", 0x956f38, 0.004, 0.47, 0.0, 0.98, 0.0, 1.47; 0.22, 0.91, 0.126, 0.9, 0.0, 0.0, 0.0, 0.0, false),
+    ready!("oil", 0x956f38, 0.004, 0.47, 0.0, 0.98, 0.0, 1.47; 0.22, 0.91, 0.126, 0.9, 0.0, 0.0, 0.0, 0.0, false, false),
     // 10 Pa·s at 20 °C, 1.42 g/cm³, about 50-60 mN/m, n 1.49-1.50.
-    ready!("honey", 0xf6bf59, 0.02, 0.37, 0.0, 0.99, 0.0, 1.5; 0.5, 1.42, 0.31, 0.1, 0.6, 0.0, 0.0, 0.0, false),
+    ready!("honey", 0xf6bf59, 0.02, 0.37, 0.0, 0.99, 0.0, 1.5; 0.5, 1.42, 0.31, 0.1, 0.6, 0.0, 0.0, 0.0, false, false),
     // Toy slime (PVA-borax gel) 30-100 Pa·s at rest; bounce after Portal 2's
     // repulsion gel (a game's choice, not a measurement).
-    ready!("slime", 0x89da59, 0.05, 0.55, 0.08, 0.94, 0.0, 1.35; 0.6, 1.05, 0.35, 0.75, 0.3, 0.5, 0.0, 0.0, false),
+    ready!("slime", 0x89da59, 0.05, 0.55, 0.08, 0.94, 0.0, 1.35; 0.6, 1.05, 0.35, 0.75, 0.3, 0.5, 0.0, 0.0, false, false),
     // Warm road tar about 6000 Pa·s (cold bitumen is far thicker),
     // 1.2 g/cm³, about 35 mN/m.
-    ready!("tar", 0x0a0a0a, 0.001, 0.0, 0.0, 0.9, 0.0, 1.6; 0.85, 1.2, 0.17, 0.0, 0.95, 0.0, 0.0, 0.0, false),
+    ready!("tar", 0x0a0a0a, 0.001, 0.0, 0.0, 0.9, 0.0, 1.6; 0.85, 1.2, 0.17, 0.0, 0.95, 0.0, 0.0, 0.0, false, false),
     // Battery acid (35 % sulfuric) 2.5 mPa·s, 1.26 g/cm³, about 75 mN/m,
     // n 1.37. Clean acid is as clear as water and a player could not tell
     // the two apart, so this is acid that has been at work: yellow-green
     // and a little cloudy with what it has eaten.
-    ready!("acid", 0xcfe84a, 0.05, 0.3, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false),
+    ready!("acid", 0xcfe84a, 0.05, 0.3, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false, false),
     // Basalt melt 100-1000 Pa·s at eruption, 2.7 g/cm³, about 0.35 N/m;
     // glows at about 1100 °C.
-    ready!("lava", 0xe77c27, 0.001, 0.75, 1.0, 0.51, 0.0, 1.5; 0.75, 2.7, 0.89, 0.0, 0.5, 0.0, 1.0, 0.0, false),
+    ready!("lava", 0xe77c27, 0.001, 0.75, 1.0, 0.51, 0.0, 1.5; 0.75, 2.7, 0.89, 0.0, 0.5, 0.0, 1.0, 0.0, false, false),
     // 1.53 mPa·s, 13.53 g/cm³, 485 mN/m; a liquid metal.
-    ready!("mercury", 0xe6e6e8, 0.0001, 0.0, 0.0, 0.99, 1.0, 1.0; 0.022, 13.53, 1.0, 0.6, 0.0, 0.0, 0.0, 0.0, false),
+    ready!("mercury", 0xe6e6e8, 0.0001, 0.0, 0.0, 0.99, 1.0, 1.0; 0.022, 13.53, 1.0, 0.6, 0.0, 0.0, 0.0, 0.0, false, false),
     // Whole milk 2.1 mPa·s, 1.03 g/cm³, about 45 mN/m, n 1.35; fat and
     // protein scatter all colours.
-    ready!("milk", 0xfffaf0, 0.5, 1.0, 0.0, 0.94, 0.0, 1.35; 0.04, 1.03, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0, false),
+    ready!("milk", 0xfffaf0, 0.5, 1.0, 0.0, 0.94, 0.0, 1.35; 0.04, 1.03, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0, false, true),
     // Washing-up liquid about 0.3 Pa·s, about 30 mN/m; a soapy floor is as
     // slippery as a banana skin, and soap cleans.
-    ready!("soap", 0xc8f0b4, 0.05, 0.35, 0.0, 1.0, 0.0, 1.4; 0.31, 1.03, 0.126, 1.0, 0.0, 0.0, 0.0, 0.0, true),
+    ready!("soap", 0xc8f0b4, 0.05, 0.35, 0.0, 1.0, 0.0, 1.4; 0.31, 1.03, 0.126, 1.0, 0.0, 0.0, 0.0, 0.0, true, true),
     // Emulsion wall paint about 1 Pa·s, 1.3 g/cm³, about 35 mN/m; pigment
     // makes it opaque.
-    ready!("paint", 0xd22a2a, 0.001, 1.0, 0.0, 0.7, 0.0, 1.5; 0.375, 1.3, 0.17, 0.3, 0.2, 0.0, 0.0, 0.0, false),
+    ready!("paint", 0xd22a2a, 0.001, 1.0, 0.0, 0.7, 0.0, 1.5; 0.375, 1.3, 0.17, 0.3, 0.2, 0.0, 0.0, 0.0, false, false),
     // Mud slurry 10-100 Pa·s, 1.5-1.8 g/cm³.
-    ready!("mud", 0x5a4130, 0.001, 1.0, 0.0, 0.6, 0.0, 1.4; 0.56, 1.6, 0.4, 0.6, 0.4, 0.0, 0.0, 0.0, false),
+    ready!("mud", 0x5a4130, 0.001, 1.0, 0.0, 0.6, 0.0, 1.4; 0.56, 1.6, 0.4, 0.6, 0.4, 0.0, 0.0, 0.0, false, false),
     // Whole blood 3-4 mPa·s, 1.06 g/cm³, about 58 mN/m; red cells scatter.
-    ready!("blood", 0x7a0a0a, 0.002, 0.8, 0.0, 0.97, 0.0, 1.35; 0.07, 1.06, 0.33, 0.5, 0.1, 0.0, 0.0, 0.0, false),
+    ready!("blood", 0x7a0a0a, 0.002, 0.8, 0.0, 0.97, 0.0, 1.35; 0.07, 1.06, 0.33, 0.5, 0.1, 0.0, 0.0, 0.0, false, true),
 ];
 
 /// The ready-made kind called `name`.
@@ -311,6 +402,7 @@ impl Spec {
                 corrosive: ready.corrosive,
                 dries: ready.dries,
                 washes: ready.washes,
+                freezes: ready.freezes,
             },
         }
     }
@@ -363,6 +455,7 @@ enum Slot {
     Corrosive,
     Dries,
     Washes,
+    Freezes,
 }
 
 /// One setting of a kind, as a script writes it.
@@ -398,7 +491,7 @@ const fn field(
 
 /// Every setting a kind has except its name, in the order of
 /// [`FLUID_FIELDS`].
-const FIELDS: [Field; 16] = [
+const FIELDS: [Field; 17] = [
     field(
         "color",
         Slot::Color,
@@ -531,6 +624,15 @@ const FIELDS: [Field; 16] = [
         "true if it washes other fluids away where it lands, as water does, or false",
         "true",
     ),
+    field(
+        "freezes",
+        Slot::Freezes,
+        0.0,
+        1.0,
+        "true if a pool of it freezes over when the weather's ice is thick enough to walk \
+         on, as water does, or false",
+        "false",
+    ),
 ];
 
 /// The setting called `name`.
@@ -551,6 +653,7 @@ impl Spec {
         Reading::Number(match slot {
             Slot::Color => return Reading::Text(hex_of(self.color)),
             Slot::Washes => return Reading::Flag(flow.washes),
+            Slot::Freezes => return Reading::Flag(flow.freezes),
             Slot::Clarity => self.clarity,
             Slot::Cloudiness => self.cloudiness,
             Slot::Glow => self.glow,
@@ -585,7 +688,7 @@ impl Spec {
             Slot::Bouncy => self.flow.bouncy = value,
             Slot::Corrosive => self.flow.corrosive = value,
             Slot::Dries => self.flow.dries = value,
-            Slot::Color | Slot::Washes => {}
+            Slot::Color | Slot::Washes | Slot::Freezes => {}
         }
     }
 }
@@ -606,8 +709,9 @@ fn apply(
             let (color, _) = color_of(lua, label, value)?;
             spec.color = [color.r, color.g, color.b].map(to_linear);
         }
-        Slot::Washes => match value {
-            Value::Boolean(washes) => spec.flow.washes = *washes,
+        Slot::Washes | Slot::Freezes => match value {
+            Value::Boolean(flag) if field.slot == Slot::Washes => spec.flow.washes = *flag,
+            Value::Boolean(flag) => spec.flow.freezes = *flag,
             other => {
                 return Err(fail(
                     lua,
@@ -630,7 +734,7 @@ fn apply(
 
 /// A number as a script should read it: the shortest text that is the
 /// `f32` (0.4, not 0.4000000059604645).
-fn plain(value: f32) -> f64 {
+pub(crate) fn plain(value: f32) -> f64 {
     value.to_string().parse().unwrap_or(f64::from(value))
 }
 
@@ -648,6 +752,11 @@ pub(crate) struct FluidState {
     /// What each character stands in, with how long they have, and the
     /// seconds of the last tick.
     unders: RefCell<Vec<(CharacterId, FluidUnder, f64, f32)>>,
+    /// What the level's pools are called, once the engine has said: each
+    /// as its maker wrote it and as scripts find it.
+    pool_names: RefCell<Option<Vec<(String, String)>>>,
+    /// What the engine last said of each pool.
+    pools: RefCell<Vec<PoolTold>>,
 }
 
 impl Default for FluidState {
@@ -662,6 +771,8 @@ impl Default for FluidState {
             asks: RefCell::default(),
             litres: Cell::new([0.0; MOST_KINDS]),
             unders: RefCell::default(),
+            pool_names: RefCell::default(),
+            pools: RefCell::default(),
         }
     }
 }
@@ -749,6 +860,104 @@ impl FluidState {
         })
     }
 
+    /// Says what the level's pools are called, in the order of its
+    /// waters: one with no name is "pool 1", "pool 2" and so on by its
+    /// place among them.
+    pub(crate) fn name_pools(&self, names: &[Option<&str>]) {
+        let named = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let name = name
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map_or_else(|| format!("pool {}", index + 1), str::to_owned);
+                let found_by = tidy(&name);
+                (name, found_by)
+            })
+            .collect();
+        *self.pool_names.borrow_mut() = Some(named);
+        self.pools.borrow_mut().clear();
+    }
+
+    /// Says how every pool stands now, in the order of the level's waters.
+    pub(crate) fn set_pools(&self, told: impl IntoIterator<Item = PoolTold>) {
+        let mut pools = self.pools.borrow_mut();
+        pools.clear();
+        pools.extend(told);
+    }
+
+    /// Whether the engine has said what pools the level has.
+    pub(crate) fn pools_known(&self) -> bool {
+        self.pool_names.borrow().is_some()
+    }
+
+    /// The names of the level's pools, as their maker wrote them.
+    pub(crate) fn pool_names(&self) -> Vec<String> {
+        self.pool_names
+            .borrow()
+            .iter()
+            .flatten()
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Which pool is called `name` (trimmed and in lower case).
+    pub(crate) fn pool_named(&self, name: &str) -> Option<u16> {
+        let names = self.pool_names.borrow();
+        let index = names.as_ref()?.iter().position(|(_, by)| by == name)?;
+        u16::try_from(index).ok()
+    }
+
+    /// What the engine last said of pool `index`.
+    pub(crate) fn pool(&self, index: u16) -> Option<PoolTold> {
+        self.pools.borrow().get(usize::from(index)).copied()
+    }
+
+    /// The kind a level's pool is, from the name its sheet gives
+    /// (`None`: water): a kind the game has, or a ready-made, which is
+    /// made. `Err` holds what to tell the level's maker.
+    pub(crate) fn kind_for_pool(&self, fluid: Option<&str>) -> Result<u8, String> {
+        let Some(name) = fluid.map(tidy).filter(|name| !name.is_empty()) else {
+            return Ok(0);
+        };
+        if let Some(kind) = self.index_of(&name) {
+            return Ok(kind);
+        }
+        match ready_named(&name) {
+            Some(ready) => self.try_create(&name, Spec::of(ready)),
+            None => {
+                let mut names: Vec<String> = (self.kinds.borrow().iter())
+                    .map(|named| named.name.clone())
+                    .collect();
+                names.extend(
+                    (READY.iter())
+                        .filter(|ready| !names.iter().any(|known| known == ready.name))
+                        .map(|ready| ready.name.to_owned())
+                        .collect::<Vec<_>>(),
+                );
+                let hint = closest(&name, names.iter().map(String::as_str)).map_or_else(
+                    || format!("The kinds are: {}.", names.join(", ")),
+                    |near| format!("Did you mean \"{near}\"?"),
+                );
+                Err(format!(
+                    "there is no kind of fluid called \"{name}\". {hint} To make one, write in \
+                     main.luau: game.fluid(\"{name}\", {{ from = \"water\" }})"
+                ))
+            }
+        }
+    }
+
+    /// A `Fluid` for a script to hold: kind `kind`.
+    pub(crate) fn handle(lua: &Lua, kind: u8) -> mlua::Result<AnyUserData> {
+        lua.create_userdata(FluidRef(kind))
+    }
+
+    /// How many kinds the game has.
+    pub(crate) fn kinds(&self) -> usize {
+        self.kinds.borrow().len()
+    }
+
     fn index_of(&self, name: &str) -> Option<u8> {
         let kinds = self.kinds.borrow();
         let index = kinds.iter().position(|named| named.name == name)?;
@@ -762,7 +971,7 @@ impl FluidState {
             .map(|named| named.spec)
     }
 
-    fn name(&self, kind: u8) -> String {
+    pub(crate) fn name(&self, kind: u8) -> String {
         self.kinds
             .borrow()
             .get(usize::from(kind))
@@ -771,15 +980,18 @@ impl FluidState {
 
     /// Makes a new kind, if there is room.
     fn create(&self, lua: &Lua, name: &str, spec: Spec) -> mlua::Result<u8> {
+        self.try_create(name, spec)
+            .map_err(|message| fail(lua, message))
+    }
+
+    /// Makes a new kind, if there is room; `Err` holds what to say if not.
+    fn try_create(&self, name: &str, spec: Spec) -> Result<u8, String> {
         let mut kinds = self.kinds.borrow_mut();
         if kinds.len() >= MOST_KINDS {
-            return Err(fail(
-                lua,
-                format!(
-                    "There are already {MOST_KINDS} kinds of fluid, the most a game can have, \
-                     so game.fluid(\"{name}\") could not make another. Change a kind the game \
-                     has instead, for example: game.fluid(\"water\", {{ color = \"#203040\" }})"
-                ),
+            return Err(format!(
+                "There are already {MOST_KINDS} kinds of fluid, the most a game can have, \
+                 so game.fluid(\"{name}\") could not make another. Change a kind the game \
+                 has instead, for example: game.fluid(\"water\", {{ color = \"#203040\" }})"
             ));
         }
         let number = u8::try_from(kinds.len()).unwrap_or(u8::MAX);
@@ -801,10 +1013,11 @@ impl FluidState {
         }
     }
 
-    fn queue(&self, ask: FluidAsk) {
+    pub(crate) fn queue(&self, ask: FluidAsk) {
         let mut asks = self.asks.borrow_mut();
         match ask {
-            FluidAsk::Spray { .. } if asks.len() >= MOST_FLUID_ASKS => {}
+            FluidAsk::Spray { .. } | FluidAsk::PoolSplash { .. }
+                if asks.len() >= MOST_FLUID_ASKS => {}
             FluidAsk::Clear { .. } if asks.len() >= MOST_FLUID_ASKS => {
                 asks.retain(|ask| matches!(ask, FluidAsk::Clear { .. }));
                 asks.push(ask);
@@ -852,14 +1065,14 @@ fn unknown_kind(lua: &Lua, state: &FluidState, name: &str) -> mlua::Error {
 }
 
 /// The name a script wrote for a kind: trimmed and in lower case.
-fn tidy(name: &str) -> String {
+pub(crate) fn tidy(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
 /// A kind of fluid, from what a script wrote: a `Fluid` or its name. A name
 /// that is not yet a kind but is a ready-made is made when `make` is set,
 /// and is `None` otherwise.
-fn kind_of(
+pub(crate) fn kind_of(
     lua: &Lua,
     state: &FluidState,
     value: &Value,
@@ -1048,7 +1261,7 @@ fn specified(lua: &Lua, state: &FluidState, name: &str, settings: &Table) -> mlu
 }
 
 /// The key a script wrote, as text.
-fn key_text(key: &Value) -> String {
+pub(crate) fn key_text(key: &Value) -> String {
     match key {
         Value::String(key) => key.to_string_lossy(),
         other => other.to_string().unwrap_or_default(),
@@ -1152,7 +1365,7 @@ impl UserData for FluidRef {
 }
 
 /// A place or a way a script wrote, as `function` takes it.
-fn vector_of(
+pub(crate) fn vector_of(
     lua: &Lua,
     function: &str,
     what: &str,
@@ -1315,6 +1528,10 @@ pub(crate) fn touch_table(
     table.raw_set("depth", plain(under.depth))?;
     table.raw_set("harm", plain(under.corrosive * standing.step))?;
     table.raw_set("seconds", standing.seconds)?;
+    if let Some(pool) = under.pool {
+        table.raw_set("pool", crate::pool_api::handle(lua, shared, pool)?)?;
+    }
+    table.raw_set("submerged", plain(under.submerged))?;
     Ok(table)
 }
 
@@ -1411,6 +1628,7 @@ pub(crate) fn fluids(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             list,
         )?,
     )?;
+    crate::pool_api::install(lua, shared, &table)?;
     strict(lua, &table, "game.fluids", FLUIDS_FUNCTIONS)?;
     // `game.fluids("honey")` is one letter from `game.fluid("honey")`.
     if let Some(meta) = table.metatable() {
@@ -1420,7 +1638,7 @@ pub(crate) fn fluids(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 Err(fail(
                     lua,
                     "game.fluids holds what is done with fluids (spray, clear, amount, under, \
-                     onTouch) and cannot be called. To make or find a kind of fluid, write \
+                     onTouch, pool, pools) and cannot be called. To make or find a kind of fluid, write \
                      game.fluid with no s: game.fluid(\"honey\")",
                 ))
             })?,

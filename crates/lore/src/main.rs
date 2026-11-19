@@ -430,6 +430,13 @@ fn check(folder: &Path) -> Result<(), String> {
     // Said before the script's own lines; a level with a mistake fails the
     // check at the end, after the script has had its turn.
     let level = cli::load_level(folder).inspect_err(|error| eprintln!("{error}"));
+    // The level's pools, as a world would say them: a script's lines
+    // about a pool run, and a pool it names that the level has not got is
+    // a mistake said here.
+    let pools = match &level {
+        Ok(Some(level)) => cli::tell_pools(level, game.host_mut()),
+        _ => 0,
+    };
     // Read before the script runs, so a sound that cannot be played is not
     // one the script is let play. Each such file is logged as it is found.
     game.check_sounds();
@@ -506,9 +513,22 @@ fn check(folder: &Path) -> Result<(), String> {
             cover: 1.0,
             depth: 0.003,
             corrosive: 0.5,
+            pool: None,
+            submerged: 0.0,
         };
         for _ in 0..2 {
             game.host_mut().stand_in_fluid(player, Some(puddle), step);
+            game.tick(input.tick(), step);
+        }
+        // And up to the neck in the level's first pool, if it has one.
+        if pools > 0 {
+            let pool = lore_script::FluidUnder {
+                depth: 1.4,
+                pool: Some(0),
+                submerged: 0.8,
+                ..puddle
+            };
+            game.host_mut().stand_in_fluid(player, Some(pool), step);
             game.tick(input.tick(), step);
         }
         game.host_mut().stand_in_fluid(player, None, step);

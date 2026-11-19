@@ -12,10 +12,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use crate::bolt::Lightning;
 use crate::bounce::Bounce;
 use crate::camera::Camera;
-use crate::effects::{Effects, Splash};
+use crate::effects::{Effects, Splash, Standing};
 use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
-use crate::fluid::{FluidDrop, FluidLook};
+use crate::fluid::{FluidDrop, FluidLook, PoolDrawn};
 use crate::font::Font;
 use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
@@ -591,6 +591,20 @@ impl Renderer {
         self.effects.set_rise(rise);
     }
 
+    /// Says how each body of still fluid stands and looks, one for each of
+    /// the scene's waters (`Scene::waters`) in their order: how far from
+    /// where its maker put it the surface is, what it is drawn as (lava,
+    /// honey, a mix), and whether the weather's ice shows on it. A game
+    /// whose pools hold what its rules say (`lore_fluid::Pool`) says this
+    /// every frame; a body nothing is said of stands as high as rain has
+    /// raised it ([`set_water_rise`](Self::set_water_rise)) and is drawn
+    /// as the level's own water. Setting a scene forgets what was said.
+    pub fn set_pools(&mut self, pools: &[PoolDrawn]) {
+        if let Some(meshes) = &mut self.meshes {
+            meshes.set_pools(pools);
+        }
+    }
+
     /// Says how each kind of fluid looks, by its number: the first look is
     /// kind 0. Up to 32; kinds not given look like clear water.
     pub fn set_fluid_looks(&mut self, looks: &[FluidLook]) {
@@ -1009,7 +1023,10 @@ impl Renderer {
         // What flies moves on by as long as the last frame took.
         self.effects.step(
             seconds,
-            self.meshes.as_ref().map_or(&[][..], Meshes::waters),
+            &self
+                .meshes
+                .as_ref()
+                .map_or(Standing::default(), Meshes::standing),
         );
         let weather = self.effects.air(view.seconds());
         self.look.step(seconds);

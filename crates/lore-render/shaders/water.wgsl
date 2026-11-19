@@ -12,10 +12,36 @@ const WATER_MIRRORS: f32 = 0.02;
 
 // ------------------------------------------------------------ the look
 
+// The look of the body of still fluid being drawn, when it is drawn as
+// itself and not as the water nearest the eye is (`fragment_body`): the
+// same three rows as `view.water_look`.
+var<private> own_look: array<vec4<f32>, 3>;
+var<private> own_look_said: bool = false;
+// Whether that body never freezes over, as lava does not.
+var<private> never_frozen: bool = false;
+
+// One row of the look of the water being shaded: what it takes of red,
+// green and blue light in a metre and whether it has a look at all; what
+// it scatters and how rough it is; its glow and how much it bends light.
+fn water_look(row: i32) -> vec4<f32> {
+    if own_look_said {
+        return own_look[row];
+    }
+    return view.water_look[row];
+}
+
+// How thick the ice on the water being shaded is, from 0 to 1.
+fn water_ice() -> f32 {
+    if never_frozen {
+        return 0.0;
+    }
+    return view.weather[2].y;
+}
+
 // Whether the level's game has said how its water looks (`fluid.rs`):
 // lava, slime and the like, instead of the clear water above.
 fn water_has_look() -> bool {
-    return view.water_look[0].w > 0.5;
+    return water_look(0).w > 0.5;
 }
 
 // How much red, green and blue light a metre of the water takes and
@@ -23,7 +49,7 @@ fn water_has_look() -> bool {
 // clear the level says its water is, which a look has no use for.
 fn water_passes(through: f32, clarity: f32) -> vec3<f32> {
     if water_has_look() {
-        return exp(-through * (view.water_look[0].xyz + view.water_look[1].xyz));
+        return exp(-through * (water_look(0).xyz + water_look(1).xyz));
     }
     // Times one over the clarity, not divided by it: the same sums in the
     // same order as before looks existed, so a level's water is unchanged.
@@ -35,8 +61,8 @@ fn water_passes(through: f32, clarity: f32) -> vec3<f32> {
 // level's own colour, or what the look scatters as against what it takes.
 fn water_albedo(colour: vec3<f32>) -> vec3<f32> {
     if water_has_look() {
-        let takes = view.water_look[0].xyz;
-        let scatters = view.water_look[1].xyz;
+        let takes = water_look(0).xyz;
+        let scatters = water_look(1).xyz;
         return scatters / max(takes + scatters, vec3<f32>(1e-4));
     }
     return colour;
@@ -46,7 +72,7 @@ fn water_albedo(colour: vec3<f32>) -> vec3<f32> {
 // none for clear water.
 fn water_glows() -> vec3<f32> {
     if water_has_look() {
-        return view.water_look[2].xyz;
+        return water_look(2).xyz;
     }
     return vec3<f32>(0.0);
 }
@@ -56,7 +82,7 @@ fn water_glows() -> vec3<f32> {
 // crust that drift slowly, and glows through the cracks between them and
 // where they are thin; a smooth one glows all over.
 fn crusted(place: vec2<f32>) -> f32 {
-    let crust = smoothstep(0.2, 0.5, view.water_look[1].w);
+    let crust = smoothstep(0.2, 0.5, water_look(1).w);
     if crust <= 0.0 {
         return 1.0;
     }
@@ -80,7 +106,7 @@ fn crusted(place: vec2<f32>) -> f32 {
 // how much the liquid bends light, if it has a look.
 fn water_mirrors() -> f32 {
     if water_has_look() {
-        let bends = max(view.water_look[2].w, 1.0);
+        let bends = max(water_look(2).w, 1.0);
         let off = (bends - 1.0) / (bends + 1.0);
         return off * off;
     }
@@ -91,7 +117,7 @@ fn water_mirrors() -> f32 {
 // make of it: a look's own roughness is never smoother than that.
 fn water_roughness(waves: f32) -> f32 {
     if water_has_look() {
-        return max(waves, view.water_look[1].w);
+        return max(waves, water_look(1).w);
     }
     return waves;
 }
@@ -135,7 +161,7 @@ fn wave_strength(place: vec2<f32>, deep: f32) -> vec4<f32> {
     let blowing = gust(place, 0.0) / 0.8 * (1.0 + 1.5 * view.weather[0].w);
     // Ice holds it still.
     var strength = mix(vec4<f32>(1.0), vec4<f32>(blowing), vec4<f32>(0.35, 0.7, 1.0, 1.0))
-        * (1.0 - view.weather[2].y);
+        * (1.0 - water_ice());
     if deep >= 0.0 {
         strength *= vec4<f32>(
             smoothstep(0.0, view.waves[0].w * 0.5, deep),
@@ -708,7 +734,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     }
     // Still water freezes over when the cold has made ice of it; water
     // that runs stays open.
-    let frozen = view.weather[2].y * (1.0 - smoothstep(0.05, 0.5, fast));
+    let frozen = water_ice() * (1.0 - smoothstep(0.05, 0.5, fast));
     var ring = rings(wet.rest) * (1.0 - frozen);
     // No ring is steeper than water stands before it breaks.
     let steep = length(ring.yz);
@@ -1076,6 +1102,29 @@ fn body_depth(place: vec2<f32>) -> f32 {
     return textureSampleLevel(body_water, clamp_sampler, uv, 0.0).r + draw.world_from_local[1].z;
 }
 
+// Takes the look of the body being drawn from where the engine put it
+// (`body_bytes`): each body is drawn as what it holds, which need not be
+// what the water nearest the eye is. How much it bends light is 0 for a
+// body with no look of its own, the level's water; and below nothing for
+// one that never freezes.
+fn body_look() {
+    let bends = draw.sway;
+    own_look_said = true;
+    never_frozen = bends < 0.0;
+    if bends == 0.0 {
+        own_look[0] = vec4<f32>(0.0);
+        own_look[1] = vec4<f32>(0.0);
+        own_look[2] = vec4<f32>(0.0);
+        return;
+    }
+    own_look[0] = vec4<f32>(draw.world_from_local[2].xyz, 1.0);
+    own_look[1] = vec4<f32>(draw.normal_from_local[2].xyz, draw.world_from_local[2].w);
+    own_look[2] = vec4<f32>(
+        draw.world_from_local[0].w, draw.world_from_local[1].w, draw.world_from_local[3].w,
+        abs(bends),
+    );
+}
+
 // One point of the grid a body of still water is drawn with. The grid is
 // laid round the eye: `square` is how many squares along x and z the point
 // is from its middle, which `draw.world_from_local` puts in the world.
@@ -1086,6 +1135,8 @@ fn vertex_body(@location(0) square: vec2<f32>) -> Corner {
     let middle = draw.world_from_local[3].xz;
     let level = draw.normal_from_local[1].z;
     let rest = middle + square * apart;
+    // Ice holds the waves of what freezes, and only of that.
+    never_frozen = draw.sway < 0.0;
     let deep = body_depth(rest);
     // Points are closer together the nearer the eye; waves too short for
     // the points here to follow are left to the shading. Worked out from
@@ -1144,5 +1195,6 @@ fn fragment_body(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     wet.deep = max(deep, 0.0);
     wet.level = draw.normal_from_local[1].z;
     wet.colour = vec4<f32>(draw.normal_from_local[2].xyz, draw.handedness);
+    body_look();
     return water_pixel(corner, front, wet);
 }
