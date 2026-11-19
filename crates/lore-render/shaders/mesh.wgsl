@@ -1564,11 +1564,14 @@ fn snow_buries(world: vec3<f32>, deep: f32) -> f32 {
 // How much of a point of the world is snow, from 0 to 1, and the two
 // grains of noise that make its edge ragged. `faces_up` is how far the
 // surface there faces up, as it is built (-1 to 1), and `open` how much of
-// the sky it sees.
+// what falls reaches it (`rained_on`).
 //
-// Snow lies on what faces up under an open sky: first on what is flattest
-// and in patches, then, as it deepens, on all but what is steep. Under
-// trees and ledges there is little or none. And it buries what is in it:
+// Snow lies on what faces up with nothing over it: first on what is
+// flattest and in patches, then, as it deepens, on all but what is steeper
+// than it clings to, sixty degrees. It comes nearly straight down, so under
+// trees, ledges and roofs there is little or none however much of the sky
+// is in sight round about, and the floor of a narrow street between tall
+// buildings is as white as an open square. And it buries what is in it:
 // whatever is no higher over the ground than the snow is deep has as much
 // snow as the ground beside it, whichever way it faces. What a surface's
 // normal map says plays no part: snow settles on a road, not between its
@@ -1579,7 +1582,7 @@ fn snow_on(world: vec3<f32>, faces_up: f32, open: f32) -> vec3<f32> {
         cloud_volume, cloud_sampler, world * vec3<f32>(0.13, 0.19, 0.13) + 0.21, 0.0,
     ).r;
     let small = textureSampleLevel(cloud_volume, cloud_sampler, world * 0.9 + 0.5, 0.0).g;
-    let needs = mix(0.97, 0.3, lies);
+    let needs = mix(0.97, 0.5, lies);
     let ragged = (patches - 0.5) * mix(0.9, 0.3, lies) + (small - 0.5) * 0.25;
     let own = smoothstep(needs - 0.1, needs + 0.1, faces_up + ragged);
     let level = smoothstep(needs - 0.1, needs + 0.1, 1.0 + ragged);
@@ -1809,11 +1812,19 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // has a good half of the light, and what faces up has all it had.
     var banked_sun = 1.0;
     var banked_sky = 1.0;
+    // How much of what falls reaches the point, asked only while snow lies
+    // or the rain has left the ground wet: what lies and what wets come
+    // nearly straight down, so what is over the point counts, not how
+    // much of the sky it sees.
+    var reached = 1.0;
+    if view.weather[2].x > 0.0 || (view.weather[0].z > 0.0 && built.y > 0.2) {
+        reached = rained_on(corner.world, corner.position.xy);
+    }
     if view.weather[2].x > 0.0 {
         let faces_up = smoothstep(0.25, 0.6, built.y);
         banked_sun = mix(0.55, 1.0, faces_up);
         banked_sky = mix(0.85, 1.0, faces_up);
-        let found = snow_on(corner.world, built.y, open);
+        let found = snow_on(corner.world, built.y, reached);
         let patches = found.y;
         let small = found.z;
         snowed = found.x;
@@ -1867,10 +1878,8 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
 
     // What the water laps at is soaked, and so is what the rain falls on:
     // whatever faces up with nothing over it, and has no snow on it.
-    var rained = view.weather[0].z * smoothstep(0.2, 0.7, built.y) * (1.0 - snowed);
-    if rained > 0.0 {
-        rained *= rained_on(corner.world, corner.position.xy);
-    }
+    let rain_reaches = smoothstep(0.2, 0.7, built.y) * (1.0 - snowed) * reached;
+    let rained = view.weather[0].z * rain_reaches;
     let wet = max(shore_wet(corner.world) * (1.0 - snowed), rained);
     // Water fills the pores of what has them, which is what is rough
     // (Lagarde, "Water drop 3b", 2013): that is darker, because light gets

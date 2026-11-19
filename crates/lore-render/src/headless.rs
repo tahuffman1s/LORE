@@ -1757,15 +1757,9 @@ mod tests {
         assert_eq!(validation_errors(), 0);
     }
 
-    #[test]
-    fn air_in_the_shade_of_a_roof_does_not_glow_with_the_sun() {
-        let Some(mut headless) = headless(128, 72) else {
-            return;
-        };
-        headless.gpu().require_validation();
-        // A roof forty metres across, four metres up, at noon in mist:
-        // looking out from under it, the first twenty metres of air are in
-        // its shadow, and the sun lights the air beyond.
+    /// The grey floor, and over the square from `-half` to `half` along x
+    /// and z a flat roof `high` up.
+    fn roofed(half: f32, high: f32) -> Scene {
         let mut scene = fluid_scene(false, false);
         // The sun's shadows span the level's bounds, which a loaded level
         // knows: these are made here, so they are said here.
@@ -1777,13 +1771,13 @@ mod tests {
             name: None,
             parts: vec![lore_assets::MeshPart {
                 positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
-                    .map(|[x, z]| [x * 20.0, 4.0, z * 20.0])
+                    .map(|[x, z]| [x * half, high, z * half])
                     .to_vec(),
                 normals: vec![[0.0, 1.0, 0.0]; 4],
                 indices: vec![0, 1, 2, 0, 2, 3],
                 bounds: lore_assets::Bounds {
-                    min: [-20.0, 4.0, -20.0],
-                    max: [20.0, 4.0, 20.0],
+                    min: [-half, high, -half],
+                    max: [half, high, half],
                 },
                 ..lore_assets::MeshPart::default()
             }],
@@ -1792,7 +1786,83 @@ mod tests {
         let mut placed = scene.instances[0].clone();
         placed.mesh = 1;
         scene.instances.push(placed);
-        headless.set_scene(&scene).unwrap();
+        scene
+    }
+
+    #[test]
+    fn snow_lies_in_the_open_and_not_under_a_roof() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A shelter twelve metres across with its roof three metres up,
+        // seen from the open ground in front of it at noon. Snow falls
+        // nearly straight down: under the roof, even just inside its edge
+        // where most of the sky is still in sight, none lies.
+        headless.set_scene(&roofed(6.0, 3.0)).unwrap();
+        headless.set_hour(Some(12.0));
+        let camera = Camera {
+            position: [0.0, 1.6, 9.0],
+            pitch: -0.25,
+            ..Camera::default()
+        };
+        let mut snowed = |depth: f32| {
+            headless.set_weather(Weather {
+                cloud_cover: 0.3,
+                temperature: -5.0,
+                snow: depth,
+                ..Weather::default()
+            });
+            headless.screenshot(&camera).unwrap()
+        };
+        let (bare, white) = (snowed(0.0), snowed(0.1));
+        if let Ok(folder) = std::env::var("LORE_SAVE_PICTURES") {
+            let _ = std::fs::write(format!("{folder}/roof-bare.raw"), &bare);
+            let _ = std::fs::write(format!("{folder}/roof-snow.raw"), &white);
+        }
+        // How bright rows `from` to `to` are, across the middle half of
+        // the picture.
+        let light = |picture: &[u8], from: usize, to: usize| -> i64 {
+            (from..to)
+                .flat_map(|row| (32..96).map(move |column| (row * 128 + column) * 4))
+                .map(|at| {
+                    (0..3)
+                        .map(|colour| i64::from(picture[at + colour]))
+                        .sum::<i64>()
+                })
+                .sum()
+        };
+        // The open floor in front, from one to two metres out from the
+        // roof's edge, is white; the floor under the roof, from a little
+        // inside its edge to five metres in, is as it was.
+        let (open, inside) = ((55, 70), (33, 44));
+        let (lies, bare_open) = (light(&white, open.0, open.1), light(&bare, open.0, open.1));
+        assert!(
+            lies * 10 > bare_open * 15,
+            "no snow lies in the open: {lies} against {bare_open} bare"
+        );
+        let (under, was) = (
+            light(&white, inside.0, inside.1),
+            light(&bare, inside.0, inside.1),
+        );
+        assert!(
+            under * 10 < was * 12,
+            "snow lies under the roof: {under} against {was} bare"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn air_in_the_shade_of_a_roof_does_not_glow_with_the_sun() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A roof forty metres across, four metres up, at noon in mist:
+        // looking out from under it, the first twenty metres of air are in
+        // its shadow, and the sun lights the air beyond.
+        headless.set_scene(&roofed(20.0, 4.0)).unwrap();
         headless.set_hour(Some(12.0));
         headless.set_weather(Weather {
             cloud_cover: 0.0,
