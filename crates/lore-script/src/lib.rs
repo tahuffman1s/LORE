@@ -33,6 +33,12 @@
 //! each piece and changes it; whoever draws the game reads them from
 //! [`ScriptHost::each_hud_piece`].
 //!
+//! `game.shaders` turns on a game's own shaders by name, a screen effect
+//! over the finished picture or a change to the surface of one material, and
+//! sets their values. Like lamps they only change what is drawn; whoever
+//! draws the game reads them from [`ScriptHost::each_shader`] and notices a
+//! change by [`ScriptHost::shader_revision`].
+//!
 //! The script API is described for editors in `types/lore.d.luau`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -50,6 +56,7 @@ mod lighting_api;
 mod limit;
 mod modules;
 mod settings_api;
+mod shader_api;
 mod time_api;
 mod tools_api;
 mod weapon_api;
@@ -65,6 +72,7 @@ pub use lamp_api::{LampBeam, LampLight};
 pub use lighting_api::EyeSaid;
 pub use lore_weapons as weapons;
 pub use settings_api::{Setting, SettingKind, SettingValue};
+pub use shader_api::{ShaderSaid, ShaderUse};
 pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};

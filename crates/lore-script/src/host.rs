@@ -25,8 +25,9 @@ use crate::hud::{self, HudPiece, HudState};
 use crate::keep::{Kept, Store};
 use crate::lamp_api::LampLight;
 use crate::limit::{self, within_time_limit};
-use crate::modules::{Files, Modules, Stamp, Touched, stamp};
+use crate::modules::{Files, Modules, Touched, Watch, stamp};
 use crate::settings_api::{Setting, SettingValue, SettingsState};
+use crate::shader_api::{ShaderSaid, ShaderState};
 use crate::time_api::Clock;
 use crate::tools_api::{Motion, Movement, Teleport, Tools};
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
@@ -81,36 +82,6 @@ fn reloaded(saved: &[String]) -> String {
 struct Watched {
     path: PathBuf,
     watch: Watch,
-}
-
-/// Decides when a file has been saved and the save has finished.
-#[derive(Debug, Default)]
-struct Watch {
-    /// The file as it was when last loaded.
-    loaded: Option<Stamp>,
-    /// A newer state seen once, waiting to be seen again.
-    pending: Option<Stamp>,
-}
-
-impl Watch {
-    /// Takes what the file looks like now and says whether to reload it.
-    ///
-    /// A change must look the same on two checks in a row, so a file caught
-    /// half-written by the editor is not loaded. A missing file (some editors
-    /// save by deleting and renaming) is never a reason to reload.
-    fn should_reload(&mut self, seen: Option<Stamp>) -> bool {
-        if seen.is_none() || seen == self.loaded {
-            self.pending = None;
-            false
-        } else if seen == self.pending {
-            self.loaded = seen;
-            self.pending = None;
-            true
-        } else {
-            self.pending = seen;
-            false
-        }
-    }
 }
 
 /// Runs one game's script.
@@ -177,6 +148,8 @@ pub struct ScriptHost {
     /// outlive a reload too.
     fluids: Rc<crate::fluid_api::FluidState>,
     lamps: Rc<crate::lamp_api::LampState>,
+    /// The game shaders the script turned on; they outlive a reload too.
+    shaders: Rc<ShaderState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
@@ -310,8 +283,10 @@ impl ScriptHost {
 
     /// A host running the `main.luau` in `files`.
     fn with_files(files: Files, actions: ActionMap, settings: Vec<Setting>) -> Self {
+        let files = Rc::new(files);
         let mut host = Self {
-            files: Rc::new(files),
+            shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
+            files,
             file: ENTRY_SCRIPT.to_owned(),
             actions: Rc::new(RefCell::new(actions)),
             running: None,
@@ -717,6 +692,57 @@ impl ScriptHost {
     /// that of this moment of the game. Allocates nothing.
     pub fn lamps(&self, see: impl FnMut(&LampLight)) {
         self.lamps.lights(self.clock.now(), see);
+    }
+
+    /// A number that rises whenever the list [`each_shader`](Self::each_shader)
+    /// gives changes in a way the renderer must build again: a shader turned
+    /// on or off, new text for one, or a problem with its file that appeared
+    /// or went away. It does not rise when only a value changes
+    /// (`shader:set`).
+    ///
+    /// Ask every frame. When it differs from the last answer, read the
+    /// whole list with [`each_shader`](Self::each_shader) and hand it to the
+    /// renderer.
+    #[must_use]
+    pub fn shader_revision(&self) -> u64 {
+        self.shaders.revision()
+    }
+
+    /// Calls `see` with each game shader the script has turned on
+    /// (`game.shaders.screen`, `game.shaders.surface`), in the order they
+    /// were turned on. Allocates nothing.
+    ///
+    /// Values change without [`shader_revision`](Self::shader_revision)
+    /// rising, so read them from here every frame. A shader's `problem` is
+    /// a standing problem with its file, shown until it clears, and its
+    /// `text` is the last version that worked.
+    ///
+    /// ```
+    /// use lore_input::ActionMap;
+    /// use lore_script::ScriptHost;
+    ///
+    /// let host = ScriptHost::from_sources(
+    ///     [
+    ///         (
+    ///             "main.luau".to_owned(),
+    ///             r#"game.shaders.screen("heat", { strength = 0.3 })"#.to_owned(),
+    ///         ),
+    ///         (
+    ///             "shaders/heat.wgsl".to_owned(),
+    ///             "//! param strength: f32 = 0.5 range 0..1\n\
+    ///              fn screen(in: ScreenIn) -> vec3f { return in.color * params.strength; }"
+    ///                 .to_owned(),
+    ///         ),
+    ///     ],
+    ///     ActionMap::standard(),
+    /// );
+    /// assert!(host.last_error().is_none());
+    /// let mut names = Vec::new();
+    /// host.each_shader(|shader| names.push(shader.name.clone()));
+    /// assert_eq!(names, ["heat"]);
+    /// ```
+    pub fn each_shader(&self, see: impl FnMut(&ShaderSaid)) {
+        self.shaders.each(see);
     }
 
     /// The game's own exposure in stops and how the eye adapts, if the
@@ -1133,6 +1159,7 @@ impl ScriptHost {
 
     /// Builds a version from the game's scripts and makes it the running one.
     fn install(&mut self) -> Result<(), ScriptError> {
+        let before = self.shaders.begin_load();
         let (touched, built) = self.build();
         // A version that failed is fixed by saving one of the files it read,
         // or one the running version did.
@@ -1163,6 +1190,7 @@ impl ScriptHost {
                     }
                 }
                 self.running = Some(version);
+                self.shaders.end_load();
                 // The new version has its own HUD, made as its file ran.
                 self.versions = self.versions.wrapping_add(1);
                 self.paused = false;
@@ -1170,7 +1198,10 @@ impl ScriptHost {
                 self.reported.clear();
                 Ok(())
             }
-            Err(error) => Err(self.failed_to_load(error)),
+            Err(error) => {
+                self.shaders.restore(before);
+                Err(self.failed_to_load(error))
+            }
         }
     }
 
@@ -1181,10 +1212,7 @@ impl ScriptHost {
             self.watched.clear();
         }
         for (path, seen) in touched {
-            let watch = Watch {
-                loaded: seen,
-                pending: None,
-            };
+            let watch = Watch::loaded(seen);
             match self.watched.iter_mut().find(|file| file.path == path) {
                 Some(file) => file.watch = watch,
                 None => self.watched.push(Watched { path, watch }),
@@ -1226,6 +1254,7 @@ impl ScriptHost {
             weather: Rc::clone(&self.weather),
             fluids: Rc::clone(&self.fluids),
             lamps: Rc::clone(&self.lamps),
+            shaders: Rc::clone(&self.shaders),
             lighting: Rc::clone(&self.lighting),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
@@ -1379,47 +1408,5 @@ impl ScriptHost {
         // on every tick.
         self.paused = too_long;
         !too_long
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::SystemTime;
-
-    use super::*;
-
-    fn at(seconds: u64, len: u64) -> Option<Stamp> {
-        Some((SystemTime::UNIX_EPOCH + Duration::from_secs(seconds), len))
-    }
-
-    #[test]
-    fn a_save_is_loaded_once_it_has_settled() {
-        let mut watch = Watch {
-            loaded: at(1, 10),
-            pending: None,
-        };
-        assert!(!watch.should_reload(at(1, 10)), "nothing changed");
-        assert!(
-            !watch.should_reload(at(2, 4)),
-            "seen once: may be half-written"
-        );
-        assert!(!watch.should_reload(at(2, 20)), "still being written");
-        assert!(
-            watch.should_reload(at(2, 20)),
-            "same twice: the save is done"
-        );
-        assert!(!watch.should_reload(at(2, 20)), "already loaded");
-    }
-
-    #[test]
-    fn a_file_that_vanishes_mid_save_is_not_a_reload() {
-        let mut watch = Watch {
-            loaded: at(1, 10),
-            pending: None,
-        };
-        assert!(!watch.should_reload(at(2, 20)));
-        assert!(!watch.should_reload(None), "deleted before the rename");
-        assert!(!watch.should_reload(at(2, 20)));
-        assert!(watch.should_reload(at(2, 20)));
     }
 }
