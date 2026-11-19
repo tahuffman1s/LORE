@@ -41,11 +41,15 @@
 // drawn there is, or `SHADE_SKY` for nothing. A step far from its pixel is
 // read from one of these, so that steps far apart on the picture are near
 // each other in memory, and a wide search costs what a narrow one does
-// (XeGTAO's chain of depths).
-@group(0) @binding(28) var depth_half: texture_2d<f32>;
-@group(0) @binding(29) var depth_quarter: texture_2d<f32>;
-@group(0) @binding(30) var depth_eighth: texture_2d<f32>;
-@group(0) @binding(31) var depth_sixteenth: texture_2d<f32>;
+// (XeGTAO's chain of depths). They are four layers of one picture, each in
+// the top left corner of its layer, so that whichever a step wants is one
+// read and no choosing between pictures.
+@group(0) @binding(28) var depths_smaller: texture_2d_array<f32>;
+// The first three of those layers by themselves: each is read while the
+// next is drawn.
+@group(0) @binding(29) var depth_half: texture_2d<f32>;
+@group(0) @binding(30) var depth_quarter: texture_2d<f32>;
+@group(0) @binding(31) var depth_eighth: texture_2d<f32>;
 
 // How many sectors a slice has: the bits of a u32.
 const SHADE_SECTORS: f32 = 32.0;
@@ -62,17 +66,16 @@ const SHADE_JOINED: f32 = 3.0;
 // The sine of how far above a pixel's own surface a thing must stand to be
 // looked at any further.
 const SHADE_LEVEL: f32 = 0.05;
-// The widest the search is on the picture, as a share of its height: what
-// is right in front of the eye would otherwise be searched across half of
-// the picture.
+// The widest the search is on the picture, as a share of its height: for
+// what is right in front of the eye, as far as the picture is high, beyond
+// which most steps would land off it.
 const SHADE_WIDEST: f32 = 1.0;
 // How far ahead the sky is taken to be in the smaller copies of the depth.
 const SHADE_SKY: f32 = 1e30;
 // A step under twice this many pixels from its own pixel is read from the
 // depth itself; each doubling beyond that, from the next smaller copy
-// (XeGTAO reads the depth itself to 2 to the power 3.3 pixels, which is
-// twice this).
-const SHADE_FINEST: f32 = 4.925;
+// (XeGTAO's 2 to the power 3.3).
+const SHADE_FINEST: f32 = 9.85;
 // What is so far off that the search is narrower than this many pixels has
 // no shade found for it: it fades out before that.
 const SHADE_NARROWEST: f32 = 1.5;
@@ -110,28 +113,18 @@ fn shade_ray(point: vec2<f32>, size: vec2<i32>) -> vec3<f32> {
     return view.sky_rays[0].xyz + right.xyz * (across.x - right.w) + up.xyz * (across.y - up.w);
 }
 
+// How many pixels wide and high the copy of a picture of `size` is that is
+// `smaller` halvings of it: every pixel of the picture is in one of its.
+fn shade_halved(size: vec2<i32>, smaller: i32) -> vec2<i32> {
+    return (size + ((1 << u32(smaller)) - 1)) >> vec2<u32>(u32(smaller));
+}
+
 // The same as `shade_seen`, read from the smaller copy of the depth that is
 // `smaller` halvings of the picture (1 to 4): what is there is taken to be
 // at the middle of the square of pixels it stands for.
 fn shade_seen_far(at: vec2<i32>, size: vec2<i32>, smaller: i32) -> vec4<f32> {
-    let square = at >> vec2<u32>(u32(smaller));
-    var ahead = SHADE_SKY;
-    switch smaller {
-        case 1 {
-            ahead = textureLoad(depth_half, min(square, vec2<i32>(textureDimensions(depth_half)) - 1), 0).r;
-        }
-        case 2 {
-            ahead = textureLoad(depth_quarter, min(square, vec2<i32>(textureDimensions(depth_quarter)) - 1), 0).r;
-        }
-        case 3 {
-            ahead = textureLoad(depth_eighth, min(square, vec2<i32>(textureDimensions(depth_eighth)) - 1), 0).r;
-        }
-        default {
-            ahead = textureLoad(
-                depth_sixteenth, min(square, vec2<i32>(textureDimensions(depth_sixteenth)) - 1), 0,
-            ).r;
-        }
-    }
+    let square = min(at >> vec2<u32>(u32(smaller)), shade_halved(size, smaller) - 1);
+    let ahead = textureLoad(depths_smaller, square, smaller - 1, 0).r;
     if ahead >= 0.5 * SHADE_SKY {
         return vec4<f32>(0.0);
     }
@@ -175,41 +168,34 @@ fn fragment_depth_half(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f3
     )));
 }
 
-// Each of the rest, from the one before it.
+// Each of the rest, from the one before it, which fills the top left
+// corner of its layer: `last` is its last pixel there.
+fn shade_halved_again(before: texture_2d<f32>, at: vec2<f32>, last: vec2<i32>) -> f32 {
+    let first = vec2<i32>(at) * 2;
+    return shade_smaller(vec4<f32>(
+        textureLoad(before, min(first, last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(1, 0), last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(0, 1), last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(1, 1), last), 0).r,
+    ));
+}
+
 @fragment
 fn fragment_depth_quarter(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
-    let last = vec2<i32>(textureDimensions(depth_half)) - 1;
-    let first = vec2<i32>(at.xy) * 2;
-    return vec4<f32>(shade_smaller(vec4<f32>(
-        textureLoad(depth_half, min(first, last), 0).r,
-        textureLoad(depth_half, min(first + vec2<i32>(1, 0), last), 0).r,
-        textureLoad(depth_half, min(first + vec2<i32>(0, 1), last), 0).r,
-        textureLoad(depth_half, min(first + vec2<i32>(1, 1), last), 0).r,
-    )));
+    let half = vec2<i32>(textureDimensions(depth_half));
+    return vec4<f32>(shade_halved_again(depth_half, at.xy, half - 1));
 }
 
 @fragment
 fn fragment_depth_eighth(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
-    let last = vec2<i32>(textureDimensions(depth_quarter)) - 1;
-    let first = vec2<i32>(at.xy) * 2;
-    return vec4<f32>(shade_smaller(vec4<f32>(
-        textureLoad(depth_quarter, min(first, last), 0).r,
-        textureLoad(depth_quarter, min(first + vec2<i32>(1, 0), last), 0).r,
-        textureLoad(depth_quarter, min(first + vec2<i32>(0, 1), last), 0).r,
-        textureLoad(depth_quarter, min(first + vec2<i32>(1, 1), last), 0).r,
-    )));
+    let half = vec2<i32>(textureDimensions(depth_quarter));
+    return vec4<f32>(shade_halved_again(depth_quarter, at.xy, shade_halved(half, 1) - 1));
 }
 
 @fragment
 fn fragment_depth_sixteenth(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
-    let last = vec2<i32>(textureDimensions(depth_eighth)) - 1;
-    let first = vec2<i32>(at.xy) * 2;
-    return vec4<f32>(shade_smaller(vec4<f32>(
-        textureLoad(depth_eighth, min(first, last), 0).r,
-        textureLoad(depth_eighth, min(first + vec2<i32>(1, 0), last), 0).r,
-        textureLoad(depth_eighth, min(first + vec2<i32>(0, 1), last), 0).r,
-        textureLoad(depth_eighth, min(first + vec2<i32>(1, 1), last), 0).r,
-    )));
+    let half = vec2<i32>(textureDimensions(depth_eighth));
+    return vec4<f32>(shade_halved_again(depth_eighth, at.xy, shade_halved(half, 2) - 1));
 }
 
 // The step along a surface from one pixel to the next, from the pixel
@@ -413,6 +399,14 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> ShadeFound {
                 // itself. A point on the pixel's own flat surface is then
                 // exactly at the slice's end, and hides nothing.
                 let front = there.xyz - here.xyz;
+                // The search is a circle on the picture, which along a
+                // floor that runs away from the eye reaches much farther
+                // than across it: what is farther off than the search
+                // reaches, in the world, is not counted, nor joined to.
+                if dot(front, front) > reach * reach {
+                    last_closer = -1e9;
+                    continue;
+                }
                 // How much closer to the eye it is than the pixel, and how far
                 // across the line of sight from it.
                 let closer = dot(front, to_eye);

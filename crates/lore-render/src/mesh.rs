@@ -1127,7 +1127,8 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-            // The smaller copies of the depth that the shade is found from.
+            // The smaller copies of the depth that the shade is found from:
+            // all of them, then the first three each by itself.
             smaller_depth(28),
             smaller_depth(29),
             smaller_depth(30),
@@ -1854,10 +1855,10 @@ impl MeshPipeline {
                 target.depth.view,
                 target.shade_found.view,
                 target.shade.view,
-                target.depths[0].view,
-                target.depths[1].view,
-                target.depths[2].view,
-                target.depths[3].view,
+                target.depths.view,
+                target.depths.layers[0],
+                target.depths.layers[1],
+                target.depths.layers[2],
             ]
             .map(|view| {
                 [vk::DescriptorImageInfo::default()

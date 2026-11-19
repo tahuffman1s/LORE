@@ -1832,6 +1832,55 @@ mod tests {
     }
 
     #[test]
+    fn steps_far_from_their_pixel_are_read_from_smaller_copies_of_the_depth() {
+        // Four times as wide and as high as the other pictures of this
+        // wall: the search round the floor nearest the camera is then some
+        // ninety pixels wide, and its far steps are read from the copies
+        // of the depth an eighth of the picture's size.
+        let Some(mut headless) = headless(512, 288) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = at_the_wall();
+        headless.set_scene(&wall_on_a_floor(0)).unwrap();
+        headless.set_bounce(Bounce::Off);
+        headless.set_weather(Weather {
+            cloud_cover: 1.0,
+            ..Weather::default()
+        });
+        let light = |picture: &[u8], from: usize, to: usize| -> i64 {
+            (from..to)
+                .flat_map(|y| (128..384).map(move |x| (y * 512 + x) * 4))
+                .map(|at| i64::from(picture[at]) + i64::from(picture[at + 1]))
+                .sum()
+        };
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_ambient_occlusion(AmbientOcclusion::Medium);
+        let shaded = headless.screenshot(&camera).unwrap();
+        // The wall's foot is shaded, and a smaller copy's pixel stands for
+        // a square of the floor without putting any of it above the floor:
+        // open ground is still drawn bit for bit as it was.
+        assert!(light(&shaded, 177, 186) * 100 < light(&plain, 177, 186) * 98);
+        let open = 240 * 512 * 4;
+        assert!(
+            shaded[open..] == plain[open..],
+            "open floor changed with nothing near it"
+        );
+        // More than a metre from the wall is beyond the search, until the
+        // game widens it: then the wall is found from there, however many
+        // pixels off it is.
+        assert_eq!(light(&shaded, 224, 232), light(&plain, 224, 232));
+        headless.set_game_occlusion(1.0, 2.5);
+        let wide = headless.screenshot(&camera).unwrap();
+        assert!(
+            light(&wide, 224, 232) * 200 < light(&plain, 224, 232) * 199,
+            "a wider search finds no shade farther from the wall"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn what_is_see_through_or_cut_out_is_drawn_the_same_with_shade_found() {
         let Some(mut headless) = headless(128, 72) else {
             return;
