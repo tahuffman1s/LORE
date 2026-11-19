@@ -98,7 +98,13 @@ fn block(min: [f32; 3], max: [f32; 3]) -> Vec<Triangle> {
 /// rest, with a sheet named "Tank" two metres over its floor that says
 /// what `extras` says.
 fn tank(extras: &str) -> Scene {
+    tank_and(extras, Vec::new())
+}
+
+/// The same level with `more` standing in it.
+fn tank_and(extras: &str, more: Vec<Triangle>) -> Scene {
     let mut solid = block([-30.0, -0.5, -30.0], [30.0, 0.0, 30.0]);
+    solid.extend(more);
     solid.extend(block([-3.5, 0.0, -3.5], [-3.0, 3.0, 3.5]));
     solid.extend(block([3.0, 0.0, -3.5], [3.5, 2.75, 3.5]));
     solid.extend(block([-3.0, 0.0, -3.5], [3.0, 3.0, -3.0]));
@@ -156,6 +162,11 @@ const IN_THE_TANK: &str = "version = 1\n\n\
 /// The world of a game with `script` as its rules in a tank that says
 /// `extras`, the player on the tank's floor.
 fn world(script: &str, extras: &str) -> World {
+    world_in(script, &tank(extras))
+}
+
+/// The world of a game with `script` as its rules in `scene`.
+fn world_in(script: &str, scene: &Scene) -> World {
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     printed();
@@ -166,7 +177,7 @@ fn world(script: &str, extras: &str) -> World {
         "{:?}",
         game.host().last_error()
     );
-    World::new(game, TICK_RATE).with_level(&tank(extras))
+    World::new(game, TICK_RATE).with_level(scene)
 }
 
 /// Runs `ticks` ticks, the player doing what was last asked of them.
@@ -398,4 +409,57 @@ fn falling_into_a_pool_throws_drops_of_what_it_holds() {
     }
     assert!(most >= 3, "{most} drops thrown");
     assert!(world.player().submerged > 0.0, "{:?}", world.player());
+}
+
+#[test]
+fn a_tub_nobody_marked_becomes_a_pool_the_script_and_the_picture_are_told_of() {
+    // A tub two metres square on the floor far from the tank, its wall
+    // towards +x lower than the rest. No sheet says it is a pool.
+    let tub = [
+        block([-13.2, 0.0, -13.2], [-13.0, 1.0, -10.8]),
+        block([-11.0, 0.0, -13.2], [-10.8, 0.8, -10.8]),
+        block([-13.0, 0.0, -13.2], [-11.0, 1.0, -13.0]),
+        block([-13.0, 0.0, -11.0], [-11.0, 1.0, -10.8]),
+    ];
+    let scene = tank_and(WATER, tub.into_iter().flatten().collect());
+    let mut world = world_in(
+        r#"
+        local tap = vector.create(-12, 1.5, -12)
+        local told = false
+        game.onStart(function() game.player:teleport(vector.create(10, 0.1, 10)) end)
+        game.onTick(function()
+            if game.time() < 8 then
+                game.fluids.spray("honey", tap, vector.create(0, -2, 0), { litresPerSecond = 60, spread = 0 })
+            end
+            local pools = game.fluids.pools()
+            if #pools == 2 and not told then
+                told = true
+                print("found", pools[2].name, pools[2].fluid.name)
+            end
+            if game.time() > 9.99 and game.time() < 10.01 then
+                local tub = game.fluids.pool("pool 2")
+                print(tub.litres > 300, tub.depth > 0.08, tub.brim > 0.7, tub.overflowing)
+                tub:fill(20, "water")
+            end
+        end)
+        "#,
+        &scene,
+    );
+    // Before anything is poured the picture is told there are none found.
+    let frame = fluid_frame(&mut world);
+    assert_eq!(frame.found.as_ref().map(Vec::len), Some(0));
+    assert_eq!(frame.pools.len(), 1);
+    play(&mut world, 10 * 60 + 2);
+    assert_eq!(printed(), ["found pool 2 honey", "true true true false"]);
+    // The picture is given the tub's shape once, and how it stands with
+    // the tank from then on: honey, with a look of its own.
+    let frame = fluid_frame(&mut world);
+    let found = frame.found.expect("the found hollows are said");
+    assert_eq!(found.len(), 1);
+    assert!(found[0].depth_at(-12.0, -12.0) > 0.0, "the tub's own shape");
+    assert_eq!(frame.pools.len(), 2);
+    assert!(frame.pools[1].look.is_some());
+    let frame = fluid_frame(&mut world);
+    assert!(frame.found.is_none(), "said once, until it changes");
+    assert_eq!(frame.pools.len(), 2);
 }

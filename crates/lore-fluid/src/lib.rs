@@ -373,6 +373,7 @@ impl Fluids {
         self.settle_landings();
         self.lie(level, dt);
         self.find_hollow(level);
+        self.deepen_found(level);
         self.soak_pools(level);
         self.dry(dt);
         self.step_pools(level, dt);

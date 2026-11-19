@@ -68,10 +68,10 @@ pub(crate) struct WorldFluids {
     /// Where drops went into pools since the last frame: where, how wide
     /// and how hard.
     rings: Vec<Stir>,
-    /// How many pools the script has been told the names of, and whether
-    /// the picture has been told of the hollows found so far.
+    /// How many pools the script has been told the names of, and which
+    /// change of the hollows found so far the picture has been told of.
     named: usize,
-    found_said: Option<usize>,
+    found_said: Option<u32>,
 }
 
 impl Default for WorldFluids {
@@ -431,10 +431,10 @@ impl WorldFluids {
                 kind: pool.kind(),
             }
         }));
-        // The hollows found so far, when there is another: before how the
+        // The hollows found so far, when they have changed: before how the
         // pools stand, which counts them in.
-        if self.found_said != Some(fluids.found().len()) {
-            self.found_said = Some(fluids.found().len());
+        if self.found_said != Some(fluids.found_changes()) {
+            self.found_said = Some(fluids.found_changes());
             frame.set_found_waters(fluids.found());
         }
         frame.set_pools(stands);

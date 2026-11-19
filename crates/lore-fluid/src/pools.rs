@@ -71,6 +71,9 @@ const LOWEST: f32 = 0.01;
 const POND_THICK: f32 = 2.5;
 /// How many ticks apart a hollow is looked for.
 const POND_EVERY: u32 = 20;
+/// How far under the brim it was found with a found hollow's surface
+/// stands when it is looked into further, in metres.
+const NEAR_BRIM: f32 = 0.05;
 /// The most hollows found in one level while a game runs.
 pub const MOST_FOUND: usize = 32;
 
@@ -270,6 +273,9 @@ pub struct Pool {
     spilled: f32,
     /// What it is to someone in it.
     medium: Medium,
+    /// Whether it is a found hollow that may be deeper than it was looked
+    /// into ([`Fluids::deepen_found`]).
+    grows: bool,
 }
 
 impl Pool {
@@ -419,6 +425,7 @@ impl Pool {
             bound: None,
             spilled: 0.0,
             medium: Medium::WATER,
+            grows: false,
         };
         pool.mix(physics);
         pool
@@ -539,6 +546,8 @@ pub(crate) struct Pools {
     /// The hollows found while the game ran, in the shape each was filled
     /// in: the last of `list`, in this order.
     found: Vec<Arc<Water>>,
+    /// How many times `found` has changed.
+    found_changes: u32,
 }
 
 impl Fluids {
@@ -553,6 +562,7 @@ impl Fluids {
         let physics = self.physics;
         self.pools.hits = Vec::with_capacity(MOST_POOL_HITS);
         self.pools.found.clear();
+        self.pools.found_changes = self.pools.found_changes.wrapping_add(1);
         self.pools.list = level
             .waters()
             .iter()
@@ -586,6 +596,15 @@ impl Fluids {
         &self.pools.found
     }
 
+    /// How many times [`found`](Self::found) has changed: a hollow was
+    /// found, or one was found to be deeper than it was looked into and
+    /// has another shape since. Whoever draws them asks this to know when
+    /// to take the list again.
+    #[must_use]
+    pub fn found_changes(&self) -> u32 {
+        self.pools.found_changes
+    }
+
     /// Looks for a hollow where fluid lies deeper than a puddle of its
     /// kind can, which it only does where it has nowhere to spread to:
     /// one drop every few ticks, and the hollow it lies in becomes a pool
@@ -613,13 +632,57 @@ impl Fluids {
             return;
         };
         // Empty: what lies in it is poured in as it is found on its floor.
-        let pool = Pool::of(&water, kind, 0.0, &self.physics);
+        let mut pool = Pool::of(&water, kind, 0.0, &self.physics);
+        pool.grows = true;
         self.pools.list.push(pool);
         self.pools.found.push(Arc::new(water));
+        self.pools.found_changes = self.pools.found_changes.wrapping_add(1);
         if self.pools.hits.capacity() == 0 {
             self.pools.hits = Vec::with_capacity(MOST_POOL_HITS);
         }
         self.stand_pools(level);
+    }
+
+    /// Looks further into a found hollow that is nearly full as far as it
+    /// was looked into, and may be deeper: a hollow is found only so far
+    /// up from where fluid lay in it, so a deep pit is found a stage at a
+    /// time ([`lore_physics::deeper`]). What it holds stays in it.
+    pub(crate) fn deepen_found(&mut self, level: &Level) {
+        let physics = self.physics;
+        let own = (self.pools.list.len()).saturating_sub(self.pools.found.len());
+        let mut changed = false;
+        for place in 0..self.pools.found.len() {
+            let (Some(pool), Some(water)) = (
+                self.pools.list.get_mut(own + place),
+                self.pools.found.get_mut(place),
+            ) else {
+                continue;
+            };
+            let room = pool.brim - pool.level;
+            if !pool.grows || pool.curve.shift(pool.held() + pool.displaced) < room - NEAR_BRIM {
+                continue;
+            }
+            let Some(next) = lore_physics::deeper(level, water) else {
+                pool.grows = false;
+                continue;
+            };
+            let mut stage = Pool::of(&next, pool.kind, 0.0, &physics);
+            stage.parts = pool.parts;
+            stage.displaced = pool.displaced;
+            // A height a game asked for is as far from where the hollow
+            // stands at rest, which is higher now.
+            stage.bound = pool
+                .bound
+                .map(|(to, rate)| (to + pool.level - stage.level, rate));
+            stage.grows = true;
+            *pool = stage;
+            *water = Arc::new(next);
+            changed = true;
+        }
+        if changed {
+            self.pools.found_changes = self.pools.found_changes.wrapping_add(1);
+            self.stand_pools(level);
+        }
     }
 
     /// Where things went into pools in the newest [`step`](Self::step), at
@@ -933,8 +996,12 @@ impl Fluids {
                 continue;
             }
             let Some((place, way, wide)) = pool.spill else {
-                // No way out was found: what is over is lost.
-                pool.take((standing - full).max(0.0));
+                // No way out was found: what is over is lost. A found
+                // hollow that may be deeper keeps it until it has been
+                // looked into further.
+                if !pool.grows {
+                    pool.take((standing - full).max(0.0));
+                }
                 continue;
             };
             let most = f64::from(MOST_SPILL * dt / 1000.0);

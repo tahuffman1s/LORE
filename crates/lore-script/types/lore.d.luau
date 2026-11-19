@@ -510,7 +510,8 @@ end
 --- custom property `water` set to true, laid over a hollow at the height
 --- the fluid should stand; the engine fills the hollow. The sheet may also
 --- say `fluid` (a kind's name, such as "lava") and `amount` (how full it
---- starts, from 0 for an empty basin to 1).
+--- starts, from 0 for an empty basin to 1). A hollow with no sheet becomes
+--- a pool as well, once fluid poured into it lies deep.
 ---
 --- A pool holds an amount. What is sprayed or poured into it raises it, and
 --- kinds mix: honey poured into water makes it heavier, thicker and more
@@ -523,8 +524,8 @@ end
 --- it straight after asking is still what it was.
 --- Example: local pond = game.fluids.pool("Pond"); pond:fill(200, "honey")
 declare extern type Pool with
-    --- The name its sheet has in the level. One with no name is "pool 1",
-    --- "pool 2" and so on, in the level's order.
+    --- The name its sheet has in the level. One with no name, or with no
+    --- sheet, is "pool 1", "pool 2" and so on, by its place among them all.
     --- Example: print(game.fluids.pool("pond").name)
     name: string
 
@@ -1912,7 +1913,10 @@ declare game: {
         --- Example: local pond = game.fluids.pool("Pond")
         pool: (name: string) -> Pool,
 
-        --- Every pool of the level, in the level's order.
+        --- Every pool of the level, in the level's order, and after them
+        --- the hollows nobody marked that became pools because fluid was
+        --- poured into them: a trough, a crater. Those are named by their
+        --- place in this list ("pool 4").
         --- Example: for _, pool in game.fluids.pools() do print(pool.name, pool.litres) end
         pools: () -> { Pool },
     },

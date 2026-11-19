@@ -289,6 +289,59 @@ pub fn hollow(level: &Level, place: [f32; 3]) -> Option<Water> {
     holds.then_some(water)
 }
 
+/// A hollow found while a game runs ([`hollow`]) as it is once it is full:
+/// the same hollow with the fluid standing at its brim, and the brim and
+/// the way out there are from there. Fluid is looked to rise only so far
+/// over where it stands ([`Level::MOST_WATER_RISE`]), so a pit deeper than
+/// that is found a stage at a time: when what it holds reaches the brim it
+/// was found with, this finds the next.
+///
+/// `None` if `water` has its rim already (a way out, or a brim lower than
+/// fluid is looked to rise), if something hangs over it that the next
+/// stage would reach, or if no deeper hollow is found there.
+#[must_use]
+pub fn deeper(level: &Level, water: &Water) -> Option<Water> {
+    let rise = water.brim - water.level;
+    if water.spill.is_some() || (rise - Level::MOST_WATER_RISE).abs() > 1.0e-4 {
+        return None;
+    }
+    // From over its deepest point, which is in the hollow whatever shape
+    // it has: the first of them, so that it is the same one every time.
+    let mut deepest = (0_usize, f32::NEG_INFINITY);
+    for (index, depth) in water.depths.iter().enumerate() {
+        if *depth > deepest.1 {
+            deepest = (index, *depth);
+        }
+    }
+    let across = usize::try_from(water.size[0])
+        .ok()
+        .filter(|across| *across > 0)?;
+    // A grid is a few thousand points across at the most.
+    #[allow(clippy::cast_precision_loss)]
+    let (column, row) = ((deepest.0 % across) as f32, (deepest.0 / across) as f32);
+    let [x, z] = [
+        water.origin[0] + column * water.cell,
+        water.origin[1] + row * water.cell,
+    ];
+    // The ground round risen fluid is looked for from over the highest it
+    // may stand: under a roof lower than that it would be the roof.
+    let roofed = level
+        .raycast(
+            [x, water.level, z],
+            [0.0, 1.0, 0.0],
+            rise + Level::MOST_WATER_RISE + 0.1,
+        )
+        .is_some();
+    if roofed || in_ground(level, [x, z], water.brim) {
+        return None;
+    }
+    let mut next = body(level, [x, z], water.brim, WHILE_PLAYING)?;
+    next.name.clone_from(&water.name);
+    next.fluid.clone_from(&water.fluid);
+    next.colour = water.colour;
+    (next.deepest() > water.deepest()).then_some(next)
+}
+
 /// The body of water that stands at `surface` and starts from `seed`, or
 /// `None` if there is no bottom under the seed for it to stand on.
 fn body(level: &Level, seed: [f32; 2], surface: f32, fineness: Fineness) -> Option<Water> {
@@ -854,6 +907,8 @@ fn in_ground(level: &Level, [x, z]: [f32; 2], surface: f32) -> bool {
 mod tests {
     use lore_assets::{Mesh, MeshPart};
 
+    use crate::{Medium, Stand};
+
     use super::*;
 
     const STILL: lore_assets::Transform = [
@@ -1302,5 +1357,166 @@ mod tests {
         fill(&mut one);
         fill(&mut other);
         assert_eq!(one.waters, other.waters);
+    }
+
+    /// The level of `parts` alone: no still water is marked in it.
+    fn unmarked(parts: Vec<MeshPart>) -> Level {
+        let mut scene = scene(parts, [0.0, 0.0, 0.0]);
+        scene.instances.truncate(1);
+        let level = Level::from_scene(&scene);
+        assert!(level.waters().is_empty());
+        level
+    }
+
+    /// A tub two metres across on a wide floor, its walls `high` over its
+    /// own floor, which is at 0, and the one towards +x `low`.
+    fn tub(low: f32, high: f32) -> Vec<MeshPart> {
+        let (w, e, s, n) = (-1.0, 1.0, -1.0, 1.0);
+        vec![
+            floor([-12.0, -12.0], [12.0, 12.0], -0.2),
+            floor([w, s], [e, n], 0.0),
+            wall([w, s], [e, s], -0.2, high),
+            wall([e, n], [w, n], -0.2, high),
+            wall([w, n], [w, s], -0.2, high),
+            wall([e, s], [e, n], -0.2, low),
+        ]
+    }
+
+    #[test]
+    fn fluid_lying_in_a_tub_nobody_marked_lies_in_a_hollow_the_shape_of_the_tub() {
+        let level = unmarked(tub(0.5, 0.7));
+        let water = hollow(&level, [0.3, 0.0, -0.2]).expect("the tub holds it");
+        // It stands a little over the floor it was found on, wall to wall.
+        assert!((water.level - LYING_DEEP).abs() < 1e-6, "{}", water.level);
+        for place in [[0.0, 0.0], [0.85, 0.85], [-0.85, 0.85], [0.85, -0.85]] {
+            let depth = water.depth_at(place[0], place[1]);
+            assert!((depth - LYING_DEEP).abs() < 0.005, "{place:?}: {depth}");
+        }
+        assert!(water.depth_at(1.5, 0.0) < 0.0, "outside the tub is dry");
+        // Its brim is a little under its low wall, where it runs out.
+        assert!(
+            (water.brim - (0.5 - UNDER_RIM)).abs() < 0.01,
+            "{}",
+            water.brim
+        );
+        let spill = water.spill.expect("a way out over the low wall");
+        assert!(
+            spill.place[0] > 1.0 && spill.place[2].abs() < 0.3,
+            "{spill:?}"
+        );
+        assert_eq!(spill.way, [1.0, 0.0]);
+        // The same every time.
+        assert_eq!(hollow(&level, [0.3, 0.0, -0.2]), Some(water));
+    }
+
+    #[test]
+    fn fluid_lying_on_a_floor_or_in_a_dip_or_inside_a_rock_lies_in_no_hollow() {
+        // On the open floor outside the tub, with a wall on one side only.
+        let level = unmarked(tub(0.5, 0.7));
+        assert_eq!(hollow(&level, [3.0, -0.2, 0.0]), None);
+        assert_eq!(hollow(&level, [f32::NAN, 0.0, 0.0]), None);
+        // A tray whose sides are lower than a puddle is deep is a floor.
+        let level = unmarked(tub(0.04, 0.04));
+        assert_eq!(hollow(&level, [0.0, 0.0, 0.0]), None);
+        // Inside a closed block every way is met from within.
+        let level = unmarked(block([-1.0, -1.0], [1.0, 1.0], 0.0, 1.0));
+        assert_eq!(hollow(&level, [0.0, 0.5, 0.0]), None);
+    }
+
+    #[test]
+    fn a_pit_deeper_than_fluid_is_looked_to_rise_is_found_a_stage_at_a_time() {
+        // A pit two metres deep: its low wall is higher than a hollow is
+        // looked into at once.
+        let level = unmarked(tub(2.0, 2.4));
+        let first = hollow(&level, [0.0, 0.0, 0.0]).expect("the pit holds it");
+        assert_eq!(first.spill, None);
+        assert!((first.brim - first.level - Level::MOST_WATER_RISE).abs() < 1e-6);
+        // Full that far, it is the same pit with its surface there.
+        let second = deeper(&level, &first).expect("the pit is deeper");
+        assert!((second.level - first.brim).abs() < 1e-6);
+        assert!(
+            (second.deepest() - first.brim).abs() < 0.01,
+            "{}",
+            second.deepest()
+        );
+        assert_eq!(second.spill, None);
+        // And once more, to its low wall, where it runs out.
+        let third = deeper(&level, &second).expect("and deeper again");
+        assert!(
+            (third.brim - (2.0 - UNDER_RIM)).abs() < 0.01,
+            "{}",
+            third.brim
+        );
+        let spill = third.spill.expect("a way out over the low wall");
+        assert!(spill.place[0] > 1.0, "{spill:?}");
+        // That is its rim: there is nothing further to find.
+        assert_eq!(deeper(&level, &third), None);
+        // Nor for a tub that had its rim when it was found.
+        let level = unmarked(tub(0.5, 0.7));
+        let tub = hollow(&level, [0.0, 0.0, 0.0]).expect("the tub holds it");
+        assert_eq!(deeper(&level, &tub), None);
+    }
+
+    #[test]
+    fn a_pit_under_a_low_roof_is_looked_into_no_further() {
+        // The same pit with a roof over it, lower than the next stage
+        // would stand: the ground round it would be read as the roof.
+        let mut parts = tub(2.0, 2.4);
+        parts.extend(block([-3.0, -3.0], [3.0, 3.0], 1.2, 1.4));
+        let level = unmarked(parts);
+        let first = hollow(&level, [0.0, 0.0, 0.0]).expect("the pit holds it");
+        assert_eq!(deeper(&level, &first), None);
+    }
+
+    #[test]
+    fn a_found_hollow_is_one_of_the_levels_bodies_after_its_own() {
+        // A marked tank and, beside it, a tub nobody marked.
+        let mut parts = tank([10.0, 0.0], 2.0, -1.0, 1.0);
+        parts.extend(tub(0.5, 0.7));
+        let mut scene = scene(parts, [10.0, 0.0, 0.0]);
+        fill(&mut scene);
+        let level = Level::from_scene(&scene);
+        assert_eq!((level.waters().len(), level.found()), (1, 0));
+        assert_eq!(level.hollow_at(0.0, 0.0), None);
+        let tub = std::sync::Arc::new(hollow(&level, [0.0, 0.0, 0.0]).expect("a hollow"));
+        level.set_found(std::slice::from_ref(&tub));
+        assert_eq!(level.found(), 1);
+        // It is body 1, empty until it is said to hold something.
+        let (index, bed) = level.hollow_at(0.0, 0.0).expect("the tub is a body");
+        assert_eq!(index, 1);
+        assert!(bed.abs() < 0.005, "{bed}");
+        assert_eq!(level.pool_at(0.0, 0.0), None);
+        let honey = Medium {
+            density: 1.4,
+            viscosity: 5.0,
+        };
+        level.set_pool(
+            1,
+            Stand {
+                shift: 0.3,
+                frozen: false,
+                medium: honey,
+            },
+        );
+        let here = level.pool_at(0.0, 0.0).expect("honey in the tub");
+        assert_eq!(here.index, 1);
+        assert!((here.surface - (tub.level + 0.3)).abs() < 1e-5, "{here:?}");
+        assert_eq!(here.medium, honey);
+        // Rain raises the level's own water and not what was poured.
+        level.set_water_rise(0.2);
+        let stood = level.pool(1).expect("body 1");
+        assert!((stood.shift - 0.3).abs() < 1e-6, "{stood:?}");
+        // Said again with another found after it, it stands as it stood.
+        let other = std::sync::Arc::new(Water::clone(&tub));
+        level.set_found(&[std::sync::Arc::clone(&tub), other]);
+        assert_eq!(level.found(), 2);
+        let stood = level.pool(1).expect("body 1");
+        assert!((stood.shift - 0.3).abs() < 1e-6, "{stood:?}");
+        let empty = level.pool(2).expect("body 2");
+        assert!((empty.shift + tub.deepest()).abs() < 1e-6, "{empty:?}");
+        // And none found is none: the level's own are left.
+        level.set_found(&[]);
+        assert_eq!((level.found(), level.hollow_at(0.0, 0.0)), (0, None));
+        assert!(level.pool_at(10.0, 0.0).is_some());
     }
 }

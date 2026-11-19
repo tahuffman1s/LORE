@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use common::{DT, run};
 use lore_assets::{Instance, Mesh, MeshPart, Scene};
 use lore_fluid::{Flow, Fluids};
@@ -640,6 +642,76 @@ fn fluid_poured_into_a_tub_nobody_marked_fills_it_and_runs_over() {
     // than was poured.
     let all = pool.litres() + fluids.litres(None);
     assert!(all <= poured + 1.0, "{all} of {poured}");
+}
+
+#[test]
+fn a_pit_nobody_marked_fills_to_its_real_rim_and_loses_nothing_on_the_way() {
+    // A pit two metres square and a metre and a half deep to its low wall,
+    // towards +x: deeper than a hollow is looked into when it is found.
+    let mut solid = block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]);
+    solid.extend(block([-1.2, -0.2, -1.2], [1.2, 0.0, 1.2]));
+    solid.extend(block([-1.2, 0.0, -1.2], [-1.0, 1.8, 1.2]));
+    solid.extend(block([1.0, 0.0, -1.2], [1.2, 1.5, 1.2]));
+    solid.extend(block([-1.0, 0.0, -1.2], [1.0, 1.8, -1.0]));
+    solid.extend(block([-1.0, 0.0, 1.0], [1.0, 1.8, 1.2]));
+    let level = level_with(solid, &[]);
+    let mut fluids = world(&level);
+    let mut poured = 0.0;
+    for _ in 0..10 * 60 {
+        if !fluids.pools().is_empty() {
+            break;
+        }
+        fluids.spray(0, [0.0, 1.0, 0.0], [0.0, -2.0, 0.0], 60.0 * DT, 0.1);
+        poured += 60.0 * DT;
+        fluids.step(&level, DT);
+    }
+    // Found as far up as a hollow is looked into: no rim yet.
+    let first = Arc::clone(fluids.found().first().expect("the pit became a pool"));
+    assert_eq!(fluids.pools()[0].spill(), None);
+    assert!(
+        fluids.pools()[0].brim() < 0.9,
+        "{}",
+        fluids.pools()[0].brim()
+    );
+    let changes = fluids.found_changes();
+    // Filled on, by the bucket and once by far more than a stage holds:
+    // it is looked into further each time it is nearly full, and what is
+    // in it stays in it.
+    for tick in 0..240 {
+        let bucket = if tick == 100 { 1500.0 } else { 15.0 };
+        fluids.pool_add(0, HONEY, bucket);
+        poured += bucket;
+        fluids.step(&level, DT);
+    }
+    assert!(poured > 5000.0 && poured < 5600.0, "{poured}");
+    let pool = &fluids.pools()[0];
+    let all = pool.litres() + fluids.litres(None);
+    assert!(close(all, poured, 2.0), "{all} litres of {poured}");
+    assert!(pool.surface() > 1.2, "{}", pool.surface());
+    assert_eq!((fluids.pools().len(), fluids.found().len()), (1, 1));
+    assert!(!Arc::ptr_eq(&first, &fluids.found()[0]), "another shape");
+    assert!(fluids.found_changes() > changes);
+    assert!(close(pool.brim(), 1.47, 0.03), "{}", pool.brim());
+    let spill = pool.spill().expect("a way out over the low wall");
+    assert!(spill[0] > 1.19 && spill[2].abs() < 0.3, "{spill:?}");
+    // Whoever is in it is told how deep it stands now.
+    let here = level.pool_at(0.0, 0.0).expect("fluid in the pit");
+    assert!(close(here.surface, pool.surface(), 1.0e-4), "{here:?}");
+    assert!(close(here.deep, pool.surface(), 0.02), "{here:?}");
+    // Past its rim it runs out over the low wall, as a marked pool does.
+    let mut ran = 0.0;
+    for _ in 0..120 {
+        fluids.pool_add(0, 0, 15.0);
+        fluids.step(&level, DT);
+        ran += fluids.pools()[0].spilled();
+    }
+    // As fast as a rim lets it: 40 litres a second, for the second or so
+    // since it was full.
+    assert!(ran > 30.0, "{ran} litres ran out");
+    let outside = (fluids.drops().iter())
+        .filter(|drop| drop.place[0] > 1.19)
+        .count();
+    assert!(outside > 20, "{outside} drops outside");
 }
 
 #[test]

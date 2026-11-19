@@ -1447,6 +1447,133 @@ mod tests {
     }
 
     #[test]
+    fn a_hollow_found_while_playing_is_drawn_once_its_game_says_how_it_stands() {
+        use std::sync::Arc;
+
+        use lore_assets::{Instance, Material, Mesh, MeshPart, Water};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor a metre down and no water in the level at all.
+        let mut scene = Scene::default();
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                    .map(|[x, z]| [x * 500.0, -1.0, z * 500.0])
+                    .to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        headless.set_scene(&scene).unwrap();
+        // A round hollow three metres across over the middle of the
+        // floor, a metre deep, as one is found: `wide` says how round.
+        let hollow = |wide: f32| {
+            let points = 41_u32;
+            let depths = (0..points * points)
+                .map(|at| {
+                    let (x, z) = (
+                        (at % points) as f32 * 0.25 - 5.0,
+                        (at / points) as f32 * 0.25 - 5.0,
+                    );
+                    if x.hypot(z) < wide { 1.0 } else { Water::DRY }
+                })
+                .collect();
+            Arc::new(Water {
+                name: None,
+                sources: Vec::new(),
+                level: 0.0,
+                brim: 0.5,
+                origin: [-5.0, -5.0],
+                cell: 0.25,
+                size: [points, points],
+                depths,
+                colour: [0.0, 0.02, 0.02, 0.3],
+                fluid: None,
+                amount: 0.0,
+                spill: None,
+            })
+        };
+        let above = Camera {
+            position: [0.0, 4.0, 0.0],
+            pitch: -1.5,
+            ..Camera::default()
+        };
+        let red = |picture: &[u8], [x, y]: [usize; 2]| i32::from(picture[(y * SIZE[0] + x) * 4]);
+        let floor = headless.screenshot(&above).unwrap();
+        let bare = red(&floor, [48, 32]);
+        // Found, and nothing said of how it stands: it is not drawn.
+        let found = [hollow(1.5)];
+        headless.set_found_waters(&found).unwrap();
+        assert_eq!(headless.screenshot(&above).unwrap(), floor);
+        // Said to stand where it was found, as murky water: drawn in its
+        // shape, the floor beside it as it was.
+        let murky = FluidLook {
+            absorbs: [3.0, 0.4, 0.4],
+            ..FluidLook::default()
+        };
+        let stands = [PoolDrawn {
+            look: Some(murky),
+            ..PoolDrawn::default()
+        }];
+        headless.set_pools(&stands);
+        let pooled = headless.screenshot(&above).unwrap();
+        let (middle, beside) = (red(&pooled, [48, 32]), red(&pooled, [6, 32]));
+        assert!(
+            bare > middle + 40 && beside > middle + 40,
+            "red in the pool {middle}, on the floor {beside}, {bare} before"
+        );
+        // Said again with the same hollows, nothing is made again; found
+        // to have another shape, it is drawn in that one, once its game
+        // says how it stands again.
+        headless.set_found_waters(&found).unwrap();
+        assert_eq!(headless.screenshot(&above).unwrap(), pooled);
+        headless
+            .set_found_waters(&[hollow(0.6), hollow(1.5)])
+            .unwrap();
+        assert_eq!(headless.screenshot(&above).unwrap(), floor);
+        headless.set_pools(&[
+            stands[0],
+            PoolDrawn {
+                shift: -2.0,
+                ..stands[0]
+            },
+        ]);
+        let smaller = headless.screenshot(&above).unwrap();
+        assert!(
+            bare > red(&smaller, [48, 32]) + 40,
+            "the small one is drawn"
+        );
+        assert!(
+            red(&smaller, [56, 32]) > red(&pooled, [56, 32]) + 40,
+            "where the wide one stood, the empty one shows the floor"
+        );
+        // With none found the level is as it was, and nothing is left
+        // pointing at their pictures.
+        headless.set_found_waters(&[]).unwrap();
+        assert_eq!(headless.screenshot(&above).unwrap(), floor);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn what_a_level_says_bends_in_the_wind_moves_and_nothing_else_does() {
         use lore_assets::{Instance, Material, Mesh, MeshPart};
 
