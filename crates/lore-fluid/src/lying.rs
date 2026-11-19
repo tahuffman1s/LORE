@@ -87,14 +87,23 @@ impl Fluids {
             parts,
             grid,
             physics,
+            landed,
             ..
         } = self;
+        // Where it all landed is summed here and divided once below.
+        let mut middle = [0.0_f32; 3];
         for i in 0..parts.len() {
             let Some(p) = parts.get(i).copied() else {
                 continue;
             };
             if !(p.landed_now && p.lying && !p.dead) {
                 continue;
+            }
+            let litres = p.volume * 1000.0;
+            landed.litres += litres;
+            middle = madd(middle, p.pos, litres);
+            if litres > landed.biggest {
+                (landed.biggest, landed.kind) = (litres, p.kind);
             }
             // What ran out of a pool is the pool's mix, one kind a stream:
             // the water in it does not wash the honey in it away, and what
@@ -168,6 +177,9 @@ impl Fluids {
                 slot.still = 0;
                 slot.calm = false;
             }
+        }
+        if landed.litres > 0.0 {
+            landed.place = scale(middle, 1.0 / landed.litres);
         }
         // Only now, so that which of two drops landing on each other this
         // tick lies on top does not hang on where each is kept.

@@ -70,6 +70,7 @@ pub(crate) const FLUID_FIELDS: &[&str] = &[
     "dries",
     "washes",
     "freezes",
+    "mixes",
 ];
 
 /// What can be read from what a character touches. The type definitions
@@ -214,6 +215,9 @@ pub struct PoolTold {
     pub frozen: bool,
     /// How much of what it holds each kind is, from 0 to 1, by kind.
     pub shares: [f32; MOST_KINDS],
+    /// The kind that lies on top: the one there is most of, unless
+    /// something lighter that does not mix floats on it.
+    pub top: u8,
 }
 
 /// What a character stands in, as the engine tells the script.
@@ -276,6 +280,7 @@ struct Ready {
     dries: f32,
     washes: bool,
     freezes: bool,
+    mixes: bool,
 }
 
 /// Shorthand for a row of [`READY`].
@@ -283,7 +288,7 @@ macro_rules! ready {
     ($name:literal, $color:literal, $clarity:literal, $cloud:literal, $glow:literal, $shine:literal,
      $metal:literal, $bends:literal; $visc:literal, $density:literal, $bead:literal,
      $slip:literal, $sticky:literal, $bouncy:literal, $corr:literal, $dries:literal, $washes:literal,
-     $freezes:literal) => {
+     $freezes:literal, $mixes:literal) => {
         Ready {
             name: $name,
             color: $color,
@@ -303,6 +308,7 @@ macro_rules! ready {
             dries: $dries,
             washes: $washes,
             freezes: $freezes,
+            mixes: $mixes,
         }
     };
 }
@@ -318,41 +324,41 @@ const GLOW_AT_MOST: f32 = 1.5;
 const READY: [Ready; 13] = [
     // Absorption 0.35/0.06/0.01 per m (Pope & Fry 1997) seen through 10 m;
     // 1.0 mPa·s; 72.8 mN/m; wet concrete grip.
-    ready!("water", 0x30c3f4, 10.0, 0.0, 0.0, 1.0, 0.0, 1.333; 0.0, 1.0, 0.4, 0.45, 0.0, 0.0, 0.0, 0.0, true, true),
+    ready!("water", 0x30c3f4, 10.0, 0.0, 0.0, 1.0, 0.0, 1.333; 0.0, 1.0, 0.4, 0.45, 0.0, 0.0, 0.0, 0.0, true, true, true),
     // Olive oil 56 mPa·s, 0.91 g/cm³, 32 mN/m, n 1.47; an oiled floor grips
     // about as a banana skin does.
-    ready!("oil", 0x956f38, 0.004, 0.47, 0.0, 0.98, 0.0, 1.47; 0.22, 0.91, 0.126, 0.9, 0.0, 0.0, 0.0, 0.0, false, false),
+    ready!("oil", 0x956f38, 0.004, 0.47, 0.0, 0.98, 0.0, 1.47; 0.22, 0.91, 0.126, 0.9, 0.0, 0.0, 0.0, 0.0, false, false, false),
     // 10 Pa·s at 20 °C, 1.42 g/cm³, about 50-60 mN/m, n 1.49-1.50.
-    ready!("honey", 0xf6bf59, 0.02, 0.37, 0.0, 0.99, 0.0, 1.5; 0.5, 1.42, 0.31, 0.1, 0.6, 0.0, 0.0, 0.0, false, false),
+    ready!("honey", 0xf6bf59, 0.02, 0.37, 0.0, 0.99, 0.0, 1.5; 0.5, 1.42, 0.31, 0.1, 0.6, 0.0, 0.0, 0.0, false, false, true),
     // Toy slime (PVA-borax gel) 30-100 Pa·s at rest; bounce after Portal 2's
     // repulsion gel (a game's choice, not a measurement).
-    ready!("slime", 0x89da59, 0.05, 0.55, 0.08, 0.94, 0.0, 1.35; 0.6, 1.05, 0.35, 0.75, 0.3, 0.5, 0.0, 0.0, false, false),
+    ready!("slime", 0x89da59, 0.05, 0.55, 0.08, 0.94, 0.0, 1.35; 0.6, 1.05, 0.35, 0.75, 0.3, 0.5, 0.0, 0.0, false, false, true),
     // Warm road tar about 6000 Pa·s (cold bitumen is far thicker),
     // 1.2 g/cm³, about 35 mN/m.
-    ready!("tar", 0x0a0a0a, 0.001, 0.0, 0.0, 0.9, 0.0, 1.6; 0.85, 1.2, 0.17, 0.0, 0.95, 0.0, 0.0, 0.0, false, false),
+    ready!("tar", 0x0a0a0a, 0.001, 0.0, 0.0, 0.9, 0.0, 1.6; 0.85, 1.2, 0.17, 0.0, 0.95, 0.0, 0.0, 0.0, false, false, false),
     // Battery acid (35 % sulfuric) 2.5 mPa·s, 1.26 g/cm³, about 75 mN/m,
     // n 1.37. Clean acid is as clear as water and a player could not tell
     // the two apart, so this is acid that has been at work: yellow-green
     // and a little cloudy with what it has eaten.
-    ready!("acid", 0xcfe84a, 0.05, 0.3, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false, false),
+    ready!("acid", 0xcfe84a, 0.05, 0.3, 0.0, 1.0, 0.0, 1.37; 0.05, 1.26, 0.41, 0.5, 0.0, 0.0, 1.0, 0.0, false, false, true),
     // Basalt melt 100-1000 Pa·s at eruption, 2.7 g/cm³, about 0.35 N/m;
     // glows at about 1100 °C.
-    ready!("lava", 0xe77c27, 0.001, 0.75, 1.0, 0.51, 0.0, 1.5; 0.75, 2.7, 0.89, 0.0, 0.5, 0.0, 1.0, 0.0, false, false),
+    ready!("lava", 0xe77c27, 0.001, 0.75, 1.0, 0.51, 0.0, 1.5; 0.75, 2.7, 0.89, 0.0, 0.5, 0.0, 1.0, 0.0, false, false, true),
     // 1.53 mPa·s, 13.53 g/cm³, 485 mN/m; a liquid metal.
-    ready!("mercury", 0xe6e6e8, 0.0001, 0.0, 0.0, 0.99, 1.0, 1.0; 0.022, 13.53, 1.0, 0.6, 0.0, 0.0, 0.0, 0.0, false, false),
+    ready!("mercury", 0xe6e6e8, 0.0001, 0.0, 0.0, 0.99, 1.0, 1.0; 0.022, 13.53, 1.0, 0.6, 0.0, 0.0, 0.0, 0.0, false, false, false),
     // Whole milk 2.1 mPa·s, 1.03 g/cm³, about 45 mN/m, n 1.35; fat and
     // protein scatter all colours.
-    ready!("milk", 0xfffaf0, 0.5, 1.0, 0.0, 0.94, 0.0, 1.35; 0.04, 1.03, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0, false, true),
+    ready!("milk", 0xfffaf0, 0.5, 1.0, 0.0, 0.94, 0.0, 1.35; 0.04, 1.03, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0, false, true, true),
     // Washing-up liquid about 0.3 Pa·s, about 30 mN/m; a soapy floor is as
     // slippery as a banana skin, and soap cleans.
-    ready!("soap", 0xc8f0b4, 0.05, 0.35, 0.0, 1.0, 0.0, 1.4; 0.31, 1.03, 0.126, 1.0, 0.0, 0.0, 0.0, 0.0, true, true),
+    ready!("soap", 0xc8f0b4, 0.05, 0.35, 0.0, 1.0, 0.0, 1.4; 0.31, 1.03, 0.126, 1.0, 0.0, 0.0, 0.0, 0.0, true, true, true),
     // Emulsion wall paint about 1 Pa·s, 1.3 g/cm³, about 35 mN/m; pigment
     // makes it opaque.
-    ready!("paint", 0xd22a2a, 0.001, 1.0, 0.0, 0.7, 0.0, 1.5; 0.375, 1.3, 0.17, 0.3, 0.2, 0.0, 0.0, 0.0, false, false),
+    ready!("paint", 0xd22a2a, 0.001, 1.0, 0.0, 0.7, 0.0, 1.5; 0.375, 1.3, 0.17, 0.3, 0.2, 0.0, 0.0, 0.0, false, false, true),
     // Mud slurry 10-100 Pa·s, 1.5-1.8 g/cm³.
-    ready!("mud", 0x5a4130, 0.001, 1.0, 0.0, 0.6, 0.0, 1.4; 0.56, 1.6, 0.4, 0.6, 0.4, 0.0, 0.0, 0.0, false, false),
+    ready!("mud", 0x5a4130, 0.001, 1.0, 0.0, 0.6, 0.0, 1.4; 0.56, 1.6, 0.4, 0.6, 0.4, 0.0, 0.0, 0.0, false, false, true),
     // Whole blood 3-4 mPa·s, 1.06 g/cm³, about 58 mN/m; red cells scatter.
-    ready!("blood", 0x7a0a0a, 0.002, 0.8, 0.0, 0.97, 0.0, 1.35; 0.07, 1.06, 0.33, 0.5, 0.1, 0.0, 0.0, 0.0, false, true),
+    ready!("blood", 0x7a0a0a, 0.002, 0.8, 0.0, 0.97, 0.0, 1.35; 0.07, 1.06, 0.33, 0.5, 0.1, 0.0, 0.0, 0.0, false, true, true),
 ];
 
 /// The ready-made kind called `name`.
@@ -421,6 +427,7 @@ impl Spec {
                 dries: ready.dries,
                 washes: ready.washes,
                 freezes: ready.freezes,
+                mixes: ready.mixes,
             },
         }
     }
@@ -482,6 +489,7 @@ enum Slot {
     Dries,
     Washes,
     Freezes,
+    Mixes,
 }
 
 /// One setting of a kind, as a script writes it.
@@ -517,7 +525,7 @@ const fn field(
 
 /// Every setting a kind has except its name, in the order of
 /// [`FLUID_FIELDS`].
-const FIELDS: [Field; 17] = [
+const FIELDS: [Field; 18] = [
     field(
         "color",
         Slot::Color,
@@ -659,6 +667,15 @@ const FIELDS: [Field; 17] = [
          on, as water does, or false",
         "false",
     ),
+    field(
+        "mixes",
+        Slot::Mixes,
+        0.0,
+        1.0,
+        "true if it mixes with the other fluids in a pool, as water and honey do, or false \
+         if it lies as a layer of its own, as oil does",
+        "false",
+    ),
 ];
 
 /// The setting called `name`.
@@ -680,6 +697,7 @@ impl Spec {
             Slot::Color => return Reading::Text(hex_of(self.color)),
             Slot::Washes => return Reading::Flag(flow.washes),
             Slot::Freezes => return Reading::Flag(flow.freezes),
+            Slot::Mixes => return Reading::Flag(flow.mixes),
             Slot::Clarity => self.clarity,
             Slot::Cloudiness => self.cloudiness,
             Slot::Glow => self.glow,
@@ -714,7 +732,7 @@ impl Spec {
             Slot::Bouncy => self.flow.bouncy = value,
             Slot::Corrosive => self.flow.corrosive = value,
             Slot::Dries => self.flow.dries = value,
-            Slot::Color | Slot::Washes | Slot::Freezes => {}
+            Slot::Color | Slot::Washes | Slot::Freezes | Slot::Mixes => {}
         }
     }
 }
@@ -735,8 +753,9 @@ fn apply(
             let (color, _) = color_of(lua, label, value)?;
             spec.color = [color.r, color.g, color.b].map(to_linear);
         }
-        Slot::Washes | Slot::Freezes => match value {
+        Slot::Washes | Slot::Freezes | Slot::Mixes => match value {
             Value::Boolean(flag) if field.slot == Slot::Washes => spec.flow.washes = *flag,
+            Value::Boolean(flag) if field.slot == Slot::Mixes => spec.flow.mixes = *flag,
             Value::Boolean(flag) => spec.flow.freezes = *flag,
             other => {
                 return Err(fail(

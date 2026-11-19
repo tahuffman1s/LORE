@@ -38,6 +38,10 @@ pub enum NoiseKind {
     Bubbles,
     /// Something burning in a liquid that burns: acid, lava.
     Sizzle,
+    /// Fluid coming down on the ground or a wall: a stream, a spill.
+    Patter,
+    /// Fluid coming down into a pool.
+    Pour,
     /// Thunder from a stroke of lightning close enough for its crack to
     /// be heard.
     Thunder,
@@ -64,9 +68,19 @@ impl NoiseKind {
             Self::Surface => "surface",
             Self::Bubbles => "bubbles",
             Self::Sizzle => "sizzle",
+            Self::Patter => "drip",
+            Self::Pour => "splash-small",
             Self::Thunder => "thunder",
             Self::FarThunder => "thunder-far",
         }
+    }
+
+    /// Whether it is made somewhere in the world and heard from there,
+    /// not by the player themself, whose own noises are heard equally in
+    /// both ears.
+    #[must_use]
+    pub const fn is_at_a_place(self) -> bool {
+        matches!(self, Self::Patter | Self::Pour)
     }
 
     /// Whether it is a foot coming down on the ground: a step or a landing.
@@ -86,12 +100,13 @@ impl NoiseKind {
             | Self::Wade
             | Self::SwimStroke
             | Self::Surface
-            | Self::Sizzle => Range::FOOTSTEP,
+            | Self::Sizzle
+            | Self::Pour => Range::FOOTSTEP,
             Self::Splash => Range {
                 near: 2.0,
                 far: 70.0,
             },
-            Self::Bubbles => Range {
+            Self::Bubbles | Self::Patter => Range {
                 near: 1.0,
                 far: 15.0,
             },
@@ -191,5 +206,8 @@ pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play>
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
     }
     play.range = noise.kind.range();
+    if noise.kind.is_at_a_place() {
+        play.place = lore_audio::Place::At(noise.position);
+    }
     Some(play.after(noise.delay))
 }

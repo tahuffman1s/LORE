@@ -503,6 +503,14 @@ declare extern type Fluid with
     --- stand on and nothing to swim in. Lava and honey do not.
     --- Example: game.fluid("brine").freezes = false
     freezes: boolean
+
+    --- True if it mixes with the other fluids in a pool, as water, milk
+    --- and honey do. False if it lies in the pool as a layer of its own:
+    --- on top if it is lighter than the rest, as oil is, and underneath if
+    --- it is heavier, as mercury is. What is on top is what you see, and
+    --- what runs over the rim first.
+    --- Example: game.fluid("oil").mixes = false
+    mixes: boolean
 end
 
 --- A pool: a body of fluid that stands in the level. A lake, a tank, a tub.
@@ -562,6 +570,12 @@ declare extern type Pool with
     --- than a litre standing over its brim and waiting to.
     --- Example: if tub.overflowing then print("Turn the tap off!") end
     overflowing: boolean
+
+    --- The fluid that lies on top: the one there is most of, unless
+    --- something lighter that does not mix floats on it, as oil does on
+    --- water. It is what the pool looks like from above.
+    --- Example: if pond.top == game.fluid("oil") then print("There is oil on the pond") end
+    top: Fluid
 
     --- True while it is frozen thick enough to walk on.
     --- Example: if pond.frozen then print("You can cross") end
@@ -646,7 +660,7 @@ end
 --- start from (a ready-made name, a kind the game has, or a `Fluid`); each
 --- other setting replaces one thing, and is also a field of `Fluid`.
 --- Example: game.fluid("goo", { from = "honey", color = "green" })
-type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean?, freezes: boolean? }
+type FluidSettings = { from: (string | Fluid)?, color: string?, clarity: number?, cloudiness: number?, glow: number?, shine: number?, metal: number?, refraction: number?, viscosity: number?, density: number?, beading: number?, slippery: number?, sticky: number?, bouncy: number?, corrosive: number?, dries: number?, washes: boolean?, freezes: boolean?, mixes: boolean? }
 
 --- A lamp: light from a point, every way (a bulb, a candle, a fire) or in a
 --- beam (a torch, a street lamp). What `game.lamp` gives. Every setting

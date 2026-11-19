@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use lore_fluid::{Fluids, MOST_KINDS, Underfoot};
-use lore_physics::{Footing, Level, Player};
+use lore_physics::{Footing, Level, Medium, Player};
 use lore_render::{FluidDrop, FluidLook, PoolDrawn, Stir};
 use lore_script::{CharacterId, FluidAsk, FluidUnder, PoolTold, ScriptHost};
 
@@ -77,6 +77,68 @@ pub(crate) struct WorldFluids {
     /// How many ticks running the player has been burnt by what they are
     /// in.
     burnt_for: u32,
+    /// What has landed on the ground, and what has gone into pools, since
+    /// each was last heard; and what of them is heard this tick.
+    landing: Falling,
+    pouring: Falling,
+    falls: [Option<Fall>; 2],
+    /// How many ticks have been stepped.
+    stepped: u32,
+}
+
+/// Fluid coming down somewhere, summed until it is heard.
+#[derive(Clone, Copy, Debug, Default)]
+struct Falling {
+    litres: f32,
+    /// Where, each place times the litres that came down there.
+    places: [f32; 3],
+    /// How heavy and how thick the most of it was.
+    medium: Option<Medium>,
+    most: f32,
+}
+
+impl Falling {
+    fn add(&mut self, litres: f32, place: [f32; 3], medium: Medium) {
+        if !(litres.is_finite() && litres > 0.0) {
+            return;
+        }
+        self.litres += litres;
+        for (sum, part) in self.places.iter_mut().zip(place) {
+            *sum += part * litres;
+        }
+        if litres > self.most {
+            (self.most, self.medium) = (litres, Some(medium));
+        }
+    }
+
+    /// What is heard of it after `seconds` of summing, if it is enough to
+    /// hear; and it starts again from nothing.
+    fn heard(&mut self, seconds: f32, into_pool: bool) -> Option<Fall> {
+        let all = std::mem::take(self);
+        if all.litres < LEAST_HEARD {
+            return None;
+        }
+        let (pitch, quiet) = super::wet::voice(all.medium.unwrap_or(Medium::WATER));
+        // A tap is a quarter as loud as a fire hose: by the root of what
+        // comes down in a second.
+        let rate = all.litres / seconds.max(1.0e-3);
+        Some(Fall {
+            place: all.places.map(|sum| sum / all.litres),
+            loudness: ((rate / LOUDEST_FALL).sqrt() * quiet).clamp(0.08, 1.0),
+            pitch,
+            into_pool,
+        })
+    }
+}
+
+/// Fluid heard coming down in one tick: where, how loud from 0 to 1, how
+/// high (1 is as water), and whether it went into a pool or onto a surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Fall {
+    pub(crate) place: [f32; 3],
+    pub(crate) loudness: f32,
+    pub(crate) pitch: f32,
+    pub(crate) into_pool: bool,
 }
 
 impl Default for WorldFluids {
@@ -95,6 +157,10 @@ impl Default for WorldFluids {
             // The renderer may hold hollows from a world before this one.
             found_said: None,
             burnt_for: 0,
+            landing: Falling::default(),
+            pouring: Falling::default(),
+            falls: [None; 2],
+            stepped: 0,
         }
     }
 }
@@ -151,6 +217,22 @@ fn mixed(shares: &[f32; MOST_KINDS], looks: &[FluidLook; MOST_KINDS]) -> FluidLo
     }
     mix
 }
+
+/// How much of the footprint has to be wet for a step to be a step in a
+/// puddle.
+const PUDDLE_STEP: f32 = 0.3;
+
+/// How many seconds apart fluid coming down is heard, the least of it in
+/// that time that is heard at all, in litres (a thimbleful), and how many
+/// litres a second are as loud as it gets (a fire hose).
+const FALL_EVERY: f32 = 0.15;
+const LEAST_HEARD: f32 = 0.002;
+const LOUDEST_FALL: f32 = 15.0;
+
+/// A layer lying on a pool this thick hides what is under it, in metres:
+/// half a centimetre of oil is oil to look at. A thinner one shows some of
+/// both.
+const SLICK_HIDES: f32 = 0.005;
 
 /// The least harm a fluid does for it to be heard burning, and how many
 /// seconds apart its hisses come.
@@ -292,6 +374,28 @@ impl WorldFluids {
         }
         self.fluids.step(level, step);
         self.under = self.fluids.underfoot(player.position, FOOTPRINT);
+        // What came down, onto a surface and into pools, is summed and
+        // heard a few times a second: a stream is thousands of drops.
+        let landed = self.fluids.landed();
+        (self.landing).add(landed.litres, landed.place, self.fluids.medium(landed.kind));
+        for hit in self.fluids.pool_hits() {
+            let medium =
+                (self.fluids.pools().get(hit.pool)).map_or(Medium::WATER, |pool| pool.medium());
+            self.pouring.add(hit.litres, hit.place, medium);
+        }
+        self.stepped = self.stepped.wrapping_add(1);
+        // Counted in ticks, so that it comes on the same tick every run.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let every = ((FALL_EVERY / step.max(1.0e-3)) as u32).max(1);
+        self.falls = [None; 2];
+        if self.stepped.is_multiple_of(every) {
+            #[allow(clippy::cast_precision_loss)]
+            let seconds = every as f32 * step;
+            self.falls = [
+                self.landing.heard(seconds, false),
+                self.pouring.heard(seconds, true),
+            ];
+        }
         // Where drops went in, for rings to run out from.
         for hit in self.fluids.pool_hits() {
             if self.rings.len() >= MOST_RINGS {
@@ -358,7 +462,22 @@ impl WorldFluids {
             overflowing: pool.overflowing(),
             frozen: pool.frozen(),
             shares: pool.shares(),
+            top: pool.top().kind,
         }));
+    }
+
+    /// The fluid heard coming down in the newest tick: onto a surface,
+    /// and into a pool.
+    pub(crate) fn falls(&self) -> impl Iterator<Item = Fall> + '_ {
+        self.falls.iter().flatten().copied()
+    }
+
+    /// How a step in the puddle under the player's feet sounds, if they
+    /// stand in one: how high it is played and how loud, against a step
+    /// in a puddle of water.
+    pub(crate) fn puddle_voice(&self) -> Option<(f32, f32)> {
+        let kind = (self.under.kind).filter(|_| self.under.cover >= PUDDLE_STEP)?;
+        Some(super::wet::voice(self.fluids.medium(kind)))
     }
 
     /// Tells the script how much of each kind there is, how each pool
@@ -447,8 +566,20 @@ impl WorldFluids {
             let shares = pool.shares();
             // All water, it is the level's own water (or whatever the
             // script has made of water); anything else is its mix.
+            // Layers: what is seen from above is what lies on top, as far
+            // as it is thick enough to hide what is under it.
+            let top = pool.top();
+            let layered = top.part < 1.0;
+            let cover = (top.thick / SLICK_HIDES).clamp(0.0, 1.0);
             let look = if shares[0] >= PURE {
                 *water_look
+            } else if layered {
+                let mut seen = shares;
+                for (seen, of_top) in seen.iter_mut().zip(&top.shares) {
+                    let under = ((*seen - of_top * top.part) / (1.0 - top.part)).max(0.0);
+                    *seen = of_top * cover + under * (1.0 - cover);
+                }
+                Some(mixed(&seen, looks))
             } else {
                 Some(mixed(&shares, looks))
             };
@@ -462,7 +593,13 @@ impl WorldFluids {
                 look,
                 freezes,
                 calm: (libm::log10f(thick) / 3.5).clamp(0.0, 1.0),
-                kind: pool.kind(),
+                // A game's shader for the kind on top draws it, once that
+                // hides more than it shows.
+                kind: if layered && cover >= 0.5 {
+                    top.kind
+                } else {
+                    pool.kind()
+                },
             }
         }));
         // The hollows found so far, when they have changed: before how the

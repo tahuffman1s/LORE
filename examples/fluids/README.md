@@ -26,7 +26,10 @@ lore run
   side. The other is full to its brim, with a step beside it: climb in, and
   what you push aside runs out.
 - **The mixing vat.** Spray anything into it. The panel says what it holds
-  by share, and it looks, weighs and drags as its mix.
+  by share, and it looks, weighs and drags as its mix. Oil does not mix:
+  it lies on top, the vat looks like oil from above, and the panel says
+  so. Tar and mercury go to the bottom and the water over them is what
+  you see.
 - **The lock.** A shaft of water in the middle of the yard. E beside it
   empties it over eight seconds, and fills it again; get in first and you
   go down with it.
@@ -76,4 +79,8 @@ object.
 - A hollow nobody marked is found only where fluid lies deep in it and
   something holds it in within four metres on every side, and at most 32 of
   them in a level. Once found it stays a pool, empty or not.
+- Only the top layer of a pool is told apart: mercury under water is
+  water to look at, and you swim in a blend of the layers (#469).
+- A fluid shader's glow does not show on a stream in the air, only once
+  it lands or in a pool (#468).
 - The level is plain boxes. It is a lab, not a place.

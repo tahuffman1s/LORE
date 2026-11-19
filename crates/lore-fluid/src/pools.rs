@@ -71,6 +71,10 @@ const LOWEST: f32 = 0.01;
 const POND_THICK: f32 = 2.5;
 /// How many ticks apart a hollow is looked for.
 const POND_EVERY: u32 = 20;
+/// A top layer this deep is all that someone in the pool is in: about as
+/// deep as a swimmer lies. Under a thinner one they are partly in what is
+/// below it.
+const BODY_DEEP: f32 = 1.2;
 /// Less than this many litres over a rim in a tick is a dribble, not a
 /// pool running over: half a millilitre, 30 millilitres a second.
 const DRIBBLE: f32 = 5.0e-4;
@@ -279,6 +283,29 @@ pub struct Pool {
     /// Whether it is a found hollow that may be deeper than it was looked
     /// into ([`Fluids::deepen_found`]).
     grows: bool,
+    /// How many cubic metres of each kind are in its top layer: all of
+    /// what it holds, unless some of it does not mix with the rest.
+    top: [f64; MOST_KINDS],
+    /// How thick that layer is, in metres.
+    top_thick: f32,
+}
+
+/// What lies on top of a pool. Kinds that mix are one fluid; a kind that
+/// does not ([`Flow::mixes`](crate::Flow::mixes)) lies as a layer of its
+/// own, and the lightest of them all is on top: oil on water, water on
+/// mercury.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Top {
+    /// The kind there is most of in the layer.
+    pub kind: u8,
+    /// How much of the layer each kind is, from 0 to 1.
+    pub shares: [f32; MOST_KINDS],
+    /// How thick the layer is, in metres: what it holds, spread over the
+    /// pool's surface.
+    pub thick: f32,
+    /// How much of all the pool holds is in the layer, from 0 to 1: 1 for
+    /// a pool that is one fluid through and through.
+    pub part: f32,
 }
 
 impl Pool {
@@ -399,6 +426,39 @@ impl Pool {
                 && self.held() + self.displaced > self.curve.at_brim() + 1.0e-3)
     }
 
+    /// What lies on top of it: the whole of it, unless some of what it
+    /// holds does not mix with the rest.
+    #[must_use]
+    pub fn top(&self) -> Top {
+        let (held, layer) = (self.held(), self.top.iter().sum::<f64>());
+        let mut top = Top {
+            kind: self.kind,
+            shares: [0.0; MOST_KINDS],
+            thick: self.top_thick,
+            part: 1.0,
+        };
+        if layer <= 0.0 || held <= 0.0 {
+            if let Some(share) = top.shares.get_mut(usize::from(self.kind)) {
+                *share = 1.0;
+            }
+            return top;
+        }
+        let mut most = 0.0;
+        #[allow(clippy::cast_possible_truncation)]
+        for (kind, (share, part)) in top.shares.iter_mut().zip(&self.top).enumerate() {
+            *share = (part / layer) as f32;
+            if *part > most {
+                most = *part;
+                top.kind = u8::try_from(kind).unwrap_or(top.kind);
+            }
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            top.part = (layer / held).min(1.0) as f32;
+        }
+        top
+    }
+
     /// What it is to someone in it: how heavy and how thick its mix is.
     #[must_use]
     pub fn medium(&self) -> Medium {
@@ -442,6 +502,8 @@ impl Pool {
             spilled: 0.0,
             medium: Medium::WATER,
             grows: false,
+            top: [0.0; MOST_KINDS],
+            top_thick: 0.0,
         };
         pool.mix(physics);
         pool
@@ -477,6 +539,23 @@ impl Pool {
         taken
     }
 
+    /// Takes `volume` cubic metres out of its top layer alone, of each
+    /// kind in the layer by its share, and says how much there was to
+    /// take.
+    fn take_top(&mut self, volume: f64) -> f64 {
+        let layer: f64 = self.top.iter().sum();
+        if !(volume.is_finite() && volume > 0.0 && layer > 0.0) {
+            return 0.0;
+        }
+        let taken = volume.min(layer);
+        let kept = (layer - taken) / layer;
+        for (part, top) in self.parts.iter_mut().zip(&mut self.top) {
+            *part = (*part - *top * (1.0 - kept)).max(0.0);
+            *top *= kept;
+        }
+        taken
+    }
+
     /// Makes what it holds come to `volume` cubic metres, each kind in the
     /// share it has; an empty pool is filled with the kind it last held.
     fn hold(&mut self, volume: f64) {
@@ -505,32 +584,109 @@ impl Pool {
                 }
             }
         }
-        // Weights add by volume; thicknesses by their logarithms, as those
-        // of liquids that mix do (Arrhenius 1887).
-        let (mut density, mut thick) = (0.0_f64, 0.0_f64);
+        // The layers: the kinds that mix are one fluid, each kind that
+        // does not is its own, and the lightest of them lies on top.
+        let (mut blend, mut blend_mass) = (0.0_f64, 0.0_f64);
         for (part, phys) in self.parts.iter().zip(physics) {
-            if *part > 0.0 && held > 0.0 {
-                let share = part / held;
-                density += share * f64::from(phys.rho) / 1000.0;
-                thick += share * f64::from(phys.mu).max(1.0e-9).ln();
+            if *part > 0.0 && phys.mixes {
+                blend += part;
+                blend_mass += part * f64::from(phys.rho);
             }
         }
-        #[allow(clippy::cast_possible_truncation)]
-        let medium = if held > 0.0 {
-            Medium {
-                density: density as f32,
-                viscosity: thick.exp() as f32,
+        // Its weight, and which kind it is: none for the blend.
+        let mut lightest = (blend > 0.0).then(|| (blend_mass / blend, None));
+        for (kind, (part, phys)) in self.parts.iter().zip(physics).enumerate() {
+            let rho = f64::from(phys.rho);
+            if *part > 0.0 && !phys.mixes && lightest.is_none_or(|(least, _)| rho < least) {
+                lightest = Some((rho, Some(kind)));
             }
-        } else {
-            physics
+        }
+        self.top = [0.0; MOST_KINDS];
+        for (kind, ((top, part), phys)) in (self.top.iter_mut())
+            .zip(&self.parts)
+            .zip(physics)
+            .enumerate()
+        {
+            let on_top = match lightest {
+                Some((_, None)) => phys.mixes,
+                Some((_, Some(alone))) => kind == alone,
+                None => false,
+            };
+            if on_top {
+                *top = *part;
+            }
+        }
+        let layer: f64 = self.top.iter().sum();
+        let area = self.curve.area(held);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.top_thick = if area > 0.0 {
+                (layer / area) as f32
+            } else {
+                0.0
+            };
+        }
+        let whole = medium_of(&self.parts, physics);
+        let medium = match whole {
+            // One fluid through and through.
+            Some(whole) if layer >= held * (1.0 - 1.0e-9) => whole,
+            // Layers: a body floats in what is under a slick, and is in
+            // the top layer alone only when that is as deep as they are.
+            Some(whole) => {
+                let mut under = self.parts;
+                for (part, top) in under.iter_mut().zip(&self.top) {
+                    *part = (*part - top).max(0.0);
+                }
+                match (medium_of(&self.top, physics), medium_of(&under, physics)) {
+                    (Some(upper), Some(lower)) => {
+                        let in_top = (self.top_thick / BODY_DEEP).clamp(0.0, 1.0);
+                        Medium {
+                            density: lower.density + (upper.density - lower.density) * in_top,
+                            viscosity: libm::expf(
+                                libm::logf(lower.viscosity.max(1.0e-9))
+                                    + (libm::logf(upper.viscosity.max(1.0e-9))
+                                        - libm::logf(lower.viscosity.max(1.0e-9)))
+                                        * in_top,
+                            ),
+                        }
+                    }
+                    _ => whole,
+                }
+            }
+            None => physics
                 .get(usize::from(self.kind))
                 .map_or(Medium::WATER, |phys| Medium {
                     density: phys.rho / 1000.0,
                     viscosity: phys.mu,
-                })
+                }),
         };
         self.medium = medium.cleaned();
     }
+}
+
+/// What `parts` (cubic metres of each kind) are to someone in them, mixed:
+/// `None` when there is nothing of any. Weights add by volume;
+/// thicknesses by their logarithms, as those of liquids that mix do
+/// (Arrhenius 1887).
+fn medium_of(parts: &[f64; MOST_KINDS], physics: &[Physics; MOST_KINDS]) -> Option<Medium> {
+    let held: f64 = parts.iter().sum();
+    if held <= 0.0 {
+        return None;
+    }
+    let (mut density, mut thick) = (0.0_f64, 0.0_f64);
+    for (part, phys) in parts.iter().zip(physics) {
+        if *part > 0.0 {
+            let share = part / held;
+            density += share * f64::from(phys.rho) / 1000.0;
+            thick += share * f64::from(phys.mu).max(1.0e-9).ln();
+        }
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let medium = Medium {
+        density: density as f32,
+        viscosity: thick.exp() as f32,
+    };
+    Some(medium)
 }
 
 /// Somewhere something went into a pool in the newest tick: a place for
@@ -1045,9 +1201,24 @@ impl Fluids {
             }
             // What goes over the rim is what the pool holds, in its mix:
             // each stream is of one kind, chosen by the shares.
-            let shares = pool.shares();
-            let mostly = pool.kind;
-            let taken = pool.take(out.min(from_pool));
+            // Of the top layer first: oil on water runs over before the
+            // water does, and the last of it goes with the first of what
+            // was under it.
+            let wanted = out.min(from_pool);
+            let top = pool.top();
+            let layer: f64 = pool.top.iter().sum();
+            let skims = top.part < 1.0 && layer > 0.0;
+            let (shares, mostly) = if skims && layer >= 0.5 * wanted {
+                (top.shares, top.kind)
+            } else {
+                (pool.shares(), pool.kind)
+            };
+            let skimmed = if skims {
+                pool.take_top(wanted.min(layer))
+            } else {
+                0.0
+            };
+            let taken = skimmed + pool.take(wanted - skimmed);
             let waiting = (from_pool - taken - MOST_WAITING).max(0.0);
             pool.take(waiting);
             #[allow(clippy::cast_possible_truncation)]

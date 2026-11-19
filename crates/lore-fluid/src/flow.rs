@@ -79,6 +79,10 @@ pub struct Flow {
     /// Whether a pool of it freezes over when the weather's ice is thick
     /// enough to walk on, as water does. Lava and honey do not.
     pub freezes: bool,
+    /// Whether it mixes with the other kinds in a pool, as water, milk
+    /// and honey do. One that does not (oil, mercury, tar) lies in the
+    /// pool as a layer of its own, over or under the rest by its weight.
+    pub mixes: bool,
 }
 
 impl Default for Flow {
@@ -95,6 +99,7 @@ impl Default for Flow {
             dries: 0.0,
             washes: true,
             freezes: true,
+            mixes: true,
         }
     }
 }
@@ -131,6 +136,7 @@ impl Flow {
             },
             washes: self.washes,
             freezes: self.freezes,
+            mixes: self.mixes,
         }
     }
 }
@@ -157,6 +163,8 @@ pub(crate) struct Physics {
     pub dries: f32,
     /// Whether it washes other kinds away.
     pub washes: bool,
+    /// Whether it mixes with other kinds in a pool.
+    pub mixes: bool,
     /// The feel underfoot, copied from the flow.
     pub slippery: f32,
     /// See [`Flow::sticky`].
@@ -196,6 +204,7 @@ impl Physics {
             pin,
             dries: flow.dries,
             washes: flow.washes,
+            mixes: flow.mixes,
             slippery: flow.slippery,
             sticky: flow.sticky,
             bouncy: flow.bouncy,

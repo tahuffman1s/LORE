@@ -249,7 +249,13 @@ function lab.draw(shown: boolean)
             holds.text = "empty"
             like.text = ""
         else
-            holds.text = "holds " .. mix(pool) .. (if pool.frozen then " (frozen over)" else "")
+            -- What does not mix lies on top or underneath: say which is up.
+            local top = pool.top
+            local layered = not top.mixes and pool:share(top) < 0.995
+            holds.text = "holds "
+                .. mix(pool)
+                .. (if layered then ", " .. string.lower(top.name) .. " on top" else "")
+                .. (if pool.frozen then " (frozen over)" else "")
             like.text = kinds.about(pool.fluid)
         end
         full.value = if pool.capacity > 0 then pool.litres / pool.capacity else 0

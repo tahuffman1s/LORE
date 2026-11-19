@@ -320,7 +320,7 @@ end)
 local honey: Fluid = game.fluid("honey")
 local goo: Fluid = game.fluid("goo", { from = "honey", color = "green", glow = 0.3 })
 local pond = game.fluid("pond", { from = goo, color = "#203040", clarity = 2, cloudiness = 0.3, shine = 0.9, metal = 0, refraction = 1.34, viscosity = 0.1, density = 1, beading = 0.4, slippery = 0.5, sticky = 0, bouncy = 0, corrosive = 0, dries = 120, washes = true })
-game.fluid("blob", { from = "water", color = "red", freezes = false })
+game.fluid("blob", { from = "water", color = "red", freezes = false, mixes = false })
 local tub: Pool = game.fluids.pool("Tub")
 honey.viscosity = 0.6
 honey.color = "#f6bf59"
@@ -404,6 +404,10 @@ game.onTick(function()
     -- Pools: what one holds, and filling, draining and moving it.
     local name: string, holds: Fluid = tub.name, tub.fluid
     print(name, holds.freezes, tub.level, tub.depth, tub.litres / tub.capacity, tub.brim)
+    local floating: Fluid = tub.top
+    if not floating.mixes then
+        print(floating.name .. " lies on " .. holds.name)
+    end
     if tub.overflowing or tub.frozen then
         tub:drain(5)
     elseif tub:share("honey") < 0.5 then

@@ -35,6 +35,7 @@ pub(crate) const POOL_FIELDS: &[&str] = &[
     "brim",
     "overflowing",
     "frozen",
+    "top",
 ];
 
 /// What can be set on a pool.
@@ -321,6 +322,9 @@ impl UserData for PoolRef {
                 Ok(match key.as_str() {
                     "fluid" => {
                         Value::UserData(FluidState::handle(lua, told.map_or(0, |told| told.kind))?)
+                    }
+                    "top" => {
+                        Value::UserData(FluidState::handle(lua, told.map_or(0, |told| told.top))?)
                     }
                     "level" => read(|told| told.level),
                     "depth" => read(|told| told.depth),

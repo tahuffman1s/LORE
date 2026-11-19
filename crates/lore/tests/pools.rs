@@ -612,3 +612,154 @@ fn what_is_done_in_a_pool_sounds_as_thick_and_as_heavy_as_what_it_holds() {
     .unwrap();
     assert!(first <= splash + 3, "it hisses as they go in: {lava:?}");
 }
+
+#[test]
+fn oil_poured_on_a_tank_of_water_lies_on_top_and_is_what_is_seen() {
+    const OIL: &str = r#"{"water": true, "fluid": "oil"}"#;
+    // What a tank of nothing but oil is drawn as.
+    let mut oily = world("", OIL);
+    play(&mut oily, 2);
+    let oil = fluid_frame(&mut oily).pools[0]
+        .look
+        .expect("oil has a look");
+    // A tank of water with 400 litres of oil let onto it: a centimetre
+    // over its 36 square metres.
+    let mut world = world(
+        r#"
+        local tank = game.fluids.pool("Tank")
+        game.onStart(function()
+            game.player:teleport(vector.create(10, 0.1, 10))
+            tank:fill(400, "oil")
+        end)
+        game.onTick(function()
+            if game.time() > 0.49 and game.time() < 0.51 then
+                print(tank.fluid.name, tank.top.name, tank:share("oil") < 0.01, tank.top.mixes)
+            end
+        end)
+        "#,
+        WATER,
+    );
+    play(&mut world, 60);
+    assert_eq!(printed(), ["water oil true false"]);
+    let seen = fluid_frame(&mut world).pools[0];
+    let look = seen.look.expect("a look of its own");
+    for colour in 0..3 {
+        assert!(
+            (look.absorbs[colour] - oil.absorbs[colour]).abs()
+                < 1.0e-3 * oil.absorbs[colour].max(1.0)
+                && (look.scatters[colour] - oil.scatters[colour]).abs() < 1.0e-3,
+            "{look:?} is not {oil:?}"
+        );
+    }
+}
+
+#[test]
+fn fluid_coming_down_is_heard_from_where_it_lands_as_what_it_is() {
+    use lore::noise::NoiseKind;
+
+    // A tap over the open floor outside the tank pours honey for two
+    // seconds and is then shut; another over the tank pours water into it
+    // all the while. The player stands well away from both.
+    let mut world = world(
+        r#"
+        game.onStart(function() game.player:teleport(vector.create(-10, 0.1, 10)) end)
+        game.onTick(function()
+            if game.time() < 2 then
+                game.fluids.spray("honey", vector.create(10, 1.5, 10), vector.create(0, -1, 0), { litresPerSecond = 6, spread = 2 })
+            end
+            if game.time() < 4 then
+                game.fluids.spray("water", vector.create(0, 4, 0), vector.create(0, -1, 0), { litresPerSecond = 6, spread = 2 })
+            end
+        end)
+        "#,
+        WATER,
+    );
+    let first = heard(&mut world, 150);
+    let of = |noises: &[lore::noise::Noise], kind: NoiseKind| -> Vec<lore::noise::Noise> {
+        (noises.iter().filter(|noise| noise.kind == kind))
+            .copied()
+            .collect()
+    };
+    // The honey patters on the floor under its tap, a few times a second,
+    // low and soft as honey is.
+    let patter = of(&first, NoiseKind::Patter);
+    assert!((6..=17).contains(&patter.len()), "{} patters", patter.len());
+    for noise in &patter {
+        let [x, y, z] = noise.position;
+        assert!(
+            (x - 10.0).abs() < 0.6 && (z - 10.0).abs() < 0.6 && y < 0.3,
+            "{noise:?}"
+        );
+        assert!((0.4..0.7).contains(&noise.pitch), "{noise:?}");
+        assert!(noise.loudness > 0.05 && noise.loudness < 0.5, "{noise:?}");
+    }
+    // The water pours into the tank, heard at its surface, as water.
+    let pour = of(&first, NoiseKind::Pour);
+    assert!(pour.len() >= 6, "{} pours", pour.len());
+    for noise in &pour {
+        let [x, y, z] = noise.position;
+        assert!(x.hypot(z) < 0.8 && (y - 2.0).abs() < 0.2, "{noise:?}");
+        assert_eq!(noise.pitch, 1.0, "{noise:?}");
+    }
+    // With the honey's tap shut its patter stops, and with both shut
+    // there is nothing to hear.
+    heard(&mut world, 30);
+    let later = heard(&mut world, 45);
+    assert!(of(&later, NoiseKind::Patter).is_empty(), "{later:?}");
+    assert!(!of(&later, NoiseKind::Pour).is_empty());
+    heard(&mut world, 120);
+    assert_eq!(heard(&mut world, 60), []);
+}
+
+#[test]
+fn a_step_in_a_puddle_is_a_step_in_what_the_puddle_is() {
+    use lore::noise::NoiseKind;
+
+    // The player on the open floor, walking through what was let out all
+    // round them: nothing, water, or honey.
+    let walked = |fluid: &str| {
+        let script = format!(
+            r#"
+            game.onStart(function() game.player:teleport(vector.create(10, 0.1, 10)) end)
+            game.onTick(function()
+                if "{fluid}" ~= "" and game.time() < 3 then
+                    for along = -1, 6 do
+                        game.fluids.spray("{fluid}", vector.create(10, 0.5, 10 - along), vector.create(0, -1, 0), {{ litresPerSecond = 8, spread = 25 }})
+                    end
+                end
+            end)
+            "#
+        );
+        let mut world = world(&script, WATER);
+        heard(&mut world, 240);
+        ask(&mut world, |asked| asked.movement.forward = 1.0);
+        heard(&mut world, 60)
+    };
+    let steps = |noises: &[lore::noise::Noise]| -> Vec<(NoiseKind, f32)> {
+        (noises.iter())
+            .filter(|noise| noise.kind.is_footfall() || noise.kind == NoiseKind::SmallSplash)
+            .map(|noise| (noise.kind, noise.pitch))
+            .collect()
+    };
+    let dry = steps(&walked(""));
+    assert!(!dry.is_empty());
+    assert!(
+        dry.iter().all(|step| *step == (NoiseKind::Footstep, 1.0)),
+        "{dry:?}"
+    );
+    let wet = steps(&walked("water"));
+    assert!(!wet.is_empty());
+    assert!(
+        wet.iter()
+            .all(|step| *step == (NoiseKind::SmallSplash, 1.0)),
+        "{wet:?}"
+    );
+    let sticky = steps(&walked("honey"));
+    assert!(!sticky.is_empty());
+    assert!(
+        sticky
+            .iter()
+            .all(|(kind, pitch)| *kind == NoiseKind::SmallSplash && *pitch < 0.7),
+        "{sticky:?}"
+    );
+}

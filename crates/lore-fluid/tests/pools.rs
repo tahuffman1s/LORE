@@ -829,3 +829,176 @@ fn a_mix_that_runs_over_a_rim_lands_as_much_as_left_the_pool() {
     let all = fluids.pools()[0].litres() + water + honey;
     assert!(close(all, before, 6.0), "{all} litres of {before}");
 }
+
+const OIL: u8 = 3;
+const MERCURY: u8 = 4;
+
+/// The same world with two kinds that do not mix: a light oil as kind 3
+/// and mercury as kind 4.
+fn world_with_oil(level: &Level) -> Fluids {
+    let mut fluids = world(level);
+    fluids.set_flow(
+        OIL,
+        Flow {
+            viscosity: 0.22,
+            density: 0.9,
+            mixes: false,
+            ..Flow::default()
+        },
+    );
+    fluids.set_flow(
+        MERCURY,
+        Flow {
+            viscosity: 0.022,
+            density: 13.5,
+            mixes: false,
+            ..Flow::default()
+        },
+    );
+    fluids
+}
+
+#[test]
+fn what_does_not_mix_lies_in_a_layer_of_its_own_by_its_weight() {
+    let level = tub_level(r#"{"water": true}"#);
+    let mut fluids = world_with_oil(&level);
+    // Water alone, or water with honey stirred in, is one fluid.
+    fluids.pool_add(0, HONEY, 200.0);
+    fluids.step(&level, DT);
+    let pool = &fluids.pools()[0];
+    let top = pool.top();
+    assert_eq!((top.kind, top.part), (0, 1.0));
+    assert!(close(top.shares[usize::from(HONEY)], 200.0 / 2200.0, 0.01));
+    assert!(close(top.thick, pool.depth(), 0.01), "{}", top.thick);
+    let stirred = pool.medium();
+    // Forty litres of oil lie on it, a centimetre thick over four square
+    // metres, and whoever is in the tub is still in the water under it.
+    fluids.pool_add(0, OIL, 40.0);
+    fluids.step(&level, DT);
+    let pool = &fluids.pools()[0];
+    let top = pool.top();
+    assert_eq!(top.kind, OIL);
+    assert_eq!(top.shares[usize::from(OIL)], 1.0);
+    assert!(close(top.thick, 0.01, 0.001), "{}", top.thick);
+    assert!(close(top.part, 40.0 / 2240.0, 0.001), "{}", top.part);
+    assert_eq!(pool.kind(), 0, "it is still mostly water");
+    let slicked = pool.medium();
+    assert!(
+        close(slicked.density, stirred.density, 0.005),
+        "{slicked:?}"
+    );
+    // Mercury goes to the bottom: the oil is still what is on top.
+    fluids.pool_add(0, MERCURY, 100.0);
+    fluids.step(&level, DT);
+    assert_eq!(fluids.pools()[0].top().kind, OIL);
+    // With the oil skimmed off, the water is on top of the mercury.
+    let mut fluids = world_with_oil(&level);
+    fluids.pool_add(0, MERCURY, 100.0);
+    fluids.step(&level, DT);
+    let top = fluids.pools()[0].top();
+    assert_eq!(top.kind, 0);
+    assert!(close(top.part, 2000.0 / 2100.0, 0.01), "{}", top.part);
+    // A tub of oil alone is one fluid, and whoever is in it is in oil.
+    let oily = tub_level(r#"{"water": true}"#);
+    let mut fluids = world_with_oil(&oily);
+    fluids.pool_set_kind(0, OIL);
+    fluids.step(&oily, DT);
+    let pool = &fluids.pools()[0];
+    assert_eq!((pool.top().kind, pool.top().part), (OIL, 1.0));
+    assert!(
+        close(pool.medium().density, 0.9, 1.0e-3),
+        "{:?}",
+        pool.medium()
+    );
+}
+
+#[test]
+fn a_layer_as_deep_as_a_swimmer_is_what_they_are_in() {
+    let level = tub_level(r#"{"water": true}"#);
+    let mut fluids = world_with_oil(&level);
+    // A hand's depth of water under the rest of the tub in oil: a body
+    // in it is nearly all in oil.
+    fluids.pool_take(0, 1600.0);
+    fluids.pool_add(0, OIL, 2400.0);
+    fluids.step(&level, DT);
+    let pool = &fluids.pools()[0];
+    assert_eq!(pool.top().kind, OIL);
+    assert!(close(pool.top().thick, 0.6, 0.02), "{}", pool.top().thick);
+    // Half a body's depth of oil: half way from water to oil.
+    let medium = pool.medium();
+    assert!(close(medium.density, 0.95, 0.01), "{medium:?}");
+    assert!(
+        medium.viscosity > 0.003 && medium.viscosity < 0.058,
+        "{medium:?}"
+    );
+}
+
+#[test]
+fn what_floats_on_a_pool_runs_over_its_rim_first() {
+    let level = tub_level(r#"{"water": true}"#);
+    let mut fluids = world_with_oil(&level);
+    // Full to the brim with water, and sixty litres of oil on top of that.
+    let pool = &fluids.pools()[0];
+    fluids.pool_add(0, 0, pool.capacity() - pool.litres());
+    fluids.pool_add(0, OIL, 60.0);
+    let mut ran = 0.0;
+    for _ in 0..6 * 60 {
+        fluids.step(&level, DT);
+        ran += fluids.pools()[0].spilled();
+    }
+    // Sixty litres ran out, and they were the oil: the water is all there.
+    assert!(close(ran, 60.0, 1.0), "{ran} litres ran out");
+    let pool = &fluids.pools()[0];
+    assert!(pool.share(OIL) < 0.001, "{}", pool.share(OIL));
+    assert!(
+        close(pool.litres(), pool.capacity(), 1.0),
+        "{}",
+        pool.litres()
+    );
+    assert!(
+        close(fluids.litres(Some(OIL)), 60.0, 3.0),
+        "{}",
+        fluids.litres(Some(OIL))
+    );
+    assert!(fluids.litres(Some(0)) < 1.0, "{}", fluids.litres(Some(0)));
+    assert_eq!(pool.top().kind, 0);
+}
+
+#[test]
+fn what_lands_in_a_step_is_said_with_where_and_of_what_kind() {
+    let level = level_with(block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]), &[]);
+    let mut fluids = world(&level);
+    assert_eq!(fluids.landed().litres, 0.0);
+    // A litre a second of honey let fall a metre onto the floor at (3, 2)
+    // for a second, and then nothing.
+    let (mut landed, mut ticks) = (0.0, 0);
+    for tick in 0..180 {
+        if tick < 60 {
+            fluids.spray(HONEY, [3.0, 0.8, 2.0], [0.0, -1.0, 0.0], DT, 0.02);
+        }
+        fluids.step(&level, DT);
+        let now = fluids.landed();
+        if now.litres > 0.0 {
+            ticks += 1;
+            landed += now.litres;
+            assert_eq!(now.kind, HONEY);
+            let [x, y, z] = now.place;
+            assert!(
+                close(x, 3.0, 0.3) && close(z, 2.0, 0.3) && close(y, -0.2, 0.05),
+                "{now:?}"
+            );
+            assert!(now.biggest > 0.0 && now.biggest <= now.litres, "{now:?}");
+        }
+    }
+    // All of it landed, over about the second it fell for, and what lies
+    // there is what landed.
+    assert!(close(landed, 1.0, 0.05), "{landed} litres landed");
+    assert!((40..=75).contains(&ticks), "over {ticks} ticks");
+    assert!(close(fluids.litres(Some(HONEY)), landed, 0.01));
+    assert_eq!(fluids.landed().litres, 0.0, "and nothing since");
+    // The kind's own weight and thickness, for whoever makes it heard.
+    assert!(close(fluids.medium(HONEY).density, 1.4, 1.0e-3));
+    assert!(fluids.medium(HONEY).viscosity > 5.0);
+    assert_eq!(fluids.medium(0), lore_physics::Medium::WATER);
+    assert_eq!(fluids.medium(200), lore_physics::Medium::WATER);
+}
