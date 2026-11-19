@@ -538,7 +538,7 @@ mod tests {
         files[0].1 = script;
         let host = ScriptHost::from_sources(files, ActionMap::standard());
         let mut list = crate::game_shaders::ShaderList::default();
-        list.follow(&host);
+        list.follow(crate::game_shaders::Source::new(), &host);
         list.hear(
             problems
                 .iter()

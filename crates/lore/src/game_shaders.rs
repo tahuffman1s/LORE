@@ -7,6 +7,8 @@
 //! revision, follows the values the script sets every frame without asking
 //! for any memory, and holds what the renderer said of each shader.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use lore_render::{GameShader, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport};
 use lore_script::{ScriptHost, ShaderUse};
 use lore_shader::{ParamValue, ShaderError};
@@ -42,28 +44,43 @@ fn material_of(used_as: &ShaderUse) -> Option<&str> {
     }
 }
 
+/// Which game a list follows. Every script's revisions count from the
+/// start, so a list lent to another game (the editor plays the level again)
+/// must not take the new script's revision for one it has already read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Source(u64);
+
+impl Source {
+    /// One no other game has.
+    pub(crate) fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// The shaders a game has turned on, as the renderer is handed them.
 #[derive(Debug, Default)]
 pub(crate) struct ShaderList {
     /// In the order the script turned them on.
     kept: Vec<Kept>,
-    /// The script's revision of its list that `kept` follows.
-    seen: Option<u64>,
+    /// The game, and its script's revision of its list, that `kept` follows.
+    seen: Option<(Source, u64)>,
     /// The revision the next changed shader gets. Starts at 1.
     next: u64,
 }
 
 impl ShaderList {
-    /// Follows the script's shaders: what is new is added and what is gone
-    /// is dropped when the script's revision changed, and otherwise only
-    /// the values are copied, which asks for no memory.
-    pub(crate) fn follow(&mut self, host: &ScriptHost) {
-        let revision = host.shader_revision();
-        if self.seen == Some(revision) && self.copy_values(host) {
+    /// Follows the shaders of the script `host` of the game `source`: what
+    /// is new is added and what is gone is dropped when the script's
+    /// revision changed, and otherwise only the values are copied, which
+    /// asks for no memory.
+    pub(crate) fn follow(&mut self, source: Source, host: &ScriptHost) {
+        let seen = Some((source, host.shader_revision()));
+        if self.seen == seen && self.copy_values(host) {
             return;
         }
         self.rebuild(host);
-        self.seen = Some(revision);
+        self.seen = seen;
     }
 
     /// Copies the values of every shader. Says `false`, having changed
@@ -242,12 +259,14 @@ mod tests {
         host
     }
 
-    /// Follows `host`, which is not the one the list followed before: its
-    /// revisions count from the start, so the list is made to read it all.
+    /// Follows `host` as the script of a game of its own, which is how the
+    /// list knows to read it all although its revisions count from the start.
     fn follow_another(list: &mut ShaderList, host: &ScriptHost) {
-        list.seen = None;
-        list.follow(host);
+        list.follow(Source::new(), host);
     }
+
+    /// The game the tests' first script belongs to.
+    const ONE: Source = Source(0);
 
     fn revisions(list: &ShaderList) -> Vec<(String, u64)> {
         list.kept
@@ -295,7 +314,7 @@ mod tests {
             &[("shaders/a.wgsl", SCREEN), ("shaders/b.wgsl", SCREEN)],
         );
         let mut list = ShaderList::default();
-        list.follow(&one);
+        list.follow(ONE, &one);
         assert_eq!(revisions(&list), [("a".to_owned(), 1)]);
 
         let two = host(
@@ -326,18 +345,18 @@ mod tests {
             &[("shaders/a.wgsl", SCREEN)],
         );
         let mut list = ShaderList::default();
-        list.follow(&host);
+        list.follow(ONE, &host);
         let before = list.kept[0].values.clone();
         assert_eq!(before, [("strength".to_owned(), ParamValue::F32(0.2))]);
 
         host.tick(&lore_input::InputFrame::default(), 1.0 / 60.0);
-        list.follow(&host);
+        list.follow(ONE, &host);
         assert_eq!(
             list.kept[0].values,
             [("strength".to_owned(), ParamValue::F32(0.9))]
         );
         assert_eq!(list.kept[0].revision, 1);
-        assert_eq!(list.seen, Some(host.shader_revision()));
+        assert_eq!(list.seen, Some((ONE, host.shader_revision())));
     }
 
     #[test]
@@ -347,7 +366,7 @@ mod tests {
             &[("shaders/a.wgsl", SCREEN)],
         );
         let mut list = ShaderList::default();
-        list.follow(&one);
+        list.follow(ONE, &one);
         list.hear(vec![report("a", 1, Err(error("shaders/a.wgsl")))]);
         assert_eq!(list.problems().count(), 1);
 
@@ -359,7 +378,7 @@ mod tests {
 
         // The same text again keeps the failure; new text keeps it until
         // the renderer has said something about it.
-        list.follow(&one);
+        list.follow(ONE, &one);
         assert_eq!(list.problems().count(), 1);
         let changed = host(
             r#"game.shaders.screen("a", {})"#,
@@ -381,7 +400,7 @@ mod tests {
             &[("shaders/a.wgsl", SCREEN)],
         );
         let mut list = ShaderList::default();
-        list.follow(&one);
+        list.follow(ONE, &one);
         list.hear(vec![report("a", 1, Err(error("compile")))]);
         list.kept[0].problem = Some(error("script"));
         let files: Vec<&str> = list.problems().map(|error| error.file.as_str()).collect();
@@ -392,18 +411,33 @@ mod tests {
     }
 
     #[test]
+    fn a_list_lent_to_another_game_reads_its_shaders_afresh() {
+        let script = r#"game.shaders.screen("a", {})"#;
+        let first = host(script, &[("shaders/a.wgsl", SCREEN)]);
+        let changed = SCREEN.replace("0.5", "0.6");
+        let second = host(script, &[("shaders/a.wgsl", &changed)]);
+        // Two new scripts with the same shaders are at the same revision.
+        assert_eq!(first.shader_revision(), second.shader_revision());
+        let mut list = ShaderList::default();
+        list.follow(Source::new(), &first);
+        list.follow(Source::new(), &second);
+        assert_eq!(revisions(&list), [("a".to_owned(), 2)]);
+        assert_eq!(list.kept[0].text, changed);
+    }
+
+    #[test]
     fn clear_leaves_no_shaders() {
         let one = host(
             r#"game.shaders.screen("a", {})"#,
             &[("shaders/a.wgsl", SCREEN)],
         );
         let mut list = ShaderList::default();
-        list.follow(&one);
+        list.follow(ONE, &one);
         list.clear();
         assert!(handed(&list).is_empty());
         assert_eq!(list.problems().count(), 0);
         // Following again brings them back, with a revision never used.
-        list.follow(&one);
+        list.follow(ONE, &one);
         assert_eq!(revisions(&list), [("a".to_owned(), 2)]);
     }
 }

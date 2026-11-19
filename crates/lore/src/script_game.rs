@@ -54,6 +54,8 @@ pub struct ScriptGame {
     map_file: Option<MapFile>,
     /// Why the map file as it now is could not be read, if it could not.
     map_error: Option<MapError>,
+    /// Which game this is to the list of shaders it hands the renderer.
+    shaders: crate::game_shaders::Source,
     /// The player's settings as the script was last told them. They are
     /// not kept here to be put into effect: whoever runs the game has the
     /// settings in force, and is handed only what the script changes.
@@ -86,6 +88,7 @@ impl ScriptGame {
             map: Map::default(),
             map_file: None,
             map_error: None,
+            shaders: crate::game_shaders::Source::new(),
             told: settings,
         };
         game.name_sounds();
@@ -219,6 +222,7 @@ impl ScriptGame {
             map,
             map_file: Some(map_file),
             map_error,
+            shaders: crate::game_shaders::Source::new(),
             told: settings,
         };
         game.name_sounds();
@@ -368,7 +372,7 @@ impl Game for ScriptGame {
         // After those, so what the script asks for while drawing is in this frame.
         self.host.draw(frame.alpha());
         // After the draw too, so a `shader:set` in `game.onDraw` is in this frame.
-        frame.shader_list().follow(&self.host);
+        frame.shader_list().follow(self.shaders, &self.host);
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
