@@ -880,6 +880,45 @@ pub fn drips() -> SoundSet {
     takes(&KEPT, 5, drip).spread(0.12, 0.25)
 }
 
+/// Something burning in a liquid that burns: steam let go in a bright
+/// hiss that spits and is gone in two thirds of a second.
+fn sizzle(take: u32) -> Sound {
+    let seed = 0x5122_0000 + take * 331;
+    let seconds = pick([0.66, 0.58, 0.74], take);
+    let mut out = silence(seconds);
+
+    // The steam: hiss kept high, loud at once and dying away, in lumps.
+    let mut steam = Hiss(seed);
+    let mut high = Split::at(pick([4_200.0, 5_000.0, 3_600.0], take), 0.9);
+    let mut lumpy = lumps(seed + 1);
+    let mut fading = dying(0.16);
+    layer(&mut out, 0.0, seconds, |time| {
+        let parts = high.next(steam.next());
+        (parts.near + 0.6 * parts.high) * lumpy() * fading() * rise(time, 0.0, 0.004)
+    });
+
+    // The spit: a few short cracks in the first third of a second.
+    let mut spit = Hiss(seed + 2);
+    for crack in 0..5_u32 {
+        let at = 0.02 + 0.3 * roll(seed + 3, crack);
+        let mut sharp = Split::at(between(1_800.0, 6_500.0, roll(seed + 4, crack)), 3.0);
+        let mut short = dying(0.006);
+        let loud = 0.5 + 0.5 * roll(seed + 5, crack);
+        layer(&mut out, at, (at + 0.03).min(seconds), |_| {
+            sharp.next(spit.next()).near * short() * loud
+        });
+    }
+    finish(out, 900.0, 0.5, 0.1)
+}
+
+/// Three takes of something burning in a liquid that burns, as acid and
+/// lava do: a hiss and a spit, two thirds of a second long.
+#[must_use]
+pub fn sizzles() -> SoundSet {
+    static KEPT: OnceLock<Vec<Sound>> = OnceLock::new();
+    takes(&KEPT, 3, sizzle).spread(0.1, 0.2)
+}
+
 /// The low, dark rumble heard with the head under water: five seconds
 /// whose end runs into its beginning, to play
 /// [looping](crate::Play::looping) for as long as the head is under.

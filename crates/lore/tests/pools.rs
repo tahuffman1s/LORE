@@ -524,3 +524,91 @@ fn a_script_asks_which_pool_is_at_a_place_and_hears_it_run_over_and_stop() {
         ]
     );
 }
+
+/// Every noise made while `ticks` ticks are played.
+fn heard(world: &mut World, ticks: u32) -> Vec<lore::noise::Noise> {
+    let mut all = Vec::new();
+    for _ in 0..ticks {
+        play(world, 1);
+        all.extend_from_slice(world.noises());
+    }
+    all
+}
+
+#[test]
+fn what_is_done_in_a_pool_sounds_as_thick_and_as_heavy_as_what_it_holds() {
+    use lore::noise::NoiseKind;
+
+    // Dropped into the tank from four metres over it, then left to swim
+    // forward for three seconds.
+    let dropped = |extras: &str| {
+        let mut world = world(
+            "game.onStart(function() game.player:teleport(vector.create(0, 6, 0)) end)",
+            extras,
+        );
+        let mut all = heard(&mut world, 150);
+        ask(&mut world, |asked| asked.movement.forward = 1.0);
+        all.extend(heard(&mut world, 180));
+        all
+    };
+    let of = |noises: &[lore::noise::Noise], kind: NoiseKind| -> Vec<(f32, f32)> {
+        (noises.iter().filter(|noise| noise.kind == kind))
+            .map(|noise| (noise.pitch, noise.loudness))
+            .collect()
+    };
+    // Water sounds as it always has: nothing is played lower or quieter.
+    let water = dropped(WATER);
+    let splashes = of(&water, NoiseKind::Splash);
+    assert_eq!(splashes.len(), 1, "{water:?}");
+    assert!(water.iter().all(|noise| noise.pitch == 1.0), "{water:?}");
+    assert!(of(&water, NoiseKind::Sizzle).is_empty());
+    // Honey glugs: the same splash, more than half an octave lower and
+    // quieter, and so is every stroke swum in it.
+    let honey = dropped(HONEY);
+    let [(pitch, loudness)] = of(&honey, NoiseKind::Splash)[..] else {
+        panic!("one splash: {honey:?}");
+    };
+    assert!((0.4..0.7).contains(&pitch), "{pitch}");
+    assert!(
+        loudness < splashes[0].1 * 0.75,
+        "{loudness} against {splashes:?}"
+    );
+    let wet = [
+        NoiseKind::Splash,
+        NoiseKind::SmallSplash,
+        NoiseKind::Wade,
+        NoiseKind::SwimStroke,
+        NoiseKind::Bubbles,
+    ];
+    let in_honey: Vec<_> = (honey.iter())
+        .filter(|noise| wet.contains(&noise.kind))
+        .collect();
+    assert!(in_honey.len() >= 2, "{honey:?}");
+    assert!(
+        in_honey.iter().all(|noise| noise.pitch == pitch),
+        "{honey:?}"
+    );
+    assert!(
+        of(&honey, NoiseKind::Sizzle).is_empty(),
+        "honey burns nobody"
+    );
+    // Lava burns whoever is in it, and is heard to: a hiss as they go in
+    // and a couple a second for as long as they stay.
+    let lava = dropped(LAVA);
+    let hisses = of(&lava, NoiseKind::Sizzle);
+    assert!((6..=14).contains(&hisses.len()), "{} hisses", hisses.len());
+    assert!(
+        hisses
+            .iter()
+            .all(|(pitch, loud)| *pitch == 1.0 && *loud > 0.35)
+    );
+    let first = (lava
+        .iter()
+        .position(|noise| noise.kind == NoiseKind::Sizzle))
+    .unwrap();
+    let splash = (lava
+        .iter()
+        .position(|noise| noise.kind == NoiseKind::Splash))
+    .unwrap();
+    assert!(first <= splash + 3, "it hisses as they go in: {lava:?}");
+}

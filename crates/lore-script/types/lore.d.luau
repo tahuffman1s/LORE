@@ -1338,7 +1338,7 @@ declare game: {
     --- The engine also has starter sounds a new game can use straight away:
     --- "footstep", "gunshot", "landing", "dry-fire" and "reload", and for
     --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
-    --- "bubbles", "drip" and "underwater"; and the weather's, which the
+    --- "bubbles", "drip", "sizzle" and "underwater"; and the weather's, which the
     --- engine plays by itself: "rain", "wind", "thunder" and "thunder-far".
     --- A file of your own with one of those names replaces the starter
     --- sound.

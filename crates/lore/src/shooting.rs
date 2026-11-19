@@ -173,6 +173,7 @@ impl Shooting {
             kind,
             position: eyes,
             loudness: 1.0,
+            pitch: 1.0,
             delay: if delay.is_finite() {
                 delay.clamp(0.0, step.max(0.0))
             } else {

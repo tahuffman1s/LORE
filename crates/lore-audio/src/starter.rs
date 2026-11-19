@@ -5,7 +5,8 @@
 //! recorded sounds with [`Sound::load`] when the game has its own.
 //!
 //! Besides feet and guns there is water: [`splashes`], [`small_splashes`],
-//! [`wading`], [`swim_strokes`], [`surfacing`], [`bubbles`], [`drips`] and
+//! [`wading`], [`swim_strokes`], [`surfacing`], [`bubbles`], [`drips`], the
+//! [`sizzles`] of a liquid that burns and
 //! the [`underwater`] rumble to loop while the head is under; and there is
 //! weather: [`thunder`] close by and [`far_thunder`] far off, and [`rain`]
 //! and [`wind`] to loop while they last.
@@ -20,7 +21,7 @@ mod water;
 
 pub use storm::{far_thunder, rain, thunder, wind};
 pub use water::{
-    bubbles, drips, small_splashes, splashes, surfacing, swim_strokes, underwater, wading,
+    bubbles, drips, sizzles, small_splashes, splashes, surfacing, swim_strokes, underwater, wading,
 };
 
 /// Samples a second of every starter sound.

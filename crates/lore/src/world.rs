@@ -663,6 +663,7 @@ impl Game for World {
                 },
                 position: *position,
                 loudness: 1.0,
+                pitch: 1.0,
                 delay: 0.0,
                 tick: now,
             });
@@ -697,12 +698,23 @@ impl Game for World {
         // stands in, before its own tick. Only someone walking with their
         // feet down stands in anything.
         let standing = self.player.player.grounded && walking;
-        self.fluids.tell(
+        let hiss = self.fluids.tell(
             self.game.host_mut(),
             level,
             *tick,
             (&self.player.player, standing),
         );
+        // What burns them is heard burning them.
+        if let Some(loudness) = hiss {
+            self.noises.push(Noise {
+                kind: crate::noise::NoiseKind::Sizzle,
+                position: self.player.player.position,
+                loudness,
+                pitch: 1.0,
+                delay: 0.0,
+                tick: self.tick,
+            });
+        }
         self.game.tick(input, step);
         // The script may have put the player somewhere.
         self.teleport();
