@@ -181,7 +181,7 @@ picture and `lore bench` numbers as before.
 ## Not built
 
 Textures as values, sky and HUD shaders, a fluid shader's glow and shine on
-a stream of drops in flight, moving vertices, reloading the
+a stream of drops in flight (#468), moving vertices, reloading the
 engine's own shaders while it runs, a helper library (noise and the like),
 saving the pipeline cache to disk (#97), and bounce light seeing a changed
 surface. A surface shader changes only what the camera sees: not shadows,

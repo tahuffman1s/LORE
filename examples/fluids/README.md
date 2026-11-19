@@ -79,4 +79,8 @@ object.
 - A hollow nobody marked is found only where fluid lies deep in it and
   something holds it in within four metres on every side, and at most 32 of
   them in a level. Once found it stays a pool, empty or not.
+- Only the top layer of a pool is told apart: mercury under water is
+  water to look at, and you swim in a blend of the layers (#469).
+- A fluid shader's glow does not show on a stream in the air, only once
+  it lands or in a pool (#468).
 - The level is plain boxes. It is a lab, not a place.
