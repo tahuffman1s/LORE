@@ -824,6 +824,60 @@ fn check_passes_a_new_game_without_a_window() {
 }
 
 #[test]
+fn check_fails_a_game_whose_shader_has_a_mistake() {
+    let folder = scratch("check-shader-broken");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    let game = folder.join("game");
+    std::fs::create_dir_all(game.join("shaders")).unwrap();
+    std::fs::write(
+        game.join("shaders/heat.wgsl"),
+        "fn screen(in: ScreenIn) -> vec3f {\n    return in.colour;\n}\n",
+    )
+    .unwrap();
+    let main = std::fs::read_to_string(game.join("main.luau")).unwrap();
+    std::fs::write(
+        game.join("main.luau"),
+        format!("{main}\ngame.shaders.screen(\"heat\")\n"),
+    )
+    .unwrap();
+
+    let output = lore(&folder, &["check", "game"]);
+
+    assert!(!output.status.success());
+    let said = stderr(&output);
+    assert!(said.contains("shaders/heat.wgsl, line 2"), "{said}");
+    assert!(said.contains("1 mistake in the game's shaders"), "{said}");
+}
+
+#[test]
+fn check_passes_a_game_whose_shader_works_and_says_so() {
+    let folder = scratch("check-shader-ok");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    let game = folder.join("game");
+    std::fs::create_dir_all(game.join("shaders")).unwrap();
+    std::fs::write(
+        game.join("shaders/heat.wgsl"),
+        "fn screen(in: ScreenIn) -> vec3f {\n    return in.color;\n}\n",
+    )
+    .unwrap();
+    let main = std::fs::read_to_string(game.join("main.luau")).unwrap();
+    std::fs::write(
+        game.join("main.luau"),
+        format!("{main}\ngame.shaders.screen(\"heat\")\n"),
+    )
+    .unwrap();
+
+    let output = lore(&folder, &["check", "game"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("The game's shaders are fine: 1 turned on by the script"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn check_warns_about_a_level_with_nothing_to_stand_on_and_still_passes() {
     let folder = scratch("check-empty-level");
     assert!(lore(&folder, &["new", "game"]).status.success());

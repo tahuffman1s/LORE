@@ -223,6 +223,229 @@ pub fn load_level(folder: &Path) -> Result<Option<lore_assets::Scene>, String> {
     Ok(level)
 }
 
+/// How many of the level's materials a message lists before "and N more":
+/// the renderer's limit, so `lore run` and `lore check` list the same.
+const MOST_MATERIAL_NAMES: usize = 12;
+
+/// What `lore check` found out about a game's shaders.
+#[derive(Debug, Default, PartialEq)]
+pub struct ShadersChecked {
+    /// Mistakes, each shaped as the engine shows a shader error.
+    pub mistakes: Vec<lore_shader::ShaderError>,
+    /// Things worth a look that do not fail the check, a line each.
+    pub warnings: Vec<String>,
+    /// How many shaders the script has on, compiled as they are drawn.
+    pub drawn: usize,
+    /// The files in the `shaders` folder that the script has not turned on,
+    /// compiled by the function each holds.
+    pub from_folder: Vec<String>,
+}
+
+/// Checks every shader of the game in `folder`, once its script has run: the
+/// ones it has on (their own problems, whether they compile as they would be
+/// drawn, and whether a surface shader's material is in the level), then
+/// the other files in the `shaders` folder, which a menu may turn on later.
+/// `level` is the game's level, or `None` for the engine's test floor.
+#[must_use]
+pub fn check_shaders(
+    host: &lore_script::ScriptHost,
+    folder: &Path,
+    level: Option<&lore_assets::Scene>,
+) -> ShadersChecked {
+    use lore_script::ShaderUse;
+
+    let mut found = ShadersChecked::default();
+    let mut on: Vec<String> = Vec::new();
+    let floor;
+    let scene = match level {
+        Some(scene) => scene,
+        None => {
+            floor = crate::standin::scene();
+            &floor
+        }
+    };
+    host.each_shader(|said| {
+        on.push(said.file.clone());
+        found.drawn += 1;
+        if let Some(problem) = &said.problem {
+            found.mistakes.push(problem.clone());
+        } else if let Err(error) =
+            lore_render::check_game_shader(said.used_as.hook(), &said.file, &said.text)
+        {
+            found.mistakes.push(error);
+        }
+        if let ShaderUse::Surface { material } = &said.used_as
+            && !scene
+                .materials
+                .iter()
+                .any(|own| own.name.as_deref() == Some(material))
+        {
+            found.mistakes.push(missing_material(
+                &said.file,
+                material,
+                scene,
+                level.is_none(),
+            ));
+        }
+    });
+    for name in shader_files(folder) {
+        let file = format!("{SHADERS_FOLDER}/{name}");
+        if on.contains(&file) {
+            continue;
+        }
+        let text = match std::fs::read_to_string(folder.join(&file)) {
+            Ok(text) => text,
+            Err(error) => {
+                found.mistakes.push(shader_fault(
+                    &file,
+                    format!("The file could not be read: {error}."),
+                    "Save it as plain text (UTF-8), then run `lore check` again.",
+                ));
+                continue;
+            }
+        };
+        let code = without_comments(&text);
+        let hooks: Vec<_> = [lore_shader::Hook::Screen, lore_shader::Hook::Surface]
+            .into_iter()
+            .filter(|hook| holds_function(&code, hook.entry()))
+            .collect();
+        if hooks.is_empty() {
+            found.warnings.push(format!(
+                "{file} holds neither `fn screen(` nor `fn surface(`, and the script never \
+                 turns it on, so it does nothing. A game shader holds one of those two \
+                 functions: add one, or remove the file."
+            ));
+            continue;
+        }
+        found.from_folder.push(file.clone());
+        for hook in hooks {
+            if let Err(error) = lore_render::check_game_shader(hook, &file, &text) {
+                found.mistakes.push(error);
+            }
+        }
+    }
+    found
+}
+
+/// The folder a game's shaders are in.
+const SHADERS_FOLDER: &str = "shaders";
+
+/// The names of the `.wgsl` files in the game's `shaders` folder, in order.
+fn shader_files(folder: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder.join(SHADERS_FOLDER)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| !name.starts_with('.') && name.ends_with(".wgsl"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// A problem with a whole shader file, shaped as the engine shows one.
+fn shader_fault(file: &str, message: String, hint: &str) -> lore_shader::ShaderError {
+    lore_shader::ShaderError {
+        file: file.to_owned(),
+        line: None,
+        column: None,
+        message,
+        source_line: None,
+        hint: Some(hint.to_owned()),
+        note: None,
+        lore_fault: false,
+    }
+}
+
+/// What is said of a surface shader whose material the level does not have:
+/// the renderer's words, so `lore run` and `lore check` agree.
+fn missing_material(
+    file: &str,
+    material: &str,
+    scene: &lore_assets::Scene,
+    test_floor: bool,
+) -> lore_shader::ShaderError {
+    let mut names: Vec<&str> = Vec::new();
+    for name in scene.materials.iter().filter_map(|own| own.name.as_deref()) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    let whose = if test_floor { "test floor" } else { "level" };
+    // A check is read at leisure, so it gives both the likely name and the
+    // whole list, where the running game gives one or the other.
+    let list = if names.is_empty() {
+        format!("None of the {whose}'s materials has a name.")
+    } else {
+        let shown = names.len().min(MOST_MATERIAL_NAMES);
+        let mut text = format!("The {whose}'s materials are: {}", names[..shown].join(", "));
+        if names.len() > shown {
+            text.push_str(&format!(", and {} more", names.len() - shown));
+        }
+        text.push('.');
+        text
+    };
+    let hint = match lore_shader::closest(material, names.iter().copied()) {
+        Some(near) => format!("Did you mean `{near}`? {list}"),
+        None => list,
+    };
+    let message = if test_floor {
+        format!(
+            "The game has no level.glb, and the test floor it is played on has no material \
+             named `{material}`."
+        )
+    } else {
+        format!("The level has no material named `{material}`.")
+    };
+    let mut error = shader_fault(file, message, &hint);
+    error.note = Some("Nothing is changed until a level with that material is loaded.".to_owned());
+    error
+}
+
+/// `text` with its `//` and `/* */` comments turned into spaces.
+fn without_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut depth = 0_u32;
+    while let Some(c) = chars.next() {
+        match (c, chars.peek().copied()) {
+            ('/', Some('*')) => {
+                chars.next();
+                depth += 1;
+                out.push_str("  ");
+            }
+            ('*', Some('/')) if depth > 0 => {
+                chars.next();
+                depth -= 1;
+                out.push_str("  ");
+            }
+            ('/', Some('/')) if depth == 0 => {
+                while chars.next_if(|next| *next != '\n').is_some() {}
+                out.push(' ');
+            }
+            ('\n', _) => out.push('\n'),
+            _ if depth > 0 => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether `code` (with no comments) declares `fn <name>(`.
+fn holds_function(code: &str, name: &str) -> bool {
+    code.match_indices("fn").any(|(at, _)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + 2..].trim_start();
+        before.is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            && code[at + 2..].starts_with(char::is_whitespace)
+            && after
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.trim_start().starts_with('('))
+    })
+}
+
 /// What `lore check` says after trying a level out for walking: that the
 /// player can start at every spawn point, or what to change, a line each.
 #[must_use]
@@ -880,5 +1103,167 @@ mod tests {
     fn names_with_spaces_are_quoted() {
         assert_eq!(quoted("my-game"), "my-game");
         assert_eq!(quoted("Zombie Night"), "\"Zombie Night\"");
+    }
+
+    /// A game folder with `main.luau` and these `shaders` files.
+    fn shader_game(test: &str, script: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("lore-cli-{}-shaders-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("shaders")).unwrap();
+        std::fs::write(folder.join(ENTRY_SCRIPT), script).unwrap();
+        for (name, text) in files {
+            std::fs::write(folder.join("shaders").join(name), text).unwrap();
+        }
+        folder
+    }
+
+    /// What `check_shaders` says of a game with these files, in a level
+    /// with the materials `Lava` and `Stone` (or none, if `level` is false).
+    fn shaders_of(test: &str, script: &str, files: &[(&str, &str)], level: bool) -> ShadersChecked {
+        let folder = shader_game(test, script, files);
+        let game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
+        assert!(game.host().last_error().is_none());
+        let mut scene = lore_assets::Scene::default();
+        for name in ["Lava", "Stone"] {
+            scene.materials.push(lore_assets::Material {
+                name: Some(name.to_owned()),
+                ..lore_assets::Material::default()
+            });
+        }
+        let found = check_shaders(game.host(), &folder, level.then_some(&scene));
+        let _ = std::fs::remove_dir_all(&folder);
+        found
+    }
+
+    const SCREEN: &str = "fn screen(in: ScreenIn) -> vec3f {\n    return in.color;\n}\n";
+    const SURFACE: &str = "fn surface(in: SurfaceIn) -> Surface {\n    return in.surface;\n}\n";
+
+    #[test]
+    fn a_screen_effect_that_compiles_is_fine() {
+        let found = shaders_of(
+            "fine",
+            "game.shaders.screen(\"heat\")",
+            &[("heat.wgsl", SCREEN)],
+            true,
+        );
+        assert_eq!(found.mistakes, []);
+        assert_eq!((found.drawn, found.from_folder.len()), (1, 0));
+    }
+
+    #[test]
+    fn a_shader_that_does_not_compile_is_a_mistake_with_its_line() {
+        let bad = "fn screen(in: ScreenIn) -> vec3f {\n    return in.colour;\n}\n";
+        let found = shaders_of(
+            "broken",
+            "game.shaders.screen(\"heat\")",
+            &[("heat.wgsl", bad)],
+            true,
+        );
+        assert_eq!(found.mistakes.len(), 1);
+        assert_eq!(found.mistakes[0].file, "shaders/heat.wgsl");
+        assert_eq!(found.mistakes[0].line, Some(2));
+    }
+
+    #[test]
+    fn a_problem_the_script_found_in_the_file_is_a_mistake() {
+        let folder = shader_game(
+            "problem",
+            "game.shaders.screen(\"heat\")",
+            &[("heat.wgsl", SCREEN)],
+        );
+        let mut game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
+        std::fs::remove_file(folder.join("shaders/heat.wgsl")).unwrap();
+        // The host looks at the files a few times a second, and takes a
+        // missing file as gone only on the second look.
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            game.host_mut().poll_reload();
+        }
+        let found = check_shaders(game.host(), &folder, None);
+        let _ = std::fs::remove_dir_all(&folder);
+        assert!(!found.mistakes.is_empty());
+        assert!(found.mistakes.iter().all(|e| e.file == "shaders/heat.wgsl"));
+    }
+
+    #[test]
+    fn a_surface_shader_for_a_material_the_level_lacks_says_what_it_has() {
+        let found = shaders_of(
+            "lavva",
+            "game.shaders.surface(\"lava\", \"Lavva\")",
+            &[("lava.wgsl", SURFACE)],
+            true,
+        );
+        let [error] = &found.mistakes[..] else {
+            panic!("{:?}", found.mistakes)
+        };
+        assert_eq!(error.message, "The level has no material named `Lavva`.");
+        assert_eq!(
+            error.hint.as_deref(),
+            Some("Did you mean `Lava`? The level's materials are: Lava, Stone.")
+        );
+
+        let found = shaders_of(
+            "water",
+            "game.shaders.surface(\"lava\", \"Water\")",
+            &[("lava.wgsl", SURFACE)],
+            true,
+        );
+        assert_eq!(
+            found.mistakes[0].hint.as_deref(),
+            Some("The level's materials are: Lava, Stone.")
+        );
+    }
+
+    #[test]
+    fn with_no_level_the_materials_are_the_test_floors() {
+        let found = shaders_of(
+            "floor",
+            "game.shaders.surface(\"lava\", \"Lava\")",
+            &[("lava.wgsl", SURFACE)],
+            false,
+        );
+        let [error] = &found.mistakes[..] else {
+            panic!("{:?}", found.mistakes)
+        };
+        assert!(error.message.contains("no level.glb"), "{}", error.message);
+        assert!(error.message.contains("`Lava`"), "{}", error.message);
+        let hint = error.hint.as_deref().unwrap_or_default();
+        assert!(
+            hint.starts_with("The test floor's materials are: "),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn a_file_the_script_never_turns_on_is_compiled_by_its_function() {
+        let bad = "fn surface(in: SurfaceIn) -> Surface {\n    return nope;\n}\n";
+        let found = shaders_of(
+            "unused",
+            "print(\"hi\")",
+            &[("a.wgsl", SCREEN), ("c.wgsl", bad)],
+            true,
+        );
+        assert_eq!(found.drawn, 0);
+        assert_eq!(found.from_folder, ["shaders/a.wgsl", "shaders/c.wgsl"]);
+        assert_eq!(found.mistakes.len(), 1, "{:#?}", found.mistakes);
+        assert_eq!(found.mistakes[0].file, "shaders/c.wgsl");
+    }
+
+    #[test]
+    fn a_file_with_neither_function_is_a_warning_not_a_mistake() {
+        let found = shaders_of(
+            "neither",
+            "print(\"hi\")",
+            &[("x.wgsl", "// fn screen(\nfn other() {}\n")],
+            true,
+        );
+        assert_eq!(found.mistakes, []);
+        assert!(found.from_folder.is_empty());
+        let [warning] = &found.warnings[..] else {
+            panic!("{:?}", found.warnings)
+        };
+        assert!(warning.contains("shaders/x.wgsl"), "{warning}");
+        assert!(warning.contains("fn screen(") && warning.contains("fn surface("));
     }
 }
