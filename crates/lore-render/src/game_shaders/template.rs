@@ -61,7 +61,7 @@ fn included(name: &str) -> Result<String, String> {
 }
 
 /// A fault in LORE's own text, as a `ShaderError`.
-fn fault(file: &str, message: String) -> ShaderError {
+pub(super) fn fault(file: &str, message: String) -> ShaderError {
     ShaderError {
         file: file.to_owned(),
         line: None,

@@ -33,6 +33,8 @@ pub(crate) struct Live<T> {
     /// The block that carries its values.
     pub(crate) block: ParamBlock,
     /// The revision of the text it was made from.
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) revision: u64,
 }
 
@@ -59,16 +61,22 @@ pub(crate) struct Entry<T> {
 
 impl<T> Entry<T> {
     /// The game's name for it.
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// The level's material a surface shader is for.
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn material(&self) -> Option<&str> {
         self.material.as_deref()
     }
 
     /// The entry's id, which is never used for another.
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn id(&self) -> u64 {
         self.id
     }
@@ -287,6 +295,8 @@ impl<T> Book<T> {
     }
 
     /// The surface shaders that can be drawn, in the game's order.
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn surfaces(&self) -> impl Iterator<Item = &Entry<T>> {
         self.live_of(Hook::Surface)
     }
@@ -300,6 +310,8 @@ impl<T> Book<T> {
     /// Whether which entries are live, their order, or what they are built
     /// from changed since this was last asked. (An entry's material is part
     /// of which entry it is, so it cannot change alone.)
+    // Used by the surface shaders, which come after the screen effects.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn changed(&mut self) -> bool {
         mem::take(&mut self.changed)
     }
@@ -307,6 +319,14 @@ impl<T> Book<T> {
     /// Everything said since the last call.
     pub(crate) fn take_reports(&mut self) -> Vec<ShaderReport> {
         mem::take(&mut self.reports)
+    }
+
+    /// The file of the entry `id`, as errors show it.
+    pub(crate) fn file_of(&self, id: u64) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.file.as_str())
     }
 
     /// Whether the game wants nothing.

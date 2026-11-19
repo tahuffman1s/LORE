@@ -39,6 +39,7 @@ impl<T> Retiring<T> {
     }
 
     /// How many items are waiting.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn len(&self) -> usize {
         self.items.len()
     }

@@ -50,6 +50,17 @@ pub(crate) fn stores_srgb(format: vk::Format) -> bool {
     )
 }
 
+/// The bindings of the set the tone mapping reads the picture through: one
+/// sampled image. The game's screen effects make sets with the same
+/// bindings, so that the last of them can be read here instead.
+pub(crate) fn set_bindings() -> [vk::DescriptorSetLayoutBinding<'static>; 1] {
+    [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)]
+}
+
 /// Draws the scene, tone mapped, into images of one colour format.
 pub(crate) struct TonemapPipeline {
     gpu: Arc<Gpu>,
@@ -108,11 +119,7 @@ impl TonemapPipeline {
         };
         // Dropping `tonemap` cleans up whatever was created; destroying a null handle is allowed.
 
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        let bindings = set_bindings();
         let sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)];
@@ -273,6 +280,9 @@ impl TonemapPipeline {
     /// image must not be in use by other work on the graphics card. The scene
     /// given to [`read_from`](Self::read_from) must be alive, at least
     /// `extent` in size, and ready to be read by shaders when these commands run.
+    /// `read` is a set made with [`set_bindings`] whose image is ready to be
+    /// read by shaders when these commands run, or `None` for the scene
+    /// given to [`read_from`](Self::read_from). The picture of the other need not be ready.
     /// `over.ui` must have been made for this pipeline's format, and
     /// [`prepare`](UiPass::prepare)d with `commands` for this frame; the
     /// panels must have been prepared for this pipeline's format since they
@@ -283,6 +293,7 @@ impl TonemapPipeline {
         canvas: Canvas,
         exposure: f32,
         over: Over<'_>,
+        read: Option<vk::DescriptorSet>,
         then: Then,
     ) -> Result<(), RenderError> {
         let device = self.gpu.device();
@@ -372,7 +383,7 @@ impl TonemapPipeline {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.layout,
                 0,
-                &[self.set],
+                &[read.unwrap_or(self.set)],
                 &[],
             );
             device.cmd_push_constants(
