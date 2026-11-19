@@ -18,7 +18,7 @@ editor = ["lore-render/panels", "dep:egui", "dep:egui-winit"]
 # The `lore` command (`lore new`, `lore run`, `lore package`). Off when
 # the crate is used as a library, so a game written in Rust does not build a
 # command-line parser or an archive writer.
-cli = ["dep:clap", "dep:tar", "dep:flate2"]
+cli = ["dep:clap", "dep:tar", "dep:flate2", "dep:backhand", "dep:png"]
 
 [dependencies]
 lore-input = { path = "../lore-input" }
@@ -49,6 +49,13 @@ toml = { version = "1.2", default-features = false, features = ["parse", "std"] 
 # archive should say nothing about the computer that made it.
 tar = { version = "0.4", optional = true, default-features = false }
 flate2 = { version = "1", optional = true }
+# `lore package --appimage` writes the AppImage's squashfs itself, so no
+# `mksquashfs` or `appimagetool` is needed (#141). Zstandard only: the
+# AppImage runtime cannot open xz, and the others are not needed. MIT OR
+# Apache-2.0.
+backhand = { version = "0.25.5", optional = true, default-features = false, features = ["zstd"] }
+# The icon an AppImage of a game with no icon of its own is given.
+png = { version = "0.18", optional = true }
 winit = "0.30"
 gilrs = "0.11"
 clap = { version = "4.5", optional = true, default-features = false, features = [

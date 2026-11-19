@@ -128,12 +128,14 @@ enum Command {
         after_help = "Examples:\n  lore package                   Package the game in this folder \
                             for this kind of computer\n  \
                             lore package my-game           Package the game in the folder my-game\n  \
-                            lore package --target linux    Package it for Linux\n\n\
+                            lore package --target linux    Package it for Linux\n  \
+                            lore package --appimage        Also make one file to send: an AppImage\n\n\
                       The package is written to the folder dist inside the game's folder. \
                       For Linux it is a .tar.gz\nholding the game's program, its files in \
                       one game pack (.lpk), and its icon if the game's\nfolder has an \
-                      icon.png. Nothing is compiled. Packages for Windows and macOS are \
-                      not built yet."
+                      icon.png. With --appimage there is also <game>-x86_64.AppImage, one \
+                      file a player\ndownloads and runs. Nothing is compiled. Packages for \
+                      Windows and macOS are not built yet."
     )]
     Package {
         /// The game's folder. Leave it out to package the game in the folder you are in
@@ -145,6 +147,9 @@ enum Command {
         /// this one: lore-linux-x86_64 for Linux
         #[arg(long, value_name = "FOLDER")]
         runtime_dir: Option<PathBuf>,
+        /// For Linux, also make one file a player downloads and runs: <game>-x86_64.AppImage
+        #[arg(long)]
+        appimage: bool,
     },
     /// Show your controls and the file to change them in
     #[command(
@@ -328,10 +333,12 @@ fn command() -> Result<(), String> {
             folder,
             target,
             runtime_dir,
+            appimage,
         }) => package(
             folder.as_deref().unwrap_or(Path::new(".")),
             target.unwrap_or_else(Target::here),
             runtime_dir.as_deref(),
+            appimage,
         ),
         Some(Command::Controls { folder }) => controls(folder.as_deref()),
         Some(Command::Demo) => demo(),
@@ -761,7 +768,12 @@ fn play_pack(pack: &Path) -> Result<(), String> {
 }
 
 /// `lore package`: makes a download of the game in `folder` for `target`.
-fn package(folder: &Path, target: Target, runtime_dir: Option<&Path>) -> Result<(), String> {
+fn package(
+    folder: &Path,
+    target: Target,
+    runtime_dir: Option<&Path>,
+    appimage: bool,
+) -> Result<(), String> {
     /// What to do about a system that cannot be packaged for yet.
     const NOT_YET: &str = "This version of LORE packages for Linux only: \
                            `lore package --target linux`.";
@@ -801,7 +813,7 @@ fn package(folder: &Path, target: Target, runtime_dir: Option<&Path>) -> Result<
     })?;
 
     let packaged =
-        package::package_linux(folder, runtime_dir).map_err(|error| error.to_string())?;
+        package::package_linux(folder, runtime_dir, appimage).map_err(|error| error.to_string())?;
     print!("{}", cli::packaged(&packaged));
     if target == Target::All {
         println!(
