@@ -26,7 +26,10 @@ lore run
   side. The other is full to its brim, with a step beside it: climb in, and
   what you push aside runs out.
 - **The mixing vat.** Spray anything into it. The panel says what it holds
-  by share, and it looks, weighs and drags as its mix.
+  by share, and it looks, weighs and drags as its mix. Oil does not mix:
+  it lies on top, the vat looks like oil from above, and the panel says
+  so. Tar and mercury go to the bottom and the water over them is what
+  you see.
 - **The lock.** A shaft of water in the middle of the yard. E beside it
   empties it over eight seconds, and fills it again; get in first and you
   go down with it.

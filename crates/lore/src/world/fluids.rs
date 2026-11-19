@@ -152,6 +152,11 @@ fn mixed(shares: &[f32; MOST_KINDS], looks: &[FluidLook; MOST_KINDS]) -> FluidLo
     mix
 }
 
+/// A layer lying on a pool this thick hides what is under it, in metres:
+/// half a centimetre of oil is oil to look at. A thinner one shows some of
+/// both.
+const SLICK_HIDES: f32 = 0.005;
+
 /// The least harm a fluid does for it to be heard burning, and how many
 /// seconds apart its hisses come.
 const SIZZLES_FROM: f32 = 0.01;
@@ -358,6 +363,7 @@ impl WorldFluids {
             overflowing: pool.overflowing(),
             frozen: pool.frozen(),
             shares: pool.shares(),
+            top: pool.top().kind,
         }));
     }
 
@@ -447,8 +453,20 @@ impl WorldFluids {
             let shares = pool.shares();
             // All water, it is the level's own water (or whatever the
             // script has made of water); anything else is its mix.
+            // Layers: what is seen from above is what lies on top, as far
+            // as it is thick enough to hide what is under it.
+            let top = pool.top();
+            let layered = top.part < 1.0;
+            let cover = (top.thick / SLICK_HIDES).clamp(0.0, 1.0);
             let look = if shares[0] >= PURE {
                 *water_look
+            } else if layered {
+                let mut seen = shares;
+                for (seen, of_top) in seen.iter_mut().zip(&top.shares) {
+                    let under = ((*seen - of_top * top.part) / (1.0 - top.part)).max(0.0);
+                    *seen = of_top * cover + under * (1.0 - cover);
+                }
+                Some(mixed(&seen, looks))
             } else {
                 Some(mixed(&shares, looks))
             };
@@ -462,7 +480,13 @@ impl WorldFluids {
                 look,
                 freezes,
                 calm: (libm::log10f(thick) / 3.5).clamp(0.0, 1.0),
-                kind: pool.kind(),
+                // A game's shader for the kind on top draws it, once that
+                // hides more than it shows.
+                kind: if layered && cover >= 0.5 {
+                    top.kind
+                } else {
+                    pool.kind()
+                },
             }
         }));
         // The hollows found so far, when they have changed: before how the

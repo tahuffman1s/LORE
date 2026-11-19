@@ -69,6 +69,7 @@ fn tell(host: &mut ScriptHost) {
             overflowing: false,
             frozen: false,
             shares: pond,
+            top: 0,
         },
         PoolTold {
             kind: 0,
@@ -80,6 +81,7 @@ fn tell(host: &mut ScriptHost) {
             overflowing: true,
             frozen: true,
             shares: vat,
+            top: honey,
         },
         PoolTold {
             kind: honey,
@@ -91,6 +93,7 @@ fn tell(host: &mut ScriptHost) {
             overflowing: false,
             frozen: false,
             shares: pond,
+            top: honey,
         },
     ]);
 }
@@ -470,6 +473,7 @@ fn a_script_hears_once_when_a_pool_starts_and_stops_running_over_and_when_one_fo
             overflowing: false,
             frozen: false,
             shares: [0.0; MOST_KINDS],
+            top: 0,
         };
         host.set_pools((0..pools).map(|index| PoolTold {
             overflowing: index == 1 && vat_over,
@@ -512,4 +516,39 @@ fn a_script_hears_once_when_a_pool_starts_and_stops_running_over_and_when_one_fo
     }
     assert_eq!(printed(), [] as [&str; 0]);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn a_fluid_says_whether_it_mixes_and_a_pool_what_lies_on_top_of_it() {
+    // The ready-made kinds know: oil, tar and mercury keep to themselves.
+    let mut host = game(
+        r#"
+        local vat = game.fluids.pool("Mixing Vat")
+        local skim = game.fluid("skim", { from = "milk", mixes = false })
+        game.onStart(function()
+            local said = {}
+            for _, name in { "water", "honey", "milk", "lava", "oil", "tar", "mercury" } do
+                table.insert(said, tostring(game.fluid(name).mixes))
+            end
+            print(table.concat(said, " "))
+            print(skim.mixes, vat.fluid.name, vat.top.name, vat.top == game.fluid("honey"))
+            skim.mixes = true
+            print(skim.mixes)
+        end)
+        "#,
+    );
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        printed(),
+        [
+            "true true true true false false false",
+            "false water honey true",
+            "true"
+        ]
+    );
+    let message = mistake_of(r#"game.onTick(function() game.fluid("oil").mixes = 1 end)"#);
+    assert!(message.contains("needs true or false"), "{message}");
+    let message = mistake_of(r#"game.onTick(function() game.fluids.pool("Pond").top = "oil" end)"#);
+    assert!(message.contains("top"), "{message}");
 }

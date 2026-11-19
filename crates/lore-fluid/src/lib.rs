@@ -66,7 +66,7 @@ use math::{add, finite, frame, length, normalize, scale};
 use store::{Particle, ball_radius};
 
 pub use flow::Flow;
-pub use pools::{MOST_FOUND, MOST_POOL_HITS, Pool, PoolHit};
+pub use pools::{MOST_FOUND, MOST_POOL_HITS, Pool, PoolHit, Top};
 
 /// How many kinds of fluid there can be. Kinds are numbered from 0.
 pub const MOST_KINDS: usize = 32;

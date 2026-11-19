@@ -612,3 +612,43 @@ fn what_is_done_in_a_pool_sounds_as_thick_and_as_heavy_as_what_it_holds() {
     .unwrap();
     assert!(first <= splash + 3, "it hisses as they go in: {lava:?}");
 }
+
+#[test]
+fn oil_poured_on_a_tank_of_water_lies_on_top_and_is_what_is_seen() {
+    const OIL: &str = r#"{"water": true, "fluid": "oil"}"#;
+    // What a tank of nothing but oil is drawn as.
+    let mut oily = world("", OIL);
+    play(&mut oily, 2);
+    let oil = fluid_frame(&mut oily).pools[0]
+        .look
+        .expect("oil has a look");
+    // A tank of water with 400 litres of oil let onto it: a centimetre
+    // over its 36 square metres.
+    let mut world = world(
+        r#"
+        local tank = game.fluids.pool("Tank")
+        game.onStart(function()
+            game.player:teleport(vector.create(10, 0.1, 10))
+            tank:fill(400, "oil")
+        end)
+        game.onTick(function()
+            if game.time() > 0.49 and game.time() < 0.51 then
+                print(tank.fluid.name, tank.top.name, tank:share("oil") < 0.01, tank.top.mixes)
+            end
+        end)
+        "#,
+        WATER,
+    );
+    play(&mut world, 60);
+    assert_eq!(printed(), ["water oil true false"]);
+    let seen = fluid_frame(&mut world).pools[0];
+    let look = seen.look.expect("a look of its own");
+    for colour in 0..3 {
+        assert!(
+            (look.absorbs[colour] - oil.absorbs[colour]).abs()
+                < 1.0e-3 * oil.absorbs[colour].max(1.0)
+                && (look.scatters[colour] - oil.scatters[colour]).abs() < 1.0e-3,
+            "{look:?} is not {oil:?}"
+        );
+    }
+}
