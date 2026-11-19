@@ -1329,8 +1329,10 @@ declare game: {
     --- Every piece takes these options, all of which can be left out:
     ---   at: where on the screen it is pinned: "top left" (the default),
     ---     "top", "top right", "left", "center", "right", "bottom left",
-    ---     "bottom" or "bottom right". A piece pinned to "bottom right"
-    ---     stays in that corner on every screen.
+    ---     "bottom" or "bottom right". The piece's own matching point is
+    ---     pinned there: its bottom right corner to "bottom right", its
+    ---     middle to "center". A piece pinned to "bottom right" stays in
+    ---     that corner on every screen.
     ---   right, down: how far to move it from there, in pixels on a screen
     ---     1080 high (below 0 moves it left or up). On a bigger or smaller
     ---     screen everything is scaled to match. These two can be changed
