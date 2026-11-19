@@ -18,6 +18,10 @@ log = "0.4"
 lore-assets = { path = "../lore-assets" }
 # The list of boxes and text the HUD and menus ask for, and the trait text is measured through.
 lore-ui = { path = "../lore-ui" }
+# A game's own shaders: stitching them into the engine's templates, checking
+# their values and compiling them to SPIR-V while the game runs. (The build
+# script uses the same crate for the engine's own shaders.)
+lore-shader = { path = "../lore-shader" }
 # Turns the font's outlines into pixels for HUD and menu text. Pure Rust.
 fontdue = { version = "0.9", default-features = false, features = ["std"] }
 # FSR 3.1 upscaling, built from source.

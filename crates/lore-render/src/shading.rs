@@ -20,7 +20,7 @@ use crate::upscale::Upscaling;
 /// A matte white floor two metres across at height 0, facing up. Seen by
 /// [`above`], its texture lies the way it would in an image viewer: u runs
 /// to the right and v runs down. Its second UV map runs right to left.
-fn floor(material: Material) -> Scene {
+pub(crate) fn floor(material: Material) -> Scene {
     let corners = [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]];
     let uv = |[x, z]: [f32; 2]| [(x + 1.0) / 2.0, (z + 1.0) / 2.0];
     let mut scene = Scene::default();
@@ -49,7 +49,7 @@ fn floor(material: Material) -> Scene {
 
 /// A camera one metre over the middle of the [`floor`], looking straight
 /// down: the floor fills the picture, +X to the right and +Z down.
-fn above() -> Camera {
+pub(crate) fn above() -> Camera {
     Camera {
         position: [0.0, 1.0, 0.0],
         pitch: -FRAC_PI_2,

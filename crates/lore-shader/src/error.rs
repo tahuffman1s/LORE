@@ -504,13 +504,19 @@ fn declared_words(module: &str) -> Vec<String> {
     found
 }
 
-/// The candidate closest to `name`, if one is close enough to be a likely typo.
+/// The candidate closest to `name`, if one is close enough to be a likely typo:
+/// for a "Did you mean" hint. Case does not matter; a letter added, missed or
+/// wrong, or two swapped, count as one slip, and a name of `n` letters may be
+/// `n / 3` slips away (at least one).
 ///
 /// Copied from `lore-script`'s `error.rs` (`lore-shader` must not depend on it).
-pub(crate) fn closest<'a>(
-    name: &str,
-    candidates: impl IntoIterator<Item = &'a str>,
-) -> Option<&'a str> {
+///
+/// ```
+/// let names = ["Lava", "Stone"];
+/// assert_eq!(lore_shader::closest("lavva", names), Some("Lava"));
+/// assert_eq!(lore_shader::closest("water", names), None);
+/// ```
+pub fn closest<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let wanted = name.to_lowercase();
     let allowed = (wanted.chars().count() / 3).max(1);
     candidates

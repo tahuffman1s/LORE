@@ -16,6 +16,7 @@ use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
+use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
@@ -81,6 +82,8 @@ pub struct Headless {
     /// The editor's panels, drawn over those.
     #[cfg(feature = "panels")]
     panels: crate::panels::PanelHost,
+    /// The game's own shaders; before the tone mapping and the picture it reads.
+    shaders: GameShaders,
     tonemap: TonemapPipeline,
     mesh: MeshPipeline,
     meshes: Option<Meshes>,
@@ -195,6 +198,7 @@ impl Headless {
             overlay: Overlay::new(Font::bundled()),
             #[cfg(feature = "panels")]
             panels: crate::panels::PanelHost::default(),
+            shaders: GameShaders::new(&gpu, 1),
             tonemap,
             mesh,
             meshes: None,
@@ -242,6 +246,8 @@ impl Headless {
     /// failure.
     pub fn set_scene(&mut self, scene: &Scene) -> Result<(), RenderError> {
         // Every frame is waited for, so the old meshes are not in use.
+        self.shaders.idle();
+        self.shaders.scene_changed();
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
         self.lamps.clear();
@@ -252,6 +258,22 @@ impl Headless {
         // Nothing of the old level belongs in the new one's first frame.
         self.view.cut();
         Ok(())
+    }
+
+    /// Sets the game's own shaders, as
+    /// [`Renderer::set_game_shaders`](crate::Renderer::set_game_shaders)
+    /// does, but waits until every one has been compiled and built, so that
+    /// the next picture is the same every time.
+    pub fn set_game_shaders(&mut self, shaders: &[GameShader<'_>]) {
+        self.shaders.want(shaders);
+        self.shaders.settle(&self.mesh);
+    }
+
+    /// What became of the game's shaders since the last call, as
+    /// [`Renderer::take_shader_reports`](crate::Renderer::take_shader_reports)
+    /// gives it.
+    pub fn take_shader_reports(&mut self) -> Vec<ShaderReport> {
+        self.shaders.take_reports()
     }
 
     /// Draws these lamps from now on, in place of the level's own (which
@@ -559,6 +581,14 @@ impl Headless {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
+            let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
+            self.shaders.start_frame(
+                0,
+                passed,
+                self.view.output_size(),
+                &self.mesh,
+                self.meshes.as_ref(),
+            );
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
             self.view.lamp_shadows = self.lamp_shadows;
@@ -579,11 +609,15 @@ impl Headless {
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
+                    surfaces: self.shaders.surface_draws(),
                 },
                 camera,
                 FRAME_SECONDS,
             )?;
             if finished {
+                let read = self
+                    .shaders
+                    .record_screen(self.commands, 0, &self.view, camera);
                 self.ui.prepare(self.commands, 0, &mut self.overlay)?;
                 self.tonemap.record(
                     self.commands,
@@ -598,6 +632,7 @@ impl Headless {
                         #[cfg(feature = "panels")]
                         panels: Some(&mut self.panels),
                     },
+                    read,
                     Then::Copy,
                 )?;
             }
@@ -615,6 +650,7 @@ impl Headless {
                     self.finished,
                 )
                 .map_err(RenderError::driver("drawing a frame"))?;
+            self.shaders.submitted();
             let handed_over = Instant::now();
             device
                 .wait_for_fences(&[self.finished], true, u64::MAX)

@@ -33,7 +33,7 @@ mod scan;
 mod source;
 
 pub use compile::{Bounds, Compiled, compile};
-pub use error::ShaderError;
+pub use error::{ShaderError, closest};
 pub use hook::{Hook, hooked_module};
 pub use params::{Given, Param, ParamBlock, ParamKind, ParamValue, params_of};
 pub use scan::refuse_endless_loops;

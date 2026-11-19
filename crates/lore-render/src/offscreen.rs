@@ -246,6 +246,7 @@ pub(crate) fn frames(
                         tracks: [None; 2],
                         fluid: None,
                         lamps: &lamps,
+                        surfaces: None,
                     },
                     camera,
                     1.0 / 60.0,
@@ -261,6 +262,7 @@ pub(crate) fn frames(
                     },
                     exposure_scale(stops),
                     Over::default(),
+                    None,
                     Then::Copy,
                 )
                 .unwrap();
@@ -947,6 +949,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
                     },
                     1.0,
                     Over::ui(Some(&ui)),
+                    None,
                     Then::Copy,
                 )
                 .unwrap();

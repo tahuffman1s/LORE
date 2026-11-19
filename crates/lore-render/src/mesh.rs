@@ -19,6 +19,7 @@ use crate::error::RenderError;
 use crate::eye::EyePass;
 use crate::fluid::FluidScene;
 use crate::fluid_pass::FluidWorks;
+use crate::game_shaders::SurfaceDraws;
 use crate::gpu::Gpu;
 use crate::grid::{self, grid_bytes};
 use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
@@ -367,11 +368,14 @@ pub(crate) struct Contents<'a> {
     pub(crate) fluid: Option<&'a FluidScene>,
     /// The lamps lit this frame.
     pub(crate) lamps: &'a [Lamp],
+    /// What the game's surface shaders draw, and which materials they draw
+    /// them on: `None` when none is live, which draws exactly as before.
+    pub(crate) surfaces: Option<&'a SurfaceDraws>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Surface {
+pub(crate) enum Surface {
     /// All of it hides what is behind.
     Solid,
     /// Its alpha cuts holes in it.
@@ -449,6 +453,9 @@ pub(crate) struct Meshes {
     /// to ask where the surface is.
     waters: Vec<Water>,
     materials: Materials,
+    /// The name of each of the scene's materials, in the order of the scene's:
+    /// game shaders find the materials they change by it.
+    material_names: Vec<Option<String>>,
     lighting: Lighting,
     /// The sky under that light.
     sky: Sky,
@@ -601,6 +608,7 @@ impl Meshes {
             draws,
             see_through_from,
             materials: Materials::new(gpu, scene)?,
+            material_names: scene.materials.iter().map(|m| m.name.clone()).collect(),
             lighting: Lighting::of(scene),
             sky: Sky::of(&Lighting::of(scene)),
             id: NEXT_MESHES.fetch_add(1, Ordering::Relaxed),
@@ -610,6 +618,13 @@ impl Meshes {
 }
 
 impl Meshes {
+    /// The name of each of the scene's materials, in the scene's order. The
+    /// number [`Draw::material`] holds is an index into this, or one past it
+    /// for the matte white a part with no material is drawn in.
+    pub(crate) fn material_names(&self) -> &[Option<String>] {
+        &self.material_names
+    }
+
     /// The still water of the scene, each body in the shape it took.
     pub(crate) fn waters(&self) -> &[Water] {
         &self.waters
@@ -828,6 +843,18 @@ pub(crate) struct MeshPipeline {
 }
 
 impl MeshPipeline {
+    /// The three set layouts of the pipeline layout (the view, a material,
+    /// a body of water), which a game's surface shaders put their own set
+    /// after, and its push-constant range.
+    pub(crate) fn surface_base(&self) -> ([vk::DescriptorSetLayout; 3], vk::PushConstantRange) {
+        (
+            [self.set_layout, self.material_layout, self.body_layout],
+            vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+                .size(DRAW_BYTES as u32),
+        )
+    }
+
     /// Builds the pipeline, for up to `frames` frames in progress at once.
     pub(crate) fn new(gpu: &Arc<Gpu>, frames: usize) -> Result<Self, RenderError> {
         let doing = "preparing the shaders";
@@ -1203,24 +1230,7 @@ impl MeshPipeline {
         }
         .map_err(RenderError::driver(doing))?;
 
-        let bindings = [vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(VERTEX_BYTES as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)];
-        // Position, folded normal, tangent, colour and the two UV maps.
-        let formats = [
-            (vk::Format::R32G32B32_SFLOAT, 0),
-            (vk::Format::R16G16_SNORM, 12),
-            (vk::Format::R8G8B8A8_SNORM, 16),
-            (vk::Format::R8G8B8A8_UNORM, 20),
-            (vk::Format::R32G32_SFLOAT, 24),
-            (vk::Format::R32G32_SFLOAT, 32),
-        ];
-        let mut attributes = [vk::VertexInputAttributeDescription::default(); 6];
-        for ((location, attribute), (format, offset)) in (0_u32..).zip(&mut attributes).zip(formats)
-        {
-            *attribute = attribute.location(location).format(format).offset(offset);
-        }
+        let (bindings, attributes) = vertex_layout();
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&bindings)
             .vertex_attribute_descriptions(&attributes);
@@ -1244,83 +1254,33 @@ impl MeshPipeline {
             vk::DynamicState::FRONT_FACE,
         ];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let formats = [SceneTarget::FORMAT, SceneTarget::MOTION_FORMAT];
+        let formats = SCENE_FORMATS;
 
         let mut failed = None;
         for (surface, pipeline) in Surface::ALL.into_iter().zip(&mut mesh.pipelines) {
-            let see_through = surface >= Surface::SeeThrough;
-            let stages = [
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::VERTEX)
-                    .module(module)
-                    .name(c"vertex"),
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::FRAGMENT)
-                    .module(module)
-                    .name(match surface {
-                        Surface::Solid => c"fragment",
-                        Surface::CutOut => c"fragment_cutout",
-                        Surface::SeeThrough => c"fragment_blend",
-                        Surface::Water => c"fragment_water",
-                    }),
-            ];
-            // Depth is 1 at the camera and 0 far away, so the greater depth
-            // wins. A see-through surface is hidden by what is in front of
-            // it but hides nothing itself.
-            let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-                .depth_test_enable(true)
-                .depth_write_enable(!see_through)
-                .depth_compare_op(vk::CompareOp::GREATER);
-            // The colour, then how far the pixel moved. A see-through
-            // surface is mixed over the colour by its alpha. The movement
-            // image has to be mixed the same way, as only some graphics
-            // cards can treat the two differently, so the shader writes it
-            // with an alpha of nothing and what is behind is left alone.
-            let attachment = vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA);
-            let attachments = [if see_through {
-                attachment
-                    .blend_enable(true)
-                    .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                    .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                    .color_blend_op(vk::BlendOp::ADD)
-                    .src_alpha_blend_factor(vk::BlendFactor::ZERO)
-                    .dst_alpha_blend_factor(vk::BlendFactor::ONE)
-                    .alpha_blend_op(vk::BlendOp::ADD)
-            } else {
-                attachment
-            }; 2];
-            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
-            let mut rendering = vk::PipelineRenderingCreateInfo::default()
-                .color_attachment_formats(&formats)
-                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
-            let info = vk::GraphicsPipelineCreateInfo::default()
-                .stages(&stages)
-                .vertex_input_state(&vertex_input)
-                .input_assembly_state(&assembly)
-                .viewport_state(&viewport)
-                .rasterization_state(&raster)
-                .multisample_state(&multisample)
-                .depth_stencil_state(&depth)
-                .color_blend_state(&blend)
-                .dynamic_state(&dynamic)
-                .layout(layout)
-                .push_next(&mut rendering);
-            // SAFETY: `info` and everything it points to are alive for the
-            // call; the shader module holds both entry points named in
-            // `stages`.
+            let fragment = match surface {
+                Surface::Solid => c"fragment",
+                Surface::CutOut => c"fragment_cutout",
+                Surface::SeeThrough => c"fragment_blend",
+                Surface::Water => c"fragment_water",
+            };
+            // SAFETY: the shader module holds both entry points, and the
+            // layout is the one the module's bindings were written for.
             let created = unsafe {
-                device.create_graphics_pipelines(
+                make_surface_pipeline(
+                    device,
                     vk::PipelineCache::null(),
-                    std::slice::from_ref(&info),
-                    None,
+                    layout,
+                    module,
+                    c"vertex",
+                    fragment,
+                    surface,
                 )
             };
             match created {
-                Ok(pipelines) if !pipelines.is_empty() => *pipeline = pipelines[0],
-                other => {
-                    failed =
-                        Some(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN));
+                Ok(made) => *pipeline = made,
+                Err(code) => {
+                    failed = Some(code);
                     break;
                 }
             }
@@ -1742,6 +1702,7 @@ impl MeshPipeline {
             tracks,
             fluid,
             lamps,
+            surfaces,
         } = contents;
         // How wet rain has made the ground, or how full its puddles, from
         // 0 to 1.
@@ -2132,7 +2093,7 @@ impl MeshPipeline {
                 let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
                 let mut last = None;
                 for draw in solid {
-                    self.draw(commands, meshes, draw, last);
+                    self.draw(commands, meshes, draw, last, surfaces);
                     last = Some(draw);
                 }
             }
@@ -2234,7 +2195,7 @@ impl MeshPipeline {
                         .iter()
                         .filter_map(|(_, number)| see_through.get(*number))
                     {
-                        self.draw(commands, meshes, draw, last);
+                        self.draw(commands, meshes, draw, last, surfaces);
                         last = Some(draw);
                     }
                 }
@@ -2996,37 +2957,71 @@ impl MeshPipeline {
     }
 
     /// Records drawing one mesh part, changing only what differs from the
-    /// part drawn before it.
+    /// part drawn before it. A part whose material a game's surface shader
+    /// draws (never water) is drawn with that shader's pipeline for its kind
+    /// of surface, and that shader's own set after the material's.
     ///
     /// # Safety
     ///
     /// As for [`record`](Self::record), inside its render pass, with the
     /// buffers of `meshes` bound; `draw` and `last` must be parts of `meshes`.
+    /// `surfaces`, if given, must hold live pipelines and sets of this device
+    /// for the frame being recorded.
     unsafe fn draw(
         &self,
         commands: vk::CommandBuffer,
         meshes: &Meshes,
         draw: &Draw,
         last: Option<&Draw>,
+        surfaces: Option<&SurfaceDraws>,
     ) {
         let device = self.gpu.device();
         let changed =
             |differs: fn(&Draw, &Draw) -> bool| last.is_none_or(|last| differs(last, draw));
+        // Which surface shader draws a part, if any.
+        let variant_of = |draw: &Draw| {
+            surfaces
+                .filter(|_| draw.surface < Surface::Water)
+                .and_then(|surfaces| surfaces.of(draw.material))
+        };
+        let variant = variant_of(draw);
+        let new_pipeline = changed(|last, draw| last.surface != draw.surface)
+            || last.is_some_and(|last| {
+                variant_of(last).map(|(number, _)| number) != variant.map(|(number, _)| number)
+            });
         // SAFETY: the caller guarantees the command buffer is recording
         // inside the mesh pass and that `draw` names points, triangles and a
         // material that `meshes` holds on this device.
         unsafe {
-            if changed(|last, draw| last.surface != draw.surface) {
-                let pipeline = self.pipelines[draw.surface as usize];
+            if new_pipeline {
+                let pipeline = variant
+                    .map_or(self.pipelines[draw.surface as usize], |(_, variant)| {
+                        variant.pipelines[draw.surface as usize]
+                    });
                 device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
             }
-            if changed(|last, draw| last.material != draw.material) {
+            let new_material = changed(|last, draw| last.material != draw.material);
+            if new_material {
                 device.cmd_bind_descriptor_sets(
                     commands,
                     vk::PipelineBindPoint::GRAPHICS,
                     self.layout,
                     1,
                     &[meshes.materials.set(draw.material)],
+                    &[],
+                );
+            }
+            // The shader's own set comes after the material's; binding a
+            // pipeline of another layout may have let go of it.
+            if let (Some((_, variant)), Some(surfaces)) = (variant, surfaces)
+                && (new_material || new_pipeline)
+            {
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    surfaces.layout,
+                    3,
+                    &[variant.set],
                     &[],
                 );
             }
@@ -3203,6 +3198,143 @@ fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
         *slot = number.to_ne_bytes();
     }
     bytes
+}
+
+/// The colour images the mesh pass draws into: the picture, then how far
+/// each pixel moved.
+const SCENE_FORMATS: [vk::Format; 2] = [SceneTarget::FORMAT, SceneTarget::MOTION_FORMAT];
+
+/// How a mesh's points are laid out in the vertex buffer: one binding, and
+/// the position, folded normal, tangent, colour and the two UV maps.
+fn vertex_layout() -> (
+    [vk::VertexInputBindingDescription; 1],
+    [vk::VertexInputAttributeDescription; 6],
+) {
+    let bindings = [vk::VertexInputBindingDescription::default()
+        .binding(0)
+        .stride(VERTEX_BYTES as u32)
+        .input_rate(vk::VertexInputRate::VERTEX)];
+    let formats = [
+        (vk::Format::R32G32B32_SFLOAT, 0),
+        (vk::Format::R16G16_SNORM, 12),
+        (vk::Format::R8G8B8A8_SNORM, 16),
+        (vk::Format::R8G8B8A8_UNORM, 20),
+        (vk::Format::R32G32_SFLOAT, 24),
+        (vk::Format::R32G32_SFLOAT, 32),
+    ];
+    let mut attributes = [vk::VertexInputAttributeDescription::default(); 6];
+    for ((location, attribute), (format, offset)) in (0_u32..).zip(&mut attributes).zip(formats) {
+        *attribute = attribute.location(location).format(format).offset(offset);
+    }
+    (bindings, attributes)
+}
+
+/// Makes the pipeline that draws mesh parts of one kind of [`Surface`] with
+/// the vertex function `vertex` and the fragment function `fragment` of
+/// `module`: the states the built-in pipelines have, and the rendering
+/// formats of the mesh pass. A game's surface shader makes its own with this.
+///
+/// # Safety
+///
+/// `module` must hold both entry points, and its bindings must fit `layout`,
+/// which must be (or be compatible with) the mesh pipeline's layout in sets
+/// 0 to 2 and its push constants. `cache` is a pipeline cache of this device
+/// that no other thread is using, or null.
+pub(crate) unsafe fn make_surface_pipeline(
+    device: &ash::Device,
+    cache: vk::PipelineCache,
+    layout: vk::PipelineLayout,
+    module: vk::ShaderModule,
+    vertex: &std::ffi::CStr,
+    fragment: &std::ffi::CStr,
+    surface: Surface,
+) -> Result<vk::Pipeline, vk::Result> {
+    let (bindings, attributes) = vertex_layout();
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+    let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    // The viewport and scissor are set while drawing, so a resized window
+    // does not need a new pipeline. Which side of a triangle is its front
+    // and whether backs are skipped are set for each mesh.
+    let viewport = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let raster = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let dynamic_states = [
+        vk::DynamicState::VIEWPORT,
+        vk::DynamicState::SCISSOR,
+        vk::DynamicState::CULL_MODE,
+        vk::DynamicState::FRONT_FACE,
+    ];
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+    let formats = SCENE_FORMATS;
+    let see_through = surface >= Surface::SeeThrough;
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(module)
+            .name(vertex),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(module)
+            .name(fragment),
+    ];
+    // Depth is 1 at the camera and 0 far away, so the greater depth
+    // wins. A see-through surface is hidden by what is in front of
+    // it but hides nothing itself.
+    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(!see_through)
+        .depth_compare_op(vk::CompareOp::GREATER);
+    // The colour, then how far the pixel moved. A see-through
+    // surface is mixed over the colour by its alpha. The movement
+    // image has to be mixed the same way, as only some graphics
+    // cards can treat the two differently, so the shader writes it
+    // with an alpha of nothing and what is behind is left alone.
+    let attachment = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    let attachments = [if see_through {
+        attachment
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+            .alpha_blend_op(vk::BlendOp::ADD)
+    } else {
+        attachment
+    }; 2];
+    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+    let mut rendering = vk::PipelineRenderingCreateInfo::default()
+        .color_attachment_formats(&formats)
+        .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+    let info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&assembly)
+        .viewport_state(&viewport)
+        .rasterization_state(&raster)
+        .multisample_state(&multisample)
+        .depth_stencil_state(&depth)
+        .color_blend_state(&blend)
+        .dynamic_state(&dynamic)
+        .layout(layout)
+        .push_next(&mut rendering);
+    // SAFETY: `info` and everything it points to are alive for the call; the
+    // caller guarantees the module, the layout and the cache.
+    let created =
+        unsafe { device.create_graphics_pipelines(cache, std::slice::from_ref(&info), None) };
+    match created {
+        Ok(pipelines) if !pipelines.is_empty() => Ok(pipelines[0]),
+        other => Err(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN)),
+    }
 }
 
 impl Drop for MeshPipeline {

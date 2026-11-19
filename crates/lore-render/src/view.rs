@@ -39,6 +39,8 @@ pub(crate) struct SceneView {
     // The upscaler goes before the images it reads.
     upscale: Option<Upscale>,
     target: SceneTarget,
+    /// The size of the finished picture.
+    output: vk::Extent2D,
     /// Where each point in the world was drawn in the last frame; `None`
     /// before the first frame and after a cut.
     before: Option<Mat4>,
@@ -141,6 +143,7 @@ impl SceneView {
             },
             target: SceneTarget::new(gpu, render)?,
             upscale,
+            output,
             before: None,
             frame: 0,
             seconds: 0.0,
@@ -163,6 +166,24 @@ impl SceneView {
         self.upscale
             .as_ref()
             .map_or(self.target.colour.view, |upscale| upscale.picture.view)
+    }
+
+    /// Which images the finished picture and the depth are, never given to
+    /// another view's: a set that reads them is pointed again when this is
+    /// not the one it read.
+    pub(crate) fn pictures_id(&self) -> u64 {
+        self.target.id
+    }
+
+    /// A view of the scene's depth, which is ready to be read by shaders
+    /// once the scene is drawn.
+    pub(crate) fn depth_view(&self) -> vk::ImageView {
+        self.target.depth.view
+    }
+
+    /// The size of the finished picture.
+    pub(crate) fn output_size(&self) -> vk::Extent2D {
+        self.output
     }
 
     /// The size the scene is drawn at, which is smaller than the finished
