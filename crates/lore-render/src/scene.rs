@@ -191,6 +191,9 @@ pub(crate) struct SceneTarget {
     /// (`occlusion.rs`). Only filled in a frame that asks for shade.
     pub(crate) shade_found: Picture,
     pub(crate) shade: Picture,
+    /// Smaller copies of the depth, each half as wide and as high as the
+    /// one before, which the shade reads its far steps from.
+    pub(crate) depths: occlusion::SmallerDepths,
     /// Whether those copies were filled in the frame last drawn: in the
     /// next, smooth things may mirror what they hold.
     pub(crate) kept: Cell<bool>,
@@ -239,6 +242,7 @@ impl SceneTarget {
             behind_depth: Picture::null(),
             shade_found: Picture::null(),
             shade: Picture::null(),
+            depths: occlusion::SmallerDepths::null(),
             kept: Cell::new(false),
             fluid: OnceCell::new(),
             extent,
@@ -294,15 +298,18 @@ impl SceneTarget {
                 DOING,
             )?;
         }
+        target.depths.create(gpu, extent, DOING)?;
         // Every surface that could mirror the world is drawn with the
         // copies at hand, in frames before any has been filled too: they
         // are made ready to be read from the start, holding nothing yet.
-        // So is the shade, which every solid surface's shader names.
+        // So is the shade, which every solid surface's shader names, and
+        // what it is found from.
         let ready = [
             (target.behind.image, COLOUR),
             (target.behind_depth.image, DEPTH),
             (target.shade_found.image, COLOUR),
             (target.shade.image, COLOUR),
+            (target.depths.image, occlusion::SmallerDepths::whole()),
         ]
         .map(|(image, range)| {
             vk::ImageMemoryBarrier2::default()
@@ -352,6 +359,7 @@ impl Drop for SceneTarget {
             self.behind_depth.destroy(&self.gpu);
             self.shade_found.destroy(&self.gpu);
             self.shade.destroy(&self.gpu);
+            self.depths.destroy(&self.gpu);
         }
     }
 }

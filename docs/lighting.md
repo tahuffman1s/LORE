@@ -374,8 +374,23 @@ picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
   (#437): it is shaded, and shades what is near it, like any other.
 - `game.lighting.setAmbientOcclusion({ strength = 1, radius = 0.6 })`
   changes how dark it is drawn (0 for none, 1 for what really arrives) and
-  how far round a point is searched, in metres. Near the eye the search is
-  no wider than a fifth of the picture's height.
+  how far round a point is searched, in metres. What is found farther off
+  than that in the world is not counted: the search is a circle on the
+  picture, which along a floor running away from the eye reaches much
+  farther than across it.
+- **Far steps read smaller copies of the depth** (#438, XeGTAO's chain). A
+  step a hundred pixels from its pixel lands on memory far from the last
+  one. So after the depth pass four smaller copies are made, each half the
+  width and height of the one before, holding how far ahead things are.
+  A step under about 20 pixels out reads the depth itself, and each
+  doubling beyond reads the next copy. A copy's pixel is not the plain
+  average of the four it stands for: what is nearer than the farthest of
+  them by more than a good part of the search's reach is left out, so a
+  thin thing in front of a wall does not come to stand for the wall too.
+  The four are layers of one image, so whichever a step wants is one read:
+  as four images chosen between, the choosing cost 2 ms a frame on
+  lavapipe. With them the search is as wide as the game asks, where
+  before it was held to a fifth of the picture's height near the eye.
 - **Only what can be seen is drawn.** The picture and the depth pass skip
   every part whose bounds are wholly outside the view (the sun's and the
   lamps' shadows already did), with room for how far the hardest gust can
@@ -412,9 +427,20 @@ ms a frame on main at 1280×720; 11.4 ms with only what is in view drawn;
 At 2560×1440: 32.7 ms, 21.6 ms and 13.8 ms. The alley example, which has
 little overdraw, is 3.8 ms off and 3.9 ms on medium.
 
-Not done yet: depth read from smaller copies for far steps (XeGTAO's
-chain of five), without which a wide search reads memory far apart, bent
-normals, and the bitmask's one bounce of light (#438).
+The smaller copies, a close view (the eye 45 cm above the benchmark's
+floor), RX 7800 XT, whole frame, medium then high. Before them, with the
+search held to a fifth of the picture's height, at 2560×1440: 2.1 and 2.6
+ms with the usual reach, 2.2 and 2.7 ms with a reach of 2 m; at 3840×2160:
+4.7 and 5.9 ms, 4.8 and 6.6 ms. The search as wide as asked and no copies:
+2.3 and 3.0 ms, 2.6 and 3.7 ms; 5.1 and 6.8 ms, 5.7 and 7.7 ms. With the
+copies: 2.3 and 2.9 ms, 2.5 and 2.7 ms; 4.6 and 5.5 ms, 4.5 and 5.6 ms. So
+the full width costs 0.2 to 0.3 ms at 1440p with the usual reach, nothing
+with a long one, and less than the narrow search did at 4K. The benchmark
+is 1.56 ms on medium (1.55 before) and, on lavapipe, 58.3 ms against 57.5
+over four runs each, taken in turn.
+
+Not done yet: light taken from the open side (bent normals, #442), and
+the one bounce of light the hidden sectors could give (#443).
 
 ## What comes next (#401)
 

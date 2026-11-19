@@ -36,6 +36,20 @@
 @group(0) @binding(26) var occlusion_found: texture_2d<f32>;
 // The same smoothed, with the game's strength in it: what `lit` reads.
 @group(0) @binding(27) var occlusion_map: texture_2d<f32>;
+// Smaller copies of the depth, each half as wide and as high as the one
+// before (the first, half the picture's): how many metres ahead what is
+// drawn there is, or `SHADE_SKY` for nothing. A step far from its pixel is
+// read from one of these, so that steps far apart on the picture are near
+// each other in memory, and a wide search costs what a narrow one does
+// (XeGTAO's chain of depths). They are four layers of one picture, each in
+// the top left corner of its layer, so that whichever a step wants is one
+// read and no choosing between pictures.
+@group(0) @binding(28) var depths_smaller: texture_2d_array<f32>;
+// The first three of those layers by themselves: each is read while the
+// next is drawn.
+@group(0) @binding(29) var depth_half: texture_2d<f32>;
+@group(0) @binding(30) var depth_quarter: texture_2d<f32>;
+@group(0) @binding(31) var depth_eighth: texture_2d<f32>;
 
 // How many sectors a slice has: the bits of a u32.
 const SHADE_SECTORS: f32 = 32.0;
@@ -52,10 +66,16 @@ const SHADE_JOINED: f32 = 3.0;
 // The sine of how far above a pixel's own surface a thing must stand to be
 // looked at any further.
 const SHADE_LEVEL: f32 = 0.05;
-// The widest the search is on the picture, as a share of its height: what
-// is right in front of the eye would otherwise be searched across half of
-// the picture.
-const SHADE_WIDEST: f32 = 0.2;
+// The widest the search is on the picture, as a share of its height: for
+// what is right in front of the eye, as far as the picture is high, beyond
+// which most steps would land off it.
+const SHADE_WIDEST: f32 = 1.0;
+// How far ahead the sky is taken to be in the smaller copies of the depth.
+const SHADE_SKY: f32 = 1e30;
+// A step under twice this many pixels from its own pixel is read from the
+// depth itself; each doubling beyond that, from the next smaller copy
+// (XeGTAO's 2 to the power 3.3).
+const SHADE_FINEST: f32 = 9.85;
 // What is so far off that the search is narrower than this many pixels has
 // no shade found for it: it fades out before that.
 const SHADE_NARROWEST: f32 = 1.5;
@@ -81,6 +101,101 @@ fn shade_seen(at: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     return vec4<f32>(fluid_ray(at, size) * (view.lens.x / depth), depth);
+}
+
+// The line of sight through the point `point` of the picture, counted in
+// pixels from its top left corner, as `fluid_ray` gives it for a pixel's
+// middle.
+fn shade_ray(point: vec2<f32>, size: vec2<i32>) -> vec3<f32> {
+    let across = vec2<f32>(point.x / f32(size.x) * 2.0 - 1.0, 1.0 - point.y / f32(size.y) * 2.0);
+    let right = view.sky_rays[1];
+    let up = view.sky_rays[2];
+    return view.sky_rays[0].xyz + right.xyz * (across.x - right.w) + up.xyz * (across.y - up.w);
+}
+
+// How many pixels wide and high the copy of a picture of `size` is that is
+// `smaller` halvings of it: every pixel of the picture is in one of its.
+fn shade_halved(size: vec2<i32>, smaller: i32) -> vec2<i32> {
+    return (size + ((1 << u32(smaller)) - 1)) >> vec2<u32>(u32(smaller));
+}
+
+// The same as `shade_seen`, read from the smaller copy of the depth that is
+// `smaller` halvings of the picture (1 to 4): what is there is taken to be
+// at the middle of the square of pixels it stands for.
+fn shade_seen_far(at: vec2<i32>, size: vec2<i32>, smaller: i32) -> vec4<f32> {
+    let square = min(at >> vec2<u32>(u32(smaller)), shade_halved(size, smaller) - 1);
+    let ahead = textureLoad(depths_smaller, square, smaller - 1, 0).r;
+    if ahead >= 0.5 * SHADE_SKY {
+        return vec4<f32>(0.0);
+    }
+    let middle = (vec2<f32>(square) + 0.5) * f32(1 << u32(smaller));
+    return vec4<f32>(shade_ray(middle, size) * ahead, 1.0);
+}
+
+// One of a smaller copy's depths from the four it stands for. Not the plain
+// average: what is nearer than the farthest of the four by more than a
+// good part of the search's reach is left out, so a thin thing in front of
+// a wall does not come to stand for the wall as well, and shade it from
+// afar (XeGTAO's weights).
+fn shade_smaller(four: vec4<f32>) -> f32 {
+    let farthest = max(max(four.x, four.y), max(four.z, four.w));
+    let reach = view.lens.z;
+    let fades = 0.615 * reach;
+    let weights = clamp((reach - fades - (farthest - four)) / fades + 1.0, vec4<f32>(0.0), vec4<f32>(1.0));
+    return dot(weights, four) / dot(weights, vec4<f32>(1.0));
+}
+
+// How many metres ahead the solid thing drawn at the pixel `at` is, for the
+// smaller copies: `SHADE_SKY` for nothing.
+fn shade_ahead(at: vec2<i32>) -> f32 {
+    let depth = textureLoad(scene_depth, at, 0);
+    if depth <= 0.0 {
+        return SHADE_SKY;
+    }
+    return view.lens.x / depth;
+}
+
+// The first smaller copy, from the depth itself.
+@fragment
+fn fragment_depth_half(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let last = vec2<i32>(textureDimensions(scene_depth)) - 1;
+    let first = vec2<i32>(at.xy) * 2;
+    return vec4<f32>(shade_smaller(vec4<f32>(
+        shade_ahead(min(first, last)),
+        shade_ahead(min(first + vec2<i32>(1, 0), last)),
+        shade_ahead(min(first + vec2<i32>(0, 1), last)),
+        shade_ahead(min(first + vec2<i32>(1, 1), last)),
+    )));
+}
+
+// Each of the rest, from the one before it, which fills the top left
+// corner of its layer: `last` is its last pixel there.
+fn shade_halved_again(before: texture_2d<f32>, at: vec2<f32>, last: vec2<i32>) -> f32 {
+    let first = vec2<i32>(at) * 2;
+    return shade_smaller(vec4<f32>(
+        textureLoad(before, min(first, last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(1, 0), last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(0, 1), last), 0).r,
+        textureLoad(before, min(first + vec2<i32>(1, 1), last), 0).r,
+    ));
+}
+
+@fragment
+fn fragment_depth_quarter(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let half = vec2<i32>(textureDimensions(depth_half));
+    return vec4<f32>(shade_halved_again(depth_half, at.xy, half - 1));
+}
+
+@fragment
+fn fragment_depth_eighth(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let half = vec2<i32>(textureDimensions(depth_quarter));
+    return vec4<f32>(shade_halved_again(depth_quarter, at.xy, shade_halved(half, 1) - 1));
+}
+
+@fragment
+fn fragment_depth_sixteenth(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let half = vec2<i32>(textureDimensions(depth_eighth));
+    return vec4<f32>(shade_halved_again(depth_eighth, at.xy, shade_halved(half, 2) - 1));
 }
 
 // The step along a surface from one pixel to the next, from the pixel
@@ -263,7 +378,16 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> ShadeFound {
                 if any(there_at < vec2<i32>(0)) || any(there_at >= size) {
                     break;
                 }
-                let there = shade_seen(there_at, size);
+                // What is far from the pixel is read from a smaller copy of
+                // the depth.
+                let doublings = vec4<f32>(out_by) >= SHADE_FINEST * vec4<f32>(2.0, 4.0, 8.0, 16.0);
+                let smaller = dot(vec4<i32>(doublings), vec4<i32>(1));
+                var there = vec4<f32>(0.0);
+                if smaller == 0 {
+                    there = shade_seen(there_at, size);
+                } else {
+                    there = shade_seen_far(there_at, size, smaller);
+                }
                 if there.w <= 0.0 {
                     // The sky: nothing there, and nothing joined across it.
                     last_closer = -1e9;
@@ -275,6 +399,14 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> ShadeFound {
                 // itself. A point on the pixel's own flat surface is then
                 // exactly at the slice's end, and hides nothing.
                 let front = there.xyz - here.xyz;
+                // The search is a circle on the picture, which along a
+                // floor that runs away from the eye reaches much farther
+                // than across it: what is farther off than the search
+                // reaches, in the world, is not counted, nor joined to.
+                if dot(front, front) > reach * reach {
+                    last_closer = -1e9;
+                    continue;
+                }
                 // How much closer to the eye it is than the pixel, and how far
                 // across the line of sight from it.
                 let closer = dot(front, to_eye);

@@ -987,6 +987,13 @@ impl MeshPipeline {
         let track_view = tracks.view();
         mesh.tracks = Some(tracks);
         mesh.bounce = Some(BounceWorks::new(gpu, frames)?);
+        let smaller_depth = |binding: u32| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        };
         let both_stages = |binding: u32, kind: vk::DescriptorType| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(binding)
@@ -1120,6 +1127,12 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The smaller copies of the depth that the shade is found from:
+            // all of them, then the first three each by itself.
+            smaller_depth(28),
+            smaller_depth(29),
+            smaller_depth(30),
+            smaller_depth(31),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1130,12 +1143,12 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid and
-            // bounce light's list, eighteen pictures, two written, and four
-            // readers.
+            // bounce light's list, twenty-two pictures, two written, and
+            // four readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 3,
-                vk::DescriptorType::SAMPLED_IMAGE => 18,
+                vk::DescriptorType::SAMPLED_IMAGE => 22,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 4,
             };
@@ -1842,6 +1855,10 @@ impl MeshPipeline {
                 target.depth.view,
                 target.shade_found.view,
                 target.shade.view,
+                target.depths.view,
+                target.depths.layers[0],
+                target.depths.layers[1],
+                target.depths.layers[2],
             ]
             .map(|view| {
                 [vk::DescriptorImageInfo::default()
@@ -1850,15 +1867,15 @@ impl MeshPipeline {
             });
             // The copies water looks through, the depth itself, which the
             // light in the air reads once the picture is drawn, and the
-            // shade in corners.
-            let writes =
-                [(5, 0_usize), (6, 1), (16, 2), (26, 3), (27, 4)].map(|(binding, picture)| {
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(*view_set)
-                        .dst_binding(binding)
-                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                        .image_info(&pictures[picture])
-                });
+            // shade in corners with the smaller depths it is found from.
+            const BINDINGS: [u32; 9] = [5, 6, 16, 26, 27, 28, 29, 30, 31];
+            let writes: [_; BINDINGS.len()] = std::array::from_fn(|at| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*view_set)
+                    .dst_binding(BINDINGS[at])
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&pictures[at])
+            });
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };

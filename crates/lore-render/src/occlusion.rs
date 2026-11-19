@@ -15,6 +15,8 @@
 use ash::vk;
 
 use crate::bounce::Shared;
+use crate::error::RenderError;
+use crate::gpu::Gpu;
 use crate::mesh::vertex_layout;
 use crate::scene::{DEPTH, SceneTarget};
 use crate::swapchain::COLOUR;
@@ -226,10 +228,174 @@ pub(crate) unsafe fn depth_pipeline(
     }
 }
 
-/// The pipelines that draw depth alone (solid, then cut-out), then the two
+/// How many smaller copies of the depth there are, each half as wide and
+/// as high as the one before: a step of the search far from its pixel is
+/// read from one of them (XeGTAO's chain, less the depth itself).
+pub(crate) const SMALLER: usize = 4;
+/// How far ahead what is drawn is, in metres, as a smaller copy keeps it.
+pub(crate) const SMALLER_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
+
+/// The size of the copy that is `halvings` halvings of a picture of
+/// `extent`: every pixel of the larger is in some pixel of the smaller.
+pub(crate) fn smaller(extent: vk::Extent2D, halvings: u32) -> vk::Extent2D {
+    let halved = |pixels: u32| {
+        (0..halvings)
+            .fold(pixels, |pixels, _| pixels.div_ceil(2))
+            .max(1)
+    };
+    vk::Extent2D {
+        width: halved(extent.width),
+        height: halved(extent.height),
+    }
+}
+
+/// The smaller copies of the depth: the layers of one image, each copy in
+/// the top left corner of its layer, so that the shader reads whichever it
+/// wants with one read. Every layer is as large as the first copy, half
+/// the picture's width and height.
+pub(crate) struct SmallerDepths {
+    pub(crate) image: vk::Image,
+    memory: vk::DeviceMemory,
+    /// All of them, for the search to read.
+    pub(crate) view: vk::ImageView,
+    /// Each one by itself: drawn into, and read while the next is drawn.
+    pub(crate) layers: [vk::ImageView; SMALLER],
+}
+
+impl SmallerDepths {
+    /// Copies that hold nothing; destroying them does nothing.
+    pub(crate) const fn null() -> Self {
+        Self {
+            image: vk::Image::null(),
+            memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
+            layers: [vk::ImageView::null(); SMALLER],
+        }
+    }
+
+    /// The part of the image that is the copy `layer` (0 for the first).
+    pub(crate) fn range(layer: u32) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            base_array_layer: layer,
+            layer_count: 1,
+            ..COLOUR
+        }
+    }
+
+    /// All of the image.
+    pub(crate) fn whole() -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            layer_count: SMALLER as u32,
+            ..COLOUR
+        }
+    }
+
+    /// Fills in `self` with the copies for a picture of `extent`. On
+    /// failure, what was made so far is left in `self` for
+    /// [`destroy`](Self::destroy) to clean up.
+    pub(crate) fn create(
+        &mut self,
+        gpu: &Gpu,
+        extent: vk::Extent2D,
+        doing: &'static str,
+    ) -> Result<(), RenderError> {
+        let device = gpu.device();
+        // SAFETY: the device is alive, and each object is created from valid
+        // settings and stored in `self` straight away. The memory is as
+        // large as the image asks for and of a kind it allows.
+        unsafe {
+            self.image = device
+                .create_image(
+                    &vk::ImageCreateInfo::default()
+                        .image_type(vk::ImageType::TYPE_2D)
+                        .format(SMALLER_FORMAT)
+                        .extent(smaller(extent, 1).into())
+                        .mip_levels(1)
+                        .array_layers(SMALLER as u32)
+                        .samples(vk::SampleCountFlags::TYPE_1)
+                        .usage(
+                            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                        ),
+                    None,
+                )
+                .map_err(RenderError::driver(doing))?;
+            let needs = device.get_image_memory_requirements(self.image);
+            let kind = gpu
+                .memory_type(
+                    needs.memory_type_bits,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )
+                .or_else(|| {
+                    gpu.memory_type(needs.memory_type_bits, vk::MemoryPropertyFlags::empty())
+                })
+                .ok_or(RenderError::Driver {
+                    doing,
+                    code: vk::Result::ERROR_FEATURE_NOT_PRESENT,
+                })?;
+            self.memory = device
+                .allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(needs.size)
+                        .memory_type_index(kind),
+                    None,
+                )
+                .map_err(RenderError::driver(doing))?;
+            device
+                .bind_image_memory(self.image, self.memory, 0)
+                .map_err(RenderError::driver(doing))?;
+            self.view = device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(self.image)
+                        .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
+                        .format(SMALLER_FORMAT)
+                        .subresource_range(Self::whole()),
+                    None,
+                )
+                .map_err(RenderError::driver(doing))?;
+            for (layer, view) in (0..).zip(&mut self.layers) {
+                *view = device
+                    .create_image_view(
+                        &vk::ImageViewCreateInfo::default()
+                            .image(self.image)
+                            .view_type(vk::ImageViewType::TYPE_2D)
+                            .format(SMALLER_FORMAT)
+                            .subresource_range(Self::range(layer)),
+                        None,
+                    )
+                    .map_err(RenderError::driver(doing))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Frees the copies.
+    ///
+    /// # Safety
+    ///
+    /// They must have been made on `gpu` (or be null), and the graphics
+    /// card must have finished using them.
+    pub(crate) unsafe fn destroy(&self, gpu: &Gpu) {
+        let device = gpu.device();
+        // SAFETY: the caller guarantees the handles are this device's and
+        // idle; destroying a null handle is allowed.
+        unsafe {
+            device.destroy_image_view(self.view, None);
+            for view in self.layers {
+                device.destroy_image_view(view, None);
+            }
+            device.destroy_image(self.image, None);
+            device.free_memory(self.memory, None);
+        }
+    }
+}
+
+/// The pipelines that draw depth alone (solid, then cut-out), those that
+/// make each smaller copy of the depth from the one before, then the two
 /// that find the shade and smooth it.
 pub(crate) struct Pipelines {
     pub(crate) depth: [vk::Pipeline; 2],
+    smaller: [vk::Pipeline; SMALLER],
     pub(crate) find: vk::Pipeline,
     pub(crate) smooth: vk::Pipeline,
 }
@@ -238,6 +404,7 @@ impl Pipelines {
     pub(crate) const fn null() -> Self {
         Self {
             depth: [vk::Pipeline::null(); 2],
+            smaller: [vk::Pipeline::null(); SMALLER],
             find: vk::Pipeline::null(),
             smooth: vk::Pipeline::null(),
         }
@@ -291,12 +458,18 @@ impl Pipelines {
                 )
             }?;
         }
-        // Finding and smoothing: one triangle over the whole picture each.
+        // The smaller depths, finding and smoothing: one triangle over the
+        // whole of what each draws into.
         let no_points = vk::PipelineVertexInputStateCreateInfo::default();
         let attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+        let [half, quarter, eighth, sixteenth] = &mut self.smaller;
         for (fragment, format, pipeline) in [
+            (c"fragment_depth_half", SMALLER_FORMAT, half),
+            (c"fragment_depth_quarter", SMALLER_FORMAT, quarter),
+            (c"fragment_depth_eighth", SMALLER_FORMAT, eighth),
+            (c"fragment_depth_sixteenth", SMALLER_FORMAT, sixteenth),
             (c"fragment_occlusion", FOUND_FORMAT, &mut self.find),
             (c"fragment_occlusion_smooth", FORMAT, &mut self.smooth),
         ] {
@@ -338,7 +511,7 @@ impl Pipelines {
     pub(crate) unsafe fn destroy(&self, device: &ash::Device) {
         // SAFETY: the caller's guarantee; destroying a null handle is allowed.
         unsafe {
-            for pipeline in self.depth {
+            for pipeline in self.depth.into_iter().chain(self.smaller) {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.find, None);
@@ -395,7 +568,7 @@ impl Pipelines {
             .subresource_range(DEPTH);
         // Each is written whole, so what it held is not kept; the frame
         // before may still be reading it.
-        let to_write = |image: vk::Image| {
+        let to_write_part = |image: vk::Image, range: vk::ImageSubresourceRange| {
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(reading)
                 .src_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
@@ -406,9 +579,9 @@ impl Pipelines {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(image)
-                .subresource_range(COLOUR)
+                .subresource_range(range)
         };
-        let to_read = |image: vk::Image| {
+        let to_read_part = |image: vk::Image, range: vk::ImageSubresourceRange| {
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
@@ -419,23 +592,25 @@ impl Pipelines {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(image)
-                .subresource_range(COLOUR)
+                .subresource_range(range)
         };
-        let area = vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent: target.extent,
-        };
-        // Sizes are far below the point where f32 stops being exact.
-        #[allow(clippy::cast_precision_loss)]
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: target.extent.width as f32,
-            height: target.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let pass = |pipeline: vk::Pipeline, into: vk::ImageView| {
+        let to_write = |image: vk::Image| to_write_part(image, COLOUR);
+        let to_read = |image: vk::Image| to_read_part(image, COLOUR);
+        let pass = |pipeline: vk::Pipeline, into: vk::ImageView, extent: vk::Extent2D| {
+            let area = vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent,
+            };
+            // Sizes are far below the point where f32 stops being exact.
+            #[allow(clippy::cast_precision_loss)]
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
             let attachments = [vk::RenderingAttachmentInfo::default()
                 .image_view(into)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -471,12 +646,28 @@ impl Pipelines {
         // SAFETY: the caller guarantees the command buffer, the target and
         // the states its pictures are in.
         unsafe {
+            // Each smaller depth is made from the one before, which is
+            // ready to be read by then; while one is drawn into, the
+            // function that draws it names only the one it reads, by a
+            // view of that layer alone.
+            let depths = &target.depths;
+            let mut before = depth_to_read;
+            for ((layer, view), pipeline) in (0..).zip(depths.layers).zip(self.smaller) {
+                let range = SmallerDepths::range(layer);
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&[before, to_write_part(depths.image, range)]),
+                );
+                pass(pipeline, view, smaller(target.extent, layer + 1));
+                before = to_read_part(depths.image, range);
+            }
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[depth_to_read, to_write(target.shade_found.image)]),
+                    .image_memory_barriers(&[before, to_write(target.shade_found.image)]),
             );
-            pass(self.find, target.shade_found.view);
+            pass(self.find, target.shade_found.view, target.extent);
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default().image_memory_barriers(&[
@@ -484,7 +675,7 @@ impl Pipelines {
                     to_write(target.shade.image),
                 ]),
             );
-            pass(self.smooth, target.shade.view);
+            pass(self.smooth, target.shade.view, target.extent);
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default()
@@ -525,6 +716,26 @@ mod tests {
             reach: 1000.0,
         };
         assert_eq!(wild.numbers(), [STRONGEST, REACHES.1, 34.0]);
+    }
+
+    #[test]
+    fn each_smaller_copy_holds_every_pixel_of_the_one_before() {
+        let picture = vk::Extent2D {
+            width: 1281,
+            height: 720,
+        };
+        let sizes = [1, 2, 3, 4].map(|halvings| {
+            let size = smaller(picture, halvings);
+            (size.width, size.height)
+        });
+        assert_eq!(sizes, [(641, 360), (321, 180), (161, 90), (81, 45)]);
+        // A picture a pixel wide still has copies to read.
+        let sliver = vk::Extent2D {
+            width: 1,
+            height: 5,
+        };
+        assert_eq!(smaller(sliver, 4).width, 1);
+        assert_eq!(smaller(sliver, 4).height, 1);
     }
 
     #[test]
