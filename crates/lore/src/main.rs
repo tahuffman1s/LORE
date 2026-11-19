@@ -551,6 +551,10 @@ fn check(folder: &Path) -> Result<(), String> {
         || {
             let mut game = cli::open_game(folder, &config.actions, "lore check").ok()?;
             game.load_sounds();
+            // Each of them is told the level's pools, as the first was.
+            if let Ok(Some(level)) = &level {
+                cli::tell_pools(level, game.host_mut());
+            }
             Some(game)
         },
         &config.actions,

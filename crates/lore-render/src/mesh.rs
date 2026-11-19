@@ -3608,7 +3608,9 @@ fn body_bytes(
         ),
     };
     let numbers = [
-        [apart, finest, squares, glows[0]],
+        // How still it lies rides beside the squares, which are a whole
+        // number: the shader takes the two apart again.
+        [apart, finest, squares + body.calm(), glows[0]],
         [finer[0], finer[1], rise, glows[1]],
         takes,
         [middle[0], body.level + rise, middle[1], glows[2]],

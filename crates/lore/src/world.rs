@@ -1038,6 +1038,11 @@ impl Playing {
     fn show_water(&mut self, frame: &mut Frame, eye: [f32; 3]) {
         for mark in self.marks.drain(..) {
             match mark {
+                // The white spray of a splash is water's. What is thrown
+                // out of honey or lava is drops of that, which the world's
+                // fluids have already thrown.
+                WaterMark::Splash { place, .. }
+                    if !(self.world.fluids).mostly_water(&self.world.ground.level, place) => {}
                 WaterMark::Splash {
                     place,
                     moving,

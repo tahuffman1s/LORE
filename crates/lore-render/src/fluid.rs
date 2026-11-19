@@ -121,6 +121,10 @@ pub struct PoolDrawn {
     pub look: Option<FluidLook>,
     /// Whether the weather's ice shows on it: lava does not freeze.
     pub freezes: bool,
+    /// How still its surface lies, from 0 (as water: the wind raises
+    /// waves on it and whoever wades leaves rings) to 1 (tar: nothing
+    /// does). Thick liquids lie still.
+    pub calm: f32,
 }
 
 impl Default for PoolDrawn {
@@ -130,6 +134,7 @@ impl Default for PoolDrawn {
             shift: 0.0,
             look: None,
             freezes: true,
+            calm: 0.0,
         }
     }
 }

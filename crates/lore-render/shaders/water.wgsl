@@ -19,6 +19,9 @@ var<private> own_look: array<vec4<f32>, 3>;
 var<private> own_look_said: bool = false;
 // Whether that body never freezes over, as lava does not.
 var<private> never_frozen: bool = false;
+// How still that body lies, from 0 (as water does) to 1 (tar): wind and
+// whoever is in it raise next to nothing on a thick liquid.
+var<private> lies_still: f32 = 0.0;
 
 // One row of the look of the water being shaded: what it takes of red,
 // green and blue light in a metre and whether it has a look at all; what
@@ -173,8 +176,11 @@ fn wave_strength(place: vec2<f32>, deep: f32) -> vec4<f32> {
     // them lie.
     let blowing = gust(place, 0.0) / 0.8 * (1.0 + 1.5 * view.weather[0].w);
     // Ice holds it still.
+    // And a thick liquid's own thickness: the short waves go first, the
+    // long swell last.
+    let thin = vec4<f32>(1.0) - lies_still * vec4<f32>(0.85, 1.0, 1.0, 1.0);
     var strength = mix(vec4<f32>(1.0), vec4<f32>(blowing), vec4<f32>(0.35, 0.7, 1.0, 1.0))
-        * (1.0 - water_ice());
+        * (1.0 - water_ice()) * max(thin, vec4<f32>(0.0));
     if deep >= 0.0 {
         strength *= vec4<f32>(
             smoothstep(0.0, view.waves[0].w * 0.5, deep),
@@ -748,7 +754,7 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     // Still water freezes over when the cold has made ice of it; water
     // that runs stays open.
     let frozen = water_ice() * (1.0 - smoothstep(0.05, 0.5, fast));
-    var ring = rings(wet.rest) * (1.0 - frozen);
+    var ring = rings(wet.rest) * (1.0 - frozen) * (1.0 - 0.9 * lies_still);
     // No ring is steeper than water stands before it breaks.
     let steep = length(ring.yz);
     ring = vec4<f32>(ring.x, ring.yz * min(1.0, 0.7 / max(steep, 0.001)), ring.w);
@@ -1127,6 +1133,7 @@ fn body_look() {
     let bends = draw.sway;
     own_look_said = true;
     never_frozen = bends < 0.0;
+    lies_still = fract(draw.world_from_local[0].z);
     if bends == 0.0 {
         own_look[0] = vec4<f32>(0.0);
         own_look[1] = vec4<f32>(0.0);
@@ -1147,12 +1154,16 @@ fn body_look() {
 @vertex
 fn vertex_body(@location(0) square: vec2<f32>) -> Corner {
     let apart = draw.world_from_local[0].x;
-    let squares = draw.world_from_local[0].z;
+    // The whole part is how many squares the grid has a side; the rest is
+    // how still the liquid lies.
+    let squares = floor(draw.world_from_local[0].z);
     let middle = draw.world_from_local[3].xz;
     let level = draw.normal_from_local[1].z;
     let rest = middle + square * apart;
-    // Ice holds the waves of what freezes, and only of that.
+    // Ice holds the waves of what freezes, and only of that; thickness
+    // holds a thick liquid's.
     never_frozen = draw.sway < 0.0;
+    lies_still = fract(draw.world_from_local[0].z);
     let deep = body_depth(rest);
     // Points are closer together the nearer the eye; waves too short for
     // the points here to follow are left to the shading. Worked out from
@@ -1163,7 +1174,7 @@ fn vertex_body(@location(0) square: vec2<f32>) -> Corner {
     var world = vec3<f32>(rest.x, level, rest.y);
     if deep > 0.0 {
         let waves = swell(rest, grain, wave_strength(rest, deep));
-        let ring = rings(rest);
+        let ring = rings(rest) * (1.0 - 0.9 * lies_still);
         world += waves.shift;
         world.y += ring.x;
         // Never under its own bottom.
@@ -1187,7 +1198,7 @@ fn fragment_body(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     let rest = corner.uv.zw;
     let apart = draw.world_from_local[0].x;
     let finest = draw.world_from_local[0].y;
-    let squares = draw.world_from_local[0].z;
+    let squares = floor(draw.world_from_local[0].z);
     // Each grid but the finest has the next finer one lying over its
     // middle: there this one is not drawn. The finer grid's middle is the
     // eye, to the nearest point of this one, as the engine worked it out

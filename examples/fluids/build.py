@@ -210,6 +210,14 @@ DUNKS = [
 DUNK_X = [-11.0, -5.5, 0.0, 5.5, 11.0]
 DUNK_Z = [-9.0, -14.0]
 PIT = 1.5  # half the width of a pit
+# How far apart the cascade's basins are: each shares a wall with the next,
+# so what runs over one's lip falls into the hollow below.
+CASCADE_STEP = 2.2
+# Where things are that the script uses: the player's start, the nozzle of
+# the tap over the cascade and of the one over the empty tub.
+SPAWN = (0.0, 0.1, 16.0)
+CASCADE_TAP = (15.0, 4.15, 1.1)
+TUB_TAP = (-17.0, 2.35, 3.0)
 
 
 def layout():
@@ -233,7 +241,7 @@ def layout():
         pools.append(
             {
                 "name": f"Cascade {step + 1}",
-                "at": (15.0, floor + 0.36, 1.2 + 2.4 * step),
+                "at": (15.0, floor + 0.36, 1.2 + CASCADE_STEP * step),
                 "fluid": "water",
                 "amount": 1.0 if step == 0 else 0.6,
                 "group": "cascade",
@@ -284,7 +292,7 @@ def build():
     # with a low lip over the next. The lowest runs out onto the yard.
     for step in range(4):
         floor = 2.4 - 0.7 * step
-        z0 = 0.2 + 2.4 * step
+        z0 = 0.2 + CASCADE_STEP * step
         basin(
             steel,
             13.6,
@@ -305,6 +313,9 @@ def build():
     basin(steel, -18.0, -16.0, 2.0, 4.0, 0.1, 1.0, lip=("+x", 0.85), base=0.0)
     basin(steel, -18.0, -16.0, 8.0, 10.0, 0.1, 1.1, lip=("+x", 1.0), base=0.0)
     dark.box((-19.4, 0.0, 8.4), (-18.4, 0.55, 9.6))
+    # The tap over the empty one.
+    dark.box((-18.5, 0.0, 2.9), (-18.3, 2.6, 3.1))
+    dark.box((-18.5, 2.4, 2.9), (-16.9, 2.6, 3.1))
 
     # The mixing vat: wide and waist-deep.
     basin(steel, -9.5, -6.5, 3.5, 6.5, 0.1, 1.0, lip=("+z", 0.9), base=0.0)
@@ -335,22 +346,33 @@ def build():
         os.path.join(HERE, "level.glb"),
         sun_towards=(-0.45, 0.72, 0.52),
         sun_light=(1.0, 0.96, 0.9, 100_000.0),
-        start=(0.0, 0.1, 16.0),
+        start=SPAWN,
     )
 
-    # What the script needs to know of the level: where each pool is.
+    # What the script needs to know of the level: where things are.
+    def vector(at):
+        return "vector.create({:g}, {:g}, {:g})".format(*at)
+
     lines = [
-        "-- Where the level's pools are. Written by build.py: change the layout",
+        "-- Where things are in the level. Written by build.py: change the layout",
         "-- there and run it again, not here.",
         "return {",
+        "    -- Where the player starts, at the south end of the yard.",
+        f"    spawn = {vector(SPAWN)},",
+        "    -- The nozzle of the tap over the cascade's top basin.",
+        f"    cascadeTap = {vector(CASCADE_TAP)},",
+        "    -- The nozzle of the tap over the empty tub.",
+        f"    tubTap = {vector(TUB_TAP)},",
+        "    -- Every pool: its name in the level, which part of the lab it",
+        "    -- belongs to, what it holds at the start and where its middle is.",
+        "    pools = {",
     ]
     for pool in pools:
-        x, y, z = pool["at"]
         lines.append(
-            f'    {{ name = "{pool["name"]}", group = "{pool["group"]}", fluid = "{pool["fluid"]}", '
-            f"at = vector.create({x:g}, {y:g}, {z:g}) }},"
+            f'        {{ name = "{pool["name"]}", group = "{pool["group"]}", fluid = "{pool["fluid"]}", '
+            f"at = {vector(pool['at'])} }},"
         )
-    lines.append("}")
+    lines += ["    },", "}"]
     with open(os.path.join(HERE, "places.luau"), "w", encoding="utf-8") as out:
         out.write("\n".join(lines) + "\n")
     triangles = sum(len(shape.indices) // 3 for _, shape, _ in parts)

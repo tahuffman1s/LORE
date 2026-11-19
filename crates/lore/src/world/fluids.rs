@@ -38,7 +38,7 @@ const BODY_LITRES: f32 = 87.0;
 /// How many litres a splash throws out of a pool for each square metre of
 /// what went in, at the speed below or faster: a body falling in throws a
 /// few litres, a foot coming down in the shallows a cupful.
-const SPLASH_LITRES: f32 = 12.0;
+const SPLASH_LITRES: f32 = 30.0;
 /// The speed at which a splash throws all of that, metres a second.
 const FULL_SPLASH: f32 = 6.0;
 
@@ -309,6 +309,15 @@ impl WorldFluids {
         self.under.footing()
     }
 
+    /// Whether the still fluid at `place` is mostly water, or there is
+    /// none there that this world knows of.
+    pub(crate) fn mostly_water(&self, level: &Level, place: [f32; 3]) -> bool {
+        level
+            .pool_at(place[0], place[2])
+            .and_then(|here| self.fluids.pools().get(here.index))
+            .is_none_or(|pool| pool.share(0) >= 0.5)
+    }
+
     /// Tells the script how each pool stands now.
     fn tell_pools(&self, host: &mut ScriptHost) {
         host.set_pools(self.fluids.pools().iter().map(|pool| PoolTold {
@@ -393,10 +402,15 @@ impl WorldFluids {
                 Some(mixed(&shares, looks))
             };
             let freezes = fluids.flow(pool.kind()).freezes;
+            // Water is a thousandth of a pascal second and lies as water
+            // does; from a few pascal seconds up, as honey is, a liquid
+            // lies still.
+            let thick = (pool.medium().viscosity / 0.001).max(1.0);
             PoolDrawn {
                 shift: pool.shift(),
                 look,
                 freezes,
+                calm: (libm::log10f(thick) / 3.5).clamp(0.0, 1.0),
             }
         }));
         frame.set_pools(stands);

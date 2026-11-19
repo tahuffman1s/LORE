@@ -69,7 +69,7 @@ const SPLASH_ROOM: usize = 2000;
 
 /// The fewest and most drops thrown up when something goes into a pool.
 const FEWEST_THROWN: usize = 3;
-const MOST_THROWN: usize = 24;
+const MOST_THROWN: usize = 48;
 /// What a puddle tile holds at the most, cubic metres: no thrown drop is
 /// bigger.
 const BIGGEST_THROWN: f32 = 1.0e-4;

@@ -418,6 +418,16 @@ impl Body {
         self.stand.is_none_or(|stand| stand.freezes)
     }
 
+    /// How still its surface lies, from 0 (as water) to just under 1.
+    pub(crate) fn calm(&self) -> f32 {
+        let calm = self.stand.map_or(0.0, |stand| stand.calm);
+        if calm.is_finite() {
+            calm.clamp(0.0, 0.99)
+        } else {
+            0.0
+        }
+    }
+
     /// The x and z of the corner of its grid with the most of both.
     fn far_corner(&self) -> [f32; 2] {
         // Sizes are far below the point where f32 stops being exact.
