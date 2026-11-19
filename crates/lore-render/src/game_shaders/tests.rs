@@ -487,6 +487,69 @@ fn surface_shaders_draw_the_same_with_the_shade_in_corners_found() {
 }
 
 #[test]
+fn a_cut_out_surface_a_shader_draws_shades_the_floor_under_its_edge_unless_cut_away() {
+    // A cut-out Lava sheet over the left half of a stone floor, a hand
+    // above it, seen from above. The stone just right of the sheet's edge
+    // has the sheet close over half of what it faces.
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    let cut_out = Material {
+        alpha_mode: AlphaMode::Mask { cutoff: 0.5 },
+        ..named("Lava", [0.6; 3])
+    };
+    let mut scene = two(cut_out, named("Stone", [0.5; 3]));
+    let mut sheet = half(-1.0, 0.0, 0);
+    for point in &mut sheet.positions {
+        point[1] = 0.1;
+    }
+    scene.meshes[0].parts = vec![sheet, half(-1.0, 0.0, 1), half(0.0, 1.0, 1)];
+    headless.set_scene(&scene).unwrap();
+    // Light from all round, which is what the shade dims.
+    headless.set_weather(crate::Weather {
+        cloud_cover: 1.0,
+        ..crate::Weather::default()
+    });
+    // How bright the stone is in the few columns right of the sheet's edge.
+    let by_the_edge = |picture: &[u8]| -> i32 {
+        (HEIGHT / 3..2 * HEIGHT / 3)
+            .flat_map(|y| (WIDTH / 2 + 1..WIDTH / 2 + 4).map(move |x| pixel(picture, x, y)))
+            .map(|[red, green, blue]| red + green + blue)
+            .sum()
+    };
+    let gone = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.alpha = 0.0;\n    return made;\n}\n";
+    // How much darker the stone by the edge is with the shade found, and
+    // how bright it is without, for a sheet drawn whole and one cut away.
+    let mut found = [(0, 0); 2];
+    for (which, (text, revision)) in [(PASS, 1), (gone, 2)].into_iter().enumerate() {
+        headless.set_game_shaders(&[lava(text, revision)]);
+        headless.set_ambient_occlusion(crate::AmbientOcclusion::Off);
+        headless.take_shader_reports();
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_ambient_occlusion(crate::AmbientOcclusion::Medium);
+        let shaded = headless.screenshot(&camera).unwrap();
+        found[which] = (
+            by_the_edge(&plain) - by_the_edge(&shaded),
+            by_the_edge(&plain),
+        );
+        if which == 1 {
+            // Cut away whole by its shader, the sheet is not there: not in
+            // the picture, and not in the depth the shade is found from.
+            assert!(shaded == plain, "a sheet its shader cut away left a mark");
+        }
+    }
+    let (darker, bright) = found[0];
+    assert!(
+        darker * 50 > bright,
+        "the sheet a surface shader draws shades nothing under its edge: {found:?}"
+    );
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
 fn surface_values_change_the_picture_with_no_report() {
     let Some(mut headless) = headless() else {
         return;

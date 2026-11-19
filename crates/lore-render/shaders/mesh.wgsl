@@ -1995,7 +1995,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var shaded = vec3<f32>(1.0);
     var around_dims = vec3<f32>(crevices);
     var mirror_dims = crevices;
-    if !see_through && !shade_unknown && view.lens.y > 0.0 {
+    if !see_through && view.lens.y > 0.0 {
         let arrives = shade_at(corner.position.xy);
         shaded = shade_thrown_back(arrives, matte);
         around_dims = min(around_dims, shaded);

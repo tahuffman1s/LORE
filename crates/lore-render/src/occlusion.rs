@@ -15,6 +15,7 @@
 use ash::vk;
 
 use crate::bounce::Shared;
+use crate::mesh::vertex_layout;
 use crate::scene::{DEPTH, SceneTarget};
 use crate::swapchain::COLOUR;
 
@@ -139,6 +140,92 @@ pub(crate) const FOUND_FORMAT: vk::Format = vk::Format::R32G32_SFLOAT;
 /// an eye tells shade apart.
 pub(crate) const FORMAT: vk::Format = vk::Format::R8_UNORM;
 
+/// Makes a pipeline that draws mesh parts for their depth alone, before the
+/// picture: the same points, placed by the same function `vertex` as the
+/// picture's, so each lands exactly where the picture will draw it. A solid
+/// surface needs no fragment shader at all; one with holes cut in it is
+/// given the function `fragment` that cuts them. A game's surface shader
+/// makes its own with this, for the holes it cuts itself.
+///
+/// # Safety
+///
+/// `module` must hold the entry points named, and its bindings must fit
+/// `layout`, which must be (or be compatible with) the mesh pipeline's in
+/// sets 0 to 2 and its push constants. `cache` is a pipeline cache of this
+/// device that no other thread is using, or null.
+pub(crate) unsafe fn depth_pipeline(
+    device: &ash::Device,
+    cache: vk::PipelineCache,
+    layout: vk::PipelineLayout,
+    module: vk::ShaderModule,
+    vertex: &std::ffi::CStr,
+    fragment: Option<&std::ffi::CStr>,
+) -> Result<vk::Pipeline, vk::Result> {
+    let (bindings, attributes) = vertex_layout();
+    let points = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+    let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let viewport = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let raster = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let dynamic_states = [
+        vk::DynamicState::VIEWPORT,
+        vk::DynamicState::SCISSOR,
+        vk::DynamicState::CULL_MODE,
+        vk::DynamicState::FRONT_FACE,
+    ];
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+    let mut stages = [vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(module)
+        .name(vertex); 2];
+    if let Some(fragment) = fragment {
+        stages[1] = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(module)
+            .name(fragment);
+    }
+    let stages = if fragment.is_some() {
+        &stages[..]
+    } else {
+        &stages[..1]
+    };
+    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::GREATER);
+    let no_colour = vk::PipelineColorBlendStateCreateInfo::default();
+    let mut rendering = vk::PipelineRenderingCreateInfo::default()
+        .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
+    let info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(stages)
+        .vertex_input_state(&points)
+        .input_assembly_state(&assembly)
+        .viewport_state(&viewport)
+        .rasterization_state(&raster)
+        .multisample_state(&multisample)
+        .depth_stencil_state(&depth)
+        .color_blend_state(&no_colour)
+        .dynamic_state(&dynamic)
+        .layout(layout)
+        .push_next(&mut rendering);
+    // SAFETY: `info` and everything it points to are alive for the call; the
+    // caller guarantees the module, the layout and the cache.
+    let created =
+        unsafe { device.create_graphics_pipelines(cache, std::slice::from_ref(&info), None) };
+    match created {
+        Ok(pipelines) if !pipelines.is_empty() => Ok(pipelines[0]),
+        other => Err(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN)),
+    }
+}
+
 /// The pipelines that draw depth alone (solid, then cut-out), then the two
 /// that find the shade and smooth it.
 pub(crate) struct Pipelines {
@@ -162,14 +249,12 @@ impl Pipelines {
     /// # Safety
     ///
     /// `module` must be the compiled `mesh.wgsl` and `layout` the mesh
-    /// pipeline's, both of `device`; `points` must be how a mesh's corner
-    /// points are laid out.
+    /// pipeline's, both of `device`.
     pub(crate) unsafe fn make(
         &mut self,
         device: &ash::Device,
         module: vk::ShaderModule,
         layout: vk::PipelineLayout,
-        points: &vk::PipelineVertexInputStateCreateInfo<'_>,
         shared: &Shared<'_>,
     ) -> Result<(), vk::Result> {
         let create = |info: &vk::GraphicsPipelineCreateInfo<'_>| {
@@ -187,42 +272,24 @@ impl Pipelines {
                 other => Err(other.map_or_else(|(_, code)| code, |_| vk::Result::ERROR_UNKNOWN)),
             }
         };
-        // Depth alone: the same points, placed by the same function as the
-        // picture's, so each lands exactly where the picture will draw it.
-        // A solid surface needs no fragment shader at all.
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(module)
-                .name(c"vertex"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(module)
-                .name(c"fragment_depth_cutout"),
-        ];
-        let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::GREATER);
-        let no_colour = vk::PipelineColorBlendStateCreateInfo::default();
-        for (cut_out, pipeline) in [false, true].into_iter().zip(&mut self.depth) {
-            let stages = if cut_out { &stages[..] } else { &stages[..1] };
-            let mut rendering = vk::PipelineRenderingCreateInfo::default()
-                .depth_attachment_format(SceneTarget::DEPTH_FORMAT);
-            *pipeline = create(
-                &vk::GraphicsPipelineCreateInfo::default()
-                    .stages(stages)
-                    .vertex_input_state(points)
-                    .input_assembly_state(shared.assembly)
-                    .viewport_state(shared.viewport)
-                    .rasterization_state(shared.raster)
-                    .multisample_state(shared.multisample)
-                    .depth_stencil_state(&depth)
-                    .color_blend_state(&no_colour)
-                    .dynamic_state(shared.dynamic)
-                    .layout(layout)
-                    .push_next(&mut rendering),
-            )?;
+        // Depth alone: a solid surface, then one with holes cut in it by its
+        // material's alpha.
+        for (fragment, pipeline) in [None, Some(c"fragment_depth_cutout")]
+            .into_iter()
+            .zip(&mut self.depth)
+        {
+            // SAFETY: the caller's guarantees; the module holds `vertex`
+            // and the fragment function named.
+            *pipeline = unsafe {
+                depth_pipeline(
+                    device,
+                    vk::PipelineCache::null(),
+                    layout,
+                    module,
+                    c"vertex",
+                    fragment,
+                )
+            }?;
         }
         // Finding and smoothing: one triangle over the whole picture each.
         let no_points = vk::PipelineVertexInputStateCreateInfo::default();

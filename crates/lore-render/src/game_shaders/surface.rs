@@ -26,6 +26,8 @@ const NONE: u8 = u8::MAX;
 pub(crate) struct Variant {
     /// For solid, cut-out and see-through surfaces, in that order.
     pub(crate) pipelines: [vk::Pipeline; 3],
+    /// Draws a cut-out surface for its depth alone, before the picture.
+    pub(crate) depth: vk::Pipeline,
     /// Its values and the clock, for the frame being recorded.
     pub(crate) set: vk::DescriptorSet,
 }
@@ -194,6 +196,7 @@ impl SurfaceTable {
                 layout,
                 variants: [Variant {
                     pipelines: [vk::Pipeline::null(); 3],
+                    depth: vk::Pipeline::null(),
                     set: vk::DescriptorSet::null(),
                 }; MOST_SURFACE_SHADERS],
                 owners: [0; MOST_SURFACE_SHADERS],
@@ -260,6 +263,7 @@ impl SurfaceTable {
             };
             let at = draws.count;
             draws.variants[at].pipelines = shader.pipelines;
+            draws.variants[at].depth = shader.depth;
             draws.owners[at] = entry.id();
             draws.count += 1;
             wanted.push(Wanted {

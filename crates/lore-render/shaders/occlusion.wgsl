@@ -403,11 +403,6 @@ fn fragment_depth_cutout(corner: Corner) {
     }
 }
 
-// Set by a fragment whose surface was not drawn for its depth before the
-// picture (a cut-out one a game's own shader cuts the holes of): the shade
-// found at its pixel is of what is behind it.
-var<private> shade_unknown: bool;
-
 // How much of the light from all round reaches the solid surface drawn at
 // `pixel`: 1 where nothing is near, or when no shade is found this frame.
 fn shade_at(pixel: vec2<f32>) -> f32 {

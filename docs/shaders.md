@@ -46,10 +46,10 @@ file, line and source line, and the last version that worked keeps drawing.
   naga stops ill-typed code but not endless loops. A game's shaders are its
   own code, not a security boundary, but a slip must not freeze the picture.
 - `refuse_discard` refuses `discard` outside comments, and says to cut holes
-  with a cut-out material's alpha. With ambient occlusion on (#104), what is
-  solid is drawn for its depth before the picture, and the picture only
-  where that depth is: a pixel a shader threw away after that would show
-  nothing, not what is behind it.
+  with a cut-out material's alpha. What is solid is drawn for its depth
+  before the picture (#104, #436), and the picture only where that depth
+  is: a pixel a shader threw away after that would show nothing, not what
+  is behind it.
   It reads words, so a condition that is only true in practice is not caught.
 - `compile` has two `Bounds`: the engine's own shaders compile with none
   (`build.rs` uses `Trusted`, so the engine's SPIR-V is unchanged), a game's
@@ -85,7 +85,10 @@ file, line and source line, and the last version that worked keeps drawing.
   number) and the maker's `surface` added. The engine's own SPIR-V stays
   byte-identical. A variant builds all three surface kinds (solid, cut-out,
   see-through), about 0.5 s cold, off the frame's thread; draws whose material
-  name matches use it.
+  name matches use it. It also builds a fourth pipeline that draws a cut-out
+  surface for its depth alone, before the picture (`lore_fragment_depth_cutout`):
+  the holes are the shader's own, so only its own code can cut them. That
+  function lights the surface as the picture does and keeps only the alpha.
 - **`in.time`** is the renderer's clock, not the simulation's, wrapped every
   hour so an `f32` keeps a fine step, and held still on `Headless`.
 - **Reports** (ready, failed, "no material named X, the level has: ...") come
