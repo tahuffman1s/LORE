@@ -36,7 +36,11 @@ pub(super) enum Which {
 /// Which image effect `index` of `count` draws into: the last one into `F`,
 /// and each one before it into the other of the two than the one after it.
 pub(super) fn draws_into(count: usize, index: usize) -> Which {
-    if count.saturating_sub(1).saturating_sub(index) % 2 == 0 {
+    if count
+        .saturating_sub(1)
+        .saturating_sub(index)
+        .is_multiple_of(2)
+    {
         Which::F
     } else {
         Which::A
@@ -133,11 +137,7 @@ pub(super) struct ScreenPass {
 
 impl ScreenPass {
     /// Makes the sets for `frames` frames in flight, pointing at nothing yet.
-    pub(super) fn new(
-        gpu: &Arc<Gpu>,
-        shared: &Shared,
-        frames: usize,
-    ) -> Result<Self, RenderError> {
+    pub(super) fn new(gpu: &Arc<Gpu>, shared: &Shared, frames: usize) -> Result<Self, RenderError> {
         let device = gpu.device();
         let count = u32::try_from(frames).unwrap_or(u32::MAX);
         let sizes = [
@@ -283,8 +283,8 @@ impl ScreenPass {
             height,
         ];
         let mut bytes = [0_u8; SCREEN_PUSH_BYTES as usize];
-        for (chunk, number) in bytes.chunks_exact_mut(4).zip(push) {
-            chunk.copy_from_slice(&number.to_ne_bytes());
+        for (chunk, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(push) {
+            *chunk = number.to_ne_bytes();
         }
 
         let mut drawn = 0;

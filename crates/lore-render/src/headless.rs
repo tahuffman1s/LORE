@@ -581,8 +581,7 @@ impl Headless {
                 )
                 .map_err(RenderError::driver("recording a frame"))?;
             let passed = if self.view.still { 0.0 } else { FRAME_SECONDS };
-            self.shaders
-                .start_frame(0, passed, self.view.output_size());
+            self.shaders.start_frame(0, passed, self.view.output_size());
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
             self.view.lamp_shadows = self.lamp_shadows;

@@ -268,11 +268,8 @@ fn make_screen(
     // module holds both entry points named in `stages`, and is only needed
     // while the pipeline is made. Only this thread uses the cache.
     let created = unsafe {
-        let created = device.create_graphics_pipelines(
-            shared.cache,
-            std::slice::from_ref(&info),
-            None,
-        );
+        let created =
+            device.create_graphics_pipelines(shared.cache, std::slice::from_ref(&info), None);
         device.destroy_shader_module(module, None);
         created
     };
@@ -398,4 +395,3 @@ impl Works {
         })
     }
 }
-

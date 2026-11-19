@@ -270,10 +270,9 @@ impl GameShaders {
         }
 
         // The pictures exist while an effect is live, at the picture's size.
-        if live == 0 || works.targets.as_ref().is_some_and(|t| t.extent != output) {
-            if let Some(old) = works.targets.take() {
-                works.old_targets.push(now, old);
-            }
+        let stale = live == 0 || works.targets.as_ref().is_some_and(|t| t.extent != output);
+        if stale && let Some(old) = works.targets.take() {
+            works.old_targets.push(now, old);
         }
         if live > 0 && works.targets.is_none() {
             match Targets::new(&self.gpu, output) {
@@ -317,7 +316,11 @@ impl GameShaders {
         };
         // SAFETY: the caller's guarantees are the pass's; the targets were
         // made for this frame's output size in `start_frame`.
-        unsafe { works.pass.record(&works.shared, &self.book, targets, &frame) }
+        unsafe {
+            works
+                .pass
+                .record(&works.shared, &self.book, targets, &frame)
+        }
     }
 
     /// Says that a frame was handed to the graphics card.
@@ -340,7 +343,8 @@ impl GameShaders {
 
 /// Hands a built shader to the book, and logs what it cost.
 fn install(book: &mut Book<Built>, retiring: &mut Retiring<Built>, now: u64, done: Done<Built>) {
-    let (id, revision, compiling, building) = (done.id, done.revision, done.compiling, done.building);
+    let (id, revision, compiling, building) =
+        (done.id, done.revision, done.compiling, done.building);
     let installed = done.outcome.is_ok();
     book.done(done, |built| retiring.push(now, built));
     if let (true, Some(file)) = (installed, book.file_of(id)) {
