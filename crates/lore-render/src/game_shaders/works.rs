@@ -405,6 +405,9 @@ pub(crate) struct SurfaceShader {
     gpu: Arc<Gpu>,
     /// For solid, cut-out and see-through surfaces, in that order.
     pub(super) pipelines: [vk::Pipeline; 3],
+    /// Draws a cut-out surface for its depth alone, before the picture,
+    /// with the holes this shader cuts.
+    pub(super) depth: vk::Pipeline,
     pool: vk::DescriptorPool,
     /// One for each frame in flight, written by the frame that uses it.
     pub(super) buffers: Vec<Buffer>,
@@ -420,6 +423,7 @@ impl Drop for SurfaceShader {
             for pipeline in self.pipelines {
                 device.destroy_pipeline(pipeline, None);
             }
+            device.destroy_pipeline(self.depth, None);
             device.destroy_descriptor_pool(self.pool, None);
         }
     }
@@ -437,6 +441,7 @@ fn make_surface(
     let mut shader = SurfaceShader {
         gpu: Arc::clone(gpu),
         pipelines: [vk::Pipeline::null(); 3],
+        depth: vk::Pipeline::null(),
         pool: vk::DescriptorPool::null(),
         buffers: Vec::with_capacity(frames),
         sets: Vec::new(),
@@ -472,6 +477,23 @@ fn make_surface(
                 failed = Some(code);
                 break;
             }
+        }
+    }
+    if failed.is_none() {
+        // SAFETY: as for the pipelines above.
+        let made = unsafe {
+            crate::occlusion::depth_pipeline(
+                device,
+                shared.cache,
+                shared.surface_layout,
+                module,
+                SURFACE_VERTEX,
+                Some(c"lore_fragment_depth_cutout"),
+            )
+        };
+        match made {
+            Ok(made) => shader.depth = made,
+            Err(code) => failed = Some(code),
         }
     }
     // SAFETY: the module is only needed while pipelines are made.

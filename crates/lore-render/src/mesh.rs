@@ -1579,10 +1579,7 @@ impl MeshPipeline {
             };
             // SAFETY: the module and layout are live and hold what
             // `occlusion.wgsl` names.
-            let made = unsafe {
-                mesh.shade
-                    .make(device, module, layout, &vertex_input, &shared)
-            };
+            let made = unsafe { mesh.shade.make(device, module, layout, &shared) };
             failed = made.err();
         }
         // The sky: one triangle with no points of its own, drawn only where
@@ -3107,22 +3104,17 @@ impl MeshPipeline {
         })
     }
 
-    /// Whether a part is drawn for its depth before the picture, when
-    /// anything is: every solid part, and each part with holes cut in it by
-    /// its material's own alpha. `game_drawn` says a game's surface shader
-    /// draws it, which cuts holes of its own.
-    fn depth_drawn_first(draw: &Draw, game_drawn: bool) -> bool {
-        match draw.surface {
-            Surface::Solid => true,
-            Surface::CutOut => !game_drawn,
-            Surface::SeeThrough | Surface::Water => false,
-        }
+    /// Whether a part is drawn for its depth before the picture: every
+    /// solid part, and each part with holes cut in it. What is see-through
+    /// hides nothing, and is mixed over the picture after.
+    fn depth_drawn_first(draw: &Draw) -> bool {
+        draw.surface <= Surface::CutOut
     }
 
     /// Records drawing what is solid of `meshes` for its depth alone,
     /// before the picture ([`depth_drawn_first`](Self::depth_drawn_first)
-    /// says which). A cut-out part a game's surface shader draws is left
-    /// to the picture: its holes are the game's.
+    /// says which). A cut-out part a game's surface shader draws has its
+    /// holes cut by that shader, with its own depth pipeline and set.
     ///
     /// # Safety
     ///
@@ -3138,38 +3130,63 @@ impl MeshPipeline {
     ) {
         let device = self.gpu.device();
         let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
-        let mut last: Option<&Draw> = None;
-        for draw in solid.iter().filter(|draw| draw.in_sight(seen)) {
-            let cut_out = draw.surface == Surface::CutOut;
-            let game_drawn = surfaces
+        // Which surface shader cuts a part's holes, if any: a solid part
+        // has none to cut, whoever draws it.
+        let variant_of = |draw: &Draw| {
+            surfaces
+                .filter(|_| draw.surface == Surface::CutOut)
                 .and_then(|surfaces| surfaces.of(draw.material))
-                .is_some();
-            if !Self::depth_drawn_first(draw, game_drawn) {
-                continue;
-            }
+        };
+        let mut last: Option<&Draw> = None;
+        for draw in solid
+            .iter()
+            .filter(|draw| Self::depth_drawn_first(draw) && draw.in_sight(seen))
+        {
+            let cut_out = draw.surface == Surface::CutOut;
+            let variant = variant_of(draw);
             let changed =
                 |differs: fn(&Draw, &Draw) -> bool| last.is_none_or(|last| differs(last, draw));
+            let new_pipeline = changed(|last, draw| last.surface != draw.surface)
+                || last.is_some_and(|last| {
+                    variant_of(last).map(|(number, _)| number) != variant.map(|(number, _)| number)
+                });
             // SAFETY: the caller guarantees the command buffer is recording
             // inside a depth pass with the buffers of `meshes` bound, and
-            // `draw` names points, triangles and a material they hold.
+            // `draw` names points, triangles and a material they hold;
+            // `surfaces` holds live pipelines and sets for this frame.
             unsafe {
-                if changed(|last, draw| last.surface != draw.surface) {
-                    device.cmd_bind_pipeline(
-                        commands,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.shade.depth[usize::from(cut_out)],
-                    );
+                if new_pipeline {
+                    let pipeline = variant
+                        .map_or(self.shade.depth[usize::from(cut_out)], |(_, variant)| {
+                            variant.depth
+                        });
+                    device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 }
                 // Only a surface with holes reads its material. (A material
                 // is one kind of surface, so the part before, if it had the
                 // same material, was cut out too and bound it.)
-                if cut_out && changed(|last, draw| last.material != draw.material) {
+                let new_material = changed(|last, draw| last.material != draw.material);
+                if cut_out && new_material {
                     device.cmd_bind_descriptor_sets(
                         commands,
                         vk::PipelineBindPoint::GRAPHICS,
                         self.layout,
                         1,
                         &[meshes.materials.set(draw.material)],
+                        &[],
+                    );
+                }
+                // The shader's own set comes after the material's; binding
+                // a pipeline of another layout may have let go of it.
+                if let (Some((_, variant)), Some(surfaces)) = (variant, surfaces)
+                    && (new_material || new_pipeline)
+                {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        surfaces.layout,
+                        3,
+                        &[variant.set],
                         &[],
                     );
                 }
@@ -3262,7 +3279,7 @@ impl MeshPipeline {
                     });
                 device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 // The same parts `draw_depths` drew.
-                let depth_drawn = known && Self::depth_drawn_first(draw, variant.is_some());
+                let depth_drawn = known && Self::depth_drawn_first(draw);
                 device.cmd_set_depth_compare_op(
                     commands,
                     if depth_drawn {
@@ -3482,7 +3499,7 @@ const SCENE_FORMATS: [vk::Format; 2] = [SceneTarget::FORMAT, SceneTarget::MOTION
 
 /// How a mesh's points are laid out in the vertex buffer: one binding, and
 /// the position, folded normal, tangent, colour and the two UV maps.
-fn vertex_layout() -> (
+pub(crate) fn vertex_layout() -> (
     [vk::VertexInputBindingDescription; 1],
     [vk::VertexInputAttributeDescription; 6],
 ) {

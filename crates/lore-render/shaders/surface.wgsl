@@ -6,8 +6,8 @@
 // `lit` in mesh.wgsl holds three marker lines (`//!surface ...`). In the
 // module built for a game each is swapped for a call into this file; in the
 // engine's own module they stay comments. Those lines and `lore_glow` and the
-// three fragment functions below must be kept in step with `lit` and its
-// fragments in mesh.wgsl.
+// fragment functions below must be kept in step with `lit` and its fragments
+// in mesh.wgsl.
 //
 // The names a maker sees (`Surface`, `SurfaceIn` and their fields, `params`)
 // are a promise to every game: add, never rename.
@@ -116,9 +116,6 @@ fn lore_fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> P
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     lore_alpha = base.a;
-    // Its holes are the game's own, so it was not drawn for its depth
-    // before the picture, and no shade was found for it (`occlusion.wgsl`).
-    shade_unknown = true;
     let light = lit(corner, front, base.rgb, mixing, painted, false);
     var pixel: Pixel;
     pixel.colour = vec4<f32>(through_air(light, corner.world), 1.0);
@@ -128,6 +125,24 @@ fn lore_fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> P
         discard;
     }
     return pixel;
+}
+
+// What the depth of a cut-out surface is drawn with before the picture, as
+// `fragment_depth_cutout` in occlusion.wgsl: the same holes as
+// `lore_fragment_cutout` cuts, so the alpha is found the same way, by
+// lighting the surface and keeping only what the game's shader made of its
+// alpha. The light itself is not used, and a driver leaves out the working
+// of it.
+@fragment
+fn lore_fragment_depth_cutout(corner: Corner, @builtin(front_facing) front: bool) {
+    let mixing = shuffle_of(corner.world, material.flags);
+    let painted = paint_of(corner);
+    let base = base_colour(corner, mixing, painted);
+    lore_alpha = base.a;
+    lit(corner, front, base.rgb, mixing, painted, false);
+    if lore_alpha < material.emissive.w {
+        discard;
+    }
 }
 
 // A see-through surface, as `fragment_blend` in mesh.wgsl, mixed by the

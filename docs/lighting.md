@@ -370,7 +370,8 @@ picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
   multiplied: the darker of the two is used.
 - What is see-through is drawn after and neither shades nor is shaded. A
   cut-out surface drawn by a game's own surface shader cuts its own holes,
-  so it is left out of the depth pass and has no shade of its own.
+  so its shader has a depth pipeline of its own that cuts the same ones
+  (#437): it is shaded, and shades what is near it, like any other.
 - `game.lighting.setAmbientOcclusion({ strength = 1, radius = 0.6 })`
   changes how dark it is drawn (0 for none, 1 for what really arrives) and
   how far round a point is searched, in metres. Near the eye the search is
@@ -413,8 +414,7 @@ little overdraw, is 3.8 ms off and 3.9 ms on medium.
 
 Not done yet: depth read from smaller copies for far steps (XeGTAO's
 chain of five), without which a wide search reads memory far apart, bent
-normals, and the bitmask's one bounce of light (#438); shade on a cut-out
-surface a game's own shader draws (#437).
+normals, and the bitmask's one bounce of light (#438).
 
 ## What comes next (#401)
 
