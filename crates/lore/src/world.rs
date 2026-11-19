@@ -185,7 +185,7 @@ impl World {
         let aim = aim_of(asked.movement.yaw, 0.0);
         game.host_mut()
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
-        Self {
+        let mut world = Self {
             game,
             ground,
             player: Body { player, asked },
@@ -206,7 +206,14 @@ impl World {
             thunder: Vec::with_capacity(MOST_THUNDER),
             teleported: None,
             fluids: fluids::WorldFluids::default(),
-        }
+        };
+        // The ground's still water is the world's pools, of the kinds its
+        // sheets say, and its script is told what they are called. Here,
+        // where every world is made, so that a game that is played, one
+        // started from the editor and one in a test all have them: a
+        // world given its level some other way once had none.
+        (world.fluids).take_level(&world.ground.level, world.game.host_mut());
+        world
     }
 
     /// Plays the game in `level`, usually the game's `level.glb` as
@@ -235,11 +242,7 @@ impl World {
             .host_mut()
             .set_level_lamps(&crate::lamps::of_level(level));
         let ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
-        let mut world = Self::on(self.game, ground, None);
-        // The level's still water is the world's pools, of the kinds its
-        // sheets say.
-        (world.fluids).take_level(&world.ground.level, world.game.host_mut());
-        world
+        Self::on(self.game, ground, None)
     }
 
     /// The game being played.

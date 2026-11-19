@@ -173,11 +173,10 @@ fn dropping_into_water_is_a_splash_and_bubbles_and_coming_up_is_heard_too() {
             .any(|mark| matches!(mark, WaterMark::Bubbles { .. }))
     );
     assert_eq!(swum.under, Some(true));
+    // Among whatever else is heard: the drops they threw up coming down
+    // again are heard too, now that a played game has its pools.
     assert!(
-        matches!(
-            swum.asks[..],
-            [.., SoundAsk::Play(UNDER_WATER, _)] | [SoundAsk::Play(UNDER_WATER, _), ..]
-        ),
+        (swum.asks.iter()).any(|ask| matches!(ask, SoundAsk::Play(UNDER_WATER, _))),
         "{:?}",
         swum.asks
     );
@@ -185,10 +184,15 @@ fn dropping_into_water_is_a_splash_and_bubbles_and_coming_up_is_heard_too() {
     swum.run(6 * 60);
     assert_eq!(swum.heard(NoiseKind::Surface), 1, "{:?}", swum.noises);
     assert_eq!(swum.under, Some(false));
-    assert!(matches!(
-        swum.asks.last(),
-        Some(SoundAsk::Stop(UNDER_WATER))
-    ));
+    // The last word on the hum is that it stops, whatever drops are
+    // heard coming down after.
+    let hum = (swum.asks.iter().rev()).find(|ask| {
+        matches!(
+            ask,
+            SoundAsk::Play(UNDER_WATER, _) | SoundAsk::Stop(UNDER_WATER)
+        )
+    });
+    assert!(matches!(hum, Some(SoundAsk::Stop(UNDER_WATER))), "{hum:?}");
     // The picture was told all of it: every mark once, and a body in the
     // water for as long as it was at the surface.
     let splashes = swum
