@@ -903,12 +903,7 @@ mod tests {
         // FSR runs on one graphics device at a time in a program, and the
         // offscreen tests beside these use it; `lore bench`'s own test
         // draws through here with upscaling on.
-        headless_with(width, height, Upscaling::Off)
-    }
-
-    /// The same, drawn smaller and upscaled if `upscaling` says so.
-    fn headless_with(width: u32, height: u32, upscaling: Upscaling) -> Option<Headless> {
-        match Headless::new(width, height, upscaling) {
+        match Headless::new(width, height, Upscaling::Off) {
             Ok(headless) => Some(headless),
             Err(
                 error @ (RenderError::NoVulkan(_)
@@ -1909,54 +1904,6 @@ mod tests {
                 assert!(bluer(&shaded, on_sheet) > bluer(&bare, hole) + 40);
             }
         }
-        drop(headless);
-        assert_eq!(validation_errors(), 0);
-    }
-
-    #[test]
-    fn shade_is_found_in_a_picture_drawn_small_and_upscaled() {
-        // Drawn at two thirds of 384 by 216 and made full size: each frame
-        // is shifted by part of a pixel and the slices are turned anew.
-        let Some(mut headless) = headless_with(384, 216, Upscaling::Quality) else {
-            return;
-        };
-        headless.gpu().require_validation();
-        let camera = at_the_wall();
-        headless.set_scene(&wall_on_a_floor(0)).unwrap();
-        headless.set_bounce(Bounce::Off);
-        headless.set_weather(Weather {
-            cloud_cover: 1.0,
-            ..Weather::default()
-        });
-        // The light of the floor's first rows below the wall's foot (three
-        // times the rows of a picture 72 high), and of open floor.
-        let light = |picture: &[u8], from: usize, to: usize| -> i64 {
-            (from..to)
-                .flat_map(|y| (96..288).map(move |x| (y * 384 + x) * 4))
-                .map(|at| i64::from(picture[at]) + i64::from(picture[at + 1]))
-                .sum()
-        };
-        let settled = |headless: &mut Headless| {
-            for _ in 0..12 {
-                headless.render(&camera).unwrap();
-            }
-            headless.screenshot(&camera).unwrap()
-        };
-        let plain = settled(&mut headless);
-        headless.set_ambient_occlusion(AmbientOcclusion::Medium);
-        let shaded = settled(&mut headless);
-        let (foot, foot_plain) = (light(&shaded, 133, 139), light(&plain, 133, 139));
-        assert!(
-            foot * 100 < foot_plain * 98,
-            "the floor at the wall's foot is no darker: {foot} against {foot_plain}"
-        );
-        // Open floor is as bright as it was, to within what the upscaler's
-        // own mixing of frames changes.
-        let (open, open_plain) = (light(&shaded, 190, 210), light(&plain, 190, 210));
-        assert!(
-            (open - open_plain).abs() * 500 < open_plain,
-            "open floor changed: {open} against {open_plain}"
-        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

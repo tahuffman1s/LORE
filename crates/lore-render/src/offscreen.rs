@@ -132,6 +132,27 @@ pub(crate) fn frames(
     size: u32,
     upscaling: Upscaling,
 ) -> Shot {
+    frames_shaded(
+        gpu,
+        scene,
+        cameras,
+        stops,
+        size,
+        upscaling,
+        crate::occlusion::Shade::default(),
+    )
+}
+
+/// The same, with the shade in corners found as `shade` says.
+pub(crate) fn frames_shaded(
+    gpu: &Arc<Gpu>,
+    scene: &Scene,
+    cameras: &[Camera],
+    stops: f32,
+    size: u32,
+    upscaling: Upscaling,
+    shade: crate::occlusion::Shade,
+) -> Shot {
     let device = gpu.device();
     let extent = vk::Extent2D {
         width: size,
@@ -142,6 +163,7 @@ pub(crate) fn frames(
     // These pictures test what they name under the sky's own light; bounce
     // light, which builds up over frames, has tests of its own.
     scene_view.bounce = crate::bounce::Bounce::Off;
+    scene_view.shade = shade;
     let drawn = scene_view.render_size();
     let motion_bytes = u64::from(drawn.width * drawn.height * 4);
     let meshes = Meshes::new(gpu, scene).unwrap();
@@ -835,6 +857,35 @@ fn a_scene_drawn_small_is_upscaled_to_a_sharp_full_size_picture() {
         native_off < plain_off * 0.8,
         "smoothing the edges should be closer to ideal than leaving them jagged"
     );
+
+    // With the shade in corners found, what is solid is drawn for its
+    // depth first and the picture only where that depth is. The upscaler
+    // shifts each frame by part of a pixel, so the two must be shifted
+    // alike, frame after frame, or the square would be full of holes. A
+    // flat square with nothing near has no shade: still or sliding, the
+    // picture is the one drawn without. (Here, and not in a test of its
+    // own: FSR runs on one graphics device at a time in a program.)
+    let shade = crate::occlusion::Shade {
+        quality: crate::AmbientOcclusion::Medium,
+        ..crate::occlusion::Shade::default()
+    };
+    for (cameras, plain) in [(&[camera; 48][..], &settled), (&sliding[..], &moved)] {
+        let shaded = frames_shaded(
+            &gpu,
+            &scene,
+            cameras,
+            0.0,
+            OUTPUT,
+            Upscaling::Performance,
+            shade,
+        );
+        assert!(shaded.upscaled);
+        let apart = difference(&shaded.pixels, &plain.pixels);
+        assert!(
+            apart < 0.05,
+            "the upscaled picture changed with the shade found: {apart} of 255 a channel"
+        );
+    }
 
     finish(gpu);
 }
