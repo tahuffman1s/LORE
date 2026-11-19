@@ -107,9 +107,15 @@ pub struct ShaderSaid {
     pub text: String,
     /// What it is used for.
     pub used_as: ShaderUse,
-    /// What the script set, in the order each was first set.
+    /// The values the script set, by name: those given in the table it
+    /// was asked for with (in order of name), then those set later with
+    /// `:set`, in the order first set. Every other value is the shader's
+    /// default. Values change without
+    /// [`shader_revision`](crate::ScriptHost::shader_revision) rising.
     pub values: Vec<(String, ParamValue)>,
-    /// What is wrong with the file now, until it is put right.
+    /// What is wrong with the file now (a `//! param` line it cannot read
+    /// after a save, a file that is gone), until it is put right: show it
+    /// while it is here. `text` meanwhile stays the last version that read.
     pub problem: Option<ShaderError>,
 }
 
