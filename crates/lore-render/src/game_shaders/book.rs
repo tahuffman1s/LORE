@@ -44,7 +44,8 @@ pub(crate) struct Entry<T> {
     file: String,
     material: Option<String>,
     values: Vec<(String, ParamValue)>,
-    /// The revision the game wants, and its text until it is asked for.
+    /// The revision the game wants, and its text (kept, so a job can be
+    /// asked for again).
     wanted: u64,
     text: String,
     /// The revision last given to the worker.
@@ -55,6 +56,9 @@ pub(crate) struct Entry<T> {
     /// Where in the game's list it was last time, and which call saw it.
     position: usize,
     seen_in: u64,
+    /// The last call that gave a second shader with this entry's kind, name
+    /// and material (0 for never).
+    twin_seen: u64,
 }
 
 impl<T> Entry<T> {
@@ -88,6 +92,11 @@ impl<T> Entry<T> {
         self.values
             .iter()
             .map(|(name, value)| (name.as_str(), *value))
+    }
+
+    /// Whether a twin was seen in the call before `calls`.
+    fn had_twin(&self, calls: u64) -> bool {
+        self.twin_seen != 0 && self.twin_seen + 1 == calls
     }
 
     /// Whether this is the game's shader `shader`.
@@ -126,10 +135,16 @@ impl<T> Book<T> {
     }
 
     /// Takes the game's whole list. An entry is the same one as last time
-    /// when its kind, name and material are the same (duplicates are matched
-    /// in order). A changed text is kept to be asked for; changed values are
-    /// copied in place. What is no longer in the list is removed: its id goes
-    /// to `forget` and what was built for it to `retire`.
+    /// when its kind, name and material are the same. There is at most one
+    /// entry for each: a later shader with the same three is a twin, told
+    /// about once and never asked for, drawn or counted toward the limit.
+    /// Which of two twins is the first can change without the revision
+    /// telling, so an entry with a twin (or just freed of one) whose text is
+    /// not that of the first shader now is started over with a new id.
+    /// A changed text is kept to be asked for; changed values are copied in
+    /// place. A shader pushed past the limit holds nothing on the card until
+    /// it is let in again. What is no longer in the list is removed: its id
+    /// goes to `forget` and what was built for it to `retire`.
     ///
     /// Allocates only for a new entry, a changed text or a changed set of
     /// value names.
@@ -147,31 +162,47 @@ impl<T> Book<T> {
                 ShaderUse::Screen => (Hook::Screen, None),
                 ShaderUse::Surface { material } => (Hook::Surface, Some(material)),
             };
-            let at =
-                match self.entries.iter().position(|entry| {
-                    entry.seen_in != calls && entry.is(hook, shader.name, material)
-                }) {
-                    Some(at) => at,
-                    None => {
-                        self.next_id += 1;
-                        self.entries.push(Entry {
-                            id: self.next_id,
-                            hook,
+            let found = self
+                .entries
+                .iter()
+                .position(|entry| entry.is(hook, shader.name, material));
+            let at = match found {
+                Some(at) if self.entries[at].seen_in == calls => {
+                    let entry = &mut self.entries[at];
+                    if entry.twin_seen != calls && !entry.had_twin(calls) {
+                        self.reports.push(ShaderReport {
                             name: shader.name.to_owned(),
                             file: shader.file.to_owned(),
                             material: material.map(str::to_owned),
-                            values: Vec::new(),
-                            wanted: shader.revision,
-                            text: shader.text.to_owned(),
-                            asked: None,
-                            live: None,
-                            refused: false,
-                            position,
-                            seen_in: calls,
+                            revision: shader.revision,
+                            outcome: Err(twin(shader.file, shader.name, material)),
                         });
-                        self.entries.len() - 1
                     }
-                };
+                    entry.twin_seen = calls;
+                    continue;
+                }
+                Some(at) => at,
+                None => {
+                    self.next_id += 1;
+                    self.entries.push(Entry {
+                        id: self.next_id,
+                        hook,
+                        name: shader.name.to_owned(),
+                        file: shader.file.to_owned(),
+                        material: material.map(str::to_owned),
+                        values: Vec::new(),
+                        wanted: shader.revision,
+                        text: shader.text.to_owned(),
+                        asked: None,
+                        live: None,
+                        refused: false,
+                        position,
+                        seen_in: calls,
+                        twin_seen: 0,
+                    });
+                    self.entries.len() - 1
+                }
+            };
             let entry = &mut self.entries[at];
             entry.seen_in = calls;
             entry.position = position;
@@ -199,7 +230,47 @@ impl<T> Book<T> {
                     outcome: Err(over_the_limit(&entry.file, most, what)),
                 });
             }
+            if over && !entry.refused {
+                // It holds nothing on the card while it is refused.
+                forget(entry.id);
+                if let Some(live) = entry.live.take() {
+                    self.changed = true;
+                    retire(live.built);
+                }
+                entry.asked = None;
+            }
             entry.refused = over;
+        }
+
+        // Entries with a twin, or just freed of one, are built from the
+        // first shader of the list as it is now.
+        for entry in &mut self.entries {
+            if entry.seen_in != calls {
+                continue;
+            }
+            let twinned = entry.twin_seen == calls;
+            let freed = !twinned && entry.had_twin(calls);
+            if !twinned && !freed {
+                continue;
+            }
+            let Some(shader) = shaders.get(entry.position) else {
+                continue;
+            };
+            if entry.text != shader.text {
+                forget(entry.id);
+                if let Some(live) = entry.live.take() {
+                    self.changed = true;
+                    retire(live.built);
+                }
+                self.next_id += 1;
+                entry.id = self.next_id;
+                entry.asked = None;
+                shader.text.clone_into(&mut entry.text);
+                entry.wanted = shader.revision;
+            } else if freed {
+                // Built again, so that a fresh report replaces the twin's.
+                entry.asked = None;
+            }
         }
 
         // What the game did not give this time is gone.
@@ -224,7 +295,7 @@ impl<T> Book<T> {
     }
 
     /// Calls `ask` with a job for each entry whose wanted revision has not
-    /// been asked for yet. The text is moved into the job.
+    /// been asked for yet. The text stays in the entry.
     pub(crate) fn asks(&mut self, mut ask: impl FnMut(Job)) {
         for entry in &mut self.entries {
             if entry.refused || entry.asked == Some(entry.wanted) {
@@ -236,7 +307,7 @@ impl<T> Book<T> {
                 revision: entry.wanted,
                 hook: entry.hook,
                 file: entry.file.clone(),
-                text: mem::take(&mut entry.text),
+                text: entry.text.clone(),
             });
         }
     }
@@ -299,7 +370,7 @@ impl<T> Book<T> {
     fn live_of(&self, hook: Hook) -> impl Iterator<Item = &Entry<T>> {
         self.entries
             .iter()
-            .filter(move |entry| entry.hook == hook && entry.live.is_some())
+            .filter(move |entry| entry.hook == hook && !entry.refused && entry.live.is_some())
     }
 
     /// Whether which entries are live, their order, or what they are built
@@ -359,6 +430,28 @@ fn over_the_limit(file: &str, most: usize, what: &str) -> ShaderError {
         source_line: None,
         hint: Some("Remove one you do not need with `:remove()` first.".to_owned()),
         note: Some("It is not drawn.".to_owned()),
+        lore_fault: false,
+    }
+}
+
+/// The report for a shader whose kind, name and material an earlier one has.
+fn twin(file: &str, name: &str, material: Option<&str>) -> ShaderError {
+    let message = match material {
+        None => {
+            format!("Two screen effects are named `{name}`; only the first in the list is drawn.")
+        }
+        Some(material) => format!(
+            "Two surface shaders named `{name}` are given to the material `{material}`; only the first in the list is drawn."
+        ),
+    };
+    ShaderError {
+        file: file.to_owned(),
+        line: None,
+        column: None,
+        message,
+        source_line: None,
+        hint: Some("Give each a name of its own, or remove one.".to_owned()),
+        note: Some("The second is not drawn.".to_owned()),
         lore_fault: false,
     }
 }
@@ -515,18 +608,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_are_matched_in_order() {
-        let mut book = Book::new();
-        let mut gone = Gone::default();
-        let list = [shader("a", SCREEN, 1, &[]), shader("a", SCREEN, 1, &[])];
-        want(&mut book, &list, &mut gone);
-        let ids: Vec<_> = book.entries.iter().map(Entry::id).collect();
-        want(&mut book, &list, &mut gone);
-        let again: Vec<_> = book.entries.iter().map(Entry::id).collect();
-        assert_eq!((ids.len(), ids), (2, again));
-    }
-
-    #[test]
     fn surface_shaders_are_told_apart_by_material() {
         let mut book = Book::new();
         let mut gone = Gone::default();
@@ -679,5 +760,236 @@ mod tests {
         book.done(made(1, 1, 1), |_| {});
         assert!(book.changed());
         assert!(!book.changed());
+    }
+
+    fn with_text<'a>(mut shader: GameShader<'a>, text: &'a str) -> GameShader<'a> {
+        shader.text = text;
+        shader
+    }
+
+    fn effect_names(count: usize) -> Vec<String> {
+        (0..count).map(|n| format!("e{n}")).collect()
+    }
+
+    /// Builds everything asked for, as `made` with the job's id as the build.
+    fn build_all(book: &mut Book<u32>) -> Vec<Job> {
+        let jobs = asked(book);
+        for job in &jobs {
+            book.done(made(job.id, job.revision, job.id as u32), |_| {});
+        }
+        jobs
+    }
+
+    #[test]
+    fn a_refused_entry_whose_build_was_in_flight_is_built_when_let_in() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let names = effect_names(9);
+        let mut list: Vec<_> = names.iter().map(|n| shader(n, SCREEN, 1, &[])).collect();
+        list[7] = with_text(list[7], "seven");
+        want(&mut book, &list, &mut gone);
+        // Eight are asked for; none is done yet.
+        let jobs = asked(&mut book);
+        assert_eq!(jobs.len(), 8);
+        assert_eq!(jobs[7].text, "seven");
+        // A reorder makes the one in flight the ninth.
+        let mut moved = list.clone();
+        moved.swap(7, 8);
+        want(&mut book, &moved, &mut gone);
+        assert!(gone.forgotten.contains(&8));
+        assert_eq!(asked(&mut book).len(), 1);
+        // Its result arrives while it is refused, and is not drawn.
+        let mut retired = Vec::new();
+        book.done(made(8, 1, 77), |built| retired.push(built));
+        assert_eq!(retired, [77]);
+        assert_eq!(book.screens().count(), 0);
+        // Let in again, it is asked for again, with its text.
+        want(&mut book, &list, &mut gone);
+        let jobs = asked(&mut book);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].id, jobs[0].text.as_str()), (8, "seven"));
+        book.take_reports();
+        book.done(made(8, 1, 78), |_| {});
+        assert_eq!(live_names(&book), ["e7"]);
+        let reports = book.take_reports();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].name, "e7");
+        assert!(reports[0].outcome.is_ok());
+    }
+
+    #[test]
+    fn a_live_entry_pushed_past_the_limit_is_retired_and_comes_back() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let names = effect_names(9);
+        let list: Vec<_> = names.iter().map(|n| shader(n, SCREEN, 1, &[])).collect();
+        want(&mut book, &list, &mut gone);
+        build_all(&mut book);
+        book.changed();
+        let mut moved: Vec<_> = list[1..].to_vec();
+        moved.push(list[0]);
+        want(&mut book, &moved, &mut gone);
+        assert_eq!(gone.retired, [1]);
+        assert!(book.changed());
+        assert!(book.screens().all(|entry| entry.name() != "e0"));
+        assert_eq!(book.screens().count(), 7);
+        // Allowed again, it is asked for again.
+        want(&mut book, &list, &mut gone);
+        let jobs = build_all(&mut book);
+        assert!(jobs.iter().any(|job| job.id == 1));
+        assert!(book.screens().any(|entry| entry.name() == "e0"));
+        assert!(book.screens().count() <= MOST_SCREEN_EFFECTS);
+    }
+
+    #[test]
+    fn what_is_drawn_never_passes_the_limit() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let names = effect_names(9);
+        let mut list: Vec<_> = names.iter().map(|n| shader(n, SCREEN, 1, &[])).collect();
+        let surface_names = effect_names(11);
+        list.extend(
+            surface_names
+                .iter()
+                .map(|n| shader(n, ShaderUse::Surface { material: "M" }, 1, &[])),
+        );
+        for _ in 0..12 {
+            want(&mut book, &list, &mut gone);
+            build_all(&mut book);
+            assert!(book.screens().count() <= MOST_SCREEN_EFFECTS);
+            assert!(book.surfaces().count() <= MOST_SURFACE_SHADERS);
+            list.rotate_left(1);
+        }
+    }
+
+    #[test]
+    fn a_twin_is_told_once_and_neither_asked_nor_counted() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let names = effect_names(8);
+        let mut list: Vec<_> = names.iter().map(|n| shader(n, SCREEN, 1, &[])).collect();
+        list.push(with_text(list[0], "other"));
+        want(&mut book, &list, &mut gone);
+        assert_eq!(asked(&mut book).len(), 8);
+        let reports = book.take_reports();
+        assert_eq!(reports.len(), 1);
+        let error = reports[0].outcome.as_ref().unwrap_err();
+        assert_eq!(reports[0].name, "e0");
+        assert_eq!(
+            error.message,
+            "Two screen effects are named `e0`; only the first in the list is drawn."
+        );
+        assert!(book.entries.iter().all(|entry| !entry.refused));
+        // The same list again says nothing.
+        want(&mut book, &list, &mut gone);
+        assert!(book.take_reports().is_empty());
+        assert!(asked(&mut book).is_empty());
+        // Gone and back, it is told again.
+        want(&mut book, &list[..8], &mut gone);
+        want(&mut book, &list, &mut gone);
+        assert_eq!(book.take_reports().len(), 1);
+    }
+
+    #[test]
+    fn a_surface_twin_names_the_material() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let lava = ShaderUse::Surface { material: "Lava" };
+        let list = [shader("glow", lava, 1, &[]), shader("glow", lava, 1, &[])];
+        want(&mut book, &list, &mut gone);
+        let reports = book.take_reports();
+        let error = reports[0].outcome.as_ref().unwrap_err();
+        assert_eq!(reports[0].material.as_deref(), Some("Lava"));
+        assert_eq!(
+            error.message,
+            "Two surface shaders named `glow` are given to the material `Lava`; only the first in the list is drawn."
+        );
+    }
+
+    #[test]
+    fn removing_the_first_twin_starts_the_other_over() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let (one, two) = (
+            with_text(shader("a", SCREEN, 1, &[]), "one"),
+            shader("a", SCREEN, 1, &[]),
+        );
+        let two = with_text(two, "two");
+        want(&mut book, &[one, two], &mut gone);
+        asked(&mut book);
+        book.done(made(1, 1, 10), |_| {});
+        book.changed();
+        want(&mut book, &[two], &mut gone);
+        assert_eq!(gone.forgotten, [1]);
+        assert_eq!(gone.retired, [10]);
+        assert!(book.changed());
+        assert_eq!(book.screens().count(), 0);
+        let jobs = asked(&mut book);
+        assert_eq!((jobs[0].id, jobs[0].text.as_str()), (2, "two"));
+        book.done(made(1, 1, 11), |_| {});
+        assert_eq!(book.screens().count(), 0);
+        book.done(made(2, 1, 20), |_| {});
+        assert_eq!(book.screens().count(), 1);
+    }
+
+    #[test]
+    fn removing_a_twin_asks_for_the_first_again_and_keeps_it_drawn() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let one = with_text(shader("a", SCREEN, 1, &[]), "one");
+        let two = with_text(shader("a", SCREEN, 1, &[]), "two");
+        want(&mut book, &[one, two], &mut gone);
+        asked(&mut book);
+        book.done(made(1, 1, 10), |_| {});
+        book.take_reports();
+        want(&mut book, &[one], &mut gone);
+        assert!(gone.forgotten.is_empty() && gone.retired.is_empty());
+        let jobs = asked(&mut book);
+        assert_eq!((jobs[0].id, jobs[0].text.as_str()), (1, "one"));
+        assert_eq!(book.screens().count(), 1);
+        book.done(made(1, 1, 11), |_| {});
+        assert_eq!(book.take_reports().len(), 1);
+        // Nothing more is asked once it is built.
+        want(&mut book, &[one], &mut gone);
+        assert!(asked(&mut book).is_empty());
+    }
+
+    #[test]
+    fn a_new_twin_before_the_old_one_starts_it_over() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let old = with_text(shader("a", SCREEN, 1, &[]), "old");
+        let new = with_text(shader("a", SCREEN, 1, &[]), "new");
+        want(&mut book, &[old], &mut gone);
+        asked(&mut book);
+        book.done(made(1, 1, 10), |_| {});
+        book.take_reports();
+        want(&mut book, &[new, old], &mut gone);
+        assert_eq!(
+            (gone.forgotten.as_slice(), gone.retired.as_slice()),
+            (&[1][..], &[10][..])
+        );
+        let jobs = asked(&mut book);
+        assert_eq!((jobs[0].id, jobs[0].text.as_str()), (2, "new"));
+        assert_eq!(book.take_reports().len(), 1);
+        // Steady again: no more starts over.
+        want(&mut book, &[new, old], &mut gone);
+        assert!(asked(&mut book).is_empty());
+        assert_eq!(gone.forgotten, [1]);
+    }
+
+    #[test]
+    fn identical_twins_removed_are_only_asked_again() {
+        let mut book = Book::new();
+        let mut gone = Gone::default();
+        let same = with_text(shader("a", SCREEN, 1, &[]), "same");
+        want(&mut book, &[same, same], &mut gone);
+        asked(&mut book);
+        book.done(made(1, 1, 10), |_| {});
+        want(&mut book, &[same], &mut gone);
+        assert!(gone.forgotten.is_empty() && gone.retired.is_empty());
+        let jobs = asked(&mut book);
+        assert_eq!((jobs[0].id, jobs[0].text.as_str()), (1, "same"));
+        assert_eq!(book.screens().count(), 1);
     }
 }
