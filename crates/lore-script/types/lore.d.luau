@@ -642,25 +642,29 @@ type LampSettings = { from: (string | Lamp)?, at: vector?, on: boolean?, lumens:
 --- list of up to four numbers.
 type ShaderValue = number | string | vector | {number}
 
---- What `game.shaders` takes for a shader's values, by name, each a
---- `ShaderValue` (the checker leaves them open). `code` is not a
---- value: it is the shader's own text in quotes, used in place of the file.
+--- What `game.shaders` takes for a shader's values: each by the name its
+--- file gives it (`//! param strength: f32 = 0.5`), as a `ShaderValue`. The
+--- type checker cannot know your shader's names, so a mistake in one is found
+--- when the script runs. `code` is not a value: it is the shader's own text,
+--- used in place of its file.
 --- Example: game.shaders.screen("heat", { strength = 0.3, tint = "orange" })
 type ShaderValues = { [string]: any }
 
 --- A game shader that is on: a screen effect or a surface shader. What
 --- `game.shaders.screen` and `game.shaders.surface` give. It changes only
---- what is drawn, so any function may use it, `game.onDraw` too.
+--- what is drawn, so any function may use it, `game.onDraw` too. Its values
+--- can be set but not read: keep your own number in a variable if you need it.
 --- Example: local heat = game.shaders.screen("heat", { strength = 0.3 })
 declare extern type Shader with
-    --- Changes one of its values by name, any time. The value must be what
-    --- the shader's file says that value takes (a number in range, a colour,
-    --- a vector); a mistake says what it takes.
+    --- Changes one value, by the name the shader's file gives it. A value of
+    --- the wrong kind, or a number outside the file's range, is an error that
+    --- says what the value takes.
     --- Example: heat:set("strength", 0.8)
     --- Example: lava:set("tint", "#ff6020")
     function set(self, name: string, value: ShaderValue): ()
 
-    --- Turns it off. Asking for it again with `game.shaders` turns it on.
+    --- Turns it off. Asking for it again turns it on, and this handle works
+    --- again.
     --- Example: heat:remove()
     function remove(self): ()
 end
@@ -900,14 +904,16 @@ declare game: {
     --- goes in the game's folder as `shaders/<name>.wgsl`. A shader is
     --- named by its file without `.wgsl`, or gives its text itself with
     --- `code`; calling again with new `code` replaces it. Values are set by
-    --- name. Asking for one that is on with no table changes nothing; with
-    --- a table its values start over (the rest go back to the shader's own).
-    --- A game can have 8 screen effects and 8 surface shaders on at once,
-    --- each with up to 32 values, and 64 KiB of text. They change only what
-    --- is drawn, so `game.onDraw` may call them. One asked for from a
-    --- function stays through a save of the script; one asked for at the
-    --- top of the file comes and goes with it. Saving the shader's own file
-    --- changes the running game and keeps the values that still fit.
+    --- name. Asking again for one that is on with no table gives it as it is;
+    --- with a table, those values are set and every other value goes back to
+    --- the shader's own. Without `code` the text is the file's. A shader
+    --- turned on at the top of the file is turned off when that line is
+    --- deleted and the file saved; one turned on inside a function stays on
+    --- until `:remove()`. A game can have 8 screen effects and 8 surface
+    --- shaders on at once, each with up to 32 values, and 64 KiB of text.
+    --- They change only what is drawn, so `game.onDraw` may call them. Saving
+    --- the shader's own file changes the running game and keeps the values
+    --- that still fit.
     shaders: {
         --- Turns on a screen effect, drawn over the finished picture, from
         --- `shaders/<name>.wgsl`, and gives it.

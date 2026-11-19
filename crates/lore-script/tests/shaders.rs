@@ -458,18 +458,18 @@ fn a_bad_param_line_is_explained_in_one_line() {
 fn values_are_checked_against_the_shader() {
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { strenght = 0.3 })"#),
-        "The screen effect \"heat\": There is no value called `strenght`. Did you mean \
-         `strength`?"
+        "The screen effect \"heat\" has no value called `strenght`. Did you mean `strength`? \
+         Write it like this: game.shaders.screen(\"heat\", { strength = 0.5 })"
     );
     let wrong_kind = mistake(r#"game.shaders.screen("heat", { strength = { 1, 2 } })"#);
     assert_eq!(
         wrong_kind,
-        "The screen effect \"heat\": `strength` needs a number, but it was given a table of 2 \
-         numbers. Write it like `0.5`."
+        "In the screen effect \"heat\", `strength` needs a number, but it was given a table of 2 \
+         numbers. Write it like this: game.shaders.screen(\"heat\", { strength = 0.5 })"
     );
     let range = mistake(r#"game.shaders.surface("lava", "Lava", { glow = 20 })"#);
     assert!(
-        range.starts_with("The surface shader \"lava\" on \"Lava\": `glow`"),
+        range.starts_with("In the surface shader \"lava\" on \"Lava\", `glow`"),
         "{range}"
     );
     let infinite = mistake(r#"game.shaders.screen("heat", { strength = 1 / 0 })"#);
@@ -480,27 +480,39 @@ fn values_are_checked_against_the_shader() {
 fn a_value_that_cannot_be_held_says_what_it_needs() {
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { strength = true })"#),
-        "The screen effect \"heat\": `strength` needs a number, but it was given true or \
-         false. Write it like `0.5`."
+        "In the screen effect \"heat\", `strength` needs a number, but it was given true or \
+         false. Write it like this: game.shaders.screen(\"heat\", { strength = 0.5 })"
     );
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { offset = { 1, "x" } })"#),
-        "The screen effect \"heat\": `offset` needs a table of 2 numbers, but its table has \
-         text in it. Write it like `{1, 0.5}`."
+        "In the screen effect \"heat\", `offset` needs a table of 2 numbers, but it was given a \
+         table with text in it. Write it like this: game.shaders.screen(\"heat\", { offset = \
+         {1, 0.5} })"
     );
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { offset = { 1, x = 2 } })"#),
-        "The screen effect \"heat\": `offset` needs a table of 2 numbers, written in order \
-         without names, but its table has a part named x. Write it like `{1, 0.5}`."
+        "In the screen effect \"heat\", `offset` needs a table of 2 numbers, but it was given a \
+         table with a part named x. Write it like this: game.shaders.screen(\"heat\", { offset \
+         = {1, 0.5} })"
     );
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { offset = { 1, 2, 3, 4, 5 } })"#),
-        "The screen effect \"heat\": `offset` needs a table of 2 numbers, but it was given a \
-         table of 5 numbers. Write it like `{1, 0.5}`."
+        "In the screen effect \"heat\", `offset` needs a table of 2 numbers, but it was given a \
+         table of 5 numbers. Write it like this: game.shaders.screen(\"heat\", { offset = \
+         {1, 0.5} })"
     );
     assert_eq!(
         mistake(r#"game.shaders.screen("heat", { nothing = true })"#),
-        "The screen effect \"heat\": There is no value called `nothing`. The values are: `strength`, `tint`, `offset`, `dir`."
+        "The screen effect \"heat\" has no value called `nothing`. Its values are: `strength`, \
+         `tint`, `offset`, `dir`. Write it like this: game.shaders.screen(\"heat\", { strength = \
+         0.5 })"
+    );
+    assert_eq!(
+        mistake(
+            r#"game.shaders.surface("pulse", "Lava", { code = "fn surface(in: SurfaceIn) -> Surface { return in.surface; }", x = 1 })"#
+        ),
+        "The surface shader \"pulse\" on \"Lava\" has no values, so there is no `x`. To add one, \
+         write a line such as `//! param x: f32 = 0.5 range 0..1` at the top of its code."
     );
 }
 
@@ -547,7 +559,8 @@ fn code_that_is_too_large_is_refused() {
         ),
         "{message}"
     );
-    assert!(message.contains(" Hint: "), "{message}");
+    assert!(message.contains(" Split it into two shaders"), "{message}");
+    assert!(!message.contains("Hint"), "{message}");
 }
 
 #[test]
@@ -576,15 +589,12 @@ fn set_explains_its_mistakes() {
     );
     assert_eq!(
         message("heat:set('strenght', 0.8)"),
-        "The screen effect \"heat\": There is no value called `strenght`. Did \
-         you mean `strength`?"
+        "The screen effect \"heat\" has no value called `strenght`. Did you mean `strength`? \
+         Write it like this: heat:set(\"strength\", 0.5)"
     );
     assert_eq!(
         message("heat:set('strength', 9)"),
-        format!(
-            "The screen effect \"heat\": {}",
-            "`strength` must be from 0 to 1, but it was given 9."
-        )
+        "In the screen effect \"heat\", `strength` must be from 0 to 1, but it was given 9."
     );
     assert_eq!(
         message("heat:remove() heat:set('strength', 0.8)"),
@@ -604,13 +614,12 @@ fn a_handle_has_no_fields() {
     };
     assert_eq!(
         read("print(heat.strength)"),
-        "shader.strength does not exist. A shader's values are set with :set, \
-         like heat:set(\"strength\", 0.5). A shader has: set, remove."
+        "shader.strength cannot be read. A shader's values can only be set, like \
+         heat:set(\"strength\", 0.5): keep your own number in a variable if you need it."
     );
     assert_eq!(
         read("print(heat.sett)"),
-        "shader.sett does not exist. A shader's values are set with :set, like \
-         heat:set(\"sett\", 0.5). Did you mean shader:set?"
+        "shader.sett does not exist. Did you mean shader:set?"
     );
     assert_eq!(
         read("heat.strength = 0.5"),
@@ -925,5 +934,205 @@ fn a_missing_shader_suggests_the_near_name_even_when_the_name_is_short() {
     assert!(
         said.contains("Did you mean game.shaders.surface(\"so\", \"Lava\")?"),
         "{said}"
+    );
+}
+
+#[test]
+fn a_broken_save_after_a_gone_file_stays_a_problem_until_a_good_one() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    std::fs::remove_file(folder.0.join("shaders/heat.wgsl")).unwrap();
+    wait_until(&mut host, |host| heat_of(host).problem.is_some());
+    save(
+        &folder,
+        "heat",
+        "//! param strength: nonsense = 1\nfn screen(in: ScreenIn) -> vec3f { return in.color; }\n",
+    );
+    wait_until(&mut host, |host| {
+        heat_of(host)
+            .problem
+            .is_some_and(|problem| problem.line == Some(1))
+    });
+    let broken = host.shader_revision();
+    // Several looks later the problem is still there, and nothing was raised.
+    for _ in 0..12 {
+        host.poll_reload();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        heat_of(&host)
+            .problem
+            .is_some_and(|problem| problem.line == Some(1))
+    );
+    assert_eq!(host.shader_revision(), broken);
+    save(&folder, "heat", HEAT);
+    wait_until(&mut host, |host| heat_of(host).problem.is_none());
+}
+
+#[test]
+fn code_asked_for_again_with_no_code_reads_the_file() {
+    let mut host = game(
+        r#"
+        game.shaders.screen("heat", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color; }", })
+        game.onTick(function() game.shaders.screen("heat") end)
+    "#,
+    );
+    assert_eq!(on(&host)[0].file, "the code for \"heat\" (main.luau:2)");
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let heat = &on(&host)[0];
+    assert_eq!(heat.file, "shaders/heat.wgsl");
+    assert_eq!(heat.text, HEAT);
+    assert!(heat.values.is_empty());
+    // With no file, the ask says so.
+    let mut host = ScriptHost::from_sources(
+        files(
+            r#"
+            game.shaders.screen("pulse", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color; }" })
+            game.onTick(function() game.shaders.screen("pulse") end)
+        "#,
+            &[],
+        ),
+        ActionMap::standard(),
+    );
+    run(&mut host, 1);
+    let error = host.last_error().expect("there is no file");
+    assert!(
+        error
+            .message
+            .starts_with("game.shaders.screen(\"pulse\") needs the file shaders/pulse.wgsl"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_handle_from_before_a_reload_is_a_new_one_for_the_same_shader() {
+    let script = r#"
+        local heat = game.shaders.screen("heat", { strength = 0.3 })
+        game.onTick(function() heat:set("tint", "red") end)
+    "#;
+    let folder = GameFolder::new(script);
+    let mut host = folder.open();
+    run(&mut host, 1);
+    folder.write(&format!("{script}\n-- saved"));
+    host.reload().unwrap();
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(on(&host)[0].values.len(), 2);
+}
+
+#[test]
+fn a_handle_works_again_when_its_shader_is_asked_for_again() {
+    let mut host = game(
+        r#"
+        local heat = game.shaders.screen("heat")
+        game.onTick(function()
+            heat:remove()
+            game.shaders.screen("heat")
+            heat:set("strength", 0.7)
+        end)
+    "#,
+    );
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        on(&host)[0].values,
+        [("strength".to_owned(), ParamValue::F32(0.7))]
+    );
+    // Another shader on the material leaves the old handle off.
+    let mut host = game(
+        r#"
+        local lava = game.shaders.surface("lava", "Lava")
+        local other = game.shaders.surface("heat", "Lava")
+        assert(lava ~= other)
+        game.onTick(function() lava:set("glow", 2) end)
+    "#,
+    );
+    run(&mut host, 1);
+    assert!(
+        host.last_error()
+            .is_some_and(|error| error.message.contains("is off")),
+        "{:?}",
+        host.last_error()
+    );
+}
+
+#[test]
+fn a_reload_may_swap_all_eight_screen_effects() {
+    let top = |first: usize| {
+        (first..first + 8)
+            .map(|at| {
+                format!(
+                    "game.shaders.screen('s{at}', {{ code = 'fn screen(in: ScreenIn) -> vec3f {{ return in.color; }}' }})\n"
+                )
+            })
+            .collect::<String>()
+    };
+    let folder = GameFolder::new(&top(0));
+    let mut host = folder.open();
+    assert_eq!(on(&host).len(), 8);
+    folder.write(&top(8));
+    host.reload().unwrap();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let expected: Vec<String> = (8..16).map(|at| format!("s{at}")).collect();
+    assert_eq!(names(&host), expected);
+}
+
+#[test]
+fn a_reload_that_fails_after_removing_things_changes_nothing() {
+    let folder = GameFolder::new(
+        r#"
+        game.shaders.screen("heat", { strength = 0.3 })
+        game.shaders.surface("lava", "Lava")
+    "#,
+    );
+    let mut host = folder.open();
+    let list = on(&host);
+    let revision = host.shader_revision();
+    // Heat is no longer asked for, lava is removed, and then the file fails.
+    folder.write(
+        r#"
+        game.shaders.surface("lava", "Lava"):remove()
+        game.shaders.screen("pulse", { code = "fn screen(in: ScreenIn) -> vec3f { return in.color; }" })
+        error("stop here")
+    "#,
+    );
+    assert!(host.reload().is_err());
+    assert_eq!(on(&host), list);
+    assert_eq!(host.shader_revision(), revision);
+}
+
+#[test]
+fn further_looks_after_a_broken_save_leave_the_revision_alone() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    let before = host.shader_revision();
+    save(
+        &folder,
+        "heat",
+        "//! param strength: nonsense = 1\nfn screen(in: ScreenIn) -> vec3f { return in.color; }\n",
+    );
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let broken = host.shader_revision();
+    for _ in 0..12 {
+        host.poll_reload();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(host.shader_revision(), broken);
+}
+
+#[test]
+fn a_surface_shader_written_with_its_name_and_material_swapped_is_explained() {
+    assert_eq!(
+        mistake_with(
+            r#"game.shaders.surface("Stone", "lava")"#,
+            &[("lava", LAVA)]
+        ),
+        "game.shaders.surface(\"Stone\", \"lava\") needs the file shaders/Stone.wgsl, which the \
+         game does not have. Did you mean game.shaders.surface(\"lava\", \"Stone\")? The shader's \
+         name comes first, then the material. To make it, create shaders/Stone.wgsl in the \
+         game's folder with this in it: fn surface(in: SurfaceIn) -> Surface { return \
+         in.surface; }"
     );
 }

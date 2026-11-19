@@ -9,9 +9,14 @@
 //! `heat:remove()` turns the shader off.
 //!
 //! The shaders live in [`ShaderState`], outside the script's VM, so saving
-//! the script keeps them: the file's top-level `game.shaders.screen(...)`
-//! calls describe each shader again, and a shader the file no longer asks
-//! for at its top goes away, as one that was never asked for there stays.
+//! the script keeps them. Asking again for one that is on with no table
+//! gives it as it is; with a table, those values are set and every other
+//! value goes back to the shader's own. Without `code` the text is the
+//! file's. A shader turned on at the top of the file is turned off when that
+//! line is deleted and the file saved; one turned on inside a function stays
+//! on until `:remove()`. A handle finds its shader by what it is (a screen
+//! effect by its name, a surface shader by its material and name), so it
+//! works again when the shader is asked for again.
 //! The engine asks for them with
 //! [`ScriptHost::each_shader`](crate::ScriptHost::each_shader) as
 //! [`ShaderSaid`]s, and learns that the list changed from
@@ -26,7 +31,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use lore_shader::{Given, Hook, ParamBlock, ParamValue, ShaderError, params_of};
+use lore_shader::{Given, Hook, ParamBlock, ParamKind, ParamValue, ShaderError, params_of};
 use mlua::{AnyUserData, Lua, MetaMethod, Table, UserData, UserDataMethods, UserDataRef, Value};
 
 use crate::api::{self, Shared, describe, fail, strict};
@@ -126,8 +131,6 @@ enum Origin {
 
 #[derive(Clone)]
 pub(crate) struct Entry {
-    /// What a handle holds, so it still finds its shader when others come and go.
-    id: u64,
     said: ShaderSaid,
     /// From `params_of` on `said.text`.
     block: ParamBlock,
@@ -147,7 +150,20 @@ pub(crate) struct ShaderState {
     revision: Cell<u64>,
     /// Between `begin_load` and `end_load` or `restore`.
     loading: Cell<bool>,
-    next_id: Cell<u64>,
+}
+
+/// The shaders as a script file found them, to go back to if it fails.
+pub(crate) struct LoadStart {
+    entries: Vec<Entry>,
+    revision: u64,
+}
+
+impl Entry {
+    /// Whether this is the shader a handle for `name` and `used` means: a
+    /// screen effect by its name, a surface shader by its material and name.
+    fn is(&self, name: &str, used: &ShaderUse) -> bool {
+        self.said.name == name && self.said.used_as == *used
+    }
 }
 
 impl ShaderState {
@@ -157,7 +173,6 @@ impl ShaderState {
             entries: RefCell::new(Vec::new()),
             revision: Cell::new(0),
             loading: Cell::new(false),
-            next_id: Cell::new(0),
         }
     }
 
@@ -225,14 +240,18 @@ impl ShaderState {
     /// fits. Whether the list changed.
     fn reread(&self, entry: &mut Entry) -> bool {
         let relative = entry.said.file.clone();
-        let text = match self.files.read(&relative) {
+        let read = self.files.read(&relative);
+        if let Origin::File { missing, .. } = &mut entry.origin {
+            // Found, so whatever else is wrong with it, it is not gone.
+            *missing = if matches!(read, Err(ReadProblem::Missing)) {
+                2
+            } else {
+                0
+            };
+        }
+        let text = match read {
             Ok(text) => text,
-            Err(ReadProblem::Missing) => {
-                if let Origin::File { missing, .. } = &mut entry.origin {
-                    *missing = 2;
-                }
-                return set_gone(&mut entry.said);
-            }
+            Err(ReadProblem::Missing) => return set_gone(&mut entry.said),
             Err(problem) => {
                 let call = call_text(&entry.said.name, &entry.said.used_as);
                 let message = self.explain(
@@ -251,9 +270,6 @@ impl ShaderState {
                 return set_problem(&mut entry.said, error.with_note(STILL_DRAWN));
             }
         };
-        if let Origin::File { missing, .. } = &mut entry.origin {
-            *missing = 0;
-        }
         let block = ParamBlock::new(params);
         let said = &mut entry.said;
         let shader = shader_text(&said.name, &said.used_as);
@@ -285,8 +301,11 @@ impl ShaderState {
 
     /// A script file is about to run: remembers the shaders as they are, to
     /// go back to if it fails, and starts noting which ones it asks for.
-    pub(crate) fn begin_load(&self) -> Vec<Entry> {
-        let before = self.entries.borrow().clone();
+    pub(crate) fn begin_load(&self) -> LoadStart {
+        let before = LoadStart {
+            entries: self.entries.borrow().clone(),
+            revision: self.revision.get(),
+        };
         for entry in self.entries.borrow_mut().iter_mut() {
             entry.said_now = false;
         }
@@ -316,29 +335,33 @@ impl ShaderState {
         self.loading.set(false);
     }
 
-    /// The script file failed: the shaders are as `before` found them.
-    pub(crate) fn restore(&self, before: Vec<Entry>) {
-        *self.entries.borrow_mut() = before;
+    /// The script file failed: the shaders are as `before` found them, and
+    /// so is the revision. What the file did to the list in between was never
+    /// seen, since a script loads in one go, so nothing is built again.
+    pub(crate) fn restore(&self, before: LoadStart) {
+        *self.entries.borrow_mut() = before.entries;
+        self.revision.set(before.revision);
         self.loading.set(false);
-        self.bump();
     }
 
     /// Whether another shader of `used`'s kind may be on, not counting the
-    /// one with id `except` and the ones the file loading now left out.
-    fn has_room(&self, entries: &[Entry], used: &ShaderUse, except: Option<u64>) -> bool {
+    /// one at `except` and the ones the file loading now left out.
+    fn has_room(&self, entries: &[Entry], used: &ShaderUse, except: Option<usize>) -> bool {
         let loading = self.loading.get();
         let counted = entries
             .iter()
-            .filter(|entry| Some(entry.id) != except)
+            .enumerate()
+            .filter(|(at, _)| Some(*at) != except)
+            .map(|(_, entry)| entry)
             .filter(|entry| !(loading && entry.file_said && !entry.said_now))
             .filter(|entry| entry.said.used_as.same_kind(used))
             .count();
         counted < used.most()
     }
 
-    fn remove(&self, id: u64) {
+    fn remove(&self, name: &str, used: &ShaderUse) {
         let mut entries = self.entries.borrow_mut();
-        if let Some(at) = entries.iter().position(|entry| entry.id == id) {
+        if let Some(at) = entries.iter().position(|entry| entry.is(name, used)) {
             entries.remove(at);
             self.bump();
         }
@@ -412,7 +435,21 @@ impl ShaderState {
                 }
                 let mut said =
                     format!("{call} needs the file {relative}, which the game does not have.");
-                if let Some(near) = closest(name, others.iter().map(String::as_str)) {
+                // The material's file is there: the two were written the wrong
+                // way round.
+                let swapped = match used {
+                    ShaderUse::Surface { material } => others
+                        .iter()
+                        .find(|other| other.eq_ignore_ascii_case(material)),
+                    ShaderUse::Screen => None,
+                };
+                if let Some(stem) = swapped {
+                    let _ = write!(
+                        said,
+                        " Did you mean game.shaders.surface(\"{stem}\", \"{name}\")? The \
+                         shader's name comes first, then the material."
+                    );
+                } else if let Some(near) = closest(name, others.iter().map(String::as_str)) {
                     let _ = write!(said, " Did you mean {}?", call_text(near, used));
                 }
                 let starter = used
@@ -446,20 +483,20 @@ impl ShaderState {
     /// own list and keeps it. Allocates nothing when `name` was set before.
     fn set(&self, lua: &Lua, handle: &ShaderRef, name: &str, value: &Value) -> mlua::Result<()> {
         let mut entries = self.entries.borrow_mut();
-        let Some(entry) = entries.iter_mut().find(|entry| entry.id == handle.id) else {
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.is(&handle.name, &handle.used))
+        else {
             return Err(fail(lua, off(&handle.name, &handle.used)));
         };
-        let who = || who(&entry.said.name, &entry.said.used_as);
-        let checked = with_given(value, |given| match given {
-            Ok(given) => entry
-                .block
-                .check(name, given)
-                .map_err(|message| format!("{}: {message}", who())),
-            Err(unfit) => Err(format!(
-                "{}: {}",
-                who(),
-                unfit_message(&entry.block, name, unfit)
-            )),
+        let checked = with_given(value, |given| {
+            check_value(&entry.block, name, given, || {
+                let file = match entry.origin {
+                    Origin::Code => "its code",
+                    Origin::File { .. } => &entry.said.file,
+                };
+                Wording::new(&entry.said.name, &entry.said.used_as, file, false)
+            })
         });
         let value = checked.map_err(|message| fail(lua, message))?;
         match entry.said.values.iter_mut().find(|(set, _)| set == name) {
@@ -616,33 +653,158 @@ fn key_text(key: &Value) -> String {
     }
 }
 
-/// Why `value` cannot be what the value called `name` takes. If the shader
-/// has no such value, the sentence of the unknown name.
-fn unfit_message(block: &ParamBlock, name: &str, unfit: Unfit) -> String {
+/// How a message about a value is worded for one shader.
+struct Wording {
+    /// `screen effect "heat"`.
+    shader: String,
+    /// Where the shader's values are declared, to finish a sentence with.
+    file: String,
+    /// What a handle is called in an example: `heat`, or `shader`.
+    var: String,
+    /// For a values table: `game.shaders.screen("heat", `. None for `:set`.
+    table_lead: Option<String>,
+}
+
+impl Wording {
+    fn new(name: &str, used: &ShaderUse, file: &str, table: bool) -> Self {
+        let table_lead = table.then(|| {
+            let call = call_text(name, used);
+            format!("{}, ", &call[..call.len() - 1])
+        });
+        Self {
+            shader: shader_text(name, used),
+            file: file.to_owned(),
+            var: var_of(name),
+            table_lead,
+        }
+    }
+
+    /// A line that sets the value `name` of `kind`.
+    fn example(&self, name: &str, kind: ParamKind) -> String {
+        let value = kind.luau_example();
+        match &self.table_lead {
+            Some(lead) => format!("{lead}{{ {name} = {value} }})"),
+            None => format!("{}:set(\"{name}\", {value})", self.var),
+        }
+    }
+}
+
+/// `name` as a variable in an example, if it can be one; otherwise `shader`.
+fn var_of(name: &str) -> String {
+    const KEYWORDS: &[&str] = &[
+        "and", "break", "continue", "do", "else", "elseif", "end", "export", "false", "for",
+        "function", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true",
+        "type", "until", "while",
+    ];
+    let mut chars = name.chars();
+    let plain = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|next| next.is_ascii_alphanumeric() || next == '_');
+    if plain && !KEYWORDS.contains(&name) {
+        name.to_owned()
+    } else {
+        "shader".to_owned()
+    }
+}
+
+/// Whether `given` is the shape a value of `kind` takes.
+fn fits(kind: ParamKind, given: &Given<'_>) -> bool {
+    match (kind, given) {
+        (ParamKind::F32, Given::Number(_)) => true,
+        (ParamKind::Color, Given::Text(_)) => true,
+        (ParamKind::Color | ParamKind::Vec3, Given::Numbers(numbers)) => numbers.len() == 3,
+        (ParamKind::Vec2, Given::Numbers(numbers)) => numbers.len() == 2,
+        (ParamKind::Vec4, Given::Numbers(numbers)) => numbers.len() == 4,
+        _ => false,
+    }
+}
+
+/// What the script gave, in a few words.
+fn given_text(given: &Given<'_>) -> String {
+    match given {
+        Given::Number(_) => "a number".to_owned(),
+        Given::Text(_) => "text".to_owned(),
+        Given::Numbers([_]) => "a table of 1 number".to_owned(),
+        Given::Numbers(numbers) => format!("a table of {} numbers", numbers.len()),
+    }
+}
+
+/// What the script wrote that is no [`Given`], in a few words.
+fn unfit_text(unfit: &Unfit) -> String {
+    match unfit {
+        Unfit::Kind(kind) => (*kind).to_owned(),
+        Unfit::Item(item) => format!("a table with {item} in it"),
+        Unfit::Part(key) => format!("a table with a part named {key}"),
+        Unfit::Long(len) => format!("a table of {len} numbers"),
+    }
+}
+
+/// Checks what the script gave for the value `name` of a shader with
+/// `block`, and says what to write when it is a mistake. Nothing is
+/// allocated for a value that fits; `words` is asked for only on a mistake.
+fn check_value(
+    block: &ParamBlock,
+    name: &str,
+    given: Result<Given<'_>, Unfit>,
+    words: impl Fn() -> Wording,
+) -> Result<ParamValue, String> {
     let Some(param) = block.params().iter().find(|param| param.name == name) else {
-        return block
-            .check(name, Given::Number(0.0))
-            .err()
-            .unwrap_or_default();
+        return Err(unknown_value(block, name, &words()));
     };
     let kind = param.kind;
-    let (needs, example) = (kind.needs(), kind.luau_example());
-    match unfit {
-        Unfit::Kind(given) => {
-            format!("`{name}` needs {needs}, but it was given {given}. Write it like `{example}`.")
-        }
-        Unfit::Item(item) => format!(
-            "`{name}` needs {needs}, but its table has {item} in it. Write it like `{example}`."
-        ),
-        Unfit::Part(key) => format!(
-            "`{name}` needs {needs}, written in order without names, but its table has a part \
-             named {key}. Write it like `{example}`."
-        ),
-        Unfit::Long(len) => format!(
-            "`{name}` needs {needs}, but it was given a table of {len} numbers. Write it like \
-             `{example}`."
-        ),
+    let wrong = |got: String| {
+        let words = words();
+        format!(
+            "In the {}, `{name}` needs {}, but it was given {got}. Write it like this: {}",
+            words.shader,
+            kind.needs(),
+            words.example(name, kind)
+        )
+    };
+    match given {
+        Err(unfit) => Err(wrong(unfit_text(&unfit))),
+        Ok(given) if !fits(kind, &given) => Err(wrong(given_text(&given))),
+        Ok(given) => block.check(name, given).map_err(|message| {
+            let words = words();
+            format!("In the {}, {message}", words.shader)
+        }),
     }
+}
+
+/// The sentence for a value the shader does not have.
+fn unknown_value(block: &ParamBlock, name: &str, words: &Wording) -> String {
+    let params = block.params();
+    let shader = &words.shader;
+    let Some(first) = params.first() else {
+        return format!(
+            "The {shader} has no values, so there is no `{name}`. To add one, write a line such \
+             as `//! param {name}: f32 = 0.5 range 0..1` at the top of {}.",
+            words.file
+        );
+    };
+    let near = closest(name, params.iter().map(|param| param.name.as_str()));
+    let Some(near) = near else {
+        let list: Vec<String> = params
+            .iter()
+            .map(|param| format!("`{}`", param.name))
+            .collect();
+        return format!(
+            "The {shader} has no value called `{name}`. Its values are: {}. Write it like \
+             this: {}",
+            list.join(", "),
+            words.example(&first.name, first.kind)
+        );
+    };
+    let kind = params
+        .iter()
+        .find(|param| param.name == near)
+        .map_or(first.kind, |param| param.kind);
+    format!(
+        "The {shader} has no value called `{name}`. Did you mean `{near}`? Write it like \
+         this: {}",
+        words.example(near, kind)
+    )
 }
 
 fn wrong_case(call: &str, on_disk: &str, relative: &str) -> String {
@@ -653,7 +815,7 @@ fn wrong_case(call: &str, on_disk: &str, relative: &str) -> String {
 }
 
 /// An error from `params_of` on one line, for a message that cannot hold
-/// more than that.
+/// more than that: where, what, then the hint as a sentence.
 fn one_line(error: &ShaderError) -> String {
     let mut said = error.file.clone();
     if let Some(line) = error.line {
@@ -661,7 +823,7 @@ fn one_line(error: &ShaderError) -> String {
     }
     let _ = write!(said, ": {}", error.message);
     if let Some(hint) = &error.hint {
-        let _ = write!(said, " Hint: {hint}");
+        let _ = write!(said, " {hint}");
     }
     said.replace(['\n', '\r'], " ")
 }
@@ -896,41 +1058,37 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
             },
         )
     };
-    let handle = |id: u64| {
+    let handle = || {
         lua.create_userdata(ShaderRef {
-            id,
             name: name.clone(),
             used: used.clone(),
         })
     };
 
-    // Asked for with no values, and already on: the same shader, untouched.
+    // Asked for with no values, and already on from its file: the same
+    // shader, untouched. One given as code is read from its file instead.
     if values.is_none() {
         let mut entries = state.entries.borrow_mut();
         if let Some(at) = entries.iter().position(&slot)
             && entries[at].said.name == name
+            && matches!(entries[at].origin, Origin::File { .. })
         {
-            let id = entries[at].id;
             if loading && entries[at].file_said && !entries[at].said_now {
                 // Counted again now that the file asks for it.
-                if !state.has_room(&entries, &used, Some(id)) {
+                if !state.has_room(&entries, &used, Some(at)) {
                     return Err(too_many());
                 }
             }
             if loading {
                 entries[at].said_now = true;
             }
-            return handle(id);
+            drop(entries);
+            return handle();
         }
     }
 
     // Everything below may change the list.
-    let existing = state
-        .entries
-        .borrow()
-        .iter()
-        .find(|entry| slot(entry))
-        .map(|entry| entry.id);
+    let existing = state.entries.borrow().iter().position(&slot);
     if !state.has_room(&state.entries.borrow(), &used, existing) {
         return Err(too_many());
     }
@@ -983,25 +1141,22 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
 
     let mut set = Vec::new();
     if let Some(values) = &values {
-        let who = || who(&name, &used);
+        let file = match source.origin {
+            Origin::Code => "its code",
+            Origin::File { .. } => &source.label,
+        };
         for (key, value) in &values.named {
-            let checked = with_given(value, |given| match given {
-                Ok(given) => source
-                    .block
-                    .check(key, given)
-                    .map_err(|message| format!("{}: {message}", who())),
-                Err(unfit) => Err(format!(
-                    "{}: {}",
-                    who(),
-                    unfit_message(&source.block, key, unfit)
-                )),
+            let checked = with_given(value, |given| {
+                check_value(&source.block, key, given, || {
+                    Wording::new(&name, &used, file, true)
+                })
             });
             set.push((key.clone(), checked.map_err(|message| fail(lua, message))?));
         }
     }
 
     let mut entries = state.entries.borrow_mut();
-    let id = match entries.iter().position(slot) {
+    match entries.iter().position(slot) {
         Some(at) if entries[at].said.name == name => {
             let entry = &mut entries[at];
             let changed = entry.said.file != source.label
@@ -1023,13 +1178,9 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
             if changed {
                 state.bump();
             }
-            entry.id
         }
         found => {
-            let id = state.next_id.get();
-            state.next_id.set(id + 1);
             let made = Entry {
-                id,
                 said: ShaderSaid {
                     name: name.clone(),
                     file: source.label,
@@ -1049,11 +1200,10 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
                 None => entries.push(made),
             }
             state.bump();
-            id
         }
-    };
+    }
     drop(entries);
-    handle(id)
+    handle()
 }
 
 /// `game.shaders`.
@@ -1098,8 +1248,11 @@ pub(crate) fn table(lua: &Lua) -> mlua::Result<Table> {
 }
 
 /// What a script holds for a shader it turned on.
+///
+/// It finds its shader by what it is, as lamp handles do: a screen effect by
+/// its name, a surface shader by its material and name. So it works again
+/// when the shader is asked for again after `:remove()`.
 struct ShaderRef {
-    id: u64,
     name: String,
     used: ShaderUse,
 }
@@ -1152,7 +1305,7 @@ impl UserData for ShaderRef {
                 &this,
                 "remove is called with a colon: heat:remove(), not heat.remove()",
             )?;
-            shared_of(lua)?.shaders.remove(handle.id);
+            shared_of(lua)?.shaders.remove(&handle.name, &handle.used);
             Ok(())
         });
         methods.add_meta_function(MetaMethod::ToString, |_, this: AnyUserData| {
@@ -1161,26 +1314,29 @@ impl UserData for ShaderRef {
         });
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (AnyUserData, AnyUserData)| {
             Ok(match (a.borrow::<Self>(), b.borrow::<Self>()) {
-                (Ok(a), Ok(b)) => a.id == b.id,
+                (Ok(a), Ok(b)) => a.name == b.name && a.used == b.used,
                 _ => false,
             })
         });
         methods.add_meta_function(
             MetaMethod::Index,
-            |lua, (_, key): (AnyUserData, Value)| -> mlua::Result<Value> {
+            |lua, (this, key): (AnyUserData, Value)| -> mlua::Result<Value> {
                 let key = key_text(&key);
-                let mut message = format!(
-                    "shader.{key} does not exist. A shader's values are set with :set, like \
-                     heat:set(\"{key}\", 0.5)."
-                );
-                match closest(&key, SHADER_METHODS.iter().copied()) {
+                let message = match closest(&key, SHADER_METHODS.iter().copied()) {
                     Some(near) => {
-                        let _ = write!(message, " Did you mean shader:{near}?");
+                        format!("shader.{key} does not exist. Did you mean shader:{near}?")
                     }
                     None => {
-                        let _ = write!(message, " A shader has: {}.", SHADER_METHODS.join(", "));
+                        let var = this
+                            .borrow::<Self>()
+                            .map_or_else(|_| "shader".to_owned(), |this| var_of(&this.name));
+                        format!(
+                            "shader.{key} cannot be read. A shader's values can only be set, like \
+                             {var}:set(\"{key}\", 0.5): keep your own number in a variable if you \
+                             need it."
+                        )
                     }
-                }
+                };
                 Err(fail(lua, message))
             },
         );
