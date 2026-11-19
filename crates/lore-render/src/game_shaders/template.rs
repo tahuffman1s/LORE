@@ -162,6 +162,23 @@ mod tests {
     use lore_shader::ParamKind;
 
     #[test]
+    fn a_file_with_both_functions_says_to_split_them() {
+        let both = "fn screen(in: ScreenIn) -> vec3f { return in.color; }\n\
+                    fn surface(in: SurfaceIn) -> Surface { return in.surface; }\n";
+        for hook in [Hook::Screen, Hook::Surface] {
+            let error = check_game_shader(hook, "shaders/both.wgsl", both).unwrap_err();
+            assert!(error.message.contains("both"), "{hook:?}: {error}");
+            assert!(
+                error
+                    .hint
+                    .as_deref()
+                    .is_some_and(|h| h.contains("holds one of the two functions")),
+                "{hook:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn each_hooks_starter_compiles() {
         for hook in [Hook::Screen, Hook::Surface] {
             let result = check_game_shader(hook, "shaders/starter.wgsl", hook.starter());

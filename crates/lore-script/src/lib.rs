@@ -72,7 +72,7 @@ pub use lamp_api::{LampBeam, LampLight};
 pub use lighting_api::EyeSaid;
 pub use lore_weapons as weapons;
 pub use settings_api::{Setting, SettingKind, SettingValue};
-pub use shader_api::{ShaderSaid, ShaderUse};
+pub use shader_api::{MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse};
 pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};

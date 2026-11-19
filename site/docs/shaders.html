@@ -50,7 +50,7 @@
   <h2 id="kinds">Two kinds of shader</h2>
   <p>A <b>screen effect</b> changes the finished picture: it is handed each pixel of what the game drew, and says what color to show instead. Black and white, a vignette, a heat haze and a sepia photograph are screen effects. Several can be on at once, and they run in the order you turned them on.</p>
   <p>A <b>surface shader</b> changes one material of your level: everything in the level that wears that material. It is handed what the material looks like at that spot (its color, which way it faces, how shiny it is, how much light it gives off) and says what it should look like instead. The engine still does the lighting, shadows, fog and weather.</p>
-  <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file.</p>
+  <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file. A file holds one function, `screen` or `surface`; if you need both, put the other in its own file.</p>
 
   <h2 id="screen">A first screen effect</h2>
   <p>Make a folder called <code>shaders</code> in your game's folder, and in it a file called <code>gray.wgsl</code>:</p>

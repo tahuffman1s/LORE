@@ -334,6 +334,57 @@ fn the_revision_rises_when_the_list_changes_and_not_for_values() {
     assert_eq!(names(&host), ["pulse"]);
 }
 
+#[test]
+fn the_same_code_asked_for_again_is_not_built_again_for_a_new_line() {
+    // Asked for from two places in turn: nothing to build after the first.
+    let mut host = game(
+        r#"
+        local code = "fn screen(in: ScreenIn) -> vec3f { return in.color; }"
+        local tick = 0
+        game.onTick(function(step)
+            tick += 1
+            if tick % 2 == 0 then
+                game.shaders.screen("pulse", { code = code })
+            else
+                game.shaders.screen("pulse", { code = code })
+            end
+        end)
+    "#,
+    );
+    run(&mut host, 1);
+    let start = host.shader_revision();
+    let label = on(&host)[0].file.clone();
+    run(&mut host, 4);
+    assert_eq!(host.shader_revision(), start);
+    assert_eq!(on(&host)[0].file, label);
+}
+
+#[test]
+fn code_that_moves_down_the_script_is_not_built_again_but_new_code_is() {
+    const CODE: &str = "fn screen(in: ScreenIn) -> vec3f { return in.color; }";
+    let folder = GameFolder::new(&format!(
+        "game.shaders.screen(\"pulse\", {{ code = \"{CODE}\" }})"
+    ));
+    let mut host = folder.open();
+    run(&mut host, 1);
+    let start = host.shader_revision();
+    let label = on(&host)[0].file.clone();
+    // Lines added above the call; the text is the same.
+    folder.write(&format!(
+        "local a = 1\nlocal b = 2\ngame.shaders.screen(\"pulse\", {{ code = \"{CODE}\" }})"
+    ));
+    host.reload().unwrap();
+    assert_eq!(host.shader_revision(), start);
+    assert_eq!(on(&host)[0].file, label);
+    // Other text takes the new label and builds.
+    folder.write(&format!(
+        "local a = 1\nlocal b = 2\nlocal c = 3\ngame.shaders.screen(\"pulse\", {{ code = \"{CODE} \" }})"
+    ));
+    host.reload().unwrap();
+    assert!(host.shader_revision() > start);
+    assert_ne!(on(&host)[0].file, label);
+}
+
 // Every mistake, worded exactly.
 
 #[test]

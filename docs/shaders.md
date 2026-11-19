@@ -96,7 +96,10 @@ file, line and source line, and the last version that worked keeps drawing.
   shader's own, as `game.lamp` does. A shader file that fails while the script
   loads is watched with the script; one that loaded is polled on its own and
   never restarts the script. A saved shader keeps the values that still fit.
-- Nothing about a shader is readable by a script. Calls are render-only
+- Nothing from the graphics card or the compiler (build results, readiness,
+  timing) reaches a script. What a script's calls check is the shader file's
+  own `//! param` lines, which change on save as scripts do, so a call can
+  fail after a save or when the file is gone. Calls are render-only
   state, allowed in `game.onDraw`, and are not part of `rules_fingerprint`, so
   the simulation stays the same.
 

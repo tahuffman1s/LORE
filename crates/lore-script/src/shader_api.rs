@@ -23,8 +23,10 @@
 //! [`ScriptHost::shader_revision`](crate::ScriptHost::shader_revision).
 //!
 //! Shaders change only what is drawn, never what happens, so any part of a
-//! script may turn them on and set them, `game.onDraw` too. Nothing about the
-//! renderer can be read back.
+//! script may turn them on and set them, `game.onDraw` too. Nothing from the
+//! graphics card or the compiler reaches a script. What a script's calls
+//! check is the shader file's own `//! param` lines, which change on save as
+//! scripts do, so a call can fail after a save or when the file is gone.
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
@@ -46,11 +48,13 @@ pub(crate) const SHADERS_FUNCTIONS: &[&str] = &["screen", "surface"];
 /// against it.
 pub(crate) const SHADER_METHODS: &[&str] = &["set", "remove"];
 
-/// How many screen effects can be on at once.
-pub(crate) const MOST_SCREEN_EFFECTS: usize = 8;
+/// How many screen effects can be on at once. The renderer draws the same
+/// number: a script is never allowed one it would not draw.
+pub const MOST_SCREEN_EFFECTS: usize = 8;
 
-/// How many surface shaders can be on at once, one for each material.
-pub(crate) const MOST_SURFACE_SHADERS: usize = 8;
+/// How many surface shaders can be on at once, one for each material. The
+/// renderer draws the same number.
+pub const MOST_SURFACE_SHADERS: usize = 8;
 
 /// What a game shader is used for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1099,7 +1103,7 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
         return Err(too_many());
     }
     let code = values.as_ref().and_then(|values| values.code.as_deref());
-    let source = match code {
+    let mut source = match code {
         Some(code) => {
             let label = match api::calling_script(lua) {
                 Some((file, Some(line))) => format!("the code for \"{name}\" ({file}:{line})"),
@@ -1165,6 +1169,14 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
     match entries.iter().position(slot) {
         Some(at) if entries[at].said.name == name => {
             let entry = &mut entries[at];
+            // The same code asked for again keeps the label it had: a moved
+            // line or another caller is not a change to the shader.
+            if matches!(source.origin, Origin::Code)
+                && matches!(entry.origin, Origin::Code)
+                && entry.said.text == source.text
+            {
+                source.label = entry.said.file.clone();
+            }
             let changed = entry.said.file != source.label
                 || entry.said.text != source.text
                 || (!source.reused && entry.said.problem.is_some());

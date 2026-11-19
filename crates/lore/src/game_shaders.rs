@@ -30,6 +30,10 @@ struct Kept {
     failed: Option<ShaderError>,
 }
 
+/// The revision of a report about the graphics driver as a whole, which no
+/// shader has: kept revisions start at 1.
+const DRIVER_FAULT: u64 = 0;
+
 impl Kept {
     fn is(&self, name: &str, material: Option<&str>) -> bool {
         self.name == name && self.material.as_deref() == material
@@ -67,6 +71,8 @@ pub(crate) struct ShaderList {
     seen: Option<(Source, u64)>,
     /// The revision the next changed shader gets. Starts at 1.
     next: u64,
+    /// What the graphics driver could not make, which stops every shader.
+    driver: Option<ShaderError>,
 }
 
 impl ShaderList {
@@ -161,6 +167,7 @@ impl ShaderList {
     pub(crate) fn clear(&mut self) {
         self.kept.clear();
         self.seen = None;
+        self.driver = None;
     }
 
     /// Lends the renderer the list. It is built on the stack.
@@ -213,6 +220,18 @@ impl ShaderList {
     /// that has been replaced since, or a shader that is gone.
     pub(crate) fn hear(&mut self, reports: Vec<ShaderReport>) {
         for report in reports {
+            match &report.outcome {
+                // Something was built, so the driver works again.
+                Ok(()) => self.driver = None,
+                // No shader has revision 0: the driver failed, and no game
+                // shader is drawn.
+                Err(error) if report.revision == DRIVER_FAULT => {
+                    log::error!("{error}");
+                    self.driver = Some(error.clone());
+                    continue;
+                }
+                Err(_) => {}
+            }
             let Some(kept) = self.kept.iter_mut().find(|kept| {
                 kept.is(&report.name, report.material.as_deref())
                     && kept.revision == report.revision
@@ -229,12 +248,15 @@ impl ShaderList {
         }
     }
 
-    /// What is wrong with the shaders, in order: for each, what the script
+    /// What is wrong with the shaders, in order: the driver's failure if
+    /// there was one, then for each, what the script
     /// side found in its file, or else what the renderer could not build.
     pub(crate) fn problems(&self) -> impl Iterator<Item = &ShaderError> {
-        self.kept
-            .iter()
-            .filter_map(|kept| kept.problem.as_ref().or(kept.failed.as_ref()))
+        self.driver.iter().chain(
+            self.kept
+                .iter()
+                .filter_map(|kept| kept.problem.as_ref().or(kept.failed.as_ref())),
+        )
     }
 }
 
@@ -423,6 +445,39 @@ mod tests {
         list.follow(Source::new(), &second);
         assert_eq!(revisions(&list), [("a".to_owned(), 2)]);
         assert_eq!(list.kept[0].text, changed);
+    }
+
+    #[test]
+    fn a_driver_failure_is_shown_until_something_is_built_or_the_list_is_cleared() {
+        let one = host(
+            r#"game.shaders.screen("a", {})"#,
+            &[("shaders/a.wgsl", SCREEN)],
+        );
+        let mut list = ShaderList::default();
+        list.follow(ONE, &one);
+        let driver = || report("game shaders", 0, Err(error("src/game_shaders/mod.rs")));
+        list.hear(vec![driver()]);
+        assert_eq!(list.problems().count(), 1);
+        assert_eq!(
+            list.problems().next().map(|e| e.message.as_str()),
+            Some("no")
+        );
+        // Another report that is not about a shader changes nothing.
+        list.hear(vec![report("gone", 7, Err(error("shaders/gone.wgsl")))]);
+        assert_eq!(list.problems().count(), 1);
+        // Something built.
+        list.hear(vec![report("a", 1, Ok(()))]);
+        assert_eq!(list.problems().count(), 0);
+        // Cleared with the list.
+        list.hear(vec![driver()]);
+        list.clear();
+        assert_eq!(list.problems().count(), 0);
+    }
+
+    #[test]
+    fn the_script_and_the_renderer_allow_the_same_number_of_shaders() {
+        assert_eq!(lore_script::MOST_SCREEN_EFFECTS, MOST_SCREEN_EFFECTS);
+        assert_eq!(lore_script::MOST_SURFACE_SHADERS, MOST_SURFACE_SHADERS);
     }
 
     #[test]

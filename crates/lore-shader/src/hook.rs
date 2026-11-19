@@ -176,6 +176,24 @@ fn check_entry(hook: Hook, file: &str, text: &str) -> Result<(), ShaderError> {
             )),
         ));
     }
+    let other = hook.other();
+    if let Some(at) = find_fn(&pieces, other.entry()) {
+        return Err(error_at(
+            file,
+            text,
+            pieces[at].at,
+            format!(
+                "This shader has both a `{}` and a `{}` function, and {} can use only one.",
+                hook.entry(),
+                other.entry(),
+                hook.kind()
+            ),
+            Some(format!(
+                "A shader file holds one of the two functions. Put `{}` in its own file.",
+                other.entry()
+            )),
+        ));
+    }
     Ok(())
 }
 
