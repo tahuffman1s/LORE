@@ -115,6 +115,7 @@ pub fn hooked_module(
             Some("Remove what you do not use, or split the work between two shaders.".to_owned()),
         ));
     }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     refuse_endless_loops(file, text)?;
     check_entry(hook, file, text)?;
     let mut module = engine.clone();
@@ -337,6 +338,14 @@ fn screen(in: ScreenIn) -> vec3f {
         assert_eq!(error.column, Some(15));
         assert!(!error.lore_fault);
         assert_eq!(error.hint.as_deref(), Some("Did you mean `color`?"));
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_stop_a_shader_compiling() {
+        let text = format!("\u{feff}{HEAT}");
+        let module = build(Hook::Screen, SCREEN, &text).expect("stitches");
+        assert!(!module.text().contains('\u{feff}'));
+        compile(&module, Bounds::Trusted).expect("compiles");
     }
 
     #[test]

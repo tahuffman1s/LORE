@@ -127,8 +127,8 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
-    /// The numbers it holds.
-    fn floats(&self) -> &[f32] {
+    /// The numbers it holds, in order, as they are written into the block.
+    pub fn floats(&self) -> &[f32] {
         match self {
             Self::F32(number) => std::slice::from_ref(number),
             Self::Vec2(numbers) => numbers,
@@ -344,6 +344,8 @@ pub fn params_of(file: &str, text: &str) -> Result<Vec<Param>, ShaderError> {
             ),
         ));
     }
+    // A byte order mark is not part of the first line, as in an editor.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut found: Vec<Param> = Vec::new();
     for (index, text) in text.lines().enumerate() {
         let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
@@ -424,6 +426,20 @@ fn parse_param(line: &Line<'_>, start: usize, found: &[Param]) -> Result<Param, 
     let name = word_of(line.from(at));
     at += name.len();
     if name.is_empty() {
+        if let Some(c) = line
+            .from(at)
+            .chars()
+            .next()
+            .filter(|c| !c.is_whitespace() && !matches!(c, ':' | '='))
+        {
+            return Err(line.error(
+                at,
+                format!(
+                    "A name can use only letters, digits and `_`, but `{c}` is not one of them."
+                ),
+                format!("Write it like `{}`.", sample("strength")),
+            ));
+        }
         return Err(line.error(
             at,
             "A `//! param` line needs a name for the value.".to_owned(),
@@ -713,7 +729,7 @@ fn parse_range(line: &Line<'_>, at: usize, sample: &str) -> Result<(f32, f32), S
 }
 
 /// The uniform block that carries a shader's values.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParamBlock {
     params: Vec<Param>,
     /// The byte offset of each param, in the same order.
@@ -784,6 +800,7 @@ impl ParamBlock {
         let wrong_kind = || {
             let got = match given {
                 Given::Number(_) => "a number".to_owned(),
+                Given::Numbers([_]) => "a table of 1 number".to_owned(),
                 Given::Numbers(numbers) => format!("a table of {} numbers", numbers.len()),
                 Given::Text(text) => format!("the text \"{text}\""),
             };
@@ -1046,6 +1063,26 @@ mod tests {
         assert!(error.message.contains(&format!("{}", MAX_TEXT_BYTES + 1)));
         assert!(error.message.contains("65536"));
         assert!(error.hint.unwrap().contains("Split"));
+    }
+
+    #[test]
+    fn a_name_with_a_letter_outside_ascii_says_what_a_name_can_use() {
+        let error = expect(
+            "//! param é: f32 = 1\n",
+            1,
+            11,
+            "A name can use only letters",
+        );
+        assert!(error.message.contains("`é`"), "{error}");
+        expect("//! param : f32 = 1\n", 1, 11, "needs a name");
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_not_part_of_the_first_line() {
+        let found = params_of("shaders/t.wgsl", "\u{feff}//! param a: f32 = 1\n").unwrap();
+        assert_eq!(found.len(), 1);
+        let error = params_of("shaders/t.wgsl", "\u{feff}//! param a f32 = 1\n").unwrap_err();
+        assert_eq!(error.column, Some(13), "{error}");
     }
 
     #[test]
@@ -1406,6 +1443,7 @@ mod tests {
             "`s` needs a number, but it was given the text \"red\". Write it like `0.5`."
         );
         assert!(text("s", Given::Numbers(&[1.0, 2.0])).contains("a table of 2 numbers"));
+        assert!(text("s", Given::Numbers(&[1.0])).contains("a table of 1 number."));
         assert_eq!(
             text("v3", Given::Numbers(&[1.0, 2.0])),
             "`v3` needs a table of 3 numbers, but it was given a table of 2 numbers. \

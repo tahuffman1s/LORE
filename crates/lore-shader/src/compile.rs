@@ -364,6 +364,73 @@ fn main() -> @location(0) vec4f {
     }
 
     #[test]
+    fn a_vector_without_that_component_says_so() {
+        let author = "fn screen(in: ScreenIn) -> vec3f {\n    var c = in.color;\n    c.w = 1.0;\n    return c;\n}\n";
+        let error = slip(author);
+        assert_eq!(error.file, FILE);
+        assert_eq!(error.line, Some(3));
+        assert_eq!(error.message, "`c` has no `.w`.");
+        let hint = error.hint.expect("a hint");
+        assert!(hint.contains("`vec2f` has x and y"), "{hint}");
+        assert!(hint.contains("only a `vec4f` has w"), "{hint}");
+        let error = slip("fn screen(in: ScreenIn) -> vec3f {\n    return vec3f(in.color.a);\n}\n");
+        assert_eq!(error.message, "`color` has no `.a`.");
+        assert!(!error.hint.expect("a hint").contains("`uv`"));
+    }
+
+    #[test]
+    fn a_misspelt_name_after_a_dot_on_a_value_says_to_check_it() {
+        let error = slip("fn screen(in: ScreenIn) -> vec3f {\n    return in.color.banana;\n}\n");
+        assert_eq!(error.message, "`color` has no field `banana`.");
+        assert_eq!(
+            error.hint.as_deref(),
+            Some("Check the spelling of the name after the `.`.")
+        );
+    }
+
+    #[test]
+    fn a_number_where_a_vector_is_needed_shows_how_to_make_one() {
+        for author in [
+            "fn screen(in: ScreenIn) -> vec3f {\n    return 1.0;\n}\n",
+            "fn screen(in: ScreenIn) -> vec3f {\n    let c: vec3f = 0.5;\n    return c;\n}\n",
+        ] {
+            let error = slip(author);
+            assert_eq!(error.file, FILE, "{error}");
+            assert_eq!(
+                error.message, "This gives a number where a `vec3f` is needed.",
+                "{error}"
+            );
+            let hint = error.hint.expect("a hint");
+            assert!(hint.contains("`vec3f(0.5)`"), "{hint}");
+            assert!(hint.contains("`vec3f(r, g, b)`"), "{hint}");
+            assert!(!error.lore_fault);
+        }
+        let error = slip(
+            "fn screen(in: ScreenIn) -> vec3f {\n    let c: vec3f = in.uv;\n    return c;\n}\n",
+        );
+        assert_eq!(
+            error.message,
+            "This gives a `vec2f` where a `vec3f` is needed."
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_declared_suggests_the_close_one() {
+        let author = "fn screen(in: ScreenIn) -> vec3f {\n    let strength = 2.0;\n    return in.color * strenght;\n}\n";
+        let error = slip(author);
+        assert_eq!(error.file, FILE);
+        assert_eq!(error.line, Some(3));
+        assert_eq!(error.column, Some(column_of(author, 3, "strenght")));
+        assert_eq!(error.message, "Nothing called `strenght` is declared.");
+        assert_eq!(error.hint.as_deref(), Some("Did you mean `strength`?"));
+        let error =
+            slip("fn screen(in: ScreenIn) -> vec3f {\n    return in.color * foo(1.0);\n}\n");
+        assert_eq!(error.message, "Nothing called `foo` is declared.");
+        let hint = error.hint.expect("a hint");
+        assert!(hint.contains("declared before it is used"), "{hint}");
+    }
+
+    #[test]
     fn a_missing_semicolon_says_to_look_above() {
         let author =
             "fn screen(in: ScreenIn) -> vec3f {\n    let a = 1.0\n    return in.color;\n}\n";

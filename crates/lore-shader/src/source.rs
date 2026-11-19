@@ -62,6 +62,7 @@ impl Source {
     /// Adds `text`, whose first line is line `first_line` of `file`.
     /// Line endings are normalised (`str::lines`, then `\n` after each line).
     pub fn push(&mut self, owner: Owner, file: &str, first_line: u32, text: &str) {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let count = self.append(text);
         self.add_run(owner, file, first_line, count);
     }
@@ -83,6 +84,7 @@ impl Source {
         text: &str,
         mut load: impl FnMut(&str) -> Result<String, String>,
     ) -> Result<(), ShaderError> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let before = (self.text.len(), self.lines, self.runs.len());
         let result = self.stitch(owner, file, text, &mut load);
         if result.is_err() {
@@ -105,7 +107,7 @@ impl Source {
         let offset = line - run.first;
         (offset < run.count).then(|| Place {
             file: &self.files[run.file],
-            line: run.file_line + offset,
+            line: run.file_line.saturating_add(offset),
             owner: run.owner,
         })
     }
@@ -173,6 +175,10 @@ impl Source {
                     ),
                 ));
             }
+            let included = included
+                .strip_prefix('\u{feff}')
+                .unwrap_or(&included)
+                .to_owned();
             // The lines before the include are closed off first so the
             // included text lands in its place.
             flush(self, &mut plain);

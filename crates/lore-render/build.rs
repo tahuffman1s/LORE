@@ -6,6 +6,7 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::{env, fs};
 
 use lore_shader::{Bounds, Owner, Source, compile};
@@ -13,7 +14,19 @@ use lore_shader::{Bounds, Owner, Source, compile};
 /// Shader files to compile, by name without the `.wgsl` extension.
 const SHADERS: &[&str] = &["eye", "grid", "mesh", "ripples", "tonemap", "ui", "waves"];
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            // The error's own text, which says where and what to do, and not
+            // its `Debug` form.
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
     let out = PathBuf::from(env::var("OUT_DIR")?);
     for name in SHADERS {
         let words = build(name)?;

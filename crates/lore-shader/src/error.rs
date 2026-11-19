@@ -228,6 +228,12 @@ pub(crate) enum Slip {
     Redefined { name: String, by_lore: bool },
     /// A statement that does not end in `;`.
     MissingSemicolon,
+    /// A value of one type where another is needed, with no conversion between
+    /// them: `return 1.0;` in a function that gives a `vec3f`. Both types are
+    /// in naga's spelling.
+    NoConversion { from: String, to: String },
+    /// A name that is not declared anywhere before it is used.
+    Undeclared { name: String },
 }
 
 /// Recognises naga's message (`what`, with the text of the label that
@@ -247,6 +253,23 @@ pub(crate) fn recognise(what: &str, source_error: &str) -> Option<Slip> {
         return Some(Slip::Redefined {
             name: quoted(what)?,
             by_lore: false,
+        });
+    }
+    if what.starts_with("automatic conversions cannot convert `") {
+        let mut names = what.split('`').skip(1).step_by(2);
+        let from = names.next()?.to_owned();
+        let to = names.next()?.to_owned();
+        return Some(Slip::NoConversion { from, to });
+    }
+    if what.starts_with("the type of `") && what.contains("` is expected to be `") {
+        let mut names = what.split('`').skip(1).step_by(2).skip(1);
+        let to = names.next()?.to_owned();
+        let from = names.next()?.to_owned();
+        return Some(Slip::NoConversion { from, to });
+    }
+    if what.starts_with("no definition in scope for identifier") {
+        return Some(Slip::Undeclared {
+            name: quoted(what)?,
         });
     }
     if what.starts_with("expected `;`") {
@@ -289,18 +312,47 @@ pub(crate) fn explain(slip: &Slip, module: &str, before: &str) -> (String, Optio
                 );
             }
             let owner = struct_of(module, thing);
+            let letters_only = !name.is_empty() && name.chars().all(|c| "xyzwrgba".contains(c));
+            if owner.is_none() && letters_only {
+                let what = if thing.is_empty() {
+                    "This value".to_owned()
+                } else {
+                    format!("`{thing}`")
+                };
+                return (
+                    format!("{what} has no `.{name}`."),
+                    Some(
+                        "A value like this is a vector, and a vector has only some components: \
+                         a `vec2f` has x and y, a `vec3f` has x, y and z (or r, g, b), and only \
+                         a `vec4f` has w (or a)."
+                            .to_owned(),
+                    ),
+                );
+            }
+            if owner.is_none() {
+                // The value's type is not written down, so a near miss is
+                // looked for among every struct's fields, and none are listed.
+                let all: Vec<&str> = structs_in(module)
+                    .into_iter()
+                    .flat_map(|(_, fields)| fields)
+                    .collect();
+                let message = if thing.is_empty() {
+                    format!("This value has no field `{name}`.")
+                } else {
+                    format!("`{thing}` has no field `{name}`.")
+                };
+                let hint = match closest(name, all.iter().copied()) {
+                    Some(near) => format!("Did you mean `{near}`?"),
+                    None => "Check the spelling of the name after the `.`.".to_owned(),
+                };
+                return (message, Some(hint));
+            }
             let (message, fields) = match &owner {
                 Some((type_name, fields)) => (
                     format!("`{type_name}` has no field `{name}`."),
                     fields.clone(),
                 ),
-                None => {
-                    let all: Vec<&str> = structs_in(module)
-                        .into_iter()
-                        .flat_map(|(_, fields)| fields)
-                        .collect();
-                    (format!("`{thing}` has no field `{name}`."), all)
-                }
+                None => (String::new(), Vec::new()),
             };
             let hint = match closest(name, fields.iter().copied()) {
                 Some(near) => format!("Did you mean `{near}`?"),
@@ -351,6 +403,34 @@ pub(crate) fn explain(slip: &Slip, module: &str, before: &str) -> (String, Optio
                 )
             }
         }
+        Slip::NoConversion { from, to } => {
+            let to = maker_type(to);
+            let given = match from.as_str() {
+                "{AbstractFloat}" | "{AbstractInt}" => "a number".to_owned(),
+                other => format!("a `{}`", maker_type(other)),
+            };
+            let make = match to.as_str() {
+                "vec2f" => "`vec2f(0.5)` for the same number twice, or `vec2f(x, y)`".to_owned(),
+                "vec3f" => {
+                    "`vec3f(0.5)` for the same number three times, or `vec3f(r, g, b)`".to_owned()
+                }
+                "vec4f" => {
+                    "`vec4f(0.5)` for the same number four times, or `vec4f(r, g, b, a)`".to_owned()
+                }
+                other => format!("`{other}(...)`"),
+            };
+            (
+                format!("This gives {given} where a `{to}` is needed."),
+                Some(format!("Make a `{to}` with {make}.")),
+            )
+        }
+        Slip::Undeclared { name } => {
+            let hint = match closest(name, declared_words(module).iter().map(String::as_str)) {
+                Some(near) => format!("Did you mean `{near}`?"),
+                None => "Check its spelling, and that it is declared before it is used.".to_owned(),
+            };
+            (format!("Nothing called `{name}` is declared."), Some(hint))
+        }
         Slip::MissingSemicolon => (
             "Expected a `;` here.".to_owned(),
             Some(
@@ -360,6 +440,68 @@ pub(crate) fn explain(slip: &Slip, module: &str, before: &str) -> (String, Optio
             ),
         ),
     }
+}
+
+/// A type as naga spells it, written the way a maker does: `vec3<f32>` is
+/// `vec3f`.
+fn maker_type(naga_type: &str) -> String {
+    let short = || -> Option<String> {
+        let (count, rest) = naga_type.strip_prefix("vec")?.split_once('<')?;
+        let suffix = match rest.strip_suffix('>')? {
+            "f32" => "f",
+            "i32" => "i",
+            "u32" => "u",
+            "f16" => "h",
+            _ => return None,
+        };
+        Some(format!("vec{count}{suffix}"))
+    };
+    short().unwrap_or_else(|| naga_type.to_owned())
+}
+
+/// The names that `module` declares, found by a scan: after `fn`, `let`,
+/// `var`, `const`, `override` and `struct`, and before every `:` (parameters,
+/// fields and typed locals). Enough to suggest a name that was misspelt.
+fn declared_words(module: &str) -> Vec<String> {
+    let blanked = crate::scan::blank_comments(module);
+    let pieces = crate::scan::tokens(&blanked);
+    let mut found: Vec<String> = Vec::new();
+    let mut add = |word: &str| {
+        let ok = word.chars().next().is_some_and(|c| !c.is_ascii_digit());
+        if ok && !found.iter().any(|known| known == word) {
+            found.push(word.to_owned());
+        }
+    };
+    let mut at = 0;
+    while let Some(piece) = pieces.get(at) {
+        at += 1;
+        if piece.text == ":" {
+            if let Some(before) = at.checked_sub(2).and_then(|i| pieces.get(i))
+                && before.is_word()
+            {
+                add(before.text);
+            }
+            continue;
+        }
+        if !matches!(
+            piece.text,
+            "fn" | "let" | "var" | "const" | "override" | "struct"
+        ) {
+            continue;
+        }
+        let mut next = at;
+        if piece.text == "var" && pieces.get(next).map(|p| p.text) == Some("<") {
+            // `var<uniform> name`: the name comes after the `>`.
+            while pieces.get(next).is_some_and(|p| p.text != ">") {
+                next += 1;
+            }
+            next += 1;
+        }
+        if let Some(name) = pieces.get(next).filter(|p| p.is_word()) {
+            add(name.text);
+        }
+    }
+    found
 }
 
 /// The candidate closest to `name`, if one is close enough to be a likely typo.
@@ -410,6 +552,25 @@ fn edit_distance(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nagas_types_are_written_the_makers_way() {
+        assert_eq!(maker_type("vec3<f32>"), "vec3f");
+        assert_eq!(maker_type("vec2<u32>"), "vec2u");
+        assert_eq!(maker_type("f32"), "f32");
+        assert_eq!(maker_type("mat4x4<f32>"), "mat4x4<f32>");
+    }
+
+    #[test]
+    fn declared_words_are_found() {
+        let text = "struct S { aa: f32 }\n@group(0) @binding(0) var<uniform> params: S;\n\
+                    fn go(p: vec2f, @builtin(position) pos: vec4f) -> f32 { let k = 1.0; var m = 2.0; const q = 3; return k; } // zed: 1";
+        let words = declared_words(text);
+        for word in ["S", "aa", "params", "go", "p", "pos", "k", "m", "q"] {
+            assert!(words.iter().any(|w| w == word), "{word} in {words:?}");
+        }
+        assert!(!words.iter().any(|w| w == "zed" || w == "uniform"));
+    }
 
     #[test]
     fn display_shows_place_line_mark_message_hint_and_note() {

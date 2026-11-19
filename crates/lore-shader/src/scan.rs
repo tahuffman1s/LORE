@@ -66,15 +66,14 @@ pub(crate) struct Token<'a> {
 impl Token<'_> {
     /// Whether this is a word, not punctuation.
     pub fn is_word(&self) -> bool {
-        self.text
-            .bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+        self.text.bytes().next().is_some_and(is_word_byte)
     }
 }
 
+/// A byte of a word. Any byte from a multi-byte character counts, because
+/// WGSL names may use letters from any language.
 fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
 }
 
 /// The pieces of `text`, which should already have its comments blanked.
@@ -148,8 +147,14 @@ const LOOP_HINT: &str = "Use `for` with a fixed count, such as \
 /// errors: they can run forever, and a shader that never finishes freezes the
 /// picture. The error says to use `for` with a fixed count.
 ///
+/// What is caught: the words `loop` and `while`, a `for` whose condition is
+/// missing (`for (;;)`, `for (var i = 0; ; i++)`), and a `for` whose condition
+/// is just `true`. A condition that is only true in practice, such as `1 < 2`
+/// or `i >= 0` on an unsigned counter, is not caught here.
+///
 /// It looks at words, not at what they mean: `loops` and `while_x` are fine.
 pub fn refuse_endless_loops(file: &str, text: &str) -> Result<(), ShaderError> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let blanked = blank_comments(text);
     let pieces = tokens(&blanked);
     for (index, piece) in pieces.iter().enumerate() {
@@ -179,7 +184,8 @@ pub fn refuse_endless_loops(file: &str, text: &str) -> Result<(), ShaderError> {
     Ok(())
 }
 
-/// Whether the `for` at `index` has nothing between its two top-level `;`.
+/// Whether the `for` at `index` has nothing, or only `true`, between its two
+/// top-level `;`. Any other condition is taken to end.
 fn for_has_no_condition(pieces: &[Token<'_>], index: usize) -> bool {
     if pieces.get(index + 1).map(|p| p.text) != Some("(") {
         return false;
@@ -198,7 +204,10 @@ fn for_has_no_condition(pieces: &[Token<'_>], index: usize) -> bool {
             }
             ";" if depth == 1 => match first {
                 None => first = Some(at),
-                Some(start) => return start + 1 == at,
+                Some(start) => {
+                    let between = &pieces[start + 1..at];
+                    return between.is_empty() || (between.len() == 1 && between[0].text == "true");
+                }
             },
             _ => {}
         }
@@ -223,6 +232,17 @@ mod tests {
     }
 
     #[test]
+    fn a_letter_outside_ascii_belongs_to_its_word() {
+        let blanked = blank_comments("let éloop = 1; let loopé = 2; let 変while = 3;");
+        let words: Vec<&str> = tokens(&blanked).iter().map(|t| t.text).collect();
+        assert!(words.contains(&"éloop"));
+        assert!(words.contains(&"loopé"));
+        assert!(words.contains(&"変while"));
+        assert!(refuse_endless_loops("a.wgsl", &blanked).is_ok());
+        assert!(refuse_endless_loops("a.wgsl", "\u{feff}loop {}").is_err());
+    }
+
+    #[test]
     fn an_open_block_comment_blanks_to_the_end() {
         assert_eq!(blank_comments("a /* b"), "a     ");
     }
@@ -234,6 +254,7 @@ mod tests {
             ("fn f() {\n  loop { break; }\n}", 2, 3, "loop"),
             ("fn f() {\n for (;;) {}\n}", 2, 2, "`for`"),
             ("fn f() {\n for (var i = 0; ; i++) {}\n}", 2, 2, "`for`"),
+            ("fn f() {\n for (var i = 0; true; i++) {}\n}", 2, 2, "`for`"),
         ] {
             let error = refuse_endless_loops("shaders/a.wgsl", text).unwrap_err();
             assert_eq!(error.line, Some(line), "{text}");
@@ -255,6 +276,7 @@ mod tests {
             "//! loop\nfn f() {}",
             "/* loop /* while */ for(;;) */ fn f() {}",
             "for (var i = 0; (i < 4); i++) { }",
+            "for (var i = 0; true_x; i++) { }",
         ] {
             assert!(refuse_endless_loops("a.wgsl", text).is_ok(), "{text}");
         }
