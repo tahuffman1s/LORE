@@ -183,7 +183,8 @@ debugMenu.menu = menu.new("Debug", rows)
 
 -- Turns the shaders on and off to match the toggles. A shader's values
 -- can change in every picture, with nothing rebuilt: the old-photo look
--- eases in over about a second after it is turned on.
+-- eases in over about a second after it is turned on. It is called for every
+-- picture (from game.onDraw in main.luau), so a toggle takes effect at once.
 function debugMenu.drawShaders()
     local dt = math.min(game.frames.lastTime(), 0.1)
     if kept.oldPhoto then

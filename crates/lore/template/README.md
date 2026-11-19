@@ -33,7 +33,7 @@ Firing plays the engine's starter gunshot. To use a sound of your own, make a fo
 
 ## Shaders
 
-A game can change how it looks with shaders of its own: put a WGSL file in a `shaders` folder here and turn it on with one line, such as `game.shaders.screen("grey")` for `shaders/grey.wgsl`. Saving the file changes the running game. How to write one: [Game shaders](https://tahuffman1s.github.io/LORE/docs/shaders.html).
+A game can change how it looks with shaders of its own: put a WGSL file in a `shaders` folder here and turn it on with one line, such as `game.shaders.screen("gray")` for `shaders/gray.wgsl`. Saving the file changes the running game. How to write one: [Game shaders](https://tahuffman1s.github.io/LORE/docs/shaders.html).
 
 ## Change it
 

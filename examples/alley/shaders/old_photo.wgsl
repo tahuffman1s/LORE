@@ -7,9 +7,9 @@
 
 fn screen(in: ScreenIn) -> vec3f {
     // How bright this pixel is, as one number.
-    let grey = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
-    // Grey light, colored by the tint: the look of a faded print.
-    let faded = grey * params.tint * 1.6;
+    let gray = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
+    // Gray light, colored by the tint: the look of a faded print.
+    let faded = gray * params.tint * 1.6;
     // How far this pixel is from the middle of the picture: 0 in the
     // middle, about 0.7 in a corner.
     let away = length(in.uv - vec2f(0.5, 0.5));

@@ -1175,9 +1175,17 @@ mod tests {
         let mut game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
         std::fs::remove_file(folder.join("shaders/heat.wgsl")).unwrap();
         // The host looks at the files a few times a second, and takes a
-        // missing file as gone only on the second look.
-        for _ in 0..4 {
-            std::thread::sleep(std::time::Duration::from_millis(150));
+        // missing file as gone only on the second look: poll until it has
+        // said so.
+        let has_problem = |game: &ScriptGame| {
+            let mut has = false;
+            game.host()
+                .each_shader(|said| has |= said.problem.is_some());
+            has
+        };
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !has_problem(&game) && std::time::Instant::now() < give_up {
+            std::thread::sleep(std::time::Duration::from_millis(20));
             game.host_mut().poll_reload();
         }
         let found = check_shaders(game.host(), &folder, None);

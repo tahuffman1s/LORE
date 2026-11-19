@@ -53,32 +53,24 @@
   <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file.</p>
 
   <h2 id="screen">A first screen effect</h2>
-  <p>Make a folder called <code>shaders</code> in your game's folder, and in it a file called <code>grey.wgsl</code>:</p>
+  <p>Make a folder called <code>shaders</code> in your game's folder, and in it a file called <code>gray.wgsl</code>:</p>
   <div class="code">
-    <span class="label">shaders/grey.wgsl</span>
-    <pre data-file="shaders/grey.wgsl" tabindex="0"><code>fn screen(in: ScreenIn) -> vec3f {
+    <span class="label">shaders/gray.wgsl</span>
+    <pre data-file="shaders/gray.wgsl" tabindex="0"><code>fn screen(in: ScreenIn) -> vec3f {
     // How bright this pixel is, as one number.
-    let grey = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
-    return vec3f(grey);
+    let gray = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
+    return vec3f(gray);
 }</code></pre>
   </div>
-  <p>Then add one line to <code>main.luau</code>, at the top level of the file, and save:</p>
+  <p>Add this line to <code>main.luau</code>, outside any function, above the line that requires the pause menu (that one stays last):</p>
   <div class="code">
     <span class="label">main.luau</span>
-    <pre data-file="main.luau" tabindex="0"><code>game.shaders.screen("grey")</code></pre>
+    <pre data-file="main.luau" tabindex="0"><code>game.shaders.screen("gray")</code></pre>
   </div>
-  <p>The running game turns grey. Change the last line of the shader to <code>return vec3f(grey) * 0.5;</code> and save again: it gets darker, with no restart. The name in the quotes is the file's name without <code>.wgsl</code>.</p>
+  <p>The running game turns gray. Change the last line of the shader to <code>return vec3f(gray) * 0.5;</code> and save again: it gets darker, with no restart. The name in the quotes is the file's name without <code>.wgsl</code>.</p>
 
   <h2 id="surface">A first surface shader</h2>
-  <p>A surface shader needs the name of a material from your level. A level made in Blender has one for each material you made there. Do not know the names? Write any name and run <code>lore check</code>: if the level has no material of that name, it lists the ones it has. Names must match letter for letter, capitals included.</p>
-  <div class="code">
-    <pre class="out" tabindex="0"><code>Shader error in shaders/lava.wgsl:
-
-  The level has no material named `Lavva`.
-  Hint: The level's materials are: Floor Light, Floor Dark, Wall, Platform, Ramp, Cover, Red, Blue.
-  Nothing is changed until a level with that material is loaded.</code></pre>
-  </div>
-  <p>Those are the materials of a new game's level. This shader makes the one called <code>Red</code> glow:</p>
+  <p>A surface shader needs the name of a material in your level. A level made in Blender has one for each material you made there. A new game's level has one called <code>Red</code>, and this shader makes it glow:</p>
   <div class="code">
     <span class="label">shaders/glow.wgsl</span>
     <pre data-file="shaders/glow.wgsl" tabindex="0"><code>fn surface(in: SurfaceIn) -> Surface {
@@ -92,6 +84,14 @@
   <div class="code">
     <span class="label">main.luau</span>
     <pre data-file="main.luau" tabindex="0"><code>game.shaders.surface("glow", "Red")</code></pre>
+  </div>
+  <p>Do not know the names? Write any name in that line and run <code>lore check</code>: if the level has no material of that name, it lists the ones it has. Names must match letter for letter, capitals included.</p>
+  <div class="code">
+    <pre class="out" tabindex="0"><code>Shader error in shaders/glow.wgsl:
+
+  The level has no material named `Rde`.
+  Hint: Did you mean `Red`? The level's materials are: Floor Light, Floor Dark, Wall, Platform, Ramp, Cover, Red, Blue.
+  Nothing is changed until a level with that material is loaded.</code></pre>
   </div>
   <p>Only what the camera sees changes: a glowing surface does not light the room around it, and it casts the same shadows as before.</p>
 
@@ -142,8 +142,8 @@
 //! param tint: color = #ff8800
 
 fn screen(in: ScreenIn) -> vec3f {
-    let grey = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
-    return mix(in.color, grey * params.tint, params.strength);
+    let gray = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(in.color, gray * params.tint, params.strength);
 }</code></pre>
   </div>
   <p>The line is <code>//! param name: type = default</code>, and may end with <code>range low..high</code> for a number.</p>
@@ -189,27 +189,29 @@ fn screen(in: ScreenIn) -> vec3f {
   <div class="code">
     <pre class="out" tabindex="0"><code>Shader error in shaders/heat.wgsl, line 5:
 
-     5 | let grey = dot(in.colour, vec3f(0.2126, 0.7152, 0.0722));
+     5 | let gray = dot(in.colour, vec3f(0.2126, 0.7152, 0.0722));
        |                   ^
 
   `ScreenIn` has no field `colour`.
   Hint: Did you mean `color`?</code></pre>
   </div>
-  <p>A mistake in the script, here a misspelt value name:</p>
+  <p>A mistake in the script, here a misspelled value name in a shader that has <code>strength</code>:</p>
   <div class="code">
-    <pre class="out" tabindex="0"><code>[ERROR] Script error in main.luau, line 52:
+    <pre class="out" tabindex="0"><code>[ERROR] Script error in main.luau, line 51:
 
-    52 | game.shaders.screen("heat", { strenght = 0.3 })
+    51 | game.shaders.screen("heat", { strenght = 0.3 })
 
   The screen effect "heat" has no value called `strenght`. Did you mean `strength`? Write it like this: game.shaders.screen("heat", { strength = 0.5 })
   Fix this and save the file: the game picks it up by itself.</code></pre>
   </div>
+  <p>A shader with no <code>//! param</code> lines says instead how to add one.</p>
   <p><code>lore check</code> also compiles the other files in <code>shaders</code> that the script did not turn on, so a shader that a menu turns on is checked too, and warns about a file with neither a <code>screen</code> nor a <code>surface</code> function in it.</p>
 
   <h2 id="limits">Limits, and what is not possible yet</h2>
   <ul>
     <li>8 screen effects and 8 surface shaders at once, with 32 values and 64 KiB of text each.</li>
     <li>No <code>loop</code> and no <code>while</code>, and no <code>for</code> without an end: a shader that never finishes would freeze the picture. Use <code>for</code> with a fixed count, as in <code>for (var i = 0; i &lt; 8; i++) { … }</code>.</li>
+    <li>A material has one surface shader: asking for another on the same material replaces it.</li>
     <li>A screen effect's color is held between 0 and 65504.</li>
   </ul>
   <p>Not possible yet: pictures (textures) as values, shaders for the sky, water or the HUD, moving a level's vertices, and a library of helpers such as noise. A surface shader changes only what the camera sees: not the shadows a surface casts, the light it bounces, or its reflection in water.</p>
