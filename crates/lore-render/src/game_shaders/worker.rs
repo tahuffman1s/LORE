@@ -122,6 +122,12 @@ impl<T: Send + 'static> Worker<T> {
         self.results.try_recv().ok()
     }
 
+    /// Whether the queue is empty and nothing is being built. Never waits.
+    pub(crate) fn is_idle(&self) -> bool {
+        let state = locked(&self.shared.state);
+        state.queue.is_empty() && !state.building
+    }
+
     /// Waits until the queue is empty and nothing is being built.
     pub(crate) fn wait_idle(&self) {
         let mut state = locked(&self.shared.state);

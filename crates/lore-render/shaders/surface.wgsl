@@ -14,7 +14,7 @@
 
 // What a surface looks like to the light.
 struct Surface {
-    // The colour light picks up, linear, 0 to 1.
+    // The color light picks up, linear, 0 to 1.
     color: vec3f,
     // Which way it faces, in the world, length one.
     normal: vec3f,
@@ -32,13 +32,13 @@ struct Surface {
 struct SurfaceIn {
     // As the level's material makes it here.
     surface: Surface,
-    // In the world, in metres.
+    // In the world, in meters.
     position: vec3f,
     // The material's first UV map.
     uv: vec2f,
     // A unit vector from the surface to the eye.
     view: vec3f,
-    // Metres from the eye.
+    // Meters from the eye.
     distance: f32,
     // Seconds on the renderer's own clock: the same as `ScreenIn.time`.
     time: f32,

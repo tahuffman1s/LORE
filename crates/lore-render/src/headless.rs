@@ -269,6 +269,12 @@ impl Headless {
         self.shaders.settle(&self.mesh);
     }
 
+    /// What the game's shaders keep, for tests.
+    #[cfg(test)]
+    pub(crate) fn game_shaders(&self) -> &GameShaders {
+        &self.shaders
+    }
+
     /// What became of the game's shaders since the last call, as
     /// [`Renderer::take_shader_reports`](crate::Renderer::take_shader_reports)
     /// gives it.

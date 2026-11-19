@@ -11,7 +11,7 @@ struct ScreenIn {
     uv: vec2f,
     // The picture here, in linear light. It may be far above 1.
     color: vec3f,
-    // Metres from the eye to what is drawn here.
+    // Meters from the eye to what is drawn here.
     distance: f32,
     // Seconds on the renderer's own clock, which starts again each hour.
     time: f32,
@@ -47,18 +47,18 @@ fn picture(uv: vec2f) -> vec3f {
     return textureSampleLevel(lore_picture, lore_smooth, uv, 0.0).rgb;
 }
 
-// Metres from the eye to what is drawn at `uv`.
+// Meters from the eye to what is drawn at `uv`.
 fn distance_at(uv: vec2f) -> f32 {
     let dims = textureDimensions(lore_depth);
     // Clamped as numbers before they become a texel, so a `uv` far outside
     // the picture (or not a number) cannot wrap round.
     let texel = vec2u(min(clamp(uv, vec2f(0.0), vec2f(1.0)) * vec2f(dims), vec2f(dims - vec2u(1u))));
     let depth = textureLoad(lore_depth, texel, 0);
-    // The depth is reversed and infinite: near / metres ahead, and 0 where
+    // The depth is reversed and infinite: near / meters ahead, and 0 where
     // nothing was drawn.
     let ahead = lore_screen.near / max(depth, 1e-30);
     let across = (uv * 2.0 - 1.0) * lore_screen.lean;
-    // Metres ahead is along the view; the eye's distance is along the ray.
+    // Meters ahead is along the view; the eye's distance is along the ray.
     return min(ahead * length(vec3f(across, 1.0)), LORE_SKY_DISTANCE);
 }
 

@@ -598,3 +598,159 @@ fn a_material_takes_one_surface_shader_and_the_first_wins() {
     drop(headless);
     assert_eq!(validation_errors(), 0);
 }
+
+/// The reports that are errors.
+fn errors(reports: &[super::ShaderReport]) -> Vec<&lore_shader::ShaderError> {
+    reports
+        .iter()
+        .filter_map(|r| r.outcome.as_ref().err())
+        .collect()
+}
+
+#[test]
+fn a_problem_that_goes_away_is_taken_back_with_an_ok_report() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    let wrong = GameShader {
+        used_as: ShaderUse::Surface { material: "Lavva" },
+        ..lava(RED, 1)
+    };
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    headless.set_game_shaders(&[wrong]);
+    let plain = headless.screenshot(&camera).unwrap();
+    let reports = headless.take_shader_reports();
+    assert_eq!(errors(&reports).len(), 1, "{reports:?}");
+
+    // A level that has the material: the shader is drawn, and said to work.
+    headless
+        .set_scene(&two(named("Lavva", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let shaded = headless.screenshot(&camera).unwrap();
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert_eq!(reports[0].outcome, Ok(()));
+    assert_eq!(reports[0].revision, 1);
+    assert_eq!(reports[0].material.as_deref(), Some("Lavva"));
+    assert_ne!(shaded, plain);
+    headless.screenshot(&camera).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_material_taken_by_a_shader_that_is_removed_is_given_to_the_next() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let blue = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.color = vec3f(0.0, 0.0, 1.0);\n    return made;\n}\n";
+    let second = GameShader {
+        name: "second",
+        ..lava(blue, 1)
+    };
+    headless.set_game_shaders(&[lava(RED, 1), second]);
+    headless.screenshot(&camera).unwrap();
+    let reports = headless.take_shader_reports();
+    assert_eq!(errors(&reports).len(), 1, "{reports:?}");
+
+    headless.set_game_shaders(&[second]);
+    let picture = headless.screenshot(&camera).unwrap();
+    let reports = headless.take_shader_reports();
+    let oks: Vec<_> = reports.iter().filter(|r| r.name == "second").collect();
+    assert_eq!(oks.len(), 1, "{reports:?}");
+    assert_eq!(oks[0].outcome, Ok(()));
+    assert!(errors(&reports).is_empty());
+    let [red, _, blue] = pixel(&picture, LAVA_AT.0, LAVA_AT.1);
+    assert!(blue > red, "{red} {blue}");
+    headless.screenshot(&camera).unwrap();
+    assert!(headless.take_shader_reports().is_empty());
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+/// Some pictures, enough for what was retired to be let go.
+fn run_frames(headless: &mut Headless, camera: &Camera) -> Vec<u8> {
+    let mut picture = Vec::new();
+    for _ in 0..4 {
+        picture = headless.screenshot(camera).unwrap();
+    }
+    picture
+}
+
+#[test]
+fn with_no_shader_wanted_nothing_is_kept() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = sky();
+    let plain = run_frames(&mut headless, &camera);
+    assert!(!headless.game_shaders().holds_anything());
+    headless.set_game_shaders(&[]);
+    let after = run_frames(&mut headless, &camera);
+    assert!(!headless.game_shaders().holds_anything());
+    assert_eq!(after, plain);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_removed_effect_leaves_no_thread_or_picture_and_can_come_back() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = sky();
+    let plain = run_frames(&mut headless, &camera);
+    headless.set_game_shaders(&[effect(GREEN, 1)]);
+    assert!(headless.game_shaders().holds_anything());
+    headless.take_shader_reports();
+    let green = run_frames(&mut headless, &camera);
+    assert_ne!(green, plain);
+
+    headless.set_game_shaders(&[]);
+    assert_eq!(run_frames(&mut headless, &camera), plain);
+    assert!(!headless.game_shaders().holds_anything());
+
+    headless.set_game_shaders(&[effect(GREEN, 1)]);
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].outcome, Ok(()));
+    assert_ne!(run_frames(&mut headless, &camera), plain);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
+fn a_removed_surface_shader_leaves_nothing_kept_and_can_come_back() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    headless
+        .set_scene(&two(named("Lava", [0.5; 3]), named("Stone", [0.5; 3])))
+        .unwrap();
+    let plain = run_frames(&mut headless, &camera);
+    headless.set_game_shaders(&[lava(RED, 1)]);
+    headless.take_shader_reports();
+    assert_ne!(run_frames(&mut headless, &camera), plain);
+
+    headless.set_game_shaders(&[]);
+    assert_eq!(run_frames(&mut headless, &camera), plain);
+    assert!(!headless.game_shaders().holds_anything());
+
+    headless.set_game_shaders(&[lava(RED, 1)]);
+    let reports = headless.take_shader_reports();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].outcome, Ok(()));
+    assert_ne!(run_frames(&mut headless, &camera), plain);
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}

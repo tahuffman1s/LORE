@@ -305,8 +305,13 @@ impl ScreenPass {
                 },
             };
             let to_draw = [vk::ImageMemoryBarrier2::default()
-                // The last frame's readers of this image must be done.
-                .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                // The last frame's readers of this image must be done, and
+                // so must its last write, when a frame draws into it twice.
+                .src_stage_mask(
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER
+                        | vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                )
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                 .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                 .old_layout(vk::ImageLayout::UNDEFINED)
