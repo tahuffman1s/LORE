@@ -9,7 +9,7 @@
 //! which is seen: drops, rings and bubbles. The same input makes the same
 //! marks on every run.
 
-use lore_physics::{Level, Player};
+use lore_physics::{Level, Medium, Player};
 
 use crate::noise::{Noise, NoiseKind};
 
@@ -45,6 +45,25 @@ const SPLASHED_THROUGH: f32 = 0.3;
 /// How many seconds pass between breaths let go under water.
 const BREATH_EVERY: f32 = 1.6;
 
+/// How a fluid changes the sounds water makes, by how thick and how heavy
+/// it is: how high they are played (1 is as water) and how loud (1 is as
+/// water). A thick fluid moves slowly and swallows its own splash, so it
+/// is lower, longer and quieter: honey and tar glug. A heavy one is lower
+/// too: mercury thuds. Water is exactly 1 and 1.
+pub(crate) fn voice(medium: Medium) -> (f32, f32) {
+    let medium = medium.cleaned();
+    // From water (0) to a thousand and more times as thick (1).
+    let thick =
+        (libm::log10f((medium.viscosity / Medium::WATER.viscosity).max(1.0)) / 3.5).clamp(0.0, 1.0);
+    // A fifth power root: mercury, 13.5 times as heavy, is 0.6.
+    let heavy = libm::powf(
+        (medium.density / Medium::WATER.density).clamp(0.2, 20.0),
+        -0.2,
+    );
+    let pitch = ((1.0 - 0.45 * thick) * heavy).clamp(0.4, 1.3);
+    (pitch, 1.0 - 0.5 * thick)
+}
+
 /// Adds to `noises` and `marks` what `player` did to the water of `level`
 /// in the tick numbered `tick`, which took `step` seconds and moved them
 /// from where `before` has them. `yaw` is the way they face.
@@ -71,6 +90,7 @@ pub(crate) fn tick(
                 kind: NoiseKind::Surface,
                 position: player.position,
                 loudness: 0.8,
+                pitch: 1.0,
                 delay: 0.0,
                 tick,
             });
@@ -90,10 +110,16 @@ pub(crate) fn tick(
             z + ahead[1] * forward + aside[1] * right,
         ]
     };
+    // What they are in says how it sounds: honey glugs where water
+    // splashes.
+    let (pitch, quiet) = level
+        .pool_around(player.position)
+        .map_or((1.0, 1.0), |here| voice(here.medium));
     let noise = |kind: NoiseKind, loudness: f32| Noise {
         kind,
         position: [x, surface, z],
-        loudness: loudness.clamp(0.0, 1.0),
+        loudness: (loudness * quiet).clamp(0.0, 1.0),
+        pitch,
         delay: 0.0,
         tick,
     };
@@ -124,7 +150,8 @@ pub(crate) fn tick(
         } else {
             NoiseKind::Wade
         };
-        footfall.loudness = (footfall.loudness * 1.3).clamp(0.2, 1.0);
+        footfall.loudness = (footfall.loudness * 1.3).clamp(0.2, 1.0) * quiet;
+        footfall.pitch = pitch;
         marks.push(WaterMark::Splash {
             place: at(0.25, 0.0, surface),
             moving: [along_x * 0.9, -(1.4 + 0.5 * speed), along_z * 0.9],
@@ -214,6 +241,40 @@ pub(crate) fn tick(
                 count: 5,
             });
             noises.push(noise(NoiseKind::Bubbles, 0.35));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fluid_sounds_lower_the_thicker_and_the_heavier_it_is_and_water_as_water() {
+        let of = |density: f32, viscosity: f32| voice(Medium { density, viscosity });
+        // Water is played as it was recorded, to the last bit.
+        assert_eq!(voice(Medium::WATER), (1.0, 1.0));
+        // Brine is all but water; a light oil is a little thicker.
+        let (brine, _) = of(1.2, 0.0015);
+        assert!((0.9..1.0).contains(&brine), "{brine}");
+        let (oil, oil_loud) = of(0.9, 0.08);
+        assert!(
+            (0.65..0.85).contains(&oil) && oil_loud < 0.8,
+            "{oil} {oil_loud}"
+        );
+        // Honey and tar glug: about an octave down and half as loud.
+        let (honey, honey_loud) = of(1.4, 6.0);
+        assert!((0.45..0.6).contains(&honey), "{honey}");
+        assert!((honey_loud - 0.5).abs() < 0.05, "{honey_loud}");
+        // Mercury is as thin as water and thirteen times as heavy: lower,
+        // and as loud.
+        let (mercury, mercury_loud) = of(13.5, 0.0015);
+        assert!((0.5..0.65).contains(&mercury), "{mercury}");
+        assert!(mercury_loud > 0.95, "{mercury_loud}");
+        // Never so low or so high as to be another sound, whatever is said.
+        for (density, viscosity) in [(30.0, 1.0e6), (0.01, 0.0), (f32::NAN, f32::INFINITY)] {
+            let (pitch, loud) = of(density, viscosity);
+            assert!((0.4..=1.3).contains(&pitch) && (0.5..=1.0).contains(&loud));
         }
     }
 }

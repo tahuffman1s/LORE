@@ -96,6 +96,12 @@ impl Fluids {
             if !(p.landed_now && p.lying && !p.dead) {
                 continue;
             }
+            // What ran out of a pool is the pool's mix, one kind a stream:
+            // the water in it does not wash the honey in it away, and what
+            // left the pool is what lies below it.
+            if p.of_a_mix {
+                continue;
+            }
             let (washes, corrosive) = physics
                 .get(usize::from(p.kind))
                 .map_or((false, 0.0), |f| (f.washes, f.corrosive));

@@ -58,8 +58,9 @@ const DRAW_BYTES: usize = 128;
 /// The size in bytes of the shader's `View`: three 4 by 4 matrices and five
 /// rows of four numbers, then for the shadows one row, a row for each
 /// shadow picture (the sun's four and the one from above) and a 4 by 4
-/// matrix for each.
-const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64;
+/// matrix for each, the sky, the matrix of the picture kept to mirror, and
+/// last three rows for how running water looks.
+const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 
 /// The part of it that is the sky: three rows for the lines of sight, one
 /// for the clouds, a row for each height of the air's light and of the
@@ -255,7 +256,8 @@ impl View {
                 .chain(above.weather.rows.iter().flatten())
                 .chain(above.heavens.iter().flatten())
                 .chain(above.water_look.iter().flatten())
-                .chain(self.kept.iter().flatten()),
+                .chain(self.kept.iter().flatten())
+                .chain(above.stream_look.iter().flatten()),
         ) {
             *slot = number.to_ne_bytes();
         }
@@ -273,6 +275,9 @@ pub(crate) struct Above {
     /// How the level's water looks if it says so, as the shader's
     /// `water_look`: all zero if not.
     pub(crate) water_look: [[f32; 4]; 3],
+    /// How running water looks, as the shader's `stream_look`: what the
+    /// level's water is drawn as, whichever pool the eye is nearest.
+    pub(crate) stream_look: [[f32; 4]; 3],
 }
 
 /// The light a scene is drawn in: one sun, and the sky and ground around it.
@@ -2057,6 +2062,8 @@ impl MeshPipeline {
         let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
         let near_rise = near.map_or(0.0, |body| body.risen(rise));
         let water_look = look_rows(near.and_then(Body::look).or(every_water));
+        // A creek is the level's water, whatever that pool holds.
+        let stream_look = look_rows(every_water);
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
             // SAFETY: the caller's guarantees cover the water's pictures,
@@ -2152,6 +2159,7 @@ impl MeshPipeline {
                     },
                     heavens,
                     water_look,
+                    stream_look,
                 },
             ))
         }?;
@@ -4433,7 +4441,7 @@ mod tests {
             1.0,
             "the last number of the last matrix"
         );
-        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES + 64);
+        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES + 64 + 48);
 
         // Then the sky: the lines of sight, the clouds, and the light the
         // air and the haze scatter, a row for each height.
@@ -4475,6 +4483,7 @@ mod tests {
                 },
                 heavens: [[9.0; 4]; 5],
                 water_look: [[0.5; 4], [0.25; 4], [0.75; 4]],
+                stream_look: [[0.125; 4], [0.0; 4], [0.375; 4]],
             },
         );
         assert_eq!(number(&bytes, 184), 0.6, "how much of the sky is cloud");
@@ -4516,9 +4525,15 @@ mod tests {
         assert_eq!(
             number(&bytes, 511),
             11.0,
-            "last, the matrix of the picture kept for them to mirror"
+            "the matrix of the picture kept for them to mirror"
         );
-        assert_eq!(bytes.len(), 512 * 4);
+        assert_eq!(
+            number(&bytes, 512),
+            0.125,
+            "last, the look of running water"
+        );
+        assert_eq!(number(&bytes, 523), 0.375);
+        assert_eq!(bytes.len(), 524 * 4);
     }
 
     #[test]

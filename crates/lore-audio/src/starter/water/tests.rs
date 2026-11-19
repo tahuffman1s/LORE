@@ -18,6 +18,7 @@ fn every() -> Vec<(&'static str, Vec<Sound>)> {
         ("bubbles", takes(bubbles())),
         ("underwater", vec![underwater()]),
         ("drip", takes(drips())),
+        ("sizzle", takes(sizzles())),
     ]
 }
 
@@ -127,7 +128,7 @@ fn the_sine_made_from_plain_arithmetic_is_right_to_five_places() {
 
 #[test]
 fn each_water_sound_has_its_takes_and_its_length() {
-    let expected: [(&str, usize, std::ops::RangeInclusive<f32>); 8] = [
+    let expected: [(&str, usize, std::ops::RangeInclusive<f32>); 9] = [
         ("splash", 3, 1.1..=1.8),
         ("splash-small", 4, 0.25..=0.4),
         ("wade", 4, 0.45..=0.6),
@@ -136,6 +137,7 @@ fn each_water_sound_has_its_takes_and_its_length() {
         ("bubbles", 3, 1.1..=1.3),
         ("underwater", 1, 4.0..=6.0),
         ("drip", 5, 0.14..=0.16),
+        ("sizzle", 3, 0.55..=0.76),
     ];
     let every = every();
     assert_eq!(every.len(), expected.len());
@@ -277,6 +279,20 @@ fn bubbles_heard_under_water_are_dull() {
 }
 
 #[test]
+fn a_sizzle_is_a_bright_hiss_that_is_loudest_at_once() {
+    for take in sound("sizzle") {
+        let pitches = Pitches::of(&take);
+        // Steam, not water: nearly all of it over 1.5 kHz, and no one note.
+        assert!(pitches.share(1_500.0, 24_000.0) > 0.85, "{take:?}");
+        assert!(pitches.share(3_000.0, 8_000.0) < 0.9, "{take:?}");
+        // Loud as it begins and all but gone by its second half.
+        let data = take.data();
+        let half = data.len() / 2;
+        assert!(level(&data[half..]) < level(&data[..half]) / 4.0);
+    }
+}
+
+#[test]
 fn a_drip_is_a_tiny_bright_note() {
     for take in sound("drip") {
         let pitches = Pitches::of(&take);
@@ -364,7 +380,7 @@ fn water_sounds_are_the_same_on_every_computer() {
             }
         }
     }
-    assert_eq!(sum, 0x382D_0A32_E076_2233, "{sum:#018X}");
+    assert_eq!(sum, 0xDFBD_BB99_21FD_21C5, "{sum:#018X}");
 }
 
 /// Writes every take to a WAV file, for someone with ears, and prints what

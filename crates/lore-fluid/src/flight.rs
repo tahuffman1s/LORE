@@ -140,6 +140,7 @@ impl Fluids {
         let mut lying = Particle::lying(p.kind, hit.point, normal, p.volume, h, p.born);
         lying.dry_left = phys.dries;
         lying.landed_now = true;
+        lying.of_a_mix = p.of_a_mix;
         lying
     }
 

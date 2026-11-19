@@ -74,6 +74,9 @@ pub(crate) struct WorldFluids {
     /// change of the hollows found so far the picture has been told of.
     named: usize,
     found_said: Option<u32>,
+    /// How many ticks running the player has been burnt by what they are
+    /// in.
+    burnt_for: u32,
 }
 
 impl Default for WorldFluids {
@@ -91,6 +94,7 @@ impl Default for WorldFluids {
             named: 0,
             // The renderer may hold hollows from a world before this one.
             found_said: None,
+            burnt_for: 0,
         }
     }
 }
@@ -147,6 +151,11 @@ fn mixed(shares: &[f32; MOST_KINDS], looks: &[FluidLook; MOST_KINDS]) -> FluidLo
     }
     mix
 }
+
+/// The least harm a fluid does for it to be heard burning, and how many
+/// seconds apart its hisses come.
+const SIZZLES_FROM: f32 = 0.01;
+const SIZZLE_EVERY: f32 = 0.45;
 
 impl WorldFluids {
     /// Takes the still water of `level` as this world's pools, each of the
@@ -359,13 +368,17 @@ impl WorldFluids {
     /// ground: someone who jumps a puddle or flies over one stands in
     /// nothing, whatever lies below. Someone in a pool is in it whether
     /// their feet are down or not.
+    ///
+    /// Gives back how loud a hiss is due on this tick, if what they are
+    /// in burns them: as it begins, and a few times a second while it
+    /// goes on.
     pub(crate) fn tell(
         &mut self,
         host: &mut ScriptHost,
         level: &Level,
         step: f32,
         (player, standing): (&Player, bool),
-    ) {
+    ) -> Option<f32> {
         host.set_fluid_litres(&self.fluids.litres_by_kind());
         // A hollow that became a pool in this tick has a name from now on.
         let formed = (self.named != self.fluids.pools().len()).then_some(self.named);
@@ -405,6 +418,17 @@ impl WorldFluids {
             })
         });
         host.stand_in_fluid(CharacterId::PLAYER, under, step);
+        let harm = under.map_or(0.0, |under| under.corrosive * under.cover);
+        if harm <= SIZZLES_FROM {
+            self.burnt_for = 0;
+            return None;
+        }
+        // Counted in ticks, so that it comes on the same tick every run.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let every = ((SIZZLE_EVERY / step.max(1.0e-3)) as u32).max(1);
+        let due = self.burnt_for.is_multiple_of(every);
+        self.burnt_for = self.burnt_for.wrapping_add(1);
+        due.then_some((0.35 + harm).min(1.0))
     }
 
     /// Hands the frame the drops to draw, how each pool stands and looks,

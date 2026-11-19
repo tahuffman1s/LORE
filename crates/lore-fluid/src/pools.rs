@@ -867,6 +867,7 @@ impl Fluids {
             self.born += 1;
             let mut thrown = Particle::flying(kind, from, velocity, each, self.born);
             thrown.thrown = true;
+            thrown.of_a_mix = true;
             thrown.dry_left = self
                 .physics
                 .get(usize::from(kind))
@@ -1099,6 +1100,7 @@ impl Fluids {
                     // Water falling over a weir is spray enough: it throws
                     // none of its own where it lands.
                     drop.thrown = true;
+                    drop.of_a_mix = true;
                     drop.dry_left = dries;
                     self.parts.push(drop);
                 }

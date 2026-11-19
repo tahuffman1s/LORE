@@ -36,6 +36,8 @@ pub enum NoiseKind {
     Surface,
     /// Air let go under water.
     Bubbles,
+    /// Something burning in a liquid that burns: acid, lava.
+    Sizzle,
     /// Thunder from a stroke of lightning close enough for its crack to
     /// be heard.
     Thunder,
@@ -61,6 +63,7 @@ impl NoiseKind {
             Self::SwimStroke => "swim-stroke",
             Self::Surface => "surface",
             Self::Bubbles => "bubbles",
+            Self::Sizzle => "sizzle",
             Self::Thunder => "thunder",
             Self::FarThunder => "thunder-far",
         }
@@ -82,7 +85,8 @@ impl NoiseKind {
             | Self::SmallSplash
             | Self::Wade
             | Self::SwimStroke
-            | Self::Surface => Range::FOOTSTEP,
+            | Self::Surface
+            | Self::Sizzle => Range::FOOTSTEP,
             Self::Splash => Range {
                 near: 2.0,
                 far: 70.0,
@@ -120,6 +124,10 @@ pub struct Noise {
     /// How loud it was, from 0 to 1: a crouched step is a quarter as loud
     /// as a sprinting one, and a gunshot is 1.
     pub loudness: f32,
+    /// How high and fast it sounds: 1 is as its sound was recorded, and a
+    /// half is an octave lower and twice as long. What is done in a thick
+    /// or a heavy fluid sounds lower than in water.
+    pub pitch: f32,
     /// How long after the tick began it was made, in seconds: a weapon
     /// that fires faster than the game ticks fires partway through one.
     pub delay: f32,
@@ -164,6 +172,7 @@ impl Walking {
             kind,
             position: player.position,
             loudness,
+            pitch: 1.0,
             delay: 0.0,
             tick,
         });
@@ -178,6 +187,9 @@ pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play>
     let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
     let mut play = sounds.take(noise.kind.sound(), seed)?;
     play.volume *= noise.loudness;
+    if noise.pitch.is_finite() {
+        play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
+    }
     play.range = noise.kind.range();
     Some(play.after(noise.delay))
 }

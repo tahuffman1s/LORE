@@ -24,7 +24,7 @@ use lore_script::SoundRequest;
 pub const SOUNDS_FOLDER: &str = "sounds";
 
 /// The sounds every game has without a file of its own, in order.
-pub const STARTER_SOUNDS: [&str; 17] = [
+pub const STARTER_SOUNDS: [&str; 18] = [
     "bubbles",
     "drip",
     "dry-fire",
@@ -33,6 +33,7 @@ pub const STARTER_SOUNDS: [&str; 17] = [
     "landing",
     "rain",
     "reload",
+    "sizzle",
     "splash",
     "splash-small",
     "surface",
@@ -498,6 +499,7 @@ fn starters() -> BTreeMap<String, Entry> {
         ("surface", takes(starter::surfacing(), Range::FOOTSTEP)),
         ("bubbles", takes(starter::bubbles(), DRIP)),
         ("drip", takes(starter::drips(), DRIP)),
+        ("sizzle", takes(starter::sizzles(), Range::FOOTSTEP)),
         // Heard with the head under: to loop, the same in both ears.
         ("underwater", one(starter::underwater(), close)),
         // The weather, to loop for as long as it lasts: the engine plays
@@ -798,6 +800,7 @@ mod tests {
             ("bubbles", 1.0..1.4),
             ("underwater", 4.0..6.0),
             ("drip", 0.1..0.2),
+            ("sizzle", 0.5..0.8),
             // The weather's loops are here too: they are found the same way.
             ("rain", 5.9..6.1),
             ("wind", 7.9..8.1),

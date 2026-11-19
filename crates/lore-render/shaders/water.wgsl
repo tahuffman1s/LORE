@@ -1101,6 +1101,11 @@ fn fragment_water(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
     if corner.world.y < view.water.x + 0.06 && near_depth(corner.world.xz) > 0.03 {
         discard;
     }
+    // A creek is water, or what its game has made of water, and not what
+    // stands in the pool nearest the eye: beside a pit of lava it is still
+    // a creek.
+    own_look = view.stream_look;
+    own_look_said = true;
     var wet: Wet;
     wet.rest = corner.world.xz;
     wet.flow = corner.uv.xy;
