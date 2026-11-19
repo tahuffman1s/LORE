@@ -11,6 +11,7 @@ use ash::vk;
 use lore_shader::{Compiled, Hook, ParamBlock, ShaderError};
 
 use super::book::Job;
+use super::fluid::FluidDraws;
 use super::retire::Retiring;
 use super::screen::{ScreenPass, Targets};
 use super::surface::SurfaceTable;
@@ -19,7 +20,7 @@ use super::worker::Worker;
 use crate::buffer::Buffer;
 use crate::error::RenderError;
 use crate::gpu::Gpu;
-use crate::mesh::{MeshPipeline, Surface, make_surface_pipeline};
+use crate::mesh::{MeshPipeline, Surface, make_body_pipeline, make_surface_pipeline};
 use crate::scene::SceneTarget;
 use crate::tonemap::set_bindings;
 
@@ -68,6 +69,10 @@ pub(super) struct Shared {
     /// What a surface shader is drawn with: the mesh pipeline's three sets,
     /// then set 3, and the mesh pipeline's push constants.
     pub(super) surface_layout: vk::PipelineLayout,
+    /// What a fluid shader's pipelines are made with: the mesh pipeline's
+    /// three sets, the poured fluid's own set, and then the shader's
+    /// values and the clock, laid out as a surface shader's are.
+    pub(super) fluid_layout: vk::PipelineLayout,
     /// The shader clock for each frame in flight, as the frame writes it.
     pub(super) clocks: Vec<Buffer>,
 }
@@ -85,6 +90,7 @@ impl Shared {
             sampler: vk::Sampler::null(),
             surface_values: vk::DescriptorSetLayout::null(),
             surface_layout: vk::PipelineLayout::null(),
+            fluid_layout: vk::PipelineLayout::null(),
             clocks: Vec::with_capacity(frames),
         };
         // Dropping `shared` cleans up whatever was made; destroying a null handle is allowed.
@@ -183,6 +189,23 @@ impl Shared {
                     None,
                 )
                 .map_err(RenderError::driver(DOING))?;
+            // A fluid shader's values go after the fluid's own set, which
+            // the passes that draw drops have bound.
+            let sets = [
+                view,
+                material,
+                body,
+                mesh.fluid_set_layout(),
+                shared.surface_values,
+            ];
+            shared.fluid_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&sets)
+                        .push_constant_ranges(&ranges),
+                    None,
+                )
+                .map_err(RenderError::driver(DOING))?;
         }
         for _ in 0..frames {
             shared.clocks.push(Buffer::writable(
@@ -202,6 +225,7 @@ impl Drop for Shared {
         // dropping this, and the compile thread has finished with it.
         unsafe {
             let device = self.gpu.device();
+            device.destroy_pipeline_layout(self.fluid_layout, None);
             device.destroy_pipeline_layout(self.surface_layout, None);
             device.destroy_descriptor_set_layout(self.surface_values, None);
             device.destroy_pipeline_layout(self.layout, None);
@@ -216,26 +240,36 @@ impl Drop for Shared {
 
 /// What the frame draws a game's shader with, made by the compile thread.
 pub(crate) enum Built {
-    /// An effect over the finished picture.
+    /// A screen effect.
     Screen(ScreenShader),
-    /// A change to the surface of a level's material.
+    /// A surface shader.
     Surface(SurfaceShader),
+    /// A fluid shader.
+    Fluid(FluidShader),
 }
 
 impl Built {
-    /// The screen effect, if this is one.
+    /// The screen effect this is, if it is one.
     pub(super) fn screen(&self) -> Option<&ScreenShader> {
         match self {
             Self::Screen(shader) => Some(shader),
-            Self::Surface(_) => None,
+            Self::Surface(_) | Self::Fluid(_) => None,
         }
     }
 
-    /// The surface shader, if this is one.
+    /// The surface shader this is, if it is one.
     pub(super) fn surface(&self) -> Option<&SurfaceShader> {
         match self {
             Self::Surface(shader) => Some(shader),
-            Self::Screen(_) => None,
+            Self::Screen(_) | Self::Fluid(_) => None,
+        }
+    }
+
+    /// The fluid shader this is, if it is one.
+    pub(super) fn fluid(&self) -> Option<&FluidShader> {
+        match self {
+            Self::Fluid(shader) => Some(shader),
+            Self::Screen(_) | Self::Surface(_) => None,
         }
     }
 }
@@ -561,6 +595,143 @@ fn make_surface(
     Ok(shader)
 }
 
+/// A game's fluid shader as the passes draw it: the pipeline for a pool of
+/// its kind, the two that add up its drops, and its values.
+pub(crate) struct FluidShader {
+    gpu: Arc<Gpu>,
+    /// Draws a pool of the kind (`vertex_body`, `fragment_body`).
+    pub(super) body: vk::Pipeline,
+    /// Adds up drops of the kind in flight, and lying on surfaces.
+    pub(super) amount: vk::Pipeline,
+    pub(super) film: vk::Pipeline,
+    pool: vk::DescriptorPool,
+    /// For each frame in progress, where its values are written.
+    pub(super) buffers: Vec<Buffer>,
+    /// And the set that hands them, and the clock, to the shader.
+    pub(super) sets: Vec<vk::DescriptorSet>,
+}
+
+impl Drop for FluidShader {
+    fn drop(&mut self) {
+        // SAFETY: the retire queue drops a shader only after every frame
+        // that drew with it has finished; destroying the pool frees its
+        // sets, and a null pipeline is ignored.
+        unsafe {
+            let device = self.gpu.device();
+            for pipeline in [self.body, self.amount, self.film] {
+                device.destroy_pipeline(pipeline, None);
+            }
+            device.destroy_descriptor_pool(self.pool, None);
+        }
+    }
+}
+
+/// Makes the pipelines and the values of a fluid shader from its compiled
+/// module.
+fn make_fluid(
+    gpu: &Arc<Gpu>,
+    shared: &Shared,
+    frames: usize,
+    compiled: &Compiled,
+    block: &ParamBlock,
+) -> Result<FluidShader, RenderError> {
+    let device = gpu.device();
+    let mut shader = FluidShader {
+        gpu: Arc::clone(gpu),
+        body: vk::Pipeline::null(),
+        amount: vk::Pipeline::null(),
+        film: vk::Pipeline::null(),
+        pool: vk::DescriptorPool::null(),
+        buffers: Vec::with_capacity(frames),
+        sets: Vec::new(),
+    };
+    // SAFETY: the words are the compiler's own output, and the module is
+    // destroyed below, after the pipelines made from it.
+    let module = unsafe {
+        device.create_shader_module(
+            &vk::ShaderModuleCreateInfo::default().code(&compiled.words),
+            None,
+        )
+    }
+    .map_err(RenderError::driver(DOING))?;
+    // SAFETY: the module is alive and holds the mesh shader's functions,
+    // the layout is this device's and agrees with the mesh pipeline's and
+    // the fluid's in the sets they bind, and only this thread uses the
+    // cache.
+    let made = unsafe {
+        let body = make_body_pipeline(device, shared.cache, shared.fluid_layout, module);
+        let drops = body.and_then(|body| {
+            shader.body = body;
+            crate::fluid_pass::variant_pipelines(device, shared.cache, shared.fluid_layout, module)
+        });
+        device.destroy_shader_module(module, None);
+        drops
+    };
+    match made {
+        Ok([amount, film]) => {
+            shader.amount = amount;
+            shader.film = film;
+        }
+        Err(code) => return Err(RenderError::driver(DOING)(code)),
+    }
+
+    let size = block.size() as u64;
+    for _ in 0..frames {
+        shader.buffers.push(Buffer::writable(
+            gpu,
+            size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            DOING,
+        )?);
+    }
+    let count = u32::try_from(frames).unwrap_or(u32::MAX);
+    let sizes = [vk::DescriptorPoolSize::default()
+        .ty(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(count.saturating_mul(2))];
+    let layouts = vec![shared.surface_values; frames];
+    // SAFETY: the pool has room for one set of two buffers for each frame,
+    // and the buffers written into the sets are alive as long as the
+    // shader and the shared clocks are.
+    unsafe {
+        shader.pool = device
+            .create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(count)
+                    .pool_sizes(&sizes),
+                None,
+            )
+            .map_err(RenderError::driver(DOING))?;
+        shader.sets = device
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(shader.pool)
+                    .set_layouts(&layouts),
+            )
+            .map_err(RenderError::driver(DOING))?;
+        for ((set, buffer), clock) in shader.sets.iter().zip(&shader.buffers).zip(&shared.clocks) {
+            let values = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer.handle)
+                .range(size)];
+            let time = [vk::DescriptorBufferInfo::default()
+                .buffer(clock.handle)
+                .range(CLOCK_BYTES)];
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&values),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&time),
+            ];
+            device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+    Ok(shader)
+}
 /// What the compile thread does after a job's module compiled.
 fn make(
     gpu: &Arc<Gpu>,
@@ -576,6 +747,9 @@ fn make(
             .map_err(|error| fault(THIS_FILE, error.to_string())),
         Hook::Surface => make_surface(gpu, shared, frames, compiled, block)
             .map(Built::Surface)
+            .map_err(|error| fault(THIS_FILE, error.to_string())),
+        Hook::Fluid => make_fluid(gpu, shared, frames, compiled, block)
+            .map(Built::Fluid)
             .map_err(|error| fault(THIS_FILE, error.to_string())),
     }
 }
@@ -595,6 +769,8 @@ pub(super) struct Works {
     pub(super) pass: ScreenPass,
     /// Which surface shader draws which of the level's materials.
     pub(super) surfaces: SurfaceTable,
+    /// Which live fluid shader draws each kind of fluid.
+    pub(super) fluids: FluidDraws,
 }
 
 impl Works {
@@ -607,6 +783,7 @@ impl Works {
         let shared = Arc::new(Shared::new(gpu, frames, mesh)?);
         let pass = ScreenPass::new(gpu, &shared, frames)?;
         let surface_layout = shared.surface_layout;
+        let fluid_layout = shared.fluid_layout;
         let (theirs, their_gpu) = (Arc::clone(&shared), Arc::clone(gpu));
         let worker = Worker::new(move |job, compiled, block| {
             make(&their_gpu, &theirs, frames, job, compiled, block)
@@ -624,6 +801,7 @@ impl Works {
             targets: None,
             pass,
             surfaces: SurfaceTable::new(surface_layout),
+            fluids: FluidDraws::new(fluid_layout),
         })
     }
 }

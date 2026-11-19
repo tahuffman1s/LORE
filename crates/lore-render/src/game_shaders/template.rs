@@ -14,6 +14,9 @@ const SCREEN_FILE: &str = "crates/lore-render/shaders/screen.wgsl";
 /// The engine's side of a surface shader, which goes after the mesh shader.
 const SURFACE: &str = include_str!("../../shaders/surface.wgsl");
 const SURFACE_FILE: &str = "crates/lore-render/shaders/surface.wgsl";
+/// The engine's side of a fluid shader, which goes after the mesh shader.
+const FLUID: &str = include_str!("../../shaders/fluid_hook.wgsl");
+const FLUID_FILE: &str = "crates/lore-render/shaders/fluid_hook.wgsl";
 const MESH: &str = include_str!("../../shaders/mesh.wgsl");
 const MESH_FILE: &str = "crates/lore-render/shaders/mesh.wgsl";
 
@@ -25,6 +28,9 @@ const FAULT_HINT: &str = "This is a fault in LORE, not in your shader. \
 const SCREEN_VALUES: (u32, u32) = (1, 0);
 /// Where a surface shader's values are bound in its module.
 const SURFACE_VALUES: (u32, u32) = (3, 0);
+/// Where a fluid shader's values are bound in its module: after the set
+/// the poured fluid's own pictures are in.
+const FLUID_VALUES: (u32, u32) = (4, 0);
 
 /// The marker lines in `lit` (`mesh.wgsl`) and the single line each becomes
 /// in a game's module. The replacements must stay on one line, so that every
@@ -43,6 +49,31 @@ const MARKERS: [(&str, &str); 3] = [
         "base_seen = mix(lore_made.color, snow, snowed);",
     ),
     ("//!surface glows", "glow = lore_made.emission;"),
+];
+
+/// The marker lines of a fluid shader, in `water.wgsl` (a pool's pixel)
+/// and `fluid.wgsl` (a drop in flight, and one lying on a surface), and the
+/// single line each becomes in a game's module.
+const FLUID_MARKERS: [(&str, &str); 3] = [
+    (
+        "//!fluid pool",
+        "normal = lore_fluid_pool(corner, wet, normal);",
+    ),
+    (
+        "//!fluid drop",
+        "let lore_made = lore_fluid_drop(fluid_looks[kind * 3u], fluid_looks[kind * 3u + 1u], \
+         fluid_looks[kind * 3u + 2u], trace.normal, \
+         view.eye.xyz + trace.direction * max(trace.enters, 0.0), chord); \
+         absorbs = lore_made.absorption; scatters = lore_made.scattering;",
+    ),
+    (
+        "//!fluid film",
+        "let lore_made = lore_fluid_drop(takes, gives, glows, up, \
+         view.eye.xyz + direction * along, corner.third.y); \
+         takes = vec4<f32>(lore_made.absorption, lore_made.roughness); \
+         gives = vec4<f32>(lore_made.scattering, lore_made.metallic); \
+         glows = vec4<f32>(lore_made.emission, glows.w);",
+    ),
 ];
 
 /// The files `mesh.wgsl` includes, as `build.rs` finds them on disk.
@@ -88,9 +119,16 @@ fn with_markers_swapped(mesh: &str) -> Result<String, ShaderError> {
             ));
         }
     }
+    Ok(swapped(mesh, &MARKERS))
+}
+
+/// `text` with each line that is one of `markers` swapped for its call,
+/// keeping the line's indent and every line's number.
+fn swapped(text: &str, markers: &[(&str, &str)]) -> String {
+    let mesh = text;
     let mut out = String::with_capacity(mesh.len() + 512);
     for line in mesh.lines() {
-        match MARKERS.iter().find(|(marker, _)| line.trim() == *marker) {
+        match markers.iter().find(|(marker, _)| line.trim() == *marker) {
             Some((_, call)) => {
                 let indent = &line[..line.len() - line.trim_start().len()];
                 out.push_str(indent);
@@ -100,7 +138,42 @@ fn with_markers_swapped(mesh: &str) -> Result<String, ShaderError> {
         }
         out.push('\n');
     }
-    Ok(out)
+    out
+}
+
+/// The engine's side of a fluid shader: the mesh shader with the fluid's
+/// marker lines, in the files it includes, swapped for their calls. Each
+/// marker must be there exactly once across those files.
+fn fluid_engine() -> Result<Source, ShaderError> {
+    let mut found = [0_usize; FLUID_MARKERS.len()];
+    let with_calls = |name: &str| {
+        let text = included(name)?;
+        Ok(swapped(&text, &FLUID_MARKERS))
+    };
+    for name in ["water.wgsl", "fluid.wgsl"] {
+        let text = included(name).map_err(|message| fault(MESH_FILE, message))?;
+        for (count, (marker, _)) in found.iter_mut().zip(FLUID_MARKERS) {
+            *count += text.lines().filter(|line| line.trim() == marker).count();
+        }
+    }
+    for (count, (marker, _)) in found.iter().zip(FLUID_MARKERS) {
+        if *count != 1 {
+            return Err(fault(
+                MESH_FILE,
+                format!("The line `{marker}` should be there once and is there {count} times."),
+            ));
+        }
+    }
+    let mut source = Source::new();
+    source
+        .push_with_includes(Owner::Lore, MESH_FILE, MESH, with_calls)
+        .map_err(|mut error| {
+            error.lore_fault = true;
+            error.hint = Some(FAULT_HINT.to_owned());
+            error
+        })?;
+    source.push(Owner::Lore, FLUID_FILE, 1, FLUID);
+    Ok(source)
 }
 
 /// The engine's side of a surface shader, built from the given mesh text.
@@ -122,6 +195,7 @@ fn surface_engine_from(mesh: &str) -> Result<Source, ShaderError> {
 fn engine(hook: Hook) -> Result<&'static Source, ShaderError> {
     static SCREEN_ENGINE: OnceLock<Result<Source, ShaderError>> = OnceLock::new();
     static SURFACE_ENGINE: OnceLock<Result<Source, ShaderError>> = OnceLock::new();
+    static FLUID_ENGINE: OnceLock<Result<Source, ShaderError>> = OnceLock::new();
     let built = match hook {
         Hook::Screen => SCREEN_ENGINE.get_or_init(|| {
             let mut source = Source::new();
@@ -129,6 +203,7 @@ fn engine(hook: Hook) -> Result<&'static Source, ShaderError> {
             Ok(source)
         }),
         Hook::Surface => SURFACE_ENGINE.get_or_init(|| surface_engine_from(MESH)),
+        Hook::Fluid => FLUID_ENGINE.get_or_init(fluid_engine),
     };
     built.as_ref().map_err(Clone::clone)
 }
@@ -145,6 +220,7 @@ pub(crate) fn build_module(
     let (group, binding) = match hook {
         Hook::Screen => SCREEN_VALUES,
         Hook::Surface => SURFACE_VALUES,
+        Hook::Fluid => FLUID_VALUES,
     };
     let module = hooked_module(engine(hook)?, hook, &block, group, binding, file, text)?;
     let compiled = compile(&module, Bounds::Clamped)?;
@@ -166,15 +242,16 @@ mod tests {
     #[test]
     fn a_file_with_both_functions_says_to_split_them() {
         let both = "fn screen(in: ScreenIn) -> vec3f { return in.color; }\n\
-                    fn surface(in: SurfaceIn) -> Surface { return in.surface; }\n";
-        for hook in [Hook::Screen, Hook::Surface] {
+                    fn surface(in: SurfaceIn) -> Surface { return in.surface; }\n\
+                    fn fluid(in: FluidIn) -> Fluid { return in.fluid; }\n";
+        for hook in Hook::ALL {
             let error = check_game_shader(hook, "shaders/both.wgsl", both).unwrap_err();
             assert!(error.message.contains("both"), "{hook:?}: {error}");
             assert!(
                 error
                     .hint
                     .as_deref()
-                    .is_some_and(|h| h.contains("holds one of the two functions")),
+                    .is_some_and(|h| h.contains("holds one function")),
                 "{hook:?}: {error}"
             );
         }
@@ -182,7 +259,7 @@ mod tests {
 
     #[test]
     fn each_hooks_starter_compiles() {
-        for hook in [Hook::Screen, Hook::Surface] {
+        for hook in Hook::ALL {
             let result = check_game_shader(hook, "shaders/starter.wgsl", hook.starter());
             assert_eq!(result, Ok(Vec::new()), "{hook:?}");
         }
@@ -265,6 +342,55 @@ mod tests {
                     \x20       + vec3f(in.size.x * 0.0 + in.distance * 0.0);\n\
                     }\n";
         check_game_shader(Hook::Screen, "shaders/calls.wgsl", text).unwrap();
+    }
+
+    #[test]
+    fn a_fluid_shader_can_use_every_field_and_the_helpers() {
+        let text = "//! param speed: f32 = 0.2 range 0..2\n\
+                    fn fluid(in: FluidIn) -> Fluid {\n\
+                    \x20   var made = in.fluid;\n\
+                    \x20   let wave = sin(in.time * params.speed + in.position.x + in.distance * 0.01);\n\
+                    \x20   made.absorption = in.fluid.absorption * (1.0 + in.depth);\n\
+                    \x20   made.scattering = in.fluid.scattering + fluid_color(in.fluid) * in.pool;\n\
+                    \x20   made.emission = vec3f(wave * wave);\n\
+                    \x20   made.roughness = in.fluid.roughness;\n\
+                    \x20   made.metallic = in.fluid.metallic;\n\
+                    \x20   made.normal = normalize(in.fluid.normal + in.view * 0.01);\n\
+                    \x20   return fluid_colored(made, vec3f(0.9, 0.3, 0.05));\n\
+                    }\n";
+        let params = check_game_shader(Hook::Fluid, "shaders/every.wgsl", text).unwrap();
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn a_slip_in_a_fluid_shader_is_reported_in_the_makers_line() {
+        let text = "fn fluid(in: FluidIn) -> Fluid {\n    var made = in.fluid;\n    made.glow = vec3f(1.0);\n    return made;\n}\n";
+        let error = check_game_shader(Hook::Fluid, "shaders/crust.wgsl", text).unwrap_err();
+        assert_eq!(error.file, "shaders/crust.wgsl");
+        assert_eq!(error.line, Some(3));
+        assert!(!error.lore_fault, "{error}");
+    }
+
+    #[test]
+    fn a_fluid_shaders_markers_are_each_there_once_and_swapped_on_their_own_lines() {
+        let water = swapped(&included("water.wgsl").unwrap(), &FLUID_MARKERS);
+        let fluid = swapped(&included("fluid.wgsl").unwrap(), &FLUID_MARKERS);
+        assert_eq!(
+            water.lines().count(),
+            included("water.wgsl").unwrap().lines().count()
+        );
+        assert!(water.contains("normal = lore_fluid_pool(corner, wet, normal);"));
+        assert!(fluid.contains("absorbs = lore_made.absorption;"));
+        assert!(fluid.contains("glows = vec4<f32>(lore_made.emission, glows.w);"));
+        for text in [&water, &fluid] {
+            assert!(
+                text.lines()
+                    .all(|line| !line.trim().starts_with("//!fluid "))
+            );
+        }
+        // A surface shader's module leaves them as the comments they are.
+        let surface = surface_engine_from(MESH).unwrap();
+        assert!(surface.text().contains("//!fluid pool"));
     }
 
     #[test]

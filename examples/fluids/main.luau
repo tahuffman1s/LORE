@@ -41,6 +41,14 @@ local RESPAWN, WEATHER, CLEAR = "reload", "map", "inventory"
 
 local places = require("./places")
 local kinds = require("./kinds")
+
+-- Three of the fluids are drawn by shaders of this game's own, in the
+-- shaders folder: one function each, which the engine calls for every
+-- pixel of that fluid, in a pool or poured. Saving one of those files
+-- changes the running game.
+game.shaders.fluid("crust", "lava")
+game.shaders.fluid("slick", "oil")
+game.shaders.fluid("pulse", "slime")
 local gun = require("./gun")
 local lab = require("./lab")
 

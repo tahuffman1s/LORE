@@ -262,8 +262,11 @@ fn fragment_fluid_amount(corner: FluidCorner) -> FluidSums {
         discard;
     }
     let kind = u32(corner.third.z + 0.5);
-    let absorbs = fluid_looks[kind * 3u].rgb;
-    let scatters = fluid_looks[kind * 3u + 1u].rgb;
+    var absorbs = fluid_looks[kind * 3u].rgb;
+    var scatters = fluid_looks[kind * 3u + 1u].rgb;
+    // A game's fluid shader settles what the drop takes and scatters
+    // (`fluid_hook.wgsl`): this line is swapped for its call.
+    //!fluid drop
     // A widened drop is that much less there.
     let real = chord * corner.cover;
     var sums: FluidSums;
@@ -335,9 +338,12 @@ fn fragment_film(corner: FluidCorner) -> FilmSums {
     let left = 1.0 - out;
     let bump = left * left * left * (1.0 - smoothstep(0.5 * slack, slack, height));
     let kind = u32(corner.third.z + 0.5);
-    let takes = fluid_looks[kind * 3u];
-    let gives = fluid_looks[kind * 3u + 1u];
-    let glows = fluid_looks[kind * 3u + 2u];
+    var takes = fluid_looks[kind * 3u];
+    var gives = fluid_looks[kind * 3u + 1u];
+    var glows = fluid_looks[kind * 3u + 2u];
+    // A game's fluid shader settles the film's look (`fluid_hook.wgsl`):
+    // this line is swapped for its call.
+    //!fluid film
     var sums: FilmSums;
     sums.film = vec4<f32>(log2(vec3<f32>(1.0) + takes.rgb), 1.0) * bump;
     sums.light = vec4<f32>(log2(vec3<f32>(1.0) + gives.rgb), max(corner.third.y, 0.0)) * bump;

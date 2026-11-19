@@ -690,6 +690,7 @@ impl Headless {
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
                     surfaces: self.shaders.surface_draws(),
+                    fluids: self.shaders.fluid_draws(),
                 },
                 camera,
                 FRAME_SECONDS,

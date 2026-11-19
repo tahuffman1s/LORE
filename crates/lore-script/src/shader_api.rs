@@ -42,7 +42,7 @@ use crate::error::closest;
 use crate::modules::{self, ReadProblem, Stamp, Watch, stamp};
 
 /// Every function on `game.shaders`.
-pub(crate) const SHADERS_FUNCTIONS: &[&str] = &["screen", "surface"];
+pub(crate) const SHADERS_FUNCTIONS: &[&str] = &["screen", "surface", "fluid"];
 
 /// What can be called on a shader handle. The type definitions are tested
 /// against it.
@@ -56,6 +56,10 @@ pub const MOST_SCREEN_EFFECTS: usize = 8;
 /// renderer draws the same number.
 pub const MOST_SURFACE_SHADERS: usize = 8;
 
+/// How many fluid shaders can be on at once, one for each kind of fluid.
+/// The renderer draws the same number.
+pub const MOST_FLUID_SHADERS: usize = 8;
+
 /// What a game shader is used for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShaderUse {
@@ -66,6 +70,13 @@ pub enum ShaderUse {
         /// The material's name, as the level writes it.
         material: String,
     },
+    /// Changes how a kind of fluid looks, in a pool and poured.
+    Fluid {
+        /// The kind's name, as `game.fluid` knows it.
+        fluid: String,
+        /// The kind, by number.
+        kind: u8,
+    },
 }
 
 impl ShaderUse {
@@ -75,6 +86,7 @@ impl ShaderUse {
         match self {
             Self::Screen => Hook::Screen,
             Self::Surface { .. } => Hook::Surface,
+            Self::Fluid { .. } => Hook::Fluid,
         }
     }
 
@@ -82,6 +94,7 @@ impl ShaderUse {
         match self {
             Self::Screen => "game.shaders.screen",
             Self::Surface { .. } => "game.shaders.surface",
+            Self::Fluid { .. } => "game.shaders.fluid",
         }
     }
 
@@ -89,6 +102,7 @@ impl ShaderUse {
         match self {
             Self::Screen => MOST_SCREEN_EFFECTS,
             Self::Surface { .. } => MOST_SURFACE_SHADERS,
+            Self::Fluid { .. } => MOST_FLUID_SHADERS,
         }
     }
 
@@ -451,7 +465,7 @@ impl ShaderState {
                     ShaderUse::Surface { material } => others
                         .iter()
                         .find(|other| other.eq_ignore_ascii_case(material)),
-                    ShaderUse::Screen => None,
+                    ShaderUse::Screen | ShaderUse::Fluid { .. } => None,
                 };
                 if let Some(stem) = swapped {
                     let _ = write!(
@@ -845,6 +859,9 @@ fn shader_text(name: &str, used: &ShaderUse) -> String {
         ShaderUse::Surface { material } => {
             format!("surface shader \"{name}\" on \"{material}\"")
         }
+        ShaderUse::Fluid { fluid, .. } => {
+            format!("fluid shader \"{name}\" on \"{fluid}\"")
+        }
     }
 }
 
@@ -859,6 +876,9 @@ fn call_text(name: &str, used: &ShaderUse) -> String {
         ShaderUse::Screen => format!("game.shaders.screen(\"{name}\")"),
         ShaderUse::Surface { material } => {
             format!("game.shaders.surface(\"{name}\", \"{material}\")")
+        }
+        ShaderUse::Fluid { fluid, .. } => {
+            format!("game.shaders.fluid(\"{name}\", \"{fluid}\")")
         }
     }
 }
@@ -876,13 +896,23 @@ fn off(name: &str, used: &ShaderUse) -> String {
 /// A shader's name as the script wrote it: text, trimmed, naming a file.
 fn shader_name(lua: &Lua, used: &ShaderUse, value: &Value) -> mlua::Result<String> {
     let function = used.function();
-    let surface = matches!(used, ShaderUse::Surface { .. });
-    let (example, file) = match surface {
-        true => (
+    // What comes after the shader's name in an example of the call: the
+    // material or the fluid it is for.
+    let second = match used {
+        ShaderUse::Screen => None,
+        ShaderUse::Surface { .. } => Some("Lava"),
+        ShaderUse::Fluid { .. } => Some("lava"),
+    };
+    let (example, file) = match used {
+        ShaderUse::Surface { .. } => (
             "game.shaders.surface(\"lava\", \"Lava\")",
             "shaders/lava.wgsl",
         ),
-        false => ("game.shaders.screen(\"heat\")", "shaders/heat.wgsl"),
+        ShaderUse::Fluid { .. } => (
+            "game.shaders.fluid(\"crust\", \"lava\")",
+            "shaders/crust.wgsl",
+        ),
+        ShaderUse::Screen => ("game.shaders.screen(\"heat\")", "shaders/heat.wgsl"),
     };
     let Value::String(written) = value else {
         return Err(fail(
@@ -904,13 +934,13 @@ fn shader_name(lua: &Lua, used: &ShaderUse, value: &Value) -> mlua::Result<Strin
     }
     // The call as the script wrote it (its material is not read yet), and
     // the call it should have written.
-    let own = |name: &str| match surface {
-        true => format!("{function}(\"{name}\", ...)"),
-        false => format!("{function}(\"{name}\")"),
+    let own = |name: &str| match second {
+        Some(_) => format!("{function}(\"{name}\", ...)"),
+        None => format!("{function}(\"{name}\")"),
     };
-    let fixed = |name: &str| match surface {
-        true => format!("{function}(\"{name}\", \"Lava\")"),
-        false => format!("{function}(\"{name}\")"),
+    let fixed = |name: &str| match second {
+        Some(second) => format!("{function}(\"{name}\", \"{second}\")"),
+        None => format!("{function}(\"{name}\")"),
     };
     if name.contains(['/', '\\']) {
         let stem = name.rsplit(['/', '\\']).next().unwrap_or(name);
@@ -990,6 +1020,10 @@ fn values_of(lua: &Lua, function: &str, example: &str, table: &Table) -> mlua::R
                         "game.shaders.surface(\"glow\", \"Lava\", { code = \"fn surface(in: \
                              SurfaceIn) -> Surface { return in.surface; }\" })"
                     }
+                    false if function.ends_with("fluid") => {
+                        "game.shaders.fluid(\"crust\", \"lava\", { code = \"fn fluid(in: \
+                             FluidIn) -> Fluid { return in.fluid; }\" })"
+                    }
                     false => {
                         "game.shaders.screen(\"pulse\", { code = \"fn screen(in: ScreenIn) \
                               -> vec3f { return in.color; }\" })"
@@ -1022,12 +1056,11 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
     let shared = shared_of(lua)?;
     let state = &shared.shaders;
     let function = used.function();
-    let surface = matches!(used, ShaderUse::Surface { .. });
     let name = shader_name(lua, &used, name)?;
-    let values_example = if surface {
-        "game.shaders.surface(\"lava\", \"Lava\", { glow = 2 })"
-    } else {
-        "game.shaders.screen(\"heat\", { strength = 0.3 })"
+    let values_example = match used {
+        ShaderUse::Surface { .. } => "game.shaders.surface(\"lava\", \"Lava\", { glow = 2 })",
+        ShaderUse::Fluid { .. } => "game.shaders.fluid(\"crust\", \"lava\", { speed = 0.2 })",
+        ShaderUse::Screen => "game.shaders.screen(\"heat\", { strength = 0.3 })",
     };
     let values = match values {
         Value::Nil => None,
@@ -1047,21 +1080,28 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
     let loading = state.loading.get();
     let slot = |entry: &Entry| match &used {
         ShaderUse::Screen => entry.said.used_as == ShaderUse::Screen && entry.said.name == name,
-        ShaderUse::Surface { .. } => entry.said.used_as == used,
+        ShaderUse::Surface { .. } | ShaderUse::Fluid { .. } => entry.said.used_as == used,
     };
     let too_many = || {
         let nth = used.most() + 1;
         fail(
             lua,
-            match surface {
-                false => format!(
+            match used {
+                ShaderUse::Screen => format!(
                     "{call} would be the {nth}th screen effect, and a game can have {} on at \
                      once. Turn one off first with its :remove().",
                     used.most()
                 ),
-                true => format!(
+                ShaderUse::Surface { .. } => format!(
                     "{call} would be the {nth}th surface shader, and a game can have {} at \
                      once, one for each of {} materials. Remove one first with its :remove().",
+                    used.most(),
+                    used.most()
+                ),
+                ShaderUse::Fluid { .. } => format!(
+                    "{call} would be the {nth}th fluid shader, and a game can have {} at \
+                     once, one for each of {} kinds of fluid. Remove one first with its \
+                     :remove().",
                     used.most(),
                     used.most()
                 ),
@@ -1259,6 +1299,34 @@ pub(crate) fn table(lua: &Lua) -> mlua::Result<Table> {
                 ));
             }
             ask(lua, ShaderUse::Surface { material }, &name, &values)
+        })?,
+    )?;
+    shaders.set(
+        "fluid",
+        lua.create_function(|lua, (name, fluid, values): (Value, Value, Value)| {
+            let example = "game.shaders.fluid(\"crust\", \"lava\", { speed = 0.2 })";
+            if fluid.is_nil() {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.shaders.fluid needs the kind of fluid it is for after the \
+                         shader's name: the kind's name in quotes, or a fluid made with \
+                         game.fluid. Write it like this: {example}"
+                    ),
+                ));
+            }
+            // A ready-made name that is not yet a kind is made, as
+            // game.fluids.spray makes it.
+            let shared = shared_of(lua)?;
+            let state = &shared.fluids;
+            let kind =
+                crate::fluid_api::kind_of(lua, state, &fluid, true, "game.shaders.fluid", example)?
+                    .unwrap_or(0);
+            let used = ShaderUse::Fluid {
+                fluid: state.name(kind),
+                kind,
+            };
+            ask(lua, used, &name, &values)
         })?,
     )?;
     strict(lua, &shaders, "game.shaders", SHADERS_FUNCTIONS)?;

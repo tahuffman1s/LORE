@@ -760,6 +760,9 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
     ring = vec4<f32>(ring.x, ring.yz * min(1.0, 0.7 / max(steep, 0.001)), ring.w);
     let slope = waves.slope + ring.yz + rain_rings(corner.world.xz) * (1.0 - frozen);
     var normal = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+    // A game's fluid shader settles what the liquid is here, and which
+    // way it faces (`fluid_hook.wgsl`): this line is swapped for its call.
+    //!fluid pool
     // White ice: patches of it that froze with air in them, tens of
     // metres across. The rest is clear.
     let milky = smoothstep(

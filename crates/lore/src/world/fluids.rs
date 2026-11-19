@@ -411,6 +411,7 @@ impl WorldFluids {
                 look,
                 freezes,
                 calm: (libm::log10f(thick) / 3.5).clamp(0.0, 1.0),
+                kind: pool.kind(),
             }
         }));
         frame.set_pools(stands);

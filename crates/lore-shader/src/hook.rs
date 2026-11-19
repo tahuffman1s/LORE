@@ -10,14 +10,22 @@ pub enum Hook {
     Screen,
     /// A change to the surface of a material: `fn surface(in: SurfaceIn) -> Surface`.
     Surface,
+    /// A change to how a kind of fluid looks, in a pool and poured:
+    /// `fn fluid(in: FluidIn) -> Fluid`.
+    Fluid,
 }
 
 impl Hook {
-    /// The name of the function the shader must hold: `screen` or `surface`.
+    /// Every hook there is.
+    pub const ALL: [Self; 3] = [Self::Screen, Self::Surface, Self::Fluid];
+
+    /// The name of the function the shader must hold: `screen`, `surface`
+    /// or `fluid`.
     pub fn entry(self) -> &'static str {
         match self {
             Self::Screen => "screen",
             Self::Surface => "surface",
+            Self::Fluid => "fluid",
         }
     }
 
@@ -26,6 +34,7 @@ impl Hook {
         match self {
             Self::Screen => "fn screen(in: ScreenIn) -> vec3f",
             Self::Surface => "fn surface(in: SurfaceIn) -> Surface",
+            Self::Fluid => "fn fluid(in: FluidIn) -> Fluid",
         }
     }
 
@@ -35,6 +44,7 @@ impl Hook {
         match self {
             Self::Screen => "fn screen(in: ScreenIn) -> vec3f {\n    return in.color;\n}",
             Self::Surface => "fn surface(in: SurfaceIn) -> Surface {\n    return in.surface;\n}",
+            Self::Fluid => "fn fluid(in: FluidIn) -> Fluid {\n    return in.fluid;\n}",
         }
     }
 
@@ -43,6 +53,7 @@ impl Hook {
         match self {
             Self::Screen => "ScreenIn",
             Self::Surface => "SurfaceIn",
+            Self::Fluid => "FluidIn",
         }
     }
 
@@ -51,6 +62,7 @@ impl Hook {
         match self {
             Self::Screen => &["vec3f"],
             Self::Surface => &["Surface"],
+            Self::Fluid => &["Fluid"],
         }
     }
 
@@ -59,14 +71,13 @@ impl Hook {
         match self {
             Self::Screen => "game.shaders.screen",
             Self::Surface => "game.shaders.surface",
+            Self::Fluid => "game.shaders.fluid",
         }
     }
 
-    fn other(self) -> Self {
-        match self {
-            Self::Screen => Self::Surface,
-            Self::Surface => Self::Screen,
-        }
+    /// The hooks this one is not.
+    fn others(self) -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().filter(move |hook| *hook != self)
     }
 
     /// What a shader of this kind is called in a sentence.
@@ -74,6 +85,7 @@ impl Hook {
         match self {
             Self::Screen => "a screen effect",
             Self::Surface => "a surface shader",
+            Self::Fluid => "a fluid shader",
         }
     }
 
@@ -135,8 +147,10 @@ fn check_entry(hook: Hook, file: &str, text: &str) -> Result<(), ShaderError> {
     let blanked = blank_comments(text);
     let pieces = tokens(&blanked);
     let Some(at) = find_fn(&pieces, hook.entry()) else {
-        let other = hook.other();
-        let hint = if find_fn(&pieces, other.entry()).is_some() {
+        let held = hook
+            .others()
+            .find(|other| find_fn(&pieces, other.entry()).is_some());
+        let hint = if let Some(other) = held {
             format!(
                 "It has a `{}` function, so it is {}: use it with `{}`. To use it as {} \
                  instead, write a `{}` function like this:\n{}",
@@ -177,8 +191,10 @@ fn check_entry(hook: Hook, file: &str, text: &str) -> Result<(), ShaderError> {
             )),
         ));
     }
-    let other = hook.other();
-    if let Some(at) = find_fn(&pieces, other.entry()) {
+    let second = hook
+        .others()
+        .find_map(|other| find_fn(&pieces, other.entry()).map(|at| (other, at)));
+    if let Some((other, at)) = second {
         return Err(error_at(
             file,
             text,
@@ -190,7 +206,8 @@ fn check_entry(hook: Hook, file: &str, text: &str) -> Result<(), ShaderError> {
                 hook.kind()
             ),
             Some(format!(
-                "A shader file holds one of the two functions. Put `{}` in its own file.",
+                "A shader file holds one function: `screen`, `surface` or `fluid`. Put `{}` in \
+                 its own file.",
                 other.entry()
             )),
         ));

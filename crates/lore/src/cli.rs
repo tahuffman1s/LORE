@@ -315,15 +315,15 @@ pub fn check_shaders(
             }
         };
         let code = without_comments(&text);
-        let hooks: Vec<_> = [lore_shader::Hook::Screen, lore_shader::Hook::Surface]
+        let hooks: Vec<_> = lore_shader::Hook::ALL
             .into_iter()
             .filter(|hook| holds_function(&code, hook.entry()))
             .collect();
         if hooks.is_empty() {
             found.warnings.push(format!(
-                "{file} holds neither `fn screen(` nor `fn surface(`, and the script never \
-                 turns it on, so it does nothing. A game shader holds one of those two \
-                 functions: add one, or remove the file."
+                "{file} holds none of `fn screen(`, `fn surface(` and `fn fluid(`, and the \
+                 script never turns it on, so it does nothing. A game shader holds one of \
+                 those three functions: add one, or remove the file."
             ));
             continue;
         }

@@ -12,6 +12,7 @@
 #![allow(clippy::result_large_err)]
 
 mod book;
+mod fluid;
 mod retire;
 mod screen;
 mod surface;
@@ -37,6 +38,7 @@ use crate::gpu::Gpu;
 use crate::mesh::{MeshPipeline, Meshes};
 use crate::view::SceneView;
 
+pub(crate) use fluid::{FluidDraws, FluidVariant};
 pub(crate) use surface::SurfaceDraws;
 pub use template::check_game_shader;
 
@@ -45,6 +47,10 @@ pub const MOST_SCREEN_EFFECTS: usize = 8;
 
 /// How many surface shaders can be on at once.
 pub const MOST_SURFACE_SHADERS: usize = 8;
+
+/// How many fluid shaders can be on at once: one for each of eight kinds
+/// of fluid.
+pub const MOST_FLUID_SHADERS: usize = 8;
 
 /// What a game shader is used for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +62,14 @@ pub enum ShaderUse<'a> {
     Surface {
         /// The name of the material in the level.
         material: &'a str,
+    },
+    /// Changes how a kind of fluid looks, in a pool and poured:
+    /// `fn fluid(in: FluidIn) -> Fluid`.
+    Fluid {
+        /// The kind, as the fluid looks number them.
+        kind: u8,
+        /// What the game calls that kind: reports name the shader by it.
+        fluid: &'a str,
     },
 }
 
@@ -341,6 +355,42 @@ impl GameShaders {
         }
         works.surfaces.update(&mut self.book, meshes, slot);
 
+        // The fluid shaders' values, and which draws each kind.
+        let mut fluids = false;
+        for entry in self.book.fluids() {
+            let Some(drawn) = entry.live() else {
+                continue;
+            };
+            let Some(shader) = drawn.built.fluid() else {
+                continue;
+            };
+            fluids = true;
+            let Some(out) = bytes.get_mut(..drawn.block.size()) else {
+                continue;
+            };
+            drawn.block.write(entry.values(), out);
+            let Some(buffer) = shader.buffers.get(slot) else {
+                continue;
+            };
+            // SAFETY: as for the screen effects' values above.
+            if let Err(error) = unsafe { buffer.write(out) } {
+                failure = Some(error);
+            }
+        }
+        if fluids && !surfaces {
+            #[allow(clippy::cast_possible_truncation)]
+            let time = (self.clock as f32).to_ne_bytes();
+            let mut clock = [0_u8; 16];
+            clock[..4].copy_from_slice(&time);
+            if let Some(buffer) = works.shared.clocks.get(slot) {
+                // SAFETY: as for the surface shaders' clock above.
+                if let Err(error) = unsafe { buffer.write(&clock) } {
+                    failure = Some(error);
+                }
+            }
+        }
+        works.fluids.update(&self.book, slot);
+
         // The pictures exist while an effect is live, at the picture's size.
         let stale = live == 0 || works.targets.as_ref().is_some_and(|t| t.extent != output);
         if stale && let Some(old) = works.targets.take() {
@@ -403,6 +453,13 @@ impl GameShaders {
     }
 
     /// Says that a frame was handed to the graphics card.
+    /// Which live fluid shader draws each kind of fluid: `None` when none
+    /// is live, which draws exactly as before.
+    pub(crate) fn fluid_draws(&self) -> Option<&FluidDraws> {
+        let fluids = &self.works.as_ref()?.fluids;
+        fluids.any().then_some(fluids)
+    }
+
     pub(crate) fn submitted(&mut self) {
         self.submitted += 1;
     }

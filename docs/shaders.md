@@ -7,7 +7,8 @@ For how to write one, see the makers' page, `site/docs/shaders.html`.
 
 A game's shader is a hook, not a whole shader: the maker writes one
 function and the engine keeps the hard part (lighting, shadows, fog,
-weather, tone mapping). There are two hooks, written in WGSL:
+weather, tone mapping). There are three hooks, written in WGSL
+(the third, for fluids, has its own section below):
 
 - **Screen effect**: `fn screen(in: ScreenIn) -> vec3f`. Run for every pixel
   of the finished HDR picture, after upscaling and before tone mapping and
@@ -21,6 +22,40 @@ Which hook a file is used as comes from how the script asks for it
 (`game.shaders.screen(...)` or `game.shaders.surface(...)`), not from a line
 in the file. Saving the file changes the running game; a mistake shows the
 file, line and source line, and the last version that worked keeps drawing.
+
+## The fluid hook (#453)
+
+- **Fluid shader**: `fn fluid(in: FluidIn) -> Fluid`, turned on for a kind
+  of fluid with `game.shaders.fluid(name, kind, values?)`. Run for every
+  pixel of a pool whose fluid is mostly that kind, and for every drop and
+  puddle of it, where the engine has the kind's look and before it shades
+  with it. One per kind, up to 8.
+- The engine's side is `shaders/fluid_hook.wgsl`. The module is the whole
+  mesh module, as for a surface shader, with three marker lines swapped for
+  calls: `//!fluid pool` in `water.wgsl` (a pool's pixel, after its normal
+  is found), and `//!fluid drop` and `//!fluid film` in `fluid.wgsl` (a
+  drop in flight, a drop lying on a surface). The markers are in included
+  files, so `fluid_engine` swaps them as it stitches the includes; a test
+  holds that each is there once.
+- A fluid shader builds three pipelines from its module: the body pipeline
+  (`make_body_pipeline`, which the engine's own is made with too) and the
+  two that add drops up (`fluid_pass::variant_pipelines`). The passes that
+  smooth and shade the fluid are the engine's own.
+- Its values and the clock are set 4, after the fluid's own set 3, so one
+  layout (`Shared::fluid_layout`: view, material, body, fluid, values)
+  serves all three pipelines and is compatible with what the mesh pass and
+  the fluid pass have bound. A pool's pixel takes the pool's own look from
+  its draw's numbers, hands it to the hook, and shades with what comes
+  back through the same private `own_look` rows.
+- Drops are handed to the graphics card grouped by kind
+  (`FluidScene::set_drops`, a counting sort that allocates nothing), so
+  each kind's run can be drawn by its own pipeline. With no fluid shader
+  live they are drawn in one call, as before.
+- A stream of drops in the air takes what it absorbs and scatters from the
+  hook; its glow, roughness and metal are read by the shading pass from the
+  kind's own look. Films (lying drops) take all of it.
+- `PoolDrawn::kind` says which kind a pool mostly is. A pool with a shader
+  is always handed a look: water with no look of its own gets water's.
 
 ## Who owns what
 
@@ -134,7 +169,7 @@ file, line and source line, and the last version that worked keeps drawing.
 
 ## Limits
 
-8 screen effects and 8 surface shaders at once; 32 values (`MAX_VALUES`) and
+8 screen effects, 8 surface shaders and 8 fluid shaders at once; 32 values (`MAX_VALUES`) and
 64 KiB of text (`MAX_TEXT_BYTES`) per shader. Values out of range are an
 error, not clamped.
 
@@ -145,7 +180,8 @@ picture and `lore bench` numbers as before.
 
 ## Not built
 
-Textures as values, sky, water and HUD shaders, moving vertices, reloading the
+Textures as values, sky and HUD shaders, a fluid shader's glow and shine on
+a stream of drops in flight, moving vertices, reloading the
 engine's own shaders while it runs, a helper library (noise and the like),
 saving the pipeline cache to disk (#97), and bounce light seeing a changed
 surface. A surface shader changes only what the camera sees: not shadows,
