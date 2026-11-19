@@ -131,7 +131,7 @@ local function use(one: Station)
         pullLever()
     else
         -- As the level made it: its own fluid, where its sheet lies.
-        one.pool.fluid = one.fluid
+        one.pool.fluid = game.fluid(one.fluid)
         one.pool.level = one.at.y
     end
 end

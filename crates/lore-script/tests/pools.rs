@@ -312,7 +312,7 @@ fn mistakes_with_a_pool_say_what_to_write() {
             "pond:splash(vector.create(0, 0, 0), { liters = 2 })",
             "Did you mean litres?",
         ),
-        ("pond.fluid = 5", "pool.fluid = \"lava\""),
+        ("pond.fluid = 5", "pool.fluid = game.fluid(\"lava\")"),
         ("pond.level = 0 / 0", "pool.level = 2.5"),
     ] {
         let message = mistake_of(&format!(

@@ -528,9 +528,9 @@ declare extern type Pool with
     --- Example: print(game.fluids.pool("pond").name)
     name: string
 
-    --- The kind of fluid there is most of in it. Set it, and all it holds
-    --- becomes that kind.
-    --- Example: game.fluids.pool("Moat").fluid = "lava"
+    --- The kind of fluid there is most of in it. Set it to a `Fluid`, and
+    --- all it holds becomes that kind.
+    --- Example: game.fluids.pool("Moat").fluid = game.fluid("lava")
     fluid: Fluid
 
     --- How high its surface stands, in metres. Set it, and the pool is

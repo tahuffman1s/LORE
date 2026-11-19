@@ -411,7 +411,7 @@ game.onTick(function()
     tub:setLevel(1.5, 10)
     tub:setLevel(0.5)
     tub:splash(game.player.position, { litres = 3, speed = 5 })
-    tub.fluid = "lava"
+    tub.fluid = game.fluid("lava")
     tub.level = 1
     tub.litres = 200
     for _, pool: Pool in game.fluids.pools() do

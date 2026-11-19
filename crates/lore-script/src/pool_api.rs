@@ -371,7 +371,7 @@ impl UserData for PoolRef {
                             &value,
                             true,
                             "pool.fluid",
-                            "pool.fluid = \"lava\"",
+                            "pool.fluid = game.fluid(\"lava\")",
                         )?;
                         FluidAsk::PoolKind {
                             pool,
