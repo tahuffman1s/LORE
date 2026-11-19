@@ -1800,6 +1800,68 @@ mod tests {
     }
 
     #[test]
+    fn rain_and_snow_are_seen_in_a_lamps_light_on_a_dark_night() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A street lamp on a moonless night, three metres up and six ahead,
+        // under a sky that is all cloud. The air's own glow round it is
+        // left out, so that only what falls through its light is counted.
+        headless.set_scene(&fluid_scene(false, false)).unwrap();
+        headless.set_hour(Some(23.0 + 24.0 * 15.0));
+        headless.set_light_shafts(false);
+        headless.set_lamps(&[Lamp {
+            at: [0.0, 3.0, -6.0],
+            candela: 120.0,
+            radius: 0.05,
+            ..Lamp::default()
+        }]);
+        let camera = Camera {
+            position: [0.0, 1.6, 0.0],
+            pitch: 0.1,
+            ..Camera::default()
+        };
+        let mut seen = |rain: f32, temperature: f32| {
+            headless.set_weather(Weather {
+                cloud_cover: 1.0,
+                precipitation: rain,
+                temperature,
+                ..Weather::default()
+            });
+            headless.screenshot(&camera).unwrap()
+        };
+        let (dry, rained, snowed) = (seen(0.0, 10.0), seen(1.0, 10.0), seen(1.0, -5.0));
+        if let Ok(folder) = std::env::var("LORE_SAVE_PICTURES") {
+            let _ = std::fs::write(format!("{folder}/lamp-dry.raw"), &dry);
+            let _ = std::fs::write(format!("{folder}/lamp-rain.raw"), &rained);
+            let _ = std::fs::write(format!("{folder}/lamp-snow.raw"), &snowed);
+        }
+        // The air round the lamp, above the ground it lights.
+        let light = |picture: &[u8]| -> i64 {
+            (8..34)
+                .flat_map(|row| (40..88).map(move |column| (row * 128 + column) * 4))
+                .map(|at| {
+                    (0..3)
+                        .map(|colour| i64::from(picture[at + colour]))
+                        .sum::<i64>()
+                })
+                .sum()
+        };
+        let (none, drops, flakes) = (light(&dry), light(&rained), light(&snowed));
+        assert!(
+            drops * 10 > none * 11,
+            "no rain is seen in the lamp's light: {drops} against {none} with none"
+        );
+        assert!(
+            flakes * 10 > none * 11,
+            "no snow is seen in the lamp's light: {flakes} against {none} with none"
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn snow_lies_in_the_open_and_not_under_a_roof() {
         let Some(mut headless) = headless(128, 72) else {
             return;

@@ -73,7 +73,8 @@ fn open_above(world: vec3<f32>) -> f32 {
 }
 
 // How much of a line of sight is covered by what is falling: drops of
-// rain, hailstones, pellets of sleet or flakes of snow.
+// rain, hailstones, pellets of sleet or flakes of snow; and, after that,
+// where the one that covers most of it is, to light it from.
 //
 // The air is cut into cells `cell` metres across, and a share `amount` of
 // them hold one of them each, `size` metres from its middle to its edge,
@@ -95,7 +96,7 @@ fn open_above(world: vec3<f32>) -> f32 {
 fn falling(
     direction: vec3<f32>, far: f32, cell: f32, reach: f32, fall: f32, size: f32,
     amount: f32, sway: f32, blink: f32, glint: f32, which: f32,
-) -> f32 {
+) -> vec4<f32> {
     let seconds = view.clouds.y;
     let high = 256.0 * cell;
     let fallen = fract(fall * seconds / high) * high;
@@ -122,6 +123,7 @@ fn falling(
     var at = floor(origin);
     var next = (at + max(way, vec3<f32>(0.0)) - origin) / safe;
     var cover = 0.0;
+    var lit_at = view.eye.xyz + direction;
     for (var number = 0; number < 32; number++) {
         let dice = cell_dice(at + which * 37.0);
         if dice.w < amount {
@@ -151,7 +153,12 @@ fn falling(
                 // Whether something is over it is only asked of what
                 // this pixel would show.
                 if seen > cover {
-                    cover = max(cover, seen * open_above(view.eye.xyz + (middle - origin) * cell));
+                    let place = view.eye.xyz + (middle - origin) * cell;
+                    let reached = seen * open_above(place);
+                    if reached > cover {
+                        cover = reached;
+                        lit_at = place;
+                    }
                 }
             }
         }
@@ -170,7 +177,39 @@ fn falling(
             next.z += each.z;
         }
     }
-    return cover;
+    return vec4<f32>(cover, lit_at);
+}
+
+// The pixel of the picture that looks along `direction`, which is in
+// front of the eye: what finds the lamps that reach a point on that line
+// of sight (`lamp_cell`).
+fn pixel_along(direction: vec3<f32>) -> vec2<f32> {
+    let forward = view.sky_rays[0].xyz;
+    let right = view.sky_rays[1];
+    let up = view.sky_rays[2];
+    let off = direction * (dot(forward, forward) / max(dot(direction, forward), 1e-6)) - forward;
+    let across = vec2<f32>(
+        dot(off, right.xyz) / max(dot(right.xyz, right.xyz), 1e-12) + right.w,
+        dot(off, up.xyz) / max(dot(up.xyz, up.xyz), 1e-12) + up.w,
+    );
+    return vec2<f32>(across.x * 0.5 + 0.5, 0.5 - across.y * 0.5) * lamps.size.xy;
+}
+
+// The light of the lamps and of lightning on something falling at `place`,
+// seen along `direction`. A drop takes a lamp's light in from one side and
+// sends it on as a glint, a point far brighter than the drop itself, and a
+// flake is a white thing: drawn a pixel wide, each is given as much of a
+// lamp's light as a white surface facing the lamp would have, four times
+// what as much mist sends on (`lamps_in_air`), and more looking towards
+// the lamp. So rain is seen streaming through the light round a street
+// lamp at night, and snow drifting through its beam. A flash lights it as
+// it lights everything under the cloud. Asked only of what a pixel shows.
+fn falling_lit(place: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    var light = flash_falls(place);
+    if lamps.counts.w > 0u {
+        light += lamps_in_air(place, direction, pixel_along(direction)) * 4.0;
+    }
+    return light;
 }
 
 // `colour`, seen `far` along `direction`, with whatever falls between.
@@ -182,7 +221,9 @@ fn falling(
 // that wander as they fall, and in a gale goes by sideways as streaks.
 // Sleet is pellets of ice a few millimetres across that fall four times
 // as fast as snow and straight. All of it is lit by the whole sky: bright
-// against trees, grey against the cloud it fell from.
+// against trees, grey against the cloud it fell from. At night, when the
+// sky gives next to no light, it is lit by what lights the land: the
+// moon, the lamps it falls past and the flash of lightning.
 //
 // Each is drawn near, where it is seen as itself, and again further off
 // where it is specks; what is further off than that is the greying of the
@@ -203,28 +244,39 @@ fn falling_over(colour: vec3<f32>, direction: vec3<f32>, far: f32) -> vec3<f32> 
         var drops = falling(direction, far, 0.625, 9.0, 8.5, 0.0011, rain * 0.95, 0.0, 0.024, 0.5, 3.0);
         // In sleet the far rain is left to the pellets.
         if rain > 0.15 && sleet < 0.3 {
-            drops = max(
-                drops, falling(direction, far, 2.5, 40.0, 8.5, 0.0014, rain, 0.0, 0.03, 0.42, 4.0),
-            );
+            let far_drops = falling(direction, far, 2.5, 40.0, 8.5, 0.0014, rain, 0.0, 0.03, 0.42, 4.0);
+            drops = select(drops, far_drops, far_drops.x > drops.x);
         }
-        seen = mix(seen, wet_light, drops);
+        if drops.x > 0.002 {
+            seen = mix(seen, wet_light + falling_lit(drops.yzw, direction), drops.x);
+        }
     }
     if hail > 0.004 {
         let stones = falling(direction, far, 1.25, 20.0, 17.0, 0.005, hail * 0.7, 0.0, 0.006, 0.0, 5.0);
-        seen = mix(seen, white * 1.2, min(stones * 3.0, 0.9));
+        if stones.x > 0.002 {
+            let lit = white * 1.2 + falling_lit(stones.yzw, direction);
+            seen = mix(seen, lit, min(stones.x * 3.0, 0.9));
+        }
     }
     if snow > 0.004 {
         // The flakes near enough to be seen as flakes, and those further
         // off that are specks.
         var flakes = falling(direction, far, 0.3125, 6.5, 1.1, 0.005, snow * 0.9, 0.04, 0.002, 0.0, 0.0);
         if sleet < 0.3 {
-            flakes += falling(direction, far, 1.25, 24.0, 1.1, 0.006, snow, 0.1, 0.002, 0.0, 1.0);
+            let specks = falling(direction, far, 1.25, 24.0, 1.1, 0.006, snow, 0.1, 0.002, 0.0, 1.0);
+            flakes = vec4<f32>(flakes.x + specks.x, select(flakes.yzw, specks.yzw, specks.x > flakes.x));
         }
-        seen = mix(seen, white, min(flakes, 1.0) * 0.92);
+        if flakes.x > 0.002 {
+            let lit = white + falling_lit(flakes.yzw, direction);
+            seen = mix(seen, lit, min(flakes.x, 1.0) * 0.92);
+        }
     }
     if sleet > 0.004 {
         let pellets = falling(direction, far, 0.625, 9.0, 4.5, 0.0024, sleet * 0.8, 0.0, 0.012, 0.0, 2.0);
-        seen = mix(seen, white * 1.2, min(pellets * 2.5, 0.85));
+        if pellets.x > 0.002 {
+            let lit = white * 1.2 + falling_lit(pellets.yzw, direction);
+            seen = mix(seen, lit, min(pellets.x * 2.5, 0.85));
+        }
     }
     return seen;
 }
