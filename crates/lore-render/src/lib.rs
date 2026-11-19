@@ -31,6 +31,7 @@ mod lamp_shadow;
 mod lamps;
 mod material;
 mod mesh;
+mod occlusion;
 #[cfg(test)]
 mod offscreen;
 mod overlay;
@@ -69,6 +70,7 @@ pub use gpu::{Gpu, validation_errors};
 pub use headless::{FrameTime, Headless};
 pub use lamp_shadow::LampShadows;
 pub use lamps::{Beam, Lamp, MOST_LAMPS};
+pub use occlusion::AmbientOcclusion;
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};

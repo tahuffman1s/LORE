@@ -10,6 +10,7 @@ use crate::error::RenderError;
 use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::mesh::{Contents, MeshPipeline, View};
+use crate::occlusion::Shade;
 use crate::scene::SceneTarget;
 use crate::upscale::{Drawn, Upscale, Upscaling};
 
@@ -78,6 +79,8 @@ pub(crate) struct SceneView {
     pub(crate) lamp_shadows: LampShadows,
     /// How much light bounces.
     pub(crate) bounce: Bounce,
+    /// The shade in corners and under things.
+    pub(crate) shade: Shade,
 }
 
 /// How many sizes larger than it otherwise would the graphics card should
@@ -158,6 +161,7 @@ impl SceneView {
             shafts: true,
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
+            shade: Shade::default(),
         })
     }
 
@@ -315,6 +319,7 @@ impl SceneView {
             shafts: self.shafts,
             lamp_shadows: self.lamp_shadows,
             bounce: self.bounce,
+            shade: self.shade,
         };
         self.target.kept.set(false);
         // SAFETY: the caller's guarantees are the ones `MeshPipeline::record`

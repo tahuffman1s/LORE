@@ -245,7 +245,10 @@ struct Draw {
 var<immediate> draw: Draw;
 
 struct Corner {
-    @builtin(position) position: vec4<f32>,
+    // Worked out the same way whatever else is asked of the point, so that
+    // what is drawn for its depth alone, before the picture, lands exactly
+    // where the picture draws it (`occlusion.wgsl`).
+    @invariant @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) colour: vec4<f32>,
     // Where the point is this frame and was last frame, before dividing by w.
@@ -1986,8 +1989,20 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
     // Snow fills the crevices it lies on.
     let crevices = mix(reaches, banked_sky, snowed);
-    let mirrored_around = mirrored * shines * (1.0 - mirrors) * crevices;
-    from_around *= crevices;
+    // And the shade the picture's own depth finds, in corners and under
+    // things (`occlusion.wgsl`), dims what comes from all round, never the
+    // sun or a lamp. What is see-through was not there when it was found.
+    var shaded = vec3<f32>(1.0);
+    var around_dims = vec3<f32>(crevices);
+    var mirror_dims = crevices;
+    if !see_through && !shade_unknown && view.lens.y > 0.0 {
+        let arrives = shade_at(corner.position.xy);
+        shaded = shade_thrown_back(arrives, matte);
+        around_dims = min(around_dims, shaded);
+        mirror_dims = min(mirror_dims, shade_mirrored(arrives, n_eye, roughness));
+    }
+    let mirrored_around = mirrored * shines * (1.0 - mirrors) * mirror_dims;
+    from_around *= around_dims;
 
     // What glows is the material's own, or the paint's where it is
     // painted over, and snow hides it.
@@ -2011,7 +2026,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     // what stands in their shade: about a third of what falls on a wall of
     // brick or a road comes back off it. Less comes down the lower the sun.
     let from_sides = matte / PI * view.sun.rgb * shade.x
-        * (SIDES_GIVE_BACK * sky.y * sqrt(max(view.towards_sun.y, 0.0)));
+        * (SIDES_GIVE_BACK * sky.y * sqrt(max(view.towards_sun.y, 0.0))) * shaded;
     let glints = view.sun.rgb * (sparkle * snowed * n_sun * sunlit * banked_sun * 1.6);
     // The mirrored world is as bright as it was drawn: no shade here dims it.
     let from_world = mirrored_world * shines * mirrors;
@@ -2028,7 +2043,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var matte_around = from_around * sky_seen + from_sides;
     let probes = probe_light(corner.world, normal, to_eye);
     if probes.a > 0.0 {
-        matte_around = mix(matte_around, matte * probes.rgb * crevices, probes.a);
+        matte_around = mix(matte_around, matte * probes.rgb * around_dims, probes.a);
     }
     // Lightning lights what can see the sky, as the cloud it flashes in
     // does: most what faces up, a wall less, and what is under cover not
@@ -2079,7 +2094,10 @@ fn fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> Pixel 
     // After every texture has been read: a pixel that is thrown away can
     // no longer tell its neighbours how fast its textures are changing,
     // and they would pick the wrong size of texture along a hole's edge.
-    if base.a < material.emissive.w {
+    // When the surface was drawn for its depth before the picture
+    // (`occlusion.wgsl`) its holes were cut then, and only what is left of
+    // it gets as far as here.
+    if view.lens.y <= 0.0 && base.a < material.emissive.w {
         discard;
     }
     return pixel;
@@ -2481,3 +2499,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include lamps.wgsl
 //!include bounce.wgsl
 //!include air.wgsl
+//!include occlusion.wgsl
