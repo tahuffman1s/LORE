@@ -108,9 +108,22 @@ fn water_mirrors() -> f32 {
     if water_has_look() {
         let bends = max(water_look(2).w, 1.0);
         let off = (bends - 1.0) / (bends + 1.0);
-        return off * off;
+        // A liquid metal mirrors most of what meets it, whichever way.
+        return mix(off * off, 0.88, water_metal());
     }
     return WATER_MIRRORS;
+}
+
+// How much of a liquid metal the water being shaded is, from 0 to 1: the
+// look says so in what is over 1 of the number that says it has a look.
+fn water_metal() -> f32 {
+    return clamp(water_look(0).w - 1.0, 0.0, 1.0);
+}
+
+// The colour a liquid metal gives what it mirrors: its own, which a look
+// keeps where other liquids keep what they scatter. White for the rest.
+fn water_mirror_tint() -> vec3<f32> {
+    return mix(vec3<f32>(1.0), clamp(water_look(1).xyz, vec3<f32>(0.0), vec3<f32>(1.0)), water_metal());
 }
 
 // How widely the surface spreads what it mirrors, given what its waves
@@ -974,7 +987,9 @@ fn water_pixel(corner: Corner, front: bool, wet: Wet) -> Mixed {
         mirrors = mirror * mix(1.0, 0.42 - 0.3 * clouded, frozen);
     }
 
-    var colour = mix(seen, mirrored, mirrors) + glitter * (1.0 - 0.7 * milky * frozen);
+    let tint = water_mirror_tint();
+    var colour = mix(seen, mirrored * tint, mirrors)
+        + glitter * tint * (1.0 - 0.7 * milky * frozen);
     of_bottom *= 1.0 - mirrors;
 
     // White water: where whoever is in it churns it, and where running
@@ -1106,7 +1121,8 @@ fn body_depth(place: vec2<f32>) -> f32 {
 // (`body_bytes`): each body is drawn as what it holds, which need not be
 // what the water nearest the eye is. How much it bends light is 0 for a
 // body with no look of its own, the level's water; and below nothing for
-// one that never freezes.
+// one that never freezes. How much of a metal it is stands where the
+// level's water keeps how clear it is.
 fn body_look() {
     let bends = draw.sway;
     own_look_said = true;
@@ -1117,7 +1133,7 @@ fn body_look() {
         own_look[2] = vec4<f32>(0.0);
         return;
     }
-    own_look[0] = vec4<f32>(draw.world_from_local[2].xyz, 1.0);
+    own_look[0] = vec4<f32>(draw.world_from_local[2].xyz, 1.0 + draw.handedness);
     own_look[1] = vec4<f32>(draw.normal_from_local[2].xyz, draw.world_from_local[2].w);
     own_look[2] = vec4<f32>(
         draw.world_from_local[0].w, draw.world_from_local[1].w, draw.world_from_local[3].w,

@@ -1908,7 +1908,9 @@ impl MeshPipeline {
             look.map_or([[0.0; 4]; 3], |look| {
                 let [takes, scatters, glows] = look.rows();
                 [
-                    [takes[0], takes[1], takes[2], 1.0],
+                    // 1 for "it has a look", and over that how much of a
+                    // liquid metal it is.
+                    [takes[0], takes[1], takes[2], 1.0 + scatters[3]],
                     [scatters[0], scatters[1], scatters[2], takes[3]],
                     glows,
                 ]
@@ -3571,8 +3573,9 @@ fn picture_write(
 /// A body with a `look` of its own (lava, honey, a mix) keeps it in the
 /// numbers left over: what it takes and how rough it is in the third row,
 /// what it scatters where the water's colour would be, its glow in the
-/// last number of the first, second and fourth rows, and how much it
-/// bends light where a mesh's sway is, below nothing if it never freezes
+/// last number of the first, second and fourth rows, how much of a metal
+/// it is where the water's clearness would be, and how much it bends
+/// light where a mesh's sway is, below nothing if it never freezes
 /// (`body_look` in the shader). With none, that last number is 0.
 fn body_bytes(
     body: &Body,
@@ -3595,7 +3598,7 @@ fn body_bytes(
         Some(_) => (
             [scatters[0], scatters[1], scatters[2]],
             [
-                0.0,
+                scatters[3],
                 glows[3].max(1.0) * if body.freezes() { 1.0 } else { -1.0 },
             ],
         ),

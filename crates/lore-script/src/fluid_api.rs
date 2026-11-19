@@ -422,8 +422,16 @@ fn look_of(spec: &Spec) -> FluidLook {
     let lin = spec.color;
     let absorbs = lin.map(|c| -libm::logf(c.max(0.001)) / spec.clarity);
     let milky = 0.002 * libm::powf(10.0, 6.0 * spec.cloudiness);
-    let scatters = lin.map(|c| {
-        let base = c * milky;
+    // A deep body of a cloudy liquid is its colour, as far as it is cloudy:
+    // of the light that goes into it, that share comes back out. So it
+    // scatters as much as, with what it absorbs, sends that share back
+    // (`scatters / (absorbs + scatters)`). Without this a tank of honey,
+    // which takes far more than a film of it scatters, was black.
+    let body = libm::sqrtf(spec.cloudiness);
+    let scatters = [0, 1, 2].map(|part| {
+        let c = lin[part];
+        let back = (c * body).min(0.98);
+        let base = (c * milky).max(absorbs[part] * back / (1.0 - back));
         base + (c - base) * spec.metal
     });
     FluidLook {
