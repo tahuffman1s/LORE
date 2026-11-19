@@ -29,6 +29,7 @@ mod grid;
 mod headless;
 mod lamp_shadow;
 mod lamps;
+mod look;
 mod material;
 mod mesh;
 mod occlusion;
@@ -70,6 +71,7 @@ pub use gpu::{Gpu, validation_errors};
 pub use headless::{FrameTime, Headless};
 pub use lamp_shadow::LampShadows;
 pub use lamps::{Beam, Lamp, MOST_LAMPS};
+pub use look::{Look, LookShares, ToneMapping};
 pub use occlusion::AmbientOcclusion;
 #[cfg(feature = "panels")]
 pub use panels::Panels;

@@ -81,6 +81,8 @@ pub(crate) struct SceneView {
     pub(crate) bounce: Bounce,
     /// The shade in corners and under things.
     pub(crate) shade: Shade,
+    /// How much FSR sharpens what it upscales, from 0 to 1.
+    pub(crate) sharpness: f32,
     /// Whether what is solid is drawn for its depth before the picture:
     /// always, but that a test may draw without and see the same picture.
     pub(crate) depth_first: bool,
@@ -165,6 +167,7 @@ impl SceneView {
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
             shade: Shade::default(),
+            sharpness: crate::upscale::SHARPNESS,
             depth_first: true,
         })
     }
@@ -351,6 +354,7 @@ impl SceneView {
                 near: camera.near_metres(),
                 fov: camera.fov_radians(),
                 cut,
+                sharpness: self.sharpness,
             };
             // SAFETY: the mesh pass above drew the target, which was made
             // the size the upscaler draws at, and left it ready to be read.

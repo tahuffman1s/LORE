@@ -159,6 +159,9 @@ pub(crate) struct Shared {
     /// What the script said of the picture's exposure. It outlives this
     /// version of the script.
     pub lighting: Rc<crate::lighting_api::LightingState>,
+    /// What the script said of how the picture is graded. It outlives this
+    /// version of the script.
+    pub look: Rc<crate::look_api::LookState>,
     /// The game shaders the script turned on. It outlives this version of
     /// the script.
     pub shaders: Rc<crate::shader_api::ShaderState>,
@@ -361,6 +364,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
+    game.set("look", crate::look_api::look(lua, shared)?)?;
     game.set("weather", weather_api::weather(lua, shared)?)?;
 
     let frames = tools_api::frames(lua, shared)?;
@@ -388,6 +392,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("input");
     members.push("lamps");
     members.push("lighting");
+    members.push("look");
     members.push("settings");
     members.push("shaders");
     members.push("sky");
@@ -811,7 +816,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 36] = [
+        let groups: [(&str, &[&str]); 37] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -844,6 +849,7 @@ mod tests {
             ("FluidTouch.", crate::fluid_api::TOUCH_FIELDS),
             ("game.lamps.", crate::lamp_api::LAMPS_FUNCTIONS),
             ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
+            ("game.look.", crate::look_api::LOOK_FUNCTIONS),
             ("Lamp.", crate::lamp_api::LAMP_FIELDS),
             ("Lamp:", &["remove"]),
             ("game.shaders.", crate::shader_api::SHADERS_FUNCTIONS),

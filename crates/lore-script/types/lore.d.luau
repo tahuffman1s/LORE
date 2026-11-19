@@ -630,6 +630,16 @@ declare extern type Lamp with
     function remove(self): ()
 end
 
+--- How the picture is graded, as `game.look.set` takes it: see
+--- `game.look`. Every setting may be left out. Colours are written as
+--- everywhere else in `game`: a name such as "white" or "orange", or a hex
+--- code such as "#3060ff".
+type LookSettings = { toneMapping: ("agx" | "neutral")?, bloom: number?, warmth: number?, tint: number?, contrast: number?, saturation: number?, shadows: string?, midtones: string?, highlights: string?, vignette: number?, filmGrain: number?, chromaticAberration: number?, night: number? }
+
+--- Every setting of a look, as `game.look.get` gives it. Colours come
+--- back as hex codes, such as "#ffffff".
+type Look = { toneMapping: "agx" | "neutral", bloom: number, warmth: number, tint: number, contrast: number, saturation: number, shadows: string, midtones: string, highlights: string, vignette: number, filmGrain: number, chromaticAberration: number, night: number }
+
 --- What `game.lamp` takes to make or change a lamp. `from` is a lamp to
 --- start from: a ready-made one ("candle", "lantern", "torch", "campfire",
 --- "bulb", "street lamp", "floodlight"), a lamp the game has, or a `Lamp`.
@@ -910,6 +920,67 @@ declare game: {
         --- The shade in corners, as `setAmbientOcclusion` takes it.
         --- Example: print(game.lighting.ambientOcclusion().strength)
         ambientOcclusion: () -> { strength: number, radius: number },
+    },
+
+    --- How the picture is graded: the last thing done to it, as a film is
+    --- graded. A new game starts with the engine's own look, which needs no
+    --- changing: AgX, a faint glow (`bloom` 0.15), lightly darkened corners
+    --- (`vignette` 0.15) and dark places seen blue-grey (`night` 0.5).
+    --- Everything else starts where it changes nothing: `warmth` and
+    --- `tint` at 0, `contrast` and `saturation` at 1, the three tints
+    --- white, `filmGrain` and `chromaticAberration` at 0. A number past a
+    --- setting's ends is taken as the nearest end.
+    ---
+    --- `toneMapping` is the curve that fits the world's light, which has no
+    --- upper limit, to what a screen can show: "agx" fades very bright
+    --- colours to white as film does, so fire and magic keep their hue;
+    --- "neutral" keeps every colour exactly as it was made, for a painted
+    --- or flat-shaded look.
+    --- `bloom` is how strong the glow round bright things is, from 0 (none)
+    --- to 1 (a dream's haze over everything). Only what is far brighter
+    --- than round it shows a halo.
+    --- `warmth` runs from -1 (cold, blue) to 1 (warm, orange) and `tint`
+    --- from -1 (green) to 1 (magenta).
+    --- `contrast` and `saturation` run from 0 (flat grey, black and white)
+    --- to 2.
+    --- `shadows`, `midtones` and `highlights` tint the darkest parts, the
+    --- middle and the brightest parts. Only a colour's hue is taken, so a
+    --- tint never makes the picture brighter or darker: `shadows =
+    --- "#3060ff"` gives cold shadows, `highlights = "#ffcc88"` warm light.
+    --- `vignette` darkens the corners as a lens does, from 0 to 1;
+    --- `filmGrain` is film grain, from 0 to 1; `chromaticAberration` parts
+    --- red and blue towards the edges as a cheap lens does, from 0 to 1.
+    --- `night` is how much a dark place turns the blue-grey of moonlight,
+    --- as eyes lose colour in the dark, from 0 to 1. Lamplit places and
+    --- daylight shade keep their colour.
+    ---
+    --- The look is kept when the script is changed and reloaded. It is
+    --- what is drawn, not part of the game's story, so it is not saved.
+    --- The player's settings "bloom", "vignette", "film_grain" and
+    --- "chromatic_aberration" say how much of each they see, all of it for
+    --- a new player and none at 0, so never make one the only sign of
+    --- something.
+    look: {
+        --- Changes the settings named, and fades to them over `seconds`
+        --- of the picture's time (at once if not given, up to 600).
+        --- Settings not named stay as they were. A fade from a look still
+        --- fading starts from where the picture is, and saying the same
+        --- look again (as a script may every tick) does not start it over.
+        --- Example: game.look.set({ warmth = 0.3 })
+        --- Example: game.look.set({ saturation = 0, vignette = 0.6, filmGrain = 0.4 }, 2) -- a flashback
+        --- Example: game.look.set({ toneMapping = "neutral" })
+        set: (settings: LookSettings, seconds: number?) -> (),
+
+        --- Every setting of the look, as `game.look.set` takes them: the
+        --- look last said, which the picture may still be fading to.
+        --- Colours come back as hex codes, such as "#ffffff".
+        --- Example: print(game.look.get().bloom)
+        get: () -> Look,
+
+        --- Puts the engine's own look back (see `game.look`), fading over
+        --- `seconds` (at once if not given).
+        --- Example: game.look.reset(3)
+        reset: (seconds: number?) -> (),
     },
 
     --- Lamps the game has.
@@ -1608,7 +1679,11 @@ declare game: {
     --- and "light_shafts" (true or false), "lamp_shadows", "bounce" and
     --- "ambient_occlusion" ("off", "low", "medium" or "high") and
     --- "anisotropic_filtering" (how sharp the ground and walls stay where
-    --- they run away from the player: "off", "2x", "4x", "8x" or "16x").
+    --- they run away from the player: "off", "2x", "4x", "8x" or "16x");
+    --- "bloom", "vignette", "film_grain" and "chromatic_aberration" (how
+    --- much of what `game.look` asks for the player sees, 0 to 100: 100 is
+    --- all of it) and "sharpening" (how crisp the picture is after
+    --- upscaling, 0 to 100, 30 for a new player).
     --- A later LORE may have more, so build a menu from
     --- `game.settings.list()`, as pause_menu.luau does, and it gains their
     --- rows by itself.

@@ -15,6 +15,7 @@ use crate::camera::Camera;
 use crate::error::RenderError;
 use crate::font::Font;
 use crate::gpu::{Gpu, validation_errors};
+use crate::look::Said;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::overlay::Overlay;
 use crate::swapchain::COLOUR;
@@ -168,7 +169,7 @@ pub(crate) fn frames_shaded(
     let motion_bytes = u64::from(drawn.width * drawn.height * 4);
     let meshes = Meshes::new(gpu, scene, crate::AnisotropicFiltering::default()).unwrap();
     let mesh = MeshPipeline::new(gpu, 1).unwrap();
-    let tonemap = TonemapPipeline::new(gpu, FORMAT).unwrap();
+    let mut tonemap = TonemapPipeline::new(gpu, FORMAT).unwrap();
     let whole = vk::ImageSubresourceLayers {
         aspect_mask: vk::ImageAspectFlags::COLOR,
         mip_level: 0,
@@ -237,7 +238,9 @@ pub(crate) fn frames_shaded(
         let fence = device
             .create_fence(&vk::FenceCreateInfo::default(), None)
             .unwrap();
-        tonemap.read_from(scene_view.picture());
+        tonemap
+            .read_from(scene_view.picture(), scene_view.output_size())
+            .unwrap();
 
         for camera in cameras {
             device
@@ -282,7 +285,7 @@ pub(crate) fn frames_shaded(
                         view,
                         extent,
                     },
-                    exposure_scale(stops),
+                    &Said::plain(exposure_scale(stops)),
                     Over::default(),
                     None,
                     Then::Copy,
@@ -926,7 +929,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
     let bytes = u64::from(WIDE * HIGH * 4);
     let mut scene_view = SceneView::new(gpu, extent, Upscaling::Off).unwrap();
     let mesh = MeshPipeline::new(gpu, 1).unwrap();
-    let tonemap = TonemapPipeline::new(gpu, format).unwrap();
+    let mut tonemap = TonemapPipeline::new(gpu, format).unwrap();
     let mut ui = UiPass::new(gpu, format, 1).unwrap();
     let mut overlay = Overlay::new(Font::bundled());
     let whole = vk::ImageSubresourceLayers {
@@ -969,7 +972,9 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
         let fence = device
             .create_fence(&vk::FenceCreateInfo::default(), None)
             .unwrap();
-        tonemap.read_from(scene_view.picture());
+        tonemap
+            .read_from(scene_view.picture(), scene_view.output_size())
+            .unwrap();
 
         for list in lists {
             overlay.set(*list);
@@ -998,7 +1003,7 @@ fn overlaid(gpu: &Arc<Gpu>, format: vk::Format, lists: &[DrawList<'_>]) -> Vec<V
                         view: picture.view,
                         extent,
                     },
-                    1.0,
+                    &Said::plain(1.0),
                     Over::ui(Some(&ui)),
                     None,
                     Then::Copy,

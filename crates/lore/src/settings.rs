@@ -323,6 +323,24 @@ settings! {
     /// if the game is slow on a graphics card built into the processor.
     anisotropic_filtering: AnisotropicFiltering = AnisotropicFiltering::X16,
         Shape::Choice(ANISOTROPIC_FILTERING), "Graphics", "Anisotropic filtering";
+    /// How much of the glow round bright things the game asks for you see,
+    /// in percent, from 0 (none) to 100 (as the game made it).
+    bloom: f32 = 100.0, Shape::Number(Settings::SHARE), "Graphics", "Bloom";
+    /// How much of the darkened corners the game asks for you see, in
+    /// percent, from 0 (none) to 100 (as the game made it).
+    vignette: f32 = 100.0, Shape::Number(Settings::SHARE), "Graphics", "Vignette";
+    /// How much of the film grain the game asks for you see, in percent,
+    /// from 0 (none) to 100 (as the game made it).
+    film_grain: f32 = 100.0, Shape::Number(Settings::SHARE), "Graphics", "Film grain";
+    /// How much of the red and blue fringes towards the edges the game
+    /// asks for you see (chromatic aberration), in percent, from 0 (none)
+    /// to 100 (as the game made it).
+    chromatic_aberration: f32 = 100.0, Shape::Number(Settings::SHARE), "Graphics",
+        "Chromatic aberration";
+    /// How much the upscaled picture is sharpened, from 0 (not at all) to
+    /// 100. Much more than 30 draws bright rims round edges. With
+    /// upscaling "off" it changes nothing.
+    sharpening: f32 = 30.0, Shape::Number(Settings::SHARE), "Graphics", "Sharpening";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -370,6 +388,15 @@ impl Settings {
     };
     /// What [`brightness`](Self::brightness) can be.
     pub const BRIGHTNESS: Range = Range {
+        lowest: 0.0,
+        highest: 100.0,
+        step: 5.0,
+    };
+    /// What [`bloom`](Self::bloom), [`vignette`](Self::vignette),
+    /// [`film_grain`](Self::film_grain),
+    /// [`chromatic_aberration`](Self::chromatic_aberration) and
+    /// [`sharpening`](Self::sharpening) can be: percentages.
+    pub const SHARE: Range = Range {
         lowest: 0.0,
         highest: 100.0,
         step: 5.0,
@@ -426,6 +453,26 @@ impl Settings {
     #[must_use]
     pub fn ui_scale(&self) -> f32 {
         self.ui_size / 100.0
+    }
+
+    /// How much of the game's glow, vignette, grain and fringes the player
+    /// wants to see, as `Renderer::set_look_shares` takes it.
+    #[must_use]
+    pub fn look_shares(&self) -> lore_render::LookShares {
+        let share = |percent: f32| (percent / 100.0).clamp(0.0, 1.0);
+        lore_render::LookShares {
+            bloom: share(self.bloom),
+            vignette: share(self.vignette),
+            grain: share(self.film_grain),
+            chromatic_aberration: share(self.chromatic_aberration),
+        }
+    }
+
+    /// How much FSR sharpens what it upscales, from 0 to 1, as
+    /// `Renderer::set_sharpness` takes it.
+    #[must_use]
+    pub fn sharpness(&self) -> f32 {
+        (self.sharpening / 100.0).clamp(0.0, 1.0)
     }
 
     /// How much brighter (above 0) or darker the picture is drawn, in
@@ -888,6 +935,11 @@ mod tests {
             bounce: Bounce::Low,
             ambient_occlusion: AmbientOcclusion::Low,
             anisotropic_filtering: AnisotropicFiltering::X4,
+            bloom: 50.0,
+            vignette: 0.0,
+            film_grain: 25.0,
+            chromatic_aberration: 0.0,
+            sharpening: 60.0,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -896,6 +948,9 @@ mod tests {
         assert_eq!(read.look()[1], -read.sensitivity);
         assert_eq!(read.ui_scale(), 1.25);
         assert_eq!(read.rumble_share(), 0.4);
+        assert_eq!(read.look_shares().bloom, 0.5);
+        assert_eq!(read.look_shares().grain, 0.25);
+        assert!((read.sharpness() - 0.6).abs() < 1e-6);
         assert_eq!(Settings::default().rumble_share(), 1.0);
         assert_eq!(read.frames_per_second(), 144);
         assert!((read.exposure_stops() - 0.45).abs() < 1e-6);
@@ -966,7 +1021,8 @@ mod tests {
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
                  `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
-                 `ambient_occlusion` and `anisotropic_filtering`.",
+                 `ambient_occlusion`, `anisotropic_filtering`, `bloom`, `vignette`, \
+                 `film_grain`, `chromatic_aberration` and `sharpening`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

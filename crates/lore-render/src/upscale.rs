@@ -62,7 +62,7 @@ impl Upscaling {
 ///
 /// Upscaling softens a picture a little, and a little sharpening gives the
 /// crispness back. Much more draws bright rims around edges.
-const SHARPNESS: f32 = 0.3;
+pub(crate) const SHARPNESS: f32 = 0.3;
 
 /// The fewest pixels across and up a picture FSR is given to upscale.
 const MIN_RENDER: u32 = 2;
@@ -80,6 +80,8 @@ pub(crate) struct Drawn {
     pub(crate) fov: f32,
     /// The view jumped, so the frames before must not be blended into this one.
     pub(crate) cut: bool,
+    /// How much to sharpen, from 0 (not at all) to 1.
+    pub(crate) sharpness: f32,
 }
 
 /// The upscaler and the full-size picture it writes.
@@ -232,7 +234,7 @@ impl Upscale {
             jitter: drawn.jitter,
             // Motion is stored as a fraction of the picture.
             motion_scale,
-            sharpness: SHARPNESS,
+            sharpness: drawn.sharpness,
             frame_seconds: drawn.seconds,
             camera_near: drawn.near,
             camera_fov_y: drawn.fov,

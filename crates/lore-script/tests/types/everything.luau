@@ -377,6 +377,12 @@ game.lighting.setEyeAdaptation({ opens = 1, closes = 6, seconds = 4 })
 print(game.lighting.exposure(), game.lighting.eyeAdaptation().opens, game.lighting.eyeAdaptation().closes, game.lighting.eyeAdaptation().seconds)
 game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })
 print(game.lighting.ambientOcclusion().strength, game.lighting.ambientOcclusion().radius)
+game.look.set({ toneMapping = "neutral", bloom = 0.1, warmth = 0.3, tint = -0.1, contrast = 1.1, saturation = 1.2, shadows = "#3060ff", midtones = "white", highlights = "#ffcc88", vignette = 0.3, filmGrain = 0.2, chromaticAberration = 0.1, night = 0.8 }, 2)
+game.look.set({ warmth = 0.3 })
+local look = game.look.get()
+print(look.toneMapping, look.bloom, look.shadows, look.night, look.chromaticAberration)
+game.look.reset()
+game.look.reset(3)
 
 game.onTick(function()
     if game.input.pressed("fire") then
