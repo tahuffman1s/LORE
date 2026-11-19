@@ -1128,12 +1128,32 @@ mod tests {
                 (brim - (notch - UNDER_RIM)).abs() < 0.01,
                 "a notch {notch} over the water lets it rise {brim}"
             );
+            // And the notch is where it runs out: from its middle, as
+            // high as it, going out through it, over its whole width.
+            let spill = water.spill.expect("a way out");
+            let [x, y, z] = spill.place;
+            assert!(x > 4.0 && x < 4.0 + 3.0 * water.cell, "{spill:?}");
+            assert!((y - (water.level + notch)).abs() < 0.01, "{spill:?}");
+            assert!(z.abs() < 0.1, "{spill:?}");
+            assert_eq!(spill.way, [1.0, 0.0]);
+            assert!((spill.wide - 1.0).abs() < 0.15, "{spill:?}");
         }
-        // Without the notch it rises as far as rain raises any water.
+        // Without the notch it rises as far as rain raises any water, and
+        // has no way out.
         let mut scene = notched(1.0);
         fill(&mut scene);
         let water = &scene.waters[0];
         assert_eq!(water.brim - water.level, Level::MOST_WATER_RISE);
+        assert_eq!(water.spill, None);
+        // The same hollow is filled the same way every time.
+        let again = {
+            let mut scene = notched(0.3);
+            fill(&mut scene);
+            scene.waters[0].clone()
+        };
+        let mut scene = notched(0.3);
+        fill(&mut scene);
+        assert_eq!(scene.waters[0], again);
     }
 
     #[test]

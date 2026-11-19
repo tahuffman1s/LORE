@@ -625,10 +625,15 @@ fn check(folder: &Path) -> Result<(), String> {
         "Then the script was told of things that did not happen, to see what it does with \
          them: a training dummy stood ten metres in front of the player, who fired one shot \
          that hit its body and one that hit a wall, reloaded, died and was put back at a \
-         spawn point, then stood for two ticks in a puddle that burns. No level was walked and nothing was aimed. Each game.on... function \
+         spawn point, then stood for two ticks in a puddle that burns{}. No level was walked and nothing was aimed. Each game.on... function \
          in the script was called at least once, with no errors. What those functions do \
          with a shot the check did not make up, such as one to the head or an explosion, \
-         was not run."
+         was not run.",
+        if pools > 0 {
+            " and for one up to the neck in the level's first pool"
+        } else {
+            ""
+        }
     );
     match paced {
         Some(Paced::Same) => println!(

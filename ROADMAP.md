@@ -151,6 +151,8 @@ One continuous world you can see across and walk into: land, sky, water and grow
 - Day, night and weather: the sun follows the clock, and rain is one word (#130)
 - Fluids a script controls: thirteen kinds that fly, splash, pool and change how the player walks (#375)
 - An example to show fluids off: a city alley with a basketball court, a fluid gun, and menus for the weather and for debugging (#377)
+- Still water is fluid: a pool of any kind holds a volume, takes drops in, runs over its brim, and is swum in by its weight and thickness (#452)
+- An example to play with fluids: dunk tanks of every kind, a cascade that runs over, a tub to fill and a vat to mix in (#454)
 - Editor: outdoor ground shaped with a few brushes, and painted by slope and height (#186)
 - A world is one place: a game's land is a grid of pieces on disk that the engine joins up (#281)
 - The whole world to the horizon: far land draws as stand-ins the engine makes by itself (#282)

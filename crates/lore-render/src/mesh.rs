@@ -3993,6 +3993,70 @@ mod tests {
         f32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[at * 4 + byte]))
     }
 
+    #[test]
+    fn a_bodys_draw_carries_its_own_look_where_the_shader_reads_it() {
+        // Which number of the shader's `Draw` is which: `body_look` and
+        // `fragment_body` in water.wgsl read the same places.
+        let pond = Body::bare([1.0, 2.0], 0.5, [8, 4]);
+        let plain = body_bytes(&pond, [0.0; 3], 0, 0.25, None);
+        assert_eq!(number(&plain, 1), 1.0, "the finest grid");
+        assert_eq!(number(&plain, 2), 192.0, "its squares, and no stillness");
+        assert_eq!(number(&plain, 6), 0.25, "how far it is risen");
+        assert_eq!(number(&plain, 13), 0.25, "the height of its surface");
+        assert_eq!(number(&plain, 29), 0.0, "no look of its own");
+        let lava = FluidLook {
+            absorbs: [1.0, 2.0, 3.0],
+            scatters: [0.25, 0.5, 0.75],
+            glows: [4.0, 5.0, 6.0],
+            roughness: 0.5,
+            metal: 1.0,
+            bends: 1.5,
+        };
+        let pool = pond.said(PoolDrawn {
+            shift: -0.5,
+            look: Some(lava),
+            freezes: false,
+            calm: 0.5,
+        });
+        let own = body_bytes(&pool, [0.0; 3], 1, -0.5, pool.look());
+        assert_eq!(number(&own, 1), 0.0, "a coarser grid");
+        assert_eq!(number(&own, 2), 192.5, "half still, beside the squares");
+        assert_eq!(
+            [number(&own, 3), number(&own, 7), number(&own, 15)],
+            [4.0, 5.0, 6.0],
+            "its glow"
+        );
+        assert_eq!(number(&own, 6), -0.5, "drained half a metre");
+        assert_eq!(
+            [8, 9, 10, 11].map(|at| number(&own, at)),
+            [1.0, 2.0, 3.0, 0.5],
+            "what it takes, and how rough"
+        );
+        assert_eq!(
+            [24, 25, 26].map(|at| number(&own, at)),
+            [0.25, 0.5, 0.75],
+            "what it scatters, where water's colour is"
+        );
+        assert_eq!(number(&own, 28), 1.0, "a metal");
+        assert_eq!(
+            number(&own, 29),
+            -1.5,
+            "how it bends light; it never freezes"
+        );
+        // One that freezes says so by the sign.
+        let freezing = Body::bare([0.0; 2], 1.0, [2, 2]).said(PoolDrawn {
+            look: Some(lava),
+            ..PoolDrawn::default()
+        });
+        assert_eq!(
+            number(
+                &body_bytes(&freezing, [0.0; 3], 0, 0.0, freezing.look()),
+                29
+            ),
+            1.5
+        );
+    }
+
     /// A part a metre across its middle at `middle`, rooted at `foot`,
     /// that the wind moves by `sway`.
     fn part_at(middle: [f32; 3], foot: [f32; 3], sway: f32) -> Draw {
