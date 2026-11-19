@@ -48,7 +48,13 @@ file, line and source line, and the last version that worked keeps drawing.
   It reads words, so a condition that is only true in practice is not caught.
 - `compile` has two `Bounds`: the engine's own shaders compile with none
   (`build.rs` uses `Trusted`, so the engine's SPIR-V is unchanged), a game's
-  with naga's `Restrict` (`Clamped`), so a bad index cannot read outside memory.
+  with naga's `Restrict` (`Clamped`), so a bad index into an array or a buffer
+  cannot read outside memory. Image reads (`textureLoad`) are left as the
+  engine's own are: naga 30 clamps one with unsigned coordinates through a
+  vector constant of the wrong type, which is not valid SPIR-V (#434).
+- `compile` reads back what it wrote and reports a vector constant whose
+  parts have the wrong type as a fault in LORE, so such a module never
+  reaches a driver.
 - An error whose span lies in engine text says it is a fault in LORE and asks
   for a report.
 
