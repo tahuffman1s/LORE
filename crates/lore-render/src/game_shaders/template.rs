@@ -56,6 +56,7 @@ fn included(name: &str) -> Result<String, String> {
         "bounce.wgsl" => include_str!("../../shaders/bounce.wgsl"),
         "air.wgsl" => include_str!("../../shaders/air.wgsl"),
         "occlusion.wgsl" => include_str!("../../shaders/occlusion.wgsl"),
+        "skylight.wgsl" => include_str!("../../shaders/skylight.wgsl"),
         other => return Err(format!("{other} is not one of the files built into LORE")),
     };
     Ok(text.to_owned())

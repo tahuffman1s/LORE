@@ -442,6 +442,88 @@ over four runs each, taken in turn.
 Not done yet: light taken from the open side (bent normals, #442), and
 the one bounce of light the hidden sectors could give (#443).
 
+### The sky's light (#127)
+
+What a matte surface gets from all round and what a rough or glossy one
+mirrors used to be two flat colours, the sky's above and the ground's
+below. Now both are the sky as it is drawn, clouds and all
+(`skylight.rs`, `skylight.wgsl`), as Unreal's sky light, Godot's sky and
+Bevy's generated environment light do it.
+
+- **The capture.** The sky is drawn into the six faces of a cube 64 pixels
+  a face round the eye, with fewer steps through the clouds than the sky
+  behind the picture (12, not 36), each pixel a different part of a step
+  in. The sun's own disc is left out (the sun's highlight is worked out
+  for itself), and so are the stars, the tornado and what falls near the
+  eye. Under the horizon is the level's ground colour, kept apart in alpha
+  so the sky's light can be scaled without it.
+- **A face a frame.** One face is drawn again each frame, round and round,
+  the smaller sizes are made from it (blits), and that face is blurred: a
+  whole turn takes six frames. The whole cube is drawn at once when there
+  is none, when the sky jumps (the sun moves more than 3° in a frame, the
+  cloud cover, night or storm by more than a tenth, or the level's sky
+  light by a quarter), and in a picture held still whenever anything it is
+  drawn from changes, so a picture held still is the same however often it
+  is drawn. With no sky drawn the numbers are wiped and the light is the
+  two colours again.
+- **Blurring.** Each face is blurred into five sizes (64 down to 4 pixels),
+  one for each roughness 0, ¼, ½, ¾ and 1, and a surface reads the size its
+  roughness says, between sizes as Filament and Bevy do (linear in the
+  roughness an artist sets). Each pixel takes 32 looks spread as a GGX
+  highlight spreads them (Hammersley points), each read from the size of
+  the drawn cube whose pixels are as wide as its share of the highlight
+  (filtered importance sampling, Colbert and Křivánek, GPU Gems 3, with
+  the usual one size more).
+- **Light from all round** is nine numbers a colour (spherical harmonics,
+  Ramamoorthi and Hanrahan 2001), from the 8-pixel size of the cube, added
+  up in two steps: 528 pixels each sum one line of a face, then ten sum
+  those (one pass of ten pixels summing everything took 0.5 ms on an RX
+  7800 XT, the two 0.05).
+- **Whose light.** A matte surface facing straight up still gets exactly
+  the level's sky light, colour and all, so a level with no light of its
+  own still shows its materials' own colours; the sky drawn says how that
+  light changes towards the sides, so the shade at sunset is warm towards
+  the sun and blue away from it. What a rough surface mirrors keeps the sky's
+  own colours, so it matches the sky behind it, made as bright in all as the
+  level's sky light.
+- **Under cover** the sky mirrored is dimmed as the light from all round
+  is, by how much sky the look from above says the point sees; and where
+  bounce light's probes are, by the light they hold against what the open
+  sky would give, whichever is less, so a room with no window mirrors no
+  sky (as Call of Duty scales its reflections by the light at a point,
+  Lazarov 2013). The rougher the surface, the more what it mirrors leans
+  to the way it faces (Filament's dominant direction), and what a normal
+  map would have it mirror from under the surface is faded out (Filament's
+  horizon fade).
+- **No reflection probes placed by hand.** A level has none: what is too
+  rough to mirror the picture itself mirrors the sky, dimmed as above.
+  Captured views of named places, placed by the engine, are #110.
+
+**Sparkle.** A highlight is spread over all the ways a surface faces
+within a pixel, or it flickers as the eye moves:
+
+- Bumps a normal map has that are too small to see shorten the normal read
+  from a smaller size of it (Toksvig 2005). The shortness gives how widely
+  they face as a von Mises–Fisher spread, κ = (3r − r³)/(1 − r²), and the
+  highlight widens by α² += 2/κ times the square of the material's normal
+  strength (for a GGX or Beckmann highlight, the spread of slopes each way
+  is α²/2, and the bumps add 1/κ). The smaller sizes are made by plain
+  averaging, so the shader needs no table made ahead.
+- Curves too tight for the pixels widen it by the turning of the built
+  normal from pixel to pixel, as Filament does (Tokuyoshi and Kaplanyan
+  2019): α² += min(2 × 0.15 × (|∂n/∂x|² + |∂n/∂y|²), 0.2).
+- Measured on a polished floor of smooth dimples 40 mm across, toward a
+  low sun, with no upscaler: the camera moved 4 mm changes the far floor's
+  pixels by 3.7 on average out of 255 (15.1 before), and 1.1 % of them by
+  more than 24 (20 % before); the near floor 14.5 (24.6 before). The far
+  floor no longer turns into a mirror where the dimples become smaller
+  than a pixel.
+
+Cost, `lore bench`: on an RX 7800 XT the graphics card's share of the
+usual frame is 1.69 to 1.70 ms against 1.66 to 1.67 on main (three runs
+each); on lavapipe no difference the bench can tell (63.6 and 66.7 ms
+against 65.5 and 65.1).
+
 ### The look (#101)
 
 The last thing done to the picture is one pass that grades it, after a
@@ -520,6 +602,21 @@ lookup texture for a look made in a colour grading program.
 
 ## Sources
 
+- M. Colbert, J. Křivánek, "GPU-Based Importance Sampling", GPU Gems 3,
+  chapter 20, 2007.
+- R. Ramamoorthi, P. Hanrahan, "An Efficient Representation for Irradiance
+  Environment Maps", SIGGRAPH 2001.
+- D. Lazarov, "Getting More Physical in Call of Duty: Black Ops II",
+  SIGGRAPH 2013 Physically Based Shading course.
+- M. Toksvig, "Mipmapping Normal Maps", 2005; D. Neubelt, M. Pettineo,
+  "Crafting a Next-Gen Material Pipeline for The Order: 1886", SIGGRAPH
+  2013 Physically Based Shading course.
+- Y. Tokuyoshi, A. Kaplanyan, "Improved Geometric Specular Antialiasing",
+  I3D 2019, and "Stable Geometric Specular Antialiasing with
+  Projected-Space NDF Filtering", JCGT 10(2), 2021.
+- Unreal Engine, "Sky Lights" (real-time capture); Godot, `Sky`
+  (`process_mode`, `radiance_size`); Bevy, `GeneratedEnvironmentMapLight`
+  (`bevy_pbr/src/light_probe/generate.rs`).
 - J. Jimenez, "Next Generation Post Processing in Call of Duty: Advanced
   Warfare", SIGGRAPH 2014 Advances course.
 - B. Wrensch, "Minimal AgX Implementation", iolite engine blog, 2023:

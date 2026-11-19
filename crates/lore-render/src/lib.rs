@@ -44,6 +44,7 @@ mod scene;
 mod shading;
 mod shadow;
 mod sky;
+mod skylight;
 mod swapchain;
 mod texture;
 mod tonemap;
