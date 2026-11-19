@@ -1406,8 +1406,10 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
 // How much of the rain reaches a point, from 0 (something is over it) to 1.
 // Rain falls nearly straight, so what matters is what is right overhead,
 // not how much of the whole sky is seen: the floor of a street between
-// tall buildings sees little sky and is rained on all the same.
-fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+// tall buildings sees little sky and is rained on all the same. Snow lying
+// `buried` metres deep has buried whatever is over the point no higher
+// than that: it covers nothing, and the snow lies over it.
+fn rained_on(world: vec3<f32>, pixel: vec2<f32>, buried: f32) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
@@ -1427,7 +1429,7 @@ fn rained_on(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
     for (var look = 0; look < 2; look++) {
         let at = uv + beside * (f32(look) * 2.0 - 1.0) / metres_a_pixel / size;
         let held = overhead_at(at, size);
-        open += 1.0 - smoothstep(0.35, 0.9, (above.z - held) * depth_metres);
+        open += 1.0 - smoothstep(0.35 + buried, 0.9 + buried, (above.z - held) * depth_metres);
     }
     return open * 0.5;
 }
@@ -1819,7 +1821,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var reached = 1.0;
     let puddled = view.weather[6].y;
     if view.weather[2].x > 0.0 || ((view.weather[0].z > 0.0 || puddled > 0.0) && built.y > 0.2) {
-        reached = rained_on(corner.world, corner.position.xy);
+        reached = rained_on(corner.world, corner.position.xy, view.weather[6].x);
     }
     if view.weather[2].x > 0.0 {
         let faces_up = smoothstep(0.25, 0.6, built.y);
