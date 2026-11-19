@@ -80,6 +80,14 @@ const RAY_STEPS: i32 = 160;
 const PROBE_OFFSET: f32 = 0.125;
 // The most lamps a ray's end is lit by: the nearest.
 const BOUNCED_LAMPS: u32 = 16u;
+// How often a block of leaves stops a ray that crosses it. A leaf has holes
+// cut in it and half a metre of a crown is mostly air, so a block that
+// holds a leaf is not a wall: counted as one, a crown kept the sky from
+// the probes under it although the sun's shadows, which see every hole,
+// showed light through it. Under the jungle example's trees the sun gets
+// through the copy's crowns as often as through its shadow pictures when
+// a block of leaves stops one ray in seven.
+const LEAVES_STOP: f32 = 0.15;
 
 // The point on a square from -1 to 1 that a direction folds to, and back
 // (an octahedral map).
@@ -172,13 +180,21 @@ fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tra
     let asked = world + (normal * 0.2 + to_eye * 0.8) * (0.3 * spacing);
     let grid = (asked - PROBE_OFFSET) / spacing - 0.5;
     let origin = bounce.probe_origin.xyz;
-    // Outside the grid the probes are not used at all; they are trusted
-    // fully a probe and a half in from its edge.
+    // Outside the grid the probes are not used at all.
     let low = grid - vec3<f32>(origin);
     let high = vec3<f32>(origin + PROBES - 1) - grid;
     let inside = min(min(min(low.x, low.y), low.z), min(min(high.x, high.y), high.z));
     if inside <= 0.0 {
         return vec4<f32>(0.0);
+    }
+    // A ray's end trusts them fully a probe and a half in from the grid's
+    // edge. What the eye sees trusts them by how far from the eye it is
+    // (`probes_trusted`), which moves as smoothly as the eye does: the
+    // grid's edge moves a whole probe at a time, and light that changed
+    // there would change in a band ahead at every step.
+    var trusted = clamp(inside / 1.5, 0.0, 1.0);
+    if !tracing {
+        trusted = min(trusted, probes_trusted(asked));
     }
     let base = vec3<i32>(floor(grid));
     let share = grid - floor(grid);
@@ -234,7 +250,21 @@ fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tra
         return vec4<f32>(0.0);
     }
     // Where no probe round about can see the point, they are not trusted.
-    return vec4<f32>(sum / total, clamp(inside / 1.5, 0.0, 1.0) * smoothstep(1e-5, 1e-3, total));
+    return vec4<f32>(sum / total, trusted * smoothstep(1e-5, 1e-3, total));
+}
+
+// How far the probes are trusted at `world`, from 1 near the eye to 0 a
+// little inside the nearest the grid's edge can come to it (it is placed
+// by whole probes round the eye: half the grid less a probe and a half
+// away at the least). Light the probes find and the sky-and-ground fill
+// beyond them are blended over the outer half of that, so that where the
+// two differ there is no edge to see, and nothing changes in a step as
+// the eye moves.
+fn probes_trusted(world: vec3<f32>) -> f32 {
+    let reach = (vec3<f32>(PROBES) * 0.5 - 1.5) * bounce.probe.x;
+    let off = abs(world - view.eye.xyz) / reach;
+    let farthest = max(max(off.x, off.z), off.y);
+    return 1.0 - smoothstep(0.55, 1.0, farthest);
 }
 
 // The light of the nearest lamps on a surface facing `normal` at `world`,
@@ -280,6 +310,22 @@ struct RayEnd {
     went: f32,
 }
 
+// Whether the leaves in block `cell` stop a ray going `way`: a number from
+// the block and the ray, the same for both every time they meet, under
+// `LEAVES_STOP`. The rays turn every frame, so over a few each block lets
+// through its share.
+fn leaves_stop(cell: vec3<i32>, way: vec3<f32>) -> bool {
+    var state = bitcast<vec3<u32>>(cell) * vec3<u32>(0x8da6b343u, 0xd8163841u, 0xcb1ab31fu);
+    state ^= bitcast<vec3<u32>>(way);
+    var mixed = state.x ^ (state.y * 0x9e3779b9u) ^ (state.z * 0x85ebca6bu);
+    // A PCG step mixes the bits (Jarzynski and Olano, "Hash Functions for
+    // GPU Rendering", 2020).
+    mixed = mixed * 747796405u + 2891336453u;
+    mixed = ((mixed >> ((mixed >> 28u) + 4u)) ^ mixed) * 277803737u;
+    mixed = (mixed >> 22u) ^ mixed;
+    return f32(mixed >> 8u) < LEAVES_STOP * 16777216.0;
+}
+
 fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
     var struck: RayEnd;
     struck.colour = vec4<f32>(0.0, 0.0, 0.0, -1.0);
@@ -310,7 +356,8 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
             // surface's and not the block's; struck at once, from behind,
             // if it is already behind it (inside a wall); and goes on if it
             // passes in front of it here. A block that says no surface (one
-            // with holes cut in it) stops the ray where it begins.
+            // with holes cut in it: leaves) stops the ray where it begins,
+            // as often as `LEAVES_STOP` says.
             let stored = textureLoad(voxel_normals, cell, 0);
             var struck_at = gone;
             var found = true;
@@ -333,9 +380,12 @@ fn ray_strikes(start: vec3<f32>, way: vec3<f32>) -> RayEnd {
                     found = false;
                 }
                 struck.face = normal;
-            } else if side >= 0 {
-                struck.face = vec3<f32>(0.0);
-                struck.face[side] = -f32(step[side]);
+            } else {
+                if side >= 0 {
+                    struck.face = vec3<f32>(0.0);
+                    struck.face[side] = -f32(step[side]);
+                }
+                found = leaves_stop(cell, way);
             }
             if found {
                 struck.colour = vec4<f32>(block.rgb * block.rgb, struck_at * size);

@@ -257,6 +257,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   faces, and where its plane lies in the block. A ray is struck where it
   crosses that plane, so a floor is where the floor is and not half a
   metre up; a ray already behind a surface is struck at once from behind.
+  A block that holds leaves (a surface with holes cut in it) stops one ray
+  in seven that crosses it and lets the rest through: half a metre of a
+  crown is mostly air, and counted as solid it kept the sky from the
+  probes under trees that the sun's shadows, which see every hole, showed
+  light coming through. One in seven is what lets the sun through the
+  jungle example's crowns as often as its shadow pictures do.
   Drawing from a fragment shader needs `fragmentStoresAndAtomics`, which
   every desktop card, lavapipe and MoltenVK have; without it light does
   not bounce.
@@ -285,8 +291,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   (Chebyshev's bound on its distances), which is what stops light leaking
   through walls. Its light replaces the sky-and-ground fill dimmed by how
   much sky is seen and the guess at what a street's sides throw back,
-  fading to them at the grid's edge. The material's own baked shadowing
-  still darkens its crevices.
+  fading to them by how far the surface is from the eye: all the probes'
+  within about 6 m across and 2.5 m up or down, all the fill's from 10.5 m
+  and 4.5 m, where the grid always reaches. The grid moves a whole probe
+  at a time; faded at its edge, light ahead changed in a band at every
+  step, and where the two disagree a ring showed round the player. The
+  material's own baked shadowing still darkens its crevices.
 - **Held still**, nothing is traced again until the eye, the level or the
   setting changes, so the same view gives the same picture.
 
