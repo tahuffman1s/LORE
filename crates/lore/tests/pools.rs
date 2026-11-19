@@ -763,3 +763,50 @@ fn a_step_in_a_puddle_is_a_step_in_what_the_puddle_is() {
         "{sticky:?}"
     );
 }
+
+#[test]
+fn a_game_that_is_played_has_its_levels_pools_from_the_first_tick() {
+    use lore::world::Playing;
+
+    // As `lore run` starts a game: with its level, through `Playing`.
+    // A world given its level this way once had no pools at all, so a
+    // script's first use of one failed and no still fluid was drawn.
+    let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Info);
+    printed();
+    let actions = ActionMap::standard();
+    let script = r#"
+        local tank = game.fluids.pool("Tank")
+        game.onStart(function() print("start", tank.fluid.name, tank.litres > 1000) end)
+        local said = false
+        game.onTick(function()
+            if not said then
+                said = true
+                local here = game.fluids.poolAt(vector.create(0, 1, 0))
+                print("tick", here == tank, #game.fluids.pools())
+            end
+        end)
+        game.onDraw(function() tank:share("honey") end)
+    "#;
+    let map = Map::parse("map.toml", IN_THE_TANK).unwrap();
+    let game = ScriptGame::from_source(script, &actions).with_map(map);
+    let mut playing = Playing::start(game, Some(&tank(HONEY)), &actions, TICK_RATE);
+    let nothing = Input::new(actions);
+    let mut frame = Frame::default();
+    for _ in 0..3 {
+        playing.tick(nothing.frame(), STEP);
+        playing.frame(&mut frame);
+    }
+    let host = playing.world().game().host();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["start honey true", "tick true 1"]);
+    // And the picture is told how the tank stands, as honey.
+    let fluid = frame.take_fluid();
+    assert_eq!(fluid.pools.len(), 1);
+    assert!(fluid.pools[0].look.is_some());
+    // The player started in it: they are in honey.
+    for _ in 0..30 {
+        playing.tick(nothing.frame(), STEP);
+    }
+    assert!(playing.world().player().submerged > 0.0);
+}
