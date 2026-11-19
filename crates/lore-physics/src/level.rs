@@ -86,6 +86,11 @@ impl Level {
     /// centimetres, which is where a careful person starts to trust it.
     pub const ICE_BEARS: f32 = 0.05;
 
+    /// The most rain raises still water over where its maker put it, in
+    /// metres. A body whose rim is lower than that runs out over it, and
+    /// stands no higher ([`Water::brim`]).
+    pub const MOST_WATER_RISE: f32 = 0.8;
+
     /// The collision shapes of a loaded scene: every mesh, where it stands,
     /// but for those marked as not solid.
     ///
@@ -118,12 +123,18 @@ impl Level {
                 continue;
             };
             for part in &mesh.parts {
-                // Both sides of a triangle are solid, so a mirrored
-                // placement, which turns triangles inside out, needs no care.
-                triangles.extend(
-                    part.triangles()
-                        .map(|corners| corners.map(|point| place(&instance.transform, point))),
-                );
+                // Both sides of a triangle are solid, but which way it faces
+                // says which side of it is the inside of a closed shape
+                // ([`met_from_behind`](Self::met_from_behind)): a mirrored
+                // placement turns triangles inside out, and is turned back.
+                triangles.extend(part.triangles().map(|corners| {
+                    let [a, b, c] = corners.map(|point| place(&instance.transform, point));
+                    if instance.mirrored {
+                        [a, c, b]
+                    } else {
+                        [a, b, c]
+                    }
+                }));
             }
         }
         Self::from_triangles(&triangles)
@@ -139,8 +150,8 @@ impl Level {
         let rise = self.rise.get();
         self.waters
             .iter()
-            .filter(|water| water.depth_at(x, z) + rise > 0.0)
-            .map(|water| water.level + rise)
+            .filter(|water| water.depth_at(x, z) + water.risen(rise) > 0.0)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -148,7 +159,9 @@ impl Level {
     /// above where its maker put it. Each lake and pond stands that much
     /// higher, and spreads over whatever ground beside it is lower than
     /// that: a body of water knows how far above it the ground round it
-    /// stands. Less than nothing, or what is no number, is nothing.
+    /// stands. One whose rim is lower runs out over it, and stands at its
+    /// brim ([`Water::risen`]). Less than nothing, or what is no number,
+    /// is nothing.
     ///
     /// The level's shapes are shared by everyone who holds it, and so is
     /// this: a world says it before each step it takes.
@@ -212,9 +225,9 @@ impl Level {
             .iter()
             .filter(|water| {
                 let deep = water.depth_at(x, z);
-                deep + rise > 0.0 && y > water.level - deep - slack
+                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
             })
-            .map(|water| water.level + rise)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -235,9 +248,9 @@ impl Level {
             .filter(|water| {
                 // The bed is where it was; the surface is higher.
                 let deep = water.depth_at(x, z);
-                deep + rise > 0.0 && y > water.level - deep - slack
+                deep + water.risen(rise) > 0.0 && y > water.level - deep - slack
             })
-            .map(|water| water.level + rise)
+            .map(|water| water.level + water.risen(rise))
             .reduce(f32::max)
     }
 
@@ -251,7 +264,7 @@ impl Level {
         let rise = self.rise.get();
         self.waters
             .iter()
-            .map(|water| water.depth_at(x, z) + rise)
+            .map(|water| water.depth_at(x, z) + water.risen(rise))
             .fold(0.0, f32::max)
     }
 
@@ -330,6 +343,32 @@ impl Level {
         })
     }
 
+    /// Whether the first surface a ray from `from` along `direction` meets,
+    /// no further off than `reach` metres, is met from behind: from the
+    /// side its triangles do not face, which is the inside of a closed
+    /// shape (a rock, a block of ground) or the rock over a cave's roof.
+    /// `None` if nothing is met.
+    pub(crate) fn met_from_behind(
+        &self,
+        from: [f32; 3],
+        direction: [f32; 3],
+        reach: f32,
+    ) -> Option<bool> {
+        let mesh = self.mesh.as_ref()?;
+        let from = Vector::from_array(from);
+        let heading = Vector::from_array(direction).try_normalize()?;
+        if !(from.is_finite() && heading.is_finite() && reach > 0.0) {
+            return None;
+        }
+        let ray = Ray::new(from.as_dvec3(), heading.as_dvec3());
+        let reach = f64::from(reach.min(FARTHEST_RAY));
+        let hit = mesh.cast_local_ray_and_get_normal(&ray, reach, false)?;
+        // The way the triangle faces as it was wound, not the way the hit
+        // reports, which is always towards the ray.
+        let faces = mesh.triangle(hit.subshape).scaled_normal();
+        Some(faces.dot(heading.as_dvec3()) > 0.0)
+    }
+
     /// Moves `shape` from `centre` along `travel` and reports the first
     /// thing in its way, stopping `gap` short of it. Something less than
     /// `gap` past the end of `travel` is in the way too.
@@ -379,6 +418,7 @@ impl Level {
     }
 
     /// Whether `shape` at `centre` reaches into anything solid.
+    #[cfg(test)]
     pub(crate) fn overlaps(&self, shape: &Capsule, centre: Vector) -> bool {
         self.mesh.as_ref().is_some_and(|mesh| {
             query::intersection_test(
@@ -466,6 +506,7 @@ mod rise_tests {
             name: None,
             sources: Vec::new(),
             level: 2.0,
+            brim: 2.0 + Level::MOST_WATER_RISE,
             origin: [0.0, 0.0],
             cell: 1.0,
             size: [3, 1],

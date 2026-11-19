@@ -200,13 +200,16 @@ impl Eye {
     /// that must be the same each time it is drawn.
     ///
     /// The view is left `weather` stops darker (see [`weather_darker`]).
+    /// A picture lit by lightning (`flash`) may open the eye but does not
+    /// close it: a flash is over before an eye could close for it, and
+    /// one that did would leave a night storm dark for seconds after each.
     pub(crate) fn see(
         &mut self,
         bytes: &[u8],
         per_lux: f32,
         elapsed: f32,
         at_once: bool,
-        weather: f32,
+        (weather, flash): (f32, bool),
     ) {
         if !self.adaptation.adapts() {
             self.stops = 0.0;
@@ -232,6 +235,9 @@ impl Eye {
         };
         let wanted = USUAL_VIEW - darker(ev) - weather - seen;
         let wanted = wanted.clamp(-self.adaptation.closes, self.adaptation.opens);
+        if flash && wanted < self.stops {
+            return;
+        }
         let seconds = if wanted > self.stops {
             self.adaptation.seconds
         } else {
@@ -271,7 +277,9 @@ fn view_brightness(cells: &[f32], order: &mut Vec<(f32, f32)>) -> Option<f32> {
         let weight = 1.0 - 0.25 * (aside * aside + above * above);
         order.push((value, weight));
     }
-    order.sort_by(|one, other| one.0.total_cmp(&other.0));
+    // An unstable sort asks for no memory; cells of the same brightness
+    // count the same whichever order they are in.
+    order.sort_unstable_by(|one, other| one.0.total_cmp(&other.0));
     let whole: f32 = order.iter().map(|(_, weight)| weight).sum();
     if whole <= 0.0 {
         return None;
@@ -300,12 +308,12 @@ pub(crate) struct EyePass {
     pool: vk::DescriptorPool,
     /// What the scene is measured into.
     grid: Picture,
-    /// For each frame: the set that says which picture is measured, that
-    /// picture, the buffer the measuring is copied back into, and whether
+    /// For each frame: the set that says which picture is measured, which
+    /// target's picture that is (see [`SceneTarget::id`]), the buffer the measuring is copied back into, and whether
     /// one was copied and not yet taken.
     frames: Vec<(
         vk::DescriptorSet,
-        std::cell::Cell<vk::ImageView>,
+        std::cell::Cell<u64>,
         Buffer,
         std::cell::Cell<bool>,
     )>,
@@ -392,7 +400,7 @@ impl EyePass {
                 )?;
                 eye.frames.push((
                     set,
-                    std::cell::Cell::new(vk::ImageView::null()),
+                    std::cell::Cell::new(0),
                     buffer,
                     std::cell::Cell::new(false),
                 ));
@@ -512,7 +520,7 @@ impl EyePass {
             return;
         };
         let device = self.gpu.device();
-        if bound.get() != target.colour.view {
+        if bound.get() != target.id {
             let pictures = [vk::DescriptorImageInfo::default()
                 .image_view(target.colour.view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -524,7 +532,7 @@ impl EyePass {
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
-            bound.set(target.colour.view);
+            bound.set(target.id);
         }
         let Some((_, _, buffer, _)) = self.frames.get(frame % self.frames.len().max(1)) else {
             return;
@@ -715,9 +723,9 @@ mod tests {
 
         // The eye draws a storm that much darker than a clear day.
         let mut eye = Eye::new(EyeAdaptation::default());
-        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, 0.0);
+        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, (0.0, false));
         let opened = eye.stops;
-        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, storm);
+        eye.see(&even(USUAL_VIEW - 3.0), NOON, 1.0, true, (storm, false));
         assert!(
             (opened - eye.stops - storm).abs() < 1e-4,
             "{opened} {}",
@@ -728,7 +736,7 @@ mod tests {
     #[test]
     fn a_sunlit_view_is_drawn_as_the_sky_draws_noon() {
         let mut eye = Eye::new(EyeAdaptation::default());
-        eye.see(&even(USUAL_VIEW), NOON, 1.0, true, 0.0);
+        eye.see(&even(USUAL_VIEW), NOON, 1.0, true, (0.0, false));
         assert!(
             (eye.multiplier() - 1.0).abs() < 1e-5,
             "{}",
@@ -740,17 +748,23 @@ mod tests {
     fn the_eye_opens_in_the_dark_and_closes_in_bright_light_within_its_limits() {
         let mut eye = Eye::new(EyeAdaptation::default());
         // A sunlit view one stop darker than usual: one stop brighter.
-        eye.see(&even(USUAL_VIEW - 1.0), NOON, 1.0, true, 0.0);
+        eye.see(&even(USUAL_VIEW - 1.0), NOON, 1.0, true, (0.0, false));
         assert!(
             (eye.multiplier() - 2.0).abs() < 1e-3,
             "{}",
             eye.multiplier()
         );
         // Far darker: no more than it may open.
-        eye.see(&even(USUAL_VIEW - 30.0), NOON * 1e9, 1.0, true, 0.0);
+        eye.see(
+            &even(USUAL_VIEW - 30.0),
+            NOON * 1e9,
+            1.0,
+            true,
+            (0.0, false),
+        );
         assert!((eye.multiplier() - 8.0_f32.exp2()).abs() < 1e-1);
         // Far brighter: no more than it may close.
-        eye.see(&even(USUAL_VIEW + 12.0), NOON, 1.0, true, 0.0);
+        eye.see(&even(USUAL_VIEW + 12.0), NOON, 1.0, true, (0.0, false));
         assert!((eye.multiplier() - (-8.0_f32).exp2()).abs() < 1e-5);
     }
 
@@ -762,7 +776,7 @@ mod tests {
         let night = 2.4;
         let seen = (0.002_f32 * night).log2();
         let mut eye = Eye::new(EyeAdaptation::default());
-        eye.see(&even(seen), night, 1.0, true, 0.0);
+        eye.see(&even(seen), night, 1.0, true, (0.0, false));
         let stops = eye.multiplier().log2();
         assert!((stops - (USUAL_VIEW - 6.0 - seen)).abs() < 0.05, "{stops}");
         assert!(
@@ -770,16 +784,16 @@ mod tests {
             "a moonlit street is drawn much as the sky draws it: {stops}"
         );
         // Lamplight thirty times as bright closes it.
-        eye.see(&even(seen + 5.0), night, 1.0, true, 0.0);
+        eye.see(&even(seen + 5.0), night, 1.0, true, (0.0, false));
         assert!(eye.multiplier().log2() < stops - 2.0);
     }
 
     #[test]
     fn it_gets_used_to_the_dark_slowly_and_to_bright_light_faster() {
         let mut opening = Eye::new(EyeAdaptation::default());
-        opening.see(&even(USUAL_VIEW - 2.0), NOON, 0.5, false, 0.0);
+        opening.see(&even(USUAL_VIEW - 2.0), NOON, 0.5, false, (0.0, false));
         let mut closing = Eye::new(EyeAdaptation::default());
-        closing.see(&even(USUAL_VIEW + 2.0), NOON, 0.5, false, 0.0);
+        closing.see(&even(USUAL_VIEW + 2.0), NOON, 0.5, false, (0.0, false));
         let opened = opening.multiplier().log2() / 2.0;
         let closed = -closing.multiplier().log2() / 2.0;
         assert!(opened > 0.1 && opened < 0.5, "{opened}");
@@ -787,9 +801,25 @@ mod tests {
     }
 
     #[test]
+    fn lightning_does_not_close_the_eye_but_the_dark_after_it_opens_it() {
+        let mut eye = Eye::new(EyeAdaptation::default());
+        eye.see(&even(USUAL_VIEW - 4.0), NOON, 1.0, true, (0.0, false));
+        let night = eye.stops;
+        // A flash six stops brighter than the night, seen for a while.
+        for _ in 0..30 {
+            eye.see(&even(USUAL_VIEW + 2.0), NOON, 0.02, false, (0.0, true));
+        }
+        assert_eq!(eye.stops, night);
+        // A picture lit by it that is darker still is no reason to stay
+        // shut.
+        eye.see(&even(USUAL_VIEW - 6.0), NOON, 1.0, true, (0.0, true));
+        assert!(eye.stops > night + 1.0, "{} {night}", eye.stops);
+    }
+
+    #[test]
     fn an_eye_that_does_not_adapt_draws_the_sky_as_it_is() {
         let mut eye = Eye::new(EyeAdaptation::FIXED);
-        eye.see(&even(-12.0), NOON, 1.0, true, 0.0);
+        eye.see(&even(-12.0), NOON, 1.0, true, (0.0, false));
         assert_eq!(eye.multiplier(), 1.0);
     }
 

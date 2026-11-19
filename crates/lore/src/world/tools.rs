@@ -100,6 +100,63 @@ fn a_script_puts_the_player_somewhere_still_and_facing_the_way_it_says() {
 }
 
 #[test]
+fn a_player_put_somewhere_mid_climb_does_not_go_on_climbing_there() {
+    let (mut game, mut input) = played(
+        r#"
+        local done = false
+        game.onTick(function()
+            if not done then
+                done = true
+                game.player:teleport(vector.create(3, 2, -4))
+            end
+        end)
+        "#,
+    );
+    // Part way through pulling themselves out of the water onto a ledge,
+    // going over its edge with forward held, nothing yet under the feet.
+    game.world.player.player.position = [0.0, 5.0, 0.0];
+    game.world.player.player.hoist = 1.0;
+    input.press(Key::W);
+    run(&mut game, &mut input, 1);
+    let player = game.world.player();
+    assert_eq!(player.position, [3.0, 2.0, -4.0]);
+    assert_eq!(player.hoist, 0.0, "{player:?}");
+    // They fall from there, and do not glide on as the climb would.
+    run(&mut game, &mut input, 10);
+    let player = game.world.player();
+    assert!(player.position[1] < 1.8, "{player:?}");
+}
+
+#[test]
+fn a_player_who_dies_near_a_spawn_point_is_cut_to_it_facing_its_way() {
+    let (mut game, mut input) = played("");
+    // A couple of metres from the spawn point, which faces -Z, looking
+    // somewhere else.
+    game.yaw = 1.0;
+    game.pitch = 0.2;
+    input.press(Key::W);
+    run(&mut game, &mut input, 30);
+    input.release(Key::W);
+    run(&mut game, &mut input, 30);
+    let [x, _, z] = game.world.player().position;
+    let away = x.hypot(z);
+    assert!(away > 1.0 && away < 4.0, "{away}");
+
+    game.world.game_mut().host_mut().player_died();
+    run(&mut game, &mut input, 1);
+    let [x, _, z] = game.world.player().position;
+    assert!(x.hypot(z) < 0.01, "not at the spawn point: {x}, {z}");
+    // A cut, not a glide back from where they died.
+    assert_eq!(game.before, None);
+    assert!(game.yaw.abs() < 1e-4, "{}", game.yaw);
+    assert!(game.pitch.abs() < 1e-4, "{}", game.pitch);
+    // And the view goes on from there.
+    run(&mut game, &mut input, 5);
+    assert!(game.yaw.abs() < 1e-4, "{}", game.yaw);
+    assert!(game.before.is_some());
+}
+
+#[test]
 fn teleporting_with_the_way_the_player_looks_keeps_the_view_where_it_was() {
     let (mut game, mut input) = played(
         "game.onTick(function() game.player:teleport(game.player.position, game.player.aim) end)",

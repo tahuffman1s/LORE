@@ -653,6 +653,20 @@ fn unorm8(value: f32) -> u8 {
     packed
 }
 
+/// A share of light from 0 to 1 as a byte, on the curve a screen uses
+/// (sRGB): even steps of the byte look like even steps of brightness, so
+/// dark colours keep as many steps as light ones, where steps of light
+/// itself would band in the dark. The shader's `vertex` takes it back.
+fn srgb8(value: f32) -> u8 {
+    let light = value.clamp(0.0, 1.0);
+    let seen = if light <= 0.003_130_8 {
+        light * 12.92
+    } else {
+        1.055 * light.powf(1.0 / 2.4) - 0.055
+    };
+    unorm8(seen)
+}
+
 /// A direction folded flat onto a square (octahedral encoding), which takes
 /// two numbers instead of three and loses nothing a screen can show.
 ///
@@ -720,11 +734,11 @@ fn append(part: &MeshPart, vertices: &mut Vec<u8>, indices: &mut Vec<u8>) -> Pla
             .map_or([0.0, 0.0, 0.0, 1.0], |tangents| tangents[number]);
         vertices.extend(tangent.map(|value| snorm8(value).to_ne_bytes()[0]));
         // A point with no colour of its own is white, so the material's shows.
-        let colour = part
+        let [red, green, blue, alpha] = part
             .colors
             .as_ref()
             .map_or([1.0; 4], |colours| colours[number]);
-        vertices.extend(colour.map(unorm8));
+        vertices.extend([srgb8(red), srgb8(green), srgb8(blue), unorm8(alpha)]);
         for value in each(&part.uv0).iter().chain(&each(&part.uv1)) {
             vertices.extend_from_slice(&value.to_ne_bytes());
         }
@@ -797,7 +811,7 @@ pub(crate) struct MeshPipeline {
     views: Vec<(Buffer, vk::DescriptorSet)>,
     /// The copy of the picture each of those sets was last pointed at:
     /// a window that changes size gets a new one.
-    behind: RefCell<Vec<vk::ImageView>>,
+    behind: RefCell<Vec<u64>>,
     /// Measures each frame's picture for the eye to adapt to: `None` only
     /// while the pipeline is being built.
     eye: Option<EyePass>,
@@ -845,7 +859,7 @@ impl MeshPipeline {
             grid: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             views: Vec::with_capacity(frames),
-            behind: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
+            behind: RefCell::new(vec![0; frames.max(1)]),
             eye: None,
             lamp_buffers: Vec::with_capacity(frames.max(1)),
             lamp_frame: RefCell::new(LampFrame::new()),
@@ -1336,9 +1350,14 @@ impl MeshPipeline {
             let grid_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bindings)
                 .vertex_attribute_descriptions(&attributes);
+            // Its depth is written: what is drawn after it (see-through
+            // things, spray, the light in the air) stops at the surface
+            // as it does at the ground, and the upscaler reads the surface
+            // where it reads the surface's movement. What is under the
+            // water was copied aside for it before.
             let depth = vk::PipelineDepthStencilStateCreateInfo::default()
                 .depth_test_enable(true)
-                .depth_write_enable(false)
+                .depth_write_enable(true)
                 .depth_compare_op(vk::CompareOp::GREATER);
             let attachments = [vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -1406,7 +1425,18 @@ impl MeshPipeline {
             let bit_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bindings)
                 .vertex_attribute_descriptions(&attributes);
-            let info = info.stages(&stages).vertex_input_state(&bit_input);
+            // Bits are tested against depth but write none, as before
+            // still water wrote its own: each is a square of which only
+            // the middle is a drop, and a bit drawn later behind another's
+            // clear corners must still show.
+            let bit_depth = vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(true)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::GREATER);
+            let info = info
+                .stages(&stages)
+                .vertex_input_state(&bit_input)
+                .depth_stencil_state(&bit_depth);
             // SAFETY: as for the pipelines above.
             let created = unsafe {
                 device.create_graphics_pipelines(
@@ -1713,8 +1743,9 @@ impl MeshPipeline {
             fluid,
             lamps,
         } = contents;
-        // How wet rain has made the ground, from 0 to 1.
-        let wet_ground = weather.rows[0][2];
+        // How wet rain has made the ground, or how full its puddles, from
+        // 0 to 1.
+        let wet_ground = weather.rows[0][2].max(weather.rows[6][1]);
         // How the level's water looks, if its game has said: the first
         // row's last number is 1 when it has, and all is zero when not.
         let water_look = fluid
@@ -1754,7 +1785,7 @@ impl MeshPipeline {
         // Water looks through this target's own copy of the picture.
         if let Ok(mut behind) = self.behind.try_borrow_mut()
             && let Some(bound) = behind.get_mut(frame % self.views.len().max(1))
-            && *bound != target.behind.view
+            && *bound != target.id
         {
             let pictures = [
                 target.behind.view,
@@ -1778,7 +1809,7 @@ impl MeshPipeline {
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
-            *bound = target.behind.view;
+            *bound = target.id;
         }
         let lighting = day.map_or_else(
             || meshes.map_or_else(Lighting::default, |meshes| meshes.lighting),
@@ -1823,9 +1854,11 @@ impl MeshPipeline {
         // The water: its waves and rings are worked out before the picture
         // that reads them, and everything drawn is told which still water
         // the eye is in or nearest.
-        // All of it stands as high as rain has raised it.
+        // All of it stands as high as rain has raised it, each body no
+        // higher than its brim.
         let rise = weather.rows[1][1];
         let near = meshes.and_then(|meshes| meshes.bodies.nearest(view.eye, rise));
+        let near_rise = near.map_or(0.0, |body| body.risen(rise));
         let mut water = [[0.0; 4]; 9];
         if let Some(works) = &self.water {
             // SAFETY: the caller's guarantees cover the water's pictures,
@@ -1837,14 +1870,19 @@ impl MeshPipeline {
                     frame,
                     view.eye,
                     (view.exact, view.elapsed),
-                    (near, meshes.is_some_and(|meshes| meshes.has_water)),
+                    (
+                        near,
+                        meshes.is_some_and(|meshes| meshes.has_water),
+                        meshes.map_or(f32::NAN, |meshes| meshes.bodies.fetch()),
+                        near_rise,
+                    ),
                     (stirs, weather.wind),
                 )
             }?;
             // The eye is under water when it is under the water as it
             // stands now, not as the level was built.
             if near.is_some() {
-                water[0][0] += rise;
+                water[0][0] += near_rise;
             }
             let depths = near.map_or(works.pictures()[3], Body::depths);
             let id = near.map_or(0, |body| body.id);
@@ -1891,7 +1929,13 @@ impl MeshPipeline {
                 &water,
                 &Above {
                     flashes,
-                    weather,
+                    // The shader reads the water nearest the eye as risen
+                    // as far as that water is.
+                    weather: {
+                        let mut seen = weather;
+                        seen.rows[1][1] = near_rise;
+                        seen
+                    },
                     heavens,
                     water_look,
                 },
@@ -2164,7 +2208,7 @@ impl MeshPipeline {
                             self.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            &body_bytes(body, view.eye, grid, weather.rows[1][1]),
+                            &body_bytes(body, view.eye, grid, body.risen(rise)),
                         );
                         device.cmd_draw_indexed(commands, GRID_INDICES, 1, 0, 0, 0);
                     }
@@ -2318,6 +2362,19 @@ impl MeshPipeline {
                 .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                 .old_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            // How far each pixel moved, written before the pass is broken
+            // off and written again after: the second half waits for the
+            // first.
+            barrier(target.motion.image, COLOUR)
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                )
+                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
             // What the copies held is thrown away; the last frame's water
             // may still be reading them.
             barrier(target.behind.image, COLOUR)
@@ -2524,16 +2581,12 @@ impl MeshPipeline {
                         &[],
                     );
                 }
-                let placed = Draw {
-                    world: multiply(clip, &draw.world),
-                    ..*draw
-                };
                 device.cmd_push_constants(
                     commands,
                     self.layout,
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
-                    &draw_bytes(&placed),
+                    &casting_bytes(&multiply(clip, &draw.world), &draw.world),
                 );
                 device.cmd_draw_indexed(
                     commands,
@@ -3079,21 +3132,27 @@ fn picture_write(
 ///
 /// Where the mesh shader keeps how a mesh stands, this keeps how the grid
 /// is laid (how far apart its points are, whether it is the finest, how
-/// many squares it has a side, and where its middle is: the eye, to the
-/// nearest two points, so that the grid moves by whole squares and its
-/// points stay where they were); and where the shader keeps how surface
-/// directions turn, the body itself: where its grid of depths starts and
-/// how far apart its points are, how many there are and how high the water
-/// stands, and the water's colour. Its clearness is the number after.
+/// many squares it has a side, where the next finer grid's middle is,
+/// round which this one is left out, and where its own middle is: the
+/// eye, to the nearest two points, so that the grid moves by whole squares
+/// and its points stay where they were); and where the shader keeps how
+/// surface directions turn, the body itself: where its grid of depths
+/// starts and how far apart its points are, how many there are and how
+/// high the water stands, risen `rise` metres by rain, and the water's
+/// colour. Its clearness is the number after. The rise itself is kept
+/// beside where the finer grid's middle is.
 fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYTES] {
     let (apart, middle) = grid_laid(eye, grid);
+    let finer = grid
+        .checked_sub(1)
+        .map_or(middle, |finer| grid_laid(eye, finer).1);
     // Sizes are far below the point where f32 stops being exact.
     #[allow(clippy::cast_precision_loss)]
     let (squares, size) = (GRID_SQUARES as f32, body.size.map(|points| points as f32));
     let finest = if grid == 0 { 1.0 } else { 0.0 };
     let numbers = [
         [apart, finest, squares, 0.0],
-        [0.0; 4],
+        [finer[0], finer[1], rise, 0.0],
         [0.0; 4],
         [middle[0], body.level + rise, middle[1], 1.0],
         [body.origin[0], body.origin[1], body.cell, 0.0],
@@ -3108,6 +3167,22 @@ fn body_bytes(body: &Body, eye: [f32; 3], grid: u32, rise: f32) -> [u8; DRAW_BYT
         .iter_mut()
         .zip(numbers.iter().flatten())
     {
+        *slot = number.to_ne_bytes();
+    }
+    bytes
+}
+
+/// How many bytes the shader's `Casting` takes: a matrix and three rows.
+const CASTING_BYTES: usize = 16 * 4 + 16 * 3;
+
+/// The shader's `Casting` for one mesh part drawn into a shadow picture:
+/// `picture` takes its points to the picture, and `world` to where they
+/// stand, of which the first three rows are kept.
+fn casting_bytes(picture: &Mat4, world: &Mat4) -> [u8; CASTING_BYTES] {
+    let rows = [0, 1, 2].map(|row| world.map(|column| column[row]));
+    let numbers = picture.iter().chain(&rows).flatten();
+    let mut bytes = [0_u8; CASTING_BYTES];
+    for (slot, number) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(numbers) {
         *slot = number.to_ne_bytes();
     }
     bytes
@@ -3241,10 +3316,35 @@ mod tests {
             "a normal along +Z folds to the middle"
         );
         assert_eq!(second[16..20], [127, 0, 0, 129]);
-        // A colour brighter than white is white.
-        assert_eq!(second[20..24], [255, 128, 0, 255]);
+        // A colour brighter than white is white; red, green and blue are
+        // on the screen's curve, where half the light is 188, and alpha,
+        // which is a share and not a light, is not.
+        assert_eq!(second[20..24], [255, 188, 0, 255]);
         assert_eq!(second[24..28], 0.25_f32.to_ne_bytes());
         assert_eq!(second[36..40], 3.0_f32.to_ne_bytes());
+    }
+
+    #[test]
+    fn dark_point_colours_keep_their_steps() {
+        // The darkest hundredth of light has two dozen steps of the byte,
+        // where as light itself it would have three.
+        assert!(srgb8(0.01) >= 25 && unorm8(0.01) <= 3);
+        // Each byte is the one its own light comes back to, so nothing is
+        // lost on the way there and back.
+        let mut before = 0;
+        for byte in 0..=255_u8 {
+            let light = f32::from(byte) / 255.0;
+            // As the shader takes it back.
+            let back = if light <= 0.040_45 {
+                light / 12.92
+            } else {
+                ((light + 0.055) / 1.055).powf(2.4)
+            };
+            assert_eq!(srgb8(back), byte, "{byte} came back as {}", srgb8(back));
+            assert!(byte == 0 || srgb8(back) > before);
+            before = srgb8(back);
+        }
+        assert_eq!((srgb8(-1.0), srgb8(f32::NAN), srgb8(2.0)), (0, 0, 255));
     }
 
     #[test]
@@ -3322,6 +3422,28 @@ mod tests {
             0.5,
             "and how far the wind moves it"
         );
+    }
+
+    #[test]
+    fn a_caster_says_where_it_stands_in_the_world_by_rows() {
+        let mut picture = [[0.0; 4]; 4];
+        picture[3][3] = 2.0;
+        let mut world = [[0.0; 4]; 4];
+        for (axis, column) in world.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        // Moved to 5, 6, 7 and half as wide along x.
+        world[0][0] = 0.5;
+        world[3] = [5.0, 6.0, 7.0, 1.0];
+        let bytes = casting_bytes(&picture, &world);
+        assert!(bytes.len() <= DRAW_BYTES, "it fits where a draw does");
+        assert_eq!(number(&bytes, 15), 2.0, "the picture's matrix comes first");
+        // Then each row: a point's x is the first row against (x, y, z, 1).
+        assert_eq!(
+            [16, 19, 20, 23, 24, 27].map(|at| number(&bytes, at)),
+            [0.5, 5.0, 0.0, 6.0, 0.0, 7.0]
+        );
+        assert_eq!(number(&bytes, 21), 1.0);
     }
 
     #[test]

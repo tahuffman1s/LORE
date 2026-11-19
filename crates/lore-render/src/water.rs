@@ -71,8 +71,11 @@ const STEP_BYTES: usize = 43 * 16 + 3 * 16 + MOST_STIRS * 32;
 pub(crate) const GRID_SQUARES: u32 = 192;
 pub(crate) const GRID_FINEST: f32 = 0.015;
 /// The most grids one body of water is drawn with: the last reaches more
-/// than a kilometre from the eye.
-const MOST_GRIDS: u32 = 11;
+/// than ninety kilometres from the eye, so that the widest body there can
+/// be (8192 points eight metres apart) is drawn whole from anywhere over
+/// it. A body takes only as many as reach it, and draws only those of them
+/// it is not wholly under a finer one of, so a pond costs no more for it.
+const MOST_GRIDS: u32 = 17;
 
 /// Something that stirs the water for one frame: a leg wading, a body
 /// swimming, a stone or a drop going in.
@@ -96,8 +99,9 @@ pub struct Stir {
 }
 
 /// The rows of the shader's `View` that say what water there is: the body
-/// the eye is nearest (three rows), each layer of waves (four), the square
-/// of rings, and one spare.
+/// the eye is nearest (three rows, the last number of the third how far
+/// the waves can lift its surface at the most), each layer of waves
+/// (four), the square of rings, and one spare.
 pub(crate) type WaterRows = [[f32; 4]; 9];
 
 /// A picture of several layers: all of them for a shader to read, and each
@@ -386,6 +390,12 @@ impl Body {
         self.depths.view
     }
 
+    /// How far rain that has raised still water `rise` metres raises
+    /// this body: no higher than its brim, where it runs out.
+    pub(crate) fn risen(&self, rise: f32) -> f32 {
+        self.water.risen(rise)
+    }
+
     /// The x and z of the corner of its grid with the most of both.
     fn far_corner(&self) -> [f32; 2] {
         // Sizes are far below the point where f32 stops being exact.
@@ -448,15 +458,17 @@ impl Body {
         if !reaches || grid == 0 {
             return reaches;
         }
-        // The finer grid's middle and reach, as the shader works them out.
-        let finer = [0, 2].map(|axis| (finite(eye[axis]) / apart).round() * apart);
+        // The finer grid's middle, which the shader is given, and how far
+        // round it the shader leaves this grid out.
+        let (_, finer) = grid_laid(eye, grid - 1);
         let covered = half / 2.0 - apart;
         let hidden = (0..2)
             .all(|axis| low[axis] >= finer[axis] - covered && high[axis] <= finer[axis] + covered);
         !hidden
     }
 
-    /// The rows of the shader's `View` that describe this body.
+    /// The rows of the shader's `View` that describe this body; the last
+    /// number is for how far the waves on it reach.
     fn rows(&self) -> [[f32; 4]; 3] {
         // Sizes are far below the point where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
@@ -568,14 +580,34 @@ impl Bodies {
         Ok(bodies)
     }
 
-    /// The body `eye` is in or over, or else the one it is nearest to.
-    /// (A pool inside the square a moat lies in is told from the moat by
-    /// which of them there is water of at the eye.)
-    pub(crate) fn nearest(&self, eye: [f32; 3], rise: f32) -> Option<&Body> {
+    /// How far the wind blows over water in this scene, in metres: across
+    /// the widest body of it. One set of waves is drawn on every body, and
+    /// it is the set the widest raises, whichever is near: worked out for
+    /// the nearest, it was worked out again as the eye went from a pond to
+    /// a lake, and the waves on all of them started again where they stood.
+    /// A pond is too shallow for the longest of them, which die away there.
+    pub(crate) fn fetch(&self) -> f32 {
+        // Sizes are far below the point where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
         self.list
             .iter()
-            .filter(|body| body.water.depth_at(eye[0], eye[2]) + rise > 0.0)
-            .max_by(|one, other| one.level.total_cmp(&other.level))
+            .map(|body| body.size[0].max(body.size[1]) as f32 * body.cell)
+            .fold(None, |widest: Option<f32>, wide| {
+                Some(widest.map_or(wide, |widest| widest.max(wide)))
+            })
+            .map_or(40.0, |wide| wide.clamp(10.0, 20_000.0))
+    }
+
+    /// The body `eye` is in or over, or else the one it is nearest to,
+    /// with rain having raised still water `rise` metres. (A pool inside
+    /// the square a moat lies in is told from the moat by which of them
+    /// there is water of at the eye.)
+    pub(crate) fn nearest(&self, eye: [f32; 3], rise: f32) -> Option<&Body> {
+        let stands = |body: &Body| body.level + body.risen(rise);
+        self.list
+            .iter()
+            .filter(|body| body.water.depth_at(eye[0], eye[2]) + body.risen(rise) > 0.0)
+            .max_by(|one, other| stands(one).total_cmp(&stands(other)))
             .or_else(|| {
                 self.list
                     .iter()
@@ -609,8 +641,13 @@ fn finite(number: f32) -> f32 {
 /// after it is twice as wide with its points twice as far apart. The
 /// middle is the eye to the nearest two points, so that the grid moves by
 /// whole squares and its points stay where they were.
+///
+/// The shader is given the middle of the next finer grid as this works it
+/// out, and does not work it out again: the graphics card rounds halves
+/// another way and divides less exactly, and a grid left out round a
+/// middle one point off leaves a crack.
 pub(crate) fn grid_laid(eye: [f32; 3], grid: u32) -> (f32, [f32; 2]) {
-    // Eleven grids at most: the power fits an f32 exactly.
+    // Seventeen grids at most: the power fits an f32 exactly.
     #[allow(clippy::cast_possible_wrap)]
     let apart = GRID_FINEST * 2.0_f32.powi(grid as i32);
     let middle = [0, 2].map(|axis| (finite(eye[axis]) / (2.0 * apart)).round() * 2.0 * apart);
@@ -944,53 +981,65 @@ impl WaterWorks {
 
     /// Makes the rings flat: no water has been stirred yet.
     fn still(&self) -> Result<(), RenderError> {
-        let device = self.gpu.device();
-        let images = [self.rings[0].image, self.rings[1].image];
         // SAFETY: the pictures are alive until `once` has waited for the
-        // commands, and each is cleared in the layout the barrier before
-        // left it in.
-        unsafe {
-            once(&self.gpu, DOING, |commands| {
-                for image in images {
-                    let barrier = || {
-                        vk::ImageMemoryBarrier2::default()
-                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                            .image(image)
-                            .subresource_range(COLOUR)
-                    };
-                    let to_clear = [barrier()
-                        .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
-                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        .old_layout(vk::ImageLayout::UNDEFINED)
-                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)];
-                    device.cmd_pipeline_barrier2(
-                        commands,
-                        &vk::DependencyInfo::default().image_memory_barriers(&to_clear),
-                    );
-                    device.cmd_clear_color_image(
-                        commands,
-                        image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &vk::ClearColorValue { float32: [0.0; 4] },
-                        &[COLOUR],
-                    );
-                    let to_read = [barrier()
-                        .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
-                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        .dst_stage_mask(
-                            vk::PipelineStageFlags2::FRAGMENT_SHADER
-                                | vk::PipelineStageFlags2::VERTEX_SHADER,
-                        )
-                        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-                    device.cmd_pipeline_barrier2(
-                        commands,
-                        &vk::DependencyInfo::default().image_memory_barriers(&to_read),
-                    );
-                }
-            })
+        // commands, and nothing else uses them yet.
+        unsafe { once(&self.gpu, DOING, |commands| self.record_still(commands)) }
+    }
+
+    /// Records making both pictures of the rings flat, ready to be read.
+    ///
+    /// # Safety
+    ///
+    /// `commands` must be a command buffer of this device that is being
+    /// recorded, outside a render pass.
+    unsafe fn record_still(&self, commands: vk::CommandBuffer) {
+        let device = self.gpu.device();
+        let readers =
+            vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::VERTEX_SHADER;
+        for image in [self.rings[0].image, self.rings[1].image] {
+            let barrier = || {
+                vk::ImageMemoryBarrier2::default()
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(COLOUR)
+            };
+            // Whatever read the rings before is done with them; what they
+            // held is not kept.
+            let to_clear = [barrier()
+                .src_stage_mask(readers)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)];
+            let to_read = [barrier()
+                .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(readers)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            // SAFETY: the caller guarantees the command buffer is recording
+            // outside a render pass; the pictures are this object's own,
+            // made to be cleared, and each is cleared in the layout the
+            // barrier before left it in.
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_clear),
+                );
+                device.cmd_clear_color_image(
+                    commands,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &vk::ClearColorValue { float32: [0.0; 4] },
+                    &[COLOUR],
+                );
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_read),
+                );
+            }
         }
     }
 
@@ -1174,9 +1223,11 @@ impl WaterWorks {
     /// what water there is.
     ///
     /// `near` is the still water the eye is in or nearest, `any` whether
-    /// the scene has water at all, `stirs` whatever is stirring the water
-    /// during this frame, and `wind` the way the wind blows along x and z
-    /// and how fast, in metres a second.
+    /// the scene has water at all, `fetch` how far the wind blows over the
+    /// widest of it ([`Bodies::fetch`]) and `rise` how far rain has raised
+    /// `near`, in metres; `stirs` is whatever is stirring the water during
+    /// this frame, and `wind` the way the wind blows along x and z and how
+    /// fast, in metres a second.
     ///
     /// # Safety
     ///
@@ -1190,7 +1241,7 @@ impl WaterWorks {
         frame: usize,
         eye: [f32; 3],
         (seconds, elapsed): (f64, f32),
-        (near, any): (Option<&Body>, bool),
+        (near, any, fetch, rise): (Option<&Body>, bool, f32, f32),
         (stirs, wind): (&[Stir], [f32; 3]),
     ) -> Result<WaterRows, RenderError> {
         let mut rows = [[0.0; 4]; 9];
@@ -1202,29 +1253,27 @@ impl WaterWorks {
         } else {
             0.0
         };
-        // The waves the wind raises on water as wide as what is near. They
-        // are worked out again when the wind has turned by a few degrees
-        // or changed by a tenth, not at every breath of it; the stillest
-        // air still ruffles water a little.
+        // The waves the wind raises on water as wide as the widest there
+        // is. They are worked out again when the wind has turned by a few
+        // degrees or changed by a tenth, not at every breath of it; the
+        // stillest air still ruffles water a little.
         let [along_x, along_z, speed] = wind;
         let speed = if speed.is_finite() {
             speed.clamp(0.5, 60.0)
         } else {
             sky::WIND[2]
         };
-        // Sizes are far below the point where f32 stops being exact.
-        #[allow(clippy::cast_precision_loss)]
-        let fetch = near.map_or(40.0, |body| {
-            (body.size[0].max(body.size[1]) as f32 * body.cell).clamp(10.0, 20_000.0)
-        });
+        let fetch = if fetch.is_finite() { fetch } else { 40.0 };
+        let mut reach = 0.0;
         if let Ok(mut waves) = self.waves.try_borrow_mut() {
             let wanted = [along_x, along_z, speed, fetch];
-            // A different water is a different width for the wind to work on.
+            // A different scene is a different width for the wind to work on.
             let turned = waves.1[0] * along_x + waves.1[1] * along_z < 0.995;
             let changed = (waves.1[2] / speed).ln().abs() > 0.1;
             if (waves.1[3] / fetch).ln().abs() > 0.2 || turned || changed {
                 *waves = (Waves::new([along_x, along_z], speed, fetch), wanted);
             }
+            reach = waves.0.reach();
             for (row, layer) in rows[3..7].iter_mut().zip(&waves.0.layers) {
                 // A layer's waves fit between 8 and 32 times into its square.
                 *row = [
@@ -1280,6 +1329,7 @@ impl WaterWorks {
         });
         // Water nothing has stirred for a good while is flat, near enough:
         // there is nothing to work out until something stirs it again.
+        let was_quiet = self.quiet.get() >= RINGS_GONE;
         let quiet = if stirs.is_empty() {
             (self.quiet.get() + elapsed).min(2.0 * RINGS_GONE)
         } else {
@@ -1319,20 +1369,35 @@ impl WaterWorks {
                 // new depths.
                 unsafe {
                     slot.step
-                        .write(&step_bytes(&self.weights, near, &acting[..count]))?;
+                        .write(&step_bytes(&self.weights, (near, rise), &acting[..count]))?;
                     self.point_at(slot, near);
                     self.record_rings(commands, slot, wanted, before, pairs);
                 }
                 self.corner.set(Some(wanted));
             } else if quiet >= RINGS_GONE {
                 pending.clear();
+                // A few hundredths of the last rings are left, and would
+                // stand where they are for as long as nothing stirs: the
+                // water is made flat once.
+                if !was_quiet {
+                    // SAFETY: as for the steps above.
+                    unsafe { self.record_still(commands) };
+                }
             }
         }
         if let Some(body) = near {
             rows[..3].copy_from_slice(&body.rows());
         }
+        rows[2][3] = reach;
         let corner = self.corner.get().unwrap_or(wanted);
-        rows[7] = [corner[0], corner[1], RING_APART, RING_SIDE as f32];
+        // With the rings gone, the shaders are told there are none, and do
+        // not look them up.
+        let side = if quiet >= RINGS_GONE {
+            0.0
+        } else {
+            RING_SIDE as f32
+        };
+        rows[7] = [corner[0], corner[1], RING_APART, side];
         Ok(rows)
     }
 
@@ -1606,9 +1671,14 @@ impl WaterWorks {
     }
 }
 
-/// The ring shader's `Step` for water `near` stirred by `stirs`, with the
-/// table of what each neighbour's height counts for.
-fn step_bytes(weights: &[f32], near: Option<&Body>, stirs: &[Stir]) -> [u8; STEP_BYTES] {
+/// The ring shader's `Step` for water `near`, raised by rain by `rise`
+/// metres, stirred by `stirs`, with the table of what each neighbour's
+/// height counts for.
+fn step_bytes(
+    weights: &[f32],
+    (near, rise): (Option<&Body>, f32),
+    stirs: &[Stir],
+) -> [u8; STEP_BYTES] {
     let mut bytes = [0_u8; STEP_BYTES];
     let (table, rest) = bytes.split_at_mut(43 * 16);
     for (slot, weight) in table.as_chunks_mut::<4>().0.iter_mut().zip(weights) {
@@ -1617,7 +1687,7 @@ fn step_bytes(weights: &[f32], near: Option<&Body>, stirs: &[Stir]) -> [u8; STEP
     let stirs = &stirs[..stirs.len().min(MOST_STIRS)];
     let (water, grid) = near.map_or(([0.0; 4], [0.0; 4]), |body| {
         let [water, grid, _] = body.rows();
-        ([water[0], water[1], 1.0, 0.0], grid)
+        ([water[0], water[1], 1.0, rise], grid)
     });
     // A handful at most.
     #[allow(clippy::cast_precision_loss)]
@@ -1667,21 +1737,53 @@ fn grid(gpu: &Arc<Gpu>) -> Result<(Buffer, Buffer), RenderError> {
             points.extend(at.iter().flat_map(|part| part.to_ne_bytes()));
         }
     }
-    let mut triangles = Vec::with_capacity((GRID_INDICES * 4) as usize);
-    for row in 0..GRID_SQUARES {
-        for column in 0..GRID_SQUARES {
-            let near = row * across + column;
-            let far = near + across;
-            // Seen from above, anticlockwise.
-            for point in [near, far, near + 1, near + 1, far, far + 1] {
-                triangles.extend(point.to_ne_bytes());
-            }
-        }
-    }
+    let triangles: Vec<u8> = grid_triangles()
+        .iter()
+        .flat_map(|point| point.to_ne_bytes())
+        .collect();
     Ok((
         Buffer::holding(gpu, &points, vk::BufferUsageFlags::VERTEX_BUFFER, DOING)?,
         Buffer::holding(gpu, &triangles, vk::BufferUsageFlags::INDEX_BUFFER, DOING)?,
     ))
+}
+
+/// The triangles of the grid still water is drawn with, as numbers of its
+/// points, a square at a time from the outermost ring of squares round
+/// its middle in to the innermost, each ring walked round.
+///
+/// Water writes its depth and is tested against it, but it is blended at
+/// its soft edges, where what is drawn first shows through what is drawn
+/// over it; so it is drawn far to near. The grid's middle is where the eye
+/// is, and along every line of sight from there what is farther off is in
+/// an outer ring: drawn first, so that a near crest is drawn over the far
+/// side of the trough behind it and not the other way round. Neighbours in a ring share two points, as
+/// neighbours in a row do, so no point is worked out more often.
+fn grid_triangles() -> Vec<u32> {
+    let across = GRID_SQUARES + 1;
+    let half = GRID_SQUARES / 2;
+    let mut triangles = Vec::with_capacity(GRID_INDICES as usize);
+    let mut square = |row: u32, column: u32| {
+        let near = row * across + column;
+        let far = near + across;
+        // Seen from above, anticlockwise.
+        triangles.extend([near, far, near + 1, near + 1, far, far + 1]);
+    };
+    for ring in (0..half).rev() {
+        let (low, high) = (half - 1 - ring, half + ring);
+        for column in low..=high {
+            square(low, column);
+        }
+        for row in low + 1..=high {
+            square(row, high);
+        }
+        for column in (low..high).rev() {
+            square(high, column);
+        }
+        for row in (low + 1..high).rev() {
+            square(row, low);
+        }
+    }
+    triangles
 }
 
 impl Drop for WaterWorks {
@@ -1796,7 +1898,7 @@ mod tests {
             body: 1.0,
             churn: 0.25,
         };
-        let bytes = step_bytes(&ring_weights(), None, &[stir, stir]);
+        let bytes = step_bytes(&ring_weights(), (None, 0.0), &[stir, stir]);
         assert_eq!(bytes.len(), 1760);
         // The grid: how far apart, how long a step, and how many stir.
         assert_eq!(number(&bytes, 688), RING_APART);
@@ -1808,5 +1910,116 @@ mod tests {
         assert_eq!(number(&bytes, 748), -1.5);
         assert_eq!(number(&bytes, 764), 0.25);
         assert_eq!(number(&bytes, 768), 3.0);
+    }
+
+    /// A body of water `size` points `cell` metres apart from `origin`,
+    /// with nothing on the graphics card.
+    fn body(origin: [f32; 2], cell: f32, size: [u32; 2]) -> Body {
+        Body {
+            id: 0,
+            level: 0.0,
+            origin,
+            cell,
+            size,
+            colour: [0.0; 4],
+            water: Water {
+                name: None,
+                sources: Vec::new(),
+                level: 0.0,
+                brim: 0.0,
+                origin,
+                cell,
+                size,
+                depths: Vec::new(),
+                colour: [0.0; 4],
+            },
+            depths: Picture::null(),
+            set: vk::DescriptorSet::null(),
+        }
+    }
+
+    #[test]
+    fn the_widest_lake_is_drawn_whole_and_a_far_pond_by_one_grid() {
+        // The widest body there can be, seen from one corner of it.
+        let sea = body([0.0, 0.0], 8.0, [8192, 8192]);
+        let eye = [1.0, 2.0, 1.0];
+        let grids = sea.grids(eye);
+        let (apart, middle) = grid_laid(eye, grids - 1);
+        #[allow(clippy::cast_precision_loss)]
+        let reach = GRID_SQUARES as f32 / 2.0 * apart;
+        let far = sea.far_corner();
+        assert!(
+            middle[0] + reach >= far[0] && middle[1] + reach >= far[1],
+            "{grids} grids reach {reach} m, the far shore is {far:?}"
+        );
+        // A pond two kilometres off, past where eleven grids reached, is
+        // drawn, and by no more than two grids.
+        let pond = body([2000.0, 40.0], 0.25, [120, 120]);
+        let drawn = (0..pond.grids(eye))
+            .filter(|grid| pond.drawn_by(eye, *grid))
+            .count();
+        assert!((1..=2).contains(&drawn), "drawn by {drawn} grids");
+        // A pond round the eye takes no more grids than it did.
+        let near = body([-10.0, -10.0], 0.1, [200, 200]);
+        assert!(near.grids(eye) <= 6, "{}", near.grids(eye));
+    }
+
+    #[test]
+    fn a_coarser_grid_is_left_out_round_the_middle_the_finer_one_is_laid_at() {
+        // Eyes exactly half way between two points of a grid, where
+        // rounding one way or the other matters.
+        for grid in 1..MOST_GRIDS {
+            let (apart, _) = grid_laid([0.0; 3], grid);
+            let eye = [apart * 2.5, 1.0, -apart * 3.5];
+            let (finer_apart, finer) = grid_laid(eye, grid - 1);
+            assert_eq!(finer_apart * 2.0, apart);
+            // The finer grid's middle is on a point of this one, within a
+            // point of the eye.
+            for (axis, at) in [(0, eye[0]), (1, eye[2])] {
+                let points = finer[axis] / apart;
+                assert!((points - points.round()).abs() < 1e-3, "{points}");
+                assert!((finer[axis] - at).abs() <= apart * 0.5 + 1e-3);
+            }
+        }
+    }
+
+    #[test]
+    fn the_grid_is_drawn_from_its_outer_ring_in() {
+        let triangles = grid_triangles();
+        assert_eq!(triangles.len(), GRID_INDICES as usize);
+        let across = GRID_SQUARES + 1;
+        let half = GRID_SQUARES / 2;
+        // Each square once, by the point at its corner nearest nothing.
+        let mut seen = vec![false; (GRID_SQUARES * GRID_SQUARES) as usize];
+        let mut ring_before = u32::MAX;
+        let mut corner_before: Option<u32> = None;
+        for square in triangles.as_chunks::<6>().0 {
+            let (row, column) = (square[0] / across, square[0] % across);
+            let at = (row * GRID_SQUARES + column) as usize;
+            assert!(!seen[at], "square {row}, {column} twice");
+            seen[at] = true;
+            // How many rings out from the middle it is: never more than
+            // the square before.
+            let ring = [row, column]
+                .map(|n| if n < half { half - 1 - n } else { n - half })
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            assert!(ring <= ring_before, "ring {ring} after {ring_before}");
+            // And in a ring, beside the square before, sharing two points.
+            if ring == ring_before
+                && let Some(before) = corner_before
+            {
+                let (was_row, was_column) = (before / across, before % across);
+                assert_eq!(
+                    was_row.abs_diff(row) + was_column.abs_diff(column),
+                    1,
+                    "{row}, {column} after {was_row}, {was_column}"
+                );
+            }
+            ring_before = ring;
+            corner_before = Some(square[0]);
+        }
+        assert!(seen.iter().all(|square| *square));
     }
 }

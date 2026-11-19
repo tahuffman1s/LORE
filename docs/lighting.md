@@ -192,27 +192,35 @@ shafts").
 A lamp with no shadow lights through walls: a lantern on one side of a wall
 lit the room on the other. Now the lamps that matter most cast shadows.
 
-- Each frame the lamps in view that may cast (`castsShadows`, true unless a
-  script says otherwise) are ranked by how far their light reaches over how
-  far they are from the eye, and the first eight (the player's "Lamp
-  shadows" setting: off, 4, 8 or 16) are given shadows. A lamp that has one
-  counts half again as much, so two lamps that matter about as much do not
-  trade it as the eye moves, and a shadow fades in and out over a quarter
-  of a second. The choice is made on the CPU and unit-tested.
+- Each frame the lamps that may cast (`castsShadows`, true unless a
+  script says otherwise) and light what is seen, or, with light bouncing,
+  the probes round the eye, are ranked by how far their light reaches over
+  how far they are from the eye, and the first eight (the player's "Lamp
+  shadows" setting: off, 4, 8 or 16) are given shadows. So a lantern
+  behind the eye keeps its shadow as the eye turns, and does not light the
+  probes through a wall. A lamp that has one counts half again as much, so
+  two lamps that matter about as much do not trade it as the eye moves,
+  and as far as its light has reached lately, so a flicker that dims it
+  does not lose it; a shadow fades in and out over a quarter of a second.
+  A lamp whose flicker goes dark for a moment keeps its shadow whole for
+  half a second. The choice is made on the CPU and unit-tested.
 - A lamp that shines every way sees the world as a cube of six depth
   pictures; a spot no wider than about 55° from its middle to its edge
   needs one picture along its beam, and a wider one only the faces of the
   cube its beam reaches. Every lamp's pictures are kept in one image, six
   to a lamp (256 pixels square at "low", 512 above), as Doom 2016 keeps
   its lights' in one atlas.
-- A lamp's pictures are drawn once and kept until it moves, its light's
-  reach changes by more than a step (a flicker does not), or the level
-  changes. Only the level casts so far, and it does not move (#337). At
-  most 24 pictures are drawn in a frame; a lamp whose pictures do not fit
-  waits a frame. A lamp that moves (a carried torch, a swinging lantern)
+- A lamp's pictures are drawn once and kept until it moves, its light
+  reaches farther than they see (a flicker does not make it), or the level
+  changes. Only the level casts so far, and it does not move (#337). A
+  lamp that moves (a carried torch, a swinging lantern) is known by its
+  place in the game's list of lamps and the slot within a metre of it,
   keeps its own slot and all its shadow, and its pictures are drawn again
-  every frame: that cost is not in the numbers below, whose lamps stand
-  still.
+  every frame they can be: that cost is not in the numbers below, whose
+  lamps stand still. At most 24 pictures are drawn in a frame: a new
+  lamp's first, then those of lamps that moved, the longest waiting
+  first, so that many torches carried at once take turns. One that waits
+  uses the pictures it had.
 - A new lamp takes a slot only once the shadow it replaces has faded out,
   so no shadow is cut off.
 - Each face of a cube is drawn 10% wider than its quarter turn, so the
@@ -249,6 +257,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   faces, and where its plane lies in the block. A ray is struck where it
   crosses that plane, so a floor is where the floor is and not half a
   metre up; a ray already behind a surface is struck at once from behind.
+  A block that holds leaves (a surface with holes cut in it) stops one ray
+  in seven that crosses it and lets the rest through: half a metre of a
+  crown is mostly air, and counted as solid it kept the sky from the
+  probes under trees that the sun's shadows, which see every hole, showed
+  light coming through. One in seven is what lets the sun through the
+  jungle example's crowns as often as its shadow pictures do.
   Drawing from a fragment shader needs `fragmentStoresAndAtomics`, which
   every desktop card, lavapipe and MoltenVK have; without it light does
   not bounce.
@@ -264,7 +278,10 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   pictures), the 16 nearest lamps (with their shadows), and the light the
   probes round it already hold, so light bounces once a frame and as often
   as it likes over a few. A ray that strikes nothing sees the sky and the
-  ground as the engine's sky model gives them, so the open looks as it did.
+  ground as the engine's sky model gives them, so the open looks as it did,
+  if the picture from above says it is open over where the ray stopped
+  (out of the copy, or 40 m on): a hall or a cave larger than the copy
+  stays dark.
   The probe blends a fifth of what it finds into what it held.
 - **A probe inside something** (a quarter of its rays strike the backs of
   surfaces) is never read: its distances are written as nought.
@@ -274,8 +291,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   (Chebyshev's bound on its distances), which is what stops light leaking
   through walls. Its light replaces the sky-and-ground fill dimmed by how
   much sky is seen and the guess at what a street's sides throw back,
-  fading to them at the grid's edge. The material's own baked shadowing
-  still darkens its crevices.
+  fading to them by how far the surface is from the eye: all the probes'
+  within about 6 m across and 2.5 m up or down, all the fill's from 10.5 m
+  and 4.5 m, where the grid always reaches. The grid moves a whole probe
+  at a time; faded at its edge, light ahead changed in a band at every
+  step, and where the two disagree a ring showed round the player. The
+  material's own baked shadowing still darkens its crevices.
 - **Held still**, nothing is traced again until the eye, the level or the
   setting changes, so the same view gives the same picture.
 

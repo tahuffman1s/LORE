@@ -273,10 +273,14 @@ fn lamp_cell(world: vec3<f32>, pixel: vec2<f32>) -> u32 {
 // The light of every lamp that reaches a point of a surface, as it leaves
 // it towards the eye: `matte` is the colour it scatters, `mirror` how much
 // it mirrors straight on, and `kept` what `energy_kept` gives. A `thin`
-// surface (a leaf) is lit through from behind as well.
+// surface (a leaf) is lit through from behind as well. `normal` is the way
+// the surface faces as the light sees it, bent by bumps; `built` the way
+// it faces as it is built, which is what its shadows are looked up with,
+// as the sun's are: a bent normal finds the surface itself in the way.
 fn from_lamps(
     world: vec3<f32>,
     normal: vec3<f32>,
+    built: vec3<f32>,
     to_eye: vec3<f32>,
     pixel: vec2<f32>,
     matte: vec3<f32>,
@@ -299,7 +303,7 @@ fn from_lamps(
         while bits != 0u {
             let lamp = lamps.lamps[word * 32u + firstTrailingBit(bits)];
             bits &= bits - 1u;
-            sum += one_lamp(lamp, world, normal, to_eye, bounced, n_eye, alpha, matte, mirror, kept, thin, pixel);
+            sum += one_lamp(lamp, world, normal, built, to_eye, bounced, n_eye, alpha, matte, mirror, kept, thin, pixel);
         }
     }
     return sum;
@@ -309,6 +313,7 @@ fn one_lamp(
     lamp: Lamp,
     world: vec3<f32>,
     normal: vec3<f32>,
+    built: vec3<f32>,
     to_eye: vec3<f32>,
     bounced: vec3<f32>,
     n_eye: f32,
@@ -345,7 +350,7 @@ fn one_lamp(
         return vec3<f32>(0.0);
     }
     // A thin thing lit from behind is lifted off its back.
-    let lit_side = select(normal, -normal, thin && dot(normal, to_lamp) < 0.0);
+    let lit_side = select(built, -built, thin && dot(built, to_lamp) < 0.0);
     let shadowed = lamp_shadowed(lamp, world, lit_side, to_lamp, far, pixel);
     if shadowed <= 0.0 {
         return vec3<f32>(0.0);

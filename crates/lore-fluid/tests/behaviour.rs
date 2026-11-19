@@ -545,3 +545,182 @@ fn a_big_spray_makes_patches_no_wider_than_a_puddle_tile_and_is_felt_underfoot()
         assert!(under.cover > 0.5, "cover {} at {:?}", under.cover, d.place);
     }
 }
+
+// 7. Ceilings, valleys, cellars and ice --------------------------------------
+
+/// A cellar floor at height 0 under a pool: the pool's bed is the cellar's
+/// roof at 3 m, and its still water stands 1 m deep over it, from -2 to 2
+/// along x and z. With `ice`, the pool is frozen that thick.
+fn cellar_under_a_pool(ice: f32) -> lore_physics::Level {
+    use lore_assets::{Instance, Mesh, MeshPart, Scene};
+    let mut solid = floor_triangles(10.0);
+    // The pool's bed, facing up into the pool and down into the cellar.
+    solid.extend(quad(
+        [-2.0, 3.0, 2.0],
+        [2.0, 3.0, 2.0],
+        [2.0, 3.0, -2.0],
+        [-2.0, 3.0, -2.0],
+    ));
+    let part = |positions: Vec<[f32; 3]>| MeshPart {
+        indices: (0..u32::try_from(positions.len()).unwrap()).collect(),
+        positions,
+        ..MeshPart::default()
+    };
+    let land = part(solid.iter().flatten().copied().collect());
+    let sheet = part(
+        quad(
+            [-2.0, 4.0, 2.0],
+            [2.0, 4.0, 2.0],
+            [2.0, 4.0, -2.0],
+            [-2.0, 4.0, -2.0],
+        )
+        .iter()
+        .flatten()
+        .copied()
+        .collect(),
+    );
+    let mesh = |part: MeshPart| Mesh {
+        name: None,
+        parts: vec![part],
+    };
+    let stood = |mesh: u32, extras: Option<String>| Instance {
+        mesh,
+        transform: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        mirrored: false,
+        name: None,
+        extras,
+    };
+    let level = lore_physics::Level::from_scene(&Scene {
+        meshes: vec![mesh(land), mesh(sheet)],
+        instances: vec![
+            stood(0, None),
+            stood(1, Some(r#"{"water": true}"#.to_owned())),
+        ],
+        ..Scene::default()
+    });
+    level.set_ice(ice);
+    level
+}
+
+#[test]
+fn water_sprayed_in_a_cellar_under_a_pool_lies_on_the_cellar_floor() {
+    let level = cellar_under_a_pool(0.0);
+    assert_eq!(level.water_at(0.0, 0.0), Some(4.0), "the pool is there");
+    let mut fluids = Fluids::new(4);
+    fluids.spray(0, [0.0, 1.0, 0.0], [0.0, -2.0, 0.0], 0.01, 0.0);
+    run(&mut fluids, &level, 120);
+    assert!(fluids.litres(Some(0)) > 0.009, "{}", fluids.litres(Some(0)));
+    assert!(lying(&fluids).iter().all(|d| d.place[1] < 0.01));
+}
+
+#[test]
+fn water_sprayed_on_a_frozen_pool_lies_on_the_ice() {
+    let level = cellar_under_a_pool(0.5);
+    assert!(level.frozen());
+    let mut fluids = Fluids::new(4);
+    fluids.spray(0, [0.0, 5.0, 0.0], [0.0, -2.0, 0.0], 0.01, 0.0);
+    run(&mut fluids, &level, 120);
+    let lying = lying(&fluids);
+    assert!(!lying.is_empty());
+    assert!(
+        lying
+            .iter()
+            .all(|d| (d.place[1] - 4.0).abs() < 0.01 && up(d)),
+        "{lying:?}"
+    );
+}
+
+#[test]
+fn a_drop_too_heavy_for_a_ceiling_falls_from_it() {
+    let level = box_room();
+    let mut fluids = Fluids::new(8);
+    // Big and small, straight up and at angles, from places that put the
+    // drops' landings on every side of the ceiling's plane by rounding.
+    for (n, litres) in [0.0005_f32, 0.002, 0.008].into_iter().enumerate() {
+        for k in 0..8_u8 {
+            let lean = f32::from(k) * 0.37;
+            let at = [0.1 * f32::from(k) - 0.4, 1.3 + 0.07 * n as f32, 0.3];
+            fluids.spray(0, at, [lean, 6.0, -0.5 * lean], litres, 0.05);
+        }
+    }
+    run(&mut fluids, &level, 300);
+    let stuck: Vec<_> = lying(&fluids)
+        .into_iter()
+        .filter(|d| d.place[1] > 2.4 && d.facing[1] > 0.0)
+        .collect();
+    assert!(
+        stuck.is_empty(),
+        "lying on the ceiling facing up: {stuck:?}"
+    );
+}
+
+#[test]
+fn a_puddle_that_starts_drying_dries_rather_than_vanishing() {
+    let level = floor();
+    let mut fluids = Fluids::new(2);
+    fluids.spray(0, [0.0, 0.4, 0.0], [0.0, -0.5, 0.0], 0.01, 0.0);
+    run(&mut fluids, &level, 60);
+    let wet = fluids.litres(Some(0));
+    fluids.set_flow(
+        0,
+        Flow {
+            dries: 30.0,
+            ..Flow::default()
+        },
+    );
+    run(&mut fluids, &level, 2);
+    assert!(
+        fluids.litres(Some(0)) > 0.9 * wet,
+        "{} of {wet} litres left",
+        fluids.litres(Some(0))
+    );
+}
+
+#[test]
+fn a_drop_running_down_a_slope_into_a_wall_stays_at_its_foot() {
+    // Downhill is -x; a wall faces it at x = -1.
+    let mut triangles = Vec::new();
+    let (h, rise) = (5.0, 0.2);
+    triangles.extend(quad(
+        [-h, -h * rise, h],
+        [h, h * rise, h],
+        [h, h * rise, -h],
+        [-h, -h * rise, -h],
+    ));
+    triangles.extend(quad(
+        [-1.0, -2.0, -h],
+        [-1.0, -2.0, h],
+        [-1.0, 2.0, h],
+        [-1.0, 2.0, -h],
+    ));
+    let level = lore_physics::Level::from_triangles(&triangles);
+    let mut fluids = Fluids::new(9);
+    fluids.spray(0, [0.0, 0.3, 0.0], [0.0, -0.5, 0.0], 0.001, 0.0);
+    run(&mut fluids, &level, 240);
+    for _ in 0..60 {
+        run(&mut fluids, &level, 1);
+        let on_wall: Vec<_> = lying(&fluids)
+            .into_iter()
+            .filter(|d| d.facing[0] > 0.5)
+            .collect();
+        assert!(on_wall.is_empty(), "went round onto the wall: {on_wall:?}");
+    }
+}
+
+#[test]
+fn a_running_patch_wider_than_a_drop_leaves_a_trail() {
+    let level = floor_and_wall();
+    let mut fluids = gentle_drop_on_wall(&level, Flow::default(), 200.0 * ONE_DROP, 3.0);
+    let landed = lying(&fluids).len();
+    run(&mut fluids, &level, 120);
+    let on_wall = lying(&fluids)
+        .into_iter()
+        .filter(|d| d.facing[2] > 0.9 && d.place[1] > 0.05)
+        .count();
+    assert!(on_wall > landed + 2, "{on_wall} on the wall from {landed}");
+}

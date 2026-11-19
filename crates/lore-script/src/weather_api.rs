@@ -684,6 +684,13 @@ fn wind(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
+/// The deepest snow lies, in metres, whether it settles by itself or a
+/// script says so.
+pub const DEEPEST_SNOW: f32 = 0.6;
+/// The thickest ice on still water grows, in metres, whether it freezes by
+/// itself or a script says so.
+pub const THICKEST_ICE: f32 = 0.5;
+
 /// What the weather leaves behind and what is falling: `setSnowDepth`,
 /// `snowDepth`, `setIce`, `ice` and `falling`.
 fn ground(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> {
@@ -717,7 +724,12 @@ fn ground(lua: &Lua, shared: &Rc<Shared>, weather: &Table) -> mlua::Result<()> {
             lua.create_function(move |lua, value: Value| {
                 let depth = number(lua, &function, Some(&value), takes, example)?;
                 rules_only(lua, &rules, &function)?;
-                let depth = depth.clamp(0.0, 2.0);
+                let most = if setter == "setIce" {
+                    THICKEST_ICE
+                } else {
+                    DEEPEST_SNOW
+                };
+                let depth = depth.clamp(0.0, most);
                 asked(&climate).set(Some(depth));
                 // The script reads back what it wrote at once, before the
                 // engine has taken it.

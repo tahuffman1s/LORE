@@ -7,10 +7,22 @@
 //! goes on until it is held in on every side. A lake stops at its banks, a
 //! pool at its walls, the water in a trough at the trough.
 //!
-//! What it covered is written down as a grid seen from above
-//! ([`Water`]), which the player swims by and the renderer draws from.
+//! Where the middle of the sheet is inside the ground (an island stands
+//! there, or a rock), the water starts from another point of the sheet
+//! that is not, so that it fills the lake and not the inside of the rock.
+//!
+//! Rain raises the water ([`Level::set_water_rise`]), and it covers more
+//! of the ground round it, but only until it stands at the lowest point of
+//! its rim: there it would run out. How high that is, and what the water
+//! covers on its way up, is worked out here too, by letting the water rise
+//! from where it stands at rest over the lowest way out of its hollow.
+//!
+//! What it covered, and what it covers when risen, is written down as a
+//! grid seen from above ([`Water`]), which the player swims by and the
+//! renderer draws from.
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use lore_assets::{Instance, Scene, Water};
 
@@ -52,6 +64,19 @@ const MARGIN_POINTS: (i32, i32) = (3, 12);
 /// filled, and not a stream running downhill.
 const LEVEL_WITHIN: f32 = 0.05;
 
+/// How far under the lowest point of its rim rain raises water at the
+/// most: kept this clear of it, a rim of flat ground is not drawn half
+/// under the water as it runs out over it.
+const UNDER_RIM: f32 = 0.03;
+/// Ground this much lower than the risen water that gets to it is on the
+/// far side of something the water got over: past the rim, where it runs
+/// away from the hollow, unless into a hollow of its own that fills on the
+/// way.
+const PAST_RIM: f32 = 0.01;
+/// How many times the height at which rising water gets over something
+/// in its way is halved in on: to a few millimetres.
+const OVER_STEPS: u32 = 7;
+
 /// Lets every sheet of still water in `scene` fill the hollow it lies
 /// over, and writes the bodies down in [`Scene::waters`], in place of any
 /// that were there. Call it once when a level is loaded, before the level
@@ -67,7 +92,8 @@ pub fn fill(scene: &mut Scene) {
         scene.warnings.push(format!(
             "The water \"{name}\" has no ground under it to hold it, so it is drawn as the \
              flat sheet it is and cannot be swum in. Put it over the hollow it should fill, \
-             at the height the water should stand; its middle has to be over the hollow."
+             at the height the water should stand, with its middle or a corner over the \
+             hollow."
         ));
     }
 }
@@ -84,9 +110,12 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
         let Some(sheet) = Sheet::of(scene, instance) else {
             continue;
         };
-        // The middle first, then each corner point: the first of them
-        // that is over a bottom is where the water starts from.
-        let found = sheet.seeds.iter().find_map(|seed| {
+        // The middle first, then each corner point, then the points half
+        // way between: the first of them that is over a bottom and not
+        // inside the ground is where the water starts from. Only if every
+        // one of them is inside the ground is the first with a bottom
+        // under it taken, as if none were.
+        let start = |seed: &[f32; 2]| {
             // A sheet laid over water that is already there adds nothing
             // but itself: it is that water's too.
             let already = waters.iter().position(|water| {
@@ -97,7 +126,13 @@ pub(crate) fn filled(level: &Level, scene: &Scene) -> (Vec<Water>, Vec<String>) 
                 return Some(Err(already));
             }
             body(level, *seed, sheet.level).map(Ok)
-        });
+        };
+        let found = sheet
+            .seeds
+            .iter()
+            .filter(|seed| !in_ground(level, **seed, sheet.level))
+            .find_map(start)
+            .or_else(|| sheet.seeds.iter().find_map(start));
         match found {
             Some(Ok(mut water)) => {
                 water.name.clone_from(&instance.name);
@@ -151,7 +186,15 @@ impl Sheet {
         if !sound || high[1] - low[1] >= LEVEL_WITHIN {
             return None;
         }
-        seeds[0] = [(low[0] + high[0]) / 2.0, (low[2] + high[2]) / 2.0];
+        let middle = [(low[0] + high[0]) / 2.0, (low[2] + high[2]) / 2.0];
+        seeds[0] = middle;
+        // Half way from the middle to each corner: over the water round an
+        // island in the middle of a sheet that reaches into the banks.
+        let halfway: Vec<[f32; 2]> = seeds[1..]
+            .iter()
+            .map(|corner| [0, 1].map(|axis| (middle[axis] + corner[axis]) / 2.0))
+            .collect();
+        seeds.extend(halfway);
         let colour = mesh
             .parts
             .first()
@@ -200,7 +243,26 @@ fn body(level: &Level, seed: [f32; 2], surface: f32) -> Option<Water> {
             }
         }
     }
-    last.map(|flood| flood.written(level))
+    last.map(|flood| {
+        let raised = flood.raised(level);
+        flood.written(level, &raised)
+    })
+}
+
+/// How far beyond the water at rest rain raises it, and how high it can.
+struct Raised {
+    /// Each point the risen water covers that the water at rest does not,
+    /// with how far over the surface at rest the lowest way to it stands:
+    /// the water covers it once it is raised over that.
+    reached: HashMap<(i32, i32), f32>,
+    /// How high the water can stand: a little under the lowest point of
+    /// its rim, or [`Level::MOST_WATER_RISE`] over the surface at rest if
+    /// that is lower.
+    brim: f32,
+    /// The least and the most column and row of the water and of what
+    /// the risen water covers.
+    low: (i32, i32),
+    high: (i32, i32),
 }
 
 /// Water spreading from a seed over a grid of points `cell` apart.
@@ -240,9 +302,7 @@ impl Flood {
     /// Whether the grid that holds the water, with the dry ground round
     /// it, would have more points than a grid may.
     fn sprawls(&self) -> bool {
-        let across = i64::from(self.high.0 - self.low.0) + 1 + 2 * i64::from(MARGIN_POINTS.1);
-        let deep = i64::from(self.high.1 - self.low.1) + 1 + 2 * i64::from(MARGIN_POINTS.1);
-        across * deep > MOST_GRID || across.max(deep) > 8000
+        sprawls(self.low, self.high)
     }
 
     /// Lets the water run. `None` if it reached more points than a grid
@@ -308,25 +368,74 @@ impl Flood {
         Some(flood)
     }
 
+    /// The water as rain raises it: from where it stands at rest, it
+    /// rises over the lowest way out of its hollow first, covering each
+    /// point beside it once it stands over the ground there and over
+    /// whatever is in the way, until it gets over its rim and runs down
+    /// the far side onto more ground than a hollow that fills on the way
+    /// would have: there it runs out. Or until it stands as high as rain
+    /// raises any water.
+    fn raised(&self, level: &Level) -> Raised {
+        let mut rising = Rising {
+            flood: self,
+            level,
+            top: self.surface + Level::MOST_WATER_RISE,
+            grounds: HashMap::new(),
+            queue: BinaryHeap::new(),
+            reached: HashMap::new(),
+        };
+        // A sea filled only as far as its grid could hold has no rim to
+        // fill to.
+        let brim = if self.wet.len() > MOST_POINTS {
+            0.0
+        } else {
+            rising.brim().max(0.0)
+        };
+        // What the water got to on its way out and does not cover until
+        // it is over its brim is ground like any other.
+        let mut reached = rising.reached;
+        reached.retain(|_, crest| *crest <= brim);
+        let (mut low, mut high) = (self.low, self.high);
+        for &(column, row) in reached.keys() {
+            low = (low.0.min(column), low.1.min(row));
+            high = (high.0.max(column), high.1.max(row));
+        }
+        Raised {
+            reached,
+            brim: self.surface + brim,
+            low,
+            high,
+        }
+    }
+
     /// The body as a grid with dry ground kept round it: each dry point
-    /// with how far over the surface the ground stands there.
-    fn written(&self, level: &Level) -> Water {
+    /// with how far over the surface the ground stands there, and each
+    /// point the water covers only when `raised` with how far over the
+    /// surface the lowest way to it is.
+    fn written(&self, level: &Level, raised: &Raised) -> Water {
         // A handful of points, whatever the grid.
         #[allow(clippy::cast_possible_truncation)]
         let margin = ((MARGIN / self.cell).ceil() as i32).clamp(MARGIN_POINTS.0, MARGIN_POINTS.1);
-        let first = (self.low.0 - margin, self.low.1 - margin);
-        let across = self.high.0 - self.low.0 + 1 + 2 * margin;
-        let deep = self.high.1 - self.low.1 + 1 + 2 * margin;
+        let (low, high) = (raised.low, raised.high);
+        let first = (low.0 - margin, low.1 - margin);
+        let across = high.0 - low.0 + 1 + 2 * margin;
+        let deep = high.1 - low.1 + 1 + 2 * margin;
+        // Ground the risen water does not reach, behind a wall or a ridge
+        // higher than its brim, stays dry however high it is.
+        let dry_at_brim = self.surface - raised.brim - 0.0005;
         // Both are at least 1 and far below what a usize holds.
         #[allow(clippy::cast_sign_loss)]
         let mut depths = Vec::with_capacity(across as usize * deep as usize);
         for row in 0..deep {
             for column in 0..across {
                 let point = (first.0 + column, first.1 + row);
-                depths.push(match (self.wet.get(&point), self.held.get(&point)) {
-                    (Some(depth), _) => *depth,
-                    (None, Some(stands)) => *stands,
-                    (None, None) => self.dry(level, point),
+                let wet = self.wet.get(&point);
+                let held = self.held.get(&point);
+                depths.push(match (wet, held, raised.reached.get(&point)) {
+                    (Some(depth), _, _) => *depth,
+                    (None, Some(stands), _) => *stands,
+                    (None, None, Some(crest)) => -crest.max(0.0005),
+                    (None, None, None) => self.dry(level, point).min(dry_at_brim),
                 });
             }
         }
@@ -336,6 +445,7 @@ impl Flood {
             name: None,
             sources: Vec::new(),
             level: self.surface,
+            brim: raised.brim,
             origin: self.at(first),
             cell: self.cell,
             size,
@@ -361,6 +471,138 @@ impl Flood {
     }
 }
 
+/// Water rising out of the hollow a flood filled.
+struct Rising<'a> {
+    flood: &'a Flood,
+    level: &'a Level,
+    /// The highest it may stand.
+    top: f32,
+    /// The ground under each point the water has come beside, met from
+    /// over the highest it may stand: `None` where there is none.
+    grounds: HashMap<(i32, i32), Option<f32>>,
+    /// The points the water can get to next, each with how far over the
+    /// surface at rest it has to stand to, the lowest first: a height that
+    /// is never less than nothing orders as the whole number of its bits.
+    queue: BinaryHeap<Reverse<(u32, i32, i32)>>,
+    /// Each point it has got to beyond the water at rest, with how far
+    /// over the surface at rest the lowest way to it stands.
+    reached: HashMap<(i32, i32), f32>,
+}
+
+impl Rising<'_> {
+    /// How far over the surface at rest the water can stand before it
+    /// runs out, filling [`reached`](Self::reached) on the way.
+    fn brim(&mut self) -> f32 {
+        let flood = self.flood;
+        for &here in flood.wet.keys() {
+            self.spread(here, flood.surface);
+        }
+        // Ground the water runs down onto past a rim, more of it than
+        // this, is the land falling away; less is a hollow, which fills on
+        // the way.
+        let hollow = (flood.wet.len() / 8).clamp(16, 4096);
+        let mut past_rim = 0;
+        let (mut low, mut high) = (flood.low, flood.high);
+        while let Some(Reverse((over, column, row))) = self.queue.pop() {
+            let here = (column, row);
+            if self.reached.contains_key(&here) {
+                continue;
+            }
+            let over = f32::from_bits(over);
+            // The top of what was in the way: the way is looked for
+            // under the surface, by as much as it is looked for over it.
+            let crest = (over - 2.0 * UNDER).max(0.0);
+            // Water that runs down the far side of a rim onto more ground
+            // than a hollow has runs away: it stands no higher than the
+            // lowest way there.
+            let ground = self.grounds.get(&here).copied().flatten();
+            if ground.is_some_and(|ground| ground < flood.surface + crest - PAST_RIM) {
+                past_rim += 1;
+                if past_rim > hollow {
+                    return crest - UNDER_RIM;
+                }
+            }
+            // Nor higher than a grid can hold.
+            low = (low.0.min(column), low.1.min(row));
+            high = (high.0.max(column), high.1.max(row));
+            if self.reached.len() >= MOST_POINTS || sprawls(low, high) {
+                return crest - UNDER_RIM;
+            }
+            self.reached.insert(here, crest);
+            self.spread(here, flood.surface + over);
+        }
+        Level::MOST_WATER_RISE
+    }
+
+    /// Lets the water at `from`, standing `at_least` high, on to each
+    /// point beside it that it has not got to.
+    fn spread(&mut self, from: (i32, i32), at_least: f32) {
+        for step in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let to = (from.0 + step.0, from.1 + step.1);
+            if self.flood.wet.contains_key(&to) || self.reached.contains_key(&to) {
+                continue;
+            }
+            if let Some(height) = self.over(from, to, at_least) {
+                // Never less than nothing, nor the nothing with a sign that
+                // orders after every height.
+                let over = height - self.flood.surface;
+                let over = if over > 0.0 { over } else { 0.0 };
+                self.queue.push(Reverse((over.to_bits(), to.0, to.1)));
+            }
+        }
+    }
+
+    /// How high the water has to stand to get from point `from` to point
+    /// `to` beside it, if it stands `at_least` that high already: over the
+    /// ground at `to` and over whatever stands in the way. `None` if that
+    /// is higher than it may stand, or if there is no ground at `to`:
+    /// water with none under it is held by nothing, as at rest.
+    fn over(&mut self, from: (i32, i32), to: (i32, i32), at_least: f32) -> Option<f32> {
+        let (flood, level, top) = (self.flood, self.level, self.top);
+        let start = flood.at(from);
+        let [x, z] = flood.at(to);
+        let ground = *self.grounds.entry(to).or_insert_with(|| {
+            level
+                .raycast([x, top + UNDER, z], [0.0, -1.0, 0.0], DEEPEST)
+                .map(|hit| hit.point[1])
+        });
+        let mut low = at_least.max(ground? + 2.0 * UNDER);
+        if low > top {
+            return None;
+        }
+        let along = [x - start[0], 0.0, z - start[1]];
+        let open = |height: f32| {
+            level
+                .raycast([start[0], height - UNDER, start[1]], along, flood.cell)
+                .is_none()
+        };
+        if open(low) {
+            return Some(low);
+        }
+        if !open(top) {
+            return None;
+        }
+        let mut high = top;
+        for _ in 0..OVER_STEPS {
+            let middle = (low + high) / 2.0;
+            if open(middle) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        Some(high)
+    }
+}
+
+/// Whether a grid from column and row `low` to `high`, with the dry ground
+/// round it, would have more points than a grid may.
+fn sprawls(low: (i32, i32), high: (i32, i32)) -> bool {
+    let across = i64::from(high.0 - low.0) + 1 + 2 * i64::from(MARGIN_POINTS.1);
+    let deep = i64::from(high.1 - low.1) + 1 + 2 * i64::from(MARGIN_POINTS.1);
+    across * deep > MOST_GRID || across.max(deep) > 8000
+}
+
 /// How deep water standing at `surface` is over `x`, `z`: how far down the
 /// first solid thing is. `None` where there is no bottom, or none worth
 /// the name.
@@ -369,6 +611,27 @@ fn depth_under(level: &Level, [x, z]: [f32; 2], surface: f32) -> Option<f32> {
         .raycast([x, surface, z], [0.0, -1.0, 0.0], DEEPEST)
         .map(|hit| hit.distance)
         .filter(|depth| *depth > SHALLOWEST)
+}
+
+/// Whether water standing at `surface` and starting from `x`, `z` would
+/// start inside the ground: inside a closed shape such as a rock or an
+/// island, which every way across is met from within, or in the rock over
+/// a cave's roof or a cellar's ceiling, which straight down is met from
+/// behind. A room's ceiling and a block's top look the same to a ray from
+/// below, so up is not asked.
+fn in_ground(level: &Level, [x, z]: [f32; 2], surface: f32) -> bool {
+    let from = [x, surface - UNDER, z];
+    if level.met_from_behind(from, [0.0, -1.0, 0.0], DEEPEST) == Some(true) {
+        return true;
+    }
+    [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ]
+    .into_iter()
+    .all(|way| level.met_from_behind(from, way, DEEPEST) == Some(true))
 }
 
 #[cfg(test)]
@@ -451,6 +714,100 @@ mod tests {
             wall([e, n], [w, n], bottom, top),
             wall([w, n], [w, s], bottom, top),
         ]
+    }
+
+    /// A closed block from `low` to `high` (x and z), from `bottom` up to
+    /// `top`, its faces turned outwards as a modeller's solids are: the
+    /// tank's turned inside out, with a bottom.
+    fn block(low: [f32; 2], high: [f32; 2], bottom: f32, top: f32) -> Vec<MeshPart> {
+        let ([w, s], [e, n]) = (low, high);
+        let mut under = floor(low, high, bottom);
+        under.indices = vec![0, 2, 1, 0, 3, 2];
+        vec![
+            floor(low, high, top),
+            under,
+            wall([e, s], [w, s], bottom, top),
+            wall([e, n], [e, s], bottom, top),
+            wall([w, n], [e, n], bottom, top),
+            wall([w, s], [w, n], bottom, top),
+        ]
+    }
+
+    #[test]
+    fn a_sheet_whose_middle_is_over_an_island_fills_the_lake_round_it() {
+        // A tank eight metres across with an island in the middle that
+        // stands a metre out of the water, and a sheet over most of the
+        // tank with its middle over the island. The island stands on the
+        // floor, or is sunk into it so that straight down from inside it
+        // the floor is met first; and it is placed mirrored, as a negative
+        // scale places it, which turns its faces inside out.
+        for (sunk, mirrored) in [(0.0, false), (1.0, false), (1.0, true)] {
+            let mut scene = scene(tank([0.0, 0.0], 4.0, -2.0, 1.0), [0.0, 0.0, 0.0]);
+            scene.meshes[1].parts = vec![floor([-3.5, -3.5], [3.5, 3.5], 0.0)];
+            scene.meshes.push(Mesh {
+                name: None,
+                parts: block([-1.1, -1.1], [1.1, 1.1], -2.0 - sunk, 1.0),
+            });
+            let mut transform = STILL;
+            if mirrored {
+                transform[0][0] = -1.0;
+            }
+            scene.instances.push(Instance {
+                mesh: 2,
+                transform,
+                mirrored,
+                name: Some("island".to_owned()),
+                extras: None,
+            });
+            fill(&mut scene);
+            assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+            let [water] = &scene.waters[..] else {
+                panic!("one body of water: {:?}", scene.waters.len());
+            };
+            assert!(
+                water.depth_at(0.0, 0.0) < 0.0,
+                "inside the island is dry (sunk {sunk}, mirrored {mirrored})"
+            );
+            for place in [[2.5, 0.0], [-2.5, 0.0], [0.0, 3.0], [-3.0, -3.0]] {
+                let depth = water.depth_at(place[0], place[1]);
+                assert!(
+                    (depth - 2.0).abs() < 0.01,
+                    "{place:?} is {depth} deep (sunk {sunk}, mirrored {mirrored})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_sheet_whose_middle_is_over_a_cellar_fills_the_pool_and_not_the_ground() {
+        // A pool eight metres across in flat ground a metre over the water,
+        // and beside it, under the ground, a cellar whose ceiling is two
+        // metres down. The sheet's middle is over the cellar, one end of
+        // it over the pool.
+        let mut parts = tank([0.0, 0.0], 4.0, -2.0, 1.0);
+        parts.extend([
+            floor([-20.0, 4.0], [20.0, 20.0], 1.0),
+            floor([-20.0, -20.0], [20.0, -4.0], 1.0),
+            floor([-20.0, -4.0], [-4.0, 4.0], 1.0),
+            floor([4.0, -4.0], [20.0, 4.0], 1.0),
+        ]);
+        // The cellar is a room: its faces turned inwards.
+        let mut cellar = tank([8.0, 0.0], 2.0, -5.0, -2.0);
+        let mut ceiling = floor([6.0, -2.0], [10.0, 2.0], -2.0);
+        ceiling.indices = vec![0, 2, 1, 0, 3, 2];
+        cellar.push(ceiling);
+        parts.extend(cellar);
+        let mut scene = scene(parts, [0.0, 0.0, 0.0]);
+        scene.meshes[1].parts = vec![floor([-3.0, -3.0], [19.0, 3.0], 0.0)];
+        fill(&mut scene);
+        assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+        let [water] = &scene.waters[..] else {
+            panic!("one body of water: {:?}", scene.waters.len());
+        };
+        assert!((water.depth_at(0.0, 0.0) - 2.0).abs() < 0.01, "the pool");
+        assert!(water.depth_at(8.0, 0.0) < 0.0, "over the cellar");
+        let level = Level::from_scene(&scene);
+        assert_eq!(level.water_at(8.0, 0.0), None);
     }
 
     #[test]
@@ -609,6 +966,97 @@ mod tests {
         fill(&mut scene);
         assert!(scene.waters.is_empty());
         assert!(scene.warnings[0].contains("pond"), "{:?}", scene.warnings);
+    }
+
+    /// A tank eight metres across, a metre deep with its walls a metre
+    /// over the water, in land two metres under the water; its east wall
+    /// is cut down to `notch` over the water for a metre of its length.
+    fn notched(notch: f32) -> Scene {
+        let (w, e, s, n) = (-4.0, 4.0, -4.0, 4.0);
+        let parts = vec![
+            floor([w, s], [e, n], -1.0),
+            wall([w, s], [e, s], -1.0, 1.0),
+            wall([e, n], [w, n], -1.0, 1.0),
+            wall([w, n], [w, s], -1.0, 1.0),
+            wall([e, s], [e, -0.5], -1.0, 1.0),
+            wall([e, -0.5], [e, 0.5], -1.0, notch),
+            wall([e, 0.5], [e, n], -1.0, 1.0),
+            floor([-12.0, -12.0], [12.0, 12.0], -2.0),
+        ];
+        scene(parts, [0.0, 0.0, 0.0])
+    }
+
+    #[test]
+    fn water_can_rise_only_to_a_little_under_the_lowest_point_of_its_rim() {
+        for notch in [0.3, 0.55] {
+            let mut scene = notched(notch);
+            fill(&mut scene);
+            assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+            let [water] = &scene.waters[..] else {
+                panic!("one body of water: {:?}", scene.waters.len());
+            };
+            let brim = water.brim - water.level;
+            assert!(
+                (brim - (notch - UNDER_RIM)).abs() < 0.01,
+                "a notch {notch} over the water lets it rise {brim}"
+            );
+        }
+        // Without the notch it rises as far as rain raises any water.
+        let mut scene = notched(1.0);
+        fill(&mut scene);
+        let water = &scene.waters[0];
+        assert_eq!(water.brim - water.level, Level::MOST_WATER_RISE);
+    }
+
+    #[test]
+    fn the_rise_never_lifts_water_over_its_brim_or_out_of_its_hollow() {
+        let mut scene = notched(0.3);
+        fill(&mut scene);
+        let level = Level::from_scene(&scene);
+        let brim = scene.waters[0].brim;
+        for rise in [0.1, 0.25, 0.5, Level::MOST_WATER_RISE, 3.0] {
+            level.set_water_rise(rise);
+            let stands = level.water_at(0.0, 0.0);
+            assert_eq!(stands, Some(rise.min(brim)), "risen {rise}");
+            assert!(level.water_around([3.0, 0.2, 0.0]).is_some(), "in the tank");
+            // Not over the land outside, past the notch or anywhere else.
+            for (x, z) in [(4.5, 0.0), (6.0, 0.0), (-4.6, 0.0), (0.0, 4.6)] {
+                assert_eq!(level.water_at(x, z), None, "{x}, {z} risen {rise}");
+            }
+        }
+    }
+
+    #[test]
+    fn risen_water_runs_as_far_up_a_shore_as_it_stands() {
+        // The sloping bed of the shore test, walled at the sides and the
+        // deep end, rising to a metre over the water: the water at rest
+        // reaches halfway up it, and risen eight tenths of a metre it
+        // reaches 18 metres out, where the bed is that high, far past
+        // where the water at rest ends.
+        let bed = quad([
+            [0.0, -1.0, 5.0],
+            [20.0, 1.0, 5.0],
+            [20.0, 1.0, -5.0],
+            [0.0, -1.0, -5.0],
+        ]);
+        let parts = vec![
+            bed,
+            wall([0.0, -5.0], [0.0, 5.0], -1.0, 2.0),
+            wall([0.0, -5.0], [20.0, -5.0], -1.0, 2.0),
+            wall([0.0, 5.0], [20.0, 5.0], -1.0, 2.0),
+        ];
+        let mut scene = scene(parts, [2.0, 0.0, 0.0]);
+        fill(&mut scene);
+        let water = &scene.waters[0];
+        assert_eq!(water.brim, Level::MOST_WATER_RISE);
+        let level = Level::from_scene(&scene);
+        assert_eq!(level.water_at(15.0, 0.0), None);
+        level.set_water_rise(Level::MOST_WATER_RISE);
+        for x in [10.5, 15.0, 17.7] {
+            assert_eq!(level.water_at(x, 0.0), Some(0.8), "{x} m out");
+        }
+        assert_eq!(level.water_at(18.4, 0.0), None, "over the shore");
+        assert!((level.water_depth(15.0, 0.0) - 0.3).abs() < 0.02);
     }
 
     #[test]

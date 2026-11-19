@@ -35,6 +35,13 @@ pub(crate) const WIND: [f32; 3] = [0.94, 0.342, 5.0];
 /// How many heights above the horizon the sky is worked out for.
 pub(crate) const HEIGHTS: usize = 24;
 
+/// How far under the horizon the sun is when its light on the land is
+/// gone, as the sine of the angle: two degrees.
+const SUN_GONE: f32 = 0.035;
+/// The lowest sun the sky's look is worked out for, as the sine of the
+/// angle: seven degrees down ([`Day::at`]).
+const SKY_SUN_LOWEST: f32 = -0.12;
+
 /// The sizes of the Earth and its air, in metres.
 const GROUND: f64 = 6_360_000.0;
 const TOP: f64 = 6_460_000.0;
@@ -338,16 +345,23 @@ impl Day {
         };
         let more = air(sun[1]) - air(noon[1]);
         let stopped = [0.066_f32, 0.139, 0.285];
-        let up = eased(-0.035, 0.035, sun[1]);
+        let up = eased(-SUN_GONE, SUN_GONE, sun[1]);
         let sunlight = [0, 1, 2]
             .map(|colour| usual.sun[colour] * (-stopped[colour] * more).exp().min(1.0) * up);
         // Moonlight is the sun's, a great deal fainter, and looks blue to
         // an eye in the dark. It is far brighter here than it is, as a
         // night on film is: the picture has one exposure, and the true
         // figure, a four-hundred-thousandth, would show nothing.
-        let moonlight =
-            [0.6, 0.75, 1.0].map(|part: f32| part * grey(usual.sun) * 0.25 * lit * moon_up);
-        let by_sun = grey(sunlight) >= grey(moonlight);
+        //
+        // There is one light on the land, so the moon takes over from the
+        // sun only where the sun gives none: its light comes up after the
+        // sun's has gone, two degrees down, over the next four degrees,
+        // and at dawn goes before the sun's comes. Handed over while
+        // either still shone, every shadow would swing round at once.
+        let after_sun = 1.0 - eased(-SUN_GONE - 0.065, -SUN_GONE, sun[1]);
+        let moonlight = [0.6, 0.75, 1.0]
+            .map(|part: f32| part * grey(usual.sun) * 0.25 * lit * moon_up * after_sun);
+        let by_sun = sun[1] > -SUN_GONE;
         let (towards, light) = if by_sun {
             (sun, sunlight)
         } else {
@@ -386,8 +400,23 @@ impl Day {
             ..lighting
         };
         // The sky is the real sun's, wherever the light on the land is from.
+        // Deep in the dusk only air so high that it is nearly none is still
+        // in the sun: the sky worked out from it turns red and then, ten
+        // degrees down, black, while the sky's light lasts to twelve. So
+        // from seven degrees down it keeps the look it has there and only
+        // grows dimmer.
+        let shaped = {
+            let low = [sun[0], sun[1].max(SKY_SUN_LOWEST), sun[2]];
+            let aside = (sun[0] * sun[0] + sun[2] * sun[2]).sqrt();
+            let wanted = (1.0 - low[1] * low[1]).sqrt();
+            if aside > 1e-6 {
+                [low[0] * wanted / aside, low[1], low[2] * wanted / aside]
+            } else {
+                [wanted, low[1], 0.0]
+            }
+        };
         let sky = Sky::of(&Lighting {
-            towards_sun: sun,
+            towards_sun: shaped,
             sky: from_day,
             ..lighting
         });
@@ -582,5 +611,80 @@ mod tests {
                 "{sky:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_light_on_the_land_goes_from_sun_to_moon_with_no_jump() {
+        let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        // The light as one arrow: which way it comes from, as long as it
+        // is bright.
+        let arrow = |day: &Day| {
+            let bright = grey(day.lighting.sun);
+            day.lighting.towards_sun.map(|part| part * bright)
+        };
+        // Through the dusk of the first day, when the nearly full moon
+        // rises as the sun sets, and the dawn after, when it sets as the
+        // sun rises: every five seconds.
+        for (from, to) in [(17.5, 18.6), (29.4, 30.5)] {
+            let mut hours: f64 = from;
+            let mut was = Day::at(hours);
+            let (mut by_sun, mut by_moon) = (false, false);
+            while hours < to {
+                hours += 5.0 / 3600.0;
+                let day = Day::at(hours);
+                let towards = day.lighting.towards_sun;
+                by_sun |= (0..3).all(|axis| (towards[axis] - day.heavens[0][axis]).abs() < 0.05);
+                by_moon |= (0..3).all(|axis| (towards[axis] - day.heavens[1][axis]).abs() < 0.05);
+                let (now, before) = (arrow(&day), arrow(&was));
+                let moved = (0..3)
+                    .map(|axis| (now[axis] - before[axis]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                let colour = (0..3)
+                    .map(|part| (day.lighting.sun[part] - was.lighting.sun[part]).abs())
+                    .fold(0.0, f32::max);
+                assert!(
+                    moved < 0.01 && colour < 0.01,
+                    "at {hours:.4} h the light jumped by {moved} ({colour} in colour)"
+                );
+                was = day;
+            }
+            assert!(by_sun && by_moon, "{from}: both lit the land");
+        }
+    }
+
+    #[test]
+    fn the_sky_darkens_smoothly_into_the_night_and_never_turns_red() {
+        let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        let up = [0.0, 1.0, 0.0];
+        let sun_of = |day: &Day| [day.heavens[0][0], day.heavens[0][1], day.heavens[0][2]];
+        let below = |degrees: f32| -degrees.to_radians().sin();
+        // From the sun eight degrees down to fourteen, every half minute.
+        let mut hours: f64 = 18.0;
+        while Day::at(hours).heavens[0][1] > below(8.0) {
+            hours += 0.5 / 60.0;
+        }
+        let first = Day::at(hours);
+        let mut was = first.sky.colour(up, sun_of(&first));
+        let start = grey(was);
+        assert!(start > 0.0, "still light at eight degrees down");
+        while Day::at(hours).heavens[0][1] > below(14.0) {
+            hours += 0.5 / 60.0;
+            let day = Day::at(hours);
+            let zenith = day.sky.colour(up, sun_of(&day));
+            let [red, green, blue] = zenith;
+            assert!(
+                (grey(zenith) - grey(was)).abs() < 0.08 * start,
+                "at {hours:.3} h the sky went from {was:?} to {zenith:?}"
+            );
+            if grey(zenith) > 0.0 {
+                assert!(
+                    blue > red && blue > green,
+                    "at {hours:.3} h the sky overhead is {zenith:?}"
+                );
+            }
+            was = zenith;
+        }
+        assert!(grey(was) < 1e-6, "night at fourteen degrees down: {was:?}");
     }
 }

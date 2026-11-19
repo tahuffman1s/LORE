@@ -64,6 +64,9 @@ impl Upscaling {
 /// crispness back. Much more draws bright rims around edges.
 const SHARPNESS: f32 = 0.3;
 
+/// The fewest pixels across and up a picture FSR is given to upscale.
+const MIN_RENDER: u32 = 2;
+
 /// What one frame's upscaling needs to know about how the frame was drawn.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Drawn {
@@ -116,6 +119,12 @@ impl Upscale {
             return Ok(None);
         }
         let render = quality.render_size(output);
+        // FSR crashes on a picture drawn one pixel wide or high (a window
+        // dragged nearly shut). There is nothing to upscale in one that
+        // small: it is drawn at full size until it grows again.
+        if render.width < MIN_RENDER || render.height < MIN_RENDER {
+            return Ok(None);
+        }
         // SAFETY: the device was created from this instance and card with
         // Vulkan 1.3 and, as `can_upscale` says, the upscaler's features. The
         // owner keeps the `Gpu` alive longer than this and waits for the

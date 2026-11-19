@@ -4,7 +4,8 @@
 //! is counted here, tick by tick, so that it is the same on every run: how
 //! far the wind has carried the clouds, how deep the snow that has fallen
 //! lies and how fast it melts, how thick the ice on still water has grown,
-//! how far rain has raised that water, and where the tornado has got to.
+//! how far rain has raised that water, how wet it has left the ground and
+//! how full its puddles, and where the tornado has got to.
 //! The picture is drawn from the same numbers ([`Climate::weather`]), so
 //! the storm the rules count is the storm that is seen.
 //!
@@ -13,16 +14,17 @@
 //! of deep frost, and a blizzard buries the land in five.
 
 use lore_physics::{Level, Player};
-use lore_render::{Falling, Tornado, Weather};
+use lore_render::{Falling, GroundWater, Tornado, Weather};
 use lore_script::{ScriptHost, TornadoAsk, WeatherHere, WeatherSaid};
 
 /// How fast a downpour raises the still water, and how fast it falls back
 /// when the rain stops, in metres a second; and the most it rises: a storm
 /// fills a lake to its brim in a little over two minutes, and it is seven
-/// minutes going down.
+/// minutes going down. A lake whose rim is lower runs out over it sooner
+/// (`lore_assets::Water::brim`).
 const WATER_RISES: f32 = 0.006;
 const WATER_FALLS: f32 = 0.002;
-const MOST_RISE: f32 = 0.8;
+const MOST_RISE: f32 = Level::MOST_WATER_RISE;
 
 /// How fast snow that falls as hard as it can settles, in metres a second:
 /// the land is white in half a minute and knee-deep in four. Then how fast
@@ -31,14 +33,14 @@ const MOST_RISE: f32 = 0.8;
 const SNOW_SETTLES: f32 = 0.002;
 const SNOW_MELTS: f32 = 0.0003;
 const RAIN_MELTS: f32 = 0.002;
-const MOST_SNOW: f32 = 0.6;
+const MOST_SNOW: f32 = lore_script::DEEPEST_SNOW;
 
 /// How fast ice grows on still water for each degree below freezing, and
 /// how fast it thaws for each degree above, in metres a second; and the
 /// thickest it gets. At five below it bears a walker in under a minute.
 const ICE_GROWS: f32 = 0.0002;
 const ICE_THAWS: f32 = 0.0004;
-const MOST_ICE: f32 = 0.5;
+const MOST_ICE: f32 = lore_script::THICKEST_ICE;
 
 /// How much of the push of the air on a body becomes speed, for each metre
 /// a second of wind squared: half the weight of the air, times the half
@@ -106,13 +108,30 @@ struct Twister {
     lasts: f32,
     /// How far round it has turned, in radians.
     turned: f32,
+    /// When it was told to stop, and how strong it was then: it dies away
+    /// from there.
+    stopped: Option<(f32, f32)>,
 }
 
 impl Twister {
+    /// How long it takes to die away, in seconds.
+    fn dies(&self) -> f32 {
+        TORNADO_DIES.min(self.lasts * 0.25)
+    }
+
+    /// How old it is when it is gone.
+    fn ends(&self) -> f32 {
+        self.stopped
+            .map_or(self.lasts, |(told, _)| told + self.dies())
+    }
+
     /// How strong it is now: it comes down, holds, and dies away.
     fn strength(&self) -> f32 {
+        let dies = self.dies();
+        if let Some((told, then)) = self.stopped {
+            return then * (1.0 - eased(told, told + dies, self.age));
+        }
         let grows = TORNADO_GROWS.min(self.lasts * 0.25);
-        let dies = TORNADO_DIES.min(self.lasts * 0.25);
         self.peak
             * eased(0.0, grows, self.age)
             * (1.0 - eased(self.lasts - dies, self.lasts, self.age))
@@ -175,11 +194,16 @@ pub(crate) struct Climate {
     /// How far the rain that has fallen has raised the still water, in
     /// metres.
     rise: f32,
+    /// How wet the rain has left the ground, and how full its puddles.
+    ground: GroundWater,
     twister: Option<Twister>,
     /// The weather of the newest tick, and what was falling on the player
     /// in it.
     weather: Weather,
     falling: Falling,
+    /// The weather of the tick before, which frames are drawn from part of
+    /// the way from.
+    before: Weather,
 }
 
 impl Default for Climate {
@@ -189,12 +213,17 @@ impl Default for Climate {
             snow: 0.0,
             ice: 0.0,
             rise: 0.0,
+            ground: GroundWater::default(),
             twister: None,
             weather: Weather {
                 drift: Some([0.0; 2]),
                 ..Weather::default()
             },
             falling: Falling::default(),
+            before: Weather {
+                drift: Some([0.0; 2]),
+                ..Weather::default()
+            },
         }
     }
 }
@@ -203,6 +232,34 @@ impl Climate {
     /// The weather of the newest tick: what the picture is drawn in.
     pub(crate) fn weather(&self) -> &Weather {
         &self.weather
+    }
+
+    /// The weather a frame drawn `alpha` of the way from the tick before
+    /// the newest to the newest shows, as the view is drawn between the
+    /// two: the air carried, and the tornado moved and turned, that far
+    /// from where the one had them to where the other does. Drawn as the
+    /// newest tick has it, clouds and rain and a tornado would go in steps
+    /// on a screen that shows more frames than there are ticks.
+    pub(crate) fn weather_drawn(&self, alpha: f32) -> Weather {
+        let alpha = if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let mut drawn = self.weather;
+        if let (Some(was), Some(now)) = (self.before.drift, self.weather.drift) {
+            let share = f64::from(alpha);
+            drawn.drift = Some([0, 1].map(|axis| was[axis] + (now[axis] - was[axis]) * share));
+        }
+        if let (Some(was), Some(now)) = (self.before.tornado, self.weather.tornado) {
+            drawn.tornado = Some(Tornado {
+                place: [0, 1, 2]
+                    .map(|axis| was.place[axis] + (now.place[axis] - was.place[axis]) * alpha),
+                turned: was.turned + (now.turned - was.turned) * alpha,
+                ..now
+            });
+        }
+        drawn
     }
 
     /// What was falling on the player in the newest tick.
@@ -221,6 +278,11 @@ impl Climate {
         self.snow
     }
 
+    /// How wet the rain has left the ground, and how full its puddles.
+    pub(crate) fn ground_water(&self) -> GroundWater {
+        self.ground
+    }
+
     /// Moves the weather on by one tick of `step` seconds, `seconds` after
     /// the world began: what the script has said becomes the weather, and
     /// what follows from it at `eye`, where the player is, is counted. The
@@ -234,6 +296,7 @@ impl Climate {
         seconds: f64,
         step: f32,
     ) {
+        self.before = self.weather;
         let asked = host.weather();
         for (far, wind) in self.drift.iter_mut().zip(asked.wind) {
             *far += f64::from(wind) * f64::from(step);
@@ -256,23 +319,24 @@ impl Climate {
                         age: 0.0,
                         lasts: seconds,
                         turned: 0.0,
+                        stopped: None,
                     });
                 }
                 TornadoAsk::Stop => {
-                    if let Some(twister) = &mut self.twister {
-                        // It dies away from where it has got to, and no
-                        // stronger than it now is.
-                        let dies = TORNADO_DIES.min(twister.lasts * 0.25);
-                        twister.peak = twister.strength();
-                        twister.lasts = twister.lasts.min(twister.age + dies);
-                        twister.age = twister.age.max(twister.lasts - dies);
+                    // It dies away from as strong as it now is; one that is
+                    // already dying away goes on as it was.
+                    if let Some(twister) = &mut self.twister
+                        && twister.stopped.is_none()
+                        && twister.age < twister.lasts - twister.dies()
+                    {
+                        twister.stopped = Some((twister.age, twister.strength()));
                     }
                 }
             }
         }
         if let Some(twister) = &mut self.twister {
             twister.step(level, step);
-            if twister.age >= twister.lasts {
+            if twister.age >= twister.ends() {
                 self.twister = None;
             }
         }
@@ -305,6 +369,9 @@ impl Climate {
         weather.snow = self.snow;
         weather.ice = self.ice;
         self.weather = weather.cleaned();
+        // The rain wets the ground and fills its puddles, as hard as it
+        // falls where the player is; snow melting on it keeps them.
+        self.ground = self.ground.after(step, &self.weather, &falling);
         self.falling = falling;
         // Said to the level before anything is moved in it: its shapes
         // are shared, and each world says its own.
@@ -458,6 +525,46 @@ mod tests {
     }
 
     #[test]
+    fn puddles_fill_faster_and_fuller_the_harder_it_rains_and_a_storm_keeps_them() {
+        let puddles = |script: &str, seconds: u32| after(script, seconds * 60).0.ground_water();
+        // Half a minute of each: a storm fills them faster than steady
+        // rain, and rain nearly three times as fast as a drizzle.
+        let (drizzle, rain, storm) = (
+            puddles(r#"game.weather.set("drizzle", 0)"#, 30),
+            puddles(r#"game.weather.set("rain", 0)"#, 30),
+            puddles(r#"game.weather.set("storm", 0)"#, 30),
+        );
+        assert!(drizzle.puddles > 0.05, "{drizzle:?}");
+        assert!(rain.puddles > 2.5 * drizzle.puddles, "{rain:?} {drizzle:?}");
+        assert!(storm.puddles > rain.puddles, "{storm:?} {rain:?}");
+        // Two minutes of rain fills them most of the way; a storm that
+        // comes on after it fills them to the brim and keeps them there; a
+        // drizzle never fills them.
+        let storm_after = r#"game.weather.set("rain", 0)
+            game.after(120, function() game.weather.set("storm", 8) end)"#;
+        let rained = puddles(storm_after, 120).puddles;
+        assert!(rained > 0.8 && rained < 0.9, "{rained}");
+        assert_eq!(puddles(storm_after, 240).puddles, 1.0);
+        assert_eq!(puddles(storm_after, 400).puddles, 1.0);
+        assert!(puddles(r#"game.weather.set("drizzle", 0)"#, 600).puddles < 0.35);
+        // When it stops they drain, and the ground dries after them.
+        let stops = r#"game.weather.set("rain", 0)
+            game.after(120, function() game.weather.set("fair", 0) end)"#;
+        let drained = puddles(stops, 240);
+        assert!(
+            drained.puddles > 0.25 && drained.puddles < 0.35,
+            "{drained:?}"
+        );
+        assert!(drained.wet > drained.puddles, "{drained:?}");
+        assert!(puddles(stops, 480).puddles < 0.1);
+        // Counted on whole ticks: the same every run, to the last bit.
+        assert_eq!(puddles(storm_after, 150), puddles(storm_after, 150));
+        // Snow lies on the ground dry.
+        let snowed = puddles(r#"game.weather.set("snow", 0)"#, 120);
+        assert_eq!(snowed, GroundWater::default());
+    }
+
+    #[test]
     fn rain_raises_the_water_and_it_falls_again_and_snow_does_not() {
         let (rained, _) = after(r"game.weather.setRain(1)", 3600);
         assert!(
@@ -541,6 +648,13 @@ mod tests {
             "{tornado:?}"
         );
         assert!(after(stopped, 2460).0.weather().tornado.is_none());
+        // Told to stop while it is already dying away, it goes on as it was.
+        let natural = r"game.weather.startTornado(vector.create(100, 0, 0), { lasts = 60 })";
+        let late = r"game.weather.startTornado(vector.create(100, 0, 0), { lasts = 60 })
+            game.after(55, function() game.weather.stopTornado() end)";
+        let strength = |script| after(script, 3360).0.weather().tornado.unwrap().strength;
+        let (natural, late) = (strength(natural), strength(late));
+        assert!((natural - late).abs() < 1e-4, "{late} against {natural}");
     }
 
     /// A flat sheet `high` up from (x0, z0) to (x1, z1), as two triangles.
@@ -568,6 +682,7 @@ mod tests {
             age: 0.0,
             lasts: 600.0,
             turned: 0.0,
+            stopped: None,
         };
         // Where it comes down it is on the ground at once.
         twister.step(&level, STEP);

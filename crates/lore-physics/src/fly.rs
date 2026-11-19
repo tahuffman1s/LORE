@@ -3,7 +3,7 @@
 use crate::level::{Level, Vector};
 use crate::player::Player;
 use crate::settings::{MoveInput, MoveMode, MoveSettings, positive};
-use crate::slide::{slide, unstick};
+use crate::slide::{fits, slide, unstick};
 
 /// How many times faster sprinting flies.
 const SPRINT_FACTOR: f32 = 2.0;
@@ -37,10 +37,13 @@ impl Player {
         let velocity = Vector::from_array(self.velocity);
         let velocity = velocity + (wanted - velocity) * eased;
 
-        // The standing body, whatever it was before.
-        let shape = settings.shape(false);
-        let to_middle = Vector::Y * (settings.height(false) / 2.0);
+        // The standing body, unless the player was crouched where there
+        // is no room to stand: a vent is flown through crouched.
         let feet = Vector::from_array(self.position);
+        let standing = feet + Vector::Y * (settings.height(false) / 2.0);
+        let crouched = self.crouched && !fits(level, &settings.shape(false), standing);
+        let shape = settings.shape(crouched);
+        let to_middle = Vector::Y * (settings.height(crouched) / 2.0);
         let (feet, velocity) = if input.mode == MoveMode::Noclip {
             (feet + velocity * dt, velocity)
         } else {
@@ -66,9 +69,9 @@ impl Player {
         }
 
         self.grounded = false;
-        self.crouched = false;
+        self.crouched = crouched;
         self.sprinting = input.sprint;
-        self.eye_height = settings.eye_height(false);
+        self.ease_eyes(settings, dt);
         self.ground_normal = [0.0, 1.0, 0.0];
         self.jump_held = input.jump;
         self.swimming = false;

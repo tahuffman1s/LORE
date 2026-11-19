@@ -57,13 +57,47 @@ fn srgb(linear: vec3<f32>) -> vec3<f32> {
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
+// The sRGB curve undone: the light an encoded number stands for.
+fn linear_of(encoded: vec3<f32>) -> vec3<f32> {
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}
+
+// A whole number with no pattern to it from one input to the next (the
+// PCG hash: Jarzynski and Olano, "Hash Functions for GPU Rendering", 2020).
+fn hashed(value: u32) -> u32 {
+    let state = value * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// How far to nudge a pixel, in steps of the display's 256: from -1 to 1,
+// most often near 0 (two even chances added, a triangle), different for
+// every pixel and the same every frame.
+fn nudge(pixel: vec2<u32>) -> f32 {
+    let first = hashed(pixel.x + hashed(pixel.y));
+    let second = hashed(first);
+    return (f32(first >> 8u) + f32(second >> 8u)) / 16777216.0 - 1.0;
+}
+
 @fragment
 fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let light = textureLoad(scene, vec2<i32>(position.xy), 0).rgb;
     // Negative or not-a-number light would spread through the curve.
     let mapped = clamp(pbr_neutral(max(light, vec3<f32>(0.0)) * settings.exposure), vec3<f32>(0.0), vec3<f32>(1.0));
+    // A display shows each colour in 256 steps, and a slow gradient, as a
+    // dusk sky's or a fog's is, shows bands where one step meets the next.
+    // Each pixel is nudged by up to a step either way before it is cut to
+    // a step, which breaks the bands into a grain too fine to see (Wronski,
+    // "Dithering part one", 2016). Black and white are left alone. The
+    // nudge is in the steps the display shows, so where the image encodes
+    // the curve itself it is undone again after.
+    let encoded = srgb(mapped);
+    let room = clamp(min(encoded, 1.0 - encoded) * 255.0, vec3<f32>(0.0), vec3<f32>(1.0));
+    let nudged = clamp(encoded + room * (nudge(vec2<u32>(position.xy)) / 255.0), vec3<f32>(0.0), vec3<f32>(1.0));
     if settings.encode == 1u {
-        return vec4<f32>(srgb(mapped), 1.0);
+        return vec4<f32>(nudged, 1.0);
     }
-    return vec4<f32>(mapped, 1.0);
+    return vec4<f32>(linear_of(nudged), 1.0);
 }

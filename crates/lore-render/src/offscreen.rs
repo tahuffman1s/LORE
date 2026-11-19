@@ -837,6 +837,25 @@ fn a_scene_drawn_small_is_upscaled_to_a_sharp_full_size_picture() {
     finish(gpu);
 }
 
+#[test]
+fn a_window_dragged_nearly_shut_is_drawn_without_upscaling() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    // Two pixels square: FSR would be asked to upscale a single pixel.
+    let tiny = frames(
+        &gpu,
+        &tilted_square(),
+        &[Camera::default(); 3],
+        0.0,
+        2,
+        Upscaling::Quality,
+    );
+    assert!(!tiny.upscaled);
+    assert_eq!(tiny.drawn_width, 2);
+    finish(gpu);
+}
+
 /// The size of the pictures the HUD and menus are drawn over in these
 /// tests: a quarter of 1920 by 1080, so a UI size of 4 is one pixel.
 const WIDE: u32 = 480;

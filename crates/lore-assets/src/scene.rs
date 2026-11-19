@@ -286,6 +286,11 @@ pub struct Water {
     pub sources: Vec<u32>,
     /// How high the surface stands when it is still, in metres.
     pub level: f32,
+    /// How high rain can raise it, in metres: a little under the lowest
+    /// point of the rim of the hollow it fills, where more would run out,
+    /// or as high as rain raises any water if that is lower. Never under
+    /// [`level`](Self::level). See [`Water::risen`].
+    pub brim: f32,
     /// The x and z of the grid's first point: the one with the least of both.
     pub origin: [f32; 2],
     /// How far apart the grid's points are along x and along z, in metres.
@@ -321,6 +326,40 @@ impl Water {
         self.depths.get(at).copied().unwrap_or(Self::DRY)
     }
 
+    /// How far rain that has raised still water `rise` metres raises this
+    /// body: as far, but no higher than its [`brim`](Self::brim), where it
+    /// runs out over its rim. Less than nothing, or what is no number, is
+    /// nothing.
+    ///
+    /// ```
+    /// use lore_assets::Water;
+    ///
+    /// // A pond whose rim is lowest a quarter of a metre over its water.
+    /// let pond = Water {
+    ///     name: None,
+    ///     sources: vec![0],
+    ///     level: 1.0,
+    ///     brim: 1.25,
+    ///     origin: [0.0, 0.0],
+    ///     cell: 1.0,
+    ///     size: [1, 1],
+    ///     depths: vec![0.5],
+    ///     colour: [0.0, 0.1, 0.1, 1.0],
+    /// };
+    /// assert_eq!(pond.risen(0.125), 0.125);
+    /// assert_eq!(pond.risen(0.8), 0.25, "it runs out over the rim");
+    /// assert_eq!(pond.risen(f32::NAN), 0.0);
+    /// ```
+    #[must_use]
+    pub fn risen(&self, rise: f32) -> f32 {
+        let room = (self.brim - self.level).max(0.0);
+        if rise.is_finite() {
+            rise.clamp(0.0, room)
+        } else {
+            0.0
+        }
+    }
+
     /// How deep the water is at `x`, `z`, in metres, read between the
     /// grid's points; below nothing where there is none.
     ///
@@ -332,6 +371,7 @@ impl Water {
     ///     name: None,
     ///     sources: vec![0],
     ///     level: 1.0,
+    ///     brim: 1.2,
     ///     origin: [0.0, 0.0],
     ///     cell: 1.0,
     ///     size: [2, 1],

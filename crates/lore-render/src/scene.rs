@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, OnceCell};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 
@@ -166,8 +167,16 @@ impl Picture {
 /// Light is stored as it is, with no upper limit, so the sun can be thousands
 /// of times brighter than a shadow; [`TonemapPipeline`](crate::tonemap::TonemapPipeline)
 /// turns it into colours a display can show.
+/// The number the next target is given; 0 is no target.
+static NEXT_TARGET: AtomicU64 = AtomicU64::new(1);
+
 pub(crate) struct SceneTarget {
     gpu: Arc<Gpu>,
+    /// Which target this is, never given to another: a set that reads its
+    /// pictures is pointed again when the target is not the one it read,
+    /// which a view's handle cannot tell, since the driver may give a new
+    /// view the handle of one just freed.
+    pub(crate) id: u64,
     pub(crate) colour: Picture,
     pub(crate) depth: Picture,
     pub(crate) motion: Picture,
@@ -216,6 +225,7 @@ impl SceneTarget {
     pub(crate) fn new(gpu: &Arc<Gpu>, extent: vk::Extent2D) -> Result<Self, RenderError> {
         let mut target = Self {
             gpu: Arc::clone(gpu),
+            id: NEXT_TARGET.fetch_add(1, Ordering::Relaxed),
             colour: Picture::null(),
             depth: Picture::null(),
             motion: Picture::null(),

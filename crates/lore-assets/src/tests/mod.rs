@@ -679,6 +679,45 @@ mod textures {
     }
 
     #[test]
+    fn a_part_painted_with_bumps_gets_tangents_for_them() {
+        // A wall with no normal map of its own, painted with plaster that
+        // has one: the plaster's bumps are drawn where it is painted, so
+        // the wall's points need tangents too.
+        let painted = |plaster: &str| {
+            let mut file = Builder::default();
+            file.positions(&QUAD);
+            file.indices(&[0, 1, 2, 0, 2, 3]);
+            file.vec3(&[[0.0, 0.0, 1.0]; 4]);
+            file.vec2(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+            file.glb(&format!(
+                r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":2,"TEXCOORD_0":3}},"indices":1,"material":0}}]}}],
+                "nodes":[{{"mesh":0}}],"scenes":[{{"nodes":[0]}}],
+                "images":[{{"uri":"{}"}}],
+                "textures":[{{"source":0}}],
+                "materials":[{{"name":"Wall","extras":{{"paint":"Plaster"}}}},{plaster}]"#,
+                data_uri("image/png", &png())
+            ))
+        };
+        let tangents = |plaster: &str| {
+            let scene = read(&painted(plaster)).unwrap();
+            scene.meshes[0].parts[0].tangents.clone()
+        };
+        let made = tangents(r#"{"name":"Plaster","normalTexture":{"index":0}}"#).unwrap();
+        assert_eq!(made.len(), 4);
+        assert!(
+            made.iter().all(|tangent| (tangent[0] - 1.0).abs() < 1e-5),
+            "{made:?}"
+        );
+        // Plaster with no bumps, or paint that names no material there,
+        // needs none.
+        assert_eq!(tangents(r#"{"name":"Plaster"}"#), None);
+        assert_eq!(
+            tangents(r#"{"name":"Soot","normalTexture":{"index":0}}"#),
+            None
+        );
+    }
+
+    #[test]
     fn tangents_can_be_turned_off() {
         let options = LoadOptions {
             tangents: false,

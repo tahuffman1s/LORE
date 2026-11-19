@@ -29,7 +29,7 @@ use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::{Mirroring, SceneView};
 use crate::water::Stir;
-use crate::weather::Weather;
+use crate::weather::{GroundWater, Weather};
 
 /// How many frames can be in progress on the graphics card at once.
 ///
@@ -81,6 +81,8 @@ struct FrameSlot {
     acquired: vk::Semaphore,
     /// Signalled when the graphics card has finished this frame.
     finished: vk::Fence,
+    /// Whether lightning lit the picture this slot drew last.
+    flashed: std::cell::Cell<bool>,
 }
 
 impl FrameSlot {
@@ -93,6 +95,7 @@ impl FrameSlot {
             commands: vk::CommandBuffer::null(),
             acquired: vk::Semaphore::null(),
             finished: vk::Fence::null(),
+            flashed: std::cell::Cell::new(false),
         };
         // Dropping `slot` cleans up whatever was created; destroying a null handle is allowed.
 
@@ -460,6 +463,15 @@ impl Renderer {
     #[must_use]
     pub fn weather(&self) -> Weather {
         *self.effects.said()
+    }
+
+    /// Says how wet the ground is and how full its puddles, as the game's
+    /// rules count them from the rain that has fallen ([`GroundWater`]).
+    /// Until this is said the picture counts them itself, from the rain at
+    /// the eye and as fast as frames are drawn; once it is, it shows what
+    /// the game says, the same on every computer.
+    pub fn set_ground_water(&mut self, ground: GroundWater) {
+        self.effects.set_ground_water(ground);
     }
 
     /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24
@@ -835,8 +847,13 @@ impl Renderer {
                 let [x, _, z] = self.camera.position;
                 let weather =
                     crate::eye::weather_darker(said, said.storm_at([x, z], view.seconds()));
-                self.eye
-                    .see(&self.measuring, per_lux, seconds, false, weather);
+                self.eye.see(
+                    &self.measuring,
+                    per_lux,
+                    seconds,
+                    false,
+                    (weather, slot.flashed.get()),
+                );
             }
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
@@ -883,6 +900,7 @@ impl Renderer {
             // graphics card of the tracks in the snow is asked for once,
             // and a frame given up before this would have lost it.
             let tracks = self.effects.take_tracks();
+            slot.flashed.set(self.effects.flashing());
             view.mirroring = if self.reflections {
                 Mirroring::Running
             } else {
@@ -932,7 +950,12 @@ impl Renderer {
                 .semaphore(slot.acquired)
                 .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)];
             let buffers = [vk::CommandBufferSubmitInfo::default().command_buffer(slot.commands)];
-            let signals = [vk::SemaphoreSubmitInfo::default().semaphore(target.drawn)];
+            // Signalled once every command is done, the last change of
+            // layout for presenting included: a signal that names no stages
+            // waits for none of them.
+            let signals = [vk::SemaphoreSubmitInfo::default()
+                .semaphore(target.drawn)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
             let submit = [vk::SubmitInfo2::default()
                 .wait_semaphore_infos(&waits)
                 .command_buffer_infos(&buffers)
