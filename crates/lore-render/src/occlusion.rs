@@ -226,10 +226,33 @@ pub(crate) unsafe fn depth_pipeline(
     }
 }
 
-/// The pipelines that draw depth alone (solid, then cut-out), then the two
+/// How many smaller copies of the depth there are, each half as wide and
+/// as high as the one before: a step of the search far from its pixel is
+/// read from one of them (XeGTAO's chain, less the depth itself).
+pub(crate) const SMALLER: usize = 4;
+/// How far ahead what is drawn is, in metres, as a smaller copy keeps it.
+pub(crate) const SMALLER_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
+
+/// The size of the copy that is `halvings` halvings of a picture of
+/// `extent`: every pixel of the larger is in some pixel of the smaller.
+pub(crate) fn smaller(extent: vk::Extent2D, halvings: u32) -> vk::Extent2D {
+    let halved = |pixels: u32| {
+        (0..halvings)
+            .fold(pixels, |pixels, _| pixels.div_ceil(2))
+            .max(1)
+    };
+    vk::Extent2D {
+        width: halved(extent.width),
+        height: halved(extent.height),
+    }
+}
+
+/// The pipelines that draw depth alone (solid, then cut-out), those that
+/// make each smaller copy of the depth from the one before, then the two
 /// that find the shade and smooth it.
 pub(crate) struct Pipelines {
     pub(crate) depth: [vk::Pipeline; 2],
+    smaller: [vk::Pipeline; SMALLER],
     pub(crate) find: vk::Pipeline,
     pub(crate) smooth: vk::Pipeline,
 }
@@ -238,6 +261,7 @@ impl Pipelines {
     pub(crate) const fn null() -> Self {
         Self {
             depth: [vk::Pipeline::null(); 2],
+            smaller: [vk::Pipeline::null(); SMALLER],
             find: vk::Pipeline::null(),
             smooth: vk::Pipeline::null(),
         }
@@ -291,12 +315,18 @@ impl Pipelines {
                 )
             }?;
         }
-        // Finding and smoothing: one triangle over the whole picture each.
+        // The smaller depths, finding and smoothing: one triangle over the
+        // whole of what each draws into.
         let no_points = vk::PipelineVertexInputStateCreateInfo::default();
         let attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+        let [half, quarter, eighth, sixteenth] = &mut self.smaller;
         for (fragment, format, pipeline) in [
+            (c"fragment_depth_half", SMALLER_FORMAT, half),
+            (c"fragment_depth_quarter", SMALLER_FORMAT, quarter),
+            (c"fragment_depth_eighth", SMALLER_FORMAT, eighth),
+            (c"fragment_depth_sixteenth", SMALLER_FORMAT, sixteenth),
             (c"fragment_occlusion", FOUND_FORMAT, &mut self.find),
             (c"fragment_occlusion_smooth", FORMAT, &mut self.smooth),
         ] {
@@ -338,7 +368,7 @@ impl Pipelines {
     pub(crate) unsafe fn destroy(&self, device: &ash::Device) {
         // SAFETY: the caller's guarantee; destroying a null handle is allowed.
         unsafe {
-            for pipeline in self.depth {
+            for pipeline in self.depth.into_iter().chain(self.smaller) {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.find, None);
@@ -421,21 +451,21 @@ impl Pipelines {
                 .image(image)
                 .subresource_range(COLOUR)
         };
-        let area = vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent: target.extent,
-        };
-        // Sizes are far below the point where f32 stops being exact.
-        #[allow(clippy::cast_precision_loss)]
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: target.extent.width as f32,
-            height: target.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let pass = |pipeline: vk::Pipeline, into: vk::ImageView| {
+        let pass = |pipeline: vk::Pipeline, into: vk::ImageView, extent: vk::Extent2D| {
+            let area = vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent,
+            };
+            // Sizes are far below the point where f32 stops being exact.
+            #[allow(clippy::cast_precision_loss)]
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
             let attachments = [vk::RenderingAttachmentInfo::default()
                 .image_view(into)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -471,12 +501,25 @@ impl Pipelines {
         // SAFETY: the caller guarantees the command buffer, the target and
         // the states its pictures are in.
         unsafe {
+            // Each smaller depth is made from the one before, which is
+            // ready to be read by then; while one is drawn into, the
+            // function that draws it names only the one it reads.
+            let mut before = depth_to_read;
+            for ((halvings, picture), pipeline) in (1..).zip(&target.depths).zip(self.smaller) {
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&[before, to_write(picture.image)]),
+                );
+                pass(pipeline, picture.view, smaller(target.extent, halvings));
+                before = to_read(picture.image);
+            }
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[depth_to_read, to_write(target.shade_found.image)]),
+                    .image_memory_barriers(&[before, to_write(target.shade_found.image)]),
             );
-            pass(self.find, target.shade_found.view);
+            pass(self.find, target.shade_found.view, target.extent);
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default().image_memory_barriers(&[
@@ -484,7 +527,7 @@ impl Pipelines {
                     to_write(target.shade.image),
                 ]),
             );
-            pass(self.smooth, target.shade.view);
+            pass(self.smooth, target.shade.view, target.extent);
             device.cmd_pipeline_barrier2(
                 commands,
                 &vk::DependencyInfo::default()

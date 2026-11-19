@@ -191,6 +191,9 @@ pub(crate) struct SceneTarget {
     /// (`occlusion.rs`). Only filled in a frame that asks for shade.
     pub(crate) shade_found: Picture,
     pub(crate) shade: Picture,
+    /// Smaller copies of the depth, each half as wide and as high as the
+    /// one before, which the shade reads its far steps from.
+    pub(crate) depths: [Picture; occlusion::SMALLER],
     /// Whether those copies were filled in the frame last drawn: in the
     /// next, smooth things may mirror what they hold.
     pub(crate) kept: Cell<bool>,
@@ -239,6 +242,7 @@ impl SceneTarget {
             behind_depth: Picture::null(),
             shade_found: Picture::null(),
             shade: Picture::null(),
+            depths: [const { Picture::null() }; occlusion::SMALLER],
             kept: Cell::new(false),
             fluid: OnceCell::new(),
             extent,
@@ -294,15 +298,32 @@ impl SceneTarget {
                 DOING,
             )?;
         }
+        for (halvings, picture) in (1..).zip(&mut target.depths) {
+            picture.create(
+                gpu,
+                occlusion::smaller(extent, halvings),
+                occlusion::SMALLER_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                COLOUR,
+                DOING,
+            )?;
+        }
         // Every surface that could mirror the world is drawn with the
         // copies at hand, in frames before any has been filled too: they
         // are made ready to be read from the start, holding nothing yet.
-        // So is the shade, which every solid surface's shader names.
+        // So is the shade, which every solid surface's shader names, and
+        // what it is found from.
+        let [half, quarter, eighth, sixteenth] =
+            target.depths.each_ref().map(|picture| picture.image);
         let ready = [
             (target.behind.image, COLOUR),
             (target.behind_depth.image, DEPTH),
             (target.shade_found.image, COLOUR),
             (target.shade.image, COLOUR),
+            (half, COLOUR),
+            (quarter, COLOUR),
+            (eighth, COLOUR),
+            (sixteenth, COLOUR),
         ]
         .map(|(image, range)| {
             vk::ImageMemoryBarrier2::default()
@@ -352,6 +373,9 @@ impl Drop for SceneTarget {
             self.behind_depth.destroy(&self.gpu);
             self.shade_found.destroy(&self.gpu);
             self.shade.destroy(&self.gpu);
+            for picture in &self.depths {
+                picture.destroy(&self.gpu);
+            }
         }
     }
 }
