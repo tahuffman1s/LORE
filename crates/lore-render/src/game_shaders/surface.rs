@@ -168,9 +168,10 @@ pub(super) struct SurfaceTable {
     drawn: bool,
     /// Whether the table must be made again.
     stale: bool,
-    /// The entries already told about for this level, so that each is told
-    /// once.
-    told: Vec<u64>,
+    /// The entries already told about for this level, and the revision
+    /// each was told about at: each is told once, and again when a new
+    /// version of it is drawn (whose own report says it works).
+    told: Vec<(u64, u64)>,
 }
 
 impl SurfaceTable {
@@ -265,15 +266,15 @@ impl SurfaceTable {
         let mut said = Vec::new();
         for &shader in &plan.missing {
             let w = &wanted[shader];
-            if !self.told.contains(&w.id) {
-                self.told.push(w.id);
+            if !self.told.contains(&(w.id, w.revision)) {
+                self.told.push((w.id, w.revision));
                 said.push(w.says(missing_error(&w.file, &w.material, names)));
             }
         }
         for &(shader, first) in &plan.taken {
             let (w, other) = (&wanted[shader], &wanted[first]);
-            if !self.told.contains(&w.id) {
-                self.told.push(w.id);
+            if !self.told.contains(&(w.id, w.revision)) {
+                self.told.push((w.id, w.revision));
                 said.push(w.says(taken_error(&w.file, &w.material, &other.name)));
             }
         }
