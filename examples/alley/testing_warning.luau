@@ -9,8 +9,7 @@ function warning.draw(shown: boolean)
     if not shown then
         return
     end
-    local label = game.input.label
-    line.text = string.format("Pre-Alpha Expect Bugs")
+    line.text = "Pre-Alpha Expect Bugs"
 end
 
 return warning

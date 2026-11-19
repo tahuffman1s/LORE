@@ -15,8 +15,8 @@ local STAYS_ON = 30
 
 -- The level's lamps are known once the world has its level, which is after
 -- this file first runs; they are looked up on the first tick that has them.
-local names = {}
-local lastSeen = {}
+local names: { string } = {}
+local lastSeen: { [string]: number } = {}
 
 game.onTick(function()
     if #names == 0 then

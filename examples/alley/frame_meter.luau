@@ -42,7 +42,7 @@ local low = game.hud.text("", { at = "top right", right = -32, down = 108, size 
 local slowest = game.hud.text("", { at = "top right", right = -32, down = 140, size = 26 })
 local graph = game.hud.frameGraph({ at = "top right", right = -32, down = 180, width = 400, height = 80, frames = 240 })
 local legend = game.hud.text("last 240 frames; lines at 60 and 30 fps", { at = "top right", right = -32, down = 266, size = 24, color = QUIET })
-local full = { back, rate, last, low, slowest, graph, legend }
+local fullWords = { rate, last, low, slowest, legend }
 
 -- What is shown now: "off", "compact" or "full".
 function meter.mode(): string
@@ -65,8 +65,10 @@ end
 function meter.draw()
     compact.visible = kept.mode == "compact"
     compactBack.visible = compact.visible
-    for _, piece in full do
-        piece.visible = kept.mode == "full"
+    local whole = kept.mode == "full"
+    back.visible, graph.visible = whole, whole
+    for _, words in fullWords do
+        words.visible = whole
     end
     if kept.mode == "off" then
         return

@@ -23,13 +23,13 @@ local oldPhotoStrength = 0
 local BLUE_DUMPSTER = "dumpster paint blue" -- a material in level.glb
 
 -- The speeds of time, by name.
-local timeSpeeds = { stopped = 0, slow = 0.25, usual = 1, fast = 4 }
+local timeSpeeds: { [string]: number } = { stopped = 0, slow = 0.25, usual = 1, fast = 4 }
 
 local NORTH = vector.create(0, 0, -1)
 
 -- The places to jump to: where the feet go, which way to look, and
 -- whether to fly there (somewhere with nothing underfoot).
-local jumps = {
+local jumps: { { name: string, at: vector, facing: vector, flying: boolean? } } = {
     { name = "The start", at = places.spawn, facing = NORTH },
     { name = "The court", at = places.court + vector.create(-4, 0, 0), facing = vector.create(1, 0, 0) },
     { name = "Above the court", at = places.court + vector.create(-6, 9, 3), facing = vector.create(1, -0.8, -0.3), flying = true },

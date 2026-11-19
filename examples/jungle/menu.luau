@@ -480,7 +480,9 @@ export type Panel = typeof(setmetatable(
 -- Shows the pieces of `shown` and of the tabs, or of nothing.
 local function showPieces(self: Panel, shown: Menu?)
     for number, each in self.menus do
-        each:setVisible(each == shown)
+        -- rawequal: two menus are the same menu or they are not, and the
+        -- type checker cannot compare a menu with one that may be nil.
+        each:setVisible(rawequal(each, shown))
         self.tabs[number].visible = shown ~= nil
         self.marks[number].visible = shown ~= nil
     end
@@ -609,7 +611,7 @@ function Panel.draw(self: Panel)
         return
     end
     for number, each in self.menus do
-        local front = each == self.current
+        local front = rawequal(each, self.current)
         self.tabs[number].color = if front then WORDS else QUIET
         self.marks[number].color = if front and #self.menus > 1 then CHOSEN else NOT_CHOSEN
     end

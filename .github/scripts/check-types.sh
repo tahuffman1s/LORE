@@ -66,24 +66,32 @@ analyze() {
 }
 
 # 1. The definitions load, and the scripts an author reads first show no
-#    mistakes. The template and examples are checked as an editor shows them
-#    (no `--!strict` line, so Luau's default mode); everything.luau is strict
-#    and uses every function. Both of Luau's type solvers are asked: 1.70.1
-#    uses the old one unless told otherwise, later releases the new one.
+#    mistakes. The template and examples are checked twice: as an editor
+#    shows them by default (no `--!strict` line, so Luau's default mode),
+#    and as one set to strict shows them, where every value has to have a
+#    known type. everything.luau is strict by its first line and uses every
+#    function. Both of Luau's type solvers are asked: 1.70.1 uses the old
+#    one unless told otherwise, later releases the new one.
 for new_solver in false true; do
-    echo "Checking the template, the examples and everything.luau (new solver: $new_solver)"
-    if ! out=$(analyze "$new_solver" crates/lore/template/main.luau examples "$fixtures/everything.luau"); then
-        echo "$out"
-        case "$out" in
-            *"Failed to read definitions file"*)
-                echo "check-types: lore.d.luau itself does not load in the Luau language server. Fix the SyntaxError lines above in $defs." >&2
-                ;;
-            *)
-                echo "check-types: the type checker found mistakes. Fix the script, or fix $defs if it describes the engine wrongly." >&2
-                ;;
-        esac
-        failed=1
-    fi
+    for mode in default strict; do
+        echo "Checking the template, the examples and everything.luau (new solver: $new_solver, $mode mode)"
+        strict=()
+        if [ "$mode" = strict ]; then
+            strict=(--base-luaurc=.github/scripts/strict.luaurc)
+        fi
+        if ! out=$(analyze "$new_solver" ${strict[@]+"${strict[@]}"} crates/lore/template examples "$fixtures/everything.luau"); then
+            echo "$out"
+            case "$out" in
+                *"Failed to read definitions file"*)
+                    echo "check-types: lore.d.luau itself does not load in the Luau language server. Fix the SyntaxError lines above in $defs." >&2
+                    ;;
+                *)
+                    echo "check-types: the type checker found mistakes. Fix the script, or fix $defs if it describes the engine wrongly." >&2
+                    ;;
+            esac
+            failed=1
+        fi
+    done
 done
 
 # 2. The check can fail: every line marked `wrong` in mistakes.luau is
