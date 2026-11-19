@@ -1447,6 +1447,127 @@ mod tests {
     }
 
     #[test]
+    fn a_creek_beside_a_pool_of_something_else_is_still_drawn_as_water() {
+        use lore_assets::{Instance, Material, Mesh, MeshPart, Water};
+
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // A white floor a metre down, a round pool over the middle of it,
+        // and sixteen metres east a creek: a sheet marked as water that
+        // no still water took the place of.
+        let flat = |low: [f32; 2], high: [f32; 2], y: f32| MeshPart {
+            positions: vec![
+                [low[0], y, high[1]],
+                [high[0], y, high[1]],
+                [high[0], y, low[1]],
+                [low[0], y, low[1]],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..MeshPart::default()
+        };
+        let mut scene = Scene::default();
+        for part in [
+            flat([-500.0, -500.0], [500.0, 500.0], -1.0),
+            flat([16.0, -3.0], [19.0, 3.0], -0.5),
+        ] {
+            scene.meshes.push(Mesh {
+                name: None,
+                parts: vec![part],
+            });
+        }
+        scene.materials.push(Material::default());
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        for (mesh, extras) in [(0, None), (1, Some(r#"{"water": true}"#))] {
+            scene.instances.push(Instance {
+                mesh,
+                transform,
+                mirrored: false,
+                name: None,
+                extras: extras.map(str::to_owned),
+            });
+        }
+        let points = 41_u32;
+        let depths = (0..points * points)
+            .map(|at| {
+                let (x, z) = (
+                    (at % points) as f32 * 0.25 - 5.0,
+                    (at / points) as f32 * 0.25 - 5.0,
+                );
+                if x.hypot(z) < 1.5 { 1.0 } else { Water::DRY }
+            })
+            .collect();
+        scene.waters.push(Water {
+            name: None,
+            sources: Vec::new(),
+            level: 0.0,
+            brim: 0.0,
+            origin: [-5.0, -5.0],
+            cell: 0.25,
+            size: [points, points],
+            depths,
+            colour: [0.0, 0.02, 0.02, 0.3],
+            fluid: None,
+            amount: 1.0,
+            spill: None,
+        });
+        headless.set_scene(&scene).unwrap();
+        // Looking straight down on the creek, the pool out of sight.
+        let over_creek = Camera {
+            position: [17.5, 3.0, 0.0],
+            pitch: -1.5,
+            ..Camera::default()
+        };
+        let red = |picture: &[u8], [x, y]: [usize; 2]| i32::from(picture[(y * SIZE[0] + x) * 4]);
+        let as_water = headless.screenshot(&over_creek).unwrap();
+        assert!(
+            red(&as_water, [3, 32]) > red(&as_water, [48, 32]) + 2,
+            "the creek is drawn: {} beside it, {} in it",
+            red(&as_water, [3, 32]),
+            red(&as_water, [48, 32])
+        );
+        // The pool becomes lava. The creek does not.
+        let lava = FluidLook {
+            absorbs: [0.5, 4.0, 6.0],
+            glows: [6.0, 1.5, 0.2],
+            ..FluidLook::default()
+        };
+        headless.set_pools(&[PoolDrawn {
+            look: Some(lava),
+            freezes: false,
+            ..PoolDrawn::default()
+        }]);
+        assert!(
+            headless.screenshot(&over_creek).unwrap() == as_water,
+            "the creek took the look of the pool"
+        );
+        // The pool itself did.
+        let over_pool = Camera {
+            position: [0.0, 4.0, 0.0],
+            ..over_creek
+        };
+        let pool = headless.screenshot(&over_pool).unwrap();
+        assert!(red(&pool, [48, 32]) > 200, "{}", red(&pool, [48, 32]));
+        // What a game makes of water itself is what its creeks are too.
+        headless.set_water_look(Some(lava));
+        let as_lava = headless.screenshot(&over_creek).unwrap();
+        assert!(
+            red(&as_lava, [48, 32]) > red(&as_water, [48, 32]) + 60,
+            "{} then {}",
+            red(&as_water, [48, 32]),
+            red(&as_lava, [48, 32])
+        );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
     fn a_hollow_found_while_playing_is_drawn_once_its_game_says_how_it_stands() {
         use std::sync::Arc;
 

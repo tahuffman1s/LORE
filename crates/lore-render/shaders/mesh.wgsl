@@ -131,6 +131,10 @@ struct View {
     // Where each point of the world was drawn in the picture kept for
     // smooth things to mirror (`walker.y` says whether there is one).
     kept_from_world: mat4x4<f32>,
+    // How running water looks (a creek, a fall: a sheet its maker shaped),
+    // in the same three rows as `water_look`: what the level's water is
+    // drawn as, whatever stands in the pool nearest the eye.
+    stream_look: array<vec4<f32>, 3>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
