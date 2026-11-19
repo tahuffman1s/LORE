@@ -31,6 +31,7 @@ mod hook;
 mod params;
 mod scan;
 mod source;
+mod spirv;
 
 pub use compile::{Bounds, Compiled, compile};
 pub use error::{ShaderError, closest};

@@ -9,6 +9,7 @@ use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 use crate::error::{self, FAULT_HINT, ShaderError, Slip};
 use crate::source::{Owner, Source};
+use crate::spirv;
 
 /// How array and buffer indexes are guarded in the SPIR-V.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -16,8 +17,11 @@ pub enum Bounds {
     /// Indexes are trusted (naga's `Unchecked`), as for the engine's own shaders.
     #[default]
     Trusted,
-    /// Every index is kept inside what it indexes (naga's `Restrict` for
-    /// index, buffer, image_load, binding_array), for a game's shaders.
+    /// Every index into an array or a buffer is kept inside what it indexes
+    /// (naga's `Restrict` for index, buffer, binding_array), for a game's
+    /// shaders. Image reads (`textureLoad`) are trusted as in the engine's
+    /// own: naga 30 clamps one whose coordinates are unsigned with a vector
+    /// constant of the wrong type, which is not valid SPIR-V (#434).
     Clamped,
 }
 
@@ -74,13 +78,23 @@ pub fn compile(source: &Source, bounds: Bounds) -> Result<Compiled, ShaderError>
         bounds_check_policies: BoundsCheckPolicies {
             index: policy,
             buffer: policy,
-            image_load: policy,
+            image_load: BoundsCheckPolicy::Unchecked,
             binding_array: policy,
         },
         ..spv::Options::default()
     };
     let words = spv::write_vec(&module, &info, &options, None)
         .map_err(|failure| explain(source, &failure.to_string(), &[], ""))?;
+    if let Some(what) = spirv::mistyped_constant(&words) {
+        // Nothing the author wrote can cause this: what the compiler wrote
+        // is wrong, and a driver must not be handed it.
+        let file = source.first_author_file().unwrap_or("the shader");
+        return Err(ShaderError::whole_file(
+            file,
+            format!("The compiled shader is not valid SPIR-V: {what}."),
+            Some(FAULT_HINT.to_owned()),
+        ));
+    }
     Ok(Compiled {
         words,
         entry_points: module
@@ -243,6 +257,48 @@ fn main() -> @location(0) vec4f {
         assert_eq!(compiled.entry_points, ["main"]);
         assert_eq!(compiled.words.first(), Some(&0x0723_0203), "SPIR-V magic");
         assert_eq!(compiled.words.get(1), Some(&0x0001_0300), "SPIR-V 1.3");
+    }
+
+    /// A head with a picture to read, as LORE's screen template has.
+    const PICTURE_HEAD: &str =
+        "struct ScreenIn { uv: vec2f, color: vec3f, distance: f32, time: f32 }
+struct Params { strength: f32 }
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var picture: texture_2d<f32>;
+";
+
+    /// An image read whose coordinates are unsigned.
+    const UNSIGNED_READ: &str = "fn screen(in: ScreenIn) -> vec3f {
+    return textureLoad(picture, vec2u(in.uv * 100.0), 0).rgb;
+}
+";
+
+    #[test]
+    fn a_clamped_module_that_reads_an_image_by_unsigned_coordinates_is_valid() {
+        let module = module_with(PICTURE_HEAD, UNSIGNED_READ);
+        let clamped = compile(&module, Bounds::Clamped).expect("compiles");
+        assert_eq!(spirv::mistyped_constant(&clamped.words), None);
+    }
+
+    /// Why `Clamped` leaves image reads alone (#434). When this fails, naga
+    /// has been put right: image reads can be clamped again.
+    #[test]
+    fn naga_still_writes_a_mistyped_constant_for_a_clamped_unsigned_image_read() {
+        let source = module_with(PICTURE_HEAD, UNSIGNED_READ);
+        let module = naga::front::wgsl::parse_str(source.text()).expect("parses");
+        let info = Validator::new(ValidationFlags::all(), Capabilities::IMMEDIATES)
+            .validate(&module)
+            .expect("validates");
+        let options = spv::Options {
+            lang_version: (1, 3),
+            bounds_check_policies: BoundsCheckPolicies {
+                image_load: BoundsCheckPolicy::Restrict,
+                ..BoundsCheckPolicies::default()
+            },
+            ..spv::Options::default()
+        };
+        let words = spv::write_vec(&module, &info, &options, None).expect("writes");
+        assert!(spirv::mistyped_constant(&words).is_some());
     }
 
     #[test]
