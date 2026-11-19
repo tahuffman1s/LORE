@@ -296,6 +296,7 @@ fn start(
         editing,
         renderer: None,
         lighting: None,
+        occlusion: None,
         lighting_given: false,
         lamps: Vec::new(),
         shaders: crate::game_shaders::ShaderList::default(),
@@ -363,10 +364,12 @@ struct App<G> {
     gamepads: Gamepads,
     /// Draws into the window. Declared before it so it is dropped first.
     renderer: Option<Renderer>,
-    /// The game's own exposure and how the eye adapts, as the game last said
-    /// them, and whether the renderer has them: kept for a renderer made
-    /// later, or made again.
+    /// The game's own exposure and how the eye adapts, and how dark the
+    /// shade in corners is and how far round it is searched for, as the
+    /// game last said them, and whether the renderer has them: kept for a
+    /// renderer made later, or made again.
     lighting: Option<(f32, lore_render::EyeAdaptation)>,
+    occlusion: Option<(f32, f32)>,
     lighting_given: bool,
     /// The memory the last frame's lamps were said in, lent to the next.
     lamps: Vec<lore_render::Lamp>,
@@ -507,6 +510,7 @@ impl<G: Game> App<G> {
             renderer.set_light_shafts(settings.light_shafts);
             renderer.set_lamp_shadows(settings.lamp_shadows);
             renderer.set_bounce(settings.bounce);
+            renderer.set_ambient_occlusion(settings.ambient_occlusion);
         }
         // The field of view is read when the camera is next placed, and
         // the size of the HUD by `follow_ui_size`.
@@ -855,11 +859,18 @@ impl<G: Game> App<G> {
             self.lighting = Some(said);
             self.lighting_given = false;
         }
-        if let (Some(renderer), Some((stops, eye)), false) =
-            (&mut self.renderer, self.lighting, self.lighting_given)
-        {
-            renderer.set_game_exposure(stops);
-            renderer.set_eye_adaptation(eye);
+        if let Some(said) = frame.take_ambient_occlusion() {
+            self.occlusion = Some(said);
+            self.lighting_given = false;
+        }
+        if let (Some(renderer), false) = (&mut self.renderer, self.lighting_given) {
+            if let Some((stops, eye)) = self.lighting {
+                renderer.set_game_exposure(stops);
+                renderer.set_eye_adaptation(eye);
+            }
+            if let Some((strength, radius)) = self.occlusion {
+                renderer.set_game_occlusion(strength, radius);
+            }
             self.lighting_given = true;
         }
         let (water_rise, sky_clock) = frame.take_water();
@@ -979,6 +990,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                         renderer.set_light_shafts(settings.light_shafts);
                         renderer.set_lamp_shadows(settings.lamp_shadows);
                         renderer.set_bounce(settings.bounce);
+                        renderer.set_ambient_occlusion(settings.ambient_occlusion);
                         renderer.set_camera(Camera {
                             position: [0.0, STANDING_EYE, 0.0],
                             fov_degrees: settings.field_of_view,

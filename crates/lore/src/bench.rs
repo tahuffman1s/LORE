@@ -63,6 +63,8 @@ pub struct Bench {
     pub lamp_shadows: lore_render::LampShadows,
     /// How light bounces.
     pub bounce: lore_render::Bounce,
+    /// How smooth the shade in corners and under things is.
+    pub ambient_occlusion: lore_render::AmbientOcclusion,
 }
 
 impl Default for Bench {
@@ -78,6 +80,7 @@ impl Default for Bench {
             lamps: 0,
             lamp_shadows: lore_render::LampShadows::default(),
             bounce: lore_render::Bounce::default(),
+            ambient_occlusion: lore_render::AmbientOcclusion::default(),
         }
     }
 }
@@ -266,6 +269,7 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     }
     headless.set_lamp_shadows(bench.lamp_shadows);
     headless.set_bounce(bench.bounce);
+    headless.set_ambient_occlusion(bench.ambient_occlusion);
     for frame in 0..bench.warmup {
         headless.render(&camera(frame))?;
     }

@@ -67,8 +67,8 @@ the sunny-16 rule is EV100 15, and moonlight about −3.
 | System | How | Needs | Fit for LORE |
 |---|---|---|---|
 | Clustered forward (Olsson 2012; Doom 2016) | Lights sorted into a 3D grid of the view; each pixel reads its cell's list. Doom sorts on the CPU into 16×8×24 cells | Nothing special | **Built** (lamps) |
-| GTAO / XeGTAO (Intel, MIT) | Horizon angles on the depth buffer give ambient occlusion | A depth (and normal) pre-pass | Step 3 |
-| Visibility bitmask (Therrien et al. 2023) | Horizon angles replaced by a 32-bit mask of hidden sectors: AO, directional sky occlusion and one bounce in one pass, ≈ GTAO's cost (0.5 to 1.1 ms, RTX 2080) | Depth pre-pass | Step 3 |
+| GTAO / XeGTAO (Intel, MIT) | Horizon angles on the depth buffer give ambient occlusion | A depth (and normal) pre-pass | **Built** (its slices, steps and smoothing) |
+| Visibility bitmask (Therrien et al. 2023) | Horizon angles replaced by a 32-bit mask of hidden sectors: AO, directional sky occlusion and one bounce in one pass, ≈ GTAO's cost (0.5 to 1.1 ms, RTX 2080) | Depth pre-pass | **Built** (the shade; its one bounce is not) |
 | DDGI / RTXGI (NVIDIA, MIT) | Probes in a grid hold irradiance and depth as octahedral maps, updated by a few rays a frame; depth stops light leaking | Rays: hardware or a software tracer | Step 4 |
 | Godot SDFGI | Cascaded distance fields round the eye traced by probes, no ray-tracing hardware, any world size | Compute | Step 4's model |
 | Lumen (UE5) | Screen traces, then mesh and global distance fields into a surface cache; screen probes and a world radiance cache | SM5/6 compute and a large asset pipeline | Too large to rebuild |
@@ -310,12 +310,98 @@ Not done yet: emissive surfaces lighting what is round them, cascades of
 coarser probes for far land, moving things in the copy, and the light of
 lamps out of view.
 
+### Shade in corners (#104)
+
+The light from all round does not reach every point alike: the foot of a
+wall sees half the sky, a crack almost none, and the ground under a cart
+little. The probes of bounce light are a metre apart and cannot tell. The
+picture's own depth can (`occlusion.rs`, `occlusion.wgsl`).
+
+- **Depth first.** What is solid is drawn once for its depth alone, before
+  the picture: every solid part, and each part with holes cut in it by its
+  own material. Every point is placed by the same function as in the
+  picture and marked `@invariant`, so it lands exactly where the picture
+  draws it. The picture is then drawn only where its depth equals that
+  depth, and writes none: nothing hidden behind something else is shaded
+  at all, and a leaf's holes are cut once, in the cheap pass.
+- **The asking** is Jimenez's ground-truth ambient occlusion (2016), laid
+  out as Intel's XeGTAO does: each pixel cuts the half of the world its
+  surface faces into slices through the line of sight (2, 3 or 4 of them:
+  the player's "Ambient occlusion" setting), and reads the depth at 2, 3
+  or 4 steps either way along each, closer together near the pixel. The
+  way the surface faces is worked out from the depth round it, taking on
+  each side the neighbour that lies on the same surface (Turánszki 2019).
+- **The keeping** is Therrien's visibility bitmask (2023). A slice is 32
+  sectors, and each thing found hides the sectors from its front to its
+  back, taken to be a fixed thickness behind. So a railing or a chair's
+  leg hides only what is behind it, and a post far in front of a wall
+  hides a sliver and leaves no dark halo, both of which a single horizon
+  angle gets wrong. Two things found one after the other with no jump in
+  depth between them are one surface and hide everything between them, as
+  a wall hides all the way down to its foot.
+- **Sectors of equal light, not equal angle.** Each sector holds an equal
+  share of the light a matte surface takes from its slice (the cosine to
+  the surface times the slice's width at that angle, summed in closed
+  form), so counting the hidden bits is Jimenez's integral, and a surface
+  with nothing near reads exactly 1: open ground is drawn bit for bit as
+  with the shade off, with no noise to smooth. Measured at the foot of a
+  wall on flat ground it reads 0.54, where the answer is one half.
+- Each sample is at a pixel's middle, a little off its slice, and is
+  measured in the slice it is really in. Measured in the slice asked for,
+  flat ground came out a third of a percent dark all over.
+- The slices are turned differently in each pixel (Jimenez's interleaved
+  gradient noise), and each frame when the upscaler mixes frames. Each
+  pixel is then averaged with the 5 × 5 round it that lie on its surface:
+  16 over the distance ahead is kept beside the shade, which is even
+  across a flat surface, so a neighbour belongs if it is where the slope
+  at the pixel says it should be to within a hundredth.
+- **What it dims.** Only light from all round: the sky's and the ground's,
+  the probes', what a street's sides throw back, and what a rough surface
+  mirrors of them. Never the sun's or a lamp's, which have shadows of
+  their own. A pale surface in a corner is lit by its own light thrown
+  back and forth, so it is dimmed less than a dark one (Jimenez's fit),
+  and what is mirrored is dimmed by Lagarde's fit (2014) to how rough the
+  surface is. The material's own baked shadowing and this are not
+  multiplied: the darker of the two is used.
+- What is see-through is drawn after and neither shades nor is shaded. A
+  cut-out surface drawn by a game's own surface shader cuts its own holes,
+  so it is left out of the depth pass and has no shade of its own.
+- `game.lighting.setAmbientOcclusion({ strength = 1, radius = 0.6 })`
+  changes how dark it is drawn (0 for none, 1 for what really arrives) and
+  how far round a point is searched, in metres. Near the eye the search is
+  no wider than a fifth of the picture's height.
+- **Only what can be seen is drawn.** The picture and the depth pass skip
+  every part whose bounds are wholly outside the view (the sun's and the
+  lamps' shadows already did), with room for how far the wind can move it.
+
+Cost, `lore bench --ambient-occlusion LEVEL` at 1280×720, the graphics
+card's part of a usual frame: on an RX 7800 XT 1.41 ms off, 1.48 ms low,
+1.55 ms medium and 1.66 ms high (main 1.38 ms); on lavapipe 50.0 ms off,
+55.0 ms medium and 62.6 ms high (main 51.3 ms). Recording the depth pass
+adds about 0.13 ms of the engine's own work in that scene's 1 600 blocks.
+A step that finds nothing above its pixel's own surface is dropped after
+one read, so open ground costs little: before that, medium was 61 ms on
+lavapipe.
+
+Where much is hidden behind other things the depth pass more than pays
+for the shade. The jungle example from its lake shore, RX 7800 XT: 22.4
+ms a frame on main at 1280×720; 11.4 ms with only what is in view drawn;
+8.4 ms with the shade on medium, because no leaf behind another is shaded.
+At 2560×1440: 32.7 ms, 21.5 ms and 13.8 ms. The alley example, which has
+little overdraw, is 3.8 ms off and 3.9 ms on medium.
+
+Not done yet: depth read from smaller copies for far steps (XeGTAO's
+chain of five), without which a wide search reads memory far apart, bent
+normals, and the bitmask's one bounce of light (#438); the depth pass
+with the shade off, where it pays (#436); shade on a cut-out surface a
+game's own shader draws (#437).
+
 ## What comes next (#401)
 
-1. **Screen-space light** (#104, #338): a depth and normal pre-pass and
-   the visibility bitmask. That gives contact shadows, ambient light
-   occluded by direction, and fine detail the probes are too far apart
-   for.
+1. **Screen-space light**: the sun's contact shadows, found in the same
+   depth (#338). And the visibility bitmask already finds which sectors
+   are hidden: lighting each hidden sector with what hides it gives one
+   bounce of fine detail the probes are too far apart for.
 2. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
    glass glows only while it is lit and as bright as it should, and lights
    what is round it through the probes.
@@ -328,6 +414,13 @@ lamps out of view.
 - Filament, "Physically Based Rendering in Filament":
   https://google.github.io/filament/main/filament.html
 - S. Lagarde, C. de Rousiers, "Moving Frostbite to PBR", SIGGRAPH 2014.
+- J. Jimenez, X. Wu, A. Pesce, A. Jarabo, "Practical Real-Time Strategies
+  for Accurate Indirect Occlusion", SIGGRAPH 2016.
+- Intel, XeGTAO (MIT): https://github.com/GameTechDev/XeGTAO
+- O. Therrien, Y. Levesque, G. Gilet, "Screen Space Indirect Lighting with
+  Visibility Bitmask", 2023: https://arxiv.org/abs/2301.11376
+- J. Turánszki, "Improved normal reconstruction from depth", Wicked
+  Engine blog, 2019.
 - C. Kulla, A. Conty, "Revisiting Physically Based Shading at
   Imageworks", 2017; C. Fdez-Agüera, JCGT 8(1), 2019.
 - O. Olsson, M. Billeter, U. Assarsson, "Clustered Deferred and Forward

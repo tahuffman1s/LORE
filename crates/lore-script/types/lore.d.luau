@@ -890,6 +890,22 @@ declare game: {
         --- How the eye adapts, as `setEyeAdaptation` takes it.
         --- Example: print(game.lighting.eyeAdaptation().opens)
         eyeAdaptation: () -> { opens: number, closes: number, seconds: number },
+
+        --- The soft shade in corners, under things and where something
+        --- stands on the ground (ambient occlusion). `strength` is how dark
+        --- it is drawn: 0 for none, 1 (as made) for as much as really
+        --- arrives, up to 4. `radius` is how far round each point is
+        --- searched for what shades it, in metres, from 0.05 to 4 (0.6 as
+        --- made). It dims only the light from all round, never the sun's or
+        --- a lamp's, and the player's own graphics setting can turn it off.
+        --- Settings not given stay as they were.
+        --- Example: game.lighting.setAmbientOcclusion({ strength = 1.5 })
+        --- Example: game.lighting.setAmbientOcclusion({ strength = 1, radius = 0.6 })
+        setAmbientOcclusion: (settings: { strength: number?, radius: number? }) -> (),
+
+        --- The shade in corners, as `setAmbientOcclusion` takes it.
+        --- Example: print(game.lighting.ambientOcclusion().strength)
+        ambientOcclusion: () -> { strength: number, radius: number },
     },
 
     --- Lamps the game has.

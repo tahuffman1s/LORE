@@ -379,7 +379,7 @@ impl Game for ScriptGame {
         if let Some(hour) = self.host.take_hour() {
             frame.set_hour(hour);
         }
-        if let Some((stops, eye)) = self.host.take_lighting() {
+        if let Some((stops, eye, occlusion)) = self.host.take_lighting() {
             frame.set_lighting(
                 stops,
                 lore_render::EyeAdaptation {
@@ -388,6 +388,7 @@ impl Game for ScriptGame {
                     seconds: eye.seconds,
                 },
             );
+            frame.set_ambient_occlusion(occlusion.strength, occlusion.radius);
         }
         // Once the game knows of any lamp, it says which are lit.
         if self.host.has_lamps() {

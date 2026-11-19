@@ -264,9 +264,14 @@ fn the_exposure_and_the_eye_are_handed_over_once_when_said() {
         assert(eye.opens == 1 and eye.closes == 8 and eye.seconds == 6)
     "#,
     );
-    let (stops, eye) = host.take_lighting().expect("it was said");
+    let (stops, eye, occlusion) = host.take_lighting().expect("it was said");
     assert_eq!(stops, -1.5);
     assert_eq!((eye.opens, eye.closes, eye.seconds), (1.0, 8.0, 6.0));
+    assert_eq!(
+        occlusion,
+        lore_script::OcclusionSaid::default(),
+        "what was not said is as the engine has it"
+    );
     assert!(host.take_lighting().is_none(), "nothing new was said");
     run(&mut host, 1);
     assert!(host.take_lighting().is_none());
@@ -280,6 +285,92 @@ fn the_eye_s_settings_say_what_to_write() {
     assert!(message.contains("settings in a table"), "{message}");
     let message = load_mistake(r#"game.lighting.setExposure("bright")"#);
     assert!(message.contains("needs a number"), "{message}");
+}
+
+#[test]
+fn the_shade_in_corners_is_handed_over_once_when_said() {
+    let mut host = game(
+        r#"
+        local made = game.lighting.ambientOcclusion()
+        assert(made.strength == 1 and math.abs(made.radius - 0.6) < 1e-6)
+        game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 2 })
+        local shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 1.5 and shade.radius == 2)
+    "#,
+    );
+    let (stops, eye, occlusion) = host.take_lighting().expect("it was said");
+    assert_eq!(stops, 0.0, "the exposure was not said");
+    assert_eq!(eye, lore_script::EyeSaid::default());
+    assert_eq!((occlusion.strength, occlusion.radius), (1.5, 2.0));
+    assert!(host.take_lighting().is_none(), "nothing new was said");
+    run(&mut host, 1);
+    assert!(host.take_lighting().is_none());
+}
+
+#[test]
+fn a_setting_of_the_shade_that_is_not_given_stays_as_it_was() {
+    let mut host = game(
+        r#"
+        game.lighting.setAmbientOcclusion({ strength = 2, radius = 1.5 })
+        game.lighting.setAmbientOcclusion({ radius = 3 })
+        local shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 2 and shade.radius == 3)
+        game.lighting.setAmbientOcclusion({ strength = 0 })
+        shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 0 and shade.radius == 3)
+        game.lighting.setAmbientOcclusion({})
+        shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 0 and shade.radius == 3)
+    "#,
+    );
+    let (_, _, occlusion) = host.take_lighting().expect("it was said");
+    assert_eq!((occlusion.strength, occlusion.radius), (0.0, 3.0));
+}
+
+#[test]
+fn the_shade_s_numbers_are_kept_within_what_can_be_drawn() {
+    let mut host = game(
+        r#"
+        game.lighting.setAmbientOcclusion({ strength = 99, radius = 99 })
+        local shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 4 and shade.radius == 4)
+        game.lighting.setAmbientOcclusion({ strength = -1, radius = 0 })
+        shade = game.lighting.ambientOcclusion()
+        assert(shade.strength == 0 and math.abs(shade.radius - 0.05) < 1e-6)
+    "#,
+    );
+    let (_, _, occlusion) = host.take_lighting().expect("it was said");
+    assert_eq!((occlusion.strength, occlusion.radius), (0.0, 0.05));
+}
+
+#[test]
+fn the_shade_s_settings_say_what_to_write() {
+    let message = load_mistake("game.lighting.setAmbientOcclusion({ strenght = 1 })");
+    assert!(
+        message.contains("has no setting called strenght. Did you mean strength?"),
+        "{message}"
+    );
+    let message = load_mistake("game.lighting.setAmbientOcclusion({ colour = 1 })");
+    assert!(
+        message.contains("The settings are: strength, radius."),
+        "{message}"
+    );
+    let message = load_mistake("game.lighting.setAmbientOcclusion(1.5)");
+    assert!(
+        message.contains("needs its settings in a table")
+            && message
+                .contains("game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })"),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.lighting.setAmbientOcclusion({ radius = "wide" })"#);
+    assert!(
+        message.contains("game.lighting.setAmbientOcclusion's `radius` needs a number"),
+        "{message}"
+    );
+    let message = load_mistake("game.lighting.setAmbientOcclusion({ strength = 0 / 0 })");
+    assert!(message.contains("a number with no size"), "{message}");
+    let message = load_mistake("game.lighting.setAmbientOcclusion({ 1.5 })");
+    assert!(message.contains("settings are named"), "{message}");
 }
 
 #[test]

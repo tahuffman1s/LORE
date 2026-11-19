@@ -49,6 +49,9 @@ const THICK_SHARE: f32 = 1.5;
 // this many times how far across it they are apart: a surface may slope
 // away that steeply and still be one.
 const JOINED_SLOPE: f32 = 3.0;
+// The sine of how far above a pixel's own surface a thing must stand to be
+// looked at any further.
+const LEVEL: f32 = 0.05;
 // The widest the search is on the picture, as a share of its height: what
 // is right in front of the eye would otherwise be searched across half of
 // the picture.
@@ -223,11 +226,11 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
         let whole = slice_of(dot(in_slice, to_eye), dot(in_slice, aside)).whole;
         var hidden = 0u;
         for (var side = -1.0; side < 2.0; side += 2.0) {
-            // The thing found before on this side: how far ahead of the
-            // pixel and how far across from it, and the share of the slice
+            // The thing found before on this side: how much closer to the
+            // eye than the pixel and how far across from it, and the share of the slice
             // its front is at. To begin with, the pixel's own surface,
             // which is the slice's end on this side.
-            var last_ahead = 0.0;
+            var last_closer = 0.0;
             var last_off = 0.0;
             var last_share = select(1.0, 0.0, side < 0.0);
             for (var step = 0; step < steps; step++) {
@@ -243,7 +246,7 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
                 let there = seen_at(there_at, size);
                 if there.w <= 0.0 {
                     // The sky: nothing there, and nothing joined across it.
-                    last_ahead = -1e9;
+                    last_closer = -1e9;
                     continue;
                 }
                 // What was read is at a pixel's middle, a little off the
@@ -252,16 +255,28 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
                 // itself. A point on the pixel's own flat surface is then
                 // exactly at the slice's end, and hides nothing.
                 let front = there.xyz - here.xyz;
-                let ahead = dot(front, to_eye);
-                let off = front - to_eye * ahead;
+                // How much closer to the eye it is than the pixel, and how far
+                // across the line of sight from it.
+                let closer = dot(front, to_eye);
+                let off = front - to_eye * closer;
                 let off_long = length(off);
                 if off_long < 1e-6 {
                     continue;
                 }
+                // What does not stand above the pixel's own surface hides
+                // nothing: on open ground that is every step, and the rest
+                // of the sum is spared. (Under three degrees above it, it
+                // would hide less than a thousandth of the slice.)
+                if dot(front, faces) < LEVEL * length(front) {
+                    last_closer = closer;
+                    last_off = off_long;
+                    last_share = select(1.0, 0.0, side < 0.0);
+                    continue;
+                }
                 let cut = slice_of(dot(faces, to_eye), dot(faces, off) / off_long);
                 // Its front, and its back `thick` metres behind.
-                let behind = ahead - thick;
-                var nearer = share_by(ahead * inverseSqrt(ahead * ahead + off_long * off_long), cut);
+                let behind = closer - thick;
+                var nearer = share_by(closer * inverseSqrt(closer * closer + off_long * off_long), cut);
                 var farther = share_by(behind * inverseSqrt(behind * behind + off_long * off_long), cut);
                 // The sectors run from one side of the slice to the other.
                 if side < 0.0 {
@@ -274,10 +289,10 @@ fn fragment_occlusion(@builtin(position) at: vec4<f32>) -> Found {
                 // between them, as a wall hides all the way down to its
                 // foot. A jump (a post before a far wall) parts them, and
                 // each hides only its own thickness.
-                if abs(ahead - last_ahead) < thick + JOINED_SLOPE * abs(off_long - last_off) {
+                if abs(closer - last_closer) < thick + JOINED_SLOPE * abs(off_long - last_off) {
                     hidden |= sectors(last_share, nearer);
                 }
-                last_ahead = ahead;
+                last_closer = closer;
                 last_off = off_long;
                 last_share = nearer;
             }

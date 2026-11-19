@@ -69,7 +69,7 @@ pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS}
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape};
 pub use lamp_api::{LampBeam, LampLight};
-pub use lighting_api::EyeSaid;
+pub use lighting_api::{EyeSaid, OcclusionSaid};
 pub use lore_weapons as weapons;
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse};

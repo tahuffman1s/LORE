@@ -8,6 +8,11 @@
 //! top, as a camera's exposure does. The player's own brightness setting
 //! is on top of that.
 //!
+//! A script can also say how dark the soft shade in corners and under
+//! things is drawn, and how far round each point is searched for what
+//! shades it ([`OcclusionSaid`]). The player's own graphics setting says
+//! whether it is drawn at all.
+//!
 //! What the script says lives in [`LightingState`], outside the script's
 //! VM, so a reload keeps it. It changes only what is drawn, so any part of
 //! a script may say it.
@@ -26,6 +31,8 @@ pub(crate) const LIGHTING_FUNCTIONS: &[&str] = &[
     "exposure",
     "setEyeAdaptation",
     "eyeAdaptation",
+    "setAmbientOcclusion",
+    "ambientOcclusion",
 ];
 
 /// What `game.lighting.setEyeAdaptation` takes.
@@ -57,24 +64,52 @@ impl Default for EyeSaid {
     }
 }
 
-/// What the script has said of the picture's exposure. It outlives a
-/// version of the script.
+/// What `game.lighting.setAmbientOcclusion` takes.
+const OCCLUSION_SETTINGS: &[&str] = &["strength", "radius"];
+
+/// The soft shade in corners and under things (ambient occlusion), as the
+/// script has said it: how dark it is drawn, and how far round each point
+/// is searched for what shades it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OcclusionSaid {
+    /// How dark the shade is drawn, from 0 (none) to 4: 1 is as much as
+    /// really arrives.
+    pub strength: f32,
+    /// How far round each point is searched for what shades it, in metres,
+    /// from 0.05 to 4.
+    pub radius: f32,
+}
+
+impl Default for OcclusionSaid {
+    /// The engine's own: as dark as really arrives, from what is within
+    /// 0.6 metres.
+    fn default() -> Self {
+        Self {
+            strength: 1.0,
+            radius: 0.6,
+        }
+    }
+}
+
+/// What the script has said of the picture's exposure and of the shade in
+/// corners. It outlives a version of the script.
 #[derive(Default)]
 pub(crate) struct LightingState {
     /// The game's own exposure, in stops.
     exposure: Cell<f32>,
     eye: Cell<EyeSaid>,
+    occlusion: Cell<OcclusionSaid>,
     /// Something was said since the engine last asked.
     changed: Cell<bool>,
 }
 
 impl LightingState {
-    /// The exposure in stops and how the eye adapts, if either was said
-    /// since this was last asked.
-    pub(crate) fn take(&self) -> Option<(f32, EyeSaid)> {
+    /// The exposure in stops, how the eye adapts and the shade in
+    /// corners, if any of them was said since this was last asked.
+    pub(crate) fn take(&self) -> Option<(f32, EyeSaid, OcclusionSaid)> {
         self.changed
             .take()
-            .then(|| (self.exposure.get(), self.eye.get()))
+            .then(|| (self.exposure.get(), self.eye.get(), self.occlusion.get()))
     }
 }
 
@@ -199,6 +234,88 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             table.set("opens", f64::from(eye.opens))?;
             table.set("closes", f64::from(eye.closes))?;
             table.set("seconds", f64::from(eye.seconds))?;
+            Ok(table)
+        })?,
+    )?;
+    let state = Rc::clone(shared);
+    lighting.set(
+        "setAmbientOcclusion",
+        lua.create_function(move |lua, value: Value| {
+            const EXAMPLE: &str = "game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })";
+            let Value::Table(settings) = &value else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.lighting.setAmbientOcclusion needs its settings in a table, but                          it was given {}. Write it like this: {EXAMPLE}",
+                        describe(&value)
+                    ),
+                ));
+            };
+            let mut occlusion = state.lighting.occlusion.get();
+            for pair in settings.pairs::<Value, Value>() {
+                let (key, value) = pair?;
+                let key = match &key {
+                    Value::String(key) => key.to_string_lossy(),
+                    other => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.lighting.setAmbientOcclusion's settings are named, but                                  one was written as {}. Write it like this: {EXAMPLE}",
+                                describe(other)
+                            ),
+                        ));
+                    }
+                };
+                let label = format!("game.lighting.setAmbientOcclusion's `{key}`");
+                match key.as_str() {
+                    "strength" => {
+                        occlusion.strength = number(
+                            lua,
+                            &label,
+                            Some(&value),
+                            "how dark the shade in corners and under things is drawn, from 0                              (none) to 4: 1 is as much as really arrives",
+                            EXAMPLE,
+                        )?
+                        .clamp(0.0, 4.0);
+                    }
+                    "radius" => {
+                        occlusion.radius = number(
+                            lua,
+                            &label,
+                            Some(&value),
+                            "how far round each point is searched for what shades it, in                              metres, from 0.05 to 4",
+                            EXAMPLE,
+                        )?
+                        .clamp(0.05, 4.0);
+                    }
+                    _ => {
+                        let mut message = format!(
+                            "game.lighting.setAmbientOcclusion has no setting called {key}."
+                        );
+                        match crate::error::closest(&key, OCCLUSION_SETTINGS.iter().copied()) {
+                            Some(near) => message.push_str(&format!(" Did you mean {near}?")),
+                            None => message.push_str(&format!(
+                                " The settings are: {}.",
+                                OCCLUSION_SETTINGS.join(", ")
+                            )),
+                        }
+                        return Err(fail(lua, message));
+                    }
+                }
+            }
+            state.lighting.occlusion.set(occlusion);
+            state.lighting.changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let state = Rc::clone(shared);
+    lighting.set(
+        "ambientOcclusion",
+        lua.create_function(move |lua, ()| {
+            let occlusion = state.lighting.occlusion.get();
+            let table = lua.create_table()?;
+            table.set("strength", f64::from(occlusion.strength))?;
+            table.set("radius", f64::from(occlusion.radius))?;
             Ok(table)
         })?,
     )?;
