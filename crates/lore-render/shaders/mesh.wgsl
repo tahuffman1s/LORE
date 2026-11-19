@@ -1,6 +1,6 @@
 // Draws a mesh with its material: textures, how metallic and how rough it
 // is, a normal map, baked shadowing and its own glow, lit by one sun and by
-// the sky above and the ground below, and in the shadow of whatever stands
+// the sky and the ground round it, and in the shadow of whatever stands
 // between it and the sun. Also writes how far each pixel moved since the
 // last frame, and draws what the sun sees for those shadows.
 //
@@ -23,7 +23,9 @@ struct View {
     towards_sun: vec4<f32>,
     // The sun's light on a surface that faces it.
     sun: vec4<f32>,
-    // The light a matte surface gets from the sky above and the ground below.
+    // The light a matte surface facing straight up gets from the sky, and
+    // one facing straight down from the ground: the sky drawn says how it
+    // changes between (`skylight.wgsl`).
     sky: vec4<f32>,
     ground: vec4<f32>,
     // The sun's shadows. The first number is 1 if there are any; the second
@@ -589,6 +591,40 @@ fn pictured_along(
     );
 }
 
+// A normal map at `uv`, read as `pictured` reads any picture: in xyz the
+// way it leans, from -1 to 1 each way, and in w how long the normals read
+// are (`bumps_spread`). For a shuffled material that is each copy's length
+// blended, not the length of the two copies blended: two copies leaning
+// different ways would make it shorter, and the seams between patches
+// would look rough.
+fn bumps_pictured(picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, mixing: Shuffle) -> vec4<f32> {
+    if !mixing.on {
+        let read = textureSampleBias(picture, how, uv, view.eye.w).xyz * 2.0 - 1.0;
+        return vec4<f32>(read, length(read));
+    }
+    let sharper = exp2(view.eye.w);
+    return bumps_along(picture, how, uv, dpdx(uv) * sharper, dpdy(uv) * sharper, mixing);
+}
+
+// The same, told how far `uv` changes from one pixel to the next, as
+// `pictured_along` is.
+fn bumps_along(
+    picture: texture_2d<f32>, how: sampler, uv: vec2<f32>, along: vec2<f32>, down: vec2<f32>, mixing: Shuffle,
+) -> vec4<f32> {
+    if mixing.share >= 1.0 {
+        let second = textureSampleGrad(picture, how, uv + mixing.second, along, down).xyz * 2.0 - 1.0;
+        return vec4<f32>(second, length(second));
+    }
+    let first = textureSampleGrad(picture, how, uv + mixing.first, along, down).xyz * 2.0 - 1.0;
+    if mixing.share <= 0.0 {
+        return vec4<f32>(first, length(first));
+    }
+    let second = textureSampleGrad(picture, how, uv + mixing.second, along, down).xyz * 2.0 - 1.0;
+    return vec4<f32>(
+        mix(first, second, mixing.share), mix(length(first), length(second), mixing.share),
+    );
+}
+
 // How far the mesh's two UV maps change from one pixel to the next, across
 // the picture and down it.
 struct Slopes {
@@ -609,6 +645,25 @@ fn over_pictured(
     let sharper = exp2(view.eye.w);
     return pictured_along(
         picture, how, over_placed(texture, corner),
+        vec2<f32>(dot(placing.u.xy, across), dot(placing.v.xy, across)) * sharper,
+        vec2<f32>(dot(placing.u.xy, down), dot(placing.v.xy, down)) * sharper,
+        mixing,
+    );
+}
+
+// The normal map of the material painted over this one, read as
+// `bumps_pictured` reads one and `over_pictured` reads that material's
+// pictures.
+fn over_bumps_pictured(
+    picture: texture_2d<f32>, how: sampler, corner: Corner, mixing: Shuffle, slopes: Slopes,
+) -> vec4<f32> {
+    let placing = material.over_placings[NORMAL];
+    let second = placing.u.w > 0.5;
+    let across = select(slopes.across.xy, slopes.across.zw, second);
+    let down = select(slopes.down.xy, slopes.down.zw, second);
+    let sharper = exp2(view.eye.w);
+    return bumps_along(
+        picture, how, over_placed(NORMAL, corner),
         vec2<f32>(dot(placing.u.xy, across), dot(placing.v.xy, across)) * sharper,
         vec2<f32>(dot(placing.u.xy, down), dot(placing.v.xy, down)) * sharper,
         mixing,
@@ -694,9 +749,33 @@ const PI: f32 = 3.14159265;
 // flickering pixel.
 const SMOOTHEST: f32 = 0.045;
 
-// The light from above and below that reaches a surface facing `direction`.
-fn surroundings(direction: vec3<f32>) -> vec3<f32> {
-    return mix(view.ground.rgb, view.sky.rgb, direction.y * 0.5 + 0.5);
+// The light from all round that reaches a surface, `surroundings`, and what
+// a rough surface mirrors of it, `sky_mirrored`, are the sky's as it is
+// drawn (`skylight.wgsl`).
+
+// A highlight is spread over all the ways a surface faces within a pixel,
+// or it flickers as the surface moves: a curve too tight for the pixels
+// (Tokuyoshi and Kaplanyan, "Improved Geometric Specular Antialiasing",
+// 2019, as Filament has it) adds to the roughness squared twice over
+// (alpha squared) this much for each unit of its turning across and down a
+// pixel, squared, and never more than the second number.
+const CURVE_SPREADS: f32 = 0.15;
+const CURVE_SPREADS_MOST: f32 = 0.2;
+
+// What a normal map's bumps too small to see add to the roughness squared
+// twice over. A smaller size of a normal map is the average of the normals
+// of the larger, and the more ways they face the shorter it is (Toksvig,
+// "Mipmapping Normal Maps", 2005): its length `long` says how widely they
+// spread. Taken as a von Mises-Fisher spread of sharpness kappa, as
+// Neubelt and Pettineo did for The Order: 1886 (2013), each way across
+// spreads by 1 / kappa, and a GGX highlight of alpha by alpha squared over
+// two. `strength` is how much the material deepens its bumps. A normal
+// read at full size is not quite one long, as eight bits keep it: so much
+// shortness counts as none.
+fn bumps_spread(long: f32, strength: f32) -> f32 {
+    let short = clamp(long + 0.004, 0.0, 0.9999);
+    let kappa = (3.0 * short - short * short * short) / (1.0 - short * short);
+    return 2.0 / kappa * strength * strength;
 }
 
 // How much of the light from all around is mirrored towards the eye, worked
@@ -1707,6 +1786,13 @@ fn towards_or(direction: vec3<f32>, otherwise: vec3<f32>) -> vec3<f32> {
 fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: Painted, see_through: bool) -> vec3<f32> {
     // The back of a two-sided surface faces the other way.
     let side = select(-1.0, 1.0, front);
+    // How fast the way the surface is built to face turns from one pixel
+    // to the next: what that spreads a highlight by.
+    let turn_across = dpdx(corner.normal);
+    let turn_down = dpdy(corner.normal);
+    let curving = min(
+        2.0 * CURVE_SPREADS * (dot(turn_across, turn_across) + dot(turn_down, turn_down)), CURVE_SPREADS_MOST,
+    );
     // The way the surface faces as it is built, before anything bends it.
     let built = towards_or(corner.normal, vec3<f32>(0.0, 1.0, 0.0)) * side;
     var normal = built;
@@ -1725,24 +1811,28 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let sky_seen = open * shade.y;
     // Whether the other material's bumps are there to be mixed in.
     let over_bumps = painted.share > 0.0 && over_has(NORMAL);
+    // How much the bumps too small to see spread a highlight.
+    var bumps = 0.0;
     if has(NORMAL) || over_bumps {
         // A material with no bumps of its own is flat: straight out.
         var sample = vec3<f32>(0.0, 0.0, 1.0);
         if has(NORMAL) {
-            sample = pictured(
-                normal_texture, normal_sampler, placed(NORMAL, corner), mixing,
-            ).xyz * 2.0 - 1.0;
-            sample = vec3<f32>(sample.xy * material.factors.z, sample.z);
+            let read = bumps_pictured(normal_texture, normal_sampler, placed(NORMAL, corner), mixing);
+            bumps = bumps_spread(read.w, material.factors.z);
+            sample = vec3<f32>(read.xy * material.factors.z, read.z);
         }
         if painted.share > 0.0 {
             var over = vec3<f32>(0.0, 0.0, 1.0);
+            var over_spread = 0.0;
             if over_has(NORMAL) {
-                over = over_pictured(
-                    over_normal_texture, over_normal_sampler, NORMAL, corner, painted.mixing, painted.slopes,
-                ).xyz * 2.0 - 1.0;
-                over = vec3<f32>(over.xy * material.over_factors.z, over.z);
+                let read = over_bumps_pictured(
+                    over_normal_texture, over_normal_sampler, corner, painted.mixing, painted.slopes,
+                );
+                over_spread = bumps_spread(read.w, material.over_factors.z);
+                over = vec3<f32>(read.xy * material.over_factors.z, read.z);
             }
             sample = mix(sample, over, painted.share);
+            bumps = mix(bumps, over_spread, painted.share);
         }
         // The tangent is kept at right angles to the smoothed normal.
         let leaning = corner.tangent.xyz - normal * dot(normal, corner.tangent.xyz);
@@ -1811,6 +1901,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     var base_seen = base;
     // The `//!surface` lines are markers a game's surface shader swaps for calls (`game_shaders/template.rs`).
     //!surface settled
+    // Bumps and curves too small to see make the surface as much rougher
+    // as they spread its highlight: after a game's surface shader has said
+    // how rough it is, so that what it says is spread too.
+    let squared = roughness * roughness;
+    roughness = sqrt(sqrt(min(squared * squared + bumps + curving, 1.0)));
     var snowed = 0.0;
     var sparkle = 0.0;
     // How much light reaches snow banked against the side of a thing: it
@@ -1965,13 +2060,23 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
 
     // The sky and the ground, dimmed in crevices by the baked shadowing.
-    var from_around = matte * surroundings(normal);
-    // What it mirrors. A rough surface mirrors only the light of the sky
-    // and the ground; a smooth one mirrors the world itself, found in the
-    // picture kept from the frame before: walls in a puddle, the street in
-    // a window, the sky in a wet road.
+    let around_sky = surroundings(normal);
+    var from_around = matte * around_sky;
+    // What it mirrors. A rough surface mirrors only the sky and the
+    // ground, blurred as rough as it is; a smooth one mirrors the world
+    // itself, found in the picture kept from the frame before: walls in a
+    // puddle, the street in a window, the sky in a wet road.
     let shines = mirrored_share(mirror, roughness, n_eye) * kept;
-    let mirrored = surroundings(reflect(-to_eye, normal));
+    // The rougher it is, the more what it mirrors leans towards the way it
+    // faces (Filament's way, after Lagarde and de Rousiers, "Moving
+    // Frostbite to Physically Based Rendering", 2014). What a normal map
+    // would have it mirror from under the surface as it is built, it does
+    // not: the surface itself is in the way (Filament's fade at the
+    // horizon).
+    let bounced_way = reflect(-to_eye, normal);
+    let horizon = min(1.0 + dot(bounced_way, built), 1.0);
+    let mirrored = sky_mirrored(towards_or(mix(bounced_way, normal, alpha * alpha), normal), roughness)
+        * (horizon * horizon);
     var mirrors = 0.0;
     var mirrored_world = vec3<f32>(0.0);
     if view.walker.y > 0.25 && roughness < MIRRORS_BELOW {
@@ -2003,6 +2108,24 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     }
     let mirrored_around = mirrored * shines * (1.0 - mirrors) * mirror_dims;
     from_around *= around_dims;
+    // Where the probes are, the light from all round is theirs: the sky's
+    // and the ground's as far as each can be seen from here, and the light
+    // of the sun and the lamps thrown back off everything round about.
+    let probes = probe_light(corner.world, normal, to_eye);
+    // They also say how much of the sky can be seen round about, better
+    // than the look from above can, which lets a little in under any roof:
+    // the light they hold against what the open sky would give. So a room
+    // with no window mirrors no sky (Call of Duty scales what it mirrors
+    // by the light from all round at the point in the same way: Lazarov,
+    // "Getting More Physical in Call of Duty: Black Ops II", 2013). It
+    // never mirrors more of the sky than the look from above lets it, for
+    // the light the probes hold is brightened by what the sun throws back.
+    var mirrors_sky = sky_seen;
+    if probes.a > 0.0 {
+        let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let held = clamp(dot(probes.rgb, grey) / max(dot(around_sky, grey), 1e-6), 0.0, 1.0);
+        mirrors_sky = min(sky_seen, mix(1.0, held, probes.a));
+    }
 
     // What glows is the material's own, or the paint's where it is
     // painted over, and snow hides it.
@@ -2034,14 +2157,11 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let lamplight = from_lamps(
         corner.world, normal, built, to_eye, corner.position.xy, matte, mirror, roughness, kept, thin,
     );
-    // Where the probes are, the light from all round is theirs: the sky's
-    // and the ground's as far as each can be seen from here, and the light
-    // of the sun and the lamps thrown back off everything round about.
-    // Beyond them, and where light does not bounce, it is the sky's and the
-    // ground's dimmed by how much sky is seen, and a guess at what the
-    // sides of a street throw back.
+    // The light from all round is the probes' where they are. Beyond them,
+    // and where light does not bounce, it is the sky's and the ground's
+    // dimmed by how much sky is seen, and a guess at what the sides of a
+    // street throw back.
     var matte_around = from_around * sky_seen + from_sides;
-    let probes = probe_light(corner.world, normal, to_eye);
     if probes.a > 0.0 {
         matte_around = mix(matte_around, matte * probes.rgb * around_dims, probes.a);
     }
@@ -2054,7 +2174,7 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
         from_flash = matte * flash_falls(corner.world)
             * (sky.z * mix(0.25, 1.0, normal.y * 0.5 + 0.5) * crevices);
     }
-    return from_sun + from_behind + matte_around + mirrored_around * sky_seen + glow + glints
+    return from_sun + from_behind + matte_around + mirrored_around * mirrors_sky + glow + glints
         + from_world + lamplight + from_flash;
 }
 
@@ -2245,7 +2365,6 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     // How much of the sky a pixel covers, for what must be drawn as fine
     // as the picture is.
     let speck = length(fwidth(direction));
-    var colour = sky_colour(direction);
     // From under water there is no sky to the side: only water. (Looking
     // up, the water's own surface is drawn over this.)
     if sight_starts_under(view.eye.xyz + direction * 1000.0) {
@@ -2254,8 +2373,33 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         pixel.motion = vec2<f32>(0.0);
         return pixel;
     }
+    // Each pixel starts a different part of a step into the clouds, and a
+    // different one each frame; the upscaler makes smooth cloud of it.
+    let start = scattered(beyond.position.xy + view.shadows.w * vec2<f32>(2.71828, 7.38906));
+    var pixel: Pixel;
+    pixel.colour = vec4<f32>(sky_along(direction, start, speck, true), 1.0);
+    pixel.motion = vec2<f32>(0.0);
+    if beyond.before.w > 0.0 && beyond.steady.w > 0.0 {
+        let moved = beyond.before.xy / beyond.before.w - beyond.steady.xy / beyond.steady.w;
+        pixel.motion = moved * vec2<f32>(0.5, -0.5);
+    }
+    return pixel;
+}
+
+// The light that comes along `direction` (length one) out of the sky: the
+// clear sky, its clouds, and the fog and rain in front of them. With
+// `whole`, everything drawn behind the picture: the stars and the moon,
+// the sun's own disc, lightning, the tornado and what falls near the eye,
+// and the clouds walked in full. Without it, only what the sky lights the
+// world with (`skylight.wgsl`), in fewer steps. `start` is how far into its
+// first step a line of sight starts through the clouds, from 0 to 1, and
+// `speck` how much of the sky a pixel covers.
+fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<f32> {
+    var colour = sky_colour(direction);
     // The stars and the moon are behind everything else in the sky.
-    colour = night_sky(colour, direction, speck);
+    if whole {
+        colour = night_sky(colour, direction, speck);
+    }
     // Under a sky said to be all cloud there is no clear sky to be seen
     // anywhere: where the clouds thin away with distance, and along the
     // horizon below them, what shows is more of the cloud's grey. Under
@@ -2280,7 +2424,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     var disc = vec3<f32>(0.0);
     let beside = cross(direction, view.heavens[0].xyz);
     let out = dot(beside, beside) / (0.00465 * 0.00465);
-    if dot(direction, view.heavens[0].xyz) > 0.0 && out < 1.0 {
+    if whole && dot(direction, view.heavens[0].xyz) > 0.0 && out < 1.0 {
         let rise = clamp(direction.y, 0.0, 1.0);
         let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
         disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
@@ -2297,9 +2441,8 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     // above, looking down on them is not drawn yet.
     let eye_height = view.eye.y;
     if view.clouds.x > 0.0 && direction.y > 0.004 {
-        // Each pixel starts a different part of a step in, and a different
-        // one each frame; the upscaler makes smooth cloud of it.
-        let start = scattered(beyond.position.xy + view.shadows.w * vec2<f32>(2.71828, 7.38906));
+        let steps = select(SKYLIGHT_CLOUD_STEPS, CLOUD_STEPS, whole);
+        let low_steps = select(SKYLIGHT_CLOUD_LOW_STEPS, CLOUD_LOW_STEPS, whole);
         // A cloud's drops send most of the sun's light onwards and a little
         // back. Light that has bounced among them many times is what makes
         // a cloud white: each further bounce is worked out as the same
@@ -2376,15 +2519,15 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
         var distance = 0.0;
         var weight = 0.0;
         var weather = vec3<f32>(0.0);
-        for (var number = 0; number < CLOUD_STEPS && leaves > enters; number++) {
-            var stride = (middle - enters) / f32(CLOUD_LOW_STEPS);
+        for (var number = 0; number < steps && leaves > enters; number++) {
+            var stride = (middle - enters) / f32(low_steps);
             var away = enters + (f32(number) + start) * stride;
-            if number >= CLOUD_LOW_STEPS {
+            if number >= low_steps {
                 if !stormy {
                     break;
                 }
-                stride = (leaves - middle) / f32(CLOUD_STEPS - CLOUD_LOW_STEPS);
-                away = middle + (f32(number - CLOUD_LOW_STEPS) + start) * stride;
+                stride = (leaves - middle) / f32(steps - low_steps);
+                away = middle + (f32(number - low_steps) + start) * stride;
             }
             // How high this point of the line is over a round Earth.
             let height = sqrt(earth * earth + away * away + 2.0 * earth * away * direction.y)
@@ -2428,7 +2571,7 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             let from_sky = around * mix(0.35 + 0.75 * min(up * 2.5, 1.0), 1.15, closed)
                 * (1.0 - 0.93 * max(found.y, 0.75 * heavy) * (1.0 - up * up));
             var from_flash = vec3<f32>(0.0);
-            if found.y > 0.0 {
+            if whole && found.y > 0.0 {
                 // Lightning lights the cloud round it from inside.
                 for (var which = 0; which < 2; which++) {
                     let off = place - view.flashes[which].xyz;
@@ -2475,22 +2618,18 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
             fog_hides(mist, vec3<f32>(direction.x, max(direction.y, 0.004), direction.z), 1000000.0),
         );
     }
-    colour = tornado_over(colour, direction, 1000000000.0, true);
+    if whole {
+        colour = tornado_over(colour, direction, 1000000000.0, true);
+    }
     // In rain the sky is seen through it: greyed.
     if view.weather[0].x > 0.0 {
         let grey = storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z)));
         colour = mix(colour, grey, 1.0 - exp(-view.weather[0].x * 0.7));
     }
-    colour = falling_over(colour, direction, 1000000000.0);
-
-    var pixel: Pixel;
-    pixel.colour = vec4<f32>(colour, 1.0);
-    pixel.motion = vec2<f32>(0.0);
-    if beyond.before.w > 0.0 && beyond.steady.w > 0.0 {
-        let moved = beyond.before.xy / beyond.before.w - beyond.steady.xy / beyond.steady.w;
-        pixel.motion = moved * vec2<f32>(0.5, -0.5);
+    if whole {
+        colour = falling_over(colour, direction, 1000000000.0);
     }
-    return pixel;
+    return colour;
 }
 
 //!include water.wgsl
@@ -2501,3 +2640,4 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
 //!include bounce.wgsl
 //!include air.wgsl
 //!include occlusion.wgsl
+//!include skylight.wgsl

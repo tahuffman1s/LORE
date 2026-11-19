@@ -29,6 +29,7 @@ use crate::occlusion::{self, Shade};
 use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
+use crate::skylight::{Heavens, Skylight};
 use crate::swapchain::COLOUR;
 use crate::texture::AnisotropicFiltering;
 use crate::tracks::TrackMap;
@@ -882,6 +883,9 @@ pub(crate) struct MeshPipeline {
     shadows: Option<ShadowMap>,
     /// Light that bounces: `None` only while the pipeline is being built.
     bounce: Option<BounceWorks>,
+    /// The light of the sky from every way: `None` only while the pipeline
+    /// is being built.
+    skylight: Option<Skylight>,
     /// What the lamps that cast shadows see: made when a lamp first needs
     /// it, and made again when the player's setting changes.
     lamp_atlas: RefCell<Option<LampAtlas>>,
@@ -964,6 +968,7 @@ impl MeshPipeline {
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             bounce: None,
+            skylight: None,
             lamp_atlas: RefCell::new(None),
             lamp_bound: RefCell::new(vec![vk::ImageView::null(); frames.max(1)]),
             lamp_atlas_failed: Cell::new(None),
@@ -1014,6 +1019,7 @@ impl MeshPipeline {
         let track_view = tracks.view();
         mesh.tracks = Some(tracks);
         mesh.bounce = Some(BounceWorks::new(gpu, frames)?);
+        mesh.skylight = Some(Skylight::new(gpu)?);
         let smaller_depth = |binding: u32| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(binding)
@@ -1160,6 +1166,18 @@ impl MeshPipeline {
             smaller_depth(29),
             smaller_depth(30),
             smaller_depth(31),
+            // The light of the sky: as drawn, blurred for each roughness,
+            // its numbers, what reads them, and the parts the numbers are
+            // added up from.
+            smaller_depth(32),
+            smaller_depth(33),
+            smaller_depth(34),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(35)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            smaller_depth(36),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1170,14 +1188,14 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid and
-            // bounce light's list, twenty-two pictures, two written, and
-            // four readers.
+            // bounce light's list, twenty-six pictures, two written, and
+            // five readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 3,
-                vk::DescriptorType::SAMPLED_IMAGE => 22,
+                vk::DescriptorType::SAMPLED_IMAGE => 26,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
-                _ => 4,
+                _ => 5,
             };
             vk::DescriptorPoolSize::default()
                 .ty(kind)
@@ -1330,6 +1348,10 @@ impl MeshPipeline {
                 device.update_descriptor_sets(&writes, &[]);
                 if let Some(bounce) = &mesh.bounce {
                     let infos = bounce.infos(mesh.views.len());
+                    device.update_descriptor_sets(&infos.writes(set), &[]);
+                }
+                if let Some(skylight) = &mesh.skylight {
+                    let infos = skylight.infos();
                     device.update_descriptor_sets(&infos.writes(set), &[]);
                 }
                 mesh.views.push((buffer, set));
@@ -1605,6 +1627,27 @@ impl MeshPipeline {
             if let Err(code) = made {
                 log::warn!(
                     "Light does not bounce: the graphics driver could not make its shaders ({code:?})."
+                );
+            }
+        }
+        // The light of the sky's: a card that cannot make them lights
+        // things with the level's two colours, as before, and says so once.
+        if failed.is_none()
+            && let Some(skylight) = &mut mesh.skylight
+        {
+            let shared = bounce::Shared {
+                assembly: &assembly,
+                viewport: &viewport,
+                raster: &raster,
+                multisample: &multisample,
+                dynamic: &dynamic,
+            };
+            // SAFETY: the module and layout are live and hold what
+            // `skylight.wgsl` names.
+            let made = unsafe { skylight.make_pipelines(module, layout, &shared) };
+            if let Err(code) = made {
+                log::warn!(
+                    "The sky is not mirrored: the graphics driver could not make its shaders ({code:?}). Surfaces are lit by the level's sky and ground colours instead."
                 );
             }
         }
@@ -2098,6 +2141,26 @@ impl MeshPipeline {
                 // this pipeline's own, and no pass has been begun yet.
                 unsafe { self.record_lamp_shadows(commands, meshes, atlas, frame_lamps.faces()) };
             }
+        }
+        // The light of the sky, before the probes and the picture that
+        // read it.
+        if let Some(skylight) = &self.skylight
+            && let Ok(mut turns) = skylight.turns.try_borrow_mut()
+        {
+            let now = sky.map(|sky| Heavens {
+                lighting,
+                sky: *sky,
+                weather,
+                heavens,
+                drift: view.time,
+                eye: view.eye,
+            });
+            let work = turns.plan(now.as_ref(), view.elapsed <= 0.0);
+            drop(turns);
+            // SAFETY: the caller's guarantees cover this frame's set, now
+            // written, and the pictures, which are this pipeline's own; no
+            // pass has been begun yet.
+            unsafe { skylight.record(commands, *view_set, self.layout, work) };
         }
         // Bounce light: the copy of the level, the rays and the probes,
         // before the picture that reads them.
@@ -3411,7 +3474,7 @@ impl MeshPipeline {
 ///
 /// `commands` must be recording outside a render pass, and the attachments
 /// must be in the layouts they say.
-unsafe fn begin_drawing(
+pub(crate) unsafe fn begin_drawing(
     device: &ash::Device,
     commands: vk::CommandBuffer,
     width: u32,
