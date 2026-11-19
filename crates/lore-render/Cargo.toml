@@ -29,8 +29,9 @@ egui = { version = "0.36.2", default-features = false, optional = true }
 egui-ash-renderer = { version = "0.13", default-features = false, optional = true }
 
 [build-dependencies]
-# Compiles the shaders in `shaders/` to SPIR-V, so no system shader compiler is needed.
-naga = { version = "30", default-features = false, features = ["wgsl-in", "spv-out"] }
+# Compiles the shaders in `shaders/` to SPIR-V (through naga), so no system
+# shader compiler is needed. The same crate checks a game's own shaders.
+lore-shader = { path = "../lore-shader" }
 
 [lints]
 workspace = true
