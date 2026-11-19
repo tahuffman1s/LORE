@@ -23,6 +23,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use lore_shader::{Given, Hook, ParamBlock, ParamValue, ShaderError, params_of};
@@ -113,12 +114,11 @@ enum Origin {
     /// The file `shaders/<name>.wgsl`, as it looked when it was read.
     File {
         /// Taken before the file was read, so a save in between is seen.
-        // Read by the file poller.
-        #[allow(dead_code)]
         watch: Watch,
         /// How many looks in a row found the file gone.
-        #[allow(dead_code)]
         missing: u8,
+        /// Where the file is, so a look at it allocates nothing.
+        path: Option<PathBuf>,
     },
     /// The script gave it.
     Code,
@@ -168,6 +168,112 @@ impl ShaderState {
 
     fn bump(&self) {
         self.revision.set(self.revision.get().wrapping_add(1));
+    }
+
+    /// Looks at each shader's file, as the host's look at its script files
+    /// does, and reads again the ones saved. A save keeps the values the
+    /// script set that still fit; a file that cannot be used leaves the last
+    /// good version drawn and says why. Does nothing for a game without
+    /// files, and allocates nothing when no file changed.
+    pub(crate) fn poll(&self) {
+        if !self.files.on_disk() {
+            return;
+        }
+        let mut changed = false;
+        for entry in self.entries.borrow_mut().iter_mut() {
+            changed |= self.look(entry);
+        }
+        if changed {
+            self.bump();
+        }
+    }
+
+    /// One shader's file. Whether the list changed.
+    fn look(&self, entry: &mut Entry) -> bool {
+        let Origin::File {
+            watch,
+            missing,
+            path: Some(path),
+        } = &mut entry.origin
+        else {
+            return false;
+        };
+        let seen = stamp(path);
+        if seen.is_none() {
+            // An editor that saves by deleting and renaming is gone for one
+            // look; two in a row is a file that is not coming back by itself.
+            watch.should_reload(None);
+            *missing = missing.saturating_add(1);
+            return *missing == 2 && set_gone(&mut entry.said);
+        }
+        let was_gone = *missing >= 2;
+        if watch.should_reload(seen) {
+            return self.reread(entry);
+        }
+        if !was_gone {
+            *missing = 0;
+        } else if watch.is_loaded(seen) {
+            // Back as it was.
+            *missing = 0;
+            entry.said.problem = None;
+            return true;
+        }
+        false
+    }
+
+    /// The file was saved: reads it, keeping what the script set that still
+    /// fits. Whether the list changed.
+    fn reread(&self, entry: &mut Entry) -> bool {
+        let relative = entry.said.file.clone();
+        let text = match self.files.read(&relative) {
+            Ok(text) => text,
+            Err(ReadProblem::Missing) => {
+                if let Origin::File { missing, .. } = &mut entry.origin {
+                    *missing = 2;
+                }
+                return set_gone(&mut entry.said);
+            }
+            Err(problem) => {
+                let call = call_text(&entry.said.name, &entry.said.used_as);
+                let message = self.explain(
+                    &problem,
+                    &call,
+                    &entry.said.used_as,
+                    &entry.said.name,
+                    &relative,
+                );
+                return set_problem(&mut entry.said, problem_of(&relative, message, None));
+            }
+        };
+        let params = match params_of(&relative, &text) {
+            Ok(params) => params,
+            Err(error) => {
+                return set_problem(&mut entry.said, error.with_note(STILL_DRAWN));
+            }
+        };
+        if let Origin::File { missing, .. } = &mut entry.origin {
+            *missing = 0;
+        }
+        let block = ParamBlock::new(params);
+        let said = &mut entry.said;
+        let shader = shader_text(&said.name, &said.used_as);
+        let mut dropped = false;
+        said.values.retain(|(name, value)| {
+            let Some(why) = why_dropped(&entry.block, &block, name, value, &relative) else {
+                return true;
+            };
+            log::warn!(
+                "The script set `{name}` on the {shader}, but {why}, so it is dropped: the \
+                 shader's default is drawn until the script sets it again."
+            );
+            dropped = true;
+            false
+        });
+        let changed = dropped || said.text != text || said.problem.is_some();
+        said.text = text;
+        said.problem = None;
+        entry.block = block;
+        changed
     }
 
     /// Calls `see` with each shader, in the order turned on.
@@ -240,7 +346,13 @@ impl ShaderState {
 
     /// Reads `shaders/<name>.wgsl`. A file that cannot be used while the
     /// script loads is noted, so saving or making it loads the script again.
-    fn read_file(&self, shared: &Shared, call: &str, name: &str) -> Result<Source, String> {
+    fn read_file(
+        &self,
+        shared: &Shared,
+        call: &str,
+        used: &ShaderUse,
+        name: &str,
+    ) -> Result<Source, String> {
         let relative = format!("shaders/{name}.wgsl");
         let path = self.files.path(&relative);
         // Looked at before the file is read, so a save in between is seen.
@@ -256,7 +368,7 @@ impl ShaderState {
             Ok(text) => text,
             Err(problem) => {
                 note();
-                return Err(self.explain(&problem, call, name, &relative));
+                return Err(self.explain(&problem, call, used, name, &relative));
             }
         };
         match params_of(&relative, &text) {
@@ -267,7 +379,9 @@ impl ShaderState {
                 origin: Origin::File {
                     watch: Watch::loaded(seen),
                     missing: 0,
+                    path,
                 },
+                reused: false,
             }),
             Err(error) => {
                 note();
@@ -277,7 +391,14 @@ impl ShaderState {
     }
 
     /// Why `shaders/<name>.wgsl` could not be read, and what to do.
-    fn explain(&self, problem: &ReadProblem, call: &str, name: &str, relative: &str) -> String {
+    fn explain(
+        &self,
+        problem: &ReadProblem,
+        call: &str,
+        used: &ShaderUse,
+        name: &str,
+        relative: &str,
+    ) -> String {
         match problem {
             ReadProblem::Missing => {
                 let others = self.files.files_in("shaders", ".wgsl");
@@ -292,13 +413,10 @@ impl ShaderState {
                 let mut said =
                     format!("{call} needs the file {relative}, which the game does not have.");
                 if let Some(near) = closest(name, others.iter().map(String::as_str)) {
-                    let _ = write!(said, " Did you mean {}?", call.replacen(name, near, 1));
+                    let _ = write!(said, " Did you mean {}?", call_text(near, used));
                 }
-                let hook = match call.starts_with("game.shaders.surface") {
-                    true => Hook::Surface,
-                    false => Hook::Screen,
-                };
-                let starter = hook
+                let starter = used
+                    .hook()
                     .starter()
                     .split_whitespace()
                     .collect::<Vec<_>>()
@@ -352,12 +470,77 @@ impl ShaderState {
     }
 }
 
+/// What a look at a saved file says of a shader that is still drawn.
+const STILL_DRAWN: &str = "The last version that worked is still drawn.";
+
+/// An error for the shader's file, with no line.
+fn problem_of(file: &str, message: String, hint: Option<&str>) -> ShaderError {
+    ShaderError {
+        file: file.to_owned(),
+        line: None,
+        column: None,
+        message,
+        source_line: None,
+        hint: hint.map(str::to_owned),
+        note: Some(STILL_DRAWN.to_owned()),
+        lore_fault: false,
+    }
+}
+
+/// Keeps `error` as the shader's problem and logs it, unless it is the
+/// problem already. Whether anything changed.
+fn set_problem(said: &mut ShaderSaid, error: ShaderError) -> bool {
+    if said.problem.as_ref() == Some(&error) {
+        return false;
+    }
+    log::error!("{error}");
+    said.problem = Some(error);
+    true
+}
+
+/// The shader's file is not there.
+fn set_gone(said: &mut ShaderSaid) -> bool {
+    let mut error = problem_of(
+        &said.file,
+        format!("{} is gone: it was deleted, moved or renamed.", said.file),
+        Some("Put the file back, or turn the shader off in the script with :remove()."),
+    );
+    error.note = Some("The last version read is still drawn.".to_owned());
+    set_problem(said, error)
+}
+
+/// Why a value the script set does not fit the shader as saved now, if it
+/// does not.
+fn why_dropped(
+    old: &ParamBlock,
+    new: &ParamBlock,
+    name: &str,
+    value: &ParamValue,
+    file: &str,
+) -> Option<String> {
+    let Some(now) = new.params().iter().find(|param| param.name == name) else {
+        return Some(format!("{file} no longer has it"));
+    };
+    let before = old.params().iter().find(|param| param.name == name);
+    if before.map(|param| param.kind) != Some(now.kind) {
+        return Some(format!("`{name}` in {file} is now a {}", now.kind.name()));
+    }
+    match (value, now.range) {
+        (ParamValue::F32(number), Some((low, high))) if !(low..=high).contains(number) => Some(
+            format!("`{name}` in {file} is now from {low} to {high}, and {number} is outside that"),
+        ),
+        _ => None,
+    }
+}
+
 /// A shader's text, found and scanned.
 struct Source {
     label: String,
     text: String,
     block: ParamBlock,
     origin: Origin,
+    /// Taken from the shader already on, which the poller keeps current.
+    reused: bool,
 }
 
 /// What a script wrote that a value cannot be made from.
@@ -764,6 +947,7 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
                     text: code.to_owned(),
                     block: ParamBlock::new(params),
                     origin: Origin::Code,
+                    reused: false,
                 },
                 Err(error) => {
                     return Err(fail(lua, format!("{call} cannot use {}", one_line(&error))));
@@ -784,13 +968,14 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
                             text: entry.said.text.clone(),
                             block: entry.block.clone(),
                             origin: entry.origin.clone(),
+                            reused: true,
                         },
                     )
                 });
             match reuse {
                 Some(source) => source,
                 None => state
-                    .read_file(&shared, &call, &name)
+                    .read_file(&shared, &call, &used, &name)
                     .map_err(|message| fail(lua, message))?,
             }
         }
@@ -821,10 +1006,14 @@ fn ask(lua: &Lua, used: ShaderUse, name: &Value, values: &Value) -> mlua::Result
             let entry = &mut entries[at];
             let changed = entry.said.file != source.label
                 || entry.said.text != source.text
-                || entry.said.problem.is_some();
+                || (!source.reused && entry.said.problem.is_some());
             entry.said.file = source.label;
             entry.said.text = source.text;
-            entry.said.problem = None;
+            // Asking again does not hide a broken file: only a fresh read or
+            // new code clears the problem.
+            if !source.reused {
+                entry.said.problem = None;
+            }
             entry.said.values = set;
             entry.block = source.block;
             entry.origin = source.origin;

@@ -724,3 +724,206 @@ fn a_shader_file_that_is_missing_as_the_script_loads_loads_it_again_once_made() 
     }
     assert_eq!(names(&host), ["glow"]);
 }
+
+// A shader file saved while the game runs.
+
+/// Polls until `done`, or gives up.
+fn wait_until(host: &mut ScriptHost, done: impl Fn(&ScriptHost) -> bool) {
+    let start = Instant::now();
+    while !done(host) {
+        host.poll_reload();
+        assert!(start.elapsed().as_secs() < 10, "the save was not picked up");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Saves a shader file a little longer each time, so the save shows even if
+/// the clock has not moved.
+fn save(folder: &GameFolder, name: &str, text: &str) {
+    static MORE: AtomicU32 = AtomicU32::new(0);
+    let more = "x".repeat(MORE.fetch_add(1, Ordering::Relaxed) as usize + 1);
+    folder.shader(name, &format!("{text}// saved {more}\n"));
+}
+
+/// The one shader on, as the engine is handed it.
+fn heat_of(host: &ScriptHost) -> ShaderSaid {
+    on(host).into_iter().next().expect("a shader is on")
+}
+
+const HEAT_SCRIPT: &str = r#"
+    local ticks = 0
+    local heat = game.shaders.screen("heat", { strength = 0.4, tint = "red", offset = {1, 2}, dir = {1, 0, 0} })
+    game.onTick(function()
+        ticks = ticks + 1
+        heat:set("strength", ticks / 1000)
+    end)
+"#;
+
+fn strength_of(host: &ScriptHost) -> f32 {
+    match heat_of(host)
+        .values
+        .iter()
+        .find(|(name, _)| name == "strength")
+    {
+        Some((_, ParamValue::F32(number))) => *number,
+        other => panic!("strength is {other:?}"),
+    }
+}
+
+#[test]
+fn saving_a_shader_file_reads_it_again_and_keeps_what_the_script_set() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    run(&mut host, 5);
+    let before = host.shader_revision();
+    let old = heat_of(&host);
+    assert_eq!(old.values.len(), 4);
+    let changed = HEAT.replace("return in.color", "return in.color * 0.9 + 0.0");
+    save(&folder, "heat", &changed);
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let now = heat_of(&host);
+    assert!(now.text.contains("* 0.9"));
+    assert_ne!(now.text, old.text);
+    assert_eq!(now.values, old.values);
+    assert!(now.problem.is_none());
+    // The script was not loaded again: its counter goes on from 5.
+    run(&mut host, 1);
+    assert!(
+        (strength_of(&host) - 0.006).abs() < 1e-6,
+        "{}",
+        strength_of(&host)
+    );
+    assert!(host.last_error().is_none());
+}
+
+#[test]
+fn a_save_drops_a_value_that_is_gone_changed_kind_or_out_of_range() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    let before = host.shader_revision();
+    // `strength` now stops at 0.3 (the script set 0.4), `tint` is a vec3f,
+    // `offset` is gone, and `dir` is as it was.
+    let text = "//! param strength: f32 = 0.1 range 0..0.3\n\
+        //! param tint: vec3f = (0, 0, 0)\n\
+        //! param dir: vec3f = (0, 1, 0)\n\
+        fn screen(in: ScreenIn) -> vec3f { return in.color; }\n";
+    save(&folder, "heat", text);
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let now = heat_of(&host);
+    assert_eq!(
+        now.values,
+        [("dir".to_owned(), ParamValue::Vec3([1.0, 0.0, 0.0]))]
+    );
+    assert!(now.problem.is_none());
+}
+
+#[test]
+fn a_bad_save_keeps_the_last_good_shader_until_a_good_one() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    let old = heat_of(&host);
+    let before = host.shader_revision();
+    save(
+        &folder,
+        "heat",
+        "//! param strength: nonsense = 1\nfn screen(in: ScreenIn) -> vec3f { return in.color; }\n",
+    );
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let now = heat_of(&host);
+    let problem = now.problem.as_ref().expect("a problem");
+    assert_eq!(problem.file, "shaders/heat.wgsl");
+    assert_eq!(problem.line, Some(1));
+    assert_eq!(
+        problem.note.as_deref(),
+        Some("The last version that worked is still drawn.")
+    );
+    assert_eq!(now.text, old.text);
+    assert_eq!(now.values, old.values);
+    let broken = host.shader_revision();
+    save(&folder, "heat", HEAT);
+    wait_until(&mut host, |host| host.shader_revision() != broken);
+    let now = heat_of(&host);
+    assert!(now.problem.is_none());
+    assert!(now.text.starts_with("//! param strength: f32"));
+    assert_eq!(now.values, old.values);
+}
+
+#[test]
+fn a_shader_file_that_is_deleted_is_gone_until_it_is_put_back() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    let old = heat_of(&host);
+    let before = host.shader_revision();
+    std::fs::remove_file(folder.0.join("shaders/heat.wgsl")).unwrap();
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let now = heat_of(&host);
+    let problem = now.problem.as_ref().expect("a problem");
+    assert_eq!(
+        problem.message,
+        "shaders/heat.wgsl is gone: it was deleted, moved or renamed."
+    );
+    assert_eq!(
+        problem.hint.as_deref(),
+        Some("Put the file back, or turn the shader off in the script with :remove().")
+    );
+    assert_eq!(
+        problem.note.as_deref(),
+        Some("The last version read is still drawn.")
+    );
+    assert_eq!(problem.line, None);
+    assert_eq!(now.text, old.text);
+    let gone = host.shader_revision();
+    save(&folder, "heat", HEAT);
+    wait_until(&mut host, |host| host.shader_revision() != gone);
+    assert!(heat_of(&host).problem.is_none());
+    assert_eq!(heat_of(&host).values, old.values);
+}
+
+#[test]
+fn a_file_back_unchanged_clears_the_gone_problem() {
+    let folder = GameFolder::new(HEAT_SCRIPT);
+    let mut host = folder.open();
+    let path = folder.0.join("shaders/heat.wgsl");
+    let kept = folder.0.join("heat.wgsl.moved");
+    std::fs::rename(&path, &kept).unwrap();
+    wait_until(&mut host, |host| heat_of(host).problem.is_some());
+    // Moved back, so it looks just as it did when it was read.
+    std::fs::rename(&kept, &path).unwrap();
+    wait_until(&mut host, |host| heat_of(host).problem.is_none());
+}
+
+#[test]
+fn a_script_asking_again_does_not_hide_a_broken_file() {
+    let folder = GameFolder::new(
+        r#"
+        game.shaders.screen("heat", { strength = 0.2 })
+        game.onTick(function() game.shaders.screen("heat", { strength = 0.3 }) end)
+    "#,
+    );
+    let mut host = folder.open();
+    let before = host.shader_revision();
+    save(
+        &folder,
+        "heat",
+        "//! param strength: nonsense = 1\nfn screen(in: ScreenIn) -> vec3f { return in.color; }\n",
+    );
+    wait_until(&mut host, |host| host.shader_revision() != before);
+    let broken = host.shader_revision();
+    run(&mut host, 3);
+    assert!(heat_of(&host).problem.is_some());
+    assert_eq!(host.shader_revision(), broken);
+}
+
+#[test]
+fn a_missing_shader_suggests_the_near_name_even_when_the_name_is_short() {
+    let said = mistake_with(r#"game.shaders.screen("s")"#, &[("so", HEAT)]);
+    assert!(
+        said.contains("Did you mean game.shaders.screen(\"so\")?"),
+        "{said}"
+    );
+    let said = mistake_with(r#"game.shaders.surface("s", "Lava")"#, &[("so", LAVA)]);
+    assert!(
+        said.contains("Did you mean game.shaders.surface(\"so\", \"Lava\")?"),
+        "{said}"
+    );
+}

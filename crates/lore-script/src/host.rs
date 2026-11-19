@@ -1073,6 +1073,8 @@ impl ScriptHost {
             return;
         }
         self.next_poll = now + POLL_EVERY;
+        // The shader files, which a save changes without loading the script.
+        self.shaders.poll();
         // A script required for the first time while the game runs.
         if let Some(version) = &self.running {
             let touched = version.shared.modules.take_touched();

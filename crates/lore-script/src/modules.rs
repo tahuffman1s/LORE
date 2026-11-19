@@ -52,6 +52,11 @@ impl Watch {
         }
     }
 
+    /// Whether `seen` is the file as it was loaded.
+    pub(crate) fn is_loaded(&self, seen: Option<Stamp>) -> bool {
+        seen == self.loaded
+    }
+
     /// Takes what the file looks like now and says whether to reload it.
     ///
     /// A change must look the same on two checks in a row, so a file caught
