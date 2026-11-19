@@ -388,7 +388,10 @@ card's part of a usual frame: on an RX 7800 XT 1.39 ms off, 1.48 ms low,
 adds about 0.13 ms of the engine's own work in that scene's 1 600 blocks.
 A step that finds nothing above its pixel's own surface is dropped after
 one read, so open ground costs little: before that, medium was 61 ms on
-lavapipe.
+lavapipe. The benchmark now draws with the shade on medium, as a game does,
+and CI's lavapipe budget for a slow frame was raised from 400 to 450 ms
+for it: the slower of CI's two kinds of machine already took 373 ms on
+main, and this PR's run took 378 ms.
 
 Where much is hidden behind other things the depth pass more than pays
 for the shade. The jungle example from its lake shore, RX 7800 XT: 22.4
