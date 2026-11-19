@@ -800,3 +800,32 @@ fn what_runs_over_a_tank_does_not_come_back_through_the_foot_of_its_wall() {
     );
     assert!(fluids.litres(Some(0)) > 400.0, "{}", fluids.litres(Some(0)));
 }
+
+#[test]
+fn a_mix_that_runs_over_a_rim_lands_as_much_as_left_the_pool() {
+    // A tub half water and half honey, full to its brim, and 300 litres
+    // more of the same mix: all of that runs out onto the floor.
+    let level = tub_level(r#"{"water": true}"#);
+    let mut fluids = world(&level);
+    let pool = &fluids.pools()[0];
+    let (held, full) = (pool.litres(), pool.capacity());
+    fluids.pool_add(0, HONEY, held);
+    fluids.pool_take(0, 2.0 * held - full);
+    fluids.pool_add(0, 0, 150.0);
+    fluids.pool_add(0, HONEY, 150.0);
+    assert!(close(fluids.pools()[0].share(HONEY), 0.5, 0.01));
+    let before = fluids.pools()[0].litres();
+    let mut ran = 0.0;
+    for _ in 0..20 * 60 {
+        fluids.step(&level, DT);
+        ran += fluids.pools()[0].spilled();
+    }
+    assert!(close(ran, 300.0, 3.0), "{ran} litres ran out");
+    // Both kinds lie outside, by their shares, and together they are what
+    // ran out: neither washed the other away where they landed.
+    let (water, honey) = (fluids.litres(Some(0)), fluids.litres(Some(HONEY)));
+    assert!(close(honey, 150.0, 12.0), "{honey} litres of honey");
+    assert!(close(water, 150.0, 12.0), "{water} litres of water");
+    let all = fluids.pools()[0].litres() + water + honey;
+    assert!(close(all, before, 6.0), "{all} litres of {before}");
+}

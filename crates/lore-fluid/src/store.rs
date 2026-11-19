@@ -43,6 +43,10 @@ pub(crate) struct Particle {
     /// lands: the droplets of a splash are small and slow, and a splash of
     /// splashes would fill the store with spatter.
     pub thrown: bool,
+    /// It came out of a pool, over its rim or thrown up from it: part of
+    /// a mix, which washes nothing away and covers nothing where it
+    /// lands, as a jet of one clean kind does.
+    pub of_a_mix: bool,
     /// A counter bumped for every drop made: the bigger, the newer.
     pub born: u64,
     /// Metres a second, in flight.
@@ -89,6 +93,7 @@ impl Particle {
             changed: false,
             calm: false,
             thrown: false,
+            of_a_mix: false,
         }
     }
 
