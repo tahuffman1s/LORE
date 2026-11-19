@@ -285,8 +285,12 @@ ray-tracing hardware is needed (`bounce.rs`, `bounce.wgsl`).
   (Chebyshev's bound on its distances), which is what stops light leaking
   through walls. Its light replaces the sky-and-ground fill dimmed by how
   much sky is seen and the guess at what a street's sides throw back,
-  fading to them at the grid's edge. The material's own baked shadowing
-  still darkens its crevices.
+  fading to them by how far the surface is from the eye: all the probes'
+  within about 6 m across and 2.5 m up or down, all the fill's from 10.5 m
+  and 4.5 m, where the grid always reaches. The grid moves a whole probe
+  at a time; faded at its edge, light ahead changed in a band at every
+  step, and where the two disagree a ring showed round the player. The
+  material's own baked shadowing still darkens its crevices.
 - **Held still**, nothing is traced again until the eye, the level or the
   setting changes, so the same view gives the same picture.
 

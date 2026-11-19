@@ -994,6 +994,45 @@ mod tests {
     }
 
     #[test]
+    fn the_probes_are_trusted_only_where_the_grid_reaches_wherever_the_eye_is() {
+        // What the eye sees trusts the probes out to this far from it along
+        // each axis (`probes_trusted` in `bounce.wgsl`), and the shader
+        // finds a probe's place `PROBE_OFFSET` from its cell's middle.
+        let reach = PROBES.map(|count| (count as f32 * 0.5 - 1.5) * SPACING);
+        let offset = 0.125;
+        let mut grid = ProbeGrid::default();
+        for step in 0..400 {
+            // Across whole metres and between them, below nought and above.
+            let along = step as f32 * 0.137 - 27.0;
+            let eye = [along, along * 0.61 + 1.7, -along * 1.3];
+            let plan = grid.plan(eye, 1, Bounce::Medium, false);
+            let origin = [0, 1, 2].map(|part| {
+                let at = 2 * 16 + part * 4;
+                i32::from_ne_bytes([
+                    plan.bytes[at],
+                    plan.bytes[at + 1],
+                    plan.bytes[at + 2],
+                    plan.bytes[at + 3],
+                ])
+            });
+            for axis in 0..3 {
+                for side in [-1.0, 1.0] {
+                    // In probes from the lowest corner of the grid, as the
+                    // shader counts.
+                    let place = eye[axis] + side * reach[axis];
+                    let grid_at = (place - offset) / SPACING - 0.5 - origin[axis] as f32;
+                    let last = (PROBES[axis] - 1) as f32;
+                    assert!(
+                        grid_at > 0.0 && grid_at < last,
+                        "at {eye:?} the probes are trusted {place} along axis {axis}, \
+                         outside the grid ({grid_at} of 0 to {last})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_first_frame_traces_every_probe_and_draws_the_level_then_takes_turns() {
         let mut grid = ProbeGrid::default();
         let first = grid.plan([0.5, 1.7, 0.5], 1, Bounce::Medium, false);

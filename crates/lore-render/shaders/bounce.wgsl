@@ -172,13 +172,21 @@ fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tra
     let asked = world + (normal * 0.2 + to_eye * 0.8) * (0.3 * spacing);
     let grid = (asked - PROBE_OFFSET) / spacing - 0.5;
     let origin = bounce.probe_origin.xyz;
-    // Outside the grid the probes are not used at all; they are trusted
-    // fully a probe and a half in from its edge.
+    // Outside the grid the probes are not used at all.
     let low = grid - vec3<f32>(origin);
     let high = vec3<f32>(origin + PROBES - 1) - grid;
     let inside = min(min(min(low.x, low.y), low.z), min(min(high.x, high.y), high.z));
     if inside <= 0.0 {
         return vec4<f32>(0.0);
+    }
+    // A ray's end trusts them fully a probe and a half in from the grid's
+    // edge. What the eye sees trusts them by how far from the eye it is
+    // (`probes_trusted`), which moves as smoothly as the eye does: the
+    // grid's edge moves a whole probe at a time, and light that changed
+    // there would change in a band ahead at every step.
+    var trusted = clamp(inside / 1.5, 0.0, 1.0);
+    if !tracing {
+        trusted = min(trusted, probes_trusted(asked));
     }
     let base = vec3<i32>(floor(grid));
     let share = grid - floor(grid);
@@ -234,7 +242,21 @@ fn probe_light_known(world: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, tra
         return vec4<f32>(0.0);
     }
     // Where no probe round about can see the point, they are not trusted.
-    return vec4<f32>(sum / total, clamp(inside / 1.5, 0.0, 1.0) * smoothstep(1e-5, 1e-3, total));
+    return vec4<f32>(sum / total, trusted * smoothstep(1e-5, 1e-3, total));
+}
+
+// How far the probes are trusted at `world`, from 1 near the eye to 0 a
+// little inside the nearest the grid's edge can come to it (it is placed
+// by whole probes round the eye: half the grid less a probe and a half
+// away at the least). Light the probes find and the sky-and-ground fill
+// beyond them are blended over the outer half of that, so that where the
+// two differ there is no edge to see, and nothing changes in a step as
+// the eye moves.
+fn probes_trusted(world: vec3<f32>) -> f32 {
+    let reach = (vec3<f32>(PROBES) * 0.5 - 1.5) * bounce.probe.x;
+    let off = abs(world - view.eye.xyz) / reach;
+    let farthest = max(max(off.x, off.z), off.y);
+    return 1.0 - smoothstep(0.55, 1.0, farthest);
 }
 
 // The light of the nearest lamps on a surface facing `normal` at `world`,
