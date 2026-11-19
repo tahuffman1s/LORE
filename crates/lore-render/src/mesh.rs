@@ -25,6 +25,7 @@ use crate::grid::{self, grid_bytes};
 use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
+use crate::occlusion::{self, Shade};
 use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
@@ -134,6 +135,8 @@ pub(crate) struct View {
     pub(crate) lamp_shadows: LampShadows,
     /// How much light bounces.
     pub(crate) bounce: Bounce,
+    /// The shade in corners and under things.
+    pub(crate) shade: Shade,
 }
 
 impl View {
@@ -148,8 +151,10 @@ impl View {
         above: &Above,
     ) -> [u8; VIEW_BYTES] {
         let mut water = *water;
-        // The last of its rows is the eye's own.
-        water[8] = [self.near, 0.0, 0.0, 0.0];
+        // The last of its rows is the eye's own: how near it sees, and the
+        // shade it finds in corners.
+        let [strength, reach, looks] = self.shade.numbers();
+        water[8] = [self.near, strength, reach, looks];
         let row = |[x, y, z]: [f32; 3], last: f32| [x, y, z, last];
         // The picture is far smaller than where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
@@ -428,6 +433,62 @@ struct Draw {
     sway: f32,
 }
 
+impl Draw {
+    /// Whether any of the part can be in the picture `seen` describes.
+    /// What the wind moves, or the water carries, may be that much
+    /// farther from where it was built.
+    fn in_sight(&self, seen: &Seen) -> bool {
+        // A part built by hand may not say how large it is (a loaded
+        // level's always do): it is drawn wherever the eye looks.
+        if self.radius.is_nan() || self.radius <= 0.0 {
+            return true;
+        }
+        let moves = if self.sway > 0.0 {
+            // The most `blown` in mesh.wgsl moves a point: it leans what
+            // stands `tall` metres above where the mesh is rooted (never
+            // counted as more than 30) by 0.0045 of that squared for each
+            // unit of the wind's strength, which in the hardest gust is
+            // 1.8 times 3.74 for each unit of sway; on top of that its
+            // leaves shiver, snow presses it down and a walker pushes it
+            // aside.
+            let tall = (self.middle[1] + self.radius - self.world[3][1]).clamp(0.0, 30.0);
+            0.031 * tall * tall * self.sway + 0.4 * self.sway + 2.0
+        } else if self.sway < 0.0 {
+            // Water's waves, and what rides them, which tips as the water
+            // slopes: the farther from its middle, the more.
+            3.0 + self.radius
+        } else {
+            0.0
+        };
+        seen.holds(self.middle, self.radius + moves)
+    }
+}
+
+/// The most `transform` stretches anything it places: no distance between
+/// two points of a shape comes out longer than this many times what it was.
+///
+/// For a shape that is only turned and made larger or smaller along its own
+/// axes, that is the longest of the three axes. One that is also leant over
+/// (sheared, as a child of a parent stretched unevenly can be) may reach
+/// farther along a diagonal, but never farther than the three taken together.
+fn most_stretch(transform: &Mat4) -> f32 {
+    let axes = [0, 1, 2].map(|column| {
+        let [x, y, z, _] = transform[column];
+        [x, y, z]
+    });
+    let dot =
+        |one: [f32; 3], other: [f32; 3]| -> f32 { one.iter().zip(other).map(|(a, b)| a * b).sum() };
+    let squares = axes.map(|axis| dot(axis, axis));
+    let square = [(0, 1), (0, 2), (1, 2)].into_iter().all(|(one, other)| {
+        dot(axes[one], axes[other]).abs() <= 1e-4 * (squares[one] * squares[other]).sqrt()
+    });
+    if square {
+        squares.into_iter().fold(0.0, f32::max).sqrt()
+    } else {
+        squares.iter().sum::<f32>().sqrt()
+    }
+}
+
 /// Where one mesh part's data sits in the buffers, or `None` if it was left out.
 type Placed = Option<(u32, u32, i32)>;
 
@@ -531,12 +592,7 @@ impl Meshes {
                     .map(|axis| ((high[axis] - low[axis]) * 0.5).powi(2))
                     .sum::<f32>()
                     .sqrt();
-                let stretch = (0..3)
-                    .map(|column| {
-                        let [x, y, z, _] = instance.transform[column];
-                        (x * x + y * y + z * z).sqrt()
-                    })
-                    .fold(0.0, f32::max);
+                let stretch = most_stretch(&instance.transform);
                 draws.push(Draw {
                     world: instance.transform,
                     normal: normal_matrix(&instance.transform),
@@ -813,6 +869,9 @@ pub(crate) struct MeshPipeline {
     fluid: Option<FluidWorks>,
     /// Draws the sky behind everything.
     sky: vk::Pipeline,
+    /// Draw what is solid for its depth alone, and find the shade in
+    /// corners from it.
+    shade: occlusion::Pipelines,
     /// Lays the light in the air over the finished picture: beams where the
     /// sun reaches the air, and the glow of lamps in it.
     air: vk::Pipeline,
@@ -881,6 +940,7 @@ impl MeshPipeline {
             clouds: None,
             fluid: None,
             sky: vk::Pipeline::null(),
+            shade: occlusion::Pipelines::null(),
             air: vk::Pipeline::null(),
             usual_sky: Sky::of(&Lighting::default()),
             grid: vk::Pipeline::null(),
@@ -1046,6 +1106,17 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The shade in corners: as it is found, and smoothed.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(26)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(27)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1056,12 +1127,12 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid and
-            // bounce light's list, sixteen pictures, two written, and four
+            // bounce light's list, eighteen pictures, two written, and four
             // readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 3,
-                vk::DescriptorType::SAMPLED_IMAGE => 16,
+                vk::DescriptorType::SAMPLED_IMAGE => 18,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 4,
             };
@@ -1494,6 +1565,23 @@ impl MeshPipeline {
                 );
             }
         }
+        // The shade in corners: depth alone, and the two passes that read it.
+        if failed.is_none() {
+            let shared = bounce::Shared {
+                assembly: &assembly,
+                viewport: &viewport,
+                raster: &raster,
+                multisample: &multisample,
+                dynamic: &dynamic,
+            };
+            // SAFETY: the module and layout are live and hold what
+            // `occlusion.wgsl` names.
+            let made = unsafe {
+                mesh.shade
+                    .make(device, module, layout, &vertex_input, &shared)
+            };
+            failed = made.err();
+        }
         // The sky: one triangle with no points of its own, drawn only where
         // nothing else was (where the depth is still the farthest), and
         // hiding nothing.
@@ -1752,21 +1840,25 @@ impl MeshPipeline {
                 target.behind.view,
                 target.behind_depth.view,
                 target.depth.view,
+                target.shade_found.view,
+                target.shade.view,
             ]
             .map(|view| {
                 [vk::DescriptorImageInfo::default()
                     .image_view(view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
             });
-            // The copies water looks through, and the depth itself, which
-            // the light in the air reads once the picture is drawn.
-            let writes = [(5, 0_usize), (6, 1), (16, 2)].map(|(binding, picture)| {
-                vk::WriteDescriptorSet::default()
-                    .dst_set(*view_set)
-                    .dst_binding(binding)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(&pictures[picture])
-            });
+            // The copies water looks through, the depth itself, which the
+            // light in the air reads once the picture is drawn, and the
+            // shade in corners.
+            let writes =
+                [(5, 0_usize), (6, 1), (16, 2), (26, 3), (27, 4)].map(|(binding, picture)| {
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(*view_set)
+                        .dst_binding(binding)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&pictures[picture])
+                });
             // SAFETY: the caller guarantees the commands last recorded with
             // this frame's set have finished, so it is not in use.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
@@ -1876,8 +1968,18 @@ impl MeshPipeline {
             || !bits.is_empty()
             || fluid.is_some()
             || mirrored;
+        // Shade in corners is found from the depth of what is solid: with
+        // nothing solid there is none to find, and the frame is drawn as
+        // one with no shade is.
+        let shading = view.shade.on()
+            && meshes.is_some_and(|meshes| meshes.buffers.is_some() && meshes.see_through_from > 0);
         let view = &View {
             copied: copies,
+            shade: if shading {
+                view.shade
+            } else {
+                Shade::default()
+            },
             ..*view
         };
         // SAFETY: the buffer was made writable and `VIEW_BYTES` long, and the
@@ -2050,11 +2152,22 @@ impl MeshPipeline {
                     stencil: 0,
                 },
             });
+        // What is solid was drawn for its depth before the picture, if shade
+        // is found from it: the picture is drawn over that depth.
+        let depth_first = vk::RenderingInfo::default()
+            .render_area(area)
+            .layer_count(1)
+            .depth_attachment(&depth);
+        let depth_then = if shading {
+            depth.load_op(vk::AttachmentLoadOp::LOAD)
+        } else {
+            depth
+        };
         let rendering = vk::RenderingInfo::default()
             .render_area(area)
             .layer_count(1)
             .color_attachments(&attachments)
-            .depth_attachment(&depth);
+            .depth_attachment(&depth_then);
         // Sizes are far below the point where f32 stops being exact.
         #[allow(clippy::cast_precision_loss)]
         let viewport = vk::Viewport {
@@ -2075,6 +2188,26 @@ impl MeshPipeline {
                 commands,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_draw),
             );
+            let drawn = meshes.and_then(|meshes| Some((meshes, meshes.buffers.as_ref()?)));
+            if let (true, Some((meshes, (vertices, indices)))) = (shading, drawn) {
+                device.cmd_begin_rendering(commands, &depth_first);
+                device.cmd_set_viewport(commands, 0, &[viewport]);
+                device.cmd_set_scissor(commands, 0, &[area]);
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    0,
+                    &[*view_set],
+                    &[],
+                );
+                device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+                self.draw_depths(commands, meshes, surfaces, &seen);
+                device.cmd_end_rendering(commands);
+                self.shade
+                    .record(device, commands, self.layout, *view_set, target);
+            }
             device.cmd_begin_rendering(commands, &rendering);
             device.cmd_set_viewport(commands, 0, &[viewport]);
             device.cmd_set_scissor(commands, 0, &[area]);
@@ -2086,14 +2219,15 @@ impl MeshPipeline {
                 &[*view_set],
                 &[],
             );
-            let drawn = meshes.and_then(|meshes| Some((meshes, meshes.buffers.as_ref()?)));
             if let Some((meshes, (vertices, indices))) = drawn {
                 device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
                 let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
                 let mut last = None;
-                for draw in solid {
-                    self.draw(commands, meshes, draw, last, surfaces);
+                // Only what can be in the picture: the same parts whose
+                // depth was drawn before it, if any was.
+                for draw in solid.iter().filter(|draw| draw.in_sight(&seen)) {
+                    self.draw(commands, meshes, draw, last, surfaces, shading);
                     last = Some(draw);
                 }
             }
@@ -2186,16 +2320,22 @@ impl MeshPipeline {
                 // Farthest first, so that each is mixed over what is behind it.
                 if let Ok(mut order) = self.order.try_borrow_mut() {
                     order.clear();
-                    order.extend(see_through.iter().enumerate().map(|(number, draw)| {
-                        let away = [0, 1, 2].map(|axis| draw.middle[axis] - view.eye[axis]);
-                        (away.iter().map(|part| part * part).sum::<f32>(), number)
-                    }));
+                    order.extend(
+                        see_through
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, draw)| draw.in_sight(&seen))
+                            .map(|(number, draw)| {
+                                let away = [0, 1, 2].map(|axis| draw.middle[axis] - view.eye[axis]);
+                                (away.iter().map(|part| part * part).sum::<f32>(), number)
+                            }),
+                    );
                     order.sort_unstable_by(|one, other| other.0.total_cmp(&one.0));
                     for draw in order
                         .iter()
                         .filter_map(|(_, number)| see_through.get(*number))
                     {
-                        self.draw(commands, meshes, draw, last, surfaces);
+                        self.draw(commands, meshes, draw, last, surfaces, false);
                         last = Some(draw);
                     }
                 }
@@ -2956,6 +3096,112 @@ impl MeshPipeline {
         })
     }
 
+    /// Whether a part is drawn for its depth before the picture, when
+    /// anything is: every solid part, and each part with holes cut in it by
+    /// its material's own alpha. `game_drawn` says a game's surface shader
+    /// draws it, which cuts holes of its own.
+    fn depth_drawn_first(draw: &Draw, game_drawn: bool) -> bool {
+        match draw.surface {
+            Surface::Solid => true,
+            Surface::CutOut => !game_drawn,
+            Surface::SeeThrough | Surface::Water => false,
+        }
+    }
+
+    /// Records drawing what is solid of `meshes` for its depth alone,
+    /// before the picture ([`depth_drawn_first`](Self::depth_drawn_first)
+    /// says which). A cut-out part a game's surface shader draws is left
+    /// to the picture: its holes are the game's.
+    ///
+    /// # Safety
+    ///
+    /// As for [`draw`](Self::draw), inside a pass that has only the depth.
+    /// `seen` must be the picture's own: the picture is then drawn only
+    /// where these parts' depth is.
+    unsafe fn draw_depths(
+        &self,
+        commands: vk::CommandBuffer,
+        meshes: &Meshes,
+        surfaces: Option<&SurfaceDraws>,
+        seen: &Seen,
+    ) {
+        let device = self.gpu.device();
+        let solid = &meshes.draws[..meshes.see_through_from.min(meshes.draws.len())];
+        let mut last: Option<&Draw> = None;
+        for draw in solid.iter().filter(|draw| draw.in_sight(seen)) {
+            let cut_out = draw.surface == Surface::CutOut;
+            let game_drawn = surfaces
+                .and_then(|surfaces| surfaces.of(draw.material))
+                .is_some();
+            if !Self::depth_drawn_first(draw, game_drawn) {
+                continue;
+            }
+            let changed =
+                |differs: fn(&Draw, &Draw) -> bool| last.is_none_or(|last| differs(last, draw));
+            // SAFETY: the caller guarantees the command buffer is recording
+            // inside a depth pass with the buffers of `meshes` bound, and
+            // `draw` names points, triangles and a material they hold.
+            unsafe {
+                if changed(|last, draw| last.surface != draw.surface) {
+                    device.cmd_bind_pipeline(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.shade.depth[usize::from(cut_out)],
+                    );
+                }
+                // Only a surface with holes reads its material. (A material
+                // is one kind of surface, so the part before, if it had the
+                // same material, was cut out too and bound it.)
+                if cut_out && changed(|last, draw| last.material != draw.material) {
+                    device.cmd_bind_descriptor_sets(
+                        commands,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.layout,
+                        1,
+                        &[meshes.materials.set(draw.material)],
+                        &[],
+                    );
+                }
+                if changed(|last, draw| last.mirrored != draw.mirrored) {
+                    device.cmd_set_front_face(
+                        commands,
+                        if draw.mirrored {
+                            vk::FrontFace::CLOCKWISE
+                        } else {
+                            vk::FrontFace::COUNTER_CLOCKWISE
+                        },
+                    );
+                }
+                if changed(|last, draw| last.double_sided != draw.double_sided) {
+                    device.cmd_set_cull_mode(
+                        commands,
+                        if draw.double_sided {
+                            vk::CullModeFlags::NONE
+                        } else {
+                            vk::CullModeFlags::BACK
+                        },
+                    );
+                }
+                device.cmd_push_constants(
+                    commands,
+                    self.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &draw_bytes(draw),
+                );
+                device.cmd_draw_indexed(
+                    commands,
+                    draw.index_count,
+                    1,
+                    draw.first_index,
+                    draw.first_vertex,
+                    0,
+                );
+            }
+            last = Some(draw);
+        }
+    }
+
     /// Records drawing one mesh part, changing only what differs from the
     /// part drawn before it. A part whose material a game's surface shader
     /// draws (never water) is drawn with that shader's pipeline for its kind
@@ -2966,7 +3212,11 @@ impl MeshPipeline {
     /// As for [`record`](Self::record), inside its render pass, with the
     /// buffers of `meshes` bound; `draw` and `last` must be parts of `meshes`.
     /// `surfaces`, if given, must hold live pipelines and sets of this device
-    /// for the frame being recorded.
+    /// for the frame being recorded. `known` says that what is solid was
+    /// drawn for its depth before the picture ([`draw_depths`](Self::draw_depths)):
+    /// such a part is then drawn only where it is exactly as far away as
+    /// what was drawn there, which is where it is seen, and nothing it
+    /// hides is shaded.
     unsafe fn draw(
         &self,
         commands: vk::CommandBuffer,
@@ -2974,6 +3224,7 @@ impl MeshPipeline {
         draw: &Draw,
         last: Option<&Draw>,
         surfaces: Option<&SurfaceDraws>,
+        known: bool,
     ) {
         let device = self.gpu.device();
         let changed =
@@ -2999,6 +3250,20 @@ impl MeshPipeline {
                         variant.pipelines[draw.surface as usize]
                     });
                 device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                // The same parts `draw_depths` drew.
+                let depth_drawn = known && Self::depth_drawn_first(draw, variant.is_some());
+                device.cmd_set_depth_compare_op(
+                    commands,
+                    if depth_drawn {
+                        vk::CompareOp::EQUAL
+                    } else {
+                        vk::CompareOp::GREATER
+                    },
+                );
+                device.cmd_set_depth_write_enable(
+                    commands,
+                    !depth_drawn && draw.surface < Surface::SeeThrough,
+                );
             }
             let new_material = changed(|last, draw| last.material != draw.material);
             if new_material {
@@ -3266,11 +3531,16 @@ pub(crate) unsafe fn make_surface_pipeline(
         .line_width(1.0);
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    // And how a surface's depth is tested and whether it is written: what
+    // was drawn for its depth before the picture is drawn only where it is
+    // exactly that far away, and has no depth left to write.
     let dynamic_states = [
         vk::DynamicState::VIEWPORT,
         vk::DynamicState::SCISSOR,
         vk::DynamicState::CULL_MODE,
         vk::DynamicState::FRONT_FACE,
+        vk::DynamicState::DEPTH_COMPARE_OP,
+        vk::DynamicState::DEPTH_WRITE_ENABLE,
     ];
     let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
     let formats = SCENE_FORMATS;
@@ -3286,8 +3556,8 @@ pub(crate) unsafe fn make_surface_pipeline(
             .name(fragment),
     ];
     // Depth is 1 at the camera and 0 far away, so the greater depth
-    // wins. A see-through surface is hidden by what is in front of
-    // it but hides nothing itself.
+    // wins. A see-through surface is hidden by what is in front of it but
+    // hides nothing itself. (`draw` says both again for each part.)
     let depth = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
         .depth_write_enable(!see_through)
@@ -3350,6 +3620,7 @@ impl Drop for MeshPipeline {
             device.destroy_pipeline(self.body_pipeline, None);
             device.destroy_pipeline(self.bit_pipeline, None);
             device.destroy_pipeline(self.sky, None);
+            self.shade.destroy(device);
             device.destroy_pipeline(self.air, None);
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
@@ -3523,6 +3794,74 @@ mod tests {
         f32::from_ne_bytes([0, 1, 2, 3].map(|byte| bytes[at * 4 + byte]))
     }
 
+    /// A part a metre across its middle at `middle`, rooted at `foot`,
+    /// that the wind moves by `sway`.
+    fn part_at(middle: [f32; 3], foot: [f32; 3], sway: f32) -> Draw {
+        let mut world = [[0.0; 4]; 4];
+        for (axis, column) in world.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        world[3] = [foot[0], foot[1], foot[2], 1.0];
+        Draw {
+            world,
+            normal: normal_matrix(&world),
+            material: 0,
+            surface: Surface::Solid,
+            middle,
+            radius: 1.0,
+            first_index: 0,
+            index_count: 3,
+            first_vertex: 0,
+            mirrored: false,
+            double_sided: false,
+            sway,
+        }
+    }
+
+    #[test]
+    fn a_part_off_the_picture_is_not_drawn_unless_the_wind_could_blow_it_in() {
+        // Looking along -z, a quarter turn from top to bottom and from side
+        // to side: at 20 m ahead the picture's edge is 20 m to the side.
+        let seen = Seen {
+            eye: [0.0; 3],
+            rays: [[0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            size: [900, 900],
+        };
+        // Still things: in the picture, and just off its side.
+        assert!(part_at([0.0, 0.0, -20.0], [0.0; 3], 0.0).in_sight(&seen));
+        assert!(part_at([19.0, 0.0, -20.0], [19.0, 0.0, -20.0], 0.0).in_sight(&seen));
+        assert!(!part_at([24.0, 0.0, -20.0], [24.0, 0.0, -20.0], 0.0).in_sight(&seen));
+        // The same just off the side, but the top of something ten metres
+        // tall that sways: a gale leans it more than three metres.
+        let top = part_at([24.0, 9.0, -20.0], [24.0, -1.0, -20.0], 1.0);
+        assert!(top.in_sight(&seen));
+        // Its foot leans hardly at all, and far enough off it is not drawn.
+        assert!(!part_at([27.0, 0.0, -20.0], [27.0, -1.0, -20.0], 1.0).in_sight(&seen));
+        // Nor is the top, far enough off for any wind.
+        assert!(!part_at([50.0, 9.0, -20.0], [50.0, -1.0, -20.0], 1.0).in_sight(&seen));
+        // A part of no known size is drawn wherever the eye looks.
+        let mut unknown = part_at([500.0, 0.0, 20.0], [0.0; 3], 0.0);
+        unknown.radius = 0.0;
+        assert!(unknown.in_sight(&seen));
+    }
+
+    #[test]
+    fn a_leaning_transform_is_counted_as_reaching_farther() {
+        let mut plain = [[0.0; 4]; 4];
+        plain[0][0] = 2.0;
+        plain[1][1] = 3.0;
+        plain[2][2] = 1.0;
+        assert!((most_stretch(&plain) - 3.0).abs() < 1e-6);
+        // x leant over along y: a point at (1, 1, 0) is moved to (1, 2, 0),
+        // which is 1.58 times as far from the middle, more than either axis
+        // is long by itself.
+        let mut leant = [[0.0; 4]; 4];
+        leant[0] = [1.0, 1.0, 0.0, 0.0];
+        leant[1][1] = 1.0;
+        leant[2][2] = 1.0;
+        assert!(most_stretch(&leant) >= 5.0_f32.sqrt() / 2.0_f32.sqrt());
+    }
+
     #[test]
     fn a_draw_fills_the_shader_block_exactly() {
         let mut world = [[0.0; 4]; 4];
@@ -3607,6 +3946,11 @@ mod tests {
                 kept
             },
             keeps: true,
+            shade: Shade {
+                quality: occlusion::AmbientOcclusion::Medium,
+                strength: 1.25,
+                reach: 0.75,
+            },
             copied: true,
             shafts: false,
             lamp_shadows: LampShadows::Off,

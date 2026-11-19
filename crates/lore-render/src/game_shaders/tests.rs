@@ -436,6 +436,57 @@ fn a_surface_shader_gives_the_alpha_of_cut_out_and_see_through_surfaces() {
 }
 
 #[test]
+fn surface_shaders_draw_the_same_with_the_shade_in_corners_found() {
+    // With ambient occlusion on, what is solid is drawn for its depth with
+    // the engine's own shader before the picture, and a game's surface
+    // shader then draws only where that depth is: a solid one must land
+    // exactly there, a cut-out one (whose holes are its own) is left to the
+    // picture, and a see-through one is mixed over as before. On flat
+    // ground with nothing near there is no shade, so each picture is the
+    // one drawn with the shade off.
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let camera = above();
+    let glows = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                 made.emission = vec3f(0.5, 0.0, 0.0);\n    return made;\n}\n";
+    let gone = "fn surface(in: SurfaceIn) -> Surface {\n    var made = in.surface;\n    \
+                made.alpha = 0.0;\n    return made;\n}\n";
+    let solid = named("Lava", [0.6; 3]);
+    let cut_out = Material {
+        alpha_mode: AlphaMode::Mask { cutoff: 0.5 },
+        ..named("Lava", [0.6; 3])
+    };
+    let see_through = Material {
+        alpha_mode: AlphaMode::Blend,
+        ..named("Lava", [0.6; 3])
+    };
+    let mut revision = 0;
+    for (lava_material, text) in [(solid, glows), (cut_out, gone), (see_through, gone)] {
+        revision += 1;
+        headless.set_ambient_occlusion(crate::AmbientOcclusion::Off);
+        headless.set_game_shaders(&[]);
+        headless
+            .set_scene(&two(lava_material, named("Stone", [0.3; 3])))
+            .unwrap();
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_game_shaders(&[lava(text, revision)]);
+        headless.take_shader_reports();
+        let without = headless.screenshot(&camera).unwrap();
+        assert_ne!(without, plain, "the shader draws nothing");
+        headless.set_ambient_occlusion(crate::AmbientOcclusion::Medium);
+        let with = headless.screenshot(&camera).unwrap();
+        assert!(
+            with == without,
+            "a surface shader's picture changed with the shade found: by {}",
+            most_different(&with, &without)
+        );
+    }
+    drop(headless);
+    assert_eq!(validation_errors(), 0);
+}
+
+#[test]
 fn surface_values_change_the_picture_with_no_report() {
     let Some(mut headless) = headless() else {
         return;

@@ -266,6 +266,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             light_shafts: false,
             lamp_shadows: lore_render::LampShadows::Low,
             bounce: lore_render::Bounce::Low,
+            ambient_occlusion: lore_render::AmbientOcclusion::Low,
         }
     );
     assert!((chosen.sensitivity - 0.9).abs() < 1e-6);

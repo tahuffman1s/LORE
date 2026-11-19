@@ -736,6 +736,33 @@ pub fn bounce(text: &str) -> Result<lore_render::Bounce, String> {
         })
 }
 
+/// Reads how smooth the shade in corners is, as the settings file says it:
+/// `off`, `low`, `medium` or `high`.
+///
+/// # Errors
+///
+/// Fails, naming the four, for any other word.
+pub fn ambient_occlusion(text: &str) -> Result<lore_render::AmbientOcclusion, String> {
+    use lore_render::AmbientOcclusion;
+    const ALL: [(AmbientOcclusion, &str); 4] = [
+        (AmbientOcclusion::Off, "off"),
+        (AmbientOcclusion::Low, "low"),
+        (AmbientOcclusion::Medium, "medium"),
+        (AmbientOcclusion::High, "high"),
+    ];
+    let typed = text.trim().to_lowercase();
+    ALL.into_iter()
+        .find(|(_, name)| *name == typed)
+        .map(|(quality, _)| quality)
+        .ok_or_else(|| {
+            format!(
+                "`{}` is not an ambient occlusion setting. Use off, low, medium or high, as in \
+                 --ambient-occlusion off",
+                text.trim()
+            )
+        })
+}
+
 /// Reads a frame-time budget typed in milliseconds, such as `16.6`.
 ///
 /// # Errors

@@ -184,6 +184,38 @@ pub fn refuse_endless_loops(file: &str, text: &str) -> Result<(), ShaderError> {
     Ok(())
 }
 
+/// `discard` outside comments is an error. The engine may draw what is solid
+/// for its depth before the picture (for the shade in corners), and then
+/// draws the picture only where that depth is: a pixel thrown away after
+/// that shows nothing at all, not what is behind it. Holes are cut by a
+/// cut-out material's alpha, which the depth is drawn with.
+///
+/// It looks at words, like [`refuse_endless_loops`]: `discarded` is fine.
+pub fn refuse_discard(file: &str, text: &str) -> Result<(), ShaderError> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let blanked = blank_comments(text);
+    match tokens(&blanked)
+        .iter()
+        .find(|piece| piece.text == "discard")
+    {
+        Some(piece) => Err(error_at(
+            file,
+            text,
+            piece.at,
+            "`discard` throws a pixel away after LORE has worked out what is in front of \
+             what, which can leave a hole in the picture, so game shaders cannot use it."
+                .to_owned(),
+            Some(
+                "To cut holes in a surface, give its material a cut-out alpha (alpha mode \
+                 MASK in the level file) and set `alpha` in the `Surface` you return: a \
+                 pixel whose alpha is under the material's cutoff is a hole."
+                    .to_owned(),
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Whether the `for` at `index` has nothing, or only `true`, between its two
 /// top-level `;`. Any other condition is taken to end.
 fn for_has_no_condition(pieces: &[Token<'_>], index: usize) -> bool {
@@ -245,6 +277,26 @@ mod tests {
     #[test]
     fn an_open_block_comment_blanks_to_the_end() {
         assert_eq!(blank_comments("a /* b"), "a     ");
+    }
+
+    #[test]
+    fn discard_is_refused_at_its_place_and_says_how_to_cut_holes() {
+        let error = refuse_discard(
+            "shaders/a.wgsl",
+            "fn f(a: f32) {\n  if a < 0.5 { discard; }\n}",
+        )
+        .unwrap_err();
+        assert_eq!((error.line, error.column), (Some(2), Some(16)));
+        assert!(error.message.contains("`discard`"), "{}", error.message);
+        assert!(error.message.contains("hole in the picture"));
+        assert!(error.hint.unwrap().contains("set `alpha` in the `Surface`"));
+        for text in [
+            "let discarded = 1.0; let to_discard = 2.0;",
+            "// discard;\nfn f() {}",
+            "/* discard */ fn f() {}",
+        ] {
+            assert!(refuse_discard("a.wgsl", text).is_ok(), "{text}");
+        }
     }
 
     #[test]

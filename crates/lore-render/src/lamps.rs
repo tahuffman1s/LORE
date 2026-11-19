@@ -319,6 +319,43 @@ pub(crate) struct Seen {
     pub(crate) size: [u32; 2],
 }
 
+impl Seen {
+    /// Whether any of a ball `radius` metres round `middle` can be in the
+    /// picture: it is not wholly behind the eye, nor wholly off one side.
+    /// A ball of no known size always can.
+    pub(crate) fn holds(&self, middle: [f32; 3], radius: f32) -> bool {
+        if !radius.is_finite() {
+            return true;
+        }
+        let [forward, right, up] = self.rays;
+        let off = [0, 1, 2].map(|axis| middle[axis] - self.eye[axis]);
+        let along = |way: [f32; 3]| off[0] * way[0] + off[1] * way[1] + off[2] * way[2];
+        let ahead = along(forward);
+        if ahead < -radius {
+            return false;
+        }
+        [right, up]
+            .into_iter()
+            .zip(self.size)
+            .all(|(side, pixels)| {
+                let long = side.iter().map(|part| part * part).sum::<f32>().sqrt();
+                if long <= 0.0 {
+                    return true;
+                }
+                let across = along(side) / long;
+                // How far a line of sight leans that way at the picture's edge,
+                // and two pixels more: the upscaler shifts the picture by up
+                // to half of one.
+                // A picture is far narrower than where f32 stops being exact.
+                #[allow(clippy::cast_precision_loss)]
+                let edge = long * (1.0 + 4.0 / pixels.max(1) as f32);
+                // The edge of the picture is a plane through the eye; the ball
+                // is off the picture if all of it is beyond that plane.
+                across.abs() - ahead * edge <= radius * (1.0 + edge * edge).sqrt()
+            })
+    }
+}
+
 /// The lamps of one frame as the shader takes them, made again each frame
 /// in the same memory.
 pub(crate) struct LampFrame {
@@ -614,6 +651,27 @@ mod tests {
             rays: [[0.0, 0.0, -1.0], [16.0 / 9.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             size: [1600, 900],
         }
+    }
+
+    #[test]
+    fn what_is_behind_the_eye_or_off_the_side_of_the_picture_is_not_in_it() {
+        let seen = seen();
+        // Straight ahead, and at the very edge of the picture (which leans
+        // one to one up and down).
+        assert!(seen.holds([0.0, 0.0, -10.0], 1.0));
+        assert!(seen.holds([0.0, 10.0, -10.0], 0.1));
+        // Off the top, off the side, and behind.
+        assert!(!seen.holds([0.0, 20.0, -10.0], 1.0));
+        assert!(!seen.holds([-40.0, 0.0, -10.0], 1.0));
+        assert!(!seen.holds([0.0, 0.0, 10.0], 1.0));
+        // Wide enough to reach into the picture from any of them.
+        assert!(seen.holds([0.0, 20.0, -10.0], 8.0));
+        assert!(seen.holds([-40.0, 0.0, -10.0], 20.0));
+        assert!(seen.holds([0.0, 0.0, 10.0], 11.0));
+        // The eye is inside it, and a thing of no known size is always in.
+        assert!(seen.holds([3.0, 0.0, 2.0], 5.0));
+        assert!(seen.holds([0.0, 0.0, 10.0], f32::NAN));
+        assert!(seen.holds([0.0, 0.0, 10.0], f32::INFINITY));
     }
 
     fn bulb(at: [f32; 3]) -> Lamp {

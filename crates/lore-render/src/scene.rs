@@ -10,6 +10,7 @@ use crate::buffer::once;
 use crate::error::RenderError;
 use crate::fluid_pass::FluidPictures;
 use crate::gpu::Gpu;
+use crate::occlusion;
 use crate::swapchain::COLOUR;
 
 /// What the renderer is doing when it makes a [`SceneTarget`]'s images.
@@ -185,6 +186,11 @@ pub(crate) struct SceneTarget {
     /// surface, and how far under. Only filled in a frame that has water.
     pub(crate) behind: Picture,
     pub(crate) behind_depth: Picture,
+    /// The shade in corners and under things, as it is found from the
+    /// depth of what is solid, and as the picture reads it once smoothed
+    /// (`occlusion.rs`). Only filled in a frame that asks for shade.
+    pub(crate) shade_found: Picture,
+    pub(crate) shade: Picture,
     /// Whether those copies were filled in the frame last drawn: in the
     /// next, smooth things may mirror what they hold.
     pub(crate) kept: Cell<bool>,
@@ -231,6 +237,8 @@ impl SceneTarget {
             motion: Picture::null(),
             behind: Picture::null(),
             behind_depth: Picture::null(),
+            shade_found: Picture::null(),
+            shade: Picture::null(),
             kept: Cell::new(false),
             fluid: OnceCell::new(),
             extent,
@@ -273,12 +281,28 @@ impl SceneTarget {
             DEPTH,
             DOING,
         )?;
+        for (picture, format) in [
+            (&mut target.shade_found, occlusion::FOUND_FORMAT),
+            (&mut target.shade, occlusion::FORMAT),
+        ] {
+            picture.create(
+                gpu,
+                extent,
+                format,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                COLOUR,
+                DOING,
+            )?;
+        }
         // Every surface that could mirror the world is drawn with the
         // copies at hand, in frames before any has been filled too: they
         // are made ready to be read from the start, holding nothing yet.
+        // So is the shade, which every solid surface's shader names.
         let ready = [
             (target.behind.image, COLOUR),
             (target.behind_depth.image, DEPTH),
+            (target.shade_found.image, COLOUR),
+            (target.shade.image, COLOUR),
         ]
         .map(|(image, range)| {
             vk::ImageMemoryBarrier2::default()
@@ -326,6 +350,8 @@ impl Drop for SceneTarget {
             self.motion.destroy(&self.gpu);
             self.behind.destroy(&self.gpu);
             self.behind_depth.destroy(&self.gpu);
+            self.shade_found.destroy(&self.gpu);
+            self.shade.destroy(&self.gpu);
         }
     }
 }

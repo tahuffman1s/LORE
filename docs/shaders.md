@@ -45,6 +45,11 @@ file, line and source line, and the last version that worked keeps drawing.
   `for (;true;)` outside comments, and says to use `for` with a fixed count.
   naga stops ill-typed code but not endless loops. A game's shaders are its
   own code, not a security boundary, but a slip must not freeze the picture.
+- `refuse_discard` refuses `discard` outside comments, and says to cut holes
+  with a cut-out material's alpha. With ambient occlusion on (#104), what is
+  solid is drawn for its depth before the picture, and the picture only
+  where that depth is: a pixel a shader threw away after that would show
+  nothing, not what is behind it.
   It reads words, so a condition that is only true in practice is not caught.
 - `compile` has two `Bounds`: the engine's own shaders compile with none
   (`build.rs` uses `Trusted`, so the engine's SPIR-V is unchanged), a game's

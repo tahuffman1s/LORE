@@ -22,6 +22,7 @@ use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
+use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
 use crate::swapchain::Swapchain;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
@@ -193,6 +194,9 @@ pub struct Renderer {
     lamp_shadows: LampShadows,
     /// How much light bounces: see [`set_bounce`](Self::set_bounce).
     bounce: Bounce,
+    /// The shade in corners: see
+    /// [`set_ambient_occlusion`](Self::set_ambient_occlusion).
+    shade: Shade,
     /// What the scene's light is multiplied by before tone mapping: the
     /// player's brightness, and the game's own.
     exposure: f32,
@@ -276,6 +280,10 @@ impl Renderer {
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
+            shade: Shade {
+                quality: AmbientOcclusion::default(),
+                ..Shade::default()
+            },
             game_exposure: 1.0,
             lamps: Vec::new(),
             eye: Eye::new(EyeAdaptation::default()),
@@ -698,6 +706,30 @@ impl Renderer {
         self.bounce = bounce;
     }
 
+    /// How finely the shade in corners and under things is worked out
+    /// (ambient occlusion), or `Off` for none: a player's setting.
+    ///
+    /// The light from all round (the sky's, the ground's, what bounces)
+    /// reaches less of a corner, a crack or the ground under a cart than
+    /// of open ground. With this on, what is solid is drawn once for its
+    /// depth before the picture, and each pixel is dimmed by how much of
+    /// what is near hides the world from it. The sun's light and the
+    /// lamps' are never dimmed: they have shadows of their own.
+    /// `Medium` to begin with.
+    pub fn set_ambient_occlusion(&mut self, quality: AmbientOcclusion) {
+        self.shade.quality = quality;
+    }
+
+    /// What the game says of that shade: how strong it is drawn (0 for
+    /// none, 1 for as much as really arrives, the default, up to 4 for
+    /// darker), and how far round each point is searched for what shades
+    /// it, in metres (0.05 to 4; 0.6 to begin with). The player's setting
+    /// still says whether there is any. A number that is not one leaves
+    /// what was said before.
+    pub fn set_game_occlusion(&mut self, strength: f32, radius: f32) {
+        self.shade = self.shade.said(strength, radius);
+    }
+
     /// Lets wet ground, puddles and polished things mirror the world round
     /// them, or only the light of the sky.
     ///
@@ -931,6 +963,7 @@ impl Renderer {
             view.shafts = self.light_shafts;
             view.lamp_shadows = self.lamp_shadows;
             view.bounce = self.bounce;
+            view.shade = self.shade;
 
             let acquired = self.gpu.swapchains().acquire_next_image(
                 swapchain.handle,

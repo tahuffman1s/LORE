@@ -745,10 +745,17 @@ impl ScriptHost {
         self.shaders.each(see);
     }
 
-    /// The game's own exposure in stops and how the eye adapts, if the
-    /// script said either since this was last asked
-    /// (`game.lighting.setExposure`, `game.lighting.setEyeAdaptation`).
-    pub fn take_lighting(&mut self) -> Option<(f32, crate::lighting_api::EyeSaid)> {
+    /// The game's own exposure in stops, how the eye adapts and the shade
+    /// in corners, if the script said any of them since this was last asked
+    /// (`game.lighting.setExposure`, `game.lighting.setEyeAdaptation`,
+    /// `game.lighting.setAmbientOcclusion`).
+    pub fn take_lighting(
+        &mut self,
+    ) -> Option<(
+        f32,
+        crate::lighting_api::EyeSaid,
+        crate::lighting_api::OcclusionSaid,
+    )> {
         self.lighting.take()
     }
 

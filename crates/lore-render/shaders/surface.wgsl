@@ -116,6 +116,9 @@ fn lore_fragment_cutout(corner: Corner, @builtin(front_facing) front: bool) -> P
     let painted = paint_of(corner);
     let base = base_colour(corner, mixing, painted);
     lore_alpha = base.a;
+    // Its holes are the game's own, so it was not drawn for its depth
+    // before the picture, and no shade was found for it (`occlusion.wgsl`).
+    shade_unknown = true;
     let light = lit(corner, front, base.rgb, mixing, painted, false);
     var pixel: Pixel;
     pixel.colour = vec4<f32>(through_air(light, corner.world), 1.0);

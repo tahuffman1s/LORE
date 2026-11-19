@@ -101,6 +101,9 @@ pub struct Frame {
     /// The game's own exposure in stops and how the eye adapts, if the
     /// game said them this frame.
     lighting: Option<(f32, lore_render::EyeAdaptation)>,
+    /// How dark the shade in corners is drawn and how far round it is
+    /// searched for, in metres, if the game said them this frame.
+    occlusion: Option<(f32, f32)>,
     /// How far rain has raised the water and what the sky's clock shows,
     /// if the game said them this frame.
     water_rise: Option<f32>,
@@ -212,6 +215,7 @@ impl Frame {
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
             lighting: None,
+            occlusion: None,
             water_rise: None,
             sky_clock: None,
             ground_water: None,
@@ -883,6 +887,22 @@ impl Frame {
     /// How the picture is exposed, if the game said it this frame.
     pub fn take_lighting(&mut self) -> Option<(f32, lore_render::EyeAdaptation)> {
         self.lighting.take()
+    }
+
+    /// Says how the soft shade in corners and under things (ambient
+    /// occlusion) is drawn from this frame on: `strength` is how dark, from
+    /// 0 (none) to 4, where 1 is as much as really arrives, and `radius`
+    /// how far round each point is searched for what shades it, in metres,
+    /// from 0.05 to 4. Until a game says, they are 1 and 0.6. The player's
+    /// own graphics setting says whether it is drawn at all.
+    pub fn set_ambient_occlusion(&mut self, strength: f32, radius: f32) {
+        self.occlusion = Some((strength, radius));
+    }
+
+    /// How the shade in corners is drawn, if the game said it this frame:
+    /// its strength, then its radius in metres.
+    pub fn take_ambient_occlusion(&mut self) -> Option<(f32, f32)> {
+        self.occlusion.take()
     }
 
     /// Lends the frame the memory of an earlier frame's lamps, so that

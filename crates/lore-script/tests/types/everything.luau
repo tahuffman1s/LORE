@@ -375,6 +375,8 @@ lava:remove()
 game.lighting.setExposure(-1.5)
 game.lighting.setEyeAdaptation({ opens = 1, closes = 6, seconds = 4 })
 print(game.lighting.exposure(), game.lighting.eyeAdaptation().opens, game.lighting.eyeAdaptation().closes, game.lighting.eyeAdaptation().seconds)
+game.lighting.setAmbientOcclusion({ strength = 1.5, radius = 1 })
+print(game.lighting.ambientOcclusion().strength, game.lighting.ambientOcclusion().radius)
 
 game.onTick(function()
     if game.input.pressed("fire") then

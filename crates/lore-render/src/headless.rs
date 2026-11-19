@@ -21,6 +21,7 @@ use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
 use crate::mesh::{Contents, MeshPipeline, Meshes};
+use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
 use crate::swapchain::COLOUR;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline};
@@ -105,6 +106,8 @@ pub struct Headless {
     lamp_shadows: LampShadows,
     /// How much light bounces, as for a window.
     bounce: Bounce,
+    /// The shade in corners, as for a window but off to begin with.
+    shade: Shade,
     view: SceneView,
     extent: vk::Extent2D,
     image: vk::Image,
@@ -211,6 +214,7 @@ impl Headless {
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
+            shade: Shade::default(),
             view,
             extent,
             image,
@@ -484,6 +488,21 @@ impl Headless {
         self.bounce = bounce;
     }
 
+    /// How finely the shade in corners is worked out, as
+    /// [`Renderer::set_ambient_occlusion`](crate::Renderer::set_ambient_occlusion)
+    /// says. `Off` to begin with, unlike a window: a picture drawn with no
+    /// window has no shade found for it unless it is asked for.
+    pub fn set_ambient_occlusion(&mut self, quality: AmbientOcclusion) {
+        self.shade.quality = quality;
+    }
+
+    /// What the game says of that shade, as
+    /// [`Renderer::set_game_occlusion`](crate::Renderer::set_game_occlusion)
+    /// takes it.
+    pub fn set_game_occlusion(&mut self, strength: f32, radius: f32) {
+        self.shade = self.shade.said(strength, radius);
+    }
+
     /// Draws `list` over every frame from now on, as
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
@@ -599,6 +618,7 @@ impl Headless {
             self.view.shafts = self.light_shafts;
             self.view.lamp_shadows = self.lamp_shadows;
             self.view.bounce = self.bounce;
+            self.view.shade = self.shade;
             self.view.record(
                 self.commands,
                 0,
@@ -1636,6 +1656,254 @@ mod tests {
         let rough = headless.screenshot(&camera).unwrap();
         headless.set_reflections(true);
         assert!(headless.screenshot(&camera).unwrap() == rough);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// A pale floor with a pale wall standing on it three metres in front
+    /// of [`at_the_wall`]'s camera, across the way it looks. `sheet` lays
+    /// something over the open floor nearest the camera, a hand above it:
+    /// 1 for a see-through pane, 2 for a sheet of which the alpha of its
+    /// corners cuts the left half away.
+    fn wall_on_a_floor(sheet: u8) -> Scene {
+        use lore_assets::{AlphaMode, Instance, Material, Mesh, MeshPart};
+
+        let quad =
+            |corners: [[f32; 3]; 4], normal: [f32; 3], material: u32, alphas: [f32; 4]| Mesh {
+                name: None,
+                parts: vec![MeshPart {
+                    positions: corners.to_vec(),
+                    normals: vec![normal; 4],
+                    colors: Some(alphas.map(|alpha| [1.0, 1.0, 1.0, alpha]).to_vec()),
+                    indices: vec![0, 1, 2, 0, 2, 3],
+                    material,
+                    ..MeshPart::default()
+                }],
+            };
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        let mut scene = Scene::default();
+        scene.materials.push(Material {
+            base_color: [0.6, 0.6, 0.6, 1.0],
+            roughness: 1.0,
+            ..Material::default()
+        });
+        scene.materials.push(Material {
+            base_color: [0.2, 0.4, 0.8, if sheet == 1 { 0.5 } else { 1.0 }],
+            roughness: 1.0,
+            alpha_mode: if sheet == 1 {
+                AlphaMode::Blend
+            } else {
+                AlphaMode::Mask { cutoff: 0.5 }
+            },
+            double_sided: true,
+            ..Material::default()
+        });
+        scene.meshes.push(quad(
+            [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]]
+                .map(|[x, z]| [x * 100.0, 0.0, z * 100.0]),
+            [0.0, 1.0, 0.0],
+            0,
+            [1.0; 4],
+        ));
+        scene.meshes.push(quad(
+            [[-30.0, 0.0], [30.0, 0.0], [30.0, 12.0], [-30.0, 12.0]].map(|[x, y]| [x, y, -10.0]),
+            [0.0, 0.0, 1.0],
+            0,
+            [1.0; 4],
+        ));
+        if sheet > 0 {
+            // Its left corners have no alpha: cut out, that half is a hole.
+            scene.meshes.push(quad(
+                [[-3.0, -8.0], [3.0, -8.0], [3.0, -8.9], [-3.0, -8.9]].map(|[x, z]| [x, 0.1, z]),
+                [0.0, 1.0, 0.0],
+                1,
+                [0.0, 1.0, 1.0, 0.0],
+            ));
+        }
+        for mesh in 0..if sheet > 0 { 3 } else { 2 } {
+            scene.instances.push(Instance {
+                mesh,
+                transform,
+                mirrored: false,
+                name: None,
+                extras: None,
+            });
+        }
+        scene
+    }
+
+    /// Standing three metres from [`wall_on_a_floor`]'s wall, looking at
+    /// its foot. In a picture 128 by 72 the wall comes down to row 43; the
+    /// floor in rows 44 to 46 is within 40 cm of it, row 56 is more than a
+    /// metre from it, and the rows from 60 down are open floor.
+    fn at_the_wall() -> Camera {
+        Camera {
+            position: [0.0, 1.5, -7.0],
+            pitch: -0.3,
+            ..Camera::default()
+        }
+    }
+
+    /// How bright rows `from` to `to` of a picture 128 wide are, summed
+    /// over the middle half of each.
+    fn rows_light(picture: &[u8], from: usize, to: usize) -> i64 {
+        (from..to)
+            .flat_map(|y| (32..96).map(move |x| (y * 128 + x) * 4))
+            .map(|at| {
+                i64::from(picture[at]) + i64::from(picture[at + 1]) + i64::from(picture[at + 2])
+            })
+            .sum()
+    }
+
+    #[test]
+    fn shade_gathers_at_the_foot_of_a_wall_and_open_ground_is_as_it_was() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = at_the_wall();
+        headless.set_scene(&wall_on_a_floor(0)).unwrap();
+        // Bounce light builds up over frames; this is about the shade alone.
+        headless.set_bounce(Bounce::Off);
+        // Under a sky that is all cloud the light comes from all round,
+        // which is the light the shade dims: the sun's it leaves alone.
+        headless.set_weather(Weather {
+            cloud_cover: 1.0,
+            ..Weather::default()
+        });
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_ambient_occlusion(AmbientOcclusion::Medium);
+        let shaded = headless.screenshot(&camera).unwrap();
+        // The same view gives the same shade.
+        assert!(headless.screenshot(&camera).unwrap() == shaded);
+        // The floor at the wall's foot and the wall just above it are
+        // darker; the open floor is not touched at all.
+        let (floor, floor_plain) = (rows_light(&shaded, 44, 47), rows_light(&plain, 44, 47));
+        let (wall, wall_plain) = (rows_light(&shaded, 41, 44), rows_light(&plain, 41, 44));
+        assert!(
+            floor * 100 < floor_plain * 98,
+            "the floor at the wall's foot is no darker: {floor} against {floor_plain}"
+        );
+        assert!(
+            wall * 100 < wall_plain * 96,
+            "the foot of the wall is no darker: {wall} against {wall_plain}"
+        );
+        let open = 60 * 128 * 4;
+        assert!(
+            shaded[open..] == plain[open..],
+            "open floor changed with nothing near it"
+        );
+        // A metre from the wall is beyond the search. A game that narrows
+        // the search finds less shade at the wall's foot, and none half a
+        // metre from it.
+        assert_eq!(rows_light(&shaded, 56, 58), rows_light(&plain, 56, 58));
+        assert!(rows_light(&shaded, 47, 48) < rows_light(&plain, 47, 48));
+        headless.set_game_occlusion(1.0, 0.15);
+        let narrow = headless.screenshot(&camera).unwrap();
+        assert!(
+            rows_light(&narrow, 44, 47) > floor,
+            "a narrower search finds as much shade at the wall's foot"
+        );
+        assert_eq!(rows_light(&narrow, 47, 50), rows_light(&plain, 47, 50));
+        // Stronger is darker, and no strength at all is the plain picture,
+        // whatever the player's setting.
+        headless.set_game_occlusion(2.0, 0.6);
+        let strong = headless.screenshot(&camera).unwrap();
+        assert!(rows_light(&strong, 44, 47) < floor);
+        headless.set_game_occlusion(0.0, 0.6);
+        assert!(headless.screenshot(&camera).unwrap() == plain);
+        headless.set_game_occlusion(1.0, 0.6);
+        headless.set_ambient_occlusion(AmbientOcclusion::Off);
+        assert!(headless.screenshot(&camera).unwrap() == plain);
+        // Each setting finds about as much shade as the others.
+        for quality in [AmbientOcclusion::Low, AmbientOcclusion::High] {
+            headless.set_ambient_occlusion(quality);
+            let other = rows_light(&headless.screenshot(&camera).unwrap(), 44, 47);
+            assert!(
+                (other - floor).abs() * 3 < floor_plain - floor,
+                "{quality:?} finds {other} at the wall's foot, medium {floor}, none {floor_plain}"
+            );
+        }
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn what_is_see_through_or_cut_out_is_drawn_the_same_with_shade_found() {
+        let Some(mut headless) = headless(128, 72) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        let camera = at_the_wall();
+        headless.set_bounce(Bounce::Off);
+        headless.set_weather(Weather {
+            cloud_cover: 1.0,
+            ..Weather::default()
+        });
+        for sheet in [1, 2] {
+            headless.set_ambient_occlusion(AmbientOcclusion::Off);
+            headless.set_scene(&wall_on_a_floor(sheet)).unwrap();
+            let plain = headless.screenshot(&camera).unwrap();
+            // The sheet is there, over the open floor.
+            headless.set_scene(&wall_on_a_floor(0)).unwrap();
+            let bare = headless.screenshot(&camera).unwrap();
+            let open = 52 * 128 * 4;
+            assert!(plain[open..] != bare[open..], "sheet {sheet} is not seen");
+            if sheet == 2 {
+                // Its left half is cut away, and the floor shows there.
+                let left: Vec<usize> = (60..68)
+                    .flat_map(|y| (8..40).map(move |x| (y * 128 + x) * 4))
+                    .collect();
+                assert!(
+                    left.iter()
+                        .all(|at| plain[*at..at + 4] == bare[*at..at + 4])
+                );
+            }
+            // With shade found, what is solid is drawn for its depth first
+            // and the picture only where that depth is: the pane is still
+            // mixed over the floor, and the cut sheet keeps its holes. The
+            // sheet is a hand above the floor, so shade lies under it and
+            // round it, but not where the camera sees the sheet itself.
+            headless.set_scene(&wall_on_a_floor(sheet)).unwrap();
+            headless.set_ambient_occlusion(AmbientOcclusion::Medium);
+            let shaded = headless.screenshot(&camera).unwrap();
+            let middle: Vec<usize> = (61..65)
+                .flat_map(|y| (72..120).map(move |x| (y * 128 + x) * 4))
+                .collect();
+            if sheet == 1 {
+                // The pane hides nothing, so the floor under it has no
+                // shade, and the pane itself is never shaded.
+                assert!(
+                    shaded[open..] == plain[open..],
+                    "a see-through pane was shaded, or shaded the floor"
+                );
+            } else {
+                // The cut sheet's own top, well inside its edge, sees the
+                // whole sky: as it was.
+                assert!(
+                    middle
+                        .iter()
+                        .all(|at| shaded[*at..at + 4] == plain[*at..at + 4]),
+                    "the top of the cut sheet changed"
+                );
+                // And the hole is still a hole: the floor, not the sheet.
+                let hole = (63 * 128 + 20) * 4;
+                // The sheet is blue and the floor grey: by how much bluer
+                // than red a pixel is they are told apart.
+                let bluer =
+                    |picture: &[u8], at: usize| i32::from(picture[at + 2]) - i32::from(picture[at]);
+                let on_sheet = (63 * 128 + 100) * 4;
+                assert!(bluer(&plain, on_sheet) > bluer(&bare, hole) + 40);
+                assert!(
+                    (bluer(&shaded, hole) - bluer(&bare, hole)).abs() < 20,
+                    "the hole in the cut sheet is not the floor"
+                );
+                assert!(bluer(&shaded, on_sheet) > bluer(&bare, hole) + 40);
+            }
+        }
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

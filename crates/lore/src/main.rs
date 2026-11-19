@@ -221,6 +221,10 @@ enum Command {
         /// How light bounces: off, low, medium (the game's own default) or high
         #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::bounce)]
         bounce: lore_render::Bounce,
+        /// The soft shade in corners and under things: off, low, medium (the game's own
+        /// default) or high
+        #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::ambient_occlusion)]
+        ambient_occlusion: lore_render::AmbientOcclusion,
     },
 }
 
@@ -352,6 +356,7 @@ fn command() -> Result<(), String> {
             lamps,
             lamp_shadows,
             bounce,
+            ambient_occlusion,
         }) => cli::bench(
             &Bench {
                 frames,
@@ -362,6 +367,7 @@ fn command() -> Result<(), String> {
                 lamps,
                 lamp_shadows,
                 bounce,
+                ambient_occlusion,
             },
             budget_ms,
             json.as_deref(),

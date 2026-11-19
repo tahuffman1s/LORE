@@ -35,7 +35,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use lore_render::{Bounce, LampShadows, Upscaling};
+use lore_render::{AmbientOcclusion, Bounce, LampShadows, Upscaling};
 use lore_script::{Setting, SettingKind, SettingValue};
 use toml::de::{DeTable, DeValue};
 
@@ -147,6 +147,13 @@ words!(Bounce, BOUNCE:
     Bounce::Low => "low",
     Bounce::Medium => "medium",
     Bounce::High => "high",
+);
+
+words!(AmbientOcclusion, AMBIENT_OCCLUSION:
+    AmbientOcclusion::Off => "off",
+    AmbientOcclusion::Low => "low",
+    AmbientOcclusion::Medium => "medium",
+    AmbientOcclusion::High => "high",
 );
 
 words!(LampShadows, LAMP_SHADOWS:
@@ -294,6 +301,13 @@ settings! {
     /// the sky alone, which is faster; "low", "medium" and "high" follow a
     /// change in the light more smoothly, each slower than the one before.
     bounce: Bounce = Bounce::Medium, Shape::Choice(BOUNCE), "Graphics", "Bounce light";
+    /// The soft shade in corners, under things and where something stands
+    /// on the ground (ambient occlusion). It only dims light that comes
+    /// from all round, never the sun's or a lamp's. "off" draws none, which
+    /// is faster; "low", "medium" and "high" look along more lines for
+    /// smoother shade, each slower than the one before.
+    ambient_occlusion: AmbientOcclusion = AmbientOcclusion::Medium,
+        Shape::Choice(AMBIENT_OCCLUSION), "Graphics", "Ambient occlusion";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -857,6 +871,7 @@ mod tests {
             light_shafts: false,
             lamp_shadows: LampShadows::High,
             bounce: Bounce::Low,
+            ambient_occlusion: AmbientOcclusion::Low,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -934,7 +949,8 @@ mod tests {
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows` and `bounce`.",
+                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce` and \
+                 `ambient_occlusion`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",
