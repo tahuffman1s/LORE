@@ -426,7 +426,13 @@ fn a_tub_nobody_marked_becomes_a_pool_the_script_and_the_picture_are_told_of() {
         r#"
         local tap = vector.create(-12, 1.5, -12)
         local told = false
-        game.onStart(function() game.player:teleport(vector.create(10, 0.1, 10)) end)
+        game.onStart(function()
+            game.player:teleport(vector.create(10, 0.1, 10))
+            print("at first", game.fluids.poolAt(tap))
+        end)
+        game.fluids.onPoolFormed(function(pool)
+            print("formed", pool.name, game.fluids.poolAt(tap - vector.create(0, 1.2, 0)) == pool)
+        end)
         game.onTick(function()
             if game.time() < 8 then
                 game.fluids.spray("honey", tap, vector.create(0, -2, 0), { litresPerSecond = 60, spread = 0 })
@@ -450,7 +456,15 @@ fn a_tub_nobody_marked_becomes_a_pool_the_script_and_the_picture_are_told_of() {
     assert_eq!(frame.found.as_ref().map(Vec::len), Some(0));
     assert_eq!(frame.pools.len(), 1);
     play(&mut world, 10 * 60 + 2);
-    assert_eq!(printed(), ["found pool 2 honey", "true true true false"]);
+    assert_eq!(
+        printed(),
+        [
+            "at first nil",
+            "formed pool 2 true",
+            "found pool 2 honey",
+            "true true true false"
+        ]
+    );
     // The picture is given the tub's shape once, and how it stands with
     // the tank from then on: honey, with a look of its own.
     let frame = fluid_frame(&mut world);
@@ -462,4 +476,51 @@ fn a_tub_nobody_marked_becomes_a_pool_the_script_and_the_picture_are_told_of() {
     let frame = fluid_frame(&mut world);
     assert!(frame.found.is_none(), "said once, until it changes");
     assert_eq!(frame.pools.len(), 2);
+}
+
+#[test]
+fn a_script_asks_which_pool_is_at_a_place_and_hears_it_run_over_and_stop() {
+    let mut world = world(
+        r#"
+        local tank = game.fluids.pool("Tank")
+        local function at(x, y, z)
+            local pool = game.fluids.poolAt(vector.create(x, y, z))
+            return if pool then pool.name else "none"
+        end
+        game.onStart(function()
+            game.player:teleport(vector.create(10, 0.1, 10))
+            -- In the water, in the air under its brim, on its floor; over
+            -- it, under it, and outside its wall.
+            print(at(0, 1, 0), at(2, 2.5, -2), at(0, 0, 0), at(0, 5, 0), at(0, -2, 0), at(10, 1, 10))
+            print(game.fluids.poolAt(vector.create(1, 1, 1)) == tank)
+        end)
+        game.onTick(function(step)
+            if game.time() < 1 then
+                tank:fill(30000 * step)
+            end
+        end)
+        local runs = 0
+        game.fluids.onOverflow(function(pool)
+            runs += 1
+            print("over", pool.name, pool == tank, game.time() < 1.2)
+        end)
+        game.fluids.onOverflowEnd(function(pool)
+            print("stopped", pool.name, runs, pool.overflowing, game.time() > 5)
+        end)
+        "#,
+        WATER,
+    );
+    // A second of filling puts 30 000 litres into room for 26 000; the
+    // half cubic metre that waits over the brim takes 12 seconds to run
+    // out, and half a second later the script is told it has stopped.
+    play(&mut world, 20 * 60);
+    assert_eq!(
+        printed(),
+        [
+            "Tank Tank Tank none none none",
+            "true",
+            "over Tank true true",
+            "stopped Tank 1 false true"
+        ]
+    );
 }

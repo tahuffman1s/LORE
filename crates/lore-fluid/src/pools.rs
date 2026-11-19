@@ -71,6 +71,9 @@ const LOWEST: f32 = 0.01;
 const POND_THICK: f32 = 2.5;
 /// How many ticks apart a hollow is looked for.
 const POND_EVERY: u32 = 20;
+/// Less than this many litres over a rim in a tick is a dribble, not a
+/// pool running over: half a millilitre, 30 millilitres a second.
+const DRIBBLE: f32 = 5.0e-4;
 /// How far under the brim it was found with a found hollow's surface
 /// stands when it is looked into further, in metres.
 const NEAR_BRIM: f32 = 0.05;
@@ -381,6 +384,19 @@ impl Pool {
     #[must_use]
     pub fn spilled(&self) -> f32 {
         self.spilled
+    }
+
+    /// Whether it is running over its rim: more than a dribble ran out in
+    /// the newest tick, or it stands a litre or more over its brim with a
+    /// way out and what is over waits its turn (a rim lets only so much
+    /// out at once, and the store of drops may be full). One droplet
+    /// falling back into a full pool pushes its own volume out and is not
+    /// the pool running over.
+    #[must_use]
+    pub fn overflowing(&self) -> bool {
+        self.spilled > DRIBBLE
+            || (self.spill.is_some()
+                && self.held() + self.displaced > self.curve.at_brim() + 1.0e-3)
     }
 
     /// What it is to someone in it: how heavy and how thick its mix is.

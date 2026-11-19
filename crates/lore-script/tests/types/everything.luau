@@ -421,6 +421,16 @@ game.onTick(function()
     end
 end)
 
+game.onTick(function()
+    local here: Pool? = game.fluids.poolAt(game.player.position)
+    if here and here.overflowing then
+        print(here.name)
+    end
+end)
+game.fluids.onOverflow(function(pool: Pool) print(pool.name, pool.litres) end)
+game.fluids.onOverflowEnd(function(pool: Pool) print(pool.name) end)
+game.fluids.onPoolFormed(function(pool: Pool) print(pool.fluid.name) end)
+
 game.fluids.onTouch(function(touch)
     local who: Character = touch.character
     local kind: Fluid = touch.fluid

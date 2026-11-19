@@ -558,7 +558,8 @@ declare extern type Pool with
     --- Example: if pond.level >= pond.brim then print("Full") end
     brim: number
 
-    --- True on a tick when it ran out over its rim.
+    --- True while it runs out over its rim: more than a dribble, or more
+    --- than a litre standing over its brim and waiting to.
     --- Example: if tub.overflowing then print("Turn the tap off!") end
     overflowing: boolean
 
@@ -1919,5 +1920,29 @@ declare game: {
         --- place in this list ("pool 4").
         --- Example: for _, pool in game.fluids.pools() do print(pool.name, pool.litres) end
         pools: () -> { Pool },
+
+        --- The pool at a place: the one whose hollow the place is in,
+        --- whether it is full or empty, or nil when the place is in none.
+        --- Nil is the usual answer, so check before you use it.
+        --- Example: local here = game.fluids.poolAt(game.player.position); if here then print(here.name) end
+        poolAt: (place: vector) -> Pool?,
+
+        --- Calls your function when a pool starts to run over its rim: once
+        --- as it starts, not on every tick it runs. `pool.overflowing` says
+        --- whether it is running over right now.
+        --- Example: game.fluids.onOverflow(function(pool) print(pool.name .. " is running over") end)
+        onOverflow: (handler: (pool: Pool) -> ()) -> (),
+
+        --- Calls your function when a pool that was running over has
+        --- stopped: once it has not run over for about half a second.
+        --- Example: game.fluids.onOverflowEnd(function(pool) print(pool.name .. " has stopped") end)
+        onOverflowEnd: (handler: (pool: Pool) -> ()) -> (),
+
+        --- Calls your function when a hollow nobody marked becomes a pool
+        --- because fluid was poured into it, with the new pool. It is not
+        --- called for the pools the level starts with: `game.fluids.pools()`
+        --- lists those.
+        --- Example: game.fluids.onPoolFormed(function(pool) print("A new pool of " .. pool.fluid.name) end)
+        onPoolFormed: (handler: (pool: Pool) -> ()) -> (),
     },
 }

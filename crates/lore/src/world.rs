@@ -152,7 +152,10 @@ const THUNDER_HEARD: f32 = 25_000.0;
 
 /// Tells `host` what pools `level` has and how each stands before
 /// anything has happened in it, as a world that plays the level does.
-pub(crate) fn tell_pools(level: &lore_physics::Level, host: &mut lore_script::ScriptHost) {
+pub(crate) fn tell_pools(
+    level: &std::sync::Arc<lore_physics::Level>,
+    host: &mut lore_script::ScriptHost,
+) {
     fluids::WorldFluids::default().take_level(level, host);
 }
 

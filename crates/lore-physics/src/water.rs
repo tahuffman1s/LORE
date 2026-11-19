@@ -1514,6 +1514,15 @@ mod tests {
         assert!((stood.shift - 0.3).abs() < 1e-6, "{stood:?}");
         let empty = level.pool(2).expect("body 2");
         assert!((empty.shift + tub.deepest()).abs() < 1e-6, "{empty:?}");
+        // A place is in the hollow it is over the bed of, full or not, up
+        // to a little over its brim: the tank's, the tub's, or neither.
+        assert_eq!(level.pool_holding([10.0, -0.5, 0.0]), Some(0));
+        assert_eq!(level.pool_holding([0.2, 0.1, -0.3]), Some(1));
+        assert_eq!(level.pool_holding([0.2, 0.45, -0.3]), Some(1));
+        assert_eq!(level.pool_holding([0.2, 1.2, -0.3]), None, "over its brim");
+        assert_eq!(level.pool_holding([0.2, -1.0, -0.3]), None, "under its bed");
+        assert_eq!(level.pool_holding([5.0, 0.0, 0.0]), None, "between them");
+        assert_eq!(level.pool_holding([f32::NAN, 0.0, 0.0]), None);
         // And none found is none: the level's own are left.
         level.set_found(&[]);
         assert_eq!((level.found(), level.hollow_at(0.0, 0.0)), (0, None));

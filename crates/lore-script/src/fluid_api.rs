@@ -29,8 +29,26 @@ use crate::weather_api::number;
 
 /// Every function on `game.fluids`.
 pub(crate) const FLUIDS_FUNCTIONS: &[&str] = &[
-    "spray", "clear", "amount", "under", "onTouch", "pool", "pools",
+    "spray",
+    "clear",
+    "amount",
+    "under",
+    "onTouch",
+    "pool",
+    "pools",
+    "poolAt",
+    "onOverflow",
+    "onOverflowEnd",
+    "onPoolFormed",
 ];
+
+/// How many ticks a pool must go without running over before its script
+/// is told it has stopped: a pool right at its brim runs over on some
+/// ticks and not on others, and that is one overflow, not many.
+const OVERFLOW_QUIET: u8 = 30;
+
+/// Says which pool's hollow a place is in, as the level knows it.
+type PoolFinder = Box<dyn Fn([f32; 3]) -> Option<usize>>;
 
 /// What can be read from a kind of fluid.
 pub(crate) const FLUID_FIELDS: &[&str] = &[
@@ -765,6 +783,11 @@ pub(crate) struct FluidState {
     pool_names: RefCell<Option<Vec<(String, String)>>>,
     /// What the engine last said of each pool.
     pools: RefCell<Vec<PoolTold>>,
+    /// How the level finds the pool at a place, once a world has it.
+    finder: RefCell<Option<PoolFinder>>,
+    /// For each pool, whether its script has been told it is running
+    /// over, and how many ticks ago it last did.
+    running: RefCell<Vec<(bool, u8)>>,
 }
 
 impl Default for FluidState {
@@ -781,6 +804,8 @@ impl Default for FluidState {
             unders: RefCell::default(),
             pool_names: RefCell::default(),
             pools: RefCell::default(),
+            finder: RefCell::default(),
+            running: RefCell::default(),
         }
     }
 }
@@ -893,6 +918,54 @@ impl FluidState {
         let mut pools = self.pools.borrow_mut();
         pools.clear();
         pools.extend(told);
+    }
+
+    /// Takes how a new level finds the pool at a place. Whatever was
+    /// running over in the level before is forgotten.
+    pub(crate) fn set_finder(&self, finder: PoolFinder) {
+        *self.finder.borrow_mut() = Some(finder);
+        self.running.borrow_mut().clear();
+    }
+
+    /// The pool whose hollow `place` is in, if it is in one: `Err` until a
+    /// world has said how its level finds one.
+    pub(crate) fn pool_holding(&self, place: [f32; 3]) -> Result<Option<u16>, ()> {
+        let finder = self.finder.borrow();
+        let finder = finder.as_ref().ok_or(())?;
+        let known = self.pool_names.borrow().as_ref().map_or(0, Vec::len);
+        Ok(finder(place)
+            .filter(|index| *index < known)
+            .and_then(|index| u16::try_from(index).ok()))
+    }
+
+    /// How many pools the engine has said there are.
+    pub(crate) fn pool_count(&self) -> usize {
+        self.pool_names.borrow().as_ref().map_or(0, Vec::len)
+    }
+
+    /// Whether pool `index` has started (`Some(true)`) or stopped
+    /// (`Some(false)`) running over, by what the engine last said of it.
+    /// Ask once a tick for each pool: it counts the ticks.
+    pub(crate) fn pool_edge(&self, index: usize) -> Option<bool> {
+        let over = self.pools.borrow().get(index)?.overflowing;
+        let mut running = self.running.borrow_mut();
+        if running.len() <= index {
+            running.resize(index + 1, (false, 0));
+        }
+        let (told, quiet) = running.get_mut(index)?;
+        if over {
+            *quiet = 0;
+            return (!std::mem::replace(told, true)).then_some(true);
+        }
+        if !*told {
+            return None;
+        }
+        *quiet = quiet.saturating_add(1);
+        if *quiet < OVERFLOW_QUIET {
+            return None;
+        }
+        *told = false;
+        Some(false)
     }
 
     /// Whether the engine has said what pools the level has.

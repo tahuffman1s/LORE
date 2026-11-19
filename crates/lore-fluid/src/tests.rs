@@ -203,7 +203,7 @@ fn timing_with_the_store_full() {
         lap(2);
         fluids.spread(&level, DT);
         lap(3);
-        fluids.crowd(DT);
+        fluids.crowd(&level, DT);
         lap(4);
         fluids.run(&level, DT);
         lap(5);

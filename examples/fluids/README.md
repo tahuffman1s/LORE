@@ -33,7 +33,8 @@ lore run
 - **Beside where you start, a trough nobody marked.** No sheet says it is a pool.
   Spray into it: the first litres lie as a puddle, and once they lie deep
   the engine finds the trough round them and it is a pool like the others,
-  which fills and runs over its low side.
+  which fills and runs over its low side. The game says so when it forms,
+  the panel reads it when you look into it, and E empties it.
 - **The weather** (M): rain raises pools of water to their brims, and frost
   freezes the kinds that freeze, so that you can walk on the water pit and
   not on the brine you made.
@@ -49,7 +50,7 @@ keys as they are bound, for keyboard or gamepad.
 | `main.luau` | The game: the keys, the weather, the line of hints. |
 | `kinds.luau` | The fluids the gun shoots, two of them made here, and the burn. |
 | `gun.luau` | The fluid gun and its crosshair. |
-| `lab.luau` | The machines (pump, tap, lever) and the panel. All of it is done through `game.fluids.pool`. |
+| `lab.luau` | The machines (pump, tap, lever) and the panel. All of it is done through `game.fluids.pool`; the trough, which has no name, is found with `game.fluids.poolAt` and announced from `game.fluids.onPoolFormed`. |
 | `shaders/` | Three fluid shaders, one function each: `crust.wgsl` (a crust of dark rock drifting on the lava), `slick.wgsl` (the colored bands of a thin film on the oil) and `pulse.wgsl` (bubbles under the slime's skin). `main.luau` turns each on for its kind with one line; they draw the pits and whatever of those kinds the gun pours. Save one while the game runs and it changes. |
 | `places.luau` | Where things are. Written by `build.py`. |
 | `build.py` | Makes the level out of boxes, and lays a small sheet marked `water` over each hollow: that is all a pool needs. The trough has none. |

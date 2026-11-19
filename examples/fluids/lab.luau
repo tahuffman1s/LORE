@@ -3,7 +3,8 @@
 --
 -- Everything here is done through a pool: game.fluids.pool finds one by the
 -- name its sheet has in the level, and from then on it can be read (what it
--- holds, how full, how high) and asked (fill, drain, setLevel).
+-- holds, how full, how high) and asked (fill, drain, setLevel). A pool
+-- nobody named is found by where it is, with game.fluids.poolAt.
 
 local places = require("./places")
 local kinds = require("./kinds")
@@ -96,6 +97,36 @@ end
 
 -- ------------------------------------------------------------ what "use" does
 
+-- A hollow nobody marked becomes a pool when enough is poured into it: the
+-- trough beside the start, or anything else that holds what you spray. The
+-- level's list does not know it, so it is found by where the player looks
+-- or stands, and the game says so once when it forms.
+local formed: Station? = nil
+local newest, newestUntil = "", 0
+
+game.fluids.onPoolFormed(function(pool)
+    newest, newestUntil = pool.name, game.time() + 6
+end)
+
+local function unmarked(): Station?
+    local player = game.player
+    local pool = game.fluids.poolAt(player.eye + player.aim * 1.6) or game.fluids.poolAt(player.position)
+    if not pool then
+        return nil
+    end
+    for _, one in stations do
+        if one.pool == pool then
+            return nil
+        end
+    end
+    if formed then
+        formed.pool, formed.fluid, formed.at = pool, pool.fluid.name, player.position
+    else
+        formed = { pool = pool, group = "found", fluid = pool.fluid.name, at = player.position }
+    end
+    return formed
+end
+
 -- The station the player is nearest, if they are near any.
 local function nearest(): Station?
     local here = game.player.position
@@ -107,7 +138,7 @@ local function nearest(): Station?
             best, bestAway = one, away
         end
     end
-    return best
+    return best or unmarked()
 end
 
 -- What the "use" button does at a station, in a few words for the hint.
@@ -118,6 +149,8 @@ local function useOf(one: Station): string
         return if kept.tap then "shut the tap" else "open the tap: it pours what the gun holds"
     elseif one.group == "lock" then
         return if kept.lockDown then "fill the lock" else "empty the lock"
+    elseif one.group == "found" then
+        return "empty it"
     end
     return "put it back as it was"
 end
@@ -129,6 +162,8 @@ local function use(one: Station)
         kept.tap = not kept.tap
     elseif one.group == "lock" then
         pullLever()
+    elseif one.group == "found" then
+        one.pool.litres = 0
     else
         -- As the level made it: its own fluid, where its sheet lies.
         one.pool.fluid = game.fluid(one.fluid)
@@ -168,6 +203,8 @@ local like = game.hud.text("", { at = "top left", right = 40, down = 104, size =
 local full = game.hud.bar(0, { at = "top left", right = 40, down = 138, width = 300, height = 14, color = "#4aa8ff" })
 local amount = game.hud.text("", { at = "top left", right = 352, down = 132, size = 22, color = "#ffffffa0" })
 local hint = game.hud.text("", { at = "top left", right = 40, down = 164, size = 24, color = "#ffe08a" })
+-- Under the panel, for a few seconds: a hollow has just become a pool.
+local news = game.hud.text("", { at = "top left", right = 40, down = 214, size = 24, color = "#9fe0a0" })
 
 -- Under it: what the player is in, and a bar that fills as acid or lava
 -- burns them.
@@ -225,6 +262,8 @@ function lab.draw(shown: boolean)
         )
         hint.text = string.format("%s  %s", game.input.label("interact"), useOf(near))
     end
+    news.visible = shown and game.time() < newestUntil
+    news.text = "A hollow filled and is a pool now: " .. newest
     local touch = game.fluids.under(game.player)
     within.visible = shown and touch ~= nil
     if touch then

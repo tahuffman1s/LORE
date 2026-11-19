@@ -750,3 +750,53 @@ fn a_found_hollow_plays_out_the_same_every_time() {
     assert!(first.0.is_some(), "the tub was found");
     assert_eq!(first, second);
 }
+
+#[test]
+fn what_runs_over_a_tank_does_not_come_back_through_the_foot_of_its_wall() {
+    // A tank whose walls stand on the floor it runs over onto: its bed and
+    // the ground outside are one floor, and its low wall is towards +x.
+    let mut solid = block([-12.0, -0.4, -12.0], [12.0, 0.0, 12.0]);
+    solid.extend(block([-1.2, 0.0, -1.2], [-1.0, 1.0, 1.2]));
+    solid.extend(block([1.0, 0.0, -1.2], [1.2, 0.8, 1.2]));
+    solid.extend(block([-1.0, 0.0, -1.2], [1.0, 1.0, -1.0]));
+    solid.extend(block([-1.0, 0.0, 1.0], [1.0, 1.0, 1.2]));
+    let level = level_with(solid, &[([0.0, 0.0], 0.5, r#"{"water": true}"#)]);
+    let mut fluids = world(&level);
+    // Six hundred litres more than it holds: what can wait over its brim
+    // has run out after thirteen seconds, onto the floor round its walls.
+    let room = fluids.pools()[0].capacity() - fluids.pools()[0].litres();
+    fluids.pool_add(0, 0, room + 600.0);
+    let mut last = 0;
+    for tick in 0..40 * 60 {
+        fluids.step(&level, DT);
+        if fluids.pools()[0].spilled() > 0.0 {
+            last = tick;
+        }
+        // Nothing lies inside a wall: two drops either side of a corner
+        // of it do not become one drop in it.
+        if tick % 60 == 0 {
+            let inside = (fluids.drops().iter())
+                .filter(|drop| {
+                    let [x, y, z] = drop.place;
+                    let in_tank = x.abs() < 1.19 && z.abs() < 1.19;
+                    let in_hollow = x.abs() < 1.01 && z.abs() < 1.01;
+                    in_tank && !in_hollow && y < 0.5
+                })
+                .count();
+            assert_eq!(inside, 0, "drops inside the walls at tick {tick}");
+        }
+    }
+    // So it ran over once and stopped: nothing came back in to run out
+    // again.
+    assert!(
+        last > 10 * 60 && last < 16 * 60,
+        "it last ran over at tick {last}"
+    );
+    let pool = &fluids.pools()[0];
+    assert!(
+        close(pool.litres(), pool.capacity(), 0.5),
+        "{}",
+        pool.litres()
+    );
+    assert!(fluids.litres(Some(0)) > 400.0, "{}", fluids.litres(Some(0)));
+}

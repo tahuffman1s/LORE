@@ -174,7 +174,7 @@ impl Fluids {
     /// push apart, run, follow their surface, leave trails and fall asleep.
     pub(crate) fn lie(&mut self, level: &Level, dt: f32) {
         self.spread(level, dt);
-        self.crowd(dt);
+        self.crowd(level, dt);
         self.run(level, dt);
     }
 
@@ -250,7 +250,7 @@ impl Fluids {
 
     /// Awake drops merge with same-kind drops they overlap, or push them
     /// apart when the merged patch would be too wide.
-    pub(crate) fn crowd(&mut self, dt: f32) {
+    pub(crate) fn crowd(&mut self, level: &Level, dt: f32) {
         let Self {
             parts,
             grid,
@@ -279,7 +279,7 @@ impl Fluids {
                     a = *now;
                 }
                 if j != i && !a.dead {
-                    meet(parts, physics, &a, i, j, dt);
+                    meet(level, parts, physics, &a, i, j, dt);
                 }
             });
         }
@@ -518,9 +518,20 @@ fn moved_on(
     Some((hit.point, normalize(hit.normal).unwrap_or(normal)))
 }
 
+/// Whether something solid stands between two lying drops, a little over
+/// the surface they lie on.
+fn parted(level: &Level, a: &Particle, b: &Particle) -> bool {
+    let from = madd(a.pos, a.normal, LOOK_LIFT);
+    let to = madd(b.pos, b.normal, LOOK_LIFT);
+    let off = sub(to, from);
+    let far = length_sq(off).sqrt();
+    normalize(off).is_some_and(|way| level.raycast(from, way, far).is_some())
+}
+
 /// Drop `i` (awake, and read as `a`) meets drop `j`: they merge, or are
 /// pushed apart. Says whether drop `i` was changed by a merge.
 fn meet(
+    level: &Level,
     parts: &mut [Particle],
     physics: &[Physics; MOST_KINDS],
     a: &Particle,
@@ -567,6 +578,12 @@ fn meet(
     let small_joins = a.volume.min(b.volume) <= JOIN_SHARE * a.volume.max(b.volume)
         && joined_h <= JOIN_THICKEST * h_eq;
     if wide <= R_MAX || small_joins {
+        // Two drops with a wall between them, or round a corner from each
+        // other, are not one puddle: joined, they would lie where the wall
+        // stands, and seep on through it.
+        if parted(level, a, &b) {
+            return false;
+        }
         // Never wider than a patch may be: what does not fit lies thicker.
         let h = h.max(volume / (PI * R_MAX * R_MAX));
         let (keep, gone, kept_at, gone_at) = if i < j { (*a, b, i, j) } else { (b, *a, j, i) };
