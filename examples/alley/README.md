@@ -52,7 +52,7 @@ It also writes `places.luau`, where the named places are (see below).
 |---|---|---|
 | Escape | Start | the pause menu: the game stands still, with Resume, Settings (sound, controls and graphics, each in force at once) and Quit |
 | F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the moon, snow, ice, lightning and a tornado that comes down the alley to you |
-| F7 | Select, then a bumper | the debug menu: walk, fly or noclip, fly speed, the speed of time, a jump to each named place, and what the player is doing |
+| F7 | Select, then a bumper | the debug menu: walk, fly or noclip, fly speed, the speed of time, a jump to each named place, two switches for the game-shader demonstrations (an old-photo screen effect and a glowing blue dumpster, from `shaders/`, both off to begin with), and what the player is doing |
 | F12 | in the debug menu | the frame meter: off, one line, or numbers with a graph |
 | F8 | left bumper | clear away every fluid |
 | E | Y | change the fluid the gun shoots |
@@ -73,6 +73,7 @@ Each part is a file of its own, `require`d by `main.luau`:
 | `pause_menu.luau` | the pause menu, with a settings screen built from `game.settings.list()`: the one `lore new` writes into every new game |
 | `weather_menu.luau` | the weather menu, a row for each thing `game.weather` and `game.sky` can say |
 | `debug_menu.luau` | the debug menu, and the readout it can leave on screen |
+| `shaders/` | `old_photo.wgsl` (a screen effect) and `glow_bands.wgsl` (a surface shader), each a short commented example of a game's own shader |
 | `frame_meter.luau` | the frame meter |
 | `key_hints.luau` | the line of keys at the bottom |
 | `fluids.luau` | the fluids the gun shoots, and where spraying and clearing them go |
