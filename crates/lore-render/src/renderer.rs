@@ -25,6 +25,7 @@ use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
 use crate::swapchain::Swapchain;
+use crate::texture::AnisotropicFiltering;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline, exposure_scale};
 use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
@@ -194,6 +195,9 @@ pub struct Renderer {
     lamp_shadows: LampShadows,
     /// How much light bounces: see [`set_bounce`](Self::set_bounce).
     bounce: Bounce,
+    /// How sharp textures seen at a slant are: see
+    /// [`set_anisotropic_filtering`](Self::set_anisotropic_filtering).
+    filtering: AnisotropicFiltering,
     /// The shade in corners: see
     /// [`set_ambient_occlusion`](Self::set_ambient_occlusion).
     shade: Shade,
@@ -280,6 +284,7 @@ impl Renderer {
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
+            filtering: AnisotropicFiltering::default(),
             shade: Shade {
                 quality: AmbientOcclusion::default(),
                 ..Shade::default()
@@ -355,7 +360,7 @@ impl Renderer {
         self.shaders.scene_changed();
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
-        self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        self.meshes = Some(Meshes::new(&self.gpu, scene, self.filtering)?);
         self.lamps.clear();
         self.lamps
             .extend(scene.lights.iter().filter_map(Lamp::from_light));
@@ -706,6 +711,18 @@ impl Renderer {
         self.bounce = bounce;
     }
 
+    /// How sharp textures stay where they are seen at a slant, as a floor
+    /// or a road is (anisotropic filtering), from the next frame on: a
+    /// player's setting. See [`AnisotropicFiltering`]; sixteen samples to
+    /// begin with.
+    ///
+    /// A change makes the scene's samplers again when the next frame is
+    /// drawn, and nothing else: its meshes, pictures and materials stay on
+    /// the graphics card as they are.
+    pub fn set_anisotropic_filtering(&mut self, filtering: AnisotropicFiltering) {
+        self.filtering = filtering;
+    }
+
     /// How finely the shade in corners and under things is worked out
     /// (ambient occlusion), or `Off` for none: a player's setting.
     ///
@@ -892,12 +909,41 @@ impl Renderer {
         Ok(())
     }
 
+    /// Has the scene read its textures as the player's setting now says,
+    /// if that changed since the scene was last drawn.
+    fn follow_filtering(&mut self) -> Result<(), RenderError> {
+        let Some(meshes) = &mut self.meshes else {
+            return Ok(());
+        };
+        if meshes.filtering() == self.filtering {
+            return Ok(());
+        }
+        // Frames still being drawn read with the old samplers.
+        // SAFETY: the device is alive for as long as `self.gpu` is.
+        unsafe { self.gpu.device().device_wait_idle() }
+            .map_err(RenderError::driver("waiting for the graphics card"))?;
+        // SAFETY: the graphics card has just gone idle, and nothing is
+        // drawn until this returns.
+        if let Err(error) = unsafe { meshes.set_filtering(self.filtering) } {
+            // The samplers are as they were, which is no reason to stop
+            // the game: it is drawn as before, and not asked again.
+            log::warn!(
+                "Anisotropic filtering stays at {} samples: {error} Choose the setting again \
+                 to try once more, or restart the game.",
+                meshes.filtering().samples()
+            );
+            self.filtering = meshes.filtering();
+        }
+        Ok(())
+    }
+
     /// Draws one frame into the current swapchain.
     fn draw(&mut self) -> Result<Drawn, RenderError> {
         if self.stale {
             // `rebuild` found no area to draw into.
             return Ok(Drawn::No);
         }
+        self.follow_filtering()?;
         let (Some(swapchain), Some(mesh), Some(tonemap), Some(view), Some(ui)) = (
             &self.swapchain,
             &self.mesh,

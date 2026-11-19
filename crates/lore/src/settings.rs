@@ -35,7 +35,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use lore_render::{AmbientOcclusion, Bounce, LampShadows, Upscaling};
+use lore_render::{AmbientOcclusion, AnisotropicFiltering, Bounce, LampShadows, Upscaling};
 use lore_script::{Setting, SettingKind, SettingValue};
 use toml::de::{DeTable, DeValue};
 
@@ -154,6 +154,14 @@ words!(AmbientOcclusion, AMBIENT_OCCLUSION:
     AmbientOcclusion::Low => "low",
     AmbientOcclusion::Medium => "medium",
     AmbientOcclusion::High => "high",
+);
+
+words!(AnisotropicFiltering, ANISOTROPIC_FILTERING:
+    AnisotropicFiltering::Off => "off",
+    AnisotropicFiltering::X2 => "2x",
+    AnisotropicFiltering::X4 => "4x",
+    AnisotropicFiltering::X8 => "8x",
+    AnisotropicFiltering::X16 => "16x",
 );
 
 words!(LampShadows, LAMP_SHADOWS:
@@ -308,6 +316,13 @@ settings! {
     /// smoother shade, each slower than the one before.
     ambient_occlusion: AmbientOcclusion = AmbientOcclusion::Medium,
         Shape::Choice(AMBIENT_OCCLUSION), "Graphics", "Ambient occlusion";
+    /// How sharp the ground, roads and walls look where they run away
+    /// from you (anisotropic filtering). "off" blurs them a few steps
+    /// ahead; "2x", "4x", "8x" and "16x" each keep them sharp about twice
+    /// as far as the one before. It costs very little: turn it down only
+    /// if the game is slow on a graphics card built into the processor.
+    anisotropic_filtering: AnisotropicFiltering = AnisotropicFiltering::X16,
+        Shape::Choice(ANISOTROPIC_FILTERING), "Graphics", "Anisotropic filtering";
 }
 
 /// Settings older versions of LORE wrote that there no longer are. A file
@@ -872,6 +887,7 @@ mod tests {
             lamp_shadows: LampShadows::High,
             bounce: Bounce::Low,
             ambient_occlusion: AmbientOcclusion::Low,
+            anisotropic_filtering: AnisotropicFiltering::X4,
         };
         let text = chosen.to_text();
         let (read, problems) = Settings::read(&text);
@@ -949,8 +965,8 @@ mod tests {
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce` and \
-                 `ambient_occlusion`.",
+                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
+                 `ambient_occlusion` and `anisotropic_filtering`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

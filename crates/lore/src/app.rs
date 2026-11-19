@@ -511,6 +511,7 @@ impl<G: Game> App<G> {
             renderer.set_lamp_shadows(settings.lamp_shadows);
             renderer.set_bounce(settings.bounce);
             renderer.set_ambient_occlusion(settings.ambient_occlusion);
+            renderer.set_anisotropic_filtering(settings.anisotropic_filtering);
         }
         // The field of view is read when the camera is next placed, and
         // the size of the HUD by `follow_ui_size`.
@@ -979,6 +980,9 @@ impl<G: Game> ApplicationHandler for App<G> {
                 };
                 let renderer = Renderer::new(Rc::clone(&window), size.width, size.height, config)
                     .and_then(|mut renderer| {
+                        // Said before the level is copied, so its samplers
+                        // are made once, as the player has them.
+                        renderer.set_anisotropic_filtering(settings.anisotropic_filtering);
                         // The graphics card has its own copy from here on.
                         match self.config.level.take() {
                             Some(level) => renderer.set_scene(&level)?,

@@ -30,6 +30,7 @@ use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::swapchain::COLOUR;
+use crate::texture::AnisotropicFiltering;
 use crate::tracks::TrackMap;
 use crate::water::{
     Bodies, Body, GRID_INDICES, GRID_SQUARES, Stir, WaterRows, WaterWorks, body_layout, grid_laid,
@@ -536,8 +537,13 @@ impl Meshes {
     /// use to the graphics card.
     ///
     /// Every mesh is stored once however many times it is placed. A part
-    /// whose lists do not match is left out with a warning.
-    pub(crate) fn new(gpu: &Arc<Gpu>, scene: &Scene) -> Result<Self, RenderError> {
+    /// whose lists do not match is left out with a warning. `filtering` is
+    /// how sharp the player wants textures seen at a slant.
+    pub(crate) fn new(
+        gpu: &Arc<Gpu>,
+        scene: &Scene,
+        filtering: AnisotropicFiltering,
+    ) -> Result<Self, RenderError> {
         let doing = "copying the level's meshes to the graphics card";
         let mut vertices: Vec<u8> = Vec::new();
         let mut indices: Vec<u8> = Vec::new();
@@ -666,7 +672,7 @@ impl Meshes {
             waters: scene.waters.clone(),
             draws,
             see_through_from,
-            materials: Materials::new(gpu, scene)?,
+            materials: Materials::new(gpu, scene, filtering)?,
             material_names: scene.materials.iter().map(|m| m.name.clone()).collect(),
             lighting: Lighting::of(scene),
             sky: Sky::of(&Lighting::of(scene)),
@@ -677,6 +683,27 @@ impl Meshes {
 }
 
 impl Meshes {
+    /// How sharp textures seen at a slant are read now.
+    pub(crate) fn filtering(&self) -> AnisotropicFiltering {
+        self.materials.filtering()
+    }
+
+    /// Reads textures seen at a slant as `filtering` says from now on.
+    /// Only the samplers are made again: the meshes, the pictures and the
+    /// materials stay as they are.
+    ///
+    /// # Safety
+    ///
+    /// Nothing still being drawn may use these meshes: the caller has
+    /// waited for the graphics card to go idle.
+    pub(crate) unsafe fn set_filtering(
+        &mut self,
+        filtering: AnisotropicFiltering,
+    ) -> Result<(), RenderError> {
+        // SAFETY: the caller says nothing is being drawn with these.
+        unsafe { self.materials.set_filtering(filtering) }
+    }
+
     /// The name of each of the scene's materials, in the scene's order. The
     /// number [`Draw::material`] holds is an index into this, or one past it
     /// for the matte white a part with no material is drawn in.

@@ -17,10 +17,59 @@ const COLOUR_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 /// Pictures that hold plain numbers, such as normal maps and roughness.
 const NUMBER_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
-/// How many samples a texture seen at a slant is read with, where the
-/// graphics card can: floors and walls seen along their length are most of
-/// what a shooter draws. A setting for it is #100.
-const SLANT_SAMPLES: f32 = 16.0;
+/// How sharp textures stay where they are seen at a slant (anisotropic
+/// filtering): a player's setting.
+///
+/// A floor, a road or a wall seen along its length is squeezed on the
+/// screen far more one way than the other, and read the plain way it blurs
+/// a few metres from the eye. Each step up reads it with up to twice as
+/// many samples along the squeezed way, which keeps it sharp twice as far.
+/// It costs next to nothing on a graphics card of its own, and a little on
+/// one built into a processor. A card that cannot do it draws as `Off`
+/// does, and one that cannot do as much does the most it can.
+///
+/// Only textures that are smoothed in every way are read like this: one
+/// whose file asks for sharp pixels keeps them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnisotropicFiltering {
+    /// Read the plain way: fastest, and blurred at a slant.
+    Off,
+    /// Up to two samples.
+    X2,
+    /// Up to four samples.
+    X4,
+    /// Up to eight samples.
+    X8,
+    /// Up to sixteen samples: sharp as far as textures are seen.
+    #[default]
+    X16,
+}
+
+impl AnisotropicFiltering {
+    /// The most samples a texture seen at a slant is read with: 1 for
+    /// `Off`, where it is read once as any other is.
+    #[must_use]
+    pub fn samples(self) -> u8 {
+        match self {
+            Self::Off => 1,
+            Self::X2 => 2,
+            Self::X4 => 4,
+            Self::X8 => 8,
+            Self::X16 => 16,
+        }
+    }
+
+    /// What a sampler is told: the samples asked for, held to the `most`
+    /// the graphics card takes, or `None` to read the plain way (the
+    /// setting is off, or the card cannot do it at all).
+    fn slant(self, most: Option<f32>) -> Option<f32> {
+        if self == Self::Off {
+            return None;
+        }
+        // A card that says it takes fewer than one still takes one.
+        most.map(|most| f32::from(self.samples()).min(most.max(1.0)))
+    }
+}
 
 const DOING: &str = "copying the level's textures to the graphics card";
 
@@ -28,6 +77,23 @@ const DOING: &str = "copying the level's textures to the graphics card";
 /// tall each time, down to a single pixel.
 pub(crate) fn sizes(width: u32, height: u32) -> u32 {
     32 - width.max(height).max(1).leading_zeros()
+}
+
+/// Whether the graphics card can make smaller copies of each kind of
+/// picture itself: colours first, then numbers.
+pub(crate) fn shrinks(gpu: &Gpu) -> [bool; 2] {
+    let needed = vk::FormatFeatureFlags::BLIT_SRC
+        | vk::FormatFeatureFlags::BLIT_DST
+        | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
+    [COLOUR_FORMAT, NUMBER_FORMAT].map(|format| {
+        // SAFETY: the instance and the physical device are alive as long as `gpu` is.
+        unsafe {
+            gpu.instance()
+                .get_physical_device_format_properties(gpu.physical_device(), format)
+        }
+        .optimal_tiling_features
+        .contains(needed)
+    })
 }
 
 /// The pictures and samplers of one scene.
@@ -39,45 +105,39 @@ pub(crate) struct Textures {
     samplers: Vec<(Sampler, vk::Sampler)>,
     /// The widest and tallest picture the graphics card takes.
     largest: u32,
-    /// The most samples a sampler may ask for at a slant, or `None` if the
-    /// graphics card cannot do it.
-    slant: Option<f32>,
+    /// The most samples the graphics card reads a texture with at a
+    /// slant, or `None` if it cannot do it.
+    most_slant: Option<f32>,
+    /// How sharp the player wants textures at a slant.
+    filtering: AnisotropicFiltering,
     /// Whether the graphics card can make smaller copies of each kind of
     /// picture itself: colours first, then numbers.
     shrinks: [bool; 2],
 }
 
 impl Textures {
-    /// Gets ready to hold pictures. The first is a single white pixel, for
-    /// materials to read where they have no texture of their own.
-    pub(crate) fn new(gpu: &Arc<Gpu>) -> Result<Self, RenderError> {
+    /// Gets ready to hold pictures, read at a slant as `filtering` says.
+    /// The first is a single white pixel, for materials to read where they
+    /// have no texture of their own.
+    pub(crate) fn new(
+        gpu: &Arc<Gpu>,
+        filtering: AnisotropicFiltering,
+    ) -> Result<Self, RenderError> {
+        let shrinks = shrinks(gpu);
         // SAFETY: the instance and the physical device are alive as long as `gpu` is.
-        let (limits, shrinks) = unsafe {
-            let instance = gpu.instance();
-            let physical = gpu.physical_device();
-            let needed = vk::FormatFeatureFlags::BLIT_SRC
-                | vk::FormatFeatureFlags::BLIT_DST
-                | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
-            let shrinks = [COLOUR_FORMAT, NUMBER_FORMAT].map(|format| {
-                instance
-                    .get_physical_device_format_properties(physical, format)
-                    .optimal_tiling_features
-                    .contains(needed)
-            });
-            (
-                instance.get_physical_device_properties(physical).limits,
-                shrinks,
-            )
-        };
+        let limits = unsafe {
+            gpu.instance()
+                .get_physical_device_properties(gpu.physical_device())
+        }
+        .limits;
         let mut textures = Self {
             gpu: Arc::clone(gpu),
             pictures: Vec::new(),
             made: Vec::new(),
             samplers: Vec::new(),
             largest: limits.max_image_dimension2_d,
-            slant: gpu
-                .anisotropy()
-                .then(|| limits.max_sampler_anisotropy.min(SLANT_SAMPLES)),
+            most_slant: gpu.anisotropy().then_some(limits.max_sampler_anisotropy),
+            filtering,
             shrinks,
         };
         textures.upload(1, 1, &[255; 4], false)?;
@@ -313,12 +373,83 @@ impl Textures {
         Ok(index)
     }
 
-    /// The sampler that reads a texture the way `wanted` says, made the
-    /// first time it is asked for.
-    pub(crate) fn sampler(&mut self, wanted: &Sampler) -> Result<vk::Sampler, RenderError> {
-        if let Some((_, sampler)) = self.samplers.iter().find(|(made, _)| made == wanted) {
-            return Ok(*sampler);
+    /// Where in the list the sampler is that reads a texture the way
+    /// `wanted` says: it is made the first time it is asked for. The place
+    /// stays the same when the player's setting remakes the samplers, so it
+    /// is what to keep; [`sampler_at`](Self::sampler_at) gives the sampler.
+    pub(crate) fn sampler(&mut self, wanted: &Sampler) -> Result<usize, RenderError> {
+        if let Some(index) = self.samplers.iter().position(|(made, _)| made == wanted) {
+            return Ok(index);
         }
+        let sampler = self.make(wanted, self.filtering)?;
+        self.samplers.push((*wanted, sampler));
+        Ok(self.samplers.len() - 1)
+    }
+
+    /// The sampler at a place [`sampler`](Self::sampler) gave, as it is now.
+    pub(crate) fn sampler_at(&self, index: usize) -> vk::Sampler {
+        self.samplers
+            .get(index)
+            .map_or(vk::Sampler::null(), |(_, sampler)| *sampler)
+    }
+
+    /// How sharp textures at a slant are read now.
+    pub(crate) fn filtering(&self) -> AnisotropicFiltering {
+        self.filtering
+    }
+
+    /// Reads textures at a slant as `filtering` says from now on. `true`
+    /// means every sampler was made again, so whatever holds one must ask
+    /// for it again with [`sampler_at`](Self::sampler_at); `false` means
+    /// they are as they were, because this card reads the same either way.
+    /// If it fails, the samplers and the setting are as they were.
+    ///
+    /// # Safety
+    ///
+    /// Nothing still being drawn may use these samplers: the caller has
+    /// waited for the graphics card to go idle. What holds a sampler that
+    /// was made again must not be drawn with until it holds the new one.
+    pub(crate) unsafe fn set_filtering(
+        &mut self,
+        filtering: AnisotropicFiltering,
+    ) -> Result<bool, RenderError> {
+        let before = std::mem::replace(&mut self.filtering, filtering);
+        if before.slant(self.most_slant) == filtering.slant(self.most_slant) {
+            return Ok(false);
+        }
+        let device = self.gpu.device();
+        let mut made = Vec::with_capacity(self.samplers.len());
+        for (wanted, _) in &self.samplers {
+            match self.make(wanted, filtering) {
+                Ok(sampler) => made.push(sampler),
+                Err(error) => {
+                    // SAFETY: these were made just now and nothing holds them.
+                    unsafe {
+                        for sampler in made {
+                            device.destroy_sampler(sampler, None);
+                        }
+                    }
+                    self.filtering = before;
+                    return Err(error);
+                }
+            }
+        }
+        for ((_, sampler), new) in self.samplers.iter_mut().zip(made) {
+            let old = std::mem::replace(sampler, new);
+            // SAFETY: the caller says nothing being drawn uses it, and it
+            // was made on this device.
+            unsafe { device.destroy_sampler(old, None) };
+        }
+        Ok(true)
+    }
+
+    /// Makes the sampler that reads a texture the way `wanted` says, and at
+    /// a slant as `filtering` says.
+    fn make(
+        &self,
+        wanted: &Sampler,
+        filtering: AnisotropicFiltering,
+    ) -> Result<vk::Sampler, RenderError> {
         let filter = |filter| match filter {
             Filter::Nearest => vk::Filter::NEAREST,
             Filter::Linear => vk::Filter::LINEAR,
@@ -353,15 +484,13 @@ impl Textures {
                 mipmaps: Some(Filter::Linear),
                 ..*wanted
             };
-        if let (Some(samples), true) = (self.slant, smooth) {
+        if let (Some(samples), true) = (filtering.slant(self.most_slant), smooth) {
             info = info.anisotropy_enable(true).max_anisotropy(samples);
         }
         // SAFETY: the device is alive and the settings are valid: slanted
-        // sampling is only asked for where the device has it switched on.
-        let sampler = unsafe { self.gpu.device().create_sampler(&info, None) }
-            .map_err(RenderError::driver(DOING))?;
-        self.samplers.push((*wanted, sampler));
-        Ok(sampler)
+        // sampling is only asked for where the device has it switched on,
+        // and for no more samples than it takes.
+        unsafe { self.gpu.device().create_sampler(&info, None) }.map_err(RenderError::driver(DOING))
     }
 }
 
@@ -395,5 +524,27 @@ mod tests {
         assert_eq!(sizes(5, 3), 3);
         // Nothing is still one size, not none.
         assert_eq!(sizes(0, 0), 1);
+    }
+
+    #[test]
+    fn a_sampler_asks_for_what_the_player_chose_and_no_more_than_the_card_takes() {
+        use AnisotropicFiltering::{Off, X2, X4, X8, X16};
+
+        // Each step doubles the samples, and sixteen is what a new player has.
+        assert_eq!(
+            [Off, X2, X4, X8, X16].map(AnisotropicFiltering::samples),
+            [1, 2, 4, 8, 16]
+        );
+        assert_eq!(AnisotropicFiltering::default(), X16);
+        // A card that takes sixteen gives each what it asks for.
+        assert_eq!(X16.slant(Some(16.0)), Some(16.0));
+        assert_eq!(X4.slant(Some(16.0)), Some(4.0));
+        // One that takes fewer gives the most it can.
+        assert_eq!(X16.slant(Some(8.0)), Some(8.0));
+        assert_eq!(X2.slant(Some(8.0)), Some(2.0));
+        assert_eq!(X8.slant(Some(0.0)), Some(1.0));
+        // Off, or a card that cannot do it, reads the plain way.
+        assert_eq!(Off.slant(Some(16.0)), None);
+        assert_eq!(X16.slant(None), None);
     }
 }

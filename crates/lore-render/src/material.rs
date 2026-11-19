@@ -9,7 +9,7 @@ use lore_assets::{AlphaMode, Material, Sampler, Scene, TextureRef};
 use crate::buffer::Buffer;
 use crate::error::RenderError;
 use crate::gpu::Gpu;
-use crate::texture::Textures;
+use crate::texture::{AnisotropicFiltering, Textures};
 
 /// The textures a material can have, in the order the shader numbers them:
 /// base colour, metallic-roughness, normal, occlusion and emissive.
@@ -181,6 +181,9 @@ pub(crate) struct Materials {
     /// One set for each of the scene's materials, then one for the matte
     /// white that a part with no material is drawn in.
     sets: Vec<vk::DescriptorSet>,
+    /// Where in `textures` the sampler of each slot of each set is: the
+    /// material's own, then those of what is painted over it.
+    samplers: Vec<[[usize; SLOTS]; 2]>,
     // Kept for as long as the sets point at them.
     _numbers: Option<Buffer>,
     textures: Textures,
@@ -188,8 +191,13 @@ pub(crate) struct Materials {
 
 impl Materials {
     /// Copies the materials of `scene`, and the textures they use, to the
-    /// graphics card.
-    pub(crate) fn new(gpu: &Arc<Gpu>, scene: &Scene) -> Result<Self, RenderError> {
+    /// graphics card. `filtering` is how sharp the player wants textures
+    /// seen at a slant.
+    pub(crate) fn new(
+        gpu: &Arc<Gpu>,
+        scene: &Scene,
+        filtering: AnisotropicFiltering,
+    ) -> Result<Self, RenderError> {
         let device = gpu.device();
         let fallback = Material::default();
         let count = scene.materials.len() + 1;
@@ -202,8 +210,9 @@ impl Materials {
             layout: vk::DescriptorSetLayout::null(),
             pool: vk::DescriptorPool::null(),
             sets: Vec::with_capacity(count),
+            samplers: Vec::with_capacity(count),
             _numbers: None,
-            textures: Textures::new(gpu)?,
+            textures: Textures::new(gpu, filtering)?,
         };
         let textures = &mut materials.textures;
 
@@ -314,8 +323,6 @@ impl Materials {
                         .image_view(view)
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 });
-                let samplers =
-                    read.map(|(_, sampler)| vk::DescriptorImageInfo::default().sampler(sampler));
                 // What is painted over it, or itself again: every binding
                 // of a set must hold something that can be read.
                 let other = over
@@ -326,8 +333,10 @@ impl Materials {
                         .image_view(view)
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 });
-                let over_samplers =
-                    other.map(|(_, sampler)| vk::DescriptorImageInfo::default().sampler(sampler));
+                materials.samplers.push([
+                    read.map(|(_, sampler)| sampler),
+                    other.map(|(_, sampler)| sampler),
+                ]);
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
@@ -342,25 +351,76 @@ impl Materials {
                         .image_info(&pictures),
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
-                        .dst_binding(1 + per_set)
-                        .descriptor_type(vk::DescriptorType::SAMPLER)
-                        .image_info(&samplers),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(*set)
                         .dst_binding(1 + 2 * per_set)
                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                         .image_info(&over_pictures),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(*set)
-                        .dst_binding(1 + 3 * per_set)
-                        .descriptor_type(vk::DescriptorType::SAMPLER)
-                        .image_info(&over_samplers),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
             }
+            materials.point_at_samplers();
         }
         materials._numbers = Some(buffer);
         Ok(materials)
+    }
+
+    /// Points every set at the samplers its slots read with, as they are now.
+    ///
+    /// # Safety
+    ///
+    /// Nothing still being drawn may use the sets.
+    unsafe fn point_at_samplers(&self) {
+        let per_set = SLOTS as u32;
+        for (set, [own, over]) in self.sets.iter().zip(&self.samplers) {
+            let [own, over] = [own, over].map(|slots| {
+                slots.map(|index| {
+                    vk::DescriptorImageInfo::default().sampler(self.textures.sampler_at(index))
+                })
+            });
+            // Bindings follow one another, so one write fills all five.
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(1 + per_set)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .image_info(&own),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(1 + 3 * per_set)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .image_info(&over),
+            ];
+            // SAFETY: the device is alive, the sets are this pool's, each
+            // sampler is one `textures` keeps alive, and the caller says
+            // the sets are not in use.
+            unsafe { self.gpu.device().update_descriptor_sets(&writes, &[]) };
+        }
+    }
+
+    /// How sharp textures seen at a slant are read now.
+    pub(crate) fn filtering(&self) -> AnisotropicFiltering {
+        self.textures.filtering()
+    }
+
+    /// Reads textures seen at a slant as `filtering` says from now on: the
+    /// samplers are made again and every material is pointed at the new
+    /// ones. The pictures and the materials themselves are not touched.
+    ///
+    /// # Safety
+    ///
+    /// Nothing still being drawn may use these materials: the caller has
+    /// waited for the graphics card to go idle.
+    pub(crate) unsafe fn set_filtering(
+        &mut self,
+        filtering: AnisotropicFiltering,
+    ) -> Result<(), RenderError> {
+        // SAFETY: the caller says nothing is being drawn with these, and
+        // every set is pointed at the new samplers before this returns.
+        unsafe {
+            if self.textures.set_filtering(filtering)? {
+                self.point_at_samplers();
+            }
+        }
+        Ok(())
     }
 
     /// The set of the scene's material number `material`, or of matte white

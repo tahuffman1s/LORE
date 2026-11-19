@@ -166,7 +166,7 @@ pub(crate) fn frames_shaded(
     scene_view.shade = shade;
     let drawn = scene_view.render_size();
     let motion_bytes = u64::from(drawn.width * drawn.height * 4);
-    let meshes = Meshes::new(gpu, scene).unwrap();
+    let meshes = Meshes::new(gpu, scene, crate::AnisotropicFiltering::default()).unwrap();
     let mesh = MeshPipeline::new(gpu, 1).unwrap();
     let tonemap = TonemapPipeline::new(gpu, FORMAT).unwrap();
     let whole = vk::ImageSubresourceLayers {
