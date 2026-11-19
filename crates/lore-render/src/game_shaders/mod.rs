@@ -107,10 +107,15 @@ const THIS_FILE: &str = "crates/lore-render/src/game_shaders/mod.rs";
 /// built of it, and what it takes to draw it. It makes nothing on the
 /// graphics card until a game wants a shader, and then only what is needed.
 pub(crate) struct GameShaders {
-    /// What the game wants against what is drawn.
-    book: Book<Built>,
+    // Fields drop in order: what holds the thread goes first, so the thread
+    // is joined before the book's live pipelines are destroyed.
     /// Made at the first frame that has a shader.
     works: Option<Works>,
+    /// Works that nothing needs any more, until the frames in flight that
+    /// used it are done.
+    old_works: Retiring<Works>,
+    /// What the game wants against what is drawn.
+    book: Book<Built>,
     gpu: Arc<Gpu>,
     /// How many frames can be in flight.
     frames: usize,
@@ -131,6 +136,7 @@ impl GameShaders {
         Self {
             book: Book::new(),
             works: None,
+            old_works: Retiring::new(frames.max(1) as u64 + 1),
             gpu: Arc::clone(gpu),
             frames: frames.max(1),
             clock: 0.0,
@@ -249,12 +255,21 @@ impl GameShaders {
         mesh: &MeshPipeline,
         meshes: Option<&Meshes>,
     ) {
+        let now = self.submitted;
+        self.old_works.release(now);
         if self.book.is_empty() && self.works.is_none() {
             return;
         }
         self.ensure_works(mesh);
         self.collect(false);
-        let now = self.submitted;
+        // With nothing wanted, the thread, the layouts and the pictures go
+        // too, once the frames in flight that used them are done.
+        if self.book.is_empty()
+            && let Some(works) = self.works.take_if(|works| works.worker.is_idle())
+        {
+            self.old_works.push(now, works);
+            return;
+        }
         if seconds.is_finite() && seconds > 0.0 {
             self.clock = (self.clock + f64::from(seconds)).rem_euclid(CLOCK_WRAPS_AT);
         }
@@ -331,7 +346,7 @@ impl GameShaders {
         if stale && let Some(old) = works.targets.take() {
             works.old_targets.push(now, old);
         }
-        if live > 0 && works.targets.is_none() {
+        if live > 0 && works.targets.is_none() && !self.failed {
             match Targets::new(&self.gpu, output) {
                 Ok(targets) => works.targets = Some(targets),
                 Err(error) => failure = Some(error),
@@ -402,6 +417,13 @@ impl GameShaders {
             works.targets = None;
             works.pass.forget();
         }
+        self.old_works.clear();
+    }
+
+    /// Whether any of the thread, layouts or pictures is kept.
+    #[cfg(test)]
+    pub(crate) fn holds_anything(&self) -> bool {
+        self.works.is_some() || self.old_works.len() > 0
     }
 }
 
