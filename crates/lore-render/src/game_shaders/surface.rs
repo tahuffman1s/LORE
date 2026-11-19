@@ -296,14 +296,12 @@ impl SurfaceTable {
             found.push(key);
         }
         // A problem told before whose cause is gone: the shader draws now.
+        // A shader has at most one problem, so each is told this once.
         for &(id, revision, _) in &self.told {
             let gone = !found.iter().any(|&(i, r, _)| (i, r) == (id, revision));
             let drawn = wanted.iter().find(|w| (w.id, w.revision) == (id, revision));
             if let (true, Some(w)) = (gone, drawn) {
-                let told = said.iter().any(|r| r.name == w.name && r.outcome.is_ok());
-                if !told {
-                    said.push(w.says(Ok(())));
-                }
+                said.push(w.says(Ok(())));
             }
         }
         self.told = found;

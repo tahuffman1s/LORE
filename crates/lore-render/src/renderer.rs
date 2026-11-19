@@ -384,7 +384,9 @@ impl Renderer {
     /// after it is ready; until then the last version that worked is drawn,
     /// and a shader that never worked draws nothing. What became of each
     /// one is given by [`take_shader_reports`](Self::take_shader_reports).
-    /// Changing only a shader's `values` never compiles anything.
+    /// Changing only a shader's `values` never compiles anything. Each
+    /// screen effect needs a name of its own: of two with one name, the
+    /// first in the list is drawn and the other is reported.
     ///
     /// A surface shader changes the color, normal, roughness, metallic,
     /// emission and alpha of every material of the level with the given
@@ -393,7 +395,9 @@ impl Renderer {
     /// weather still apply to what it gives. Shadows, bounce light and water
     /// are not changed by a surface shader: a shadow is cast by the
     /// level's own surface, and bounce light sees the level's own colors.
-    /// A material the level lacks is reported once for each level.
+    /// A material the level lacks is reported once for each level; when the
+    /// cause goes away (a level with it is set, or the shader that had the
+    /// material is removed) an `Ok` report says the shader is drawn.
     ///
     /// With an empty list nothing is made and nothing is drawn.
     ///
