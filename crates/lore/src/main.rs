@@ -570,6 +570,23 @@ fn check(folder: &Path) -> Result<(), String> {
              placed in the level. Fix it, then run `lore check` again."
         ));
     }
+    // Last, because a surface shader's material is looked up in the level.
+    let shaders = cli::check_shaders(game.host(), folder, level.as_ref());
+    for warning in &shaders.warnings {
+        eprintln!("Warning: {warning}");
+    }
+    if !shaders.mistakes.is_empty() {
+        for error in &shaders.mistakes {
+            eprintln!("{error}");
+        }
+        let count = shaders.mistakes.len();
+        return Err(format!(
+            "{count} {} in the game's shaders (each is shown above). Fix {}, then run \
+             `lore check` again.",
+            if count == 1 { "mistake" } else { "mistakes" },
+            if count == 1 { "it" } else { "them" },
+        ));
+    }
     println!(
         "{ENTRY_SCRIPT} is fine: it loaded and ran for {TICKS} ticks (1 second of game time) \
          with its player in it and no errors."
@@ -643,6 +660,39 @@ fn check(folder: &Path) -> Result<(), String> {
         print!(
             "{}",
             cli::walked(&lore::world::try_walking(&level, game.map()))
+        );
+    }
+    if shaders.drawn + shaders.from_folder.len() > 0 {
+        let on = match shaders.drawn {
+            0 => None,
+            1 => Some("the one the script turned on compiled as it would be drawn".to_owned()),
+            many => Some(format!(
+                "the {many} the script turned on compiled as they would be drawn"
+            )),
+        };
+        // Files a menu turns on later were not on during the check.
+        let folder = match shaders.from_folder.len() {
+            0 => None,
+            count => Some(format!(
+                "{} in the shaders folder that the script did not turn on during the check \
+                 ({}) compiled as the function {} holds",
+                if count == 1 {
+                    "the one".to_owned()
+                } else {
+                    format!("the {count}")
+                },
+                shaders.from_folder.join(", "),
+                if count == 1 { "it" } else { "each" },
+            )),
+        };
+        let said = match (on, folder) {
+            (Some(on), Some(folder)) => format!("{on}, and {folder}"),
+            (Some(one), None) | (None, Some(one)) => one,
+            (None, None) => String::new(),
+        };
+        println!(
+            "The game's shaders are fine: {said}. Nothing was drawn, so look at them with \
+             `lore run`."
         );
     }
     if !game.map().is_empty() {

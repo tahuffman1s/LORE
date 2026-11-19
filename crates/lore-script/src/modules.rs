@@ -34,6 +34,49 @@ pub(crate) fn stamp(path: &Path) -> Option<Stamp> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
+/// Decides when a file has been saved and the save has finished.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Watch {
+    /// The file as it was when last loaded.
+    loaded: Option<Stamp>,
+    /// A newer state seen once, waiting to be seen again.
+    pending: Option<Stamp>,
+}
+
+impl Watch {
+    /// A watch on a file that looked like `loaded` when it was read.
+    pub(crate) fn loaded(loaded: Option<Stamp>) -> Self {
+        Self {
+            loaded,
+            pending: None,
+        }
+    }
+
+    /// Whether `seen` is the file as it was loaded.
+    pub(crate) fn is_loaded(&self, seen: Option<Stamp>) -> bool {
+        seen == self.loaded
+    }
+
+    /// Takes what the file looks like now and says whether to reload it.
+    ///
+    /// A change must look the same on two checks in a row, so a file caught
+    /// half-written by the editor is not loaded. A missing file (some editors
+    /// save by deleting and renaming) is never a reason to reload.
+    pub(crate) fn should_reload(&mut self, seen: Option<Stamp>) -> bool {
+        if seen.is_none() || seen == self.loaded {
+            self.pending = None;
+            false
+        } else if seen == self.pending {
+            self.loaded = seen;
+            self.pending = None;
+            true
+        } else {
+            self.pending = seen;
+            false
+        }
+    }
+}
+
 /// The files a version of the game looked for, found or not, and what each
 /// looked like at that moment.
 pub(crate) type Touched = Vec<(PathBuf, Option<Stamp>)>;
@@ -69,7 +112,7 @@ impl Files {
     }
 
     /// Where the script called `name` is on disk, if scripts are on disk.
-    fn path(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn path(&self, name: &str) -> Option<PathBuf> {
         match self {
             Self::Folder(root) => Some(below(root, name)),
             Self::Memory(_) => None,
@@ -91,7 +134,7 @@ impl Files {
     }
 
     /// Reads the script called `name`, a name [`resolve`] made.
-    fn read(&self, name: &str) -> Result<String, ReadProblem> {
+    pub(crate) fn read(&self, name: &str) -> Result<String, ReadProblem> {
         // `resolve` only makes names that stay inside the game. Checked
         // again here, where the file is opened, so that no mistake above
         // this line can turn into a file read from somewhere else.
@@ -129,6 +172,12 @@ impl Files {
     /// The scripts in the folder called `folder` (`""` for the game's own),
     /// without their ending. Used to guess what a misspelled name meant.
     fn scripts_in(&self, folder: &str) -> Vec<String> {
+        self.files_in(folder, ENDING)
+    }
+
+    /// The files in the folder called `folder` (`""` for the game's own)
+    /// that end in `ending` (`".wgsl"`), without it.
+    pub(crate) fn files_in(&self, folder: &str, ending: &str) -> Vec<String> {
         match self {
             Self::Folder(root) => {
                 let Ok(entries) = fs::read_dir(below(root, folder)) else {
@@ -136,7 +185,7 @@ impl Files {
                 };
                 entries
                     .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-                    .filter_map(|file| file.strip_suffix(ENDING).map(str::to_owned))
+                    .filter_map(|file| file.strip_suffix(ending).map(str::to_owned))
                     .collect()
             }
             Self::Memory(scripts) => scripts
@@ -145,7 +194,7 @@ impl Files {
                     let (in_folder, file) = name.rsplit_once('/').unwrap_or(("", name));
                     (in_folder == folder).then_some(file)
                 })
-                .filter_map(|file| file.strip_suffix(ENDING).map(str::to_owned))
+                .filter_map(|file| file.strip_suffix(ending).map(str::to_owned))
                 .collect(),
         }
     }
@@ -304,7 +353,7 @@ pub(crate) fn resolve(from: &str, path: &str) -> Result<String, String> {
 }
 
 /// Why a file or folder called `step` cannot be on the way to a script.
-fn name_problem(step: &str) -> Option<&'static str> {
+pub(crate) fn name_problem(step: &str) -> Option<&'static str> {
     if step.starts_with('.') {
         // `lore package` skips them, so the packaged game would not start.
         Some("starts with a dot, and such files are left out when a game is packaged")
@@ -376,13 +425,20 @@ impl Modules {
             // Looked at before the file is read, so a save that lands in
             // between is seen as a change.
             let seen = stamp(&path);
-            self.touched.borrow_mut().push((path, seen));
+            self.touch(path, seen);
         }
         let source = self.files.read(name)?;
         self.sources
             .borrow_mut()
             .insert(name.to_owned(), source.clone());
         Ok(source)
+    }
+
+    /// Notes that the version looked for the file at `path`, which looked
+    /// like `seen` (taken before it was read) then: saving it starts the
+    /// game's script again.
+    pub(crate) fn touch(&self, path: PathBuf, seen: Option<Stamp>) {
+        self.touched.borrow_mut().push((path, seen));
     }
 
     /// The files looked for since this was last called.
@@ -566,7 +622,44 @@ fn require(lua: &Lua, shared: &Shared, asked: &Value) -> mlua::Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    fn at(seconds: u64, len: u64) -> Option<Stamp> {
+        Some((SystemTime::UNIX_EPOCH + Duration::from_secs(seconds), len))
+    }
+
+    #[test]
+    fn a_save_is_loaded_once_it_has_settled() {
+        let mut watch = Watch {
+            loaded: at(1, 10),
+            pending: None,
+        };
+        assert!(!watch.should_reload(at(1, 10)), "nothing changed");
+        assert!(
+            !watch.should_reload(at(2, 4)),
+            "seen once: may be half-written"
+        );
+        assert!(!watch.should_reload(at(2, 20)), "still being written");
+        assert!(
+            watch.should_reload(at(2, 20)),
+            "same twice: the save is done"
+        );
+        assert!(!watch.should_reload(at(2, 20)), "already loaded");
+    }
+
+    #[test]
+    fn a_file_that_vanishes_mid_save_is_not_a_reload() {
+        let mut watch = Watch {
+            loaded: at(1, 10),
+            pending: None,
+        };
+        assert!(!watch.should_reload(at(2, 20)));
+        assert!(!watch.should_reload(None), "deleted before the rename");
+        assert!(!watch.should_reload(at(2, 20)));
+        assert!(watch.should_reload(at(2, 20)));
+    }
 
     #[test]
     fn paths_are_names_inside_the_game() {

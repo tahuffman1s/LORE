@@ -14,6 +14,8 @@ lore-ui = { path = "../lore-ui" }
 lore-weapons = { path = "../lore-weapons" }
 # What a kind of fluid is made of, for `game.fluid`.
 lore-fluid = { path = "../lore-fluid" }
+# Game shaders: reading their values and what they are for, for `game.shaders`.
+lore-shader = { path = "../lore-shader" }
 libm = "0.2"
 log = "0.4"
 mlua = { version = "0.12", features = ["luau"] }

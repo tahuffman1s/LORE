@@ -1,0 +1,15 @@
+[package]
+name = "lore-shader"
+description = "Game shaders for LORE: stitching WGSL, compiling it to SPIR-V, values and plain errors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Reads WGSL, checks it and writes SPIR-V. Pure Rust, so a game's shaders can
+# be built and checked on a machine with no graphics card.
+naga = { version = "30", default-features = false, features = ["wgsl-in", "spv-out"] }
+
+[lints]
+workspace = true

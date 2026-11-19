@@ -298,6 +298,7 @@ fn start(
         lighting: None,
         lighting_given: false,
         lamps: Vec::new(),
+        shaders: crate::game_shaders::ShaderList::default(),
         window: None,
         occluded: false,
         draw_after: Instant::now(),
@@ -369,6 +370,8 @@ struct App<G> {
     lighting_given: bool,
     /// The memory the last frame's lamps were said in, lent to the next.
     lamps: Vec<lore_render::Lamp>,
+    /// The game's own shaders, between frames.
+    shaders: crate::game_shaders::ShaderList,
     /// Created once the window system is ready for it.
     window: Option<Rc<Window>>,
     /// Whether the window is completely hidden, so drawing would be wasted.
@@ -786,6 +789,7 @@ impl<G: Game> App<G> {
             .for_window(screen, std::mem::take(&mut self.ui))
             .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
             .with_lamp_buffer(std::mem::take(&mut self.lamps))
+            .with_shader_list(std::mem::take(&mut self.shaders))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
@@ -839,6 +843,14 @@ impl<G: Game> App<G> {
             renderer.set_lamps(lamps);
         }
         self.lamps = frame.lamp_buffer();
+        self.shaders = frame.take_shader_list();
+        // Both are cheap when nothing has changed: the renderer builds
+        // only a shader whose revision is new.
+        if let Some(renderer) = &mut self.renderer {
+            self.shaders
+                .hand_over(|list| renderer.set_game_shaders(list));
+            self.shaders.hear(renderer.take_shader_reports());
+        }
         if let Some(said) = frame.take_lighting() {
             self.lighting = Some(said);
             self.lighting_given = false;

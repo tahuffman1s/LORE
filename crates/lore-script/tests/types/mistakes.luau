@@ -82,3 +82,6 @@ game.settings.get(5) -- wrong: a setting is named in quotes
 local names: string = game.settings.list() -- wrong: it is a list of settings
 local stopped: number = game.paused() -- wrong: paused is true or false
 game.pause(true) -- wrong: it takes nothing; game.resume() lets the game go on
+game.shaders.screen(5) -- wrong: a shader is named in quotes
+game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's name before the values
+game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes

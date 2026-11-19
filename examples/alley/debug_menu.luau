@@ -11,7 +11,16 @@ local fluids = require("./fluids")
 local debugMenu = {}
 
 -- game.keep holds it while the script is saved and loaded again.
-local kept = game.keep("debug menu", { readout = false })
+local kept = game.keep("debug menu", { readout = false, oldPhoto = false, glowingBands = false })
+
+-- The two shader demonstrations, each in a file of its own in shaders/.
+-- Both start off, so the alley looks as it always did until a player
+-- turns one on. Their handles are kept so a shader can be changed or
+-- turned off.
+local oldPhotoShader: Shader? = nil
+local glowingShader: Shader? = nil
+local oldPhotoStrength = 0
+local BLUE_DUMPSTER = "dumpster paint blue" -- a material in level.glb
 
 -- The speeds of time, by name.
 local timeSpeeds = { stopped = 0, slow = 0.25, usual = 1, fast = 4 }
@@ -124,6 +133,22 @@ local rows = {
             kept.readout = on
         end,
     }),
+    menu.toggle("Old photo (screen effect)", {
+        get = function()
+            return kept.oldPhoto
+        end,
+        set = function(on)
+            kept.oldPhoto = on
+        end,
+    }),
+    menu.toggle("Glowing dumpster (surface shader)", {
+        get = function()
+            return kept.glowingBands
+        end,
+        set = function(on)
+            kept.glowingBands = on
+        end,
+    }),
 }
 for _, place in jumps do
     table.insert(
@@ -155,6 +180,36 @@ for _, line in {
 end
 
 debugMenu.menu = menu.new("Debug", rows)
+
+-- Turns the shaders on and off to match the toggles. A shader's values
+-- can change in every picture, with nothing rebuilt: the old-photo look
+-- eases in over about a second after it is turned on. It is called for every
+-- picture (from game.onDraw in main.luau), so a toggle takes effect at once.
+function debugMenu.drawShaders()
+    local dt = math.min(game.frames.lastTime(), 0.1)
+    if kept.oldPhoto then
+        if not oldPhotoShader then
+            -- Turned on at 0 so it does not jump to full strength.
+            oldPhotoStrength = 0
+            oldPhotoShader = game.shaders.screen("old_photo", { strength = 0 })
+        end
+        oldPhotoStrength = math.min(1, oldPhotoStrength + dt)
+        if oldPhotoShader then
+            oldPhotoShader:set("strength", oldPhotoStrength)
+        end
+    elseif oldPhotoShader then
+        oldPhotoShader:remove()
+        oldPhotoShader = nil
+    end
+    if kept.glowingBands then
+        if not glowingShader then
+            glowingShader = game.shaders.surface("glow_bands", BLUE_DUMPSTER)
+        end
+    elseif glowingShader then
+        glowingShader:remove()
+        glowingShader = nil
+    end
+end
 
 -- The readout kept on screen while the menu is closed: two lines, top
 -- left, on a dark band so they read against the sky.

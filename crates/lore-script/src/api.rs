@@ -159,6 +159,9 @@ pub(crate) struct Shared {
     /// What the script said of the picture's exposure. It outlives this
     /// version of the script.
     pub lighting: Rc<crate::lighting_api::LightingState>,
+    /// The game shaders the script turned on. It outlives this version of
+    /// the script.
+    pub shaders: Rc<crate::shader_api::ShaderState>,
     /// The HUD this version has made with `game.hud`.
     pub hud: HudState,
     /// The script files this version has read, and what `require` gave for each.
@@ -310,6 +313,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     fluid_api::install(lua, shared, &game)?;
     crate::lamp_api::install(lua, shared, &game)?;
     settings_api::install(lua, shared, &game)?;
+    game.set("shaders", crate::shader_api::table(lua)?)?;
 
     let input = lua.create_table()?;
     let any = Reads::Any;
@@ -382,7 +386,10 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("frames");
     members.push("hud");
     members.push("input");
+    members.push("lamps");
+    members.push("lighting");
     members.push("settings");
+    members.push("shaders");
     members.push("sky");
     members.push("weather");
     strict(lua, &game, "game", &members)?;
@@ -804,7 +811,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 34] = [
+        let groups: [(&str, &[&str]); 36] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -839,6 +846,8 @@ mod tests {
             ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
             ("Lamp.", crate::lamp_api::LAMP_FIELDS),
             ("Lamp:", &["remove"]),
+            ("game.shaders.", crate::shader_api::SHADERS_FUNCTIONS),
+            ("Shader:", crate::shader_api::SHADER_METHODS),
         ];
         let mut real: Vec<String> = groups
             .iter()

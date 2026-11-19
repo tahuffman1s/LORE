@@ -17,6 +17,7 @@ use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
 use crate::fluid::{FluidDrop, FluidLook};
 use crate::font::Font;
+use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
 use crate::gpu::Gpu;
 use crate::lamp_shadow::LampShadows;
 use crate::lamps::Lamp;
@@ -165,6 +166,8 @@ pub struct Renderer {
     /// The editor's panels, drawn over those.
     #[cfg(feature = "panels")]
     panels: crate::panels::PanelHost,
+    /// The game's own shaders; before the tone mapping and the picture it reads.
+    shaders: GameShaders,
     tonemap: Option<TonemapPipeline>,
     mesh: Option<MeshPipeline>,
     /// The level's meshes on the graphics card; `None` until a scene is set.
@@ -258,6 +261,7 @@ impl Renderer {
             overlay: Overlay::new(Font::bundled()),
             #[cfg(feature = "panels")]
             panels: crate::panels::PanelHost::default(),
+            shaders: GameShaders::new(&gpu, FRAMES_IN_FLIGHT),
             tonemap: None,
             mesh: None,
             meshes: None,
@@ -339,6 +343,8 @@ impl Renderer {
         // SAFETY: the device is alive for as long as `self.gpu` is.
         unsafe { self.gpu.device().device_wait_idle() }
             .map_err(RenderError::driver("waiting for the graphics card"))?;
+        self.shaders.idle();
+        self.shaders.scene_changed();
         // Dropped first, so the old and new meshes are never both held.
         self.meshes = None;
         self.meshes = Some(Meshes::new(&self.gpu, scene)?);
@@ -366,6 +372,64 @@ impl Renderer {
     pub fn set_lamps(&mut self, lamps: &[Lamp]) {
         self.lamps.clear();
         self.lamps.extend_from_slice(lamps);
+    }
+
+    /// Sets the game's own shaders: the whole list it wants drawn, in
+    /// drawing order. Call it when the list changes, or every frame; when
+    /// nothing changed it costs no allocation and no compile.
+    ///
+    /// A screen effect is drawn over the finished picture, after upscaling
+    /// and before tone mapping, in the order given. A new or changed
+    /// shader compiles on another thread, and is drawn from the first frame
+    /// after it is ready; until then the last version that worked is drawn,
+    /// and a shader that never worked draws nothing. What became of each
+    /// one is given by [`take_shader_reports`](Self::take_shader_reports).
+    /// Changing only a shader's `values` never compiles anything. Each
+    /// screen effect needs a name of its own: of two with one name, the
+    /// first in the list is drawn and the other is reported.
+    ///
+    /// A surface shader changes the color, normal, roughness, metallic,
+    /// emission and alpha of every material of the level with the given
+    /// name (an exact match; if two shaders name one material, the first
+    /// in the list is drawn and the other is reported). Lighting, fog and
+    /// weather still apply to what it gives. Shadows, bounce light and water
+    /// are not changed by a surface shader: a shadow is cast by the
+    /// level's own surface, and bounce light sees the level's own colors.
+    /// A material the level lacks is reported once for each level; when the
+    /// cause goes away (a level with it is set, or the shader that had the
+    /// material is removed) an `Ok` report says the shader is drawn.
+    ///
+    /// With an empty list nothing is made and nothing is drawn.
+    ///
+    /// ```no_run
+    /// # fn show(renderer: &mut lore_render::Renderer) {
+    /// use lore_render::{GameShader, ShaderUse};
+    ///
+    /// let text = "fn screen(in: ScreenIn) -> vec3f { return in.color * 0.5; }";
+    /// renderer.set_game_shaders(&[GameShader {
+    ///     name: "dim",
+    ///     file: "shaders/dim.wgsl",
+    ///     text,
+    ///     used_as: ShaderUse::Screen,
+    ///     values: &[],
+    ///     revision: 1,
+    /// }]);
+    /// for report in renderer.take_shader_reports() {
+    ///     if let Err(error) = report.outcome {
+    ///         eprintln!("{error}");
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    pub fn set_game_shaders(&mut self, shaders: &[GameShader<'_>]) {
+        self.shaders.want(shaders);
+    }
+
+    /// What became of the game's shaders since the last call: each one that
+    /// is drawn from now on, and each that failed, with what is wrong and
+    /// what is drawn instead. Empty most of the time.
+    pub fn take_shader_reports(&mut self) -> Vec<ShaderReport> {
+        self.shaders.take_reports()
     }
 
     /// Makes the whole picture brighter or darker, in camera stops, for the
@@ -734,6 +798,7 @@ impl Renderer {
         // SAFETY: the device is alive for as long as `self.gpu` is.
         unsafe { self.gpu.device().device_wait_idle() }
             .map_err(RenderError::driver("waiting for the graphics card"))?;
+        self.shaders.idle();
 
         let rebuilt = Swapchain::new(
             &self.gpu,
@@ -855,6 +920,13 @@ impl Renderer {
                     (weather, slot.flashed.get()),
                 );
             }
+            self.shaders.start_frame(
+                self.next,
+                seconds,
+                view.output_size(),
+                mesh,
+                self.meshes.as_ref(),
+            );
             view.measured = self.eye.adaptation.adapts();
             view.shafts = self.light_shafts;
             view.lamp_shadows = self.lamp_shadows;
@@ -922,10 +994,14 @@ impl Renderer {
                     tracks: self.effects.tracks(tracks),
                     fluid: Some(self.effects.fluid()),
                     lamps: &self.lamps,
+                    surfaces: self.shaders.surface_draws(),
                 },
                 &self.camera,
                 seconds,
             )?;
+            let read = self
+                .shaders
+                .record_screen(slot.commands, self.next, view, &self.camera);
             ui.prepare(slot.commands, self.next, &mut self.overlay)?;
             tonemap.record(
                 slot.commands,
@@ -940,6 +1016,7 @@ impl Renderer {
                     #[cfg(feature = "panels")]
                     panels: Some(&mut self.panels),
                 },
+                read,
                 Then::Show,
             )?;
             device
@@ -963,6 +1040,7 @@ impl Renderer {
             device
                 .queue_submit2(self.gpu.queue(), &submit, slot.finished)
                 .map_err(RenderError::driver("drawing a frame"))?;
+            self.shaders.submitted();
 
             let swapchains = [swapchain.handle];
             let indices = [index];

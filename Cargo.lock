@@ -1544,6 +1544,7 @@ dependencies = [
  "lore-physics",
  "lore-render",
  "lore-script",
+ "lore-shader",
  "lore-ui",
  "lore-weapons",
  "png",
@@ -1624,8 +1625,8 @@ dependencies = [
  "log",
  "lore-assets",
  "lore-fsr",
+ "lore-shader",
  "lore-ui",
- "naga",
  "raw-window-handle",
 ]
 
@@ -1637,9 +1638,17 @@ dependencies = [
  "log",
  "lore-fluid",
  "lore-input",
+ "lore-shader",
  "lore-ui",
  "lore-weapons",
  "mlua",
+]
+
+[[package]]
+name = "lore-shader"
+version = "0.0.0"
+dependencies = [
+ "naga",
 ]
 
 [[package]]

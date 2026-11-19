@@ -182,6 +182,16 @@ pub fn open_with_settings(
         let source = opened.read_text(&name)?;
         scripts.push((name, source));
     }
+    // And every shader, which the script's host reads by name.
+    let shaders: Vec<String> = opened
+        .files()
+        .filter(|name| name.starts_with("shaders/") && name.ends_with(".wgsl"))
+        .map(str::to_owned)
+        .collect();
+    for name in shaders {
+        let source = opened.read_text(&name)?;
+        scripts.push((name, source));
+    }
     let game = ScriptGame::from_sources_with_settings(scripts, actions, settings);
     // Nothing is played while a script loads, so the sounds can follow it.
     let sounds = Sounds::in_pack(&mut opened);
@@ -252,6 +262,27 @@ mod tests {
         let out = folder.join("Game.lpk");
         lore_pack::write(&out, "Zombie Night", &sources).unwrap();
         out
+    }
+
+    #[test]
+    fn a_packed_game_has_its_shaders() {
+        let folder = scratch("shaders");
+        let pack = pack(
+            &folder,
+            &[
+                ("main.luau", "game.shaders.screen(\"heat\")"),
+                (
+                    "shaders/heat.wgsl",
+                    "fn screen(in: ScreenIn) -> vec3f {\n    return in.color;\n}\n",
+                ),
+            ],
+        );
+        let game = open(&pack, &ActionMap::standard()).unwrap();
+        let mut seen = Vec::new();
+        game.game
+            .host()
+            .each_shader(|said| seen.push((said.name.clone(), said.problem.is_none())));
+        assert_eq!(seen, [("heat".to_owned(), true)]);
     }
 
     #[test]

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game shaders — LORE</title>
+<meta name="description" content="Change how your game looks with a few lines of WGSL: a screen effect over the whole picture, or a surface shader for one material of your level. Saving the file changes the running game.">
+<meta property="og:title" content="Game shaders — LORE">
+<meta property="og:description" content="A screen effect or a surface shader in a few lines of WGSL, changed while the game runs.">
+<meta name="color-scheme" content="dark light">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header>
+  <nav class="wrap" aria-label="Main">
+    <a class="brand mono" href="../index.html">LO<span>RE</span></a>
+    <ul>
+      <li><a href="index.html">Docs</a></li>
+      <li><a href="first-steps.html">Tutorial</a></li>
+      <li class="hide"><a href="../index.html#roadmap">Roadmap</a></li>
+      <li><a href="https://github.com/tahuffman1s/LORE">GitHub</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main>
+<div class="wrap">
+<article class="page">
+  <p class="crumb"><a href="index.html">Docs</a> / Game shaders</p>
+  <h1>Game shaders</h1>
+  <p class="lead">A shader is a small program that decides what color each part of the picture is. A game can bring its own, and change it while the game runs: save the file and the picture changes. You need a game to put it in; <a href="first-steps.html#new">make one</a> first if you have not.</p>
+
+  <nav class="toc" aria-label="On this page">
+    <p>On this page</p>
+    <ol>
+      <li><a href="#kinds">Two kinds of shader</a></li>
+      <li><a href="#screen">A first screen effect</a></li>
+      <li><a href="#surface">A first surface shader</a></li>
+      <li><a href="#inputs">Everything a shader is given</a></li>
+      <li><a href="#params">Values you can change</a></li>
+      <li><a href="#script">Setting values from the script</a></li>
+      <li><a href="#text">Text from the script</a></li>
+      <li><a href="#off">Turning one off, and saving the script</a></li>
+      <li><a href="#errors">When there is a mistake</a></li>
+      <li><a href="#limits">Limits, and what is not possible yet</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="kinds">Two kinds of shader</h2>
+  <p>A <b>screen effect</b> changes the finished picture: it is handed each pixel of what the game drew, and says what color to show instead. Black and white, a vignette, a heat haze and a sepia photograph are screen effects. Several can be on at once, and they run in the order you turned them on.</p>
+  <p>A <b>surface shader</b> changes one material of your level: everything in the level that wears that material. It is handed what the material looks like at that spot (its color, which way it faces, how shiny it is, how much light it gives off) and says what it should look like instead. The engine still does the lighting, shadows, fog and weather.</p>
+  <p>Shaders are written in WGSL, the shading language the engine uses itself, and each is one function in a file in your game's <code>shaders</code> folder. Which kind a file is comes from how your script asks for it, not from anything in the file. A file holds one function, `screen` or `surface`; if you need both, put the other in its own file.</p>
+
+  <h2 id="screen">A first screen effect</h2>
+  <p>Make a folder called <code>shaders</code> in your game's folder, and in it a file called <code>gray.wgsl</code>:</p>
+  <div class="code">
+    <span class="label">shaders/gray.wgsl</span>
+    <pre data-file="shaders/gray.wgsl" tabindex="0"><code>fn screen(in: ScreenIn) -> vec3f {
+    // How bright this pixel is, as one number.
+    let gray = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
+    return vec3f(gray);
+}</code></pre>
+  </div>
+  <p>Add this line to <code>main.luau</code>, outside any function, above the line that requires the pause menu (that one stays last):</p>
+  <div class="code">
+    <span class="label">main.luau</span>
+    <pre data-file="main.luau" tabindex="0"><code>game.shaders.screen("gray")</code></pre>
+  </div>
+  <p>The running game turns gray. Change the last line of the shader to <code>return vec3f(gray) * 0.5;</code> and save again: it gets darker, with no restart. The name in the quotes is the file's name without <code>.wgsl</code>.</p>
+
+  <h2 id="surface">A first surface shader</h2>
+  <p>A surface shader needs the name of a material in your level. A level made in Blender has one for each material you made there. A new game's level has one called <code>Red</code>, and this shader makes it glow:</p>
+  <div class="code">
+    <span class="label">shaders/glow.wgsl</span>
+    <pre data-file="shaders/glow.wgsl" tabindex="0"><code>fn surface(in: SurfaceIn) -> Surface {
+    // Start from what the level's material says here.
+    var out = in.surface;
+    // Light the surface gives off itself.
+    out.emission = vec3f(1.0, 0.3, 0.0);
+    return out;
+}</code></pre>
+  </div>
+  <div class="code">
+    <span class="label">main.luau</span>
+    <pre data-file="main.luau" tabindex="0"><code>game.shaders.surface("glow", "Red")</code></pre>
+  </div>
+  <p>Do not know the names? Write any name in that line and run <code>lore check</code>: if the level has no material of that name, it lists the ones it has. Names must match letter for letter, capitals included.</p>
+  <div class="code">
+    <pre class="out" tabindex="0"><code>Shader error in shaders/glow.wgsl:
+
+  The level has no material named `Rde`.
+  Hint: Did you mean `Red`? The level's materials are: Floor Light, Floor Dark, Wall, Platform, Ramp, Cover, Red, Blue.
+  Nothing is changed until a level with that material is loaded.</code></pre>
+  </div>
+  <p>Only what the camera sees changes: a glowing surface does not light the room around it, and it casts the same shadows as before.</p>
+
+  <h2 id="inputs">Everything a shader is given</h2>
+  <p>A screen effect is handed <code>in</code>, a <code>ScreenIn</code>, and returns a <code>vec3f</code>, the color to show. Light is linear and not limited to 1: a bright lamp or the sun is far above 1, and tone mapping brings it down afterwards.</p>
+  <table>
+    <thead><tr><th scope="col">In a screen effect</th><th scope="col">What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>in.uv</code></td><td>Where on the picture, 0 to 1: x to the right, y down.</td></tr>
+      <tr><td><code>in.color</code></td><td>The picture here, in linear light. It may be far above 1.</td></tr>
+      <tr><td><code>in.distance</code></td><td>Metres from the eye to what is drawn here. For sky it is 1,000,000.</td></tr>
+      <tr><td><code>in.time</code></td><td>Seconds on the renderer's own clock, which starts again each hour.</td></tr>
+      <tr><td><code>in.size</code></td><td>The picture's size in pixels.</td></tr>
+      <tr><td><code>picture(uv)</code></td><td>The picture somewhere else, as a <code>vec3f</code>: for a blur or a ripple.</td></tr>
+      <tr><td><code>distance_at(uv)</code></td><td>Metres from the eye to what is drawn at <code>uv</code>.</td></tr>
+    </tbody>
+  </table>
+  <p>A surface shader is handed a <code>SurfaceIn</code> and returns a <code>Surface</code>. It usually starts from <code>in.surface</code> and changes some fields.</p>
+  <table>
+    <thead><tr><th scope="col">In a surface shader</th><th scope="col">What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>in.surface</code></td><td>What the level's material gave here: a <code>Surface</code>, below.</td></tr>
+      <tr><td><code>in.position</code></td><td>Where this point is in the world, in metres.</td></tr>
+      <tr><td><code>in.uv</code></td><td>The material's first UV map.</td></tr>
+      <tr><td><code>in.view</code></td><td>A unit vector from the surface to the eye.</td></tr>
+      <tr><td><code>in.distance</code></td><td>Metres from the eye.</td></tr>
+      <tr><td><code>in.time</code></td><td>Seconds on the renderer's own clock: the same as in a screen effect.</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th scope="col">A <code>Surface</code> has</th><th scope="col">What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>color</code></td><td>The color light picks up, in linear light, 0 to 1.</td></tr>
+      <tr><td><code>normal</code></td><td>Which way it faces, in the world, length one.</td></tr>
+      <tr><td><code>roughness</code></td><td>0 is a mirror, 1 is chalk.</td></tr>
+      <tr><td><code>metallic</code></td><td>0 is not metal, 1 is bare metal.</td></tr>
+      <tr><td><code>emission</code></td><td>Light it gives off itself.</td></tr>
+      <tr><td><code>alpha</code></td><td>Cut-out and see-through materials use it; solid ones do not.</td></tr>
+    </tbody>
+  </table>
+  <p>Anything you return is tidied: negative color and emission become 0, alpha is held between 0 and 1.</p>
+
+  <h2 id="params">Values you can change</h2>
+  <p>A value is a number or color the shader declares, so the script can change it without touching the shader. Declare each with a line near the top that starts <code>//! param</code>, and read it in your function as <code>params.</code> and its name:</p>
+  <div class="code">
+    <span class="label">shaders/heat.wgsl</span>
+    <pre data-file="shaders/heat.wgsl" tabindex="0"><code>//! param strength: f32 = 0.5 range 0..1
+//! param tint: color = #ff8800
+
+fn screen(in: ScreenIn) -> vec3f {
+    let gray = dot(in.color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(in.color, gray * params.tint, params.strength);
+}</code></pre>
+  </div>
+  <p>The line is <code>//! param name: type = default</code>, and may end with <code>range low..high</code> for a number.</p>
+  <table>
+    <thead><tr><th scope="col">Type</th><th scope="col">What it holds</th><th scope="col">A default looks like</th></tr></thead>
+    <tbody>
+      <tr><td><code>f32</code></td><td>A number. The only type that takes a <code>range</code>.</td><td><code>0.5</code></td></tr>
+      <tr><td><code>vec2f</code>, <code>vec3f</code>, <code>vec4f</code></td><td>Two, three or four numbers, such as a direction.</td><td><code>(1, 2, 3)</code></td></tr>
+      <tr><td><code>color</code></td><td>A color. In the shader it is a <code>vec3f</code> in linear light.</td><td><code>#ff8800</code> or a name such as <code>orange</code></td></tr>
+    </tbody>
+  </table>
+  <p>Hex codes and color names are the colors you see in an editor (sRGB); the engine turns them into linear light for you.</p>
+
+  <h2 id="script">Setting values from the script</h2>
+  <p>Give the values in a table when you turn the shader on, and change any of them later, as often as every picture, with <code>shader:set</code>. Nothing is rebuilt.</p>
+  <div class="code">
+    <pre data-file="main.luau" tabindex="0"><code>local heat = game.shaders.screen("heat", { strength = 0.3, tint = "orange" })
+
+game.onDraw(function()
+    -- Gets stronger and weaker, once every three seconds or so.
+    heat:set("strength", 0.5 + 0.5 * math.sin(game.time() * 2))
+end)</code></pre>
+  </div>
+  <p>A color can be a name, a hex code in quotes, or a table of three numbers; numbers are read as sRGB like hex codes. A <code>vec3f</code> takes <code>vector.create(1, 2, 3)</code> or <code>{1, 2, 3}</code>. A number outside the shader's <code>range</code> is an error, not quietly cut to fit. A value you leave out is the shader's own default; turning the shader on again with a table sets exactly those values and puts the rest back to the defaults.</p>
+
+  <h2 id="text">Text from the script</h2>
+  <p>A shader does not have to be a file: give its text as <code>code</code>. Call again later with new text and it is replaced.</p>
+  <div class="code">
+    <pre data-file="main.luau" tabindex="0"><code>game.shaders.screen("pulse", { code = [[
+fn screen(in: ScreenIn) -> vec3f {
+    return in.color * (1.0 + 0.3 * sin(in.time * 4.0));
+}
+]] })</code></pre>
+  </div>
+
+  <h2 id="off">Turning one off, and saving the script</h2>
+  <p><code>heat:remove()</code> turns the shader off. Asking for it again turns it on, and the handle you kept works again.</p>
+  <p>What a save of <code>main.luau</code> does depends on where the line is. A shader asked for at the top of the file comes and goes with that line: delete the line, save, and it is off. A shader turned on from inside a function (a menu, a timer, <code>game.onStart</code>) is still on after a save, as a lamp is, until you remove it. Saving the shader's own file changes the running game and keeps the values that still fit.</p>
+
+  <h2 id="errors">When there is a mistake</h2>
+  <p>A mistake never turns the picture black or pink. The last version that worked keeps drawing, the message is shown in the top-left corner of the game's window and in the terminal, and it goes away when you save a version that works. Both kinds show at once, the script's first.</p>
+  <p><code>lore check</code> compiles every shader your game has, with no graphics card, so it finds these without opening a window. A mistake in the shader's own text:</p>
+  <div class="code">
+    <pre class="out" tabindex="0"><code>Shader error in shaders/heat.wgsl, line 5:
+
+     5 | let gray = dot(in.colour, vec3f(0.2126, 0.7152, 0.0722));
+       |                   ^
+
+  `ScreenIn` has no field `colour`.
+  Hint: Did you mean `color`?</code></pre>
+  </div>
+  <p>A mistake in the script, here a misspelled value name in a shader that has <code>strength</code>:</p>
+  <div class="code">
+    <pre class="out" tabindex="0"><code>[ERROR] Script error in main.luau, line 51:
+
+    51 | game.shaders.screen("heat", { strenght = 0.3 })
+
+  The screen effect "heat" has no value called `strenght`. Did you mean `strength`? Write it like this: game.shaders.screen("heat", { strength = 0.5 })
+  Fix this and save the file: the game picks it up by itself.</code></pre>
+  </div>
+  <p>A shader with no <code>//! param</code> lines says instead how to add one.</p>
+  <p><code>lore check</code> also compiles the other files in <code>shaders</code> that the script did not turn on, so a shader that a menu turns on is checked too, and warns about a file with neither a <code>screen</code> nor a <code>surface</code> function in it.</p>
+
+  <h2 id="limits">Limits, and what is not possible yet</h2>
+  <ul>
+    <li>8 screen effects and 8 surface shaders at once, with 32 values and 64 KiB of text each.</li>
+    <li>No <code>loop</code> and no <code>while</code>, and no <code>for</code> without an end: a shader that never finishes would freeze the picture. Use <code>for</code> with a fixed count, as in <code>for (var i = 0; i &lt; 8; i++) { … }</code>.</li>
+    <li>A material has one surface shader: asking for another on the same material replaces it.</li>
+    <li>A screen effect's color is held between 0 and 65504.</li>
+  </ul>
+  <p>Not possible yet: pictures (textures) as values, shaders for the sky, water or the HUD, moving a level's vertices, and a library of helpers such as noise. A surface shader changes only what the camera sees: not the shadows a surface casts, the light it bounces, or its reflection in water.</p>
+  <p>Two shaders to read and copy are in the alley example: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/old_photo.wgsl"><code>old_photo.wgsl</code></a>, a screen effect with values, and <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/shaders/glow_bands.wgsl"><code>glow_bands.wgsl</code></a>, a surface shader whose bands slide up with the time. Its debug menu turns them on from a function: <a href="https://github.com/tahuffman1s/LORE/blob/main/examples/alley/debug_menu.luau"><code>debug_menu.luau</code></a>.</p>
+</article>
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    LORE is free software under your choice of the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license.
+    Follow or contribute on <a href="https://github.com/tahuffman1s/LORE">GitHub</a>.
+  </div>
+</footer>
+
+<script src="copy.js"></script>
+</body>
+</html>

@@ -54,6 +54,8 @@ pub struct ScriptGame {
     map_file: Option<MapFile>,
     /// Why the map file as it now is could not be read, if it could not.
     map_error: Option<MapError>,
+    /// Which game this is to the list of shaders it hands the renderer.
+    shaders: crate::game_shaders::Source,
     /// The player's settings as the script was last told them. They are
     /// not kept here to be put into effect: whoever runs the game has the
     /// settings in force, and is handed only what the script changes.
@@ -86,6 +88,7 @@ impl ScriptGame {
             map: Map::default(),
             map_file: None,
             map_error: None,
+            shaders: crate::game_shaders::Source::new(),
             told: settings,
         };
         game.name_sounds();
@@ -219,6 +222,7 @@ impl ScriptGame {
             map,
             map_file: Some(map_file),
             map_error,
+            shaders: crate::game_shaders::Source::new(),
             told: settings,
         };
         game.name_sounds();
@@ -367,6 +371,8 @@ impl Game for ScriptGame {
         self.follow_settings(frame);
         // After those, so what the script asks for while drawing is in this frame.
         self.host.draw(frame.alpha());
+        // After the draw too, so a `shader:set` in `game.onDraw` is in this frame.
+        frame.shader_list().follow(self.shaders, &self.host);
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
@@ -903,6 +909,153 @@ mod tests {
 
         // The hidden box is not there.
         assert_eq!(pixel(&shown, 1700, 200), pixel(&bare, 1700, 200));
+    }
+
+    /// A game's own screen effect, from its folder to the picture: it paints,
+    /// a value set while drawing repaints it with no rebuild, a mistake
+    /// saved over it leaves the picture and shows on screen, and a fix
+    /// clears the error.
+    #[test]
+    fn a_screen_effect_from_the_folder_is_drawn_changed_and_fixed_live() {
+        use crate::game_shaders::ShaderList;
+        use lore_render::{Camera, Headless, RenderError, Upscaling};
+
+        const SIZE: u32 = 64;
+        let mut headless = match Headless::new(SIZE, SIZE * 3 / 4, Upscaling::Off) {
+            Ok(headless) => headless,
+            Err(
+                error @ (RenderError::NoVulkan(_)
+                | RenderError::OldVulkan { .. }
+                | RenderError::NoSuitableGpu { .. }),
+            ) => {
+                let required = std::env::var("LORE_REQUIRE_VULKAN").is_ok_and(|value| value != "0");
+                assert!(!required, "LORE_REQUIRE_VULKAN is set, but: {error}");
+                eprintln!("Skipping the drawing test: {error}");
+                return;
+            }
+            Err(error) => panic!("{error}"),
+        };
+        let folder =
+            std::env::temp_dir().join(format!("lore-script-game-shaders-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(folder.join("shaders")).unwrap();
+        // Green until the game has drawn twice, then blue.
+        fs::write(
+            folder.join("main.luau"),
+            "local paint = game.shaders.screen(\"paint\")\n\
+             local drawn = 0\n\
+             game.onDraw(function()\n\
+                 drawn = drawn + 1\n\
+                 if drawn == 3 then paint:set(\"color\", \"#0000ff\") end\n\
+             end)\n",
+        )
+        .unwrap();
+        let shader = folder.join("shaders/paint.wgsl");
+        let text = "//! param color: color = #00ff00\n\
+                    fn screen(in: ScreenIn) -> vec3f { return params.color; }\n";
+        fs::write(&shader, text).unwrap();
+        let mut game = ScriptGame::open(&folder, &ActionMap::default()).unwrap();
+        // The script draws only once the game has ticked.
+        game.tick(&InputFrame::default(), 1.0 / 60.0);
+
+        // One frame as the app makes it: the list is lent, followed, handed
+        // to the renderer, and what the renderer says comes back.
+        #[derive(Default)]
+        struct Rig {
+            list: ShaderList,
+            reports: usize,
+            camera: Camera,
+        }
+        impl Rig {
+            fn step(&mut self, game: &mut ScriptGame, headless: &mut Headless) -> [u8; 3] {
+                let mut frame = Frame::new(0.0).with_shader_list(std::mem::take(&mut self.list));
+                game.frame(&mut frame);
+                self.list = frame.take_shader_list();
+                self.list
+                    .hand_over(|shaders| headless.set_game_shaders(shaders));
+                let picture = headless.screenshot(&self.camera).unwrap();
+                let heard = headless.take_shader_reports();
+                self.reports += heard.len();
+                self.list.hear(heard);
+                let at = ((SIZE * 3 / 8 * SIZE + SIZE / 2) * 4) as usize;
+                [picture[at], picture[at + 1], picture[at + 2]]
+            }
+        }
+        let mut rig = Rig::default();
+
+        let green = rig.step(&mut game, &mut headless);
+        assert!(
+            green[1] > 200 && green[0] < 60 && green[2] < 60,
+            "{green:?}"
+        );
+        assert_eq!(rig.reports, 1);
+        assert_eq!(rig.list.problems().count(), 0);
+        let revision = rig.list.hand_over(|shaders| shaders[0].revision);
+
+        // Drawing again changes nothing; the third draw sets the value.
+        assert_eq!(rig.step(&mut game, &mut headless), green);
+        let blue = rig.step(&mut game, &mut headless);
+        assert!(blue[2] > 200 && blue[0] < 60 && blue[1] < 60, "{blue:?}");
+        // No new revision went over and the renderer built nothing.
+        assert_eq!(rig.list.hand_over(|shaders| shaders[0].revision), revision);
+        assert_eq!(rig.reports, 1);
+
+        // A mistake saved over the file: the picture stays as it was.
+        let wait_for = |game: &mut ScriptGame, done: &dyn Fn(&ScriptGame) -> bool| {
+            let give_up = Instant::now() + Duration::from_secs(20);
+            while !done(game) && Instant::now() < give_up {
+                std::thread::sleep(Duration::from_millis(20));
+                game.tick(&InputFrame::default(), 1.0 / 60.0);
+            }
+        };
+        let revision_now = game.host().shader_revision();
+        fs::write(&shader, text.replace("params.color", "params.colour")).unwrap();
+        wait_for(&mut game, &|game| {
+            game.host().shader_revision() != revision_now
+        });
+        let kept = rig.step(&mut game, &mut headless);
+        assert_eq!(kept, blue);
+        assert_eq!(rig.reports, 2);
+        let problem = rig.list.problems().next().map(ToString::to_string);
+        let problem = problem.unwrap_or_default();
+        assert!(problem.contains("shaders/paint.wgsl, line 2"), "{problem}");
+        let mut frame = Frame::new(0.0).with_shader_list(std::mem::take(&mut rig.list));
+        game.frame(&mut frame);
+        let shown: Vec<String> = frame
+            .take_ui()
+            .draw()
+            .iter()
+            .filter_map(|draw| match draw {
+                Draw::Text { text, .. } => Some(text.to_string()),
+                Draw::Rect { .. } => None,
+            })
+            .collect();
+        rig.list = frame.take_shader_list();
+        assert_eq!(
+            shown[0], "Shader error in shaders/paint.wgsl, line 2",
+            "{shown:?}"
+        );
+
+        // Saving it right again clears the error and draws the new text.
+        fs::write(
+            &shader,
+            text.replace("return params.color;", "return params.color * 0.5;"),
+        )
+        .unwrap();
+        let revision_now = game.host().shader_revision();
+        wait_for(&mut game, &|game| {
+            game.host().shader_revision() != revision_now
+        });
+        let fixed = rig.step(&mut game, &mut headless);
+        assert_eq!(rig.list.problems().count(), 0);
+        assert!(
+            fixed[2] > 20 && fixed[2] < blue[2],
+            "{fixed:?} against {blue:?}"
+        );
+        // The mistake was one report, the fix another.
+        assert_eq!(rig.reports, 3);
+        assert_eq!(lore_render::validation_errors(), 0);
+        let _ = fs::remove_dir_all(&folder);
     }
 
     #[test]

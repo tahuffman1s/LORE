@@ -1,13 +1,15 @@
-//! The latest script error, shown over the game until the script loads
-//! again.
+//! The latest script error and the first shader error, shown over the game
+//! until the script loads again or the shader is put right.
 //!
-//! The same error is in the terminal, but the person who made it is
-//! looking at the game. The panel sits in the top-left corner and the game
-//! carries on behind it.
+//! The same errors are in the terminal, but the person who made them is
+//! looking at the game. The panels sit in the top-left corner, the script's
+//! first and the shader's under it (the two are fixed in different files,
+//! so neither hides the other), and the game carries on behind them.
 
 use std::fmt;
 
 use lore_script::ScriptError;
+use lore_shader::ShaderError;
 use lore_ui::{Anchor, Color, TextMeasure, Ui, UiInput};
 
 use crate::game::Frame;
@@ -16,6 +18,8 @@ use crate::game::Frame;
 const WIDEST: f32 = 1100.0;
 /// Space between the panel's edge and its text.
 const PADDING: f32 = 20.0;
+/// Space between the script's panel and the shader's under it.
+const GAP: f32 = 12.0;
 /// The coloured line along the top of the panel.
 const STRIPE: f32 = 6.0;
 /// Height of the first line, which says where the error is.
@@ -56,12 +60,20 @@ pub(crate) fn measure() -> Box<dyn TextMeasure> {
     Box::new(lore_render::Font::bundled())
 }
 
-/// Shows a script error over the game.
+/// Shows a script error and shader errors over the game.
 pub(crate) struct ErrorOverlay {
-    /// The error on show and the window size it was laid out for.
-    shown: Option<(ScriptError, [u32; 2])>,
+    /// The errors on show and the window size they were laid out for.
+    shown: Option<Shown>,
     ui: Ui,
     measure: Box<dyn TextMeasure>,
+}
+
+/// What is on show.
+#[derive(Debug)]
+struct Shown {
+    script: Option<ScriptError>,
+    shaders: Vec<ShaderError>,
+    screen: [u32; 2],
 }
 
 impl fmt::Debug for ErrorOverlay {
@@ -83,33 +95,46 @@ impl Default for ErrorOverlay {
 }
 
 impl ErrorOverlay {
-    /// Draws `error` over this frame, or nothing when there is none.
+    /// Draws `error` and the frame's shader problems over this frame, or
+    /// nothing when there are none.
     ///
-    /// The panel is laid out again only when the error or the window's size
-    /// changes, so showing the same error frame after frame asks for no
-    /// memory.
+    /// The panels are laid out again only when what they say or the
+    /// window's size changes, so showing the same errors frame after frame
+    /// asks for no memory.
     pub(crate) fn show(&mut self, error: Option<&ScriptError>, frame: &mut Frame) {
-        let Some(error) = error else {
+        let screen = frame.screen_size();
+        let shaders = frame.shader_list();
+        if error.is_none() && shaders.problems().next().is_none() {
             self.shown = None;
             return;
-        };
-        let screen = frame.screen_size();
-        let current = self
-            .shown
-            .as_ref()
-            .is_some_and(|(shown, size)| shown == error && *size == screen);
+        }
+        let current = self.shown.as_ref().is_some_and(|shown| {
+            shown.script.as_ref() == error
+                && shown.screen == screen
+                && shaders.problems().eq(shown.shaders.iter())
+        });
         if !current {
-            self.ui = panel(error, screen, self.measure.as_ref());
-            self.shown = Some((error.clone(), screen));
+            let shaders: Vec<ShaderError> = shaders.problems().cloned().collect();
+            self.ui = panels(error, &shaders, screen, self.measure.as_ref());
+            self.shown = Some(Shown {
+                script: error.cloned(),
+                shaders,
+                screen,
+            });
         }
         self.ui.update(&UiInput::default(), 0.0, screen);
         frame.draw_ui(&self.ui);
     }
 }
 
-/// A UI that shows `error` in the top-left corner of a `screen` of that
-/// many pixels.
-fn panel(error: &ScriptError, screen: [u32; 2], measure: &dyn TextMeasure) -> Ui {
+/// A UI that shows `error` and the first of `shaders` in the top-left
+/// corner of a `screen` of that many pixels, one under the other.
+fn panels(
+    error: Option<&ScriptError>,
+    shaders: &[ShaderError],
+    screen: [u32; 2],
+    measure: &dyn TextMeasure,
+) -> Ui {
     let mut ui = Ui::default();
     // The UI lays out on a screen 1080 high and keeps its middle 90%.
     #[allow(
@@ -118,18 +143,30 @@ fn panel(error: &ScriptError, screen: [u32; 2], measure: &dyn TextMeasure) -> Ui
     )]
     let across = screen[0] as f32 * 1080.0 / screen[1].max(1) as f32;
     let wide = (across * 0.9).min(WIDEST);
-    let lines = lines(error, (wide - 2.0 * PADDING) * SLACK, measure);
+    let width = (wide - 2.0 * PADDING) * SLACK;
 
+    let mut top = 0.0;
+    let script = error.map(|error| lines(error, width, measure));
+    let shader = (!shaders.is_empty()).then(|| shader_lines(shaders, width, measure));
+    for lines in script.into_iter().chain(shader) {
+        top += panel(&mut ui, top, wide, &lines) + GAP;
+    }
+    ui
+}
+
+/// Adds one panel of `lines` to `ui`, `top` pixels down the screen, and
+/// says how high it is.
+fn panel(ui: &mut Ui, top: f32, wide: f32, lines: &[Line]) -> f32 {
     let high: f32 = STRIPE
         + 2.0 * PADDING
         + lines
             .iter()
             .map(|line| line.size * LINE_SPACING)
             .sum::<f32>();
-    ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [wide, high], BACKGROUND);
-    ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [wide, STRIPE], RED);
-    let mut down = STRIPE + PADDING;
-    for line in &lines {
+    ui.hud_rect(Anchor::TopLeft, [0.0, top], [wide, high], BACKGROUND);
+    ui.hud_rect(Anchor::TopLeft, [0.0, top], [wide, STRIPE], RED);
+    let mut down = top + STRIPE + PADDING;
+    for line in lines {
         let gap = line.size * (LINE_SPACING - 1.0) / 2.0;
         let text = ui.hud_text(
             Anchor::TopLeft,
@@ -143,7 +180,7 @@ fn panel(error: &ScriptError, screen: [u32; 2], measure: &dyn TextMeasure) -> Ui
     }
     // Every piece is pinned by its left edge, so the UI's own guess at how
     // wide text is moves nothing.
-    ui
+    high
 }
 
 /// The lines of the panel for `error`, none wider than `width`: where it
@@ -173,6 +210,61 @@ fn lines(error: &ScriptError, width: f32, measure: &dyn TextMeasure) -> Vec<Line
         add(note, TEXT_SIZE, QUIET);
     }
 
+    cut_short(&mut lines);
+    lines
+}
+
+/// The lines of the panel for the first of `errors`, none wider than
+/// `width`, and when there are more, a quiet line saying so.
+fn shader_lines(errors: &[ShaderError], width: f32, measure: &dyn TextMeasure) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let Some(error) = errors.first() else {
+        return lines;
+    };
+    let mut add = |text: &str, size: f32, color: Color| {
+        let mut wrapped = Vec::new();
+        wrap(&clean(text), width, size, measure, &mut wrapped);
+        lines.extend(wrapped.into_iter().map(|text| Line { text, size, color }));
+    };
+
+    let whose = if error.lore_fault { "LORE's own " } else { "" };
+    let place = match error.line {
+        Some(line) => format!("Shader error in {whose}{}, line {line}", error.file),
+        None => format!("Shader error in {whose}{}", error.file),
+    };
+    add(&place, TITLE_SIZE, TITLE);
+    if let (Some(line), Some(source)) = (error.line, &error.source_line)
+        && !source.trim().is_empty()
+    {
+        add(&format!("{line} | {}", source.trim()), TEXT_SIZE, SOURCE);
+    }
+    add(&error.message, TEXT_SIZE, MESSAGE);
+    if let Some(hint) = &error.hint {
+        add(&format!("Hint: {hint}"), TEXT_SIZE, QUIET);
+    }
+    if let Some(note) = &error.note {
+        add(note, TEXT_SIZE, QUIET);
+    }
+    cut_short(&mut lines);
+
+    let more = errors.len() - 1;
+    if more > 0 {
+        let text = if more == 1 {
+            "1 more shader error is in the terminal.".to_owned()
+        } else {
+            format!("{more} more shader errors are in the terminal.")
+        };
+        lines.push(Line {
+            text,
+            size: TEXT_SIZE,
+            color: QUIET,
+        });
+    }
+    lines
+}
+
+/// Ends a panel of more than [`MOST_LINES`] by pointing at the terminal.
+fn cut_short(lines: &mut Vec<Line>) {
     if lines.len() > MOST_LINES {
         lines.truncate(MOST_LINES - 1);
         lines.push(Line {
@@ -181,7 +273,6 @@ fn lines(error: &ScriptError, width: f32, measure: &dyn TextMeasure) -> Vec<Line
             color: QUIET,
         });
     }
-    lines
 }
 
 /// `text` as one run of words that can be drawn: line breaks, tabs and
@@ -415,6 +506,128 @@ mod tests {
         }
 
         let mut frame = Frame::new(0.0);
+        overlay.show(None, &mut frame);
+        assert!(frame.take_ui().draw().is_empty());
+    }
+
+    fn shader_error(file: &str) -> ShaderError {
+        ShaderError {
+            file: file.to_owned(),
+            line: Some(3),
+            column: Some(5),
+            message: "`ScreenIn` has no field `colour`.".to_owned(),
+            source_line: Some("    return in.colour;".to_owned()),
+            hint: Some("Did you mean `color`?".to_owned()),
+            note: Some("The last version that worked is still drawn.".to_owned()),
+            lore_fault: false,
+        }
+    }
+
+    /// A frame of the default size whose shader list holds these problems.
+    fn frame_with(problems: &[ShaderError]) -> Frame {
+        use lore_input::ActionMap;
+        use lore_script::ScriptHost;
+
+        let wgsl = "fn screen(in: ScreenIn) -> vec3f { return in.color; }";
+        let mut files = vec![("main.luau".to_owned(), String::new())];
+        let mut script = String::new();
+        for (at, _) in problems.iter().enumerate() {
+            script.push_str(&format!("game.shaders.screen(\"s{at}\", {{}})\n"));
+            files.push((format!("shaders/s{at}.wgsl"), wgsl.to_owned()));
+        }
+        files[0].1 = script;
+        let host = ScriptHost::from_sources(files, ActionMap::standard());
+        let mut list = crate::game_shaders::ShaderList::default();
+        list.follow(crate::game_shaders::Source::new(), &host);
+        list.hear(
+            problems
+                .iter()
+                .enumerate()
+                .map(|(at, error)| lore_render::ShaderReport {
+                    name: format!("s{at}"),
+                    file: format!("shaders/s{at}.wgsl"),
+                    material: None,
+                    revision: 1 + at as u64,
+                    outcome: Err(error.clone()),
+                })
+                .collect(),
+        );
+        Frame::new(0.0).with_shader_list(list)
+    }
+
+    #[test]
+    fn a_shader_error_is_shown_under_the_script_error() {
+        let mut overlay = ErrorOverlay::default();
+        let mut frame = frame_with(&[shader_error("shaders/heat.wgsl")]);
+        overlay.show(Some(&error()), &mut frame);
+        let (words, boxes) = drawn(&frame.take_ui());
+        assert_eq!(words[0], "Script error in main.luau, line 4");
+        assert_eq!(words.len(), 5 + 5);
+        assert_eq!(
+            words[5..],
+            [
+                "Shader error in shaders/heat.wgsl, line 3",
+                "3 | return in.colour;",
+                "`ScreenIn` has no field `colour`.",
+                "Hint: Did you mean `color`?",
+                "The last version that worked is still drawn.",
+            ]
+        );
+        // Script panel and stripe, then the shader's, entirely below.
+        assert_eq!(boxes.len(), 4);
+        assert!(boxes[2].0[1] >= boxes[0].0[1] + boxes[0].1[1]);
+        assert_eq!(boxes[2].0[0], boxes[0].0[0]);
+        assert_eq!(boxes[3].0, boxes[2].0);
+    }
+
+    #[test]
+    fn a_shader_error_alone_is_at_the_top_and_more_are_counted() {
+        let mut overlay = ErrorOverlay::default();
+        let mut lore = shader_error("shaders/b.wgsl");
+        lore.lore_fault = true;
+        lore.line = None;
+        let mut frame = frame_with(&[shader_error("shaders/a.wgsl")]);
+        overlay.show(None, &mut frame);
+        let (words, boxes) = drawn(&frame.take_ui());
+        assert_eq!(words[0], "Shader error in shaders/a.wgsl, line 3");
+        assert_eq!(words.len(), 5);
+        // At the top of the safe area, as the script panel is.
+        assert!(boxes[0].0[1] < 100.0, "{:?}", boxes[0]);
+
+        let mut frame = frame_with(&[shader_error("shaders/a.wgsl"), lore.clone(), lore.clone()]);
+        overlay.show(None, &mut frame);
+        let words = drawn(&frame.take_ui()).0;
+        assert_eq!(
+            words.last().map(String::as_str),
+            Some("2 more shader errors are in the terminal.")
+        );
+        let mut frame = frame_with(&[shader_error("shaders/a.wgsl"), lore.clone()]);
+        overlay.show(None, &mut frame);
+        let words = drawn(&frame.take_ui()).0;
+        assert_eq!(
+            words.last().map(String::as_str),
+            Some("1 more shader error is in the terminal.")
+        );
+
+        let said: Vec<String> = shader_lines(&[lore], 2000.0, &EstimatedText)
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(said[0], "Shader error in LORE's own shaders/b.wgsl");
+    }
+
+    #[test]
+    fn nothing_is_drawn_when_nothing_is_wrong() {
+        let mut overlay = ErrorOverlay::default();
+        let mut frame = frame_with(&[]);
+        overlay.show(None, &mut frame);
+        assert!(frame.take_ui().draw().is_empty());
+
+        // A shader error that is put right goes.
+        let mut frame = frame_with(&[shader_error("shaders/a.wgsl")]);
+        overlay.show(None, &mut frame);
+        assert!(!frame.take_ui().draw().is_empty());
+        let mut frame = frame_with(&[]);
         overlay.show(None, &mut frame);
         assert!(frame.take_ui().draw().is_empty());
     }
