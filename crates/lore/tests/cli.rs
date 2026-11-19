@@ -871,7 +871,8 @@ fn check_passes_a_game_whose_shader_works_and_says_so() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("The game's shaders are fine: 1 turned on by the script"),
+        stdout(&output)
+            .contains("The game's shaders are fine: the one the script turned on compiled"),
         "{}",
         stdout(&output)
     );

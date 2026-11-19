@@ -663,19 +663,37 @@ fn check(folder: &Path) -> Result<(), String> {
         );
     }
     if shaders.drawn + shaders.from_folder.len() > 0 {
-        let mut line = format!(
-            "The game's shaders are fine: {} turned on by the script compiled as they would \
-             be drawn",
-            shaders.drawn
+        let on = match shaders.drawn {
+            0 => None,
+            1 => Some("the one the script turned on compiled as it would be drawn".to_owned()),
+            many => Some(format!(
+                "the {many} the script turned on compiled as they would be drawn"
+            )),
+        };
+        // Files a menu turns on later were not on during the check.
+        let folder = match shaders.from_folder.len() {
+            0 => None,
+            count => Some(format!(
+                "{} in the shaders folder that the script did not turn on during the check \
+                 ({}) compiled as the function {} holds",
+                if count == 1 {
+                    "the one".to_owned()
+                } else {
+                    format!("the {count}")
+                },
+                shaders.from_folder.join(", "),
+                if count == 1 { "it" } else { "each" },
+            )),
+        };
+        let said = match (on, folder) {
+            (Some(on), Some(folder)) => format!("{on}, and {folder}"),
+            (Some(one), None) | (None, Some(one)) => one,
+            (None, None) => String::new(),
+        };
+        println!(
+            "The game's shaders are fine: {said}. Nothing was drawn, so look at them with \
+             `lore run`."
         );
-        if !shaders.from_folder.is_empty() {
-            line.push_str(&format!(
-                ", and {} only in the shaders folder ({}) compiled as the function each holds",
-                shaders.from_folder.len(),
-                shaders.from_folder.join(", ")
-            ));
-        }
-        println!("{line}. Nothing was drawn, so look at them with `lore run`.");
     }
     if !game.map().is_empty() {
         println!(
