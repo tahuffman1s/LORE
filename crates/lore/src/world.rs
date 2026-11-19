@@ -680,6 +680,31 @@ impl Game for World {
             &mut self.noises,
             &mut self.marks,
         );
+        // A foot that came down in a puddle came down in what the puddle
+        // is: a splash in water, a squelch in honey or mud.
+        if let Some((pitch, quiet)) = self.fluids.puddle_voice()
+            && let Some(footfall) = (self.noises.iter_mut().rev())
+                .find(|noise| noise.tick == self.tick && noise.kind.is_footfall())
+        {
+            footfall.kind = crate::noise::NoiseKind::SmallSplash;
+            footfall.loudness = (footfall.loudness * 1.2).clamp(0.2, 1.0) * quiet;
+            footfall.pitch = pitch;
+        }
+        // Fluid that came down in this tick is heard from where it did.
+        for fall in self.fluids.falls() {
+            self.noises.push(Noise {
+                kind: if fall.into_pool {
+                    crate::noise::NoiseKind::Pour
+                } else {
+                    crate::noise::NoiseKind::Patter
+                },
+                position: fall.place,
+                loudness: fall.loudness,
+                pitch: fall.pitch,
+                delay: 0.0,
+                tick: self.tick,
+            });
+        }
         // What they threw up is drops of what they are in.
         self.fluids.splash(level, &self.marks);
         // The weapon the player holds, by what they are pressing. The

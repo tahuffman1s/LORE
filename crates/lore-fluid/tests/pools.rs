@@ -963,3 +963,42 @@ fn what_floats_on_a_pool_runs_over_its_rim_first() {
     assert!(fluids.litres(Some(0)) < 1.0, "{}", fluids.litres(Some(0)));
     assert_eq!(pool.top().kind, 0);
 }
+
+#[test]
+fn what_lands_in_a_step_is_said_with_where_and_of_what_kind() {
+    let level = level_with(block([-12.0, -0.4, -12.0], [12.0, -0.2, 12.0]), &[]);
+    let mut fluids = world(&level);
+    assert_eq!(fluids.landed().litres, 0.0);
+    // A litre a second of honey let fall a metre onto the floor at (3, 2)
+    // for a second, and then nothing.
+    let (mut landed, mut ticks) = (0.0, 0);
+    for tick in 0..180 {
+        if tick < 60 {
+            fluids.spray(HONEY, [3.0, 0.8, 2.0], [0.0, -1.0, 0.0], DT, 0.02);
+        }
+        fluids.step(&level, DT);
+        let now = fluids.landed();
+        if now.litres > 0.0 {
+            ticks += 1;
+            landed += now.litres;
+            assert_eq!(now.kind, HONEY);
+            let [x, y, z] = now.place;
+            assert!(
+                close(x, 3.0, 0.3) && close(z, 2.0, 0.3) && close(y, -0.2, 0.05),
+                "{now:?}"
+            );
+            assert!(now.biggest > 0.0 && now.biggest <= now.litres, "{now:?}");
+        }
+    }
+    // All of it landed, over about the second it fell for, and what lies
+    // there is what landed.
+    assert!(close(landed, 1.0, 0.05), "{landed} litres landed");
+    assert!((40..=75).contains(&ticks), "over {ticks} ticks");
+    assert!(close(fluids.litres(Some(HONEY)), landed, 0.01));
+    assert_eq!(fluids.landed().litres, 0.0, "and nothing since");
+    // The kind's own weight and thickness, for whoever makes it heard.
+    assert!(close(fluids.medium(HONEY).density, 1.4, 1.0e-3));
+    assert!(fluids.medium(HONEY).viscosity > 5.0);
+    assert_eq!(fluids.medium(0), lore_physics::Medium::WATER);
+    assert_eq!(fluids.medium(200), lore_physics::Medium::WATER);
+}

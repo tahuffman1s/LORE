@@ -173,6 +173,22 @@ pub struct Fluids {
     tick: u32,
     /// The fluid that stands: the level's lakes, ponds and tanks.
     pools: pools::Pools,
+    /// What came down on a surface in the newest step.
+    landed: Landed,
+}
+
+/// What came down on the ground, a wall or other fluid in one step, all
+/// together: for whoever makes it heard.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Landed {
+    /// How many litres landed.
+    pub litres: f32,
+    /// Where, in metres: the middle of it all, by how much landed where.
+    pub place: [f32; 3],
+    /// The kind of the biggest drop of it.
+    pub kind: u8,
+    /// How big that drop was, in litres.
+    pub biggest: f32,
 }
 
 impl Fluids {
@@ -192,6 +208,7 @@ impl Fluids {
             born: 0,
             tick: 0,
             pools: pools::Pools::default(),
+            landed: Landed::default(),
         }
     }
 
@@ -220,6 +237,26 @@ impl Fluids {
                 };
             }
         }
+    }
+
+    /// What `kind` is to someone in it, by itself: how heavy and how
+    /// thick. A kind of [`MOST_KINDS`] or more is water.
+    #[must_use]
+    pub fn medium(&self, kind: u8) -> lore_physics::Medium {
+        (self.physics.get(usize::from(kind))).map_or(lore_physics::Medium::WATER, |phys| {
+            lore_physics::Medium {
+                density: phys.rho / 1000.0,
+                viscosity: phys.mu,
+            }
+        })
+    }
+
+    /// What landed on a surface in the newest [`step`](Self::step), all
+    /// together. Drops that went into a pool are not among it: those are
+    /// [`pool_hits`](Self::pool_hits).
+    #[must_use]
+    pub fn landed(&self) -> Landed {
+        self.landed
     }
 
     /// How `kind` moves and feels, as set. A kind of [`MOST_KINDS`] or more
@@ -367,6 +404,7 @@ impl Fluids {
         // The pools stand where they were left, whatever else was said to
         // the level since; nothing has gone into them yet this tick.
         self.pools.hits.clear();
+        self.landed = Landed::default();
         self.stand_pools(level);
         self.fly(level, dt);
         self.grid.build(&self.parts);
