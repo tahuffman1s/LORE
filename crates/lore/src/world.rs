@@ -351,6 +351,14 @@ impl World {
         self.climate.water_rise()
     }
 
+    /// How wet the rain that has fallen has left the ground, and how full
+    /// its puddles, counted tick by tick as [`GroundWater`](lore_render::GroundWater)
+    /// says: a downpour fills them in a minute, a drizzle leaves a few.
+    #[must_use]
+    pub fn ground_water(&self) -> lore_render::GroundWater {
+        self.climate.ground_water()
+    }
+
     /// The weather of the newest tick, with what has followed from it: how
     /// far the wind has carried the clouds, the snow that lies, the ice on
     /// the water and the tornado if there is one. The picture is drawn in
@@ -699,6 +707,7 @@ impl Game for World {
         let alpha = frame.alpha();
         frame.set_sky_clock(self.sky_seconds_drawn(alpha));
         frame.set_water_rise(self.climate.water_rise());
+        frame.set_ground_water(self.climate.ground_water());
         // The world sends the bolts, so that it knows where each fell.
         frame.set_storm_bolts(false);
         for stroke in self.strokes.drain(..) {

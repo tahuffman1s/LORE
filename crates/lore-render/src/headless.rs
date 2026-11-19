@@ -28,7 +28,7 @@ use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::{Mirroring, SceneView};
 use crate::water::Stir;
-use crate::weather::Weather;
+use crate::weather::{GroundWater, Weather};
 
 /// The format of the picture nobody sees: what most windows use, without
 /// the sRGB curve built in.
@@ -279,11 +279,20 @@ impl Headless {
         self.eye.adaptation = adaptation.sound();
     }
 
-    /// Says how wet the ground is, from 0 for dry to 1 for soaked: rain
-    /// takes half a minute to soak it, and a picture of a wet street
-    /// should not have to wait.
+    /// Says how wet the ground is, from 0 for dry to 1 for soaked, with
+    /// its puddles as full: rain takes a minute to soak it and fill them,
+    /// and a picture of a wet street should not have to wait. The picture
+    /// goes on counting from there.
     pub fn set_wet_ground(&mut self, wet: f32) {
         self.effects.soak(wet);
+    }
+
+    /// Says how wet the ground is and how full its puddles, as the game's
+    /// rules count them, as
+    /// [`Renderer::set_ground_water`](crate::Renderer::set_ground_water)
+    /// does.
+    pub fn set_ground_water(&mut self, ground: GroundWater) {
+        self.effects.set_ground_water(ground);
     }
 
     /// Lets time pass between pictures, or holds it still again. It is held
@@ -499,7 +508,8 @@ impl Headless {
         let weather = self.effects.air(self.view.seconds());
         let tracks = self.effects.take_tracks();
         let mirrors = self.reflections
-            && (weather.rows[0][2] > 0.0 || self.meshes.as_ref().is_some_and(Meshes::glossy));
+            && (weather.rows[0][2].max(weather.rows[6][1]) > 0.0
+                || self.meshes.as_ref().is_some_and(Meshes::glossy));
         // Held still, the same camera gives the same picture: what smooth
         // things mirror is a picture drawn just before from the same camera,
         // which mirrors nothing itself, and not the last picture, which may

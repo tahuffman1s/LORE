@@ -29,7 +29,7 @@ use crate::ui_pass::UiPass;
 use crate::upscale::Upscaling;
 use crate::view::{Mirroring, SceneView};
 use crate::water::Stir;
-use crate::weather::Weather;
+use crate::weather::{GroundWater, Weather};
 
 /// How many frames can be in progress on the graphics card at once.
 ///
@@ -463,6 +463,15 @@ impl Renderer {
     #[must_use]
     pub fn weather(&self) -> Weather {
         *self.effects.said()
+    }
+
+    /// Says how wet the ground is and how full its puddles, as the game's
+    /// rules count them from the rain that has fallen ([`GroundWater`]).
+    /// Until this is said the picture counts them itself, from the rain at
+    /// the eye and as fast as frames are drawn; once it is, it shows what
+    /// the game says, the same on every computer.
+    pub fn set_ground_water(&mut self, ground: GroundWater) {
+        self.effects.set_ground_water(ground);
     }
 
     /// Says what hour of the day it is: 12 is noon, 18 the sun setting, 24

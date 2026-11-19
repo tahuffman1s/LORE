@@ -1743,8 +1743,9 @@ impl MeshPipeline {
             fluid,
             lamps,
         } = contents;
-        // How wet rain has made the ground, from 0 to 1.
-        let wet_ground = weather.rows[0][2];
+        // How wet rain has made the ground, or how full its puddles, from
+        // 0 to 1.
+        let wet_ground = weather.rows[0][2].max(weather.rows[6][1]);
         // How the level's water looks, if its game has said: the first
         // row's last number is 1 when it has, and all is zero when not.
         let water_look = fluid

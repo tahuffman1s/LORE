@@ -18,7 +18,7 @@ use crate::fluid::FluidScene;
 use crate::sky;
 use crate::sky::Day;
 use crate::tracks::{Tracks, Tread};
-use crate::weather::{Weather, eased};
+use crate::weather::{Falling, GroundWater, Weather, eased};
 use lore_assets::Water;
 
 use crate::water::{MOST_STIRS, Stir};
@@ -105,7 +105,8 @@ pub(crate) struct Air {
     /// is and how far out its wall, how strong it is from 0 for none and
     /// how far it has turned; and how far the wind has carried what is
     /// near the eye, begun again every [`NEAR_AGAIN`] metres. Last, how
-    /// deep the snow lies, in metres.
+    /// deep the snow lies, in metres, and how full rain has filled the
+    /// puddles, from 0 to 1.
     pub(crate) rows: [[f32; 4]; WEATHER_ROWS],
     /// How much of the sky fair weather's clouds cover, as the shader
     /// counts it.
@@ -121,7 +122,7 @@ pub(crate) struct Air {
 impl Default for Air {
     /// Fair weather, at the moment a level begins.
     fn default() -> Self {
-        Self::of(&Weather::default(), 0.0, [0.0; 4], [0.0; 2], 0.0)
+        Self::of(&Weather::default(), 0.0, [0.0; 4], [0.0; 2], 0.0, 0.0)
     }
 }
 
@@ -130,8 +131,16 @@ impl Air {
     /// off. At the eye, `here` is how hard it rains and hails, how wet the
     /// ground has got and how much of a storm is overhead, and `cold` how
     /// hard it snows and sleets; `rise` is how far rain has raised the
-    /// still water, in metres.
-    fn of(weather: &Weather, seconds: f64, here: [f32; 4], cold: [f32; 2], rise: f32) -> Self {
+    /// still water, in metres, and `puddles` how full rain has filled the
+    /// puddles.
+    fn of(
+        weather: &Weather,
+        seconds: f64,
+        here: [f32; 4],
+        cold: [f32; 2],
+        rise: f32,
+        puddles: f32,
+    ) -> Self {
         let [along_x, along_z] = weather.carried(seconds);
         let [way_x, way_z] = weather.wind_way();
         // What is near is drawn carried by the wind too, but begun again
@@ -174,7 +183,7 @@ impl Air {
                 [along_x, along_z, weather.gusts, cover],
                 place,
                 spin,
-                [weather.snow.clamp(0.0, 10.0), 0.0, 0.0, 0.0],
+                [weather.snow.clamp(0.0, 10.0), puddles, 0.0, 0.0],
             ],
             cover,
             fog: weather.fog_thickness(),
@@ -221,9 +230,15 @@ pub(crate) struct Effects {
     looks_next: f64,
     /// The weather the game has said it is.
     weather: Weather,
-    /// At the eye: how hard it rains and hails, how wet the ground has
-    /// got, and how much of a storm is overhead, each from 0 to 1.
+    /// At the eye: how hard it rains and hails, and in the last number how
+    /// much of a storm is overhead, each from 0 to 1. The third is unused:
+    /// how wet the ground is, is `ground`'s.
     here: [f32; 4],
+    /// How wet the ground is and how full its puddles, and whether the
+    /// game counts them: then they are what it says, and the picture
+    /// counts nothing itself.
+    ground: GroundWater,
+    ground_said: bool,
     /// At the eye: how hard it snows and how hard it sleets, from 0 to 1.
     cold: [f32; 2],
     /// The sky at the hour the game says it is, if it has said.
@@ -262,6 +277,8 @@ impl Effects {
             looks_next: 1.0,
             weather: Weather::default(),
             here: [0.0; 4],
+            ground: GroundWater::default(),
+            ground_said: false,
             cold: [0.0; 2],
             day: None,
             rise: 0.0,
@@ -495,13 +512,22 @@ impl Effects {
         }
     }
 
-    /// Says how wet the ground is, from 0 for dry to 1 for soaked, as if
-    /// it had rained so long: for a picture of wet ground that has not the
-    /// half minute of rain it takes to soak it.
+    /// Says how wet the ground is, from 0 for dry to 1 for soaked, and its
+    /// puddles as full, as if it had rained so long: for a picture of wet
+    /// ground that has not the minute of rain it takes. The picture goes on
+    /// counting from there.
     pub(crate) fn soak(&mut self, wet: f32) {
         if wet.is_finite() {
-            self.here[2] = wet.clamp(0.0, 1.0);
+            self.ground = GroundWater { wet, puddles: wet }.cleaned();
         }
+    }
+
+    /// Says how wet the ground is and how full its puddles, as the game
+    /// counts them: from now on the picture shows what the game says and
+    /// counts nothing itself.
+    pub(crate) fn set_ground_water(&mut self, ground: GroundWater) {
+        self.ground = ground.cleaned();
+        self.ground_said = true;
     }
 
     /// Moves everything on by `seconds`, over the still water `water`.
@@ -513,10 +539,6 @@ impl Effects {
             for bolt in &mut self.bolts {
                 bolt.step(seconds.min(0.05));
             }
-            // The ground is soaked by half a minute of hard rain, and
-            // takes some minutes to dry.
-            // Sleet wets it as rain does; snow lies on it dry, and what
-            // lies melting keeps it wet.
             // New snow fills tracks in: a hard fall in a minute and a
             // half. With no snow left there are none.
             if self.weather.snow > 0.0 {
@@ -525,15 +547,19 @@ impl Effects {
             } else {
                 self.tracks.clear();
             }
-            let [rain, _, wet, _] = self.here;
-            let rain = rain.max(0.7 * self.cold[1]);
-            let thaw = if self.weather.temperature > 0.5 {
-                self.weather.snow_cover()
-            } else {
-                0.0
-            };
-            let dries = (1.0 - rain) * (1.0 - thaw) / 300.0;
-            self.here[2] = (wet + seconds.min(0.05) * (rain / 30.0 - dries)).clamp(0.0, 1.0);
+            // What the rain leaves on the ground, unless the game counts
+            // it.
+            if !self.ground_said {
+                let falling = Falling {
+                    rain: self.here[0],
+                    hail: self.here[1],
+                    snow: self.cold[0],
+                    sleet: self.cold[1],
+                };
+                self.ground = self
+                    .ground
+                    .after(seconds.min(0.05), &self.weather, &falling);
+            }
         }
         self.pack();
     }
@@ -733,7 +759,15 @@ impl Effects {
     /// The weather as the shader takes it, `seconds` after the clouds set
     /// off.
     pub(crate) fn air(&self, seconds: f64) -> Air {
-        Air::of(&self.weather, seconds, self.here, self.cold, self.rise)
+        let [rain, hail, _, storm] = self.here;
+        Air::of(
+            &self.weather,
+            seconds,
+            [rain, hail, self.ground.wet, storm],
+            self.cold,
+            self.rise,
+            self.ground.puddles,
+        )
     }
 
     /// Where the light of each stroke comes from, and how bright it is

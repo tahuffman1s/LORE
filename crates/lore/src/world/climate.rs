@@ -4,7 +4,8 @@
 //! is counted here, tick by tick, so that it is the same on every run: how
 //! far the wind has carried the clouds, how deep the snow that has fallen
 //! lies and how fast it melts, how thick the ice on still water has grown,
-//! how far rain has raised that water, and where the tornado has got to.
+//! how far rain has raised that water, how wet it has left the ground and
+//! how full its puddles, and where the tornado has got to.
 //! The picture is drawn from the same numbers ([`Climate::weather`]), so
 //! the storm the rules count is the storm that is seen.
 //!
@@ -13,7 +14,7 @@
 //! of deep frost, and a blizzard buries the land in five.
 
 use lore_physics::{Level, Player};
-use lore_render::{Falling, Tornado, Weather};
+use lore_render::{Falling, GroundWater, Tornado, Weather};
 use lore_script::{ScriptHost, TornadoAsk, WeatherHere, WeatherSaid};
 
 /// How fast a downpour raises the still water, and how fast it falls back
@@ -192,6 +193,8 @@ pub(crate) struct Climate {
     /// How far the rain that has fallen has raised the still water, in
     /// metres.
     rise: f32,
+    /// How wet the rain has left the ground, and how full its puddles.
+    ground: GroundWater,
     twister: Option<Twister>,
     /// The weather of the newest tick, and what was falling on the player
     /// in it.
@@ -209,6 +212,7 @@ impl Default for Climate {
             snow: 0.0,
             ice: 0.0,
             rise: 0.0,
+            ground: GroundWater::default(),
             twister: None,
             weather: Weather {
                 drift: Some([0.0; 2]),
@@ -271,6 +275,11 @@ impl Climate {
     /// How deep the snow lies, in metres.
     pub(crate) fn snow(&self) -> f32 {
         self.snow
+    }
+
+    /// How wet the rain has left the ground, and how full its puddles.
+    pub(crate) fn ground_water(&self) -> GroundWater {
+        self.ground
     }
 
     /// Moves the weather on by one tick of `step` seconds, `seconds` after
@@ -359,6 +368,9 @@ impl Climate {
         weather.snow = self.snow;
         weather.ice = self.ice;
         self.weather = weather.cleaned();
+        // The rain wets the ground and fills its puddles, as hard as it
+        // falls where the player is; snow melting on it keeps them.
+        self.ground = self.ground.after(step, &self.weather, &falling);
         self.falling = falling;
         // Said to the level before anything is moved in it: its shapes
         // are shared, and each world says its own.
@@ -509,6 +521,46 @@ mod tests {
         let warm = r"game.weather.setIce(0.2)
             game.weather.setTemperature(10)";
         assert_eq!(after(warm, 3600).0.weather().ice, 0.0);
+    }
+
+    #[test]
+    fn puddles_fill_faster_and_fuller_the_harder_it_rains_and_a_storm_keeps_them() {
+        let puddles = |script: &str, seconds: u32| after(script, seconds * 60).0.ground_water();
+        // Half a minute of each: a storm fills them faster than steady
+        // rain, and rain nearly three times as fast as a drizzle.
+        let (drizzle, rain, storm) = (
+            puddles(r#"game.weather.set("drizzle", 0)"#, 30),
+            puddles(r#"game.weather.set("rain", 0)"#, 30),
+            puddles(r#"game.weather.set("storm", 0)"#, 30),
+        );
+        assert!(drizzle.puddles > 0.05, "{drizzle:?}");
+        assert!(rain.puddles > 2.5 * drizzle.puddles, "{rain:?} {drizzle:?}");
+        assert!(storm.puddles > rain.puddles, "{storm:?} {rain:?}");
+        // Two minutes of rain fills them most of the way; a storm that
+        // comes on after it fills them to the brim and keeps them there; a
+        // drizzle never fills them.
+        let storm_after = r#"game.weather.set("rain", 0)
+            game.after(120, function() game.weather.set("storm", 8) end)"#;
+        let rained = puddles(storm_after, 120).puddles;
+        assert!(rained > 0.8 && rained < 0.9, "{rained}");
+        assert_eq!(puddles(storm_after, 240).puddles, 1.0);
+        assert_eq!(puddles(storm_after, 400).puddles, 1.0);
+        assert!(puddles(r#"game.weather.set("drizzle", 0)"#, 600).puddles < 0.35);
+        // When it stops they drain, and the ground dries after them.
+        let stops = r#"game.weather.set("rain", 0)
+            game.after(120, function() game.weather.set("fair", 0) end)"#;
+        let drained = puddles(stops, 240);
+        assert!(
+            drained.puddles > 0.25 && drained.puddles < 0.35,
+            "{drained:?}"
+        );
+        assert!(drained.wet > drained.puddles, "{drained:?}");
+        assert!(puddles(stops, 480).puddles < 0.1);
+        // Counted on whole ticks: the same every run, to the last bit.
+        assert_eq!(puddles(storm_after, 150), puddles(storm_after, 150));
+        // Snow lies on the ground dry.
+        let snowed = puddles(r#"game.weather.set("snow", 0)"#, 120);
+        assert_eq!(snowed, GroundWater::default());
     }
 
     #[test]
