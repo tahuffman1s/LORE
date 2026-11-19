@@ -426,6 +426,7 @@ game.onTick(function()
         game.settings.set("volume", loud - 5)
         game.settings.set("vsync", false)
         game.settings.set("upscaling", "performance")
+        game.settings.set("anisotropic_filtering", "8x")
     end
     if game.input.justPressed("map") then
         game.settings.reset("field_of_view")

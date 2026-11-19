@@ -267,6 +267,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             lamp_shadows: lore_render::LampShadows::Low,
             bounce: lore_render::Bounce::Low,
             ambient_occlusion: lore_render::AmbientOcclusion::Low,
+            anisotropic_filtering: lore_render::AnisotropicFiltering::X8,
         }
     );
     assert!((chosen.sensitivity - 0.9).abs() < 1e-6);
@@ -322,6 +323,51 @@ fn the_menu_starts_with_the_settings_the_player_has() {
     // Nothing was changed, so nothing was asked of the engine.
     assert_eq!(played.changes, 0);
     assert_eq!(played.settings, theirs);
+}
+
+#[test]
+fn a_script_says_how_sharp_textures_are_at_a_slant() {
+    // The first tick reads what a new player has and asks for less, in
+    // capitals; the ticks after it read what is then in force. A wrong
+    // answer is a mistake in the script, which fails the test.
+    let main = r#"
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            local now = game.settings.get("anisotropic_filtering")
+            if ticks == 1 then
+                assert(now == "16x", now)
+                game.settings.set("anisotropic_filtering", "4X")
+            else
+                assert(now == "4x", now)
+            end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.step();
+    played.step();
+    assert_eq!(
+        played.settings,
+        Settings {
+            anisotropic_filtering: lore_render::AnisotropicFiltering::X4,
+            ..Settings::default()
+        }
+    );
+    assert_eq!(played.changes, 1);
+    // The list a menu is built from says what it is and what it can be.
+    let told = played.settings.described();
+    let setting = told
+        .iter()
+        .find(|setting| setting.name == "anisotropic_filtering")
+        .unwrap();
+    assert_eq!(setting.label, "Anisotropic filtering");
+    assert_eq!(setting.group, "Graphics");
+    assert_eq!(
+        setting.kind,
+        lore_script::SettingKind::Choice {
+            options: ["off", "2x", "4x", "8x", "16x"].map(str::to_owned).to_vec()
+        }
+    );
 }
 
 #[test]

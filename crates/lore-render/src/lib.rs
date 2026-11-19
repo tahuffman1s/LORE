@@ -74,6 +74,7 @@ pub use occlusion::AmbientOcclusion;
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};
+pub use texture::AnisotropicFiltering;
 pub use tracks::Tread;
 pub use upscale::Upscaling;
 pub use water::Stir;

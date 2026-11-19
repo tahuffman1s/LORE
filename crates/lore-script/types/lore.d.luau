@@ -1603,10 +1603,15 @@ declare game: {
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"
     --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
     --- "upscaling" ("off", "native", "quality", "balanced", "performance"
-    --- or "ultra-performance"), "vsync" (true or false) and
-    --- "frame_rate_limit" (30 to 1000, or 0 for no limit). A later LORE
-    --- may have more, so build a menu from `game.settings.list()`, as
-    --- pause_menu.luau does, and it gains their rows by itself.
+    --- or "ultra-performance"), "vsync" (true or false),
+    --- "frame_rate_limit" (30 to 1000, or 0 for no limit), "reflections"
+    --- and "light_shafts" (true or false), "lamp_shadows", "bounce" and
+    --- "ambient_occlusion" ("off", "low", "medium" or "high") and
+    --- "anisotropic_filtering" (how sharp the ground and walls stay where
+    --- they run away from the player: "off", "2x", "4x", "8x" or "16x").
+    --- A later LORE may have more, so build a menu from
+    --- `game.settings.list()`, as pause_menu.luau does, and it gains their
+    --- rows by itself.
     settings: {
         --- Every setting there is, in the order to show them, each saying
         --- what kind of thing it is: see `Setting`.
@@ -1629,6 +1634,7 @@ declare game: {
         --- `game.onTick`, not in `game.onDraw`.
         --- Example: game.settings.set("volume", 40)
         --- Example: game.settings.set("upscaling", "performance")
+        --- Example: game.settings.set("anisotropic_filtering", "8x")
         set: (name: string, value: number | boolean | string) -> (),
 
         --- Puts every setting back to what a new player has, or only the

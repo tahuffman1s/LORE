@@ -24,6 +24,7 @@ use crate::mesh::{Contents, MeshPipeline, Meshes};
 use crate::occlusion::{AmbientOcclusion, Shade};
 use crate::overlay::Overlay;
 use crate::swapchain::COLOUR;
+use crate::texture::AnisotropicFiltering;
 use crate::tonemap::{Canvas, Over, Then, TonemapPipeline};
 use crate::tracks::Tread;
 use crate::ui_pass::UiPass;
@@ -106,6 +107,8 @@ pub struct Headless {
     lamp_shadows: LampShadows,
     /// How much light bounces, as for a window.
     bounce: Bounce,
+    /// How sharp textures seen at a slant are, as for a window.
+    filtering: AnisotropicFiltering,
     /// The shade in corners, as for a window but off to begin with.
     shade: Shade,
     view: SceneView,
@@ -214,6 +217,7 @@ impl Headless {
             light_shafts: true,
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
+            filtering: AnisotropicFiltering::default(),
             shade: Shade::default(),
             view,
             extent,
@@ -253,7 +257,7 @@ impl Headless {
         self.shaders.idle();
         self.shaders.scene_changed();
         self.meshes = None;
-        self.meshes = Some(Meshes::new(&self.gpu, scene)?);
+        self.meshes = Some(Meshes::new(&self.gpu, scene, self.filtering)?);
         self.lamps.clear();
         self.lamps
             .extend(scene.lights.iter().filter_map(Lamp::from_light));
@@ -488,6 +492,14 @@ impl Headless {
         self.bounce = bounce;
     }
 
+    /// How sharp textures seen at a slant are, as
+    /// [`Renderer::set_anisotropic_filtering`](crate::Renderer::set_anisotropic_filtering)
+    /// says: from the next picture on, for the scene there is and any set
+    /// later.
+    pub fn set_anisotropic_filtering(&mut self, filtering: AnisotropicFiltering) {
+        self.filtering = filtering;
+    }
+
     /// How finely the shade in corners is worked out, as
     /// [`Renderer::set_ambient_occlusion`](crate::Renderer::set_ambient_occlusion)
     /// says. `Off` to begin with, unlike a window: a picture drawn with no
@@ -545,6 +557,12 @@ impl Headless {
 
     /// Draws one frame, or two when a picture held still mirrors itself.
     fn render_once(&mut self, camera: &Camera) -> Result<FrameTime, RenderError> {
+        if let Some(meshes) = &mut self.meshes
+            && meshes.filtering() != self.filtering
+        {
+            // SAFETY: every frame is waited for, so nothing is being drawn.
+            unsafe { meshes.set_filtering(self.filtering) }?;
+        }
         #[cfg(feature = "panels")]
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
         // What flies moves on by a frame, unless time is held still.
@@ -2542,6 +2560,137 @@ mod tests {
         assert!(headless.screenshot(&camera).unwrap() == first);
         headless.set_fluid(&puddle(0));
         assert!(headless.screenshot(&camera).unwrap() == first);
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// A floor two hundred metres across with stripes a quarter of a metre
+    /// wide, black and white by turns, running north to south.
+    fn striped_floor() -> Scene {
+        use lore_assets::{Image, Instance, Material, Mesh, MeshPart, Texture, TextureRef};
+
+        let mut scene = Scene::default();
+        let corners = [[-1.0, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]];
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions: corners.map(|[x, z]| [x * 100.0, 0.0, z * 100.0]).to_vec(),
+                normals: vec![[0.0, 1.0, 0.0]; 4],
+                // The picture is laid every half metre, both ways.
+                uv0: Some(corners.map(|[x, z]| [x * 200.0, z * 200.0]).to_vec()),
+                indices: vec![0, 1, 2, 0, 2, 3],
+                ..MeshPart::default()
+            }],
+        });
+        // Black on the left and white on the right: its one smaller copy
+        // is a single grey pixel, so a stripe is seen only where the
+        // picture is read at full size.
+        scene.images.push(Image {
+            name: None,
+            width: 2,
+            height: 2,
+            pixels: [[0, 0, 0, 255], [255, 255, 255, 255]].repeat(2).concat(),
+        });
+        scene.textures.push(Texture {
+            name: None,
+            image: 0,
+            sampler: lore_assets::Sampler::default(),
+        });
+        scene.materials.push(Material {
+            base_color_texture: Some(TextureRef {
+                texture: 0,
+                uv_set: 0,
+                transform: None,
+            }),
+            ..Material::default()
+        });
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 0,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        scene
+    }
+
+    /// How much the stripes of the [`striped_floor`] show some ten metres
+    /// ahead of an eye one metre over it that looks along it: how far each
+    /// pixel of those rows is from the one beside it, added up.
+    fn stripes_seen(headless: &mut Headless) -> i64 {
+        const SIZE: [usize; 2] = [256, 144];
+        let camera = Camera {
+            position: [0.0, 1.0, 0.0],
+            ..Camera::default()
+        };
+        let picture = headless.screenshot(&camera).unwrap();
+        let light = |x: usize, y: usize| {
+            let at = (y * SIZE[0] + x) * 4;
+            picture[at..at + 3]
+                .iter()
+                .map(|&c| i64::from(c))
+                .sum::<i64>()
+        };
+        (STRIPED_ROWS.0..STRIPED_ROWS.1)
+            .flat_map(|y| (1..SIZE[0]).map(move |x| (x, y)))
+            .map(|(x, y)| (light(x, y) - light(x - 1, y)).abs())
+            .sum()
+    }
+
+    /// The rows of the picture [`stripes_seen`] looks at.
+    const STRIPED_ROWS: (usize, usize) = (78, 88);
+
+    #[test]
+    fn a_floor_seen_along_its_length_is_sharper_with_anisotropic_filtering() {
+        let Some(mut headless) = headless(256, 144) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // The stripes blur only where the picture has a smaller copy to
+        // be read from, and sharpen only where the card reads at a slant.
+        if !headless.gpu().anisotropy() || !crate::texture::shrinks(headless.gpu())[0] {
+            eprintln!(
+                "Skipping: this graphics card cannot read textures at a slant, or cannot \
+                 make their smaller copies."
+            );
+            return;
+        }
+        // As a new player has it: sixteen samples.
+        headless.set_scene(&striped_floor()).unwrap();
+        let sharp = stripes_seen(&mut headless);
+        // Off, with the scene already there: only the samplers are made again.
+        headless.set_anisotropic_filtering(AnisotropicFiltering::Off);
+        let plain = stripes_seen(&mut headless);
+        assert!(
+            sharp > 4 * plain.max(1),
+            "sixteen samples show the stripes ({sharp}) and one blurs them to grey ({plain})"
+        );
+        // Two samples show more of them than one, four more than two, and
+        // from there on they are all but all there.
+        let mut seen = |filtering| {
+            headless.set_anisotropic_filtering(filtering);
+            stripes_seen(&mut headless)
+        };
+        let two = seen(AnisotropicFiltering::X2);
+        let four = seen(AnisotropicFiltering::X4);
+        let eight = seen(AnisotropicFiltering::X8);
+        assert!(
+            plain < two && two < four && four <= eight.min(sharp),
+            "{plain}, {two}, {four}, {eight}, {sharp}"
+        );
+        // Back at sixteen, the picture is as it was.
+        let close = |one: i64, other: i64| (one - other).abs() * 50 < one.max(other);
+        let again = seen(AnisotropicFiltering::X16);
+        assert!(close(again, sharp), "{again} and {sharp}");
+        // A scene set after the setting is read as the setting says.
+        headless.set_anisotropic_filtering(AnisotropicFiltering::Off);
+        headless.set_scene(&striped_floor()).unwrap();
+        let later = stripes_seen(&mut headless);
+        assert!(close(later, plain), "{later} and {plain}");
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }
