@@ -90,8 +90,9 @@ impl ParamKind {
         KINDS.into_iter().find(|kind| kind.name() == word)
     }
 
-    /// How a script writes a value of this kind, for messages.
-    fn luau_example(self) -> &'static str {
+    /// How a script writes a value of this kind, for messages: `0.5`,
+    /// `{1, 0.5}`, `"#ff8800"` and the like.
+    pub fn luau_example(self) -> &'static str {
         match self {
             Self::F32 => "0.5",
             Self::Vec2 => "{1, 0.5}",
@@ -101,8 +102,9 @@ impl ParamKind {
         }
     }
 
-    /// What a script has to give, for messages.
-    fn needs(self) -> &'static str {
+    /// What a script has to give for a value of this kind, for messages:
+    /// "a number", "a table of 3 numbers" and the like.
+    pub fn needs(self) -> &'static str {
         match self {
             Self::F32 => "a number",
             Self::Vec2 => "a table of 2 numbers",
