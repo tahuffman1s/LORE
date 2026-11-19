@@ -90,6 +90,9 @@ pub(crate) struct Handlers {
     pub weapon_reload: Vec<Function>,
     pub lightning: Vec<Function>,
     pub fluid_touch: Vec<Function>,
+    pub pool_overflow: Vec<Function>,
+    pub pool_overflow_end: Vec<Function>,
+    pub pool_formed: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The

@@ -201,7 +201,7 @@ pub fn find_game(folder: &Path, command: &str) -> Result<(), String> {
 /// would, and says how many there are. `lore check` runs a game with no
 /// world: this is what lets a script's lines about its pools run there.
 pub fn tell_pools(level: &lore_assets::Scene, host: &mut lore_script::ScriptHost) -> usize {
-    let level = lore_physics::Level::from_scene(level);
+    let level = std::sync::Arc::new(lore_physics::Level::from_scene(level));
     crate::world::tell_pools(&level, host);
     level.waters().len()
 }

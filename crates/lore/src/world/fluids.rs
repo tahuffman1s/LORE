@@ -14,6 +14,8 @@
 //! holds an amount of whatever kinds have been put in it, mixed, and is
 //! drawn and swum in as that mix.
 
+use std::sync::Arc;
+
 use lore_fluid::{Fluids, MOST_KINDS, Underfoot};
 use lore_physics::{Footing, Level, Player};
 use lore_render::{FluidDrop, FluidLook, PoolDrawn, Stir};
@@ -151,7 +153,11 @@ impl WorldFluids {
     /// kind its sheet says, and tells the script what they are called. A
     /// sheet that names a kind the game has not got is water, and a
     /// warning says so.
-    pub(crate) fn take_level(&mut self, level: &Level, host: &mut ScriptHost) {
+    pub(crate) fn take_level(&mut self, level: &Arc<Level>, host: &mut ScriptHost) {
+        // The level answers `game.fluids.poolAt` for the script from now
+        // on, the hollows found in it later too.
+        let asked = Arc::clone(level);
+        host.set_pool_finder(move |place| asked.pool_holding(place));
         // The kinds the script has made so far, so that a pool of one of
         // them is as heavy and as thick as it from the first tick.
         self.hear(host);
@@ -340,7 +346,7 @@ impl WorldFluids {
             litres: pool.litres(),
             capacity: pool.capacity(),
             brim: pool.brim(),
-            overflowing: pool.spilled() > 0.0,
+            overflowing: pool.overflowing(),
             frozen: pool.frozen(),
             shares: pool.shares(),
         }));
@@ -362,10 +368,14 @@ impl WorldFluids {
     ) {
         host.set_fluid_litres(&self.fluids.litres_by_kind());
         // A hollow that became a pool in this tick has a name from now on.
-        if self.named != self.fluids.pools().len() {
+        let formed = (self.named != self.fluids.pools().len()).then_some(self.named);
+        if formed.is_some() {
             self.name_pools(host);
         }
         self.tell_pools(host);
+        // Its script hears of it, and of every pool that began or stopped
+        // running over.
+        host.tell_pool_events(formed);
         let in_pool = (level.pool_around(player.position))
             .filter(|_| player.submerged > 0.0)
             .and_then(|here| {

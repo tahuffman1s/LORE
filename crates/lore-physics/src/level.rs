@@ -369,6 +369,31 @@ impl Level {
         })
     }
 
+    /// The body of still fluid whose hollow `point` is in, whether or not
+    /// anything stands there now, frozen or not: over its bed where it
+    /// covers the ground when it is full, and no higher than a little over
+    /// its brim. Of several, the one whose bed is highest there. A point
+    /// under the bed, in a cellar under a pool, is in none.
+    #[must_use]
+    pub fn pool_holding(&self, [x, y, z]: [f32; 3]) -> Option<usize> {
+        if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+            return None;
+        }
+        // Feet rest a little in the bed they stand on, and a hand held
+        // just over a full pool is at it.
+        let slack = 0.5;
+        self.bodies(|all| {
+            all.filter_map(|(index, water, _)| {
+                let deep = water.depth_at(x, z);
+                let bed = water.level - deep;
+                let covered = deep + (water.brim - water.level) > 0.0;
+                (covered && y > bed - slack && y < water.brim + slack).then_some((index, bed))
+            })
+            .reduce(|one, other| if other.1 > one.1 { other } else { one })
+            .map(|(index, _)| index)
+        })
+    }
+
     /// The still fluid over `x`, `z`, if there is any that is not frozen
     /// over: the one whose surface stands highest.
     #[must_use]

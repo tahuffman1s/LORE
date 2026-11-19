@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use mlua::{AnyUserData, Lua, MetaMethod, Table, UserData, UserDataMethods, Value};
 
-use crate::api::{Shared, describe, fail};
+use crate::api::{Handlers, Shared, describe, fail};
 use crate::character_api::shared_of;
 use crate::error::closest;
 use crate::fluid_api::{FluidAsk, FluidState, key_text, kind_of, plain, tidy, vector_of};
@@ -428,6 +428,47 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, fluids: &Table) -> mlua::R
             lua.create_userdata(PoolRef(Rc::from(name)))
         })?,
     )?;
+    let asking = Rc::clone(shared);
+    fluids.set(
+        "poolAt",
+        lua.create_function(move |lua, place: Value| {
+            const EXAMPLE: &str = "game.fluids.poolAt(game.player.position)";
+            let place = vector_of(lua, "game.fluids.poolAt", "the place", &place, EXAMPLE)?;
+            let Ok(found) = asking.fluids.pool_holding(place) else {
+                return Err(fail(
+                    lua,
+                    "game.fluids.poolAt cannot be used yet: the level is not in the world until \
+                     the game starts. Use it from game.onStart(function() ... end) or \
+                     game.onTick(function() ... end).",
+                ));
+            };
+            found.map(|pool| handle(lua, &asking, pool)).transpose()
+        })?,
+    )?;
+    type List = fn(&mut Handlers) -> &mut Vec<mlua::Function>;
+    let events: [(&str, &'static str, &'static str, List); 3] = [
+        (
+            "onOverflow",
+            "fluids.onOverflow",
+            "game.fluids.onOverflow(function(pool) ... end)",
+            |handlers| &mut handlers.pool_overflow,
+        ),
+        (
+            "onOverflowEnd",
+            "fluids.onOverflowEnd",
+            "game.fluids.onOverflowEnd(function(pool) ... end)",
+            |handlers| &mut handlers.pool_overflow_end,
+        ),
+        (
+            "onPoolFormed",
+            "fluids.onPoolFormed",
+            "game.fluids.onPoolFormed(function(pool) ... end)",
+            |handlers| &mut handlers.pool_formed,
+        ),
+    ];
+    for (key, name, example, list) in events {
+        fluids.set(key, crate::api::on_event(lua, shared, name, example, list)?)?;
+    }
     let listing = Rc::clone(shared);
     fluids.set(
         "pools",

@@ -530,6 +530,9 @@ fn check(folder: &Path) -> Result<(), String> {
             };
             game.host_mut().stand_in_fluid(player, Some(pool), step);
             game.tick(input.tick(), step);
+            // Which is then said to have formed, run over and stopped.
+            game.host_mut().pretend_pool_events(0);
+            game.tick(input.tick(), step);
         }
         game.host_mut().stand_in_fluid(player, None, step);
         game.tick(input.tick(), step);
@@ -630,7 +633,8 @@ fn check(folder: &Path) -> Result<(), String> {
          with a shot the check did not make up, such as one to the head or an explosion, \
          was not run.",
         if pools > 0 {
-            " and for one up to the neck in the level's first pool"
+            " and for one up to the neck in the level's first pool, which was then said to \
+             have just formed, run over and stopped"
         } else {
             ""
         }

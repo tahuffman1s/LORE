@@ -806,6 +806,64 @@ impl ScriptHost {
         self.fluids.set_pools(pools);
     }
 
+    /// Says how the level finds the pool whose hollow a place is in, by
+    /// its number (`lore_physics::Level::pool_holding`): what
+    /// `game.fluids.poolAt` asks. Say it when a world takes its level;
+    /// until then `poolAt` says the level is not in the world yet. It also
+    /// forgets which pools were running over in the level before.
+    pub fn set_pool_finder(&mut self, finder: impl Fn([f32; 3]) -> Option<usize> + 'static) {
+        self.fluids.set_finder(Box::new(finder));
+    }
+
+    /// Tells the script what happened to the pools in the tick just
+    /// played, after [`set_pools`](Self::set_pools) has said how they
+    /// stand: calls the `game.fluids.onPoolFormed` functions with each
+    /// pool numbered `formed_from` or more (the hollows that became pools
+    /// in this tick, when there are any), then `game.fluids.onOverflow`
+    /// with each pool that started to run over and
+    /// `game.fluids.onOverflowEnd` with each that has not for half a
+    /// second. Call it once a tick.
+    pub fn tell_pool_events(&mut self, formed_from: Option<usize>) {
+        let count = self.fluids.pool_count();
+        for pool in formed_from.unwrap_or(count)..count {
+            self.call_with_pool(|handlers| &handlers.pool_formed, pool);
+        }
+        for pool in 0..count {
+            match self.fluids.pool_edge(pool) {
+                Some(true) => self.call_with_pool(|handlers| &handlers.pool_overflow, pool),
+                Some(false) => self.call_with_pool(|handlers| &handlers.pool_overflow_end, pool),
+                None => {}
+            }
+        }
+    }
+
+    /// Calls the `game.fluids.onPoolFormed`, `onOverflow` and
+    /// `onOverflowEnd` functions with pool `pool`, as if it had just
+    /// formed, run over and stopped. For `lore check`, which plays no
+    /// level and so has no pool that does.
+    pub fn pretend_pool_events(&mut self, pool: usize) {
+        if pool < self.fluids.pool_count() {
+            self.call_with_pool(|handlers| &handlers.pool_formed, pool);
+            self.call_with_pool(|handlers| &handlers.pool_overflow, pool);
+            self.call_with_pool(|handlers| &handlers.pool_overflow_end, pool);
+        }
+    }
+
+    /// Calls each of a list of functions with pool `pool`.
+    fn call_with_pool(&mut self, list: fn(&Handlers) -> &Vec<Function>, pool: usize) {
+        let Some(version) = &self.running else { return };
+        if list(&version.shared.handlers.borrow()).is_empty() {
+            return;
+        }
+        let Ok(index) = u16::try_from(pool) else {
+            return;
+        };
+        let Ok(handle) = crate::pool_api::handle(&version.vm, &version.shared, index) else {
+            return;
+        };
+        self.call_all(list, handle);
+    }
+
     /// The kind of fluid a level's pool is, from the name its sheet gives
     /// (`None` is water): a kind the game has, or a ready-made such as
     /// "lava", which is made. `Err` holds what to tell the level's maker

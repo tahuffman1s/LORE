@@ -382,3 +382,134 @@ fn a_levels_pool_is_of_a_ready_made_kind_or_one_the_game_made() {
     assert!(problem.contains("Did you mean \"lava\"?"), "{problem}");
     assert!(problem.contains("game.fluid(\"lavva\""), "{problem}");
 }
+
+#[test]
+fn the_pool_at_a_place_is_the_one_the_level_says_or_nil() {
+    // Before a world has its level nothing can say.
+    let mut host = ScriptHost::from_source(
+        "game.onTick(function() game.fluids.poolAt(vector.create(0, 0, 0)) end)",
+        ActionMap::standard(),
+    );
+    run(&mut host, 1);
+    let message = mistake(&host);
+    assert!(message.contains("cannot be used yet"), "{message}");
+    assert!(message.contains("game.onStart"), "{message}");
+    // The level says the vat is east of 10 and the pond west of -10; a
+    // number it gives that is no pool the script knows is none.
+    let mut host = game(
+        r#"
+        local vat = game.fluids.pool("mixing vat")
+        game.onStart(function()
+            local east = game.fluids.poolAt(vector.create(12, 0, 0))
+            print(east and east.name, east == vat, east and east.litres)
+            print(game.fluids.poolAt(vector.create(-12, 1, 3)).name)
+            print(game.fluids.poolAt(vector.create(0, 0, 0)))
+            print(game.fluids.poolAt(vector.create(0, 50, 0)))
+        end)
+        "#,
+    );
+    host.set_pool_finder(|[x, y, _]| match (x, y) {
+        (x, _) if x > 10.0 => Some(1),
+        (x, _) if x < -10.0 => Some(0),
+        (_, y) if y > 10.0 => Some(7),
+        _ => None,
+    });
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["Mixing Vat true 800", "Pond", "nil", "nil"],);
+    for (script, says) in [
+        ("game.fluids.poolAt()", "needs the place as a vector"),
+        (
+            "game.fluids.poolAt(\"Pond\")",
+            "game.fluids.poolAt(game.player.position)",
+        ),
+        (
+            "game.fluids.onOverflow(5)",
+            "game.fluids.onOverflow(function(pool) ... end)",
+        ),
+        (
+            "game.fluids.onPoolFormed()",
+            "game.fluids.onPoolFormed(function(pool) ... end)",
+        ),
+        ("game.fluids.poolat(vector.create(0, 0, 0))", "poolAt"),
+    ] {
+        let message = mistake_of(&format!("game.onTick(function() {script} end)"));
+        assert!(message.contains(says), "{script}: {message}");
+    }
+}
+
+#[test]
+fn a_script_hears_once_when_a_pool_starts_and_stops_running_over_and_when_one_forms() {
+    let mut host = game(
+        r#"
+        game.fluids.onOverflow(function(pool) print("over", pool.name, pool.overflowing) end)
+        game.fluids.onOverflowEnd(function(pool) print("stopped", pool.name) end)
+        game.fluids.onPoolFormed(function(pool) print("formed", pool.name, pool.fluid.name) end)
+        "#,
+    );
+    // The vat is running over as the level starts: said once, however
+    // long it runs.
+    let told = |host: &mut ScriptHost, formed: Option<usize>| {
+        run(host, 1);
+        host.tell_pool_events(formed);
+    };
+    for _ in 0..5 {
+        told(&mut host, None);
+    }
+    assert_eq!(printed(), ["over Mixing Vat true"]);
+    // It stops, runs again a moment later and stops for good: one
+    // overflow, whose end is said half a second after the last of it.
+    let stand = |host: &mut ScriptHost, vat_over: bool, pools: usize| {
+        let still = PoolTold {
+            kind: 0,
+            level: 1.0,
+            depth: 1.0,
+            litres: 100.0,
+            capacity: 100.0,
+            brim: 1.0,
+            overflowing: false,
+            frozen: false,
+            shares: [0.0; MOST_KINDS],
+        };
+        host.set_pools((0..pools).map(|index| PoolTold {
+            overflowing: index == 1 && vat_over,
+            ..still
+        }));
+    };
+    stand(&mut host, false, 3);
+    for _ in 0..10 {
+        told(&mut host, None);
+    }
+    stand(&mut host, true, 3);
+    told(&mut host, None);
+    stand(&mut host, false, 3);
+    for _ in 0..29 {
+        told(&mut host, None);
+    }
+    assert_eq!(printed(), [] as [&str; 0]);
+    told(&mut host, None);
+    assert_eq!(printed(), ["stopped Mixing Vat"]);
+    for _ in 0..40 {
+        told(&mut host, None);
+    }
+    assert_eq!(printed(), [] as [&str; 0]);
+    // A hollow becomes the fourth pool: its script is told of it, by the
+    // name it has from now on, and it can run over like the rest.
+    host.name_pools(&[Some("Pond"), Some(" Mixing Vat "), None, None]);
+    stand(&mut host, false, 4);
+    told(&mut host, Some(3));
+    assert_eq!(printed(), ["formed pool 4 water"]);
+    told(&mut host, None);
+    assert_eq!(printed(), [] as [&str; 0]);
+    // A new level forgets what was running over in the one before.
+    stand(&mut host, true, 4);
+    told(&mut host, None);
+    assert_eq!(printed(), ["over Mixing Vat true"]);
+    host.set_pool_finder(|_| None);
+    stand(&mut host, false, 4);
+    for _ in 0..40 {
+        told(&mut host, None);
+    }
+    assert_eq!(printed(), [] as [&str; 0]);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
