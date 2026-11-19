@@ -19,10 +19,12 @@
 
 mod compile;
 mod error;
+mod params;
 mod source;
 
 pub use compile::{Bounds, Compiled, compile};
 pub use error::ShaderError;
+pub use params::{Given, Param, ParamBlock, ParamKind, ParamValue, params_of};
 pub use source::{Owner, Place, Source};
 
 /// The most values (`//! param` lines) one shader can declare.
