@@ -436,6 +436,14 @@ impl Headless {
         self.effects.set_moon_size(size);
     }
 
+    /// Says what colour the moon is tinted, in linear red, green and
+    /// blue: its face, the glow round it and its light on the land, all as
+    /// bright as before. `[1.0, 1.0, 1.0]` is its own colour (the usual); a
+    /// blood moon is something like `[1.0, 0.25, 0.12]`.
+    pub fn set_moon_tint(&mut self, tint: [f32; 3]) {
+        self.effects.set_moon_tint(tint);
+    }
+
     /// Says whether storms send their own bolts to the ground, as they do
     /// until told otherwise. A game that sends them itself with
     /// [`strike`](Self::strike), so that it knows where each fell and can

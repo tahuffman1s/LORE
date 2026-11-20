@@ -13,7 +13,7 @@
 //! sun, which the shader works out for each pixel.
 
 use crate::mesh::Lighting;
-use lore_sky::{Heavens, SkyPlace};
+use lore_sky::Heavens;
 
 /// How much of the sky the clouds cover, from 0 to 1, and how high they
 /// are, in metres. Fair-weather clouds; weather will set these (#130).
@@ -284,8 +284,8 @@ pub(crate) struct Day {
     /// and how bright the lit part of the moon's face is against the whole
     /// at full ([`lore_sky::Heavens::moon_surface`]); where the sky's equator
     /// crosses the meridian with the stars turned 0, and how bright a lux
-    /// of starlight is drawn.
-    pub(crate) heavens: [[f32; 4]; 6],
+    /// of starlight is drawn; and what colour the moon is tinted.
+    pub(crate) heavens: [[f32; 4]; 7],
 }
 
 /// `value` between `low` and `high`, as a share from 0 to 1 that starts
@@ -304,20 +304,24 @@ impl Day {
     /// stands, which is its noon; it rises at six and sets at six. The
     /// moon goes round nearly the same circle and falls behind the sun by
     /// one turn in twenty-nine and a half days, which is what gives it
-    /// its phases: it starts nearly full, rising as the sun sets.
+    /// its phases: it starts nearly full, rising as the sun sets. The
+    /// renderer asks for its sky through [`seen`](Self::seen); this is for
+    /// tests.
+    #[cfg(test)]
     pub(crate) fn at(hours: f64) -> Self {
-        Self::lit_by(Heavens::at(hours, None))
+        Self::lit_by(Heavens::at(hours, None), [1.0; 3])
     }
 
-    /// The real sky over `place`, `hours` after its first midnight, an
-    /// hour being the sun's own time there (see [`lore_sky`]).
-    pub(crate) fn over(place: &SkyPlace, hours: f64) -> Self {
-        Self::lit_by(place.heavens(hours))
+    /// The sky under the sun, the moon and the stars where `heavens` has
+    /// them, with the moon tinted `tint` (linear light, as bright as
+    /// white: `[1.0; 3]` is its own colour).
+    pub(crate) fn seen(heavens: Heavens, tint: [f32; 3]) -> Self {
+        Self::lit_by(heavens, tint)
     }
 
     /// The light and the sky under the sun, the moon and the stars where
     /// `heavens` puts them.
-    fn lit_by(heavens: Heavens) -> Self {
+    fn lit_by(heavens: Heavens, tint: [f32; 3]) -> Self {
         let Heavens {
             sun,
             moon,
@@ -361,7 +365,8 @@ impl Day {
         // and at dawn goes before the sun's comes. Handed over while
         // either still shone, every shadow would swing round at once.
         let after_sun = 1.0 - eased(-SUN_GONE - 0.065, -SUN_GONE, sun[1]);
-        let moonlight = [0.6, 0.75, 1.0]
+        let moonlight = [0, 1, 2]
+            .map(|colour| [0.6, 0.75, 1.0][colour] * tint[colour])
             .map(|part: f32| part * grey(usual.sun) * 0.25 * moon_bright * moon_up * after_sun);
         let by_sun = sun[1] > -SUN_GONE;
         let (towards, light) = if by_sun {
@@ -433,7 +438,8 @@ impl Day {
         let glow_lux = 0.6 * lore_sky::STARLIGHT_LUX;
         let scattered_lux = 0.03 * heavens.moonlight_lux() * moon_up;
         let night_glow = [0, 1, 2].map(|colour| {
-            ([0.85, 1.0, 0.9][colour] * glow_lux + [0.6, 0.75, 1.15][colour] * scattered_lux)
+            ([0.85, 1.0, 0.9][colour] * glow_lux
+                + [0.6, 0.75, 1.15][colour] * tint[colour] * scattered_lux)
                 / std::f32::consts::PI
                 * per_lux
         });
@@ -457,6 +463,8 @@ impl Day {
                     heavens.moon_surface(),
                 ],
                 [meridian[0], meridian[1], meridian[2], per_lux],
+                // The moon's colour, a game's to say.
+                [tint[0], tint[1], tint[2], 0.0],
             ],
         }
     }

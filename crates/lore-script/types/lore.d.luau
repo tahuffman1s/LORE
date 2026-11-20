@@ -1535,6 +1535,17 @@ declare game: {
         --- Example: game.sky.setMoonSize(3)
         setMoonSize: (times: number) -> (),
 
+        --- Says what colour the moon is: its face, the glow round it and the
+        --- light it gives the land, all as bright as before. A name ("red")
+        --- or a hex code ("#ff6040"); "white" is its own colour, the usual.
+        --- Kept when the script is read again.
+        --- Example: game.sky.setMoonColor("#ff4020") -- a blood moon
+        setMoonColor: (color: string) -> (),
+
+        --- The moon's colour as a hex code, as setMoonColor was given it.
+        --- Example: local tint = game.sky.moonColor()
+        moonColor: () -> string,
+
         --- How large the moon is drawn, as setMoonSize takes it.
         --- Example: local size = game.sky.moonSize()
         moonSize: () -> number,

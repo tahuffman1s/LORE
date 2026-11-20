@@ -124,8 +124,9 @@ struct View {
     // sun's own disc, and 1 if there is a moon and stars at all; the light
     // of the night sky, and how bright the moon is; where the sky's equator
     // crosses the meridian with the stars turned 0, and how bright a lux
-    // of starlight is drawn.
-    heavens: array<vec4<f32>, 6>,
+    // of starlight is drawn; and what colour the moon is tinted, as bright
+    // as white.
+    heavens: array<vec4<f32>, 7>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1123,8 +1124,9 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let lobe = (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * clamp(near, -1.0, 1.0), 1.5));
     // Only while the moon is up: set, it lights no air over this place.
     let moon_risen = smoothstep(-0.03, 0.02, towards.y);
-    seen += vec3<f32>(0.85, 0.9, 1.0) * lore_moon_lux(surface, full) * 0.03 * lobe * per_lux * up
-        * moon_risen;
+    let tint = view.heavens[6].rgb;
+    seen += vec3<f32>(0.85, 0.9, 1.0) * tint * lore_moon_lux(surface, full) * 0.03 * lobe * per_lux
+        * up * moon_risen;
     let radius = MOON_RADIUS * max(view.heavens[2].w, 1.0);
     // The sky's north and west across the moon's face: the moon's north
     // is its north, and its east (where Mare Crisium is) is the sky's west.
@@ -1192,7 +1194,11 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
         let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
         let rim = smoothstep(1.0, 1.0 - 2.5 * pixel / radius, out);
-        seen += albedo / MOON_NEAR_MEAN * (lit + earthshine) * face * dimmed * rim * up;
+        // Its face keeps the tint's hue at the face's own brightness: the
+        // tint is as bright as white, so a deep one has a part far over 1,
+        // which would burn the face white.
+        let face_tint = tint / max(max(tint.r, tint.g), max(tint.b, 1e-3));
+        seen += albedo / MOON_NEAR_MEAN * face_tint * (lit + earthshine) * face * dimmed * rim * up;
         behind = 1.0 - rim;
     }
     if night <= 0.01 {

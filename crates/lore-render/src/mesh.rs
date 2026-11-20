@@ -72,7 +72,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// the light of lightning, seven for the weather and five for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 6 + 3);
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 7 + 3);
 
 /// How rough a material can be and still mirror the world round it: the
 /// shader's `MIRRORS_BELOW`.
@@ -280,7 +280,7 @@ impl View {
 pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
     pub(crate) weather: Air,
-    pub(crate) heavens: [[f32; 4]; 6],
+    pub(crate) heavens: [[f32; 4]; 7],
     /// How the level's water looks if it says so, as the shader's
     /// `water_look`: all zero if not.
     pub(crate) water_look: [[f32; 4]; 3],
@@ -2120,6 +2120,7 @@ impl MeshPipeline {
                 [red, green, blue, 0.0],
                 [0.0; 4],
                 [1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 0.0],
             ],
             |day| day.heavens,
         );
@@ -4590,7 +4591,7 @@ mod tests {
                     fog: 0.002,
                     wind: [0.0, 1.0, 9.0],
                 },
-                heavens: [[9.0; 4]; 6],
+                heavens: [[9.0; 4]; 7],
                 water_look: [[0.5; 4], [0.25; 4], [0.75; 4]],
                 stream_look: [[0.125; 4], [0.0; 4], [0.375; 4]],
             },
@@ -4634,20 +4635,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 508), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 519), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 512), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 523), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 535),
+            number(&bytes, 539),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 536),
+            number(&bytes, 540),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 547), 0.375);
-        assert_eq!(bytes.len(), 548 * 4);
+        assert_eq!(number(&bytes, 551), 0.375);
+        assert_eq!(bytes.len(), 552 * 4);
     }
 
     #[test]

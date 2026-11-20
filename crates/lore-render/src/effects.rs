@@ -279,6 +279,8 @@ pub(crate) struct Effects {
     place: Option<SkyPlace>,
     /// How large the moon is drawn, against its real size.
     moon_size: f32,
+    /// What colour the moon is tinted, as bright as white.
+    moon_tint: [f32; 3],
     /// How far rain has raised the still water, in metres.
     rise: f32,
     /// Whether storms send their own bolts to the ground: not when the
@@ -319,6 +321,7 @@ impl Effects {
             day: None,
             place: None,
             moon_size: 1.0,
+            moon_tint: [1.0; 3],
             rise: 0.0,
             bolts_of_its_own: true,
             tracks: Tracks::new(),
@@ -789,12 +792,31 @@ impl Effects {
         }
     }
 
+    /// Says what colour the moon is tinted, in linear light, made as
+    /// bright as white: its face, the glow round it and its light on the
+    /// land. `[1.0; 3]` is its own colour.
+    pub(crate) fn set_moon_tint(&mut self, tint: [f32; 3]) {
+        let bright = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
+        let tint = if bright > 1e-4 && tint.iter().all(|part| part.is_finite() && *part >= 0.0) {
+            tint.map(|part| part / bright)
+        } else {
+            [1.0; 3]
+        };
+        if tint == self.moon_tint {
+            return;
+        }
+        self.moon_tint = tint;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
     /// The sky `hour` hours after the first midnight.
     fn sky_at(&self, hour: f64) -> Day {
-        let mut day = self
-            .place
-            .as_ref()
-            .map_or_else(|| Day::at(hour), |place| Day::over(place, hour));
+        let mut day = Day::seen(
+            lore_sky::Heavens::at(hour, self.place.as_ref()),
+            self.moon_tint,
+        );
         day.heavens[2][3] = self.moon_size;
         day
     }

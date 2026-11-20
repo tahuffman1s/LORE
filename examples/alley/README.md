@@ -104,7 +104,9 @@ the alley under the real sky of that place and day (`game.sky.setDate`,
 `game.sky.setLatitude`): long light summer evenings in the north, a low
 winter sun, the moon in the phase it had that night and the stars where
 they stood. The **Moon** row says its phase, how much of it is lit and
-whether it is up.
+whether it is up; **Moon size** draws it up to ten times its real size and
+**Moon colour** tints it, face and light, from harvest orange to a blood
+moon (`game.sky.setMoonSize`, `game.sky.setMoonColor`).
 
 ## Named places
 
