@@ -342,7 +342,7 @@ impl Renderer {
     /// file gives, and by the sky. A scene with no sun gets one of the
     /// engine's own, under which a matte surface facing up shows exactly
     /// its material's colour. Everything but a see-through surface casts
-    /// a shadow from the sun, out to 216 metres from the eye. Behind it
+    /// a shadow from the sun, out to 648 metres from the eye. Behind it
     /// all is the sky that sun makes, with clouds that drift and shade the
     /// ground. Its lamps (point and spot lights) light it too, in the
     /// candela the file gives, until [`set_lamps`](Self::set_lamps) says

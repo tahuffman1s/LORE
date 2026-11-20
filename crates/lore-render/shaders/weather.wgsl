@@ -62,14 +62,14 @@ fn open_above(world: vec3<f32>) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
-    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.04 {
         return 1.0;
     }
     let size = vec2<f32>(textureDimensions(shadow_map));
-    let held = textureLoad(shadow_map, vec2<i32>(uv * size), 4, 0);
-    return 1.0 - smoothstep(0.35, 0.9, (above.z - held) * view.shadow_reach[4].y);
+    let held = textureLoad(shadow_map, vec2<i32>(uv * size), OVERHEAD, 0);
+    return 1.0 - smoothstep(0.35, 0.9, (above.z - held) * view.shadow_reach[OVERHEAD].y);
 }
 
 // How much of a line of sight is covered by what is falling: drops of

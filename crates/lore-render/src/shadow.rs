@@ -1,6 +1,7 @@
-//! The sun's shadows: what the sun sees of the level, kept as four pictures
+//! The sun's shadows: what the sun sees of the level, kept as five pictures
 //! of how far away it is, each covering a wider square round the eye than
-//! the one before (cascaded shadow maps).
+//! the one before (cascaded shadow maps). The widest reaches 648 metres to
+//! each side, so hills and towers far off shade the land below them.
 //!
 //! The squares are centred on the eye and not fitted to what the camera
 //! sees, so turning the camera changes nothing, and each square moves in
@@ -11,8 +12,15 @@
 //!
 //! The steps are whole numbers of the picture's pixels, so a shadow's edge
 //! does not crawl as the square moves.
+//!
+//! A sun that moves with the hour would have every square drawn again every
+//! frame. Instead the nearest is drawn every frame and the wider ones take
+//! turns, one a frame, each read by the square it was drawn for until its
+//! turn comes: they lag the sun by a few frames, a few thousandths of a
+//! degree, and the cost of a moving sun stays that of two pictures. A sun
+//! that jumps (a game setting the hour) has them all drawn at once.
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::sync::Arc;
 
 use ash::vk;
@@ -22,14 +30,14 @@ use crate::error::RenderError;
 use crate::gpu::Gpu;
 
 /// How many squares there are.
-pub(crate) const CASCADES: usize = 4;
+pub(crate) const CASCADES: usize = 5;
 
 /// How many pixels wide and high each square's picture is.
 pub(crate) const SIZE: u32 = 2048;
 
 /// Half the width of each square, in metres. Beyond the last nothing is
 /// shadowed.
-const REACH: [f32; CASCADES] = [8.0, 24.0, 72.0, 216.0];
+const REACH: [f32; CASCADES] = [8.0, 24.0, 72.0, 216.0, 648.0];
 
 /// How many pixels a square moves at a time: a sixteenth of its half-width.
 const STEP_PIXELS: f32 = 64.0;
@@ -55,7 +63,9 @@ pub(crate) struct Cascade {
     pub(crate) texel: f32,
     /// How many metres the picture's depth runs over.
     pub(crate) depth: f32,
-    /// The square's own sideways and upward directions in the world.
+    /// The way the light travels, and the square's own sideways and
+    /// upward directions in the world.
+    away: [f32; 3],
     across: [f32; 3],
     along: [f32; 3],
     /// Where its middle is, measured along those two.
@@ -88,6 +98,9 @@ fn unit(direction: [f32; 3]) -> [f32; 3] {
 /// seen from straight above, which says what is overhead.
 pub(crate) const PICTURES: usize = CASCADES + 1;
 
+/// Which picture is the one from above: the last.
+pub(crate) const OVERHEAD: usize = CASCADES;
+
 /// Half the width of the picture from above, in metres.
 const OVERHEAD_REACH: f32 = 96.0;
 
@@ -100,8 +113,8 @@ pub(crate) fn cascades(
     bounds: [[f32; 3]; 2],
 ) -> [Cascade; PICTURES] {
     std::array::from_fn(|number| match REACH.get(number) {
-        Some(half) => square(eye, towards_sun, bounds, *half),
-        None => square(eye, [0.0, 1.0, 0.0], bounds, OVERHEAD_REACH),
+        Some(half) if number != OVERHEAD => square(eye, towards_sun, bounds, *half),
+        _ => square(eye, [0.0, 1.0, 0.0], bounds, OVERHEAD_REACH),
     })
 }
 
@@ -166,6 +179,7 @@ fn square(eye: [f32; 3], towards: [f32; 3], [low, high]: [[f32; 3]; 2], half: f3
         ],
         texel,
         depth,
+        away,
         across,
         along,
         middle,
@@ -181,6 +195,83 @@ impl Cascade {
             .iter()
             .zip(self.middle)
             .all(|(axis, centre)| (dot(middle, *axis) - centre).abs() <= self.half + radius)
+    }
+
+    /// Whether an eye at `eye` is still near enough the middle of this
+    /// square to be shadowed well by it: within two of its steps.
+    fn near_middle(&self, eye: [f32; 3]) -> bool {
+        let room = self.half / 8.0;
+        [self.across, self.along]
+            .iter()
+            .zip(self.middle)
+            .all(|(axis, centre)| (dot(eye, *axis) - centre).abs() <= room)
+    }
+}
+
+/// How far the sun may have moved since a wider picture was drawn for it to
+/// wait its turn rather than be drawn now: the cosine of 2 degrees.
+const SUN_MAY_LAG: f32 = 0.999_39;
+
+/// What each picture was last drawn for, and which of the wider ones is
+/// next to catch up with a sun that has moved.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Drawn {
+    pictures: [Option<(u64, Cascade)>; PICTURES],
+    turn: usize,
+}
+
+/// What [`Drawn::plan`] says to do this frame.
+pub(crate) struct Plan {
+    /// Which pictures to draw, each for the square wanted of it.
+    pub(crate) draw: [bool; PICTURES],
+    /// The square each picture is to be read by: the one it holds once
+    /// this frame's are drawn.
+    pub(crate) read: [Cascade; PICTURES],
+}
+
+impl Drawn {
+    /// Which pictures to draw this frame for an eye at `eye` that wants
+    /// `wanted` of the level numbered `level`. Those drawn are counted as
+    /// drawn from now on.
+    ///
+    /// A picture is drawn now when it holds nothing yet, or another level,
+    /// or the eye has moved its square, or the sun has moved far, or it is
+    /// the nearest. A wider one whose square has changed only because the
+    /// sun has moved a little waits its turn: one of those is drawn a frame.
+    pub(crate) fn plan(&mut self, level: u64, eye: [f32; 3], wanted: &[Cascade; PICTURES]) -> Plan {
+        let mut draw = [false; PICTURES];
+        let mut waiting = [false; PICTURES];
+        for (number, (drawn, cascade)) in self.pictures.iter().zip(wanted).enumerate() {
+            match drawn {
+                Some((was, old)) if *was == level && old.clip == cascade.clip => {}
+                Some((was, old))
+                    if *was == level
+                        && number > 0
+                        && old.away != cascade.away
+                        && dot(old.away, cascade.away) >= SUN_MAY_LAG
+                        && old.near_middle(eye) =>
+                {
+                    waiting[number] = true;
+                }
+                _ => draw[number] = true,
+            }
+        }
+        let next = (0..PICTURES)
+            .map(|step| (self.turn + step) % PICTURES)
+            .find(|number| waiting[*number]);
+        if let Some(next) = next {
+            draw[next] = true;
+            self.turn = (next + 1) % PICTURES;
+        }
+        for ((drawn, cascade), draw) in self.pictures.iter_mut().zip(wanted).zip(draw) {
+            if draw {
+                *drawn = Some((level, *cascade));
+            }
+        }
+        let read = std::array::from_fn(|number| {
+            self.pictures[number].map_or(wanted[number], |(_, cascade)| cascade)
+        });
+        Plan { draw, read }
     }
 }
 
@@ -539,8 +630,8 @@ pub(crate) struct ShadowMap {
     pub(crate) pictures: DepthLayers,
     /// Compares a depth with the picture's and smooths the answer.
     pub(crate) sampler: vk::Sampler,
-    /// The level and the square each picture was last drawn for.
-    drawn: RefCell<[Option<(u64, Mat4)>; PICTURES]>,
+    /// What each picture was last drawn for.
+    drawn: Cell<Drawn>,
 }
 
 impl ShadowMap {
@@ -555,28 +646,17 @@ impl ShadowMap {
             gpu: Arc::clone(gpu),
             pictures,
             sampler,
-            drawn: RefCell::new([None; PICTURES]),
+            drawn: Cell::new(Drawn::default()),
         })
     }
 
-    /// The pictures that have to be drawn before `cascades` of the level
-    /// numbered `level` can be read: those that hold something else, or
-    /// nothing yet. They are counted as drawn from now on.
-    pub(crate) fn take_stale(
-        &self,
-        level: u64,
-        cascades: &[Cascade; PICTURES],
-    ) -> [bool; PICTURES] {
-        let mut stale = [true; PICTURES];
-        let Ok(mut drawn) = self.drawn.try_borrow_mut() else {
-            return stale;
-        };
-        for ((stale, drawn), cascade) in stale.iter_mut().zip(drawn.iter_mut()).zip(cascades) {
-            let wanted = Some((level, cascade.clip));
-            *stale = *drawn != wanted;
-            *drawn = wanted;
-        }
-        stale
+    /// Which pictures to draw this frame, and the squares to read them
+    /// by: see [`Drawn::plan`].
+    pub(crate) fn plan(&self, level: u64, eye: [f32; 3], wanted: &[Cascade; PICTURES]) -> Plan {
+        let mut drawn = self.drawn.get();
+        let plan = drawn.plan(level, eye, wanted);
+        self.drawn.set(drawn);
+        plan
     }
 }
 
@@ -651,6 +731,78 @@ mod tests {
         assert!(squares[2].holds([30.0, 0.0, 0.0], 3.0));
         // High above still counts: it is between the sun and the square.
         assert!(squares[0].holds([0.0, 500.0, 0.0], 1.0));
+    }
+
+    #[test]
+    fn the_widest_square_shadows_land_far_past_216_metres() {
+        let squares = cascades([0.0, 1.7, 0.0], unit([0.4, 0.77, 0.5]), LEVEL);
+        assert!(!squares[CASCADES - 2].holds([400.0, 0.0, 0.0], 1.0));
+        assert!(squares[CASCADES - 1].holds([400.0, 0.0, 0.0], 1.0));
+        assert!(squares[CASCADES - 1].holds([0.0, 0.0, -600.0], 1.0));
+    }
+
+    /// The sun at `hour` of a day that turns it round the sky.
+    fn sun_at(hour: f32) -> [f32; 3] {
+        let angle = hour / 24.0 * std::f32::consts::TAU;
+        unit([angle.cos(), 0.8, angle.sin() * 0.6])
+    }
+
+    #[test]
+    fn a_still_sun_and_a_still_eye_draw_nothing_after_the_first_frame() {
+        let mut drawn = Drawn::default();
+        let eye = [1.0, 1.7, 2.0];
+        let wanted = cascades(eye, sun_at(9.0), LEVEL);
+        assert_eq!(drawn.plan(1, eye, &wanted).draw, [true; PICTURES]);
+        let plan = drawn.plan(1, eye, &wanted);
+        assert_eq!(plan.draw, [false; PICTURES]);
+        assert_eq!(plan.read, wanted);
+        // Another level draws them all again.
+        assert_eq!(drawn.plan(2, eye, &wanted).draw, [true; PICTURES]);
+    }
+
+    #[test]
+    fn a_moving_sun_draws_two_pictures_a_frame_and_none_lags_long() {
+        let mut drawn = Drawn::default();
+        let eye = [1.0, 1.7, 2.0];
+        drawn.plan(1, eye, &cascades(eye, sun_at(9.0), LEVEL));
+        // A day of twenty minutes at sixty frames a second.
+        let a_frame = 24.0 / (20.0 * 60.0 * 60.0);
+        let mut since = [0_usize; PICTURES];
+        for frame in 1..=600 {
+            let wanted = cascades(eye, sun_at(9.0 + frame as f32 * a_frame), LEVEL);
+            let plan = drawn.plan(1, eye, &wanted);
+            let count = plan.draw.iter().filter(|draw| **draw).count();
+            assert!(count <= 2, "frame {frame} drew {count}");
+            // The nearest is always the sun's own; the one from above never
+            // changes with it.
+            assert!(plan.draw[0]);
+            assert!(!plan.draw[OVERHEAD]);
+            assert_eq!(plan.read[0], wanted[0]);
+            for (number, since) in since.iter_mut().enumerate().take(CASCADES) {
+                *since = if plan.draw[number] { 0 } else { *since + 1 };
+                assert!(*since < CASCADES, "picture {number} lagged {since} frames");
+            }
+        }
+    }
+
+    #[test]
+    fn a_sun_that_jumps_or_an_eye_that_moves_far_is_drawn_for_at_once() {
+        let mut drawn = Drawn::default();
+        let eye = [1.0, 1.7, 2.0];
+        drawn.plan(1, eye, &cascades(eye, sun_at(9.0), LEVEL));
+        let jumped = cascades(eye, sun_at(15.0), LEVEL);
+        let plan = drawn.plan(1, eye, &jumped);
+        assert_eq!(plan.draw[..CASCADES], [true; CASCADES]);
+        assert_eq!(plan.read, jumped);
+        // A sun that moved a little while the eye ran far: every square
+        // that no longer holds the eye near its middle is drawn now.
+        let far = [90.0, 1.7, 2.0];
+        let wanted = cascades(far, sun_at(15.01), LEVEL);
+        let plan = drawn.plan(1, far, &wanted);
+        assert!(plan.draw[..3].iter().all(|draw| *draw));
+        for number in 0..PICTURES {
+            assert!(plan.read[number].near_middle(far) || !plan.draw[number]);
+        }
     }
 
     #[test]

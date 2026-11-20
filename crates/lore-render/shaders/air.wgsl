@@ -31,7 +31,7 @@
 
 // How many steps a line of sight is walked in.
 const AIR_STEPS: i32 = 16;
-// How far it is walked, in metres: the sun's shadows end at 216.
+// How far it is walked, in metres: the beams are the near air's.
 const AIR_REACH: f32 = 200.0;
 // How strongly mist and haze send light onwards, from -1 to 1.
 const AIR_ONWARDS: f32 = 0.6;
@@ -53,7 +53,9 @@ fn sun_reaches_air(world: vec3<f32>, away: f32) -> f32 {
     for (var wider = 0; wider < SHADOW_PICTURES - 1; wider++) {
         // Half a square's width is its pixel size times half its pixels.
         let half = view.shadow_reach[wider].x * 0.5 / view.shadows.y;
-        if away > half * 0.9 {
+        // Not 0.9: a square waiting for its turn behind a moving sun may
+        // stand an eighth of its half-width off the eye.
+        if away > half * 0.75 {
             picture = wider + 1;
         }
     }
