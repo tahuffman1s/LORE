@@ -639,6 +639,12 @@ impl ScriptHost {
         self.weather.take_light_pollution()
     }
 
+    /// How stormy the aurora is, the Kp index from 0 to 9, if the script
+    /// has said since this was last called (`game.sky.setAurora`).
+    pub fn take_aurora(&mut self) -> Option<f32> {
+        self.weather.take_aurora()
+    }
+
     /// Where on the Earth the world lies (see `take_sky_place` below).
     pub fn take_sky_place(&mut self) -> Option<lore_sky::SkyPlace> {
         self.weather.take_sky_place()

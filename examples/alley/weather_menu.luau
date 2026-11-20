@@ -99,6 +99,11 @@ for name, hex in milkyColours do
     milkyLookOf[hex] = name
 end
 
+-- How stormy the aurora is, in the words game.sky.setAurora takes, and the
+-- Kp index each stands for.
+local auroraWords = { "none", "quiet", "active", "storm", "great storm" }
+local auroraKp: { [string]: number } = { none = 0, quiet = 2, active = 4, storm = 6, ["great storm"] = 9 }
+
 -- How much towns light the sky, in the words game.sky.setLightPollution
 -- takes, and the class on Bortle's scale each stands for.
 local townLights = { "none", "village", "town", "city" }
@@ -428,6 +433,25 @@ return menu.new("Weather", {
         end,
         set = function(word)
             game.sky.setLightPollution(townClass[word] or 1)
+        end,
+    }),
+    -- How stormy the aurora is: game.sky.setAurora("storm"). With Latitude
+    -- 70 a quiet one is overhead; a great storm reaches 45.
+    menu.choice("Aurora", {
+        options = auroraWords,
+        get = function()
+            -- The word nearest the Kp a script said.
+            local kp = game.sky.aurora()
+            local nearest = "none"
+            for _, word in auroraWords do
+                if math.abs(auroraKp[word] - kp) < math.abs(auroraKp[nearest] - kp) then
+                    nearest = word
+                end
+            end
+            return nearest
+        end,
+        set = function(word)
+            game.sky.setAurora(auroraKp[word] or 0)
         end,
     }),
     menu.slider("Snow lying", { max = 0.6, step = 0.05, get = game.weather.snowDepth, set = game.weather.setSnowDepth, format = centimetres, color = "white" }),

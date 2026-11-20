@@ -453,6 +453,16 @@ impl Headless {
         self.effects.set_light_pollution(class);
     }
 
+    /// Says how stormy the aurora is: the Kp index forecasts give, from 0
+    /// (none, the usual) to 9 (a great storm). The ring of light lies round
+    /// the magnetic pole, nearer the equator the stormier: overhead in the
+    /// far north on a quiet night, low in the north from the middle
+    /// latitudes in a great storm, and in a world with no place on the
+    /// Earth as if it were in the far north.
+    pub fn set_aurora(&mut self, kp: f32) {
+        self.effects.set_aurora(kp);
+    }
+
     /// Says how the Milky Way is drawn: `times` its real brightness, from
     /// 0 (not at all) to 10 (1 is the usual), tinted `tint` in linear red,
     /// green and blue, as bright as before (`[1.0, 1.0, 1.0]` is its own

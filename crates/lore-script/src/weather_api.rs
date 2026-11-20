@@ -62,6 +62,18 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "longitude",
     "eclipse",
     "sunCovered",
+    "setAurora",
+    "aurora",
+    "auroraSeen",
+];
+
+/// The words `game.sky.setAurora` takes, and the Kp index each stands for.
+const AURORA_WORDS: [(&str, f32); 5] = [
+    ("none", 0.0),
+    ("quiet", 2.0),
+    ("active", 4.0),
+    ("storm", 6.0),
+    ("great storm", 9.0),
 ];
 
 /// The words `game.sky.setLightPollution` takes, and the class on Bortle's
@@ -323,6 +335,10 @@ pub struct Climate {
     /// the engine has yet to take it.
     light_pollution: Cell<f32>,
     light_pollution_asked: Cell<bool>,
+    /// How stormy the aurora is (Kp, 0 to 9), and whether the engine has
+    /// yet to take it.
+    aurora: Cell<f32>,
+    aurora_asked: Cell<bool>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -362,6 +378,8 @@ impl Default for Climate {
             milky_way_asked: Cell::new(false),
             light_pollution: Cell::new(1.0),
             light_pollution_asked: Cell::new(false),
+            aurora: Cell::new(0.0),
+            aurora_asked: Cell::new(false),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -434,6 +452,12 @@ impl Climate {
         self.milky_way_asked
             .take()
             .then(|| (self.milky_way_brightness.get(), self.milky_way_tint.get()))
+    }
+
+    /// How stormy the aurora is, if the script has said since this was last
+    /// asked.
+    pub(crate) fn take_aurora(&self) -> Option<f32> {
+        self.aurora_asked.take().then(|| self.aurora.get())
     }
 
     /// How much towns light the night sky, on Bortle's scale, if the script
@@ -794,6 +818,73 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     sky.set(
         "longitude",
         lua.create_function(move |_, ()| Ok(climate.place.get().map(|place| place.longitude)))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setAurora",
+        lua.create_function(move |lua, value: Value| {
+            const EXAMPLE: &str = "game.sky.setAurora(\"storm\")";
+            let kp = match &value {
+                Value::String(word) => {
+                    let said = word.to_string_lossy();
+                    let word = said.trim().to_lowercase();
+                    AURORA_WORDS
+                        .iter()
+                        .find(|(name, _)| *name == word)
+                        .map(|(_, kp)| *kp)
+                        .ok_or_else(|| {
+                            fail(
+                                lua,
+                                format!(
+                                    "game.sky.setAurora does not know \"{said}\". Give it \
+                                     \"none\", \"quiet\", \"active\", \"storm\" or \"great \
+                                     storm\", or a number from 0 (none) to 9 (the greatest \
+                                     storm), as forecasts give the Kp index. Write it like \
+                                     this: {EXAMPLE}"
+                                ),
+                            )
+                        })?
+                }
+                _ => number(
+                    lua,
+                    "game.sky.setAurora",
+                    Some(&value),
+                    "how stormy the aurora is: \"none\", \"quiet\", \"active\", \"storm\" \
+                     or \"great storm\", or a number from 0 (none) to 9, the Kp index",
+                    EXAMPLE,
+                )?
+                .clamp(0.0, 9.0),
+            };
+            climate.aurora.set(kp);
+            climate.aurora_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "aurora",
+        lua.create_function(move |_, ()| Ok(f64::from(climate.aurora.get())))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "auroraSeen",
+        lua.create_function(move |_, ()| {
+            let Some(heavens) = climate.heavens() else {
+                return Ok(None);
+            };
+            let Some(aurora) =
+                lore_sky::aurora::seen(climate.aurora.get(), climate.place.get().as_ref())
+            else {
+                return Ok(Some(0.0));
+            };
+            // Lost in the day, and in the dusk until the sun is twelve
+            // degrees down.
+            let sun = heavens.sun[1].clamp(-1.0, 1.0).asin().to_degrees();
+            let dark = ((-4.0 - sun) / 8.0).clamp(0.0, 1.0);
+            let share =
+                aurora.share_seen() * aurora.brightness / lore_sky::aurora::brightness(9.0) * dark;
+            Ok(Some(f64::from(share)))
+        })?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(
@@ -1348,8 +1439,13 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
         "light",
         lua.create_function(move |_, ()| {
             Ok(climate.heavens().map(|heavens| {
+                let aurora =
+                    lore_sky::aurora::seen(climate.aurora.get(), climate.place.get().as_ref())
+                        .map_or(0.0, |aurora| aurora.lux());
                 f64::from(
-                    heavens.ground_lux() + lore_sky::town_glow_lux(climate.light_pollution.get()),
+                    heavens.ground_lux()
+                        + lore_sky::town_glow_lux(climate.light_pollution.get())
+                        + aurora,
                 )
             }))
         })?,
