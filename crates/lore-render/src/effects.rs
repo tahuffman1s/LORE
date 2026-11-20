@@ -282,8 +282,10 @@ pub(crate) struct Effects {
     /// What colour the moon is tinted, as bright as white.
     moon_tint: [f32; 3],
     /// How many stops the eye's night darkening takes from the picture
-    /// (`Eye::night_darkening`), given back to the stars and the moon.
+    /// (`Eye::night_darkening`), given back to the stars, and what the eye
+    /// multiplies the picture by, undone for the moon's face.
     night_darkening: f32,
+    eye_multiplier: f32,
     /// How far rain has raised the still water, in metres.
     rise: f32,
     /// Whether storms send their own bolts to the ground: not when the
@@ -326,6 +328,7 @@ impl Effects {
             moon_size: 1.0,
             moon_tint: [1.0; 3],
             night_darkening: 0.0,
+            eye_multiplier: 1.0,
             rise: 0.0,
             bolts_of_its_own: true,
             tracks: Tracks::new(),
@@ -819,15 +822,26 @@ impl Effects {
     /// picture: the stars and the moon's face are drawn that much brighter,
     /// so that however dark a night is drawn they stand out as an eye used
     /// to the dark sees them.
-    pub(crate) fn set_night_darkening(&mut self, stops: f32) {
+    ///
+    /// `multiplier` is what the eye multiplies the whole picture by: the
+    /// moon's face is drawn against it, so that it is seen at one
+    /// brightness whatever the eye does for the dark round it.
+    pub(crate) fn set_night_darkening(&mut self, stops: f32, multiplier: f32) {
         let stops = if stops.is_finite() {
             stops.clamp(0.0, 20.0)
         } else {
             0.0
         };
+        let multiplier = if multiplier.is_finite() && multiplier > 0.0 {
+            multiplier
+        } else {
+            1.0
+        };
         self.night_darkening = stops;
+        self.eye_multiplier = multiplier;
         if let Some((_, day)) = &mut self.day {
             day.heavens[6][3] = stops.exp2();
+            day.heavens[3][3] = 1.0 / multiplier;
         }
     }
 
@@ -839,6 +853,7 @@ impl Effects {
         );
         day.heavens[2][3] = self.moon_size;
         day.heavens[6][3] = self.night_darkening.exp2();
+        day.heavens[3][3] = 1.0 / self.eye_multiplier;
         day
     }
 

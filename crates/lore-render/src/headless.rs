@@ -844,7 +844,8 @@ impl Headless {
                     self.view.still,
                     (weather, self.effects.flashing()),
                 );
-                self.effects.set_night_darkening(self.eye.night_darkening);
+                self.effects
+                    .set_night_darkening(self.eye.night_darkening, self.eye.multiplier());
             }
             handed_over
         };
