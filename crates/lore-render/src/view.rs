@@ -81,6 +81,8 @@ pub(crate) struct SceneView {
     pub(crate) bounce: Bounce,
     /// The shade in corners and under things.
     pub(crate) shade: Shade,
+    /// Whether the fine shadow where things touch is found.
+    pub(crate) contact: bool,
     /// How much FSR sharpens what it upscales, from 0 to 1.
     pub(crate) sharpness: f32,
     /// Whether what is solid is drawn for its depth before the picture:
@@ -167,6 +169,7 @@ impl SceneView {
             lamp_shadows: LampShadows::default(),
             bounce: Bounce::default(),
             shade: Shade::default(),
+            contact: false,
             sharpness: crate::upscale::SHARPNESS,
             depth_first: true,
         })
@@ -327,6 +330,7 @@ impl SceneView {
             lamp_shadows: self.lamp_shadows,
             bounce: self.bounce,
             shade: self.shade,
+            contact: self.contact,
             depth_first: self.depth_first,
         };
         self.target.kept.set(false);

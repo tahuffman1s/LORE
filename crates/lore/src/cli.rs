@@ -773,6 +773,22 @@ pub fn ambient_occlusion(text: &str) -> Result<lore_render::AmbientOcclusion, St
         })
 }
 
+/// Reads whether things touch their shadows: `on` or `off`.
+///
+/// # Errors
+///
+/// Fails, naming the two, for any other word.
+pub fn contact_shadows(text: &str) -> Result<bool, String> {
+    match text.trim().to_lowercase().as_str() {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(format!(
+            "`{}` is not a contact shadow setting. Use on or off, as in --contact-shadows off",
+            text.trim()
+        )),
+    }
+}
+
 /// Reads a frame-time budget typed in milliseconds, such as `16.6`.
 ///
 /// # Errors
@@ -1310,5 +1326,16 @@ mod tests {
         };
         assert!(warning.contains("shaders/x.wgsl"), "{warning}");
         assert!(warning.contains("fn screen(") && warning.contains("fn surface("));
+    }
+
+    #[test]
+    fn contact_shadows_are_on_or_off_and_anything_else_says_which() {
+        assert_eq!(contact_shadows(" On "), Ok(true));
+        assert_eq!(contact_shadows("off"), Ok(false));
+        let wrong = contact_shadows("yes").unwrap_err();
+        assert!(
+            wrong.contains("`yes`") && wrong.contains("--contact-shadows off"),
+            "{wrong}"
+        );
     }
 }

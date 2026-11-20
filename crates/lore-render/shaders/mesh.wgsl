@@ -72,7 +72,9 @@ struct View {
     // there is no picture of the world to mirror this frame; 1 the world,
     // in the picture kept from the frame before. The third is 1 if this
     // frame's picture is copied before what is see-through is drawn, which
-    // then mirrors that.
+    // then mirrors that. The fourth is how far towards the sun each solid
+    // pixel looks for what touches it and shades it, in metres: 0 for no
+    // contact shadows (`contact.wgsl`).
     walker: vec4<f32>,
     // The still water the eye is in or nearest: how high its surface is,
     // how far apart the points of its grid of depths are, 1 if there is
@@ -1807,7 +1809,14 @@ fn lit(corner: Corner, front: bool, base: vec3<f32>, mixing: Shuffle, painted: P
     let thin = material.emissive.w > 0.0;
     let sun_side = select(1.0, sign(dot(normal, view.towards_sun.xyz) + 0.0001), thin);
     let shade = cloud_shade(corner.world);
-    let sunlit = sunlight(corner.world, normal * sun_side, corner.position.xy)
+    // The shadow picture's, and the fine shadow the picture's own depth
+    // finds where things touch (`contact.wgsl`): what is see-through was
+    // not there when that was found.
+    var shadowed = sunlight(corner.world, normal * sun_side, corner.position.xy);
+    if !see_through {
+        shadowed = min(shadowed, contact_at(corner.position.xy));
+    }
+    let sunlit = shadowed
         * shade.x
         * light_through_water(corner.world);
     let sky = sky_and_slot(corner.world, corner.position.xy);
@@ -2644,4 +2653,5 @@ fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<
 //!include bounce.wgsl
 //!include air.wgsl
 //!include occlusion.wgsl
+//!include contact.wgsl
 //!include skylight.wgsl

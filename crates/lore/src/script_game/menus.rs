@@ -267,6 +267,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             lamp_shadows: lore_render::LampShadows::Low,
             bounce: lore_render::Bounce::Low,
             ambient_occlusion: lore_render::AmbientOcclusion::Low,
+            contact_shadows: false,
             anisotropic_filtering: lore_render::AnisotropicFiltering::X8,
             bloom: 95.0,
             vignette: 95.0,

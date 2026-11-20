@@ -1811,10 +1811,11 @@ declare game: {
     --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
     --- "upscaling" ("off", "native", "quality", "balanced", "performance"
     --- or "ultra-performance"), "vsync" (true or false),
-    --- "frame_rate_limit" (30 to 1000, or 0 for no limit), "reflections"
-    --- and "light_shafts" (true or false), "lamp_shadows", "bounce" and
-    --- "ambient_occlusion" ("off", "low", "medium" or "high") and
-    --- "anisotropic_filtering" (how sharp the ground and walls stay where
+    --- "frame_rate_limit" (30 to 1000, or 0 for no limit), "reflections",
+    --- "light_shafts" and "contact_shadows" (true or false; contact shadows
+    --- let small things touch their shadows in the sun), "lamp_shadows",
+    --- "bounce" and "ambient_occlusion" ("off", "low", "medium" or "high")
+    --- and "anisotropic_filtering" (how sharp the ground and walls stay where
     --- they run away from the player: "off", "2x", "4x", "8x" or "16x");
     --- "bloom", "vignette", "film_grain" and "chromatic_aberration" (how
     --- much of what `game.look` asks for the player sees, 0 to 100: 100 is

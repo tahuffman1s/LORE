@@ -202,6 +202,9 @@ pub struct Renderer {
     /// The shade in corners: see
     /// [`set_ambient_occlusion`](Self::set_ambient_occlusion).
     shade: Shade,
+    /// Whether things touch their shadows: see
+    /// [`set_contact_shadows`](Self::set_contact_shadows).
+    contact_shadows: bool,
     /// What the scene's light is multiplied by before tone mapping: the
     /// player's brightness, and the game's own.
     exposure: f32,
@@ -298,6 +301,7 @@ impl Renderer {
                 quality: AmbientOcclusion::default(),
                 ..Shade::default()
             },
+            contact_shadows: true,
             game_exposure: 1.0,
             look: Fade::default(),
             look_shares: LookShares::default(),
@@ -832,6 +836,19 @@ impl Renderer {
         self.shade = self.shade.said(strength, radius);
     }
 
+    /// Lets things touch their shadows in the sun, or leaves the sun's
+    /// shadows as its shadow pictures alone have them.
+    ///
+    /// A shadow picture cannot hold what is smaller than its pixels (8 mm
+    /// near the eye, 20 cm far off), so a foot, a cup on a table or a
+    /// blade of grass would stand a little apart from its shadow. On (the
+    /// default), each solid pixel looks a metre towards the sun through
+    /// the picture's own depth for what stands in the way. Off costs
+    /// nothing.
+    pub fn set_contact_shadows(&mut self, on: bool) {
+        self.contact_shadows = on;
+    }
+
     /// Lets wet ground, puddles and polished things mirror the world round
     /// them, or only the light of the sky.
     ///
@@ -1100,6 +1117,7 @@ impl Renderer {
             view.lamp_shadows = self.lamp_shadows;
             view.bounce = self.bounce;
             view.shade = self.shade;
+            view.contact = self.contact_shadows;
             view.sharpness = self.sharpness;
 
             let acquired = self.gpu.swapchains().acquire_next_image(

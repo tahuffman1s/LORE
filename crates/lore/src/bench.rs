@@ -65,6 +65,8 @@ pub struct Bench {
     pub bounce: lore_render::Bounce,
     /// How smooth the shade in corners and under things is.
     pub ambient_occlusion: lore_render::AmbientOcclusion,
+    /// Whether things touch their shadows.
+    pub contact_shadows: bool,
 }
 
 impl Default for Bench {
@@ -81,6 +83,7 @@ impl Default for Bench {
             lamp_shadows: lore_render::LampShadows::default(),
             bounce: lore_render::Bounce::default(),
             ambient_occlusion: lore_render::AmbientOcclusion::default(),
+            contact_shadows: true,
         }
     }
 }
@@ -270,6 +273,7 @@ pub fn run(bench: &Bench) -> Result<Report, RenderError> {
     headless.set_lamp_shadows(bench.lamp_shadows);
     headless.set_bounce(bench.bounce);
     headless.set_ambient_occlusion(bench.ambient_occlusion);
+    headless.set_contact_shadows(bench.contact_shadows);
     // The engine's own look, with every part of the last pass at work, so
     // the glow, the grading and each lens touch are all timed.
     headless.set_look(

@@ -141,6 +141,9 @@ pub(crate) struct View {
     pub(crate) bounce: Bounce,
     /// The shade in corners and under things.
     pub(crate) shade: Shade,
+    /// Whether the fine shadow where things touch is found from the depth
+    /// of what is solid (`contact.wgsl`).
+    pub(crate) contact: bool,
     /// Whether what is solid is drawn for its depth before the picture:
     /// always, but that a test may draw without and see the same picture.
     pub(crate) depth_first: bool,
@@ -249,7 +252,11 @@ impl View {
                         (true, true) => 1.0,
                     },
                     if self.copied { 1.0 } else { 0.0 },
-                    0.0,
+                    if self.contact {
+                        occlusion::CONTACT_REACH
+                    } else {
+                        0.0
+                    },
                 ])
                 .chain(water.iter().flatten())
                 .chain(above.flashes.iter().flatten())
@@ -1272,6 +1279,8 @@ impl MeshPipeline {
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             smaller_depth(36),
+            // The contact shadows.
+            smaller_depth(37),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1282,12 +1291,12 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid and
-            // bounce light's list, twenty-six pictures, two written, and
+            // bounce light's list, twenty-seven pictures, two written, and
             // five readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 3,
-                vk::DescriptorType::SAMPLED_IMAGE => 26,
+                vk::DescriptorType::SAMPLED_IMAGE => 27,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 5,
             };
@@ -1991,6 +2000,7 @@ impl MeshPipeline {
                 target.depths.layers[0],
                 target.depths.layers[1],
                 target.depths.layers[2],
+                target.contact.view,
             ]
             .map(|view| {
                 [vk::DescriptorImageInfo::default()
@@ -1999,8 +2009,9 @@ impl MeshPipeline {
             });
             // The copies water looks through, the depth itself, which the
             // light in the air reads once the picture is drawn, and the
-            // shade in corners with the smaller depths it is found from.
-            const BINDINGS: [u32; 9] = [5, 6, 16, 26, 27, 28, 29, 30, 31];
+            // shade in corners with the smaller depths it is found from,
+            // and the contact shadows.
+            const BINDINGS: [u32; 10] = [5, 6, 16, 26, 27, 28, 29, 30, 31, 37];
             let writes: [_; BINDINGS.len()] = std::array::from_fn(|at| {
                 vk::WriteDescriptorSet::default()
                     .dst_set(*view_set)
@@ -2131,8 +2142,12 @@ impl MeshPipeline {
         let depth_first = view.depth_first
             && meshes.is_some_and(|meshes| meshes.buffers.is_some() && meshes.see_through_from > 0);
         let shading = view.shade.on() && depth_first;
+        // The fine shadow where things touch is found from the same depth,
+        // and only the sun's light is dimmed by it.
+        let contact = view.contact && depth_first;
         let view = &View {
             copied: copies,
+            contact,
             shade: if shading {
                 view.shade
             } else {
@@ -2384,10 +2399,17 @@ impl MeshPipeline {
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
                 self.draw_depths(commands, meshes, surfaces, &seen);
                 device.cmd_end_rendering(commands);
-                if shading {
-                    self.shade
-                        .record(device, commands, self.layout, *view_set, target);
-                }
+                self.shade.record(
+                    device,
+                    commands,
+                    self.layout,
+                    *view_set,
+                    target,
+                    occlusion::Asked {
+                        shade: shading,
+                        contact,
+                    },
+                );
             }
             device.cmd_begin_rendering(commands, &rendering);
             device.cmd_set_viewport(commands, 0, &[viewport]);
@@ -4386,6 +4408,7 @@ mod tests {
                 strength: 1.25,
                 reach: 0.75,
             },
+            contact: true,
             depth_first: true,
             copied: true,
             shafts: false,
@@ -4498,6 +4521,11 @@ mod tests {
         assert_eq!(number(&bytes, 386), 9.0);
         assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
         assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
+        assert_eq!(
+            number(&bytes, 391),
+            occlusion::CONTACT_REACH,
+            "how far towards the sun contact shadows are looked for"
+        );
         assert_eq!(
             number(&bytes, 389),
             1.0,
