@@ -1357,7 +1357,8 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
     let noise = scattered(pixel + view.shadows.w * vec2<f32>(5.588238, 3.141593));
     let turn = noise * 6.2831853;
 
-    for (var picture = 0; picture < SHADOW_PICTURES; picture++) {
+    // The near pictures, with soft edges.
+    for (var picture = 0; picture < SHADOW_PICTURES - 1; picture++) {
         let metres_a_pixel = view.shadow_reach[picture].x;
         let depth_metres = view.shadow_reach[picture].y;
         // Lifted off the surface a little, so that it does not shadow itself.
@@ -1412,14 +1413,29 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
                 shadow_map, shadow_sampler, uv + beside * edge, picture, place.z - allowed,
             );
         }
-        var sunlit = reached / f32(EDGE_LOOKS);
-        // Shadows fade out towards the end of the widest picture.
-        if picture == SHADOW_PICTURES - 1 {
-            sunlit = mix(1.0, sunlit, clamp((inside - 0.02) / 0.1, 0.0, 1.0));
-        }
-        return sunlit;
+        return reached / f32(EDGE_LOOKS);
     }
-    return 1.0;
+    return far_sunlight(world, normal, facing, slope);
+}
+
+// The same past the near pictures, from the widest, whose pixels are wider
+// than any soft edge: one smoothed look, and shadows fade out towards its
+// end.
+fn far_sunlight(world: vec3<f32>, normal: vec3<f32>, facing: f32, slope: f32) -> f32 {
+    let picture = SHADOW_PICTURES - 1;
+    let metres_a_pixel = view.shadow_reach[picture].x;
+    let lifted = world + normal * metres_a_pixel * (1.0 + 2.0 * (1.0 - facing));
+    let place = view.shadow_from_world[picture] * vec4<f32>(lifted, 1.0);
+    let uv = vec2<f32>(place.x * 0.5 + 0.5, 0.5 - place.y * 0.5);
+    let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+    if inside < 0.02 || place.z <= 0.0 || place.z >= 1.0 {
+        return 1.0;
+    }
+    let allowed = metres_a_pixel * (1.0 + slope) / view.shadow_reach[picture].y;
+    let sunlit = textureSampleCompareLevel(
+        shadow_map, shadow_sampler, uv, picture, place.z - allowed,
+    );
+    return mix(1.0, sunlit, clamp((inside - 0.02) / 0.1, 0.0, 1.0));
 }
 
 // The depth the picture from above holds at `at` (from 0 to 1 across it),
