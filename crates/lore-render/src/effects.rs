@@ -277,6 +277,8 @@ pub(crate) struct Effects {
     /// Where the world lies and on what day its clock started, if the
     /// game has said: with none, the sky is the made-up one of [`Day::at`].
     place: Option<SkyPlace>,
+    /// How large the moon is drawn, against its real size.
+    moon_size: f32,
     /// How far rain has raised the still water, in metres.
     rise: f32,
     /// Whether storms send their own bolts to the ground: not when the
@@ -316,6 +318,7 @@ impl Effects {
             cold: [0.0; 2],
             day: None,
             place: None,
+            moon_size: 1.0,
             rise: 0.0,
             bolts_of_its_own: true,
             tracks: Tracks::new(),
@@ -769,11 +772,31 @@ impl Effects {
         }
     }
 
+    /// Says how large the moon is drawn, against its real size (half a
+    /// degree across): from 1 to 10.
+    pub(crate) fn set_moon_size(&mut self, size: f32) {
+        let size = if size.is_finite() {
+            size.clamp(1.0, 10.0)
+        } else {
+            1.0
+        };
+        if size == self.moon_size {
+            return;
+        }
+        self.moon_size = size;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
     /// The sky `hour` hours after the first midnight.
     fn sky_at(&self, hour: f64) -> Day {
-        self.place
+        let mut day = self
+            .place
             .as_ref()
-            .map_or_else(|| Day::at(hour), |place| Day::over(place, hour))
+            .map_or_else(|| Day::at(hour), |place| Day::over(place, hour));
+        day.heavens[2][3] = self.moon_size;
+        day
     }
 
     /// The sky at the hour it is, if the game has said the hour.

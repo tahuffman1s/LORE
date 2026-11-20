@@ -44,6 +44,8 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "starNear",
     "starNames",
     "light",
+    "setMoonSize",
+    "moonSize",
 ];
 
 /// The real sky a game gets when it says only some of where and when:
@@ -249,6 +251,10 @@ pub struct Climate {
     /// whether that has changed since the engine last took it.
     place: Cell<Option<SkyPlace>>,
     place_changed: Cell<bool>,
+    /// How large the moon is drawn against its real size, if the script
+    /// has said and the engine has not yet taken it.
+    moon_size: Cell<f32>,
+    moon_size_asked: Cell<Option<f32>>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -277,6 +283,8 @@ impl Default for Climate {
             hour_changed: Cell::new(false),
             place: Cell::new(None),
             place_changed: Cell::new(false),
+            moon_size: Cell::new(1.0),
+            moon_size_asked: Cell::new(None),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -335,6 +343,10 @@ impl Climate {
 
     /// Where the world lies and when its clock started, if it has changed
     /// since this was last asked.
+    pub(crate) fn take_moon_size(&self) -> Option<f32> {
+        self.moon_size_asked.take()
+    }
+
     pub(crate) fn take_sky_place(&self) -> Option<SkyPlace> {
         self.place_changed
             .take()
@@ -940,6 +952,29 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             let among = heavens.among_stars([x / long, y / long, z / long]);
             Ok(lore_sky::stars::name_near(among, degrees))
         })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setMoonSize",
+        lua.create_function(move |lua, value: Value| {
+            let size = number(
+                lua,
+                "game.sky.setMoonSize",
+                Some(&value),
+                "how many times its real size the moon is drawn, from 1 (as it is, half a degree \
+                 across, about eight pixels high on a 1080p screen) to 10",
+                "game.sky.setMoonSize(3)",
+            )?
+            .clamp(1.0, 10.0);
+            climate.moon_size.set(size);
+            climate.moon_size_asked.set(Some(size));
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "moonSize",
+        lua.create_function(move |_, ()| Ok(f64::from(climate.moon_size.get())))?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(

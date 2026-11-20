@@ -1523,6 +1523,21 @@ declare game: {
         --- game.sky.sunHeight is.
         --- Example: local dark = (game.sky.light() or math.huge) < 0.05
         light: () -> number?,
+
+        --- Says how large the moon is drawn: how many times its real size,
+        --- from 1 (as it is, the usual: half a degree across, about eight
+        --- pixels high on a 1080p screen at the usual view) to 10. Painters
+        --- and films draw it larger, as the eye takes it to be near the
+        --- horizon. Below 1 is taken as 1 and above 10 as 10; moonSize()
+        --- gives the size used. Only the picture grows: the light the moon
+        --- gives the land, and game.sky.light(), do not change. Kept when
+        --- the script is read again; setMoonSize(1) puts it back.
+        --- Example: game.sky.setMoonSize(3)
+        setMoonSize: (times: number) -> (),
+
+        --- How large the moon is drawn, as setMoonSize takes it.
+        --- Example: local size = game.sky.moonSize()
+        moonSize: () -> number,
     },
 
     --- The weather: say it in one word with game.weather.set, or a number

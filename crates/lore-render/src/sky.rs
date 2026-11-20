@@ -279,8 +279,10 @@ pub(crate) struct Day {
     /// What the shader is told of the heavens, a row each: towards the sun
     /// itself, and how far the night has come from 0 to 1; towards the
     /// moon, and how far the stars have turned, in radians; the pole they
-    /// turn about; the colour of the sun's own disc, and 1; the light of
-    /// the night sky, and how bright the moon is; where the sky's equator
+    /// turn about, and how large the moon is drawn against its real size;
+    /// the colour of the sun's own disc, and 1; the light of the night sky,
+    /// and how bright the lit part of the moon's face is against the whole
+    /// at full ([`lore_sky::Heavens::moon_surface`]); where the sky's equator
     /// crosses the meridian with the stars turned 0, and how bright a lux
     /// of starlight is drawn.
     pub(crate) heavens: [[f32; 4]; 6],
@@ -327,9 +329,6 @@ impl Day {
         let heavens = &heavens;
         let usual = Lighting::default();
         let noon = usual.towards_sun;
-        // How much of the moon's face the sun lights, as seen from here.
-        let between: f32 = (0..3).map(|axis| sun[axis] * moon[axis]).sum();
-        let lit = (1.0 - between) * 0.5;
         let moon_up = eased(-0.03, 0.1, moon[1]);
         // How much of a full moon's light this moon gives, after the air:
         // a half moon about a tenth.
@@ -445,14 +444,17 @@ impl Day {
             heavens: [
                 [sun[0], sun[1], sun[2], night],
                 [moon[0], moon[1], moon[2], turn],
-                [pole[0], pole[1], pole[2], 0.0],
+                // The moon's size, against its real one: a game's to say
+                // (`Effects::set_moon_size` puts it here).
+                [pole[0], pole[1], pole[2], 1.0],
                 [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
                 [
                     night_glow[0],
                     night_glow[1],
                     night_glow[2],
-                    // How bright the moon's face is drawn (#481 makes it real).
-                    grey(usual.sky) * 1.6 * (1.0 - 0.45 * lit * moon_up),
+                    // How bright the lit part of the moon's face is, against
+                    // the whole of it at full moon.
+                    heavens.moon_surface(),
                 ],
                 [meridian[0], meridian[1], meridian[2], per_lux],
             ],

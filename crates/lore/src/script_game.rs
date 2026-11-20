@@ -376,6 +376,9 @@ impl Game for ScriptGame {
         if let Some(rumble) = self.host.take_rumble() {
             frame.rumble(rumble);
         }
+        if let Some(size) = self.host.take_moon_size() {
+            frame.set_moon_size(size);
+        }
         if let Some(place) = self.host.take_sky_place() {
             frame.set_sky_place(place);
         }

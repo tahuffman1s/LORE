@@ -391,10 +391,42 @@ impl Heavens {
     /// angle and 4e-9 times its fourth power).
     #[must_use]
     pub fn moon_share(&self) -> f32 {
-        let between: f32 = (0..3).map(|axis| self.sun[axis] * self.moon[axis]).sum();
-        // The angle at the moon between the sun and the Earth.
-        let phase = 180.0 - between.clamp(-1.0, 1.0).acos().to_degrees();
+        let phase = self.moon_phase_angle();
         10f32.powf(-0.4 * (0.026 * phase + 4e-9 * phase.powi(4)))
+    }
+
+    /// The angle at the moon between the sun and the Earth, in degrees: 0
+    /// at full moon, 180 at new.
+    #[must_use]
+    pub fn moon_phase_angle(&self) -> f32 {
+        let between: f32 = (0..3).map(|axis| self.sun[axis] * self.moon[axis]).sum();
+        180.0 - between.clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    /// How bright the sunlit part of the moon's face is at its phase,
+    /// against the whole face at full moon, where a point of it is lit
+    /// square on and seen square on.
+    ///
+    /// Moon dust sends light back as Lommel and Seeliger's law has it, a
+    /// point twice the sun's slant over the sum of the sun's and the
+    /// eye's; over the whole face that comes to 1 - sin(α/2) tan(α/2)
+    /// ln(cot(α/4)) of full at phase angle α. The rest of the phase law
+    /// ([`moon_share`](Self::moon_share)) is the moon's own: its hills'
+    /// shadows, and the dust's glare straight back towards the sun at
+    /// full. So each point is drawn by Lommel and Seeliger's law times
+    /// this.
+    #[must_use]
+    pub fn moon_surface(&self) -> f32 {
+        // Past 150 degrees, a crescent too thin to matter, the share of
+        // the face lit falls faster than f32 can follow: held there.
+        let half = self.moon_phase_angle().min(150.0).to_radians() * 0.5;
+        let quarter = half * 0.5;
+        let face = if quarter <= 1e-4 {
+            1.0
+        } else {
+            1.0 - half.sin() * half.tan() * (1.0 / quarter.tan()).ln()
+        };
+        self.moon_share() / face.max(1e-3)
     }
 
     /// The light the moon gives a surface facing it, in lux, after the air
@@ -682,6 +714,14 @@ mod tests {
             (0.1..0.3).contains(&full.ground_lux()),
             "{}",
             full.ground_lux()
+        );
+        // At full moon a point of the face is as bright as the face is;
+        // at half, the lit half is brighter than a tenth would say, as its
+        // light is shared over half the face.
+        assert!(
+            (0.85..1.1).contains(&full.moon_surface()),
+            "{}",
+            full.moon_surface()
         );
         // A half moon gives about a tenth of a full one.
         let half = SkyPlace {
