@@ -2120,7 +2120,7 @@ impl MeshPipeline {
                 [red, green, blue, 0.0],
                 [0.0; 4],
                 [1.0, 0.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0],
             ],
             |day| day.heavens,
         );
@@ -2310,11 +2310,16 @@ impl MeshPipeline {
         if let Some(skylight) = &self.skylight
             && let Ok(mut turns) = skylight.turns.try_borrow_mut()
         {
+            // The light of the sky has no stars or moon in it, so how much
+            // brighter they are drawn, which moves with the eye every
+            // frame, is held still: it would draw the cube again each time.
+            let mut held = heavens;
+            held[6][3] = 1.0;
             let now = sky.map(|sky| Heavens {
                 lighting,
                 sky: *sky,
                 weather,
-                heavens,
+                heavens: held,
                 drift: view.time,
                 eye: view.eye,
             });

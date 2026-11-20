@@ -1143,6 +1143,7 @@ impl Renderer {
                     false,
                     (weather, slot.flashed.get()),
                 );
+                self.effects.set_night_darkening(self.eye.night_darkening);
             }
             self.shaders.start_frame(
                 self.next,
