@@ -191,6 +191,10 @@ pub(crate) struct SceneTarget {
     /// (`occlusion.rs`). Only filled in a frame that asks for shade.
     pub(crate) shade_found: Picture,
     pub(crate) shade: Picture,
+    /// How much of the sun reaches each solid pixel past what touches it
+    /// (`contact.wgsl`). Only filled in a frame that asks for contact
+    /// shadows.
+    pub(crate) contact: Picture,
     /// Smaller copies of the depth, each half as wide and as high as the
     /// one before, which the shade reads its far steps from.
     pub(crate) depths: occlusion::SmallerDepths,
@@ -242,6 +246,7 @@ impl SceneTarget {
             behind_depth: Picture::null(),
             shade_found: Picture::null(),
             shade: Picture::null(),
+            contact: Picture::null(),
             depths: occlusion::SmallerDepths::null(),
             kept: Cell::new(false),
             fluid: OnceCell::new(),
@@ -288,6 +293,7 @@ impl SceneTarget {
         for (picture, format) in [
             (&mut target.shade_found, occlusion::FOUND_FORMAT),
             (&mut target.shade, occlusion::FORMAT),
+            (&mut target.contact, occlusion::CONTACT_FORMAT),
         ] {
             picture.create(
                 gpu,
@@ -303,12 +309,13 @@ impl SceneTarget {
         // copies at hand, in frames before any has been filled too: they
         // are made ready to be read from the start, holding nothing yet.
         // So is the shade, which every solid surface's shader names, and
-        // what it is found from.
+        // what it is found from, and the contact shadows.
         let ready = [
             (target.behind.image, COLOUR),
             (target.behind_depth.image, DEPTH),
             (target.shade_found.image, COLOUR),
             (target.shade.image, COLOUR),
+            (target.contact.image, COLOUR),
             (target.depths.image, occlusion::SmallerDepths::whole()),
         ]
         .map(|(image, range)| {
@@ -359,6 +366,7 @@ impl Drop for SceneTarget {
             self.behind_depth.destroy(&self.gpu);
             self.shade_found.destroy(&self.gpu);
             self.shade.destroy(&self.gpu);
+            self.contact.destroy(&self.gpu);
             self.depths.destroy(&self.gpu);
         }
     }

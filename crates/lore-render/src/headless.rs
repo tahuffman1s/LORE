@@ -112,6 +112,9 @@ pub struct Headless {
     filtering: AnisotropicFiltering,
     /// The shade in corners, as for a window but off to begin with.
     shade: Shade,
+    /// Whether things touch their shadows, as for a window but off to
+    /// begin with.
+    contact_shadows: bool,
     /// How the picture is graded: [`Look::plain`] to begin with, unlike a
     /// window, so that tests see the colours a scene was given.
     look: Fade,
@@ -226,6 +229,7 @@ impl Headless {
             bounce: Bounce::default(),
             filtering: AnisotropicFiltering::default(),
             shade: Shade::default(),
+            contact_shadows: false,
             look: Fade::new(Look::plain()),
             look_shares: LookShares::default(),
             frame_count: 0,
@@ -561,6 +565,13 @@ impl Headless {
         self.shade = self.shade.said(strength, radius);
     }
 
+    /// Lets things touch their shadows in the sun, as
+    /// [`Renderer::set_contact_shadows`](crate::Renderer::set_contact_shadows)
+    /// says. Off to begin with, unlike a window, as the shade in corners is.
+    pub fn set_contact_shadows(&mut self, on: bool) {
+        self.contact_shadows = on;
+    }
+
     /// Grades the picture with `look`, fading to it over `seconds` of the
     /// picture's time, as [`Renderer::set_look`](crate::Renderer::set_look)
     /// does. [`Look::plain`] to begin with, unlike a window: pass
@@ -697,6 +708,7 @@ impl Headless {
             );
             self.view.measured = finished && self.eye.adaptation.adapts();
             self.view.shafts = self.light_shafts;
+            self.view.contact = self.contact_shadows;
             self.view.lamp_shadows = self.lamp_shadows;
             self.view.bounce = self.bounce;
             self.view.shade = self.shade;
@@ -2173,6 +2185,157 @@ mod tests {
                 "{quality:?} finds {other} at the wall's foot, medium {floor}, none {floor_plain}"
             );
         }
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    /// [`wall_on_a_floor`]'s floor with no wall, and a post four
+    /// centimetres thick and a metre high standing on it at x 0, z -9,
+    /// whose shadow the usual sun throws towards -z and -x.
+    fn post_on_a_floor() -> Scene {
+        use lore_assets::{Instance, Mesh, MeshPart};
+
+        let mut scene = wall_on_a_floor(0);
+        scene.instances.retain(|instance| instance.mesh != 1);
+        let (x, z, half, high) = (0.0, -9.0, 0.02, 1.0);
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+        let mut indices = Vec::new();
+        // Four sides and the top, each a square of its own facing out.
+        let sides: [([f32; 3], [[f32; 3]; 4]); 5] = [
+            (
+                [1.0, 0.0, 0.0],
+                [
+                    [1.0, 0.0, -1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 1.0, -1.0],
+                ],
+            ),
+            (
+                [-1.0, 0.0, 0.0],
+                [
+                    [-1.0, 0.0, 1.0],
+                    [-1.0, 0.0, -1.0],
+                    [-1.0, 1.0, -1.0],
+                    [-1.0, 1.0, 1.0],
+                ],
+            ),
+            (
+                [0.0, 0.0, 1.0],
+                [
+                    [1.0, 0.0, 1.0],
+                    [-1.0, 0.0, 1.0],
+                    [-1.0, 1.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+            ),
+            (
+                [0.0, 0.0, -1.0],
+                [
+                    [-1.0, 0.0, -1.0],
+                    [1.0, 0.0, -1.0],
+                    [1.0, 1.0, -1.0],
+                    [-1.0, 1.0, -1.0],
+                ],
+            ),
+            (
+                [0.0, 1.0, 0.0],
+                [
+                    [-1.0, 1.0, -1.0],
+                    [1.0, 1.0, -1.0],
+                    [1.0, 1.0, 1.0],
+                    [-1.0, 1.0, 1.0],
+                ],
+            ),
+        ];
+        for (normal, corners) in sides {
+            let first = u32::try_from(positions.len()).unwrap();
+            for [cx, cy, cz] in corners {
+                positions.push([x + cx * half, cy * high, z + cz * half]);
+                normals.push(normal);
+            }
+            indices.extend([0, 1, 2, 0, 2, 3].map(|corner| first + corner));
+        }
+        scene.meshes.push(Mesh {
+            name: None,
+            parts: vec![MeshPart {
+                positions,
+                normals,
+                indices,
+                material: 0,
+                ..MeshPart::default()
+            }],
+        });
+        let mut transform = [[0.0; 4]; 4];
+        for (axis, column) in transform.iter_mut().enumerate() {
+            column[axis] = 1.0;
+        }
+        scene.instances.push(Instance {
+            mesh: 2,
+            transform,
+            mirrored: false,
+            name: None,
+            extras: None,
+        });
+        scene
+    }
+
+    /// The sum of red, green and blue over a whole picture.
+    fn all_light(picture: &[u8]) -> i64 {
+        picture
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| i64::from(pixel[0]) + i64::from(pixel[1]) + i64::from(pixel[2]))
+            .sum()
+    }
+
+    #[test]
+    fn contact_shadows_darken_where_a_thing_touches_and_nowhere_else() {
+        let Some(mut headless) = headless(256, 144) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_bounce(Bounce::Off);
+        // A wall and a floor that both face the sun cast nothing on each
+        // other: the walk finds nothing, and the picture is as it was, bit
+        // for bit, with no surface shadowing itself.
+        let camera = at_the_wall();
+        headless.set_scene(&wall_on_a_floor(0)).unwrap();
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_contact_shadows(true);
+        assert!(
+            headless.screenshot(&camera).unwrap() == plain,
+            "contact shadows were found where nothing casts any"
+        );
+        // A thin post, seen from the side its shadow falls on: the floor
+        // where its shadow meets its foot is darker, nothing is lighter,
+        // and the same view gives the same picture.
+        let camera = Camera {
+            position: [-1.2, 1.0, -11.0],
+            yaw: std::f32::consts::PI + 0.6,
+            pitch: -0.45,
+            ..Camera::default()
+        };
+        headless.set_scene(&post_on_a_floor()).unwrap();
+        headless.set_contact_shadows(false);
+        let plain = headless.screenshot(&camera).unwrap();
+        headless.set_contact_shadows(true);
+        let touched = headless.screenshot(&camera).unwrap();
+        assert!(headless.screenshot(&camera).unwrap() == touched);
+        let lighter = plain
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(touched.as_chunks::<4>().0)
+            .filter(|(before, after)| (0..3).any(|channel| after[channel] > before[channel]))
+            .count();
+        assert_eq!(lighter, 0, "contact shadows made {lighter} pixels lighter");
+        assert!(
+            all_light(&touched) < all_light(&plain),
+            "no contact shadow was found at the post's foot"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

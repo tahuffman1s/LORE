@@ -442,6 +442,54 @@ over four runs each, taken in turn.
 Not done yet: light taken from the open side (bent normals, #442), and
 the one bounce of light the hidden sectors could give (#443).
 
+### Things touch their shadows (#338)
+
+A shadow picture cannot hold what is smaller than its pixels: 8 mm near
+the eye, 20 cm far off, and each point is lifted a pixel or more off its
+surface before it is compared, so that it does not shadow itself. So a
+foot, a cup on a table, a leaf over the leaf under it and the foot of a
+drainpipe stand a little apart from their shadows. The picture's own depth
+holds that detail (`contact.wgsl`, Bend Studio's screen-space shadows in
+Days Gone, 2023).
+
+- **The walk.** After the depth pass, each solid pixel walks a metre
+  towards the sun in 16 steps, closer together near the pixel, and reads
+  the depth where each step is drawn. A thing drawn in front of a step,
+  by more than a thousandth of its distance (the pixel's own surface, read
+  a little off the line) and by less than 20 cm and a centimetre for each
+  ten metres off (more is a thing nearer the eye with a gap behind it),
+  shadows the pixel. What is found near the end of the walk shadows less,
+  so the shadow ends softly.
+- The walk starts a pixel and a half off the surface, which faces the way
+  the depth round it says (as for the shade in corners); a surface turned
+  from the sun is not walked from. Its two ends are placed on the picture
+  once, and each step is the share of the way between them, so a step
+  costs a read and a division. It takes as many steps as it crosses
+  pixels, up to 16, and none when it crosses fewer than 2.
+- The first step is placed differently in each pixel, and each frame when
+  the upscaler mixes frames, which then makes an even edge of it, as it
+  does of the sun's soft edges. It fades out near the picture's edge,
+  where what would cast is off the picture.
+- **What it dims.** Only the sun's light: the less of the shadow picture's
+  and the walk's (they see the same things, so they are not multiplied).
+  What is see-through is drawn after, and is not dimmed. Under still water
+  nothing is walked: the light there was bent at the surface, which a
+  straight walk misses (it found a second shadow of a lily pad beside the
+  first), and `light_through_water` says what reaches the bed.
+- A player's setting, "Contact shadows", on to begin with; `lore bench
+  --contact-shadows off` measures without it. It is found whenever the
+  depth is drawn first, whether or not the shade in corners is.
+
+Cost, the benchmark's blocks, the graphics card's part of a usual frame,
+RX 7800 XT, three runs each way: 5.58 ms off and 6.06 ms on at 3840×2160
+with no upscaling; 1.71 and 1.77 ms at 1280×720. Of the 0.48 ms at 4K,
+0.07 ms is the pass with nothing in it, about 0.2 ms placing the walk and
+the way the surface faces, and 0.25 ms the walk; 12 steps saved 0.03 ms,
+and holding the walk to a twentieth of the picture's height, as Bend's
+fixed count of pixels would, saved nothing, so neither was kept. On
+lavapipe 65.5 to 69.3 ms on against 66.0 to 66.5 ms off: within its
+noise.
+
 ### The sky's light (#127)
 
 What a matte surface gets from all round and what a rough or glossy one
@@ -605,10 +653,10 @@ lookup texture for a look made in a colour grading program.
 
 ## What comes next (#401)
 
-1. **Screen-space light**: the sun's contact shadows, found in the same
-   depth (#338). And the visibility bitmask already finds which sectors
-   are hidden: lighting each hidden sector with what hides it gives one
-   bounce of fine detail the probes are too far apart for.
+1. **Screen-space light**: the visibility bitmask already finds which
+   sectors are hidden: lighting each hidden sector with what hides it
+   gives one bounce of fine detail the probes are too far apart for
+   (#443).
 2. Emissive surfaces in nits, drawn with `per_lux` like lamps, so a bulb's
    glass glows only while it is lit and as bright as it should, and lights
    what is round it through the probes.

@@ -316,6 +316,11 @@ settings! {
     /// smoother shade, each slower than the one before.
     ambient_occlusion: AmbientOcclusion = AmbientOcclusion::Medium,
         Shape::Choice(AMBIENT_OCCLUSION), "Graphics", "Ambient occlusion";
+    /// true lets things touch their shadows in the sun: a foot on the
+    /// ground, a cup on a table, a blade of grass, all finer than the
+    /// sun's shadows can hold by themselves. false leaves a sliver of light
+    /// between them, which is a little faster.
+    contact_shadows: bool = true, Shape::Toggle, "Graphics", "Contact shadows";
     /// How sharp the ground, roads and walls look where they run away
     /// from you (anisotropic filtering). "off" blurs them a few steps
     /// ahead; "2x", "4x", "8x" and "16x" each keep them sharp about twice
@@ -934,6 +939,7 @@ mod tests {
             lamp_shadows: LampShadows::High,
             bounce: Bounce::Low,
             ambient_occlusion: AmbientOcclusion::Low,
+            contact_shadows: false,
             anisotropic_filtering: AnisotropicFiltering::X4,
             bloom: 50.0,
             vignette: 0.0,
@@ -1021,8 +1027,8 @@ mod tests {
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
                  `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
-                 `ambient_occlusion`, `anisotropic_filtering`, `bloom`, `vignette`, \
-                 `film_grain`, `chromatic_aberration` and `sharpening`.",
+                 `ambient_occlusion`, `contact_shadows`, `anisotropic_filtering`, `bloom`, \
+                 `vignette`, `film_grain`, `chromatic_aberration` and `sharpening`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",
                 "line 6: `upscaling` must be one of `off`, `native`, `quality`, `balanced`, \
                  `performance` or `ultra-performance`, in quotes, so it stays \"quality\".",

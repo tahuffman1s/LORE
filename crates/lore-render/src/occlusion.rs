@@ -141,6 +141,14 @@ pub(crate) const FOUND_FORMAT: vk::Format = vk::Format::R32G32_SFLOAT;
 /// The smoothed share, as the picture reads it: 256 steps are finer than
 /// an eye tells shade apart.
 pub(crate) const FORMAT: vk::Format = vk::Format::R8_UNORM;
+/// How much of the sun reaches each solid pixel by the walk towards it that
+/// finds contact shadows (`contact.wgsl`), in the same steps.
+pub(crate) const CONTACT_FORMAT: vk::Format = vk::Format::R8_UNORM;
+/// How far towards the sun each solid pixel looks for what touches it, in
+/// metres: about what the nearest shadow picture's pixels miss, a foot on
+/// the ground or a cup on a table, and short enough that what is off the
+/// picture is rarely what would cast.
+pub(crate) const CONTACT_REACH: f32 = 1.0;
 
 /// Makes a pipeline that draws mesh parts for their depth alone, before the
 /// picture: the same points, placed by the same function `vertex` as the
@@ -390,14 +398,25 @@ impl SmallerDepths {
     }
 }
 
+/// What is found from the depth of what is solid in one frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Asked {
+    /// The shade in corners and under things.
+    pub(crate) shade: bool,
+    /// The fine shadow where things touch.
+    pub(crate) contact: bool,
+}
+
 /// The pipelines that draw depth alone (solid, then cut-out), those that
 /// make each smaller copy of the depth from the one before, then the two
-/// that find the shade and smooth it.
+/// that find the shade and smooth it, and the one that finds contact
+/// shadows.
 pub(crate) struct Pipelines {
     pub(crate) depth: [vk::Pipeline; 2],
     smaller: [vk::Pipeline; SMALLER],
     pub(crate) find: vk::Pipeline,
     pub(crate) smooth: vk::Pipeline,
+    pub(crate) contact: vk::Pipeline,
 }
 
 impl Pipelines {
@@ -407,6 +426,7 @@ impl Pipelines {
             smaller: [vk::Pipeline::null(); SMALLER],
             find: vk::Pipeline::null(),
             smooth: vk::Pipeline::null(),
+            contact: vk::Pipeline::null(),
         }
     }
 
@@ -472,6 +492,7 @@ impl Pipelines {
             (c"fragment_depth_sixteenth", SMALLER_FORMAT, sixteenth),
             (c"fragment_occlusion", FOUND_FORMAT, &mut self.find),
             (c"fragment_occlusion_smooth", FORMAT, &mut self.smooth),
+            (c"fragment_contact", CONTACT_FORMAT, &mut self.contact),
         ] {
             let stages = [
                 vk::PipelineShaderStageCreateInfo::default()
@@ -516,13 +537,15 @@ impl Pipelines {
             }
             device.destroy_pipeline(self.find, None);
             device.destroy_pipeline(self.smooth, None);
+            device.destroy_pipeline(self.contact, None);
         }
     }
 
-    /// Records finding the shade from `target`'s depth, which holds what
-    /// is solid and is in the state it is drawn into, and smoothing it
-    /// into the picture the mesh shader reads. The depth is left as it
-    /// was found, in the state it is drawn into.
+    /// Records what is found from `target`'s depth, which holds what is
+    /// solid and is in the state it is drawn into: the shade, found and
+    /// smoothed into the picture the mesh shader reads, and the contact
+    /// shadows, as far as `asked` asks for each. The depth is left as it was found,
+    /// in the state it is drawn into.
     ///
     /// # Safety
     ///
@@ -537,7 +560,12 @@ impl Pipelines {
         layout: vk::PipelineLayout,
         set: vk::DescriptorSet,
         target: &SceneTarget,
+        asked: Asked,
     ) {
+        let Asked { shade, contact } = asked;
+        if !shade && !contact {
+            return;
+        }
         let depth_stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
             | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
         let reading = vk::PipelineStageFlags2::FRAGMENT_SHADER;
@@ -646,40 +674,54 @@ impl Pipelines {
         // SAFETY: the caller guarantees the command buffer, the target and
         // the states its pictures are in.
         unsafe {
-            // Each smaller depth is made from the one before, which is
-            // ready to be read by then; while one is drawn into, the
-            // function that draws it names only the one it reads, by a
-            // view of that layer alone.
-            let depths = &target.depths;
+            // Each pass is begun once what it reads is ready: `before` is
+            // the last barrier not yet sent, which readies what was drawn
+            // last (to begin with, the depth).
             let mut before = depth_to_read;
-            for ((layer, view), pipeline) in (0..).zip(depths.layers).zip(self.smaller) {
-                let range = SmallerDepths::range(layer);
+            if shade {
+                // Each smaller depth is made from the one before, which is
+                // ready to be read by then; while one is drawn into, the
+                // function that draws it names only the one it reads, by a
+                // view of that layer alone.
+                let depths = &target.depths;
+                for ((layer, view), pipeline) in (0..).zip(depths.layers).zip(self.smaller) {
+                    let range = SmallerDepths::range(layer);
+                    device.cmd_pipeline_barrier2(
+                        commands,
+                        &vk::DependencyInfo::default()
+                            .image_memory_barriers(&[before, to_write_part(depths.image, range)]),
+                    );
+                    pass(pipeline, view, smaller(target.extent, layer + 1));
+                    before = to_read_part(depths.image, range);
+                }
                 device.cmd_pipeline_barrier2(
                     commands,
                     &vk::DependencyInfo::default()
-                        .image_memory_barriers(&[before, to_write_part(depths.image, range)]),
+                        .image_memory_barriers(&[before, to_write(target.shade_found.image)]),
                 );
-                pass(pipeline, view, smaller(target.extent, layer + 1));
-                before = to_read_part(depths.image, range);
+                pass(self.find, target.shade_found.view, target.extent);
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default().image_memory_barriers(&[
+                        to_read(target.shade_found.image),
+                        to_write(target.shade.image),
+                    ]),
+                );
+                pass(self.smooth, target.shade.view, target.extent);
+                before = to_read(target.shade.image);
+            }
+            if contact {
+                device.cmd_pipeline_barrier2(
+                    commands,
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&[before, to_write(target.contact.image)]),
+                );
+                pass(self.contact, target.contact.view, target.extent);
+                before = to_read(target.contact.image);
             }
             device.cmd_pipeline_barrier2(
                 commands,
-                &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[before, to_write(target.shade_found.image)]),
-            );
-            pass(self.find, target.shade_found.view, target.extent);
-            device.cmd_pipeline_barrier2(
-                commands,
-                &vk::DependencyInfo::default().image_memory_barriers(&[
-                    to_read(target.shade_found.image),
-                    to_write(target.shade.image),
-                ]),
-            );
-            pass(self.smooth, target.shade.view, target.extent);
-            device.cmd_pipeline_barrier2(
-                commands,
-                &vk::DependencyInfo::default()
-                    .image_memory_barriers(&[to_read(target.shade.image), depth_to_draw]),
+                &vk::DependencyInfo::default().image_memory_barriers(&[before, depth_to_draw]),
             );
         }
     }

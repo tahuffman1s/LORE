@@ -225,6 +225,9 @@ enum Command {
         /// default) or high
         #[arg(long, default_value = "medium", value_name = "LEVEL", value_parser = cli::ambient_occlusion)]
         ambient_occlusion: lore_render::AmbientOcclusion,
+        /// The fine shadow where things touch: on (the game's own default) or off
+        #[arg(long, default_value = "on", value_name = "on|off", value_parser = cli::contact_shadows, action = clap::ArgAction::Set)]
+        contact_shadows: bool,
     },
 }
 
@@ -357,6 +360,7 @@ fn command() -> Result<(), String> {
             lamp_shadows,
             bounce,
             ambient_occlusion,
+            contact_shadows,
         }) => cli::bench(
             &Bench {
                 frames,
@@ -368,6 +372,7 @@ fn command() -> Result<(), String> {
                 lamp_shadows,
                 bounce,
                 ambient_occlusion,
+                contact_shadows,
             },
             budget_ms,
             json.as_deref(),

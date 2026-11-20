@@ -520,6 +520,7 @@ impl<G: Game> App<G> {
             renderer.set_lamp_shadows(settings.lamp_shadows);
             renderer.set_bounce(settings.bounce);
             renderer.set_ambient_occlusion(settings.ambient_occlusion);
+            renderer.set_contact_shadows(settings.contact_shadows);
             renderer.set_anisotropic_filtering(settings.anisotropic_filtering);
             renderer.set_look_shares(settings.look_shares());
             renderer.set_sharpness(settings.sharpness());
@@ -1029,6 +1030,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                         renderer.set_lamp_shadows(settings.lamp_shadows);
                         renderer.set_bounce(settings.bounce);
                         renderer.set_ambient_occlusion(settings.ambient_occlusion);
+                        renderer.set_contact_shadows(settings.contact_shadows);
                         renderer.set_look_shares(settings.look_shares());
                         renderer.set_sharpness(settings.sharpness());
                         renderer.set_camera(Camera {
