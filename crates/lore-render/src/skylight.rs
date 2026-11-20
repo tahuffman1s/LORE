@@ -89,7 +89,7 @@ pub(crate) struct Heavens {
     pub(crate) sky: Sky,
     pub(crate) weather: Air,
     /// The sun, the moon and the stars, as the shader's `heavens`.
-    pub(crate) heavens: [[f32; 4]; 5],
+    pub(crate) heavens: [[f32; 4]; 6],
     /// How many seconds the clouds have drifted.
     pub(crate) drift: f32,
     /// Where the eye is: the clouds and the weather are drawn round it.
@@ -1004,6 +1004,7 @@ mod tests {
                 [0.0, 1.0, 0.0, 0.0],
                 [1.0; 4],
                 [0.0; 4],
+                [1.0, 0.0, 0.0, 0.0],
             ],
             drift: 0.0,
             eye: [0.0; 3],

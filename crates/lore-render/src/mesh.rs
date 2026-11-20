@@ -30,6 +30,7 @@ use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
 use crate::sky::{self, Sky};
 use crate::skylight::{Heavens, Skylight};
+use crate::stars::StarGrid;
 use crate::swapchain::COLOUR;
 use crate::texture::AnisotropicFiltering;
 use crate::tracks::TrackMap;
@@ -70,7 +71,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// the light of lightning, seven for the weather and five for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 5 + 3);
+const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 6 + 3);
 
 /// How rough a material can be and still mirror the world round it: the
 /// shader's `MIRRORS_BELOW`.
@@ -278,7 +279,7 @@ impl View {
 pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
     pub(crate) weather: Air,
-    pub(crate) heavens: [[f32; 4]; 5],
+    pub(crate) heavens: [[f32; 4]; 6],
     /// How the level's water looks if it says so, as the shader's
     /// `water_look`: all zero if not.
     pub(crate) water_look: [[f32; 4]; 3],
@@ -972,6 +973,8 @@ pub(crate) struct MeshPipeline {
     shadow_pipelines: [vk::Pipeline; 2],
     /// What the sun sees: `None` only while the pipeline is being built.
     shadows: Option<ShadowMap>,
+    /// Every star, sorted into a grid among the stars.
+    stars: Option<StarGrid>,
     /// Light that bounces: `None` only while the pipeline is being built.
     bounce: Option<BounceWorks>,
     /// The light of the sky from every way: `None` only while the pipeline
@@ -1068,6 +1071,7 @@ impl MeshPipeline {
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
+            stars: None,
             bounce: None,
             skylight: None,
             lamp_atlas: RefCell::new(None),
@@ -1101,6 +1105,9 @@ impl MeshPipeline {
         let shadows = ShadowMap::new(gpu)?;
         let (shadow_view, shadow_sampler) = (shadows.pictures.view, shadows.sampler);
         mesh.shadows = Some(shadows);
+        let stars = StarGrid::new(gpu)?;
+        let (star_cells, star_list) = (stars.cells.handle, stars.list.handle);
+        mesh.stars = Some(stars);
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
         mesh.clouds = Some(clouds);
@@ -1281,6 +1288,17 @@ impl MeshPipeline {
             smaller_depth(36),
             // The contact shadows.
             smaller_depth(37),
+            // The stars: the grid, and the list it points into.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(38)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(39)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1290,12 +1308,12 @@ impl MeshPipeline {
             vk::DescriptorType::SAMPLER,
         ]
         .map(|kind| {
-            // Each frame's set has one view, the lamps, their grid and
-            // bounce light's list, twenty-seven pictures, two written, and
-            // five readers.
+            // Each frame's set has one view, the lamps, their grid, bounce
+            // light's list and the stars' grid and list, twenty-seven
+            // pictures, two written, and five readers.
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
-                vk::DescriptorType::STORAGE_BUFFER => 3,
+                vk::DescriptorType::STORAGE_BUFFER => 5,
                 vk::DescriptorType::SAMPLED_IMAGE => 27,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 5,
@@ -1375,6 +1393,12 @@ impl MeshPipeline {
                 let cell_info = [vk::DescriptorBufferInfo::default()
                     .buffer(cell_buffer.handle)
                     .range(lamps::CELL_BUFFER_BYTES as u64)];
+                let star_cell_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(star_cells)
+                    .range(vk::WHOLE_SIZE)];
+                let star_list_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(star_list)
+                    .range(vk::WHOLE_SIZE)];
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -1447,6 +1471,16 @@ impl MeshPipeline {
                         .dst_binding(15)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&cell_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(38)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&star_cell_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(39)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&star_list_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 if let Some(bounce) = &mesh.bounce {
@@ -2039,6 +2073,7 @@ impl MeshPipeline {
                 [0.0, 1.0, 0.0, 0.0],
                 [red, green, blue, 0.0],
                 [0.0; 4],
+                [1.0, 0.0, 0.0, 0.0],
             ],
             |day| day.heavens,
         );
@@ -4509,7 +4544,7 @@ mod tests {
                     fog: 0.002,
                     wind: [0.0, 1.0, 9.0],
                 },
-                heavens: [[9.0; 4]; 5],
+                heavens: [[9.0; 4]; 6],
                 water_look: [[0.5; 4], [0.25; 4], [0.75; 4]],
                 stream_look: [[0.125; 4], [0.0; 4], [0.375; 4]],
             },
@@ -4553,20 +4588,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 504), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 515), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 508), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 519), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 531),
+            number(&bytes, 535),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 532),
+            number(&bytes, 536),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 543), 0.375);
-        assert_eq!(bytes.len(), 544 * 4);
+        assert_eq!(number(&bytes, 547), 0.375);
+        assert_eq!(bytes.len(), 548 * 4);
     }
 
     #[test]

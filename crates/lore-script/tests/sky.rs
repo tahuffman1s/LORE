@@ -152,6 +152,43 @@ fn an_hour_far_past_any_date_still_gives_one() {
 }
 
 #[test]
+fn stars_are_where_they_are_and_can_be_found_by_looking() {
+    let host = game(
+        r#"
+        print(game.sky.starDirection("Sirius"))
+        game.sky.setLatitude(45)
+        game.sky.setDate(2026, 3, 20)
+        -- Sirius crosses the meridian at about 18:45 sun time, 28 degrees up.
+        game.sky.setHour(18.85)
+        local sirius = game.sky.starDirection("sirius")
+        print(math.abs(game.sky.starHeight("Sirius") - 28.3) < 1, sirius.z > 0)
+        print(game.sky.starNear(sirius), game.sky.starNear(-sirius))
+        -- The pole star is as high as the latitude, at any hour.
+        print(math.abs(game.sky.starHeight("North Star") - 45) < 1)
+        game.sky.setHour(3)
+        print(math.abs(game.sky.starHeight("Polaris") - 45) < 1, game.sky.starHeight("Sirius") < 0)
+        "#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        printed(),
+        ["nil", "true true", "Sirius nil", "true", "true true"]
+    );
+    // Every name listed is one the stars are found by.
+    let host = game(
+        r#"
+        local names = game.sky.starNames()
+        print(names[1], #names > 500)
+        for _, name in names do
+            assert(game.sky.starDirection(name) == nil, name)
+        end
+        "#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["Sirius true"]);
+}
+
+#[test]
 fn a_wrong_place_or_date_says_what_to_write() {
     for (script, said) in [
         ("game.sky.setLatitude(100)", "from -90"),
@@ -168,6 +205,15 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "the month as a whole number",
         ),
         ("game.sky.setNorth()", "game.sky.setNorth(90)"),
+        (
+            "game.sky.starDirection(\"Betelguese\")",
+            "Did you mean \"Betelgeuse\"",
+        ),
+        ("game.sky.starHeight(42)", "the name of a star as text"),
+        (
+            "game.sky.starNear(\"up\")",
+            "game.sky.starNear(game.player.aim)",
+        ),
     ] {
         let host = game(script);
         let message = mistake(&host);

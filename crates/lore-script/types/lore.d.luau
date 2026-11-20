@@ -1465,6 +1465,37 @@ declare game: {
         --- full, or nil if no hour has been said.
         --- Example: local moonlight = game.sky.moonLit() or 0
         moonLit: () -> number?,
+
+        --- The way towards a star, by its name: its own ("Sirius",
+        --- "Polaris", "Betelgeuse", "North Star") or a Greek-letter one
+        --- ("Alpha Centauri"), in any capitals. The stars are the real ones,
+        --- where they stand at this hour over the place game.sky.setLatitude
+        --- says, turning about the pole as the night goes on. Nil if no hour
+        --- has been said: call game.sky.setHour (or setDayLength) first.
+        --- It changes as the hours pass, so ask again when you need it.
+        --- game.sky.starNames() lists every name.
+        --- Example: local northStar = game.sky.starDirection("Polaris")
+        starDirection: (name: string) -> vector?,
+
+        --- How high a star stands, in degrees: 90 straight up, 0 on the
+        --- horizon, below 0 it has set. Nil if no hour has been said.
+        --- Example: local height = game.sky.starHeight("Sirius")
+        --- if height and height > 10 then print("Sirius is up") end
+        starHeight: (name: string) -> number?,
+
+        --- The name of the brightest named star within a few degrees of a
+        --- direction (any length; 2 degrees unless a second number from 0
+        --- to 180 says how many), or nil if none is that near or no hour has
+        --- been said. With the way the player looks, it says which star they
+        --- are looking at; the name works in game.sky.starDirection.
+        --- Example: local star = game.sky.starNear(game.player.aim)
+        starNear: (direction: vector, degrees: number?) -> string?,
+
+        --- The name of every star that has one, brightest first: the names
+        --- game.sky.starDirection and starHeight know. A star with more than
+        --- one ("Polaris", "North Star") is listed by the first.
+        --- Example: for _, name in game.sky.starNames() do print(name) end
+        starNames: () -> {string},
     },
 
     --- The weather: say it in one word with game.weather.set, or a number

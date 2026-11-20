@@ -253,6 +253,12 @@ local moon: vector? = game.sky.moonDirection()
 local moonUp = (game.sky.moonHeight() or -90) > 0
 local wolves = game.sky.moonPhase() == "full" and (game.sky.moonLit() or 0) > 0.98
 print(latitude, north, year, month, day, sun, sunUp, moon, moonUp, wolves)
+local northStar: vector? = game.sky.starDirection("Polaris")
+local siriusUp = (game.sky.starHeight("Sirius") or -90) > 10
+local lookingAt: string? = game.sky.starNear(vector.create(0, 1, 0), 5)
+print(northStar, siriusUp, lookingAt)
+local names: {string} = game.sky.starNames()
+print(#names, names[1])
 game.onTick(function()
     if game.sky.dayLength() == 0 then
         game.sky.setHour((game.sky.hour() or 12) + 1 / 600)

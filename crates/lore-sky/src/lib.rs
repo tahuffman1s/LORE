@@ -16,6 +16,8 @@
 //! due south (due north, south of the tropics), as a sundial says, so a
 //! game never has to think about longitude or time zones.
 
+pub mod stars;
+
 use std::f64::consts::TAU;
 
 /// Towards the engine's usual sun, high to the right and behind the
@@ -52,6 +54,10 @@ pub struct Heavens {
     /// it meets, so a star's place with the turn taken off is where it
     /// stood when it was turned 0.
     pub turn: f32,
+    /// Where the sky's equator crosses the meridian when the stars are
+    /// turned 0: towards right ascension 0 with the turn taken off. With
+    /// [`pole`](Self::pole) it says which way every star is.
+    pub meridian: [f32; 3],
     /// How far the moon is through its month, from 0 at new moon through
     /// 0.5 at full to nearly 1.
     pub moon_age: f32,
@@ -193,6 +199,7 @@ impl SkyPlace {
             moon: self.towards(sidereal - moon.ascension, moon.declination),
             pole,
             turn,
+            meridian: self.towards(0.0, 0.0),
             // A share of a turn, far below where an f32 stops being exact.
             #[allow(clippy::cast_possible_truncation)]
             moon_age: ((moon_along - sun_along) / 360.0).rem_euclid(1.0) as f32,
@@ -248,8 +255,42 @@ impl Heavens {
             moon,
             pole,
             turn,
+            meridian: noon,
             moon_age: month,
         }
+    }
+
+    /// Where in the level a star is that is `towards` among the stars (as
+    /// [`stars::Star::towards`] says): the sky turned by the hour.
+    #[must_use]
+    pub fn world_of(&self, towards: [f32; 3]) -> [f32; 3] {
+        let east = cross(self.pole, self.meridian);
+        let [x, y, z] = towards;
+        let fixed =
+            [0, 1, 2].map(|axis| x * self.meridian[axis] + y * east[axis] + z * self.pole[axis]);
+        // Turned forward about the pole by the turn, as the shader turns a
+        // line of sight back (Rodrigues' rotation).
+        let (sin, cos) = self.turn.sin_cos();
+        let across = cross(self.pole, fixed);
+        let along: f32 = (0..3).map(|axis| self.pole[axis] * fixed[axis]).sum();
+        [0, 1, 2].map(|axis| {
+            fixed[axis] * cos + across[axis] * sin + self.pole[axis] * along * (1.0 - cos)
+        })
+    }
+
+    /// Where among the stars a direction `towards` in the level is: what
+    /// [`world_of`](Self::world_of) undoes.
+    #[must_use]
+    pub fn among_stars(&self, towards: [f32; 3]) -> [f32; 3] {
+        let (sin, cos) = (-self.turn).sin_cos();
+        let across = cross(self.pole, towards);
+        let along: f32 = (0..3).map(|axis| self.pole[axis] * towards[axis]).sum();
+        let fixed: [f32; 3] = [0, 1, 2].map(|axis| {
+            towards[axis] * cos + across[axis] * sin + self.pole[axis] * along * (1.0 - cos)
+        });
+        let east = cross(self.pole, self.meridian);
+        let dot = |one: [f32; 3]| (0..3).map(|axis| one[axis] * fixed[axis]).sum::<f32>();
+        [dot(self.meridian), dot(east), dot(self.pole)]
     }
 
     /// How much of the moon's face the sun lights, as seen from here, from
@@ -281,6 +322,15 @@ impl Heavens {
         let eighth = (self.moon_age.rem_euclid(1.0) * 8.0).round() as usize % 8;
         PHASES[eighth]
     }
+}
+
+/// The cross product of two vectors.
+fn cross(one: [f32; 3], other: [f32; 3]) -> [f32; 3] {
+    [
+        one[1] * other[2] - one[2] * other[1],
+        one[2] * other[0] - one[0] * other[2],
+        one[0] * other[1] - one[1] * other[0],
+    ]
 }
 
 /// The days from 1 January 2000 to `day` `month` `year` in the Gregorian
@@ -321,6 +371,7 @@ pub fn date_from_2000(days: i64) -> (i64, u32, u32) {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -484,6 +535,38 @@ mod tests {
         };
         assert_eq!(at(3, 13), "first quarter");
         assert_eq!(at(3, 28), "last quarter");
+    }
+
+    #[test]
+    fn a_star_stands_where_the_almanac_says_and_turns_westward() {
+        let place = SkyPlace {
+            latitude: 45.0,
+            north: NORTH,
+            first_day: days_from_2000(2026, 3, 20),
+        };
+        // Polaris is within a degree of the pole at any hour.
+        let polaris = stars::named("Polaris").expect("Polaris").towards;
+        for hour in [0.0, 6.0, 21.5] {
+            let heavens = place.heavens(hour);
+            assert!(degrees_between(heavens.world_of(polaris), heavens.pole) < 0.8);
+        }
+        // At the equinox, Sirius (right ascension 6h 45m) crosses the
+        // meridian about 6 h 45 m after the sun: at 18:45 sun time, as
+        // high as 90 - 45 - 16.7 = 28.3 degrees, due south.
+        let sirius = stars::named("Sirius").expect("Sirius").towards;
+        let heavens = place.heavens(18.0 + 45.0 / 60.0 + 0.1);
+        let at = heavens.world_of(sirius);
+        assert!((height(at) - 28.3).abs() < 1.0, "{}", height(at));
+        assert!(at[0].abs() < 0.05 && at[2] > 0.0, "{at:?}");
+        // An hour later it is lower and to the west.
+        let later = place.heavens(19.85).world_of(sirius);
+        assert!(height(later) < height(at) && later[0] < -0.1, "{later:?}");
+        // And back again.
+        let back = heavens.among_stars(at);
+        assert!(
+            (0..3).all(|axis| (back[axis] - sirius[axis]).abs() < 1e-4),
+            "{back:?} {sirius:?}"
+        );
     }
 
     #[test]

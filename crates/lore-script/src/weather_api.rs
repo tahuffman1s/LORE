@@ -39,6 +39,10 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "moonHeight",
     "moonPhase",
     "moonLit",
+    "starDirection",
+    "starHeight",
+    "starNear",
+    "starNames",
 ];
 
 /// The real sky a game gets when it says only some of where and when:
@@ -807,6 +811,37 @@ fn date(lua: &Lua, values: &Variadic<Value>) -> mlua::Result<[i64; 3]> {
     Ok(said)
 }
 
+/// The star a script named for `function`, or an error that says which
+/// names there are.
+fn star(lua: &Lua, function: &str, value: &Value) -> mlua::Result<&'static lore_sky::stars::Star> {
+    let example = format!("{function}(\"Sirius\")");
+    let Value::String(name) = value else {
+        return Err(fail(
+            lua,
+            format!(
+                "{function} needs the name of a star as text, but it was given {}. Write it \
+                 like this: {example}",
+                describe(value)
+            ),
+        ));
+    };
+    let name = name.to_string_lossy();
+    lore_sky::stars::named(&name).ok_or_else(|| {
+        let suggestion = lore_sky::stars::closest_name(&name)
+            .map(|close| format!("Did you mean \"{close}\"? "))
+            .unwrap_or_default();
+        fail(
+            lua,
+            format!(
+                "{function} knows no star called \"{name}\". {suggestion}Stars go by their own \
+                 names, such as \"Sirius\", \"Polaris\" or \"Betelgeuse\", or by Greek-letter \
+                 ones, such as \"Alpha Centauri\"; game.sky.starNames() lists them all. Write it \
+                 like this: {example}"
+            ),
+        )
+    })
+}
+
 /// `game.sky.sunDirection`, `sunHeight`, `moonDirection`, `moonHeight`,
 /// `moonPhase` and `moonLit`: where the lights of the sky are, as they are
 /// drawn. Each gives nil until the hour has been said.
@@ -838,6 +873,76 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
         lua.create_function(move |_, ()| {
             Ok(climate.heavens().map(|heavens| heavens.moon_phase()))
         })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "starDirection",
+        lua.create_function(move |lua, value: Value| {
+            let star = star(lua, "game.sky.starDirection", &value)?;
+            Ok(climate.heavens().map(|heavens| {
+                let [x, y, z] = heavens.world_of(star.towards);
+                Vector::new(x, y, z)
+            }))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "starHeight",
+        lua.create_function(move |lua, value: Value| {
+            let star = star(lua, "game.sky.starHeight", &value)?;
+            Ok(climate.heavens().map(|heavens| {
+                f64::from(
+                    heavens.world_of(star.towards)[1]
+                        .clamp(-1.0, 1.0)
+                        .asin()
+                        .to_degrees(),
+                )
+            }))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "starNear",
+        lua.create_function(move |lua, values: Variadic<Value>| {
+            const EXAMPLE: &str = "game.sky.starNear(game.player.aim)";
+            let Some(Value::Vector(towards)) = values.first() else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sky.starNear needs a direction as a vector, but it was given {}. \
+                         It gives the name of the brightest named star within a few degrees of \
+                         that direction. Write it like this: {EXAMPLE}, or \
+                         game.sky.starNear(vector.create(0, 1, 0)) for straight up",
+                        values.first().map_or("nothing", describe)
+                    ),
+                ));
+            };
+            let degrees = match values.get(1) {
+                None | Some(Value::Nil) => 2.0,
+                Some(value) => number(
+                    lua,
+                    "game.sky.starNear",
+                    Some(value),
+                    "how many degrees from the direction a star may be, as its second number",
+                    "game.sky.starNear(direction, 5)",
+                )?
+                .clamp(0.0, 180.0),
+            };
+            let Some(heavens) = climate.heavens() else {
+                return Ok(None);
+            };
+            let [x, y, z] = [towards.x(), towards.y(), towards.z()];
+            let long = (x * x + y * y + z * z).sqrt();
+            if !(long > 0.0 && long.is_finite()) {
+                return Ok(None);
+            }
+            let among = heavens.among_stars([x / long, y / long, z / long]);
+            Ok(lore_sky::stars::name_near(among, degrees))
+        })?,
+    )?;
+    sky.set(
+        "starNames",
+        lua.create_function(|_, ()| Ok(lore_sky::stars::star_names()))?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(

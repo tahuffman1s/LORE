@@ -1,0 +1,1138 @@
+# The stars of stars.bin with names of their own: index, then name.
+# From Wikidata's English labels (CC0). Written by fetch_stars.py.
+0	Sirius
+0	Alpha Canis Majoris
+1	Canopus
+1	Agastya
+1	Alpha Carinae
+2	Toliman
+2	Alpha Centauri
+2	Bungula
+2	Rigel Kent
+2	Rigil Kentaurus
+2	Rigel Kentaurus
+3	Arcturus
+4	Vega
+4	Alpha Lyrae
+4	Lucida Lyrae
+5	Capella
+5	Alhajoth
+5	Alpha Aurigae
+7	Rigel
+7	Beta Orionis
+8	Procyon
+8	Alpha Canis Minoris
+9	Betelgeuse
+10	Achernar
+11	Hadar
+11	Beta Centauri
+11	Agena
+12	Acrux
+12	Alpha Crucis
+13	Altair
+13	Alpha Aquilae
+14	Aldebaran
+14	Alpha Tauri
+14	Cor Tauri
+14	Parilicium
+15	Antares
+15	Alpha Scorpii
+16	Spica
+16	Alpha Virginis
+16	Azimech
+17	Pollux
+17	Beta Geminorum
+18	Fomalhaut
+18	* alf PsA
+19	Mimosa
+19	Becrux
+19	Beta Crusis
+20	Deneb
+20	Alpha Cygni
+20	Arided
+20	Aridif
+20	Arrioph
+20	Gallina
+21	Alpha Leonis
+21	Regulus
+22	Adhara
+23	Castor
+23	Alpha Geminorum
+24	Lambda Scorpii
+24	Shaula
+25	Bellatrix
+25	Gamma Orionis
+26	Gacrux
+26	Gamma Crucis
+27	Elnath
+27	Beta Tauri
+27	Gamma Aurigae
+27	Nath
+28	Alnilam
+28	Epsilon Orionis
+29	Miaplacidus
+29	Beta Carinae
+30	Alnair
+31	Alnitak
+31	Zeta Orionis
+32	Alioth
+32	Epsilon Ursae Majoris
+32	The Jade Sighting-Tube
+33	Alpha Persei
+33	* alf Per
+33	Mirfak
+34	Dubhe
+34	Alpha Ursae Majoris
+34	The Celestial Pivot
+34	* alf UMa
+35	Kaus Australis
+35	Epsilon Sagittarii
+36	Gamma Velorum
+36	Regor
+37	Wezen
+37	Delta Canis Majoris
+38	Theta Scorpii
+38	Sargas
+39	Avior
+39	Epsilon Carinae
+40	Alkaid
+40	Alcaid
+40	Eta Ursae Majoris
+40	The Twinkling Brilliance
+41	Alpha Trianguli Australis
+41	Atria
+42	Beta Aurigae
+42	Menkalinan
+43	Peacock
+43	Alpha Pavonis
+44	Alhena
+44	Gamma Geminorum
+45	Mirzam
+45	Beta Canis Majoris
+45	Murzim
+46	Alphard
+46	Alpha Hydrae
+47	Algieba
+47	Gamma Leonis
+48	Beta Ceti
+48	Deneb Kaitos
+48	Diphda
+49	Hamal
+49	Alpha Arietis
+50	Polaris
+50	* alf UMi
+50	Alpha Ursae Minoris
+50	Northern Star
+50	North pole star
+50	North Star
+50	Pole star
+50	Pole-star
+50	Polestar
+50	Stella Polaris
+50	V* alf UMi
+51	Mirach
+51	Beta Andromedae
+52	Menkent
+52	Theta Centauri
+53	Alpheratz
+53	Alpha Andromedae
+53	Delta Pegasi
+53	Sirrah
+54	Saiph
+54	Kappa Orionis
+55	Nunki
+55	Sigma Sagittarii
+55	Sadira
+56	Rasalhague
+56	Alpha Ophiuchi
+57	Kochab
+57	Beta Ursae Minoris
+57	The Emperor
+58	Almach
+58	Gamma Andromedae
+60	Tiaki
+60	Beta Gruis
+61	Algol
+61	Beta Persei
+62	Denebola
+63	Gamma Centauri
+63	Muhlifain
+64	Lambda Velorum
+65	Zeta Ursae Majoris
+65	Mizar
+65	The Opener of Heat
+66	Alpha Cassiopeiae
+66	Schedar
+67	Eltanin
+67	Gamma Draconis
+67	Etamin
+68	Sadr
+68	Gamma Cygni
+69	Alphecca
+69	Alpha Coronae Borealis
+69	Gemma
+69	Gnosia Stella Coronae
+70	Zeta Puppis
+70	Naos
+71	Iota Carinae
+71	Aspidiske
+72	Beta Cassiopeiae
+72	Caph
+73	Alpha Lupi
+74	Epsilon Scorpii
+74	Klaudas
+74	Larawag
+75	Epsilon Centauri
+76	Eta Centauri
+77	Delta Scorpii
+77	Dschubba
+78	Merak
+78	Beta Ursae Majoris
+78	The Celestial Rotating Jade
+79	Alpha Phoenicis
+79	Ankaa
+80	Kappa Scorpii
+80	Girtab
+81	Gamma Cassiopeiae
+81	Navi
+82	Epsilon Pegasi
+82	Enif
+82	V* eps Peg
+83	Mintaka
+83	Delta Orionis
+84	Epsilon Boötis
+84	Izar
+84	Mirac
+84	Mirak
+84	Pulcherrima
+85	Eta Ophiuchi
+85	Sabik
+85	The Song region in the Heavenly Market
+86	Beta Pegasi
+86	Scheat
+86	V* bet Peg
+87	Phecda
+87	Gamma Ursae Majoris
+87	The Celestial Shining Pearl
+88	Aludra
+88	Eta Canis Majoris
+89	Alderamin
+89	Alpha Cephei
+90	Markeb
+90	Kappa Velorum
+91	Aljanah
+91	Epsilon Cygni
+92	Alpha Pegasi
+92	* alf Peg
+92	Markab
+93	Acrab
+93	Beta Scorpii
+95	Delta Centauri
+96	Alpha Ceti
+96	Menkar
+97	Delta Leonis
+97	The First Western Minister
+97	Zosma
+98	Zeta Centauri
+99	Zeta Ophiuchi
+99	The Han region in the Heavenly Market
+100	Alpha Leporis
+100	Arneb
+101	Gienah
+101	Gamma Corvi
+102	Ascella
+102	Zeta Sagittarii
+103	Theta Aurigae
+103	Bogardus
+103	Mahasim
+104	Zubeneschamali
+104	Beta Librae
+104	Kiffa Borealis
+105	Unukalhai
+105	Alpha Serpentis
+105	The Shu region in the Heavenly Market
+106	Kraz
+106	Beta Corvi
+107	Alpha Muscae
+108	Sheratan
+108	Beta Arietis
+109	Alpha Columbae
+109	Phact
+110	Upsilon Scorpii
+110	Lesath
+111	Kaus Media
+111	Delta Sagittarii
+112	Delta Cassiopeiae
+112	Ruchbah
+113	Eta Boötis
+113	Muphrid
+114	Beta Lupi
+114	Kekouan
+115	Iota Aurigae
+115	Al Kab
+115	Hassaleh
+115	Kabdhilinan
+116	Mu Velorum
+117	Tarazed
+117	Gamma Aquilae
+118	Iota Centauri
+118	Alhakim
+118	Kulou
+119	Porrima
+119	Gamma Virginis
+119	The First Eastern Minister
+119	Gamma Virginis S
+120	Eta Draconis
+121	Alpha Librae
+121	Zubenelgenubi
+122	Delta Ophiuchi
+122	The Liang region in the Heavenly Market
+122	Yed Prior
+123	Cebalrai
+123	Beta Ophiuchi
+124	Delta Crucis
+124	Imai
+124	V* del Cru
+125	Theta Carinae
+126	Gamma Lupi
+126	* gam Lup
+127	Iota Orionis
+127	Hatysa
+128	Kornephoros
+128	Beta Herculis
+128	The Consists of : Hezhong region in the Heavenly Market
+129	Beta Hydri
+130	Cursa
+131	Vindemiatrix
+131	The Second Eastern General
+132	Zeta Herculis
+133	Rho Puppis
+133	Tureis
+134	Tau Scorpii
+134	Paikauhale
+135	Beta Draconis
+136	Kaus Borealis
+136	Lambda Sagittarii
+137	Lang-Exster
+138	Gamma Pegasi
+138	Algemo
+138	Algenib
+138	V* gam Peg
+139	Alpha Hydri
+139	Head of Hydrus
+140	Nihal
+140	Beta Leporis
+141	Delta Capricorni
+141	Deneb Algedi
+142	Zeta Persei
+142	Menkib
+143	Beta Trianguli Australis
+144	Beta Arae
+145	Alcyone
+145	Eta Tauri
+146	Mu Geminorum
+146	Tejat
+148	Cor Caroli
+149	Albaldah
+150	Epsilon Persei
+151	Pi Puppis
+151	Ahadi
+152	Gomeisa
+152	Beta Canis Minoris
+153	Gamma Trianguli Australis
+154	Sigma Scorpii
+154	Alniyat
+155	Beta Aquarii
+155	Sadalsuud
+156	Pi Scorpii
+156	Fang
+157	Gamma Persei
+158	Tau Puppis
+159	Zaurak
+159	Gamma Eridani
+160	Delta Corvi
+160	Algorab
+161	Alpha Aquarii
+161	Sadalmelik
+162	Alpha Arae
+163	Eta Pegasi
+163	Matar
+164	Mebsuta
+164	Epsilon Geminorum
+165	Ras Elased Australis
+165	Epsilon Leonis
+165	Algenubi
+166	Minkar
+166	Epsilon Corvi
+167	Denebakrab
+167	Xamidimura
+168	Almaaz
+168	Epsilon Aurigae
+169	Furud
+169	Zeta Canis Majoris
+170	Upsilon Carinae
+171	Alnasl
+171	Gamma Sagittarii
+172	Zeta Aquilae
+174	Alaybasan
+175	Gamma Hydrae
+176	Pherkad
+176	The Crown Prince
+177	Delta Persei
+178	Psi Ursae Majoris
+178	* psi UMa
+179	Aldhanab
+179	Gamma Gruis
+179	Al Dhanab
+181	Gamma Boötis
+181	Seginus
+182	Zeta Tauri
+182	Tianguan
+183	Mira
+183	Omicron Ceti
+184	Mu Ursae Majoris
+184	Tania Australis
+184	The Second Middle Step
+185	Delta Draconis
+185	Altais
+185	Nodus Secundus
+186	Zeta Arae
+188	Albireo
+188	Beta Cygni
+188	Beta Cygni Aa
+188	Beta Cygni Ac
+189	Zeta Hydrae
+190	Nu Hydrae
+191	Kappa Centauri
+192	Eta Sagittarii
+193	Alpha Indi
+194	Beta Columbae
+194	Wazn
+195	The First Upper Step
+195	Iota Ursae Majoris
+195	Talitha
+196	Sarin
+196	Delta Herculis
+196	The Consists of : Wei region in the Heavenly Market
+197	N Velorum
+197	N Vel
+198	Alpha Lyncis
+198	Elvashak
+199	Lambda Centauri
+200	Phi Sagittarii
+201	Nu Puppis
+202	Zeta Draconis
+202	Aldhibah
+202	First Minister
+203	Acamar
+204	Epsilon Leporis
+205	Eta Aurigae
+205	Haedus
+206	Theta Ursae Majoris
+207	Pi Herculis
+208	Tabit
+209	Xami
+209	Alpha Circini
+210	Delta Lupi
+211	Kappa Ophiuchi
+212	Sigma Librae
+212	Brachium
+213	G Scorpii
+213	Fuyue
+213	Ryan Magee
+214	Zeta Cygni
+215	Antinous
+215	Theta Aquilae
+216	Gamma Cephei
+216	Alrai
+216	Errai
+217	Alpha Pictoris
+218	Yed Posterior
+218	Epsilon Ophiuchi
+218	The Chu region in the Heavenly Market
+219	Beta Cephei
+219	Alfirk
+220	Sigma Puppis
+221	Eta Serpentis
+221	The Donghai region in the Heavenly Market
+222	Sulafat
+222	Gamma Lyrae
+222	Jugum
+223	Gamma Hydri
+224	Theta Ophiuchi
+225	PP Car
+225	PP Carinae
+226	Delta Andromedae
+227	Alpha Doradus
+228	Propus
+228	Eta Geminorum
+229	Pi Hydrae
+230	Delta Aquarii
+230	Skat
+231	Mu Leporis
+232	Iota Draconis
+232	Edasich
+233	Beta Phoenicis
+234	Xi Puppis
+235	Tau Sagittarii
+236	Megrez
+236	Delta Ursae Majoris
+236	The Celestial Balance
+237	Omega Carinae
+238	Eta Scorpii
+239	Gamma Arae
+240	Nu Ophiuchi
+240	Sinistra
+240	The Yan region in the Heavenly Market
+241	Eta Orionis
+243	Theta Leonis
+243	Chertan
+243	The Second Western Minister
+244	Rasalgethi
+244	Ras Algethi
+245	Zeta Cephei
+246	Alpha Reticuli
+247	Xi Geminorum
+247	Alzirr
+248	Delta Aquilae
+249	Epsilon Lupi
+250	Epsilon Cassiopeiae
+250	Segin
+251	Epsilon Hydrae
+252	Delta Virginis
+252	Minelauva
+252	The Second Eastern Minister
+253	Heze
+253	Zeta Virginis
+254	Nu Centauri
+254	Heng
+255	Rho Persei
+258	Beta Pavonis
+259	Elthor
+259	Lambda Tauri
+260	Chamukuy
+261	Eta Leonis
+262	Adhafera
+262	Zeta Leonis
+263	Zeta Lupi
+264	Eta Lupi
+265	Eta Cephei
+266	Zeta Pegasi
+266	Homam
+267	Gamma Phoenicis
+268	Alpha Trianguli
+268	Caput Trianguli
+268	Mothallah
+269	Omicron Ursae Majoris
+269	Muscida
+269	* omi UMa
+270	Mu Herculis
+271	Beta Lyrae
+271	Sheliak
+271	Shelyak
+273	Lambda Aquilae
+274	Chi Carinae
+275	Achird
+276	Eta Ceti
+277	Phi Velorum
+278	Lambda Ursae Majoris
+278	Tania Borealis
+278	The First Middle Step
+279	Alpha Telescopii
+280	Epsilon Gruis
+281	Gamma Ceti
+281	Kaffaljidhma
+282	Meissa
+282	Lambda Orionis
+283	Sigma Canis Majoris
+283	Unurgunite
+284	Telum
+285	Mu Pegasi
+285	Sadalbari
+286	Nu Ursae Majoris
+286	Alula Borealis
+287	Delta Boötis
+288	Tau Ceti
+289	Eta Herculis
+291	Xi Serpentis
+291	The Nanhai region in the Heavenly Market
+292	Beta Cancri
+292	Tarf
+293	Subra
+293	Omicron Leonis
+294	Beta Boötis
+294	Nakkar
+295	Darlugal
+296	Iota Lupi
+297	Ain
+298	Delta Geminorum
+298	Wasat
+299	Mu Serpentis
+300	Rana
+300	Delta Eridani
+301	Xi Hydrae
+302	Iota Cephei
+303	Pipirima
+305	Iota Ceti
+305	Deneb Kaitos Shemali
+306	Kappa Ursae Majoris
+306	Alkaphrah
+306	Talitha Australis
+306	The Second Upper Step
+307	* bet Mus
+308	Theta Pegasi
+308	Biham
+309	Lambda Geminorum
+311	Delta Crateris
+312	Delta Pavonis
+313	Nembus
+313	Upsilon Persei
+314	Phi Eridani
+315	Kappa Geminorum
+316	Epsilon Crucis
+316	Ginan
+317	Chi Draconis
+318	Algedi
+318	Secunda Giedi
+319	Eta Pavonis
+320	Upsilon Librae
+321	Theta Ceti
+322	Tau Orionis
+323	Rho Boötis
+324	Bharani
+325	Omicron Tauri
+326	Gamma Leporis
+327	Theta Geminorum
+328	Psi Velorum
+329	Zavijava
+329	Beta Virginis
+331	Lambda Hydrae
+332	Delta Muscae
+333	Eta Piscium
+333	Kullat Nunu
+335	Delta Arae
+336	Alfarasalkamil
+336	Omicron Andromedae
+337	Atlas
+338	Omicron Velorum
+339	Rotanev
+339	Beta Delphini
+341	Tau Librae
+342	Gamma Tauri
+342	Hyadum I
+342	Prima Hyadum
+343	Lambda Muscae
+344	Beta Indi
+345	Zeta Aquarii
+346	Zeta Cassiopeiae
+346	Fulu
+347	Theta Arae
+349	Beta Serpentis
+349	Chow
+349	The Zhou region in the Heavenly Market
+350	Gamma Capricorni
+350	Nashira
+352	Alpha Pyxidis
+353	Thuban
+353	Right Pivot
+354	Beta Coronae Borealis
+354	Nusakan
+355	Epsilon Serpentis
+355	The Ba region in the Heavenly Market
+356	A Puppis
+357	Chi Eridani
+359	Electra
+360	Kappa Lupi
+361	Xi Herculis
+362	Gamma Piscium
+362	* gam Psc
+363	Beta Aquilae
+363	Alshain
+363	* bet Aql
+364	Zeta Ceti
+364	Baten Kaitos
+365	Eta Leporis
+366	Delta Aurigae
+367	Chi Ursae Majoris
+367	Alkafzah
+367	Taiyangshou
+368	Nu Octantis
+369	Ran
+373	Xi Cygni
+374	Beta Monocerotis
+375	Zeta Capricorni
+376	Eta Arae
+378	Xi Tauri
+379	Zeta Aurigae
+379	Saclateni
+382	Gamma Ophiuchi
+382	Bake-eo
+382	Bake Eo
+383	Xi Draconis
+383	Grumium
+384	Delta Cephei
+385	Iota Cygni
+386	Beta Volantis
+387	Delta Tauri
+387	Secunda Hyadum
+388	Beta Doradus
+389	Gamma Herculis
+389	The Hejian region in the Heavenly Market
+390	Kappa Cygni
+391	Omicron Sagittarii
+392	Epsilon Aquarii
+392	Albali
+393	Iota Pegasi
+394	Alpha Lacertae
+395	Zeta Boötis
+396	Eta Persei
+396	Miram
+397	Sigma Orionis
+397	Mayrit
+397	Sigma Orionis E
+398	Zeta Geminorum
+398	Mekbuda
+399	Iota Geminorum
+401	Xi Ursae Majoris
+401	Alula Australis
+402	Lambda Aquarii
+402	Hydor
+403	Paradys
+404	Nu Persei
+407	Iota Herculis
+408	Eta Aquilae
+410	Sualocin
+410	Alpha Delphini
+411	Phi Centauri
+412	Kappa Persei
+412	Misam
+414	Upsilon Ursae Majoris
+414	V* ups UMa
+415	Mu Hydrae
+417	Delta Sagittae
+418	Beemin
+418	Theemim
+418	Theemin
+419	Omega Canis Majoris
+421	Lambda Andromedae
+421	Udkadua
+422	Omicron Herculis
+422	The Zhongshan region in the Heavenly Market
+423	Praecipua
+425	Alpha Scuti
+426	Tau Cygni
+427	Beta Reticuli
+428	Gamma Aquarii
+428	Sadachbia
+429	Delta Trianguli Australis
+432	Ainalhai
+432	Gamma Serpentis
+432	The Zheng region in the Heavenly Market
+433	Tusizuo
+434	Epsilon Draconis
+434	Tyl
+435	Delta Leporis
+436	Delta Columbae
+438	Lambda Draconis
+438	Giausar
+439	Polis
+439	Mu Sagittarii
+440	Gamma Apodis
+441	Alpha Horologii
+442	Beta Pictoris
+443	Tau Centauri
+444	Rho Scorpii
+444	Iklil
+445	Epsilon Phoenicis
+446	Mu Andromedae
+447	Eta Eridani
+447	Azha
+448	Omicron Persei
+448	Atik
+449	Maia
+450	Sceptrum
+451	Epsilon Columbae
+453	Rho Leonis
+453	Shaomin
+455	Tau Herculis
+456	Iota Gruis
+457	Mu Leonis
+457	Rasalas
+458	Gamma Muscae
+460	Mu Virginis
+461	Theta Herculis
+462	Eta Cygni
+463	Nu Tauri
+463	Davlos
+464	Kappa Canis Majoris
+465	Kappa Draconis
+465	Second Chief Judge
+466	Pi Lupi
+467	C Hya
+467	C Hydrae
+468	Pi Centauri
+469	The Left Law Administrator
+469	Eta Virginis
+469	Zaniah
+470	Lambda Ophiuchi
+473	Iota Hydrae
+474	Sigma Centauri
+475	Zubenelhakrabi
+475	Gamma Librae
+475	Zubenelakrab
+476	R Horologii
+477	Epsilon Herculis
+478	Nu Eridani
+479	Alpha Monocerotis
+483	Lambda Pegasi
+484	Alpha Equulei
+484	Kitalpha
+485	Delta Phoenicis
+487	Kappa Phoenicis
+488	Delta Cancri
+488	Asellus Australis
+489	Epsilon Pavonis
+490	Nu Cygni
+492	Alpha Sagittarii
+492	Rukbat
+493	Zeta Volantis
+494	Chi Lupi
+495	Nu Aurigae
+496	Beta Pyxidis
+497	Tau Persei
+498	Beemim
+499	Eta Columbae
+500	Gamma Monocerotis
+502	Rho Centauri
+505	Alpha Fornacis
+505	Dalim
+508	Gamma Tucanae
+510	Delta Volantis
+511	Alpha Volantis
+512	Gamma Trianguli
+513	Mu Eridani
+515	Theta Draconis
+515	First Premier
+516	Nu Scorpii
+516	Jabbah
+517	R Lyrae
+518	Zeta Pavonis
+519	Gamma Pyxidis
+520	I Carinae
+520	I Car
+521	Alchiba
+521	Alpha Corvi
+522	Alcor
+523	Arkab Prior
+525	Zeta Phoenicis
+525	Wurren
+526	Iota Cancri
+527	Upsilon Ceti
+528	Beta Camelopardalis
+529	Epsilon Muscae
+531	Epsilon Aquilae
+533	Rho Cygni
+534	Beid
+535	MX Persei
+537	Epsilon Delphini
+537	Aldulfin
+538	Eta Aquarii
+539	Psi Centauri
+540	Sigma Leonis
+540	The First Western General
+541	Nu Virginis
+546	Alpha Chamaeleontis
+547	Zeta Crucis
+548	Theta Boötis
+549	Rho Lupi
+550	Lambda Lupi
+552	Beta Circini
+553	Zeta Andromedae
+553	Shimu
+554	Phi Persei
+555	Xi Persei
+557	Upsilon Geminorum
+558	Iota Leonis
+558	The Second Western General
+559	Gamma Crateris
+560	Delta Ceti
+561	Alkes
+561	Alpha Crateris
+562	Upsilon Boötis
+563	Theta Capricorni
+564	Theta Canis Majoris
+565	Iota Virginis
+565	Syrma
+566	Mu Cephei
+566	Erakis
+567	Meridiana
+567	Alpha Coronae Australis
+568	Delta Hydri
+572	Gudja
+572	Kappa Serpentis
+574	Beta Coronae Australis
+575	Epsilon Hydri
+576	Upsilon Andromedae
+576	Titawin
+579	Epsilon Trianguli Australis
+580	Alpha Piscium
+580	Alrescha
+581	Theta Persei
+582	P Puppis
+583	Zhang
+584	Zeta Telescopii
+586	Zeta Gruis
+587	Iota Eridani
+589	Gamma Canis Majoris
+589	Muliphein
+590	Gamma Chamaeleontis
+591	Omicron Virginis
+592	Omega Capricorni
+593	Iota Piscium
+594	Psi Capricorni
+595	Beta Octantis
+596	Mu Orionis
+597	Theta Coronae Borealis
+598	Epsilon Coronae Borealis
+599	Iota Sagittarii
+600	Delta Hydrae
+601	Kappa Pegasi
+602	Eta Crucis
+603	Nu Geminorum
+605	Delta Serpentis
+606	Kappa Andromedae
+606	Kaffalmusalsala
+608	Delta Monocerotis
+611	H Scorpii
+612	Kappa Cassiopeiae
+613	Mu Persei
+614	Theta Librae
+615	Theta Aquarii
+615	Ancha
+617	Rho Herculis
+618	Epsilon Piscis Austrini
+619	Merope
+620	Rho Geminorum
+621	Lambda Boötis
+621	Xuange
+626	Sigma Herculis
+628	Gamma Doradus
+629	A Ori
+629	A Orionis
+630	Xi Pegasi
+632	Theta Lupi
+633	Lambda Pavonis
+634	Delta Piscis Austrini
+635	Beta Leonis Minoris
+636	Kang
+636	Kappa Virginis
+637	Gamma Coronae Australis
+638	Epsilon Ursae Minoris
+638	V* eps UMi
+639	CS Camelopardalis
+639	CS Cam
+640	Phi Draconis
+641	Beta Scuti
+642	Theta Cephei
+643	Gamma Pavonis
+644	Phi Aquarii
+646	Omicron Serpentis
+647	Beta Chamaeleontis
+648	Zeta Tucanae
+649	Psi Persei
+651	N Scorpii
+653	Son of Concubine
+654	Pi Ceti
+655	Tau Virginis
+656	J Puppis
+657	Beta Apodis
+658	Chi Cygni
+659	Sigma Cygni
+660	Alpha Cancri
+660	Acubens
+661	Junnanmen
+661	Phi Andromedae
+662	Kappa Eridani
+665	Pi Aurigae
+666	Alsciaukat
+666	Mabsuthat
+667	Alpha Antliae
+668	Beta Canum Venaticorum
+668	Chara
+669	Beta Comae Berenices
+672	Tau Tauri
+673	Omicron Piscium
+673	Torcular
+674	Mu Ceti
+679	Alpha Sculptoris
+683	Lambda Eridani
+686	Phi Herculis
+687	Phi Ophiuchi
+688	Arkab Posterior
+689	Prima Giedi
+691	Iota Capricorni
+692	Iota Aquarii
+695	Zeta Ursae Minoris
+696	Mu Tauri
+697	Epsilon Piscium
+698	Beta Hydrae
+698	* bet Hya
+699	Upsilon Tauri
+701	Lambda Persei
+702	Alpha Camelopardalis
+703	Lambda Leporis
+704	Sigma Geminorum
+705	Nu Cephei
+706	Xi Cephei
+706	Kurhah
+707	Pi Pegasi
+708	Beta Piscis Austrini
+709	Iota Andromedae
+709	Rasalnaqa
+710	Eta Corvi
+713	Taygeta
+713	Taygete
+714	DM Eri
+714	DM Eridani
+715	Gamma Canis Minoris
+716	Eta Hydrae
+717	Upsilon Leonis
+718	* del Lyr
+719	Theta Piscium
+720	Delta Octantis
+722	Epsilon Monocerotis
+723	Lambda Leonis
+723	Alterf
+724	Sigma Ophiuchi
+726	Omicron Lupi
+728	D Hya
+728	D Hydrae
+731	Diadem
+731	Alpha Comae Berenices
+731	The First Eastern General
+732	Nu Serpentis
+733	Pi Pavonis
+734	Theta Cassiopeiae
+734	Marfak
+737	Zeta Monocerotis
+741	Omega Lupi
+744	Theta Gruis
+745	Delta Ursae Minoris
+745	Yildun
+746	Theta Chamaeleontis
+747	Rho Hydrae
+748	Gamma Comae Berenices
+749	Kappa Lyrae
+750	Iota Piscis Austrini
+751	Chi Centauri
+752	Ramus
+755	Kappa Aurigae
+757	M Velorum
+761	Pi Andromedae
+762	Sigma Persei
+763	Delta Doradus
+764	Gamma Columbae
+765	Xi Scorpii
+768	Iota Aquilae
+769	Eta Phoenicis
+770	Xi Pavonis
+771	Botein
+771	Delta Arietis
+773	Kappa Columbae
+776	Beta Sculptoris
+777	Epsilon Andromedae
+778	G Canis Minoris
+778	G CMi
+779	A Leo
+779	A Leonis
+779	Yunu
+780	Iota Ophiuchi
+781	Theta Lyrae
+782	Alpha Sagittae
+782	Sham
+783	Beta Sagittae
+784	Iota Canis Majoris
+785	Xi Ophiuchi
+790	Nu Orionis
+791	Theta Virginis
+792	Epsilon Volantis
+794	Aladfar
+795	Omega Eridani
+797	N Carinae
+797	N Car
+798	Tau Canis Majoris
+801	Kappa Pavonis
+802	Kappa Cephei
+803	Delta Indi
+805	Upsilon Pegasi
+805	Alkarab
+806	Gamma Sculptoris
+807	A Car
+807	A Carinae
+808	YY Piscium
+809	Psi Phoenicis
+811	V Puppis
+812	Solitaire
+812	E Hya
+812	E Hydrae
+813	Lambda Herculis
+813	Maasym
+813	The Zhao region in the Heavenly Market
+814	Nu Herculis
+815	Pi Cephei
+816	Delta Delphini
+817	Eta Andromedae
+817	Kui
+818	Pi Eridani
+820	Tau Geminorum
+821	NS Puppis
+823	Lambda Serpentis
+824	Upsilon Cygni
+825	Sigma Lupi
+827	Keid
+828	Sigma Hydrae
+828	Minchir
+830	Chi Ophiuchi
+834	Delta Piscium
+835	Nu Piscium
+836	Epsilon Reticuli
+837	Kappa Leporis
+840	EN Aquarii
+841	Beta Lacertae
+843	Beta Crateris
+845	Alpha Caeli
+846	Iota Leporis
+847	Phi Leonis
+848	Omega Ophiuchi
+849	Tau Draconis
+850	Anser
+850	Alpha Vulpeculae
+851	Mu Aquilae
+852	Lambda Gruis
+854	AE Ceti
+856	Beta Fornacis
+857	Kappa Leonis
+857	Al Minliar al Asad
+858	B Centauri
+858	B Cen
+861	G Carinae
+861	G Car
+865	Sigma Boötis
+867	Epsilon Tucanae
+869	BE Camelopardalis
+869	BE Cam
+871	Rho Orionis
+872	Xi Orionis
+873	Lambda Canis Majoris
+873	Al Ḳurūd
+875	Theta Cygni
+876	Theta Indi
+879	I Puppis
+880	Omicron Puppis
+883	Alpha Sextantis
+884	Tau Boötis
+886	Delta Equulei
+888	Gamma Pictoris
+889	Eta Indi
+890	Delta Tucanae
+890	* del Tuc
