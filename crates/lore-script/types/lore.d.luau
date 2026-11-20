@@ -1515,7 +1515,8 @@ declare game: {
         starNames: () -> {string},
 
         --- How much light falls on open level ground now under a clear sky,
-        --- in lux: the sun's and the sky's, the moon's and the stars'.
+        --- in lux: the sun's and the sky's, the moon's and the stars', and the
+        --- glow of towns if setLightPollution says there are any.
         --- About 100000 at noon, 3 at the end of dusk, 0.3 under a full moon
         --- high in the sky, 0.03 under a half moon and 0.002 with no moon.
         --- Shade, cloud and lamps are not counted, so a storm gives the same
@@ -1549,6 +1550,52 @@ declare game: {
         --- How large the moon is drawn, as setMoonSize takes it.
         --- Example: local size = game.sky.moonSize()
         moonSize: () -> number,
+
+        --- Says how bright the Milky Way is drawn: how many times its real
+        --- brightness, from 0 (not at all) to 10. 1 is as it really is, the
+        --- usual: on a dark night with no moon, a band of star clouds and
+        --- dark lanes of dust from horizon to horizon; under a full moon or
+        --- over a town, faint or gone. More makes a storybook sky of it.
+        --- Below 0 is taken as 0 and above 10 as 10. Kept when the script is
+        --- read again; setMilkyWayBrightness(1) puts it back.
+        --- Example: game.sky.setMilkyWayBrightness(3)
+        setMilkyWayBrightness: (times: number) -> (),
+
+        --- How bright the Milky Way is drawn, as setMilkyWayBrightness takes
+        --- it.
+        --- Example: local times = game.sky.milkyWayBrightness()
+        milkyWayBrightness: () -> number,
+
+        --- Says what colour the Milky Way is: only its tint, as bright as
+        --- setMilkyWayBrightness says. A name ("violet") or a hex code
+        --- ("#c0a0ff"); "white" is its own colour, the usual. A name it does
+        --- not know, or black, stops the script with a message that says
+        --- what to write; to hide the Milky Way, use
+        --- setMilkyWayBrightness(0). Kept when the script is read again.
+        --- Example: game.sky.setMilkyWayColor("#c0a0ff") -- another world's sky
+        setMilkyWayColor: (color: string) -> (),
+
+        --- The Milky Way's colour as a hex code, as setMilkyWayColor was
+        --- given it.
+        --- Example: local tint = game.sky.milkyWayColor()
+        milkyWayColor: () -> string,
+
+        --- Says how much the light of towns brightens the night sky over the
+        --- world: "none" (the usual, a world lit by fire), "village",
+        --- "town" or "city", which are short for 1, 3, 5 and 8 on Bortle's
+        --- scale, or a number on it from 1 (no town) to 9 (an inner city),
+        --- below 1 taken as 1 and above 9 as 9. The glow is warm, brightest towards the
+        --- horizon, lights the land a little (game.sky.light() counts it)
+        --- and washes out the Milky Way and the faint stars, as real town
+        --- light does. Kept when the script is read again.
+        --- Example: game.sky.setLightPollution("town")
+        setLightPollution: (amount: number | "none" | "village" | "town" | "city") -> (),
+
+        --- How much towns light the night sky, as a number on Bortle's scale
+        --- from 1 (no town) to 9 (an inner city), even if setLightPollution
+        --- was given a word ("none" is 1, "village" 3, "town" 5, "city" 8).
+        --- Example: local class = game.sky.lightPollution()
+        lightPollution: () -> number,
     },
 
     --- The weather: say it in one word with game.weather.set, or a number

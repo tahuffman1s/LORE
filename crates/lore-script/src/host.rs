@@ -624,6 +624,21 @@ impl ScriptHost {
         self.weather.take_moon_size()
     }
 
+    /// How many times its real brightness the Milky Way is drawn and what
+    /// colour it is tinted, in linear light, if the script has said either
+    /// since this was last called (`game.sky.setMilkyWayBrightness`,
+    /// `game.sky.setMilkyWayColor`).
+    pub fn take_milky_way(&mut self) -> Option<(f32, [f32; 3])> {
+        self.weather.take_milky_way()
+    }
+
+    /// How much towns light the night sky, on Bortle's scale from 1 to 9,
+    /// if the script has said since this was last called
+    /// (`game.sky.setLightPollution`).
+    pub fn take_light_pollution(&mut self) -> Option<f32> {
+        self.weather.take_light_pollution()
+    }
+
     /// Where on the Earth the world lies (see `take_sky_place` below).
     pub fn take_sky_place(&mut self) -> Option<lore_sky::SkyPlace> {
         self.weather.take_sky_place()

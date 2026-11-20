@@ -356,6 +356,56 @@ pub const STARLIGHT_LUX: f32 = 0.002;
 /// lux: 0.1 to 0.3 is usual.
 pub const FULL_MOON_LUX: f32 = 0.3;
 
+/// How bright the sky overhead is on a clear night with no moon, for each
+/// class of John Bortle's scale from 1 (an excellent dark site) to 9 (an
+/// inner city), in magnitudes a square arcsecond as a sky quality meter
+/// reads it: the middle of each class's range as the scale gives it, and
+/// for 8 and 9, which it leaves open, 17.5 and 17.
+const BORTLE_SKY: [f32; 9] = [21.9, 21.7, 21.45, 21.0, 19.8, 18.9, 18.25, 17.5, 17.0];
+
+/// A sky of `magnitudes` a square arcsecond in candela a square metre.
+#[must_use]
+pub fn sky_candela(magnitudes: f32) -> f32 {
+    10.8e4 * 10.0_f32.powf(-0.4 * magnitudes)
+}
+
+/// The light of towns, `class` on Bortle's scale (1 to 9, between whole
+/// classes too; outside it, taken as the nearest end), that the sky
+/// overhead sends back down, in candela a square metre: what the sky
+/// quality meter reads less what a sky with no town at all sends (class 1,
+/// the night air and the stars). None at class 1, and 0.017 over a city.
+#[must_use]
+pub fn town_glow_candela(class: f32) -> f32 {
+    let class = if class.is_finite() {
+        class.clamp(1.0, 9.0)
+    } else {
+        1.0
+    };
+    let below = (class.floor() as usize).clamp(1, 8);
+    let share = class - below as f32;
+    let magnitudes = BORTLE_SKY[below - 1] + (BORTLE_SKY[below] - BORTLE_SKY[below - 1]) * share;
+    (sky_candela(magnitudes) - sky_candela(BORTLE_SKY[0])).max(0.0)
+}
+
+/// How much brighter town glow is `rise` (the sine of how high, 0 at the
+/// horizon and 1 overhead) than overhead: five times at the horizon, where
+/// the eye looks through the most lit air towards the towns, twice at 30
+/// degrees.
+#[must_use]
+pub fn town_glow_towards(rise: f32) -> f32 {
+    let low = 1.0 - rise.clamp(0.0, 1.0);
+    1.0 + 4.0 * low * low
+}
+
+/// The light town glow of `class` on Bortle's scale gives level open
+/// ground, in lux: the whole sky's, shaped as [`town_glow_towards`] says,
+/// which is five thirds of pi times the glow overhead. About 0.09 lux in
+/// an inner city, as bright as a quarter moon's light.
+#[must_use]
+pub fn town_glow_lux(class: f32) -> f32 {
+    5.0 / 3.0 * std::f32::consts::PI * town_glow_candela(class)
+}
+
 /// The light of the sun and the sky on level ground under a clear sky with
 /// the sun `degrees` high: as [`TWILIGHT`] says, in between by the
 /// logarithm, and [`daylight_lux`] from ten degrees up.
@@ -796,5 +846,37 @@ mod tests {
         for part in [broken.sun, broken.moon, broken.pole].iter().flatten() {
             assert!(part.is_finite());
         }
+    }
+
+    #[test]
+    fn town_glow_follows_bortles_scale() {
+        // No town glow at a dark site, the sky's own 21.9 magnitudes.
+        assert_eq!(town_glow_candela(1.0), 0.0);
+        assert_eq!(town_glow_candela(-3.0), 0.0);
+        assert_eq!(town_glow_candela(f32::NAN), 0.0);
+        // An inner city: 17 magnitudes a square arcsecond overhead.
+        let city = town_glow_candela(9.0) + sky_candela(21.9);
+        assert!((city - sky_candela(17.0)).abs() < 1e-6, "{city}");
+        assert_eq!(town_glow_candela(12.0), town_glow_candela(9.0));
+        // Brighter with each class, and smoothly between them.
+        let mut last = 0.0;
+        for tenth in 11..=90 {
+            let glow = town_glow_candela(tenth as f32 / 10.0);
+            assert!(glow > last, "{tenth}");
+            last = glow;
+        }
+        // Five times as bright at the horizon, and the whole sky's light on
+        // the ground as the shape says: summed over the sky by hand.
+        assert_eq!(town_glow_towards(1.0), 1.0);
+        assert_eq!(town_glow_towards(0.0), 5.0);
+        let steps = 2000;
+        let mut lux = 0.0;
+        for step in 0..steps {
+            let rise = (step as f32 + 0.5) / steps as f32;
+            lux += town_glow_towards(rise) * rise / steps as f32;
+        }
+        lux *= 2.0 * std::f32::consts::PI * town_glow_candela(9.0);
+        assert!((lux / town_glow_lux(9.0) - 1.0).abs() < 1e-3, "{lux}");
+        assert!((0.08..0.1).contains(&town_glow_lux(9.0)));
     }
 }

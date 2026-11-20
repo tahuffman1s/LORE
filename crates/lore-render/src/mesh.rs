@@ -69,10 +69,11 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, seven for the weather and five for the sun, the
+/// the light of lightning, seven for the weather and ten for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
-const SKY_BYTES: usize = 16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + 7 + 3);
+const SKY_BYTES: usize =
+    16 * (3 + 1 + 2 * sky::HEIGHTS + 1 + 1 + 1 + 9 + 2 + WEATHER_ROWS + sky::HEAVENS_ROWS + 3);
 
 /// How rough a material can be and still mirror the world round it: the
 /// shader's `MIRRORS_BELOW`.
@@ -230,6 +231,12 @@ impl View {
             {
                 *row = [*red, *green, *blue, 0.0];
             }
+            // Last in each row, how the night's own glows grow towards the
+            // horizon at that height: the air's, and the towns'.
+            for (number, [air, town]) in sky::NIGHT_GLOW_SHAPES.iter().enumerate() {
+                scattered[number][3] = *air;
+                scattered[sky::HEIGHTS + number][3] = *town;
+            }
         }
         let numbers = [self.clip, self.steady, self.before];
         let mut bytes = [0_u8; VIEW_BYTES];
@@ -280,7 +287,7 @@ impl View {
 pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
     pub(crate) weather: Air,
-    pub(crate) heavens: [[f32; 4]; 7],
+    pub(crate) heavens: [[f32; 4]; crate::sky::HEAVENS_ROWS],
     /// How the level's water looks if it says so, as the shader's
     /// `water_look`: all zero if not.
     pub(crate) water_look: [[f32; 4]; 3],
@@ -1114,6 +1121,7 @@ impl MeshPipeline {
         mesh.stars = Some(stars);
         let moon = MoonMaps::new(gpu)?;
         let (moon_colour, moon_height, moon_sampler) = (moon.colour, moon.height, moon.sampler);
+        let milky_way = moon.milky_way;
         mesh.moon = Some(moon);
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
@@ -1322,6 +1330,12 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The Milky Way, read by the moon's reader.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(43)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1332,13 +1346,13 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid, bounce
-            // light's list and the stars' grid and list, twenty-nine
-            // pictures (the moon's two among them), two written, and six
+            // light's list and the stars' grid and list, thirty pictures
+            // (the moon's two and the Milky Way among them), two written, and six
             // readers (the moon's among them).
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 5,
-                vk::DescriptorType::SAMPLED_IMAGE => 29,
+                vk::DescriptorType::SAMPLED_IMAGE => 30,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 6,
             };
@@ -1430,6 +1444,9 @@ impl MeshPipeline {
                     .image_view(moon_height)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
                 let moon_sampler_info = [vk::DescriptorImageInfo::default().sampler(moon_sampler)];
+                let milky_way_info = [vk::DescriptorImageInfo::default()
+                    .image_view(milky_way)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -1527,6 +1544,11 @@ impl MeshPipeline {
                         .dst_binding(42)
                         .descriptor_type(vk::DescriptorType::SAMPLER)
                         .image_info(&moon_sampler_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(43)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&milky_way_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 if let Some(bounce) = &mesh.bounce {
@@ -2121,6 +2143,9 @@ impl MeshPipeline {
                 [0.0; 4],
                 [1.0, 0.0, 0.0, 0.0],
                 [1.0, 1.0, 1.0, 1.0],
+                [0.0; 4],
+                [0.0; 4],
+                [1.0; 4],
             ],
             |day| day.heavens,
         );
@@ -4596,7 +4621,7 @@ mod tests {
                     fog: 0.002,
                     wind: [0.0, 1.0, 9.0],
                 },
-                heavens: [[9.0; 4]; 7],
+                heavens: [[9.0; 4]; sky::HEAVENS_ROWS],
                 water_look: [[0.5; 4], [0.25; 4], [0.75; 4]],
                 stream_look: [[0.125; 4], [0.0; 4], [0.375; 4]],
             },
@@ -4640,20 +4665,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 512), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 523), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 524), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 535), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 539),
+            number(&bytes, 551),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 540),
+            number(&bytes, 552),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 551), 0.375);
-        assert_eq!(bytes.len(), 552 * 4);
+        assert_eq!(number(&bytes, 563), 0.375);
+        assert_eq!(bytes.len(), 564 * 4);
     }
 
     #[test]

@@ -196,7 +196,7 @@ impl Sky {
     }
 
     /// The angle above the horizon of height `number`, in radians.
-    fn angle_of(number: usize) -> f64 {
+    pub(crate) fn angle_of(number: usize) -> f64 {
         let share = number as f64 / (HEIGHTS - 1) as f64;
         share * share * std::f64::consts::FRAC_PI_2
     }
@@ -282,12 +282,56 @@ pub(crate) struct Day {
     /// turn about, and how large the moon is drawn against its real size;
     /// the colour of the sun's own disc, and one over what the eye
     /// multiplies the picture by (1 here; `Effects` keeps it); the light of
-    /// the night sky,
+    /// the moonlight the air scatters,
     /// and how bright the lit part of the moon's face is against the whole
     /// at full ([`lore_sky::Heavens::moon_surface`]); where the sky's equator
     /// crosses the meridian with the stars turned 0, and how bright a lux
-    /// of starlight is drawn; and what colour the moon is tinted.
-    pub(crate) heavens: [[f32; 4]; 7],
+    /// of starlight is drawn; what colour the moon is tinted; the glow of
+    /// the air overhead; the glow of towns overhead; and what colour the
+    /// Milky Way is tinted, and how many times its real brightness it is
+    /// drawn (`Effects` says these two).
+    pub(crate) heavens: [[f32; 4]; HEAVENS_ROWS],
+}
+
+/// How many rows of four numbers the shader's `heavens` has.
+pub(crate) const HEAVENS_ROWS: usize = 10;
+
+/// How bright the glow of the air high up is straight overhead on a dark
+/// night, in candela a square metre: 1e-4, 22.6 magnitudes a square
+/// arcsecond, about three fifths of a dark site's 21.9; the dust between
+/// the planets, the Milky Way and the faint stars give the rest. Its
+/// green line of oxygen at 558 nanometres outshines the rest of it.
+pub(crate) const AIRGLOW_CANDELA: f32 = 1e-4;
+
+/// The colour of the air's glow, as bright as white: greenish grey.
+const AIRGLOW: [f32; 3] = [0.885, 1.041, 0.937];
+
+/// For each of the sky's heights, how much brighter than overhead the glow
+/// of the air ([`airglow_towards`]) and of towns
+/// ([`lore_sky::town_glow_towards`]) are there: worked out once.
+pub(crate) static NIGHT_GLOW_SHAPES: std::sync::LazyLock<[[f32; 2]; HEIGHTS]> =
+    std::sync::LazyLock::new(|| {
+        std::array::from_fn(|number| {
+            let rise = Sky::angle_of(number).sin() as f32;
+            [airglow_towards(rise), lore_sky::town_glow_towards(rise)]
+        })
+    });
+
+/// How much brighter the glow of the air is along a line of sight `rise`
+/// high (the sine of its height) than overhead. It shines from a thin shell
+/// some 90 km up, so a line of sight crosses more of it the lower it looks,
+/// six times as much at the horizon (van Rhijn's law); the air below dims
+/// it as it dims a star, and gives some of that back as glow scattered from
+/// the rest of the shell. Brightest about ten degrees up, two and a half
+/// times overhead's. The shader reads it from the sky's heights.
+pub(crate) fn airglow_towards(rise: f32) -> f32 {
+    let rise = rise.clamp(0.0, 1.0);
+    // (6371 / 6461) squared: the Earth's radius over the shell's.
+    let shell = 1.0 / (1.0 - 0.972_34 * (1.0 - rise * rise)).sqrt();
+    // Kasten and Young's count of the air, and what it takes of green.
+    let air = 1.0 / (rise + 0.505_72 * (rise.asin().to_degrees() + 6.079_95).powf(-1.6364));
+    let through = (-0.921 * 0.19 * (air - 1.0)).exp();
+    shell * (through + 0.4 * (1.0 - through))
 }
 
 /// `value` between `low` and `high`, as a share from 0 to 1 that starts
@@ -430,21 +474,17 @@ impl Day {
             ..lighting
         });
         let per_lux = crate::lamps::per_lux(&lighting, heavens, moon_up);
-        // The night sky's own light, as bright as it really is: the glow of
-        // the air high up and of the dust between the planets, about 0.04
-        // of a lux on level ground less what the stars drawn one by one
-        // give (some 6e-4 candela a square metre, 21.5 magnitudes a square
-        // arcsecond), greenish grey; and the moon's light that the air
-        // scatters, about 3 % of it, blue. Drawn as bright as a lux is
-        // drawn at this hour.
-        let glow_lux = 0.6 * lore_sky::STARLIGHT_LUX;
+        // The moon's light that the air scatters, about 3 % of it, blue;
+        // and the glow of the air itself overhead (`AIRGLOW_CANDELA`),
+        // greenish. Drawn as bright as a lux is drawn at this hour. The
+        // shader makes the air's glow brighter towards the horizon and
+        // adds the dust between the planets and the Milky Way.
         let scattered_lux = 0.03 * heavens.moonlight_lux() * moon_up;
-        let night_glow = [0, 1, 2].map(|colour| {
-            ([0.85, 1.0, 0.9][colour] * glow_lux
-                + [0.6, 0.75, 1.15][colour] * tint[colour] * scattered_lux)
-                / std::f32::consts::PI
+        let scattered = [0, 1, 2].map(|colour| {
+            [0.6, 0.75, 1.15][colour] * tint[colour] * scattered_lux / std::f32::consts::PI
                 * per_lux
         });
+        let airglow = AIRGLOW.map(|part| part * AIRGLOW_CANDELA * per_lux);
         Self {
             lighting,
             sky,
@@ -457,9 +497,9 @@ impl Day {
                 [pole[0], pole[1], pole[2], 1.0],
                 [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
                 [
-                    night_glow[0],
-                    night_glow[1],
-                    night_glow[2],
+                    scattered[0],
+                    scattered[1],
+                    scattered[2],
                     // How bright the lit part of the moon's face is, against
                     // the whole of it at full moon.
                     heavens.moon_surface(),
@@ -469,6 +509,11 @@ impl Day {
                 // the stars and the moon's face are drawn than the land
                 // (`Effects::set_night_darkening` says).
                 [tint[0], tint[1], tint[2], 1.0],
+                [airglow[0], airglow[1], airglow[2], 0.0],
+                // The glow of towns and the Milky Way as it really is,
+                // unless a game says otherwise (`Effects` puts them here).
+                [0.0; 4],
+                [1.0; 4],
             ],
         }
     }
@@ -719,5 +764,23 @@ mod tests {
             was = zenith;
         }
         assert!(grey(was) < 1e-6, "night at fourteen degrees down: {was:?}");
+    }
+
+    #[test]
+    fn the_air_glows_brightest_some_ten_degrees_up() {
+        let at = |degrees: f32| airglow_towards(degrees.to_radians().sin());
+        assert!((at(90.0) - 1.0).abs() < 1e-3, "{}", at(90.0));
+        let brightest = (0..=90)
+            .map(|degrees| degrees as f32)
+            .fold(0.0, |best: f32, degrees| {
+                if at(degrees) > at(best) {
+                    degrees
+                } else {
+                    best
+                }
+            });
+        assert!((5.0..=15.0).contains(&brightest), "{brightest}");
+        assert!((2.0..3.5).contains(&at(brightest)), "{}", at(brightest));
+        assert!(at(0.0) > 1.0 && at(0.0) < at(brightest));
     }
 }

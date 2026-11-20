@@ -9,6 +9,16 @@
 //! the orbiter's laser altimeter (`ldem_3_8bit.jpg`), about 20 km from
 //! black to white. Both are 1024 by 512, longitude across with 0 in the
 //! middle and east to the right, latitude down with north at the top.
+//!
+//! The Milky Way (#480) is read the same way and kept with them: NASA's
+//! "Deep Star Maps 2020" (<https://svs.gsfc.nasa.gov/4851>, credit "NASA/
+//! Goddard Space Flight Center Scientific Visualization Studio. Gaia DR2:
+//! ESA/Gaia/DPAC"), the map without the stars brighter than about
+//! magnitude 11.5, so the stars drawn one by one are not counted twice.
+//! `data/sky/make_milky_way.sh` makes it: 4096 by 2048, right ascension
+//! across with 0 in the middle and growing to the left, declination down
+//! with north at the top, each pixel the fourth root of NASA's linear
+//! light.
 
 use std::sync::Arc;
 
@@ -24,7 +34,10 @@ const COLOUR: &[u8] = include_bytes!("../data/moon/lroc_color_poles_1k.jpg");
 /// The height of the moon's face, as NASA made it.
 const HEIGHT: &[u8] = include_bytes!("../data/moon/ldem_3_8bit.jpg");
 
-/// The two maps on the graphics card.
+/// The Milky Way, as `data/sky/make_milky_way.sh` makes it from NASA's map.
+const MILKY_WAY: &[u8] = include_bytes!("../data/sky/milky_way.jpg");
+
+/// The moon's two maps and the Milky Way on the graphics card.
 pub(crate) struct MoonMaps {
     /// Kept so the pictures live as long as the maps.
     _textures: Textures,
@@ -32,6 +45,8 @@ pub(crate) struct MoonMaps {
     pub(crate) colour: vk::ImageView,
     /// The height, read as numbers.
     pub(crate) height: vk::ImageView,
+    /// The Milky Way, read as numbers (the fourth root of its light).
+    pub(crate) milky_way: vk::ImageView,
     /// Reads both smoothly and from their smaller copies, as small as the
     /// moon is drawn, so its face does not sparkle: round in longitude,
     /// not past the poles.
@@ -48,21 +63,24 @@ impl Drop for MoonMaps {
 }
 
 impl MoonMaps {
-    /// Decodes both maps and copies them to the graphics card.
+    /// Decodes the maps and copies them to the graphics card.
     pub(crate) fn new(gpu: &Arc<Gpu>) -> Result<Self, RenderError> {
         let mut textures = Textures::new(gpu, AnisotropicFiltering::default())?;
-        let mut upload = |bytes: &[u8], colour: bool| -> Result<vk::ImageView, RenderError> {
-            // The maps are the engine's own and decode; were one broken, the
-            // moon would show the white of an unknown picture rather than
-            // stop the game.
-            let Ok(picture) = lore_assets::decode_picture(bytes) else {
-                return Ok(textures.white());
-            };
-            let index = textures.upload(picture.width, picture.height, &picture.pixels, colour)?;
-            Ok(textures.view_at(index))
+        // The maps are the engine's own and decode; were one broken, it
+        // would be drawn as one plain colour, `otherwise`, rather than stop
+        // the game: the moon white, the Milky Way none at all.
+        let mut upload = |bytes: &[u8], colour: bool, otherwise: [u8; 4]| {
+            let index = match lore_assets::decode_picture(bytes) {
+                Ok(picture) => {
+                    textures.upload(picture.width, picture.height, &picture.pixels, colour)
+                }
+                Err(_) => textures.upload(1, 1, &otherwise, colour),
+            }?;
+            Ok::<_, RenderError>(textures.view_at(index))
         };
-        let colour = upload(COLOUR, true)?;
-        let height = upload(HEIGHT, false)?;
+        let colour = upload(COLOUR, true, [255; 4])?;
+        let height = upload(HEIGHT, false, [255; 4])?;
+        let milky_way = upload(MILKY_WAY, false, [0, 0, 0, 255])?;
         // SAFETY: the device is alive, and the settings live until the call
         // returns.
         let sampler = unsafe {
@@ -83,6 +101,7 @@ impl MoonMaps {
             _textures: textures,
             colour,
             height,
+            milky_way,
             sampler,
             gpu: Arc::clone(gpu),
         })
@@ -117,6 +136,8 @@ mod tests {
         let height = lore_assets::decode_picture(HEIGHT).expect("the height map");
         assert_eq!((colour.width, colour.height), (1024, 512));
         assert_eq!((height.width, height.height), (1024, 512));
+        let milky_way = lore_assets::decode_picture(MILKY_WAY).expect("the Milky Way");
+        assert_eq!((milky_way.width, milky_way.height), (4096, 2048));
         // The near side: longitude -90 to 90, the middle half across, each
         // pixel counted by the part of the round face it fills.
         let mut sum = 0.0_f64;

@@ -86,6 +86,24 @@ for name, hex in moonColours do
     moonLookOf[hex] = name
 end
 
+local milkyLooks = { "natural", "violet", "teal", "golden", "rose" }
+local milkyColours: { [string]: string } = {
+    natural = "#ffffff",
+    violet = "#b090ff",
+    teal = "#70e0d0",
+    golden = "#ffd070",
+    rose = "#ff90b0",
+}
+local milkyLookOf: { [string]: string } = {}
+for name, hex in milkyColours do
+    milkyLookOf[hex] = name
+end
+
+-- How much towns light the sky, in the words game.sky.setLightPollution
+-- takes, and the class on Bortle's scale each stands for.
+local townLights = { "none", "village", "town", "city" }
+local townClass: { [string]: number } = { none = 1, village = 3, town = 5, city = 8 }
+
 local monthNames = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" }
 
 -- The way the player looks, along the ground, as a vector of length 1.
@@ -333,6 +351,51 @@ return menu.new("Weather", {
             end
             local up = (game.sky.moonHeight() or -90) > 0
             return string.format("%s, %d%% lit, %s", phase, math.floor((game.sky.moonLit() or 0) * 100 + 0.5), if up then "up" else "down")
+        end,
+    }),
+    -- How bright the Milky Way is drawn, from none to ten times as bright as
+    -- it really is: game.sky.setMilkyWayBrightness(2). On a dark night with
+    -- no moon it is a band of star clouds and dark lanes; a bright moon or
+    -- town light washes it out.
+    menu.slider("Milky Way", {
+        min = 0,
+        max = 10,
+        step = 0.5,
+        get = game.sky.milkyWayBrightness,
+        set = game.sky.setMilkyWayBrightness,
+        format = function(times)
+            return if times == 0 then "hidden" elseif times == 1 then "as it is" else string.format("%g times", times)
+        end,
+        color = "#c8c8ff",
+    }),
+    -- What colour the Milky Way is: game.sky.setMilkyWayColor("#b090ff").
+    menu.choice("Milky Way colour", {
+        options = milkyLooks,
+        get = function()
+            return milkyLookOf[game.sky.milkyWayColor()] or "natural"
+        end,
+        set = function(look)
+            game.sky.setMilkyWayColor(milkyColours[look] or "#ffffff")
+        end,
+    }),
+    -- How much the light of towns brightens the night sky and hides the
+    -- faint stars: game.sky.setLightPollution("town").
+    menu.choice("Town light", {
+        options = townLights,
+        get = function()
+            -- The word nearest the class: a script that said a number
+            -- between two words, such as 4, shows the first of them.
+            local class = game.sky.lightPollution()
+            local nearest = "none"
+            for _, word in townLights do
+                if math.abs(townClass[word] - class) < math.abs(townClass[nearest] - class) then
+                    nearest = word
+                end
+            end
+            return nearest
+        end,
+        set = function(word)
+            game.sky.setLightPollution(townClass[word] or 1)
         end,
     }),
     menu.slider("Snow lying", { max = 0.6, step = 0.05, get = game.weather.snowDepth, set = game.weather.setSnowDepth, format = centimetres, color = "white" }),

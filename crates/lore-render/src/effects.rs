@@ -238,6 +238,11 @@ impl Surface for Standing<'_> {
     }
 }
 
+/// The colour of town glow, as bright as white: the warm light of street
+/// lamps, old orange sodium and newer white LEDs together, sent back by the
+/// air.
+const TOWN_GLOW: [f32; 3] = [1.185, 0.972, 0.735];
+
 /// Everything in the air and the water that a splash made, and what is
 /// still pushing on the water.
 pub(crate) struct Effects {
@@ -281,6 +286,13 @@ pub(crate) struct Effects {
     moon_size: f32,
     /// What colour the moon is tinted, as bright as white.
     moon_tint: [f32; 3],
+    /// How much towns light the night sky, on Bortle's scale from 1 (none)
+    /// to 9 (an inner city).
+    light_pollution: f32,
+    /// How many times its real brightness the Milky Way is drawn, and what
+    /// colour it is tinted, as bright as white.
+    milky_way: f32,
+    milky_way_tint: [f32; 3],
     /// How many stops the eye's night darkening takes from the picture
     /// (`Eye::night_darkening`), given back to the stars, and what the eye
     /// multiplies the picture by, undone for the moon's face.
@@ -327,6 +339,9 @@ impl Effects {
             place: None,
             moon_size: 1.0,
             moon_tint: [1.0; 3],
+            light_pollution: 1.0,
+            milky_way: 1.0,
+            milky_way_tint: [1.0; 3],
             night_darkening: 0.0,
             eye_multiplier: 1.0,
             rise: 0.0,
@@ -818,6 +833,48 @@ impl Effects {
         }
     }
 
+    /// Says how much towns light the night sky over the world: `class` on
+    /// Bortle's scale, from 1 (no town, the default) to 9 (an inner city).
+    pub(crate) fn set_light_pollution(&mut self, class: f32) {
+        let class = if class.is_finite() {
+            class.clamp(1.0, 9.0)
+        } else {
+            1.0
+        };
+        if class == self.light_pollution {
+            return;
+        }
+        self.light_pollution = class;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
+    /// Says how many times its real brightness the Milky Way is drawn, from
+    /// 0 (not at all) to 10, and what colour it is tinted, in linear light
+    /// (`[1.0; 3]` is its own colour; it is made as bright as white).
+    pub(crate) fn set_milky_way(&mut self, times: f32, tint: [f32; 3]) {
+        let times = if times.is_finite() {
+            times.clamp(0.0, 10.0)
+        } else {
+            1.0
+        };
+        let bright = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
+        let tint = if bright > 1e-4 && tint.iter().all(|part| part.is_finite() && *part >= 0.0) {
+            tint.map(|part| part / bright)
+        } else {
+            [1.0; 3]
+        };
+        if times == self.milky_way && tint == self.milky_way_tint {
+            return;
+        }
+        self.milky_way = times;
+        self.milky_way_tint = tint;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
     /// Says how many stops the eye's night darkening took from the last
     /// picture: the stars and the moon's face are drawn that much brighter,
     /// so that however dark a night is drawn they stand out as an eye used
@@ -854,6 +911,22 @@ impl Effects {
         day.heavens[2][3] = self.moon_size;
         day.heavens[6][3] = self.night_darkening.exp2();
         day.heavens[3][3] = 1.0 / self.eye_multiplier;
+        // Town glow lights the land from the whole sky, as a lux of any
+        // light is drawn at this hour, so the eye's exposure stays as it
+        // was and the glow shows as more light.
+        let town_lux = lore_sky::town_glow_lux(self.light_pollution) * day.per_lux;
+        for (sky, colour) in day.lighting.sky.iter_mut().zip(TOWN_GLOW) {
+            *sky += colour * town_lux / std::f32::consts::PI;
+        }
+        let town = lore_sky::town_glow_candela(self.light_pollution) * day.per_lux;
+        day.heavens[8] = [
+            TOWN_GLOW[0] * town,
+            TOWN_GLOW[1] * town,
+            TOWN_GLOW[2] * town,
+            0.0,
+        ];
+        let [red, green, blue] = self.milky_way_tint;
+        day.heavens[9] = [red, green, blue, self.milky_way];
         day
     }
 
