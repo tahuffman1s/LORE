@@ -388,6 +388,9 @@ impl Game for ScriptGame {
         if let Some(class) = self.host.take_light_pollution() {
             frame.set_light_pollution(class);
         }
+        if let Some(kp) = self.host.take_aurora() {
+            frame.set_aurora(kp);
+        }
         if let Some(place) = self.host.take_sky_place() {
             frame.set_sky_place(place);
         }

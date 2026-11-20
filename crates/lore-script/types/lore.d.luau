@@ -1461,6 +1461,37 @@ declare game: {
         --- Example: local covered = game.sky.sunCovered() or 0
         sunCovered: () -> number?,
 
+        --- Says how strong the aurora (the northern and southern lights) is:
+        --- "none" (the usual), "quiet", "active", "storm" or "great storm", or
+        --- a number from 0 to 9 on Kp, the storm scale forecasts use ("quiet"
+        --- is 2, "active" 4, "storm" 6, "great storm" 9; numbers outside are
+        --- brought into 0 to 9). It shows only at night, lights the land a
+        --- little green (game.sky.light() counts it), and is kept when the
+        --- script is read again.
+        ---
+        --- Its curtains, green below and red above, hang in a ring round the
+        --- magnetic pole that reaches nearer the equator the stronger it is:
+        --- overhead in the far north on a quiet night, low in the north from
+        --- the middle latitudes in a great storm, and in the south of the
+        --- world round the southern pole. Where the ring is comes from
+        --- setLatitude and setLongitude; a world with no place on the Earth is
+        --- taken to lie in the far north, so a quiet aurora is overhead.
+        --- Example: game.sky.setAurora("storm")
+        setAurora: (storm: number | "none" | "quiet" | "active" | "storm" | "great storm") -> (),
+
+        --- How stormy the aurora is, as the Kp index from 0 to 9, even if
+        --- setAurora was given a word.
+        --- Example: local kp = game.sky.aurora()
+        aurora: () -> number,
+
+        --- How much of the aurora shows here now, from 0 (none: none is
+        --- set, it is day, or the ring is beyond the horizon) to 1, the most
+        --- there can be: a great storm overhead on a dark night. A world with
+        --- no place on the Earth counts as the far north. Nil if no hour has
+        --- been said.
+        --- Example: if (game.sky.auroraSeen() or 0) > 0.05 then print("look north!") end
+        auroraSeen: () -> number?,
+
         --- Says which way north is in the level, as a compass bearing in
         --- degrees: 0 when north is the level's -z (Blender's +y), 90 when
         --- it is +x, turning clockwise seen from above. Turns the whole sky

@@ -18,6 +18,7 @@
 //! never has to think about time zones; a longitude only says which moment
 //! of the world's day that is, for eclipses and the moon's place.
 
+pub mod aurora;
 mod moon;
 pub mod planets;
 pub mod stars;

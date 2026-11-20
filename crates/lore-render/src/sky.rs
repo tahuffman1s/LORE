@@ -296,7 +296,13 @@ pub(crate) struct Day {
 /// How many rows of four numbers the shader's `heavens` has: ten for the
 /// sun, the moon, the stars and the night's glow, then two for each planet
 /// ([`PLANET_ROWS`]).
-pub(crate) const HEAVENS_ROWS: usize = ECLIPSE_ROWS + 3;
+pub(crate) const HEAVENS_ROWS: usize = AURORA_ROWS + 2;
+
+/// Where in `heavens` the aurora is: towards the magnetic pole along the
+/// ground, and how far the middle of its ring is that way, in kilometres;
+/// how far the ring reaches either side, how bright its brightest curtains
+/// are in candela a square metre, and how stormy (Kp). All 0 with none (`Effects` says).
+pub(crate) const AURORA_ROWS: usize = ECLIPSE_ROWS + 3;
 
 /// Where in `heavens` the eclipses are: towards the middle of the Earth's
 /// shadow, and how far its full shadow reaches; how far its half shadow

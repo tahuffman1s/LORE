@@ -300,6 +300,30 @@ fn a_script_sees_the_eclipse_over_dallas() {
 }
 
 #[test]
+fn the_aurora_shows_in_the_far_north_at_night() {
+    let mut host = game(
+        r#"
+        print(game.sky.aurora(), game.sky.auroraSeen())
+        game.sky.setLatitude(69.65)
+        game.sky.setLongitude(18.96)
+        game.sky.setDate(2026, 1, 18)
+        game.sky.setHour(22)
+        print(game.sky.auroraSeen())
+        local dark = game.sky.light()
+        game.sky.setAurora(" Storm ")
+        print(game.sky.aurora(), game.sky.auroraSeen() > 0.01, game.sky.light() > dark)
+        game.sky.setHour(12)
+        print(game.sky.auroraSeen())
+        game.sky.setAurora(20)
+        print(game.sky.aurora())
+        "#,
+    );
+    assert_eq!(printed(), ["0 nil", "0", "6 true true", "0", "9"]);
+    assert_eq!(host.take_aurora(), Some(9.0));
+    assert_eq!(host.take_aurora(), None);
+}
+
+#[test]
 fn town_light_brightens_the_night_on_open_ground() {
     let _host = game(
         r#"
@@ -350,6 +374,11 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "game.sky.setLongitude(200)",
             "from -180 (west) to 180 (east)",
         ),
+        (
+            "game.sky.setAurora(\"bright\")",
+            "\"none\", \"quiet\", \"active\", \"storm\" or \"great storm\"",
+        ),
+        ("game.sky.setAurora(true)", "game.sky.setAurora(\"storm\")"),
         (
             "game.sky.setLongitude(\"west\")",
             "game.sky.setLongitude(-3.7)",

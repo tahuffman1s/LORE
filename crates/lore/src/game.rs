@@ -105,6 +105,8 @@ pub struct Frame {
     milky_way: Option<(f32, [f32; 3])>,
     /// How much towns light the night sky, if the game said it this frame.
     light_pollution: Option<f32>,
+    /// How stormy the aurora is, if the game said it this frame.
+    aurora: Option<f32>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -231,6 +233,7 @@ impl Frame {
             moon_tint: None,
             milky_way: None,
             light_pollution: None,
+            aurora: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -925,6 +928,16 @@ impl Frame {
     /// How much towns light the night sky, if the game said it this frame.
     pub(crate) fn take_light_pollution(&mut self) -> Option<f32> {
         self.light_pollution.take()
+    }
+
+    /// Says how stormy the aurora is: the Kp index, from 0 (none) to 9.
+    pub fn set_aurora(&mut self, kp: f32) {
+        self.aurora = Some(kp);
+    }
+
+    /// How stormy the aurora is, if the game said it this frame.
+    pub(crate) fn take_aurora(&mut self) -> Option<f32> {
+        self.aurora.take()
     }
 
     /// Says what colour the moon is tinted, in linear red, green and blue:

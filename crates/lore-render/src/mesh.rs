@@ -69,7 +69,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, seven for the weather and twenty-seven for the sun, the
+/// the light of lightning, seven for the weather and twenty-nine for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
 const SKY_BYTES: usize =
@@ -4669,20 +4669,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 592), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 603), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 600), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 611), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 619),
+            number(&bytes, 627),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 620),
+            number(&bytes, 628),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 631), 0.375);
-        assert_eq!(bytes.len(), 632 * 4);
+        assert_eq!(number(&bytes, 639), 0.375);
+        assert_eq!(bytes.len(), 640 * 4);
     }
 
     #[test]

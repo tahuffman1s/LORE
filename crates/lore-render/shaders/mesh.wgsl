@@ -137,8 +137,12 @@ struct View {
     // shadow and how far its full shadow reaches; how far its half shadow
     // reaches, how much of the sun the moon covers, how much of its
     // sunlight the moon gets, and how wide the sun is; how wide the moon
-    // really is, and how much of the corona shows.
-    heavens: array<vec4<f32>, 27>,
+    // really is, and how much of the corona shows; and from row 27 the
+    // aurora (`AURORA_ROWS` in `sky.rs`): towards the magnetic pole along
+    // the ground and how far the middle of its ring is that way, in
+    // kilometres; how far the ring reaches either side, how bright its
+    // brightest curtains are drawn, and how stormy (Kp), 0 with none.
+    heavens: array<vec4<f32>, 29>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1333,6 +1337,20 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     // Way, as the eye cannot open far enough for it.
     let noticed = smoothstep(0.05, 0.5, stands_out)
         * MILKY_WAY_SEEN / (0.8 * MILKY_WAY_CANDELA) * view.heavens[3].w;
+    // The aurora is in the air, in front of the stars. It is shown as an
+    // eye used to the dark sees it, on the Milky Way's scale (whatever the
+    // eye does for the land, `heavens[3].w` undoing it): a quiet arc as
+    // bright as the Milky Way's brightest cloud, and brighter as the square
+    // root of its light, so a great storm, a hundred times as bright, shows
+    // ten times as bright and not blinding.
+    if view.heavens[28].y > 0.0 {
+        let aurora = aurora_light(direction);
+        let candela = dot(aurora, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if candela > 1e-9 {
+            let shown = MILKY_WAY_SEEN * sqrt(candela / (0.8 * MILKY_WAY_CANDELA));
+            seen += aurora / candela * shown * view.heavens[3].w * up * night;
+        }
+    }
     let points = real_stars(among, direction, pixel, sky) + planets_light(direction, pixel, sky);
     return seen + (beyond * noticed + points) * behind;
 }
@@ -1464,6 +1482,113 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) ->
     // An eye used to the dark sees the stars stand out against it: the
     // night's darkening, which dims the land, is given back to them.
     return light * dimmed * per_lux * view.heavens[6].w;
+}
+
+// For each of the aurora's three sheets, the cosine and sine of how far
+// round each of its waves is turned from the first sheet's: the wide fold
+// (2.1 radians a sheet) and the middling one (4.7), then the fine fold
+// (1.0) and the swell along it (1.7).
+const AURORA_TURNS: array<vec4<f32>, 3> = array<vec4<f32>, 3>(vec4<f32>(1.000000, 0.000000, 1.000000, 0.000000), vec4<f32>(-0.504846, 0.863209, -0.012389, -0.999923), vec4<f32>(-0.490261, -0.871576, -0.999693, 0.024775));
+const AURORA_FINE_TURNS: array<vec2<f32>, 3> = array<vec2<f32>, 3>(vec2<f32>(1.000000, 0.000000), vec2<f32>(0.540302, 0.841471), vec2<f32>(-0.416147, 0.909297));
+const AURORA_SWELL_TURNS: array<vec2<f32>, 3> = array<vec2<f32>, 3>(vec2<f32>(1.000000, 0.000000), vec2<f32>(-0.128844, 0.991665), vec2<f32>(-0.966798, -0.255541));
+
+// The light of the aurora along `direction` (in the level), in candela a
+// square metre. Its curtains hang in a shell from about 100 to 300 km up, along the
+// ring round the magnetic pole: a few thin sheets that fold and drift
+// along it, streaked with rays that run up them. Oxygen glows green low in
+// them and red high up, and in a strong storm their foot is fringed with
+// the pink of nitrogen. The line of sight is walked through the shell, where
+// it is within the ring, in twelve steps, the Earth's curve taken into account, so a far ring sits
+// low on the horizon and one overhead fills the sky.
+fn aurora_light(direction: vec3<f32>) -> vec3<f32> {
+    if direction.y < -0.02 {
+        return vec3<f32>(0.0);
+    }
+    let pole = view.heavens[27].xyz;
+    let middle = view.heavens[27].w;
+    let half = view.heavens[28].x;
+    let bright = view.heavens[28].y;
+    let kp = view.heavens[28].z;
+    let east = vec3<f32>(-pole.z, 0.0, pole.x);
+    let seconds = view.clouds.y;
+    // How far along the line of sight it reaches a height, in kilometres:
+    // h = s sin(e) + (s cos(e))^2 / 2R, solved for s.
+    let level = max(1.0 - direction.y * direction.y, 0.0);
+    let curve = level / (2.0 * 6371.0);
+    var low = 2.0 * 90.0 / (direction.y + sqrt(direction.y * direction.y + 4.0 * curve * 90.0));
+    var high = 2.0 * 320.0 / (direction.y + sqrt(direction.y * direction.y + 4.0 * curve * 320.0));
+    // How far towards the pole the line of sight has gone grows evenly
+    // along it: only the stretch within the ring is walked.
+    let towards_pole = dot(direction, pole);
+    if abs(towards_pole) > 1e-4 {
+        let one = (middle - 2.0 * half) / towards_pole;
+        let other = (middle + 2.0 * half) / towards_pole;
+        low = max(low, min(one, other));
+        high = min(high, max(one, other));
+    } else if abs(middle) > 2.0 * half {
+        return vec3<f32>(0.0);
+    }
+    if high <= low {
+        return vec3<f32>(0.0);
+    }
+    let step = (high - low) / 12.0;
+    // Each pixel starts at a different part of a step, a different one each
+    // frame: the upscaler blends it smooth.
+    let jitter = fract(
+        sin(dot(direction, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453 + seconds * 7.13,
+    );
+    var light = vec3<f32>(0.0);
+    for (var number = 0; number < 12; number++) {
+        let along = low + (f32(number) + jitter) * step;
+        let at = direction * along;
+        let height = along * direction.y + along * along * curve;
+        let north = dot(at, pole) - middle;
+        let across = dot(at, east);
+        // The whole ring: brightest in its middle.
+        let ring = exp(-(north * north) / (half * half));
+        // Three sheets across the ring, each folding along it and drifting:
+        // the same waves for each, a third of a turn apart, so each wave's
+        // sine and cosine are worked out once (sin(x + p) = sin x cos p +
+        // cos x sin p).
+        let wide = vec2<f32>(sin(across * 0.0035 + seconds * 0.04), cos(across * 0.0035 + seconds * 0.04));
+        let middling = vec2<f32>(sin(across * 0.013 - seconds * 0.09), cos(across * 0.013 - seconds * 0.09));
+        let fine = vec2<f32>(sin(across * 0.05 + seconds * 0.3), cos(across * 0.05 + seconds * 0.3));
+        let swell = vec2<f32>(sin(across * 0.0021 + seconds * 0.02), cos(across * 0.0021 + seconds * 0.02));
+        var sheets = 0.0;
+        for (var sheet = 0; sheet < 3; sheet++) {
+            let which = f32(sheet);
+            let fold = 60.0 * dot(wide, AURORA_TURNS[sheet].xy)
+                + 25.0 * dot(middling, AURORA_TURNS[sheet].zw)
+                + 8.0 * dot(fine, AURORA_FINE_TURNS[sheet]);
+            // Unevenly spaced, the brightest nearest the middle, and each
+            // brightening and fading along its length.
+            let place = (which - 1.0) * half * (0.55 + 0.1 * which);
+            let strength = (1.0 - 0.35 * abs(which - 1.0))
+                * (0.55 + 0.45 * dot(swell, AURORA_SWELL_TURNS[sheet]));
+            let off = (north - place - fold) / 6.0;
+            sheets += strength * exp(-off * off);
+        }
+        // Rays running up the sheets, flickering.
+        let rays = 0.6 + 0.25 * sin(across * 0.4 + 3.0 * middling.x)
+            + 0.15 * sin(across * 1.3 - seconds * 0.6);
+        // Green from its sharp foot near 100 km, fading upwards; red above
+        // 200 km, more of it the stormier; pink at the foot in a storm.
+        let foot = smoothstep(92.0, 105.0, height);
+        let green = foot * exp(-max(height - 110.0, 0.0) / 55.0);
+        let red = smoothstep(170.0, 230.0, height) * exp(-max(height - 230.0, 0.0) / 90.0)
+            * (0.03 + 0.05 * max(kp - 4.0, 0.0));
+        let pink = foot * (1.0 - smoothstep(100.0, 112.0, height)) * smoothstep(5.0, 8.0, kp);
+        let glow = vec3<f32>(0.4, 1.0, 0.55) * green + vec3<f32>(1.0, 0.35, 0.4) * red
+            + vec3<f32>(1.0, 0.5, 0.8) * pink;
+        // Between the sheets the ring glows faintly all over, the diffuse
+        // aurora: per kilometre a three-hundredth of a sheet's middle, as a
+        // sheet is some ten kilometres thick and a low line of sight
+        // crosses a thousand of the ring.
+        light += glow * ring * (sheets * rays + 0.003) * step;
+    }
+    // A curtain seen side on is some 60 km of it: that is its full
+    // brightness. The air in front dims it as it dims a star.
+    return light / 60.0 * bright * through_air_mass(max(direction.y, 0.0));
 }
 
 // How quickly a star's spot of light falls off from its middle, for a

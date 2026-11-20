@@ -238,6 +238,10 @@ impl Surface for Standing<'_> {
     }
 }
 
+/// The colour of the aurora's light on the land, as bright as white: the
+/// green of oxygen at 558 nanometres.
+const AURORA_GREEN: [f32; 3] = [0.25, 1.25, 0.45];
+
 /// The colour of town glow, as bright as white: the warm light of street
 /// lamps, old orange sodium and newer white LEDs together, sent back by the
 /// air.
@@ -289,6 +293,8 @@ pub(crate) struct Effects {
     /// How much towns light the night sky, on Bortle's scale from 1 (none)
     /// to 9 (an inner city).
     light_pollution: f32,
+    /// How stormy the aurora is, the Kp index from 0 (none) to 9.
+    aurora: f32,
     /// How many times its real brightness the Milky Way is drawn, and what
     /// colour it is tinted, as bright as white.
     milky_way: f32,
@@ -340,6 +346,7 @@ impl Effects {
             moon_size: 1.0,
             moon_tint: [1.0; 3],
             light_pollution: 1.0,
+            aurora: 0.0,
             milky_way: 1.0,
             milky_way_tint: [1.0; 3],
             night_darkening: 0.0,
@@ -850,6 +857,23 @@ impl Effects {
         }
     }
 
+    /// Says how stormy the aurora is: the Kp index, from 0 (none, the
+    /// usual) to 9 (a great storm, seen from the middle latitudes).
+    pub(crate) fn set_aurora(&mut self, kp: f32) {
+        let kp = if kp.is_finite() {
+            kp.clamp(0.0, 9.0)
+        } else {
+            0.0
+        };
+        if kp == self.aurora {
+            return;
+        }
+        self.aurora = kp;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
     /// Says how many times its real brightness the Milky Way is drawn, from
     /// 0 (not at all) to 10, and what colour it is tinted, in linear light
     /// (`[1.0; 3]` is its own colour; it is made as bright as white).
@@ -927,6 +951,25 @@ impl Effects {
         ];
         let [red, green, blue] = self.milky_way_tint;
         day.heavens[9] = [red, green, blue, self.milky_way];
+        // The aurora: its ring, towards the magnetic pole, and its green
+        // light on the land.
+        if let Some(aurora) = lore_sky::aurora::seen(self.aurora, self.place.as_ref()) {
+            let heavens = lore_sky::Heavens::at(hour, self.place.as_ref());
+            let pole = heavens.pole;
+            let level = (pole[0] * pole[0] + pole[2] * pole[2]).sqrt().max(1e-6);
+            let north = [pole[0] / level, 0.0, pole[2] / level];
+            let east = [-north[2], 0.0, north[0]];
+            let (sin, cos) = aurora.bearing.to_radians().sin_cos();
+            let towards = [0, 1, 2].map(|axis| north[axis] * cos + east[axis] * sin);
+            day.heavens[crate::sky::AURORA_ROWS] =
+                [towards[0], towards[1], towards[2], aurora.distance];
+            day.heavens[crate::sky::AURORA_ROWS + 1] =
+                [aurora.half_width, aurora.brightness, self.aurora, 0.0];
+            let lux = aurora.lux() * day.per_lux;
+            for (sky, colour) in day.lighting.sky.iter_mut().zip(AURORA_GREEN) {
+                *sky += colour * lux / std::f32::consts::PI;
+            }
+        }
         day
     }
 
