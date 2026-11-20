@@ -93,6 +93,9 @@ pub struct Frame {
     storminess: Option<f32>,
     /// The hour of the day, if the game said it this frame.
     hour: Option<f64>,
+    /// Where the world lies on the Earth and when, if the game said it
+    /// this frame.
+    sky_place: Option<lore_render::SkyPlace>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -214,6 +217,7 @@ impl Frame {
             treads: Vec::new(),
             storminess: None,
             hour: None,
+            sky_place: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -866,6 +870,19 @@ impl Frame {
     /// The hour of the day, if the game said it this frame.
     pub(crate) fn take_hour(&mut self) -> Option<f64> {
         self.hour.take()
+    }
+
+    /// Says where on the Earth the world lies, which way north is in the
+    /// level and on what day hour 0 was midnight: the sun, the moon and the
+    /// stars then stand where they really would there, the hour being the
+    /// sun's own time. Until a game says it the sky is a made-up one.
+    pub fn set_sky_place(&mut self, place: lore_render::SkyPlace) {
+        self.sky_place = Some(place);
+    }
+
+    /// Where the world lies, if the game said it this frame.
+    pub(crate) fn take_sky_place(&mut self) -> Option<lore_render::SkyPlace> {
+        self.sky_place.take()
     }
 
     /// Says which lamps light the world from this frame on: all of them,

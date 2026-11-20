@@ -16,6 +16,8 @@ lore-weapons = { path = "../lore-weapons" }
 lore-fluid = { path = "../lore-fluid" }
 # Game shaders: reading their values and what they are for, for `game.shaders`.
 lore-shader = { path = "../lore-shader" }
+# Where the sun, the moon and the stars stand, for `game.sky`: worked out as the renderer works it out.
+lore-sky = { path = "../lore-sky" }
 libm = "0.2"
 log = "0.4"
 mlua = { version = "0.12", features = ["luau"] }

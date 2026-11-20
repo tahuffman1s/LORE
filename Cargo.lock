@@ -1626,6 +1626,7 @@ dependencies = [
  "lore-assets",
  "lore-fsr",
  "lore-shader",
+ "lore-sky",
  "lore-ui",
  "raw-window-handle",
 ]
@@ -1639,6 +1640,7 @@ dependencies = [
  "lore-fluid",
  "lore-input",
  "lore-shader",
+ "lore-sky",
  "lore-ui",
  "lore-weapons",
  "mlua",
@@ -1650,6 +1652,10 @@ version = "0.0.0"
 dependencies = [
  "naga",
 ]
+
+[[package]]
+name = "lore-sky"
+version = "0.0.0"
 
 [[package]]
 name = "lore-ui"

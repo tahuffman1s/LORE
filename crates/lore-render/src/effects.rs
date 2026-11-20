@@ -20,6 +20,7 @@ use crate::sky::Day;
 use crate::tracks::{Tracks, Tread};
 use crate::weather::{Falling, GroundWater, Weather, eased};
 use lore_assets::Water;
+use lore_sky::SkyPlace;
 
 use crate::water::{MOST_STIRS, Stir};
 
@@ -273,6 +274,9 @@ pub(crate) struct Effects {
     cold: [f32; 2],
     /// The sky at the hour the game says it is, if it has said.
     day: Option<(f64, Day)>,
+    /// Where the world lies and on what day its clock started, if the
+    /// game has said: with none, the sky is the made-up one of [`Day::at`].
+    place: Option<SkyPlace>,
     /// How far rain has raised the still water, in metres.
     rise: f32,
     /// Whether storms send their own bolts to the ground: not when the
@@ -311,6 +315,7 @@ impl Effects {
             ground_said: false,
             cold: [0.0; 2],
             day: None,
+            place: None,
             rise: 0.0,
             bolts_of_its_own: true,
             tracks: Tracks::new(),
@@ -747,8 +752,28 @@ impl Effects {
         match (hour, &self.day) {
             (None, _) => self.day = None,
             (Some(hour), Some((made, _))) if (hour - made).abs() < 1.0 / 180.0 => {}
-            (Some(hour), _) => self.day = Some((hour, Day::at(hour))),
+            (Some(hour), _) => self.day = Some((hour, self.sky_at(hour))),
         }
+    }
+
+    /// Says where the world lies on the Earth and on what day its clock
+    /// started, so the sky is the real one there; or with `None`, the
+    /// made-up sky whose noon is the level's own sun.
+    pub(crate) fn set_sky_place(&mut self, place: Option<SkyPlace>) {
+        if self.place == place {
+            return;
+        }
+        self.place = place;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
+    /// The sky `hour` hours after the first midnight.
+    fn sky_at(&self, hour: f64) -> Day {
+        self.place
+            .as_ref()
+            .map_or_else(|| Day::at(hour), |place| Day::over(place, hour))
     }
 
     /// The sky at the hour it is, if the game has said the hour.

@@ -15,13 +15,42 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use lore_sky::{Heavens, SkyPlace};
 use mlua::{Function, Lua, Table, Value, Variadic, Vector};
 
 use crate::api::{Handlers, Shared, describe, fail, strict};
 use crate::time_api::rules_only;
 
 /// Every function on `game.sky`.
-pub(crate) const SKY_FUNCTIONS: &[&str] = &["setHour", "hour", "setDayLength", "dayLength"];
+pub(crate) const SKY_FUNCTIONS: &[&str] = &[
+    "setHour",
+    "hour",
+    "setDayLength",
+    "dayLength",
+    "setLatitude",
+    "latitude",
+    "setNorth",
+    "north",
+    "setDate",
+    "date",
+    "sunDirection",
+    "sunHeight",
+    "moonDirection",
+    "moonHeight",
+    "moonPhase",
+    "moonLit",
+];
+
+/// The real sky a game gets when it says only some of where and when:
+/// 45 degrees north, north the level's -z, and 20 March 2000, an equinox
+/// with a full moon.
+fn usual_place() -> SkyPlace {
+    SkyPlace {
+        latitude: 45.0,
+        north: 0.0,
+        first_day: lore_sky::days_from_2000(2000, 3, 20),
+    }
+}
 
 /// Every function on `game.weather`.
 pub(crate) const WEATHER_FUNCTIONS: &[&str] = &[
@@ -210,6 +239,11 @@ pub struct Climate {
     /// How many minutes a day lasts: 0 if the hours do not pass by
     /// themselves.
     day_minutes: Cell<f64>,
+    /// Where on the Earth the world lies, which way north is and on what
+    /// day hour 0 was midnight, if the script has said any of it, and
+    /// whether that has changed since the engine last took it.
+    place: Cell<Option<SkyPlace>>,
+    place_changed: Cell<bool>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -236,6 +270,8 @@ impl Default for Climate {
             struck: Cell::new(0),
             hour: Cell::new(None),
             hour_changed: Cell::new(false),
+            place: Cell::new(None),
+            place_changed: Cell::new(false),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -290,6 +326,30 @@ impl Climate {
     /// The hour of the day, if the script has said one.
     pub(crate) fn hour(&self) -> Option<f64> {
         self.hour.get()
+    }
+
+    /// Where the world lies and when its clock started, if it has changed
+    /// since this was last asked.
+    pub(crate) fn take_sky_place(&self) -> Option<SkyPlace> {
+        self.place_changed
+            .take()
+            .then(|| self.place.get())
+            .flatten()
+    }
+
+    /// Where the sun, the moon and the stars are now, if the script has
+    /// said the hour: as the renderer draws them.
+    fn heavens(&self) -> Option<Heavens> {
+        let hour = self.hour.get()?;
+        Some(Heavens::at(hour, self.place.get().as_ref()))
+    }
+
+    /// Changes the place the script has said, starting from the usual one.
+    fn change_place(&self, change: impl FnOnce(&mut SkyPlace)) {
+        let mut place = self.place.get().unwrap_or_else(usual_place);
+        change(&mut place);
+        self.place.set(Some(place));
+        self.place_changed.set(true);
     }
 
     /// The hour of the day, if it has changed since this was last asked.
@@ -548,8 +608,247 @@ pub(crate) fn sky(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         "dayLength",
         lua.create_function(move |_, ()| Ok(climate.day_minutes.get()))?,
     )?;
+    place(lua, shared, &sky)?;
+    lights(lua, shared, &sky)?;
     strict(lua, &sky, "game.sky", SKY_FUNCTIONS)?;
     Ok(sky)
+}
+
+/// `game.sky.setLatitude`, `setNorth` and `setDate`, and what they said:
+/// where on the Earth the world lies and when, for the real sky there.
+fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
+    let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
+    sky.set(
+        "setLatitude",
+        lua.create_function(move |lua, value: Value| {
+            const EXAMPLE: &str = "game.sky.setLatitude(61)";
+            let latitude = degrees(
+                lua,
+                "game.sky.setLatitude",
+                &value,
+                "a number of degrees: how far north of the equator the world lies, 0 at the \
+                 equator, 61 for the far north, -34 for the south",
+                EXAMPLE,
+            )?;
+            if !(-90.0..=90.0).contains(&latitude) {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sky.setLatitude was given {latitude}, but a latitude is from -90 \
+                         (the south pole) to 90 (the north pole). Write it like this: {EXAMPLE}"
+                    ),
+                ));
+            }
+            rules_only(lua, &rules, "game.sky.setLatitude")?;
+            climate.change_place(|place| place.latitude = latitude);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "latitude",
+        lua.create_function(move |_, ()| Ok(climate.place.get().map(|place| place.latitude)))?,
+    )?;
+    let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
+    sky.set(
+        "setNorth",
+        lua.create_function(move |lua, value: Value| {
+            let north = degrees(
+                lua,
+                "game.sky.setNorth",
+                &value,
+                "a number of degrees: which way north is in the level, as a compass bearing, 0 \
+                 when north is the level's -z (Blender's +y), 90 when it is +x",
+                "game.sky.setNorth(90)",
+            )?;
+            rules_only(lua, &rules, "game.sky.setNorth")?;
+            climate.change_place(|place| place.north = north.rem_euclid(360.0));
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "north",
+        lua.create_function(move |_, ()| Ok(climate.place.get().map(|place| place.north)))?,
+    )?;
+    let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
+    sky.set(
+        "setDate",
+        lua.create_function(move |lua, values: Variadic<Value>| {
+            let [year, month, day] = date(lua, &values)?;
+            rules_only(lua, &rules, "game.sky.setDate")?;
+            // Small numbers: checked in `date`.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let first_day = lore_sky::days_from_2000(year, month as u32, day as u32);
+            climate.change_place(|place| place.first_day = first_day);
+            // The day said is today: the hour stays, without the days
+            // that had passed.
+            if let Some(hour) = climate.hour.get()
+                && hour >= 24.0
+            {
+                climate.hour.set(Some(hour.rem_euclid(24.0)));
+                climate.hour_changed.set(true);
+            }
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "date",
+        lua.create_function(move |_, ()| {
+            let Some(place) = climate.place.get() else {
+                return Ok((None, None, None));
+            };
+            // Whole days, held to some millions of years either way so an
+            // hour of 1e300 cannot carry the count past what an i64 holds.
+            #[allow(clippy::cast_possible_truncation)]
+            let passed = (climate.hour.get().unwrap_or(0.0) / 24.0)
+                .floor()
+                .clamp(-1e9, 1e9) as i64;
+            let (year, month, day) = lore_sky::date_from_2000(place.first_day + passed);
+            Ok((Some(year), Some(month), Some(day)))
+        })?,
+    )?;
+    Ok(())
+}
+
+/// A number of degrees for `function`, or an error that says what it
+/// takes.
+fn degrees(
+    lua: &Lua,
+    function: &str,
+    value: &Value,
+    takes: &str,
+    example: &str,
+) -> mlua::Result<f64> {
+    match value {
+        Value::Number(number) if number.is_finite() => Ok(*number),
+        // Degrees are far below where an f64 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        Value::Integer(number) => Ok(*number as f64),
+        other => Err(fail(
+            lua,
+            format!(
+                "{function} needs a number, but it was given {}. It takes {takes}. Write it \
+                 like this: {example}",
+                describe(other)
+            ),
+        )),
+    }
+}
+
+/// The year, month and day `game.sky.setDate` was given, checked.
+fn date(lua: &Lua, values: &Variadic<Value>) -> mlua::Result<[i64; 3]> {
+    const EXAMPLE: &str = "game.sky.setDate(2026, 3, 20)";
+    const NAMES: [&str; 3] = ["year", "month", "day"];
+    let mut said = [0_i64; 3];
+    for (number, (slot, name)) in said.iter_mut().zip(NAMES).enumerate() {
+        *slot = match values.get(number) {
+            Some(Value::Integer(whole)) => *whole,
+            // A whole number Luau keeps as a float.
+            #[allow(clippy::cast_possible_truncation)]
+            Some(Value::Number(value))
+                if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e9 =>
+            {
+                *value as i64
+            }
+            other => {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sky.setDate needs the {name} as a whole number (a number, not \
+                         text, and no fraction), but it was given {}. It takes the year, the \
+                         month (1 to 12) and the day, in that order. \
+                         Write it like this: {EXAMPLE}",
+                        other.map_or("nothing", describe)
+                    ),
+                ));
+            }
+        };
+    }
+    let [year, month, day] = said;
+    if !(1..=12).contains(&month) {
+        return Err(fail(
+            lua,
+            format!(
+                "game.sky.setDate was given month {month}, but months go from 1 (January) to \
+                 12 (December), and the order is year, month, day. Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    if !(-100_000..=100_000).contains(&year) {
+        return Err(fail(
+            lua,
+            format!(
+                "game.sky.setDate was given the year {year}, but the sky can be worked out \
+                 only for years from -100000 to 100000. Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    // Checked as 1 to 12 just above.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let longest = {
+        let next = if month == 12 {
+            lore_sky::days_from_2000(year + 1, 1, 1)
+        } else {
+            lore_sky::days_from_2000(year, month as u32 + 1, 1)
+        };
+        next - lore_sky::days_from_2000(year, month as u32, 1)
+    };
+    if !(1..=longest).contains(&day) {
+        return Err(fail(
+            lua,
+            format!(
+                "game.sky.setDate was given day {day}, but that month has days 1 to {longest}. \
+                 Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    Ok(said)
+}
+
+/// `game.sky.sunDirection`, `sunHeight`, `moonDirection`, `moonHeight`,
+/// `moonPhase` and `moonLit`: where the lights of the sky are, as they are
+/// drawn. Each gives nil until the hour has been said.
+fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
+    let towards = |pick: fn(&Heavens) -> [f32; 3]| {
+        let climate = Rc::clone(&shared.weather);
+        lua.create_function(move |_, ()| {
+            Ok(climate.heavens().map(|heavens| {
+                let [x, y, z] = pick(&heavens);
+                Vector::new(x, y, z)
+            }))
+        })
+    };
+    let height = |pick: fn(&Heavens) -> [f32; 3]| {
+        let climate = Rc::clone(&shared.weather);
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .map(|heavens| f64::from(pick(&heavens)[1].clamp(-1.0, 1.0).asin().to_degrees())))
+        })
+    };
+    sky.set("sunDirection", towards(|heavens| heavens.sun)?)?;
+    sky.set("sunHeight", height(|heavens| heavens.sun)?)?;
+    sky.set("moonDirection", towards(|heavens| heavens.moon)?)?;
+    sky.set("moonHeight", height(|heavens| heavens.moon)?)?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "moonPhase",
+        lua.create_function(move |_, ()| {
+            Ok(climate.heavens().map(|heavens| heavens.moon_phase()))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "moonLit",
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .map(|heavens| f64::from(heavens.moon_lit())))
+        })?,
+    )?;
+    Ok(())
 }
 
 /// `game.weather`: the weather in a word or a number at a time, what it

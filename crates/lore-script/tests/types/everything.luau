@@ -241,6 +241,18 @@ end
 
 game.sky.setHour(18.5)
 game.sky.setDayLength(24)
+game.sky.setLatitude(61)
+game.sky.setNorth(90)
+game.sky.setDate(2026, 3, 20)
+local latitude: number? = game.sky.latitude()
+local north: number? = game.sky.north()
+local year, month, day = game.sky.date()
+local sun: vector? = game.sky.sunDirection()
+local sunUp = (game.sky.sunHeight() or 90) > -6
+local moon: vector? = game.sky.moonDirection()
+local moonUp = (game.sky.moonHeight() or -90) > 0
+local wolves = game.sky.moonPhase() == "full" and (game.sky.moonLit() or 0) > 0.98
+print(latitude, north, year, month, day, sun, sunUp, moon, moonUp, wolves)
 game.onTick(function()
     if game.sky.dayLength() == 0 then
         game.sky.setHour((game.sky.hour() or 12) + 1 / 600)

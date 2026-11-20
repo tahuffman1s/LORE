@@ -608,6 +608,14 @@ impl ScriptHost {
         self.weather.take_hour()
     }
 
+    /// Where on the Earth the world lies, which way north is in the level
+    /// and on what day hour 0 was midnight, if it has changed since this
+    /// was last called: the script said it with `game.sky.setLatitude`,
+    /// `setNorth` or `setDate`.
+    pub fn take_sky_place(&mut self) -> Option<lore_sky::SkyPlace> {
+        self.weather.take_sky_place()
+    }
+
     /// The hour of the day, if the script has said one.
     #[must_use]
     pub fn hour(&self) -> Option<f64> {
