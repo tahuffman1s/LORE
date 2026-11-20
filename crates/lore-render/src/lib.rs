@@ -32,6 +32,7 @@ mod lamps;
 mod look;
 mod material;
 mod mesh;
+mod moon;
 mod occlusion;
 #[cfg(test)]
 mod offscreen;
@@ -74,7 +75,7 @@ pub use headless::{FrameTime, Headless};
 pub use lamp_shadow::LampShadows;
 pub use lamps::{Beam, Lamp, MOST_LAMPS};
 pub use look::{Look, LookShares, ToneMapping};
-pub use lore_sky::{SkyPlace, date_from_2000, days_from_2000};
+pub use lore_sky::{Heavens, SkyPlace, date_from_2000, days_from_2000};
 pub use occlusion::AmbientOcclusion;
 #[cfg(feature = "panels")]
 pub use panels::Panels;

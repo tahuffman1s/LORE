@@ -96,6 +96,8 @@ pub struct Frame {
     /// Where the world lies on the Earth and when, if the game said it
     /// this frame.
     sky_place: Option<lore_render::SkyPlace>,
+    /// How large the moon is drawn, if the game said it this frame.
+    moon_size: Option<f32>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -218,6 +220,7 @@ impl Frame {
             storminess: None,
             hour: None,
             sky_place: None,
+            moon_size: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -878,6 +881,17 @@ impl Frame {
     /// sun's own time. Until a game says it the sky is a made-up one.
     pub fn set_sky_place(&mut self, place: lore_render::SkyPlace) {
         self.sky_place = Some(place);
+    }
+
+    /// Says how large the moon is drawn against its real size, from 1 to
+    /// 10. Its light on the land does not change.
+    pub fn set_moon_size(&mut self, size: f32) {
+        self.moon_size = Some(size);
+    }
+
+    /// How large the moon is drawn, if the game said it this frame.
+    pub(crate) fn take_moon_size(&mut self) -> Option<f32> {
+        self.moon_size.take()
     }
 
     /// Where the world lies, if the game said it this frame.

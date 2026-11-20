@@ -32,6 +32,16 @@ mod scene;
 mod tests;
 
 pub use error::AssetError;
+
+/// Decodes a PNG or JPEG file's bytes into four bytes a pixel (red,
+/// green, blue, alpha), or says why it cannot.
+///
+/// # Errors
+///
+/// When the bytes are not a PNG or JPEG the decoder can read.
+pub fn decode_picture(bytes: &[u8]) -> Result<Image, String> {
+    material::decode(None, bytes)
+}
 pub use load::LoadOptions;
 pub use scene::{
     AlphaMode, Animation, Bounds, Filter, Image, Instance, Interpolation, Joint, Keys, Light,

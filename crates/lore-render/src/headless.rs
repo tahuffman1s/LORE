@@ -428,6 +428,14 @@ impl Headless {
         self.effects.set_sky_place(place);
     }
 
+    /// Says how large the moon is drawn against its real size, half a
+    /// degree across, which is about eight pixels in a 1080-pixel-high
+    /// picture: from 1 (as it is, the usual) to 10. Its light on the land
+    /// does not change.
+    pub fn set_moon_size(&mut self, size: f32) {
+        self.effects.set_moon_size(size);
+    }
+
     /// Says whether storms send their own bolts to the ground, as they do
     /// until told otherwise. A game that sends them itself with
     /// [`strike`](Self::strike), so that it knows where each fell and can

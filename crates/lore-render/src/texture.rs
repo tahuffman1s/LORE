@@ -210,9 +210,16 @@ impl Textures {
         true
     }
 
+    /// The picture at `index`, as [`upload`](Self::upload) said.
+    pub(crate) fn view_at(&self, index: usize) -> vk::ImageView {
+        self.pictures
+            .get(index)
+            .map_or(vk::ImageView::null(), |picture| picture.view)
+    }
+
     /// Copies one picture to the graphics card, makes its smaller copies,
     /// and says where in `pictures` it is.
-    fn upload(
+    pub(crate) fn upload(
         &mut self,
         width: u32,
         height: u32,

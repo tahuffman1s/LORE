@@ -612,6 +612,13 @@ impl ScriptHost {
     /// and on what day hour 0 was midnight, if it has changed since this
     /// was last called: the script said it with `game.sky.setLatitude`,
     /// `setNorth` or `setDate`.
+    /// How large the moon is drawn against its real size, if the script
+    /// has said since this was last called (`game.sky.setMoonSize`).
+    pub fn take_moon_size(&mut self) -> Option<f32> {
+        self.weather.take_moon_size()
+    }
+
+    /// Where on the Earth the world lies (see `take_sky_place` below).
     pub fn take_sky_place(&mut self) -> Option<lore_sky::SkyPlace> {
         self.weather.take_sky_place()
     }

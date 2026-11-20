@@ -1064,17 +1064,41 @@ fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     return colour + colour * flash_falls(world) * dark;
 }
 
+// NASA's maps of the moon's face (`moon.rs`): its colour, and its height.
+@group(0) @binding(40) var moon_colour: texture_2d<f32>;
+@group(0) @binding(41) var moon_height: texture_2d<f32>;
+// Reads them from their smaller copies too, round in longitude.
+@group(0) @binding(42) var moon_sampler: sampler;
+// How far across the sky the real moon reaches from its middle, in
+// radians: a quarter of a degree and a little.
+const MOON_RADIUS: f32 = 0.004538;
+// How bright the whole face of a full moon is, in candela a square metre:
+// 0.3 lux over the 6.47e-5 steradians it fills.
+const MOON_FULL_FACE: f32 = 4640.0;
+// The mean of the colour map over the face the Earth sees, each point
+// counted by the part of the round face it fills (`moon.rs`).
+const MOON_NEAR_MEAN: f32 = 0.224;
+// The brightest the face is drawn, in the picture's light, once the eye is
+// used to the dark: bright, with its seas still to be seen.
+const MOON_SEEN: f32 = 6.0;
+
+// The light the moon gives a surface facing it, in lux, from how bright
+// its lit part is (`surface`) and how much of it is lit (`full`): near
+// enough to `Heavens::moonlight_lux` for the glow round it.
+fn lore_moon_lux(surface: f32, full: f32) -> f32 {
+    return 0.3 * surface * full;
+}
+
 // `colour`, the clear sky towards `direction`, with the stars and the moon
 // in it: none of either unless the game has said what hour it is. `pixel`
 // is how much of the sky one pixel covers, in radians.
 //
 // The stars are the real ones (`real_stars`), in their places, as bright
 // and of the colours they are, turning about the pole as the hours pass;
-// the Milky Way is a band of cloudy light round the sky. The moon is a ball
-// lit by the sun, wherever the sun is: its phase comes of that, its seas
-// are dark, and the air round it glows. It is drawn five times its real
-// size: at its real size it is a dozen pixels in a wide view, too few to
-// show a phase.
+// the Milky Way is a band of cloudy light round the sky. The moon is the
+// real one, from NASA's maps (`moon.rs`), at its real size unless a game
+// says, lit by the sun as moon dust is, so its phase, its terminator and
+// its seas are as they are, its dark side faint with earthshine.
 fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     if view.heavens[3].w < 0.5 || direction.y < -0.03 {
         return colour;
@@ -1085,37 +1109,90 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
 
     let towards = view.heavens[1].xyz;
     let sun = view.heavens[0].xyz;
+    let per_lux = view.heavens[5].w;
+    let surface = view.heavens[4].w;
     let up = smoothstep(-0.03, 0.02, direction.y);
     // How much of its face is lit, as seen from here.
     let full = (1.0 - dot(sun, towards)) * 0.5;
     let near = dot(direction, towards);
-    // The glow of the air round it.
-    seen += vec3<f32>(0.7, 0.8, 1.0) * view.heavens[4].w * full * night * up
-        * (0.05 * pow(max(near, 0.0), 300.0) + 0.012 * pow(max(near, 0.0), 24.0));
-    let wide = 0.0226;
-    let across = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), towards) + vec3<f32>(0.00001, 0.0, 0.0));
-    let upwards = cross(towards, across);
-    let on = vec2<f32>(dot(direction, across), dot(direction, upwards)) / wide;
+    // The air round it: the moonlight the haze sends on a little off its
+    // way, a glow that is brightest close to the moon (Henyey and
+    // Greenstein's shape, strongly forward), out of the 3 % of its light
+    // the air scatters.
+    let g = 0.85;
+    let lobe = (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * clamp(near, -1.0, 1.0), 1.5));
+    // Only while the moon is up: set, it lights no air over this place.
+    let moon_risen = smoothstep(-0.03, 0.02, towards.y);
+    seen += vec3<f32>(0.85, 0.9, 1.0) * lore_moon_lux(surface, full) * 0.03 * lobe * per_lux * up
+        * moon_risen;
+    let radius = MOON_RADIUS * max(view.heavens[2].w, 1.0);
+    // The sky's north and west across the moon's face: the moon's north
+    // is its north, and its east (where Mare Crisium is) is the sky's west.
+    let sky_pole = view.heavens[2].xyz;
+    let north = normalize(sky_pole - towards * dot(sky_pole, towards) + vec3<f32>(0.0, 0.00001, 0.0));
+    let west = cross(towards, north);
+    let on = vec2<f32>(dot(direction, west), dot(direction, north)) / radius;
     let out = dot(on, on);
     if near > 0.0 && out < 1.0 {
-        // The way its ground faces at this point of its face.
-        let facing = across * on.x + upwards * on.y - towards * sqrt(1.0 - out);
-        // Its dust sends light back the way it came, so it does not
-        // darken towards its rim as a smooth ball would.
-        let sunlit = sqrt(clamp(dot(facing, sun) * 1.5, 0.0, 1.0));
-        // Dark seas, and on them and the highlands smaller marks.
-        let seas = textureSampleLevel(
-            cloud_volume, cloud_sampler, vec3<f32>(on * 0.19 + vec2<f32>(0.31, 0.62), 0.47), 0.0,
-        ).r;
-        let marks = textureSampleLevel(
-            cloud_volume, cloud_sampler, vec3<f32>(on * 0.83 + vec2<f32>(0.11, 0.4), 0.21), 0.0,
-        ).rg;
-        let ground = mix(0.42, 1.0, smoothstep(0.36, 0.56, seas + (marks.r - 0.5) * 0.18))
-            * (0.86 + 0.28 * marks.g);
-        let rim = smoothstep(1.0, 1.0 - 2.5 * pixel / wide, out);
-        // The dark of the moon is lit a little by the Earth.
-        seen += vec3<f32>(1.0, 0.97, 0.9) * view.heavens[4].w * 1.8 * ground
-            * (sunlit + 0.01) * rim * up / max(1.0 - 0.45 * full, 0.3);
+        // Where on the moon this is: latitude and longitude, 0 at the
+        // middle of the face the Earth sees.
+        let deep = sqrt(1.0 - out);
+        let latitude = asin(clamp(on.y, -1.0, 1.0));
+        let longitude = atan2(on.x, deep);
+        let uv = vec2<f32>(0.5 + longitude / (2.0 * PI), 0.5 - latitude / PI);
+        // Read from the copy as small as the moon is drawn: its near side
+        // is 512 of the map's pixels across two radii of sky.
+        let level = max(log2(pixel * 256.0 / radius), 0.0);
+        let step = exp2(level);
+        let albedo = textureSampleLevel(moon_colour, moon_sampler, uv, level).rgb;
+        // Its slopes, from the heights either side: 20 km from black to
+        // white, 10.7 km between pixels (less across, nearer the poles).
+        let du = vec2<f32>(step / 1024.0, 0.0);
+        let dv = vec2<f32>(0.0, step / 512.0);
+        let east_rise = (textureSampleLevel(moon_height, moon_sampler, uv + du, level).r
+            - textureSampleLevel(moon_height, moon_sampler, uv - du, level).r)
+            * 20.0 / (2.0 * 10.7 * step * max(cos(latitude), 0.05));
+        let north_rise = (textureSampleLevel(moon_height, moon_sampler, uv - dv, level).r
+            - textureSampleLevel(moon_height, moon_sampler, uv + dv, level).r)
+            * 20.0 / (2.0 * 10.7 * step);
+        // The ground's own east, north and up there, in the world.
+        let sin_lat = sin(latitude);
+        let cos_lat = cos(latitude);
+        let sin_lon = sin(longitude);
+        let cos_lon = cos(longitude);
+        let ground_up = west * cos_lat * sin_lon + north * sin_lat - towards * cos_lat * cos_lon;
+        let ground_east = west * cos_lon + towards * sin_lon;
+        let ground_north = -west * sin_lat * sin_lon + north * cos_lat + towards * sin_lat * cos_lon;
+        // Seen edge-on, at its rim, no slope shows, and near the poles the
+        // map's pixels crowd together: the relief fades out there.
+        let relief = smoothstep(0.0, 0.35, deep) * smoothstep(0.05, 0.25, cos_lat);
+        let facing = normalize(ground_up - (ground_east * east_rise + ground_north * north_rise) * relief);
+        // Moon dust sends light back as Lommel and Seeliger's law has it,
+        // twice the sun's slant over the sum of the sun's and the eye's,
+        // and the rest of the phase is in `surface` (`lore-sky`).
+        let from_sun = dot(facing, sun);
+        let to_eye = max(dot(facing, -towards), 0.0);
+        var lit = 0.0;
+        if from_sun > 0.0 {
+            lit = 2.0 * from_sun / (from_sun + to_eye + 1e-4) * surface;
+        }
+        // The dark of the moon is lit by the Earth, which is as full as
+        // the moon is new: earthshine, a few ten-thousandths of the day
+        // side's light.
+        let earthshine = 3e-4 * (1.0 - full);
+        // As bright as it really is (0.3 lux over the 6.5e-5 steradians it
+        // fills), by day; by night no brighter than an eye used to the dark
+        // sees its seas and craters in, which it does by narrowing its view
+        // of the moon alone, as a camera cannot.
+        let face = min(MOON_FULL_FACE * per_lux, MOON_SEEN);
+        // Low down, the air it shines through dims it and turns it orange;
+        // high up, the eye takes its colour for white, as it does the
+        // sun's, so it is counted against straight overhead.
+        let rise = clamp(direction.y, 0.0, 1.0);
+        let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
+        let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
+        let rim = smoothstep(1.0, 1.0 - 2.5 * pixel / radius, out);
+        seen += albedo / MOON_NEAR_MEAN * (lit + earthshine) * face * dimmed * rim * up;
         behind = 1.0 - rim;
     }
     if night <= 0.01 {

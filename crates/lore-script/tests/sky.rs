@@ -207,6 +207,16 @@ fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
     );
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     assert_eq!(printed(), ["nil 6", "true", "true", "true", "12"]);
+    let mut host = game(
+        r#"
+        print(game.sky.moonSize())
+        game.sky.setMoonSize(30)
+        print(game.sky.moonSize())
+        "#,
+    );
+    assert_eq!(printed(), ["1", "10"]);
+    assert_eq!(host.take_moon_size(), Some(10.0));
+    assert_eq!(host.take_moon_size(), None);
 }
 
 #[test]
@@ -235,6 +245,11 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "game.sky.starNear(\"up\")",
             "game.sky.starNear(game.player.aim)",
         ),
+        (
+            "game.lighting.setNightDarkness(\"dark\")",
+            "game.lighting.setNightDarkness(8)",
+        ),
+        ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
     ] {
         let host = game(script);
         let message = mistake(&host);

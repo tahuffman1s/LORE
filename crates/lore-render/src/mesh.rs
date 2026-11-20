@@ -25,6 +25,7 @@ use crate::grid::{self, grid_bytes};
 use crate::lamp_shadow::{Face, LampAtlas, LampShadows, Shadowing};
 use crate::lamps::{self, Lamp, LampFrame, Seen};
 use crate::material::{self, Materials};
+use crate::moon::MoonMaps;
 use crate::occlusion::{self, Shade};
 use crate::scene::{DEPTH, SceneTarget};
 use crate::shadow::{self, Cascade, PICTURES, ShadowMap};
@@ -975,6 +976,8 @@ pub(crate) struct MeshPipeline {
     shadows: Option<ShadowMap>,
     /// Every star, sorted into a grid among the stars.
     stars: Option<StarGrid>,
+    /// NASA's maps of the moon's face.
+    moon: Option<MoonMaps>,
     /// Light that bounces: `None` only while the pipeline is being built.
     bounce: Option<BounceWorks>,
     /// The light of the sky from every way: `None` only while the pipeline
@@ -1072,6 +1075,7 @@ impl MeshPipeline {
             shadow_pipelines: [vk::Pipeline::null(); 2],
             shadows: None,
             stars: None,
+            moon: None,
             bounce: None,
             skylight: None,
             lamp_atlas: RefCell::new(None),
@@ -1108,6 +1112,9 @@ impl MeshPipeline {
         let stars = StarGrid::new(gpu)?;
         let (star_cells, star_list) = (stars.cells.handle, stars.list.handle);
         mesh.stars = Some(stars);
+        let moon = MoonMaps::new(gpu)?;
+        let (moon_colour, moon_height, moon_sampler) = (moon.colour, moon.height, moon.sampler);
+        mesh.moon = Some(moon);
         let clouds = CloudVolume::new(gpu)?;
         let (cloud_view, cloud_sampler) = (clouds.view, clouds.sampler);
         mesh.clouds = Some(clouds);
@@ -1299,6 +1306,22 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The moon's face: its colour and its height.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(40)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(41)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(42)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1309,14 +1332,15 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid, bounce
-            // light's list and the stars' grid and list, twenty-seven
-            // pictures, two written, and five readers.
+            // light's list and the stars' grid and list, twenty-nine
+            // pictures (the moon's two among them), two written, and six
+            // readers (the moon's among them).
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
                 vk::DescriptorType::STORAGE_BUFFER => 5,
-                vk::DescriptorType::SAMPLED_IMAGE => 27,
+                vk::DescriptorType::SAMPLED_IMAGE => 29,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
-                _ => 5,
+                _ => 6,
             };
             vk::DescriptorPoolSize::default()
                 .ty(kind)
@@ -1399,6 +1423,13 @@ impl MeshPipeline {
                 let star_list_info = [vk::DescriptorBufferInfo::default()
                     .buffer(star_list)
                     .range(vk::WHOLE_SIZE)];
+                let moon_colour_info = [vk::DescriptorImageInfo::default()
+                    .image_view(moon_colour)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let moon_height_info = [vk::DescriptorImageInfo::default()
+                    .image_view(moon_height)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                let moon_sampler_info = [vk::DescriptorImageInfo::default().sampler(moon_sampler)];
                 let pictures = [vk::DescriptorImageInfo::default()
                     .image_view(shadow_view)
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -1481,6 +1512,21 @@ impl MeshPipeline {
                         .dst_binding(39)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&star_list_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(40)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&moon_colour_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(41)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&moon_height_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(42)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&moon_sampler_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 if let Some(bounce) = &mesh.bounce {
