@@ -280,8 +280,10 @@ pub(crate) struct Day {
     /// itself, and how far the night has come from 0 to 1; towards the
     /// moon, and how far the stars have turned, in radians; the pole they
     /// turn about; the colour of the sun's own disc, and 1; the light of
-    /// the night sky, and how bright the stars are.
-    pub(crate) heavens: [[f32; 4]; 5],
+    /// the night sky, and how bright the moon is; where the sky's equator
+    /// crosses the meridian with the stars turned 0, and how bright a lux
+    /// of starlight is drawn.
+    pub(crate) heavens: [[f32; 4]; 6],
 }
 
 /// `value` between `low` and `high`, as a share from 0 to 1 that starts
@@ -319,6 +321,7 @@ impl Day {
             moon,
             pole,
             turn,
+            meridian,
             ..
         } = heavens;
         let usual = Lighting::default();
@@ -413,10 +416,11 @@ impl Day {
             sky: from_day,
             ..lighting
         });
+        let per_lux = crate::lamps::per_lux(&lighting, sun[1], moon[1], lit, moon_up);
         Self {
             lighting,
             sky,
-            per_lux: crate::lamps::per_lux(&lighting, sun[1], moon[1], lit, moon_up),
+            per_lux,
             heavens: [
                 [sun[0], sun[1], sun[2], night],
                 [moon[0], moon[1], moon[2], turn],
@@ -429,6 +433,7 @@ impl Day {
                     // A bright moon drowns the faint stars.
                     grey(usual.sky) * 1.6 * (1.0 - 0.45 * lit * moon_up),
                 ],
+                [meridian[0], meridian[1], meridian[2], per_lux],
             ],
         }
     }

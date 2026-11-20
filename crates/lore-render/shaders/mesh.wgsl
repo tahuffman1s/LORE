@@ -122,8 +122,10 @@ struct View {
     // night has come from 0 to 1; towards the moon, and how far the stars
     // have turned, in radians; the pole they turn about; the colour of the
     // sun's own disc, and 1 if there is a moon and stars at all; the light
-    // of the night sky, and how bright the stars are.
-    heavens: array<vec4<f32>, 5>,
+    // of the night sky, and how bright the moon is; where the sky's equator
+    // crosses the meridian with the stars turned 0, and how bright a lux
+    // of starlight is drawn.
+    heavens: array<vec4<f32>, 6>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1066,11 +1068,9 @@ fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 // in it: none of either unless the game has said what hour it is. `pixel`
 // is how much of the sky one pixel covers, in radians.
 //
-// The stars are one to a square of a grid laid on the sky, in three
-// grids: a few bright ones, many fainter and a dust of faint ones, thickest
-// along the Milky Way. Each is a point as fine as the picture can draw,
-// its own colour from orange to blue-white; they turn about the pole as
-// the hours pass and twinkle, most near the horizon. The moon is a ball
+// The stars are the real ones (`real_stars`), in their places, as bright
+// and of the colours they are, turning about the pole as the hours pass;
+// the Milky Way is a band of cloudy light round the sky. The moon is a ball
 // lit by the sun, wherever the sun is: its phase comes of that, its seas
 // are dark, and the air round it glows. It is drawn five times its real
 // size: at its real size it is a dozen pixels in a wide view, too few to
@@ -1127,53 +1127,106 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let turn = view.heavens[1].w;
     let fixed = direction * cos(turn) - cross(pole, direction) * sin(turn)
         + pole * dot(pole, direction) * (1.0 - cos(turn));
-    // The Milky Way: a band right round the sky, cloudy and uneven.
-    let off_band = dot(fixed, vec3<f32>(0.48, 0.6, 0.64)) / 0.2;
+    // Among the stars: towards right ascension 0, 6 hours, and the pole.
+    let meridian = view.heavens[5].xyz;
+    let among = vec3<f32>(
+        dot(fixed, meridian), dot(fixed, cross(pole, meridian)), dot(fixed, pole),
+    );
+    // The Milky Way: a band right round the sky along the plane of the
+    // galaxy (its north pole is at right ascension 12h 51m, declination
+    // 27.1°), cloudy and uneven.
+    let off_band = dot(among, vec3<f32>(-0.8676, -0.1981, 0.4560)) / 0.2;
     let band = exp(-off_band * off_band);
-    let dust = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 1.7 + 0.2, 0.0).rg;
-    let fine = textureSampleLevel(cloud_volume, cloud_sampler, fixed * 6.1 + 0.6, 0.0).g;
+    let dust = textureSampleLevel(cloud_volume, cloud_sampler, among * 1.7 + 0.2, 0.0).rg;
+    let fine = textureSampleLevel(cloud_volume, cloud_sampler, among * 6.1 + 0.6, 0.0).g;
     var light = vec3<f32>(0.75, 0.82, 1.0) * band * (0.2 + dust.r) * dust.g * (0.5 + fine) * 0.03;
-    // Which face of a box round the eye the line of sight goes through,
-    // and where on it.
-    let big = abs(fixed);
-    var face = fixed.xy / fixed.z;
-    var which = sign(fixed.z) * 3.0;
+    // The thick air low down hides the Milky Way.
+    let milky = light * view.heavens[4].w * night * smoothstep(0.0, 0.2, direction.y);
+    return seen + (milky + real_stars(among, direction, pixel)) * behind;
+}
+
+// The stars' grid and list (`stars.rs`): for each square of a cube among
+// the stars, where its stars start in the list and how many there are; and
+// for each star two rows, towards it and a number for its twinkling, then
+// its light in lux.
+@group(0) @binding(38) var<storage, read> star_squares: array<vec2<u32>>;
+@group(0) @binding(39) var<storage, read> star_list: array<vec4<f32>>;
+const STAR_FACE_SQUARES: u32 = 32u;
+// How far a star's light may reach from it, in radians: as far as its
+// square of the grid holds stars beyond its edge (`REACH` in `stars.rs`).
+const STAR_REACH: f32 = 0.007;
+
+// The light the stars send along a line of sight `direction` that is
+// `towards` among the stars (right ascension 0, 6 hours, the pole), `pixel`
+// radians across, as light to draw.
+//
+// Each star is a spot of light whose whole is the light it gives, spread a
+// little over half a pixel each way, so that however sharp the picture it
+// is drawn as a point and the upscaler's jitter never makes it flicker.
+// The air between dims it, the more the lower it stands, blue light more
+// than red, as a low star is dimmer and yellower; and it twinkles, more
+// the more air its light comes through.
+fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
+    let per_lux = view.heavens[5].w;
+    if per_lux <= 0.0 || direction.y <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    // The face of the cube it goes through, and its square there.
+    let big = abs(towards);
+    var axis = 2u;
     if big.x >= big.y && big.x >= big.z {
-        face = fixed.yz / fixed.x;
-        which = sign(fixed.x);
+        axis = 0u;
     } else if big.y >= big.z {
-        face = fixed.xz / fixed.y;
-        which = sign(fixed.y) * 2.0;
+        axis = 1u;
     }
-    // A star is a point: drawn no wider than a pixel and a bit, however
-    // sharp the picture is.
-    let size = max(pixel * 0.4, 0.00012);
-    var squares = 24.0;
-    for (var layer = 0; layer < 3; layer++) {
-        let grid = face * squares;
-        let square = floor(grid);
-        let dice = fract(
-            sin(dot(square, vec2<f32>(127.1, 311.7)) + which * 37.3 + f32(layer) * 91.7)
-                * vec3<f32>(43758.5453, 22578.1459, 19642.349),
-        );
-        let off = (grid - (square + 0.15 + 0.7 * dice.xy)) / squares * 0.785;
-        // A few are bright and most are faint; the faintest crowd the
-        // Milky Way.
-        // Two squares in three are empty, so that they do not stand in
-        // rows.
-        var bright = pow(dice.z, 14.0 - 4.0 * f32(layer)) * (2.6 - 0.8 * f32(layer))
-            * step(fract(dice.x * 7.3 + dice.y * 3.1), 0.36);
-        if layer == 2 {
-            bright *= 0.3 + 2.2 * band;
+    var face = axis * 2u;
+    var across = towards.xy;
+    if axis == 0u {
+        across = towards.yz;
+    } else if axis == 1u {
+        across = towards.xz;
+    }
+    let along = towards[axis];
+    if along < 0.0 {
+        face += 1u;
+    }
+    let place = across / abs(along);
+    let squares = f32(STAR_FACE_SQUARES);
+    let square = min(vec2<u32>(max((place + 1.0) * 0.5 * squares, vec2<f32>(0.0))), vec2<u32>(STAR_FACE_SQUARES - 1u));
+    let held = star_squares[(face * STAR_FACE_SQUARES + square.y) * STAR_FACE_SQUARES + square.x];
+
+    // A spot never wider than its square can hold, however coarse the
+    // picture: past that it would be cut off at the square's edge.
+    let spread = clamp(0.55 * pixel, 1e-5, STAR_REACH / 3.0);
+    let fall = 1.0 / (2.0 * spread * spread);
+    let twinkles = twinkling(direction.y);
+    var light = vec3<f32>(0.0);
+    for (var number = 0u; number < held.y; number++) {
+        let at = (held.x + number) * 2u;
+        let star = star_list[at];
+        let off = towards - star.xyz;
+        let apart = dot(off, off);
+        if apart * fall < 4.5 {
+            let twinkle = 1.0 + twinkles * sin(view.clouds.y * (7.0 + 5.0 * star.w) + star.w * 40.0);
+            light += star_list[at + 1u].rgb * exp(-apart * fall) * twinkle;
         }
-        let twinkle = 1.0 + (0.12 + 0.4 * pow(max(1.0 - direction.y, 0.0), 3.0))
-            * sin(view.clouds.y * (3.0 + 6.0 * dice.y) + dice.x * 40.0);
-        light += mix(vec3<f32>(1.0, 0.78, 0.58), vec3<f32>(0.7, 0.8, 1.0), dice.x)
-            * bright * twinkle * exp(-dot(off, off) / (size * size));
-        squares *= 2.3;
     }
-    // The thick air low down hides them.
-    return seen + light * view.heavens[4].w * night * behind * smoothstep(0.0, 0.2, direction.y);
+    // The whole of a spot is its light: spread over its area.
+    light *= fall / PI;
+    // How much more air than straight up the light comes through (Kasten
+    // and Young), and what each magnitude of it a unit of air takes, in red,
+    // green and blue.
+    let rise = clamp(direction.y, 0.0, 1.0);
+    let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
+    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * air);
+    return light * dimmed * per_lux;
+}
+
+// How much a star twinkles, from 0 to 1, at a height whose sine is `rise`:
+// hardly overhead, most low down.
+fn twinkling(rise: f32) -> f32 {
+    let air = 1.0 / max(rise, 0.05);
+    return clamp(0.06 * pow(air, 1.5), 0.0, 0.8);
 }
 
 // The colour far things fade into, low down towards `low`: the sky's
