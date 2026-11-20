@@ -399,7 +399,8 @@ fn sun_reaches(world: vec3<f32>) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
-    for (var picture = 0; picture < SHADOW_PICTURES - 1; picture++) {
+    // The three nearest are enough for what is asked here, out to 72 m.
+    for (var picture = 0; picture < 3; picture++) {
         let place = view.shadow_from_world[picture] * vec4<f32>(world, 1.0);
         let uv = vec2<f32>(place.x * 0.5 + 0.5, 0.5 - place.y * 0.5);
         let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
@@ -662,8 +663,8 @@ fn mirrored_cover(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> f3
     if view.shadows.x < 0.5 {
         return 0.0;
     }
-    let metres_a_pixel = view.shadow_reach[4].x;
-    let depth_metres = view.shadow_reach[4].y;
+    let metres_a_pixel = view.shadow_reach[OVERHEAD].x;
+    let depth_metres = view.shadow_reach[OVERHEAD].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     let start = scattered(pixel + view.shadows.w * vec2<f32>(5.71, 1.37));
     var stride = max(metres_a_pixel * 1.5, 0.5);
@@ -673,13 +674,13 @@ fn mirrored_cover(origin: vec3<f32>, bounced: vec3<f32>, pixel: vec2<f32>) -> f3
         along += stride;
         stride *= 1.16;
         let at = origin + bounced * along;
-        let above = view.shadow_from_world[4] * vec4<f32>(at, 1.0);
+        let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(at, 1.0);
         let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
         let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
         if inside < 0.01 {
             break;
         }
-        let held = textureLoad(shadow_map, vec2<i32>(uv * size), 4, 0);
+        let held = textureLoad(shadow_map, vec2<i32>(uv * size), OVERHEAD, 0);
         // How far over the line the highest thing there stands.
         let over = (above.z - held) * depth_metres;
         cover = max(cover, smoothstep(0.0, 0.6 + 0.04 * along, over));

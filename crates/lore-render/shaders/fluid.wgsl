@@ -606,18 +606,18 @@ fn fluid_reaches_sky(start: vec3<f32>, way: vec3<f32>) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
-    let depth_metres = view.shadow_reach[4].y;
+    let depth_metres = view.shadow_reach[OVERHEAD].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     var open = 1.0;
     var far = 1.5;
     for (var number = 0; number < 6; number++) {
-        let above = view.shadow_from_world[4] * vec4<f32>(start + way * far, 1.0);
+        let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(start + way * far, 1.0);
         far *= 2.0;
         let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
         if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.02 {
             break;
         }
-        let held = textureLoad(shadow_map, vec2<i32>(uv * size), 4, 0);
+        let held = textureLoad(shadow_map, vec2<i32>(uv * size), OVERHEAD, 0);
         // How far over the line the highest thing there is.
         let over = (above.z - held) * depth_metres;
         open = min(open, 1.0 - smoothstep(0.3, 1.5, over));

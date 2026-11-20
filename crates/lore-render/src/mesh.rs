@@ -2046,12 +2046,12 @@ impl MeshPipeline {
         // before the picture that reads them.
         let cascades = meshes
             .filter(|meshes| meshes.buffers.is_some())
-            .map(|meshes| shadow::cascades(view.eye, lighting.towards_sun, meshes.bounds));
-        if let (Some(meshes), Some(cascades)) = (meshes, &cascades) {
-            // SAFETY: the caller's guarantees cover the shadow pictures,
-            // which are this pipeline's own.
-            unsafe { self.record_shadows(commands, meshes, cascades) };
-        }
+            .map(|meshes| {
+                let wanted = shadow::cascades(view.eye, lighting.towards_sun, meshes.bounds);
+                // SAFETY: the caller's guarantees cover the shadow pictures,
+                // which are this pipeline's own.
+                unsafe { self.record_shadows(commands, meshes, view.eye, &wanted) }
+            });
         let sky = sky.then(|| {
             day.map_or_else(
                 || meshes.map_or(&self.usual_sky, |meshes| &meshes.sky),
@@ -2810,8 +2810,10 @@ impl MeshPipeline {
         }
     }
 
-    /// Records drawing what the sun sees of `meshes` into each of
-    /// `cascades` that does not hold it already.
+    /// Records drawing what the sun sees of `meshes`, for an eye at `eye`,
+    /// into those of the `wanted` squares whose turn it is (see
+    /// [`shadow::Drawn::plan`]), and gives the square each picture is to be
+    /// read by.
     ///
     /// # Safety
     ///
@@ -2820,14 +2822,15 @@ impl MeshPipeline {
         &self,
         commands: vk::CommandBuffer,
         meshes: &Meshes,
-        cascades: &[Cascade; PICTURES],
-    ) {
+        eye: [f32; 3],
+        wanted: &[Cascade; PICTURES],
+    ) -> [Cascade; PICTURES] {
         let (Some(shadows), true) = (&self.shadows, meshes.buffers.is_some()) else {
-            return;
+            return *wanted;
         };
-        let stale = shadows.take_stale(meshes.id, cascades);
-        for (layer, cascade) in cascades.iter().enumerate() {
-            if !stale[layer] {
+        let plan = shadows.plan(meshes.id, eye, wanted);
+        for (layer, cascade) in wanted.iter().enumerate() {
+            if !plan.draw[layer] {
                 continue;
             }
             // SAFETY: the caller's guarantees cover these.
@@ -2839,6 +2842,7 @@ impl MeshPipeline {
                 shadows.pictures.end(commands, layer);
             }
         }
+        plan.read
     }
 
     /// Records drawing what each lamp's picture `faces` sees of `meshes`
@@ -4453,27 +4457,28 @@ mod tests {
         assert_eq!(number(&bytes, 72), cascades[0].texel);
         assert_eq!(number(&bytes, 73), cascades[0].depth);
         assert_eq!(number(&bytes, 84), cascades[3].texel);
+        assert_eq!(number(&bytes, 88), cascades[4].texel, "the widest");
         assert_eq!(
-            number(&bytes, 88),
-            cascades[4].texel,
+            number(&bytes, 92),
+            cascades[shadow::OVERHEAD].texel,
             "the picture from above"
         );
-        assert_eq!(number(&bytes, 92), cascades[0].clip[0][0]);
+        assert_eq!(number(&bytes, 96), cascades[0].clip[0][0]);
         assert_eq!(
-            number(&bytes, 171),
+            number(&bytes, 191),
             1.0,
             "the last number of the last matrix"
         );
-        assert_eq!(bytes.len(), 172 * 4 + SKY_BYTES + 64 + 48);
+        assert_eq!(bytes.len(), 192 * 4 + SKY_BYTES + 64 + 48);
 
         // Then the sky: the lines of sight, the clouds, and the light the
         // air and the haze scatter, a row for each height.
-        assert_eq!(number(&bytes, 172), 1.0);
-        assert_eq!(number(&bytes, 183), 12.0);
-        assert_eq!(number(&bytes, 184), 0.0, "no clouds without a sky");
-        assert_eq!(number(&bytes, 185), 13.0, "the time");
-        assert_eq!(number(&bytes, 186), sky::CLOUD_HEIGHT);
-        assert_eq!(number(&bytes, 187), 0.0, "no sky");
+        assert_eq!(number(&bytes, 192), 1.0);
+        assert_eq!(number(&bytes, 203), 12.0);
+        assert_eq!(number(&bytes, 204), 0.0, "no clouds without a sky");
+        assert_eq!(number(&bytes, 205), 13.0, "the time");
+        assert_eq!(number(&bytes, 206), sky::CLOUD_HEIGHT);
+        assert_eq!(number(&bytes, 207), 0.0, "no sky");
         let above = Sky::of(&lighting);
         // The water: the body the eye is nearest, the layers of waves,
         // the rings, and the eye's own, which the view fills in itself.
@@ -4509,59 +4514,59 @@ mod tests {
                 stream_look: [[0.125; 4], [0.0; 4], [0.375; 4]],
             },
         );
-        assert_eq!(number(&bytes, 184), 0.6, "how much of the sky is cloud");
-        assert_eq!(number(&bytes, 187), 1.0, "a sky");
-        assert_eq!(number(&bytes, 188), above.air[0][0]);
-        assert_eq!(number(&bytes, 280), above.air[23][0]);
-        assert_eq!(number(&bytes, 284), above.haze[0][0]);
-        assert_eq!(number(&bytes, 378), above.haze[23][2]);
-        assert_eq!(number(&bytes, 380), 0.002, "the fog");
-        assert_eq!(number(&bytes, 381), sky::FOG[1]);
-        assert_eq!(number(&bytes, 385), 1.0, "the wind");
-        assert_eq!(number(&bytes, 386), 9.0);
-        assert_eq!(number(&bytes, 387), 0.25, "since the last frame");
-        assert_eq!(number(&bytes, 388), 0.5, "how much the walker stirs");
+        assert_eq!(number(&bytes, 204), 0.6, "how much of the sky is cloud");
+        assert_eq!(number(&bytes, 207), 1.0, "a sky");
+        assert_eq!(number(&bytes, 208), above.air[0][0]);
+        assert_eq!(number(&bytes, 300), above.air[23][0]);
+        assert_eq!(number(&bytes, 304), above.haze[0][0]);
+        assert_eq!(number(&bytes, 398), above.haze[23][2]);
+        assert_eq!(number(&bytes, 400), 0.002, "the fog");
+        assert_eq!(number(&bytes, 401), sky::FOG[1]);
+        assert_eq!(number(&bytes, 405), 1.0, "the wind");
+        assert_eq!(number(&bytes, 406), 9.0);
+        assert_eq!(number(&bytes, 407), 0.25, "since the last frame");
+        assert_eq!(number(&bytes, 408), 0.5, "how much the walker stirs");
         assert_eq!(
-            number(&bytes, 391),
+            number(&bytes, 411),
             occlusion::CONTACT_REACH,
             "how far towards the sun contact shadows are looked for"
         );
         assert_eq!(
-            number(&bytes, 389),
+            number(&bytes, 409),
             1.0,
             "and that smooth things mirror the world"
         );
         assert_eq!(
-            number(&bytes, 390),
+            number(&bytes, 410),
             1.0,
             "this frame's picture too, once copied"
         );
-        assert_eq!(number(&bytes, 392), 2.0, "the water's surface");
-        assert_eq!(number(&bytes, 399), 6.0, "and how many points its grid has");
-        assert_eq!(number(&bytes, 404), 5.4, "the first layer of waves");
-        assert_eq!(number(&bytes, 423), 512.0, "the rings");
-        assert_eq!(number(&bytes, 424), 0.05, "how near the eye sees");
-        assert_eq!(number(&bytes, 428), 1.0, "where lightning's light is");
-        assert_eq!(number(&bytes, 431), 0.5, "and how bright");
-        assert_eq!(number(&bytes, 436), 0.25, "how hard it rains");
-        assert_eq!(number(&bytes, 440), 0.75, "how stormy the sky is");
-        assert_eq!(number(&bytes, 456), 0.3, "how strong the tornado is");
-        assert_eq!(number(&bytes, 460), 0.4, "how deep the snow lies");
-        assert_eq!(number(&bytes, 464), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 484), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 495), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 412), 2.0, "the water's surface");
+        assert_eq!(number(&bytes, 419), 6.0, "and how many points its grid has");
+        assert_eq!(number(&bytes, 424), 5.4, "the first layer of waves");
+        assert_eq!(number(&bytes, 443), 512.0, "the rings");
+        assert_eq!(number(&bytes, 444), 0.05, "how near the eye sees");
+        assert_eq!(number(&bytes, 448), 1.0, "where lightning's light is");
+        assert_eq!(number(&bytes, 451), 0.5, "and how bright");
+        assert_eq!(number(&bytes, 456), 0.25, "how hard it rains");
+        assert_eq!(number(&bytes, 460), 0.75, "how stormy the sky is");
+        assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
+        assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
+        assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
+        assert_eq!(number(&bytes, 504), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 515), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 511),
+            number(&bytes, 531),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 512),
+            number(&bytes, 532),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 523), 0.375);
-        assert_eq!(bytes.len(), 524 * 4);
+        assert_eq!(number(&bytes, 543), 0.375);
+        assert_eq!(bytes.len(), 544 * 4);
     }
 
     #[test]

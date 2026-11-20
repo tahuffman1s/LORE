@@ -34,14 +34,14 @@ struct View {
     // what casts it and what it falls on; the fourth changes every frame,
     // to turn the pattern the edge is smoothed with.
     shadows: vec4<f32>,
-    // The fifth of each of the next two is not the sun's: it is the level
-    // seen from straight above, which says what is overhead.
+    // The last of each of the next two (`OVERHEAD`) is not the sun's: it is
+    // the level seen from straight above, which says what is overhead.
     // For each shadow picture: in the first number how many metres one of
     // its pixels covers, and in the second how many metres its depth spans.
-    shadow_reach: array<vec4<f32>, 5>,
+    shadow_reach: array<vec4<f32>, 6>,
     // Takes a point in the world to each shadow picture: x and y from -1 to
     // 1 across it, z from 0 nearest the sun to 1 farthest.
-    shadow_from_world: array<mat4x4<f32>, 5>,
+    shadow_from_world: array<mat4x4<f32>, 6>,
     // The way the eye looks, then how far a line of sight leans to the
     // right and up between the middle of the picture and its edge. The
     // fourth number of the first is how many pixels high the picture is,
@@ -1305,7 +1305,10 @@ fn under_clouds(world: vec3<f32>) -> f32 {
     return cloud_shade(world).x;
 }
 
-const SHADOW_PICTURES: i32 = 4;
+// How many of the shadow pictures are the sun's, and which one is the
+// level seen from straight above.
+const SHADOW_PICTURES: i32 = 5;
+const OVERHEAD: i32 = 5;
 // How many places round a point are asked whether something is overhead.
 const CANOPY_LOOKS: i32 = 8;
 // How much of the sunlight that falls into a street between buildings is
@@ -1354,7 +1357,8 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
     let noise = scattered(pixel + view.shadows.w * vec2<f32>(5.588238, 3.141593));
     let turn = noise * 6.2831853;
 
-    for (var picture = 0; picture < SHADOW_PICTURES; picture++) {
+    // The near pictures, with soft edges.
+    for (var picture = 0; picture < SHADOW_PICTURES - 1; picture++) {
         let metres_a_pixel = view.shadow_reach[picture].x;
         let depth_metres = view.shadow_reach[picture].y;
         // Lifted off the surface a little, so that it does not shadow itself.
@@ -1409,14 +1413,29 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
                 shadow_map, shadow_sampler, uv + beside * edge, picture, place.z - allowed,
             );
         }
-        var sunlit = reached / f32(EDGE_LOOKS);
-        // Shadows fade out towards the end of the widest picture.
-        if picture == SHADOW_PICTURES - 1 {
-            sunlit = mix(1.0, sunlit, clamp((inside - 0.02) / 0.1, 0.0, 1.0));
-        }
-        return sunlit;
+        return reached / f32(EDGE_LOOKS);
     }
-    return 1.0;
+    return far_sunlight(world, normal, facing, slope);
+}
+
+// The same past the near pictures, from the widest, whose pixels are wider
+// than any soft edge: one smoothed look, and shadows fade out towards its
+// end.
+fn far_sunlight(world: vec3<f32>, normal: vec3<f32>, facing: f32, slope: f32) -> f32 {
+    let picture = SHADOW_PICTURES - 1;
+    let metres_a_pixel = view.shadow_reach[picture].x;
+    let lifted = world + normal * metres_a_pixel * (1.0 + 2.0 * (1.0 - facing));
+    let place = view.shadow_from_world[picture] * vec4<f32>(lifted, 1.0);
+    let uv = vec2<f32>(place.x * 0.5 + 0.5, 0.5 - place.y * 0.5);
+    let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
+    if inside < 0.02 || place.z <= 0.0 || place.z >= 1.0 {
+        return 1.0;
+    }
+    let allowed = metres_a_pixel * (1.0 + slope) / view.shadow_reach[picture].y;
+    let sunlit = textureSampleCompareLevel(
+        shadow_map, shadow_sampler, uv, picture, place.z - allowed,
+    );
+    return mix(1.0, sunlit, clamp((inside - 0.02) / 0.1, 0.0, 1.0));
 }
 
 // The depth the picture from above holds at `at` (from 0 to 1 across it),
@@ -1424,7 +1443,7 @@ fn sunlight(world: vec3<f32>, normal: vec3<f32>, pixel: vec2<f32>) -> f32 {
 // beyond it.
 fn overhead_at(at: vec2<f32>, size: vec2<f32>) -> f32 {
     let pixel = clamp(vec2<i32>(at * size), vec2<i32>(0), vec2<i32>(size) - 1);
-    return textureLoad(shadow_map, pixel, 4, 0);
+    return textureLoad(shadow_map, pixel, OVERHEAD, 0);
 }
 
 // How much of the sky a point of the world can see, from a little (under
@@ -1451,14 +1470,14 @@ fn sky_and_slot(world: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     if view.shadows.x < 0.5 {
         return vec3<f32>(1.0, 0.0, 1.0);
     }
-    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
     if inside < 0.04 {
         return vec3<f32>(1.0, 0.0, 1.0);
     }
-    let metres_a_pixel = view.shadow_reach[4].x;
-    let depth_metres = view.shadow_reach[4].y;
+    let metres_a_pixel = view.shadow_reach[OVERHEAD].x;
+    let depth_metres = view.shadow_reach[OVERHEAD].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     let turn = scattered(pixel + view.shadows.w * vec2<f32>(1.618034, 4.236068)) * 6.2831853;
     var open = 0.0;
@@ -1502,13 +1521,13 @@ fn rained_on(world: vec3<f32>, pixel: vec2<f32>, buried: f32) -> f32 {
     if view.shadows.x < 0.5 {
         return 1.0;
     }
-    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     if min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y)) < 0.04 {
         return 1.0;
     }
-    let metres_a_pixel = view.shadow_reach[4].x;
-    let depth_metres = view.shadow_reach[4].y;
+    let metres_a_pixel = view.shadow_reach[OVERHEAD].x;
+    let depth_metres = view.shadow_reach[OVERHEAD].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     // Two looks a hand apart, turned for every pixel and frame, so that
     // the edge of what is dry under a ledge is soft.
@@ -1612,14 +1631,14 @@ fn snow_buries(world: vec3<f32>, deep: f32) -> f32 {
     if view.shadows.x < 0.5 || deep <= 0.001 {
         return 0.0;
     }
-    let above = view.shadow_from_world[4] * vec4<f32>(world, 1.0);
+    let above = view.shadow_from_world[OVERHEAD] * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(above.x * 0.5 + 0.5, 0.5 - above.y * 0.5);
     let inside = min(min(uv.x, uv.y), 1.0 - max(uv.x, uv.y));
     if inside < 0.04 {
         return 0.0;
     }
-    let metres_a_pixel = view.shadow_reach[4].x;
-    let depth_metres = view.shadow_reach[4].y;
+    let metres_a_pixel = view.shadow_reach[OVERHEAD].x;
+    let depth_metres = view.shadow_reach[OVERHEAD].y;
     let size = vec2<f32>(textureDimensions(shadow_map));
     // How far over the point the lowest of the highest things beside it
     // is, and the lowest a few strides out.
