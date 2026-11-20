@@ -19,6 +19,7 @@
 //! of the world's day that is, for eclipses and the moon's place.
 
 pub mod aurora;
+pub mod meteors;
 mod moon;
 pub mod planets;
 pub mod stars;
@@ -384,6 +385,13 @@ impl Heavens {
         let east = cross(self.pole, self.meridian);
         let dot = |one: [f32; 3]| (0..3).map(|axis| one[axis] * fixed[axis]).sum::<f32>();
         [dot(self.meridian), dot(east), dot(self.pole)]
+    }
+
+    /// How far round the ecliptic the sun is now, in degrees from the
+    /// spring equinox: the day of the year, as the showers keep it.
+    #[must_use]
+    pub fn sun_longitude(&self) -> f64 {
+        sun_at(self.days).1.rem_euclid(360.0)
     }
 
     /// Each of [`planets::PLANETS`] as it is seen now: towards it in the

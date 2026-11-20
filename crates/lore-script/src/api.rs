@@ -89,6 +89,7 @@ pub(crate) struct Handlers {
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
     pub lightning: Vec<Function>,
+    pub meteor: Vec<Function>,
     pub fluid_touch: Vec<Function>,
     pub pool_overflow: Vec<Function>,
     pub pool_overflow_end: Vec<Function>,

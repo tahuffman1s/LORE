@@ -636,6 +636,14 @@ impl Renderer {
         self.effects.set_aurora(kp);
     }
 
+    /// Says how many times the real rate shooting stars cross the sky: 0
+    /// for none, 1 (the usual) for the real one, a few an hour and the
+    /// great showers on their nights, up to 1000 for a storm of them, as
+    /// the Leonids of 1966 were.
+    pub fn set_meteors(&mut self, times: f32) {
+        self.effects.set_meteors(times);
+    }
+
     /// Says how the Milky Way is drawn: `times` its real brightness, from
     /// 0 (not at all) to 10 (1 is the usual), tinted `tint` in linear red,
     /// green and blue, as bright as before (`[1.0, 1.0, 1.0]` is its own
@@ -1141,6 +1149,7 @@ impl Renderer {
                 .as_ref()
                 .map_or(Standing::default(), Meshes::standing),
         );
+        self.effects.show_meteors(view.seconds());
         let weather = self.effects.air(view.seconds());
         self.look.step(seconds);
         self.frame_count = self.frame_count.wrapping_add(1);

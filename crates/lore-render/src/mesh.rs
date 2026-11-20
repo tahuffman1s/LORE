@@ -69,7 +69,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, seven for the weather and twenty-nine for the sun, the
+/// the light of lightning, seven for the weather and forty-five for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
 const SKY_BYTES: usize =
@@ -283,7 +283,7 @@ impl View {
 
 /// What is in the sky of one frame besides its light, as the shader takes
 /// it: where lightning's light comes from, the weather, and the heavens.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Above {
     pub(crate) flashes: [[f32; 4]; 2],
     pub(crate) weather: Air,
@@ -294,6 +294,18 @@ pub(crate) struct Above {
     /// How running water looks, as the shader's `stream_look`: what the
     /// level's water is drawn as, whichever pool the eye is nearest.
     pub(crate) stream_look: [[f32; 4]; 3],
+}
+
+impl Default for Above {
+    fn default() -> Self {
+        Self {
+            flashes: [[0.0; 4]; 2],
+            weather: Air::default(),
+            heavens: [[0.0; 4]; sky::HEAVENS_ROWS],
+            water_look: [[0.0; 4]; 3],
+            stream_look: [[0.0; 4]; 3],
+        }
+    }
 }
 
 /// The light a scene is drawn in: one sun, and the sky and ground around it.
@@ -2344,6 +2356,10 @@ impl MeshPipeline {
             // frame, is held still: it would draw the cube again each time.
             let mut held = heavens;
             held[6][3] = 1.0;
+            // Nor the meteors, which come and go every frame.
+            for row in &mut held[sky::METEOR_ROWS..] {
+                *row = [0.0; 4];
+            }
             let now = sky.map(|sky| Heavens {
                 lighting,
                 sky: *sky,
@@ -4669,20 +4685,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 600), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 611), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 664), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 675), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 627),
+            number(&bytes, 691),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 628),
+            number(&bytes, 692),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 639), 0.375);
-        assert_eq!(bytes.len(), 640 * 4);
+        assert_eq!(number(&bytes, 703), 0.375);
+        assert_eq!(bytes.len(), 704 * 4);
     }
 
     #[test]
