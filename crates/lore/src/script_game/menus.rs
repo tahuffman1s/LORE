@@ -233,7 +233,8 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     assert!(played.shows("Music volume") && !played.shows("Vsync"));
 
     // Left on every row of every tab: a number goes down a step, a choice
-    // back a word, and a toggle over.
+    // back a word, and a toggle over. Night brightness starts at its least,
+    // so it goes right, up a step.
     let usual = Settings::default();
     let told = usual.described();
     let mut heading = told[0].group.clone();
@@ -243,7 +244,11 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             played.tap(GamepadButton::RightBumper);
         }
         assert!(played.shows(&setting.label), "{:?}", played.words());
-        played.tap(GamepadButton::DpadLeft);
+        if setting.name == "night_brightness" {
+            played.tap(GamepadButton::DpadRight);
+        } else {
+            played.tap(GamepadButton::DpadLeft);
+        }
         played.tap(GamepadButton::DpadDown);
     }
     let chosen = played.settings;
@@ -259,6 +264,7 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             ui_size: 95.0,
             field_of_view: 73.0,
             brightness: 45.0,
+            night_brightness: 5.0,
             upscaling: lore_render::Upscaling::Native,
             vsync: false,
             frame_rate_limit: 390.0,
@@ -424,9 +430,9 @@ fn a_frame_rate_limit_of_0_is_shown_as_no_limit() {
     played.tap(Key::E);
     played.tap(Key::E);
     assert_eq!(played.value_of("Frame rate limit"), "30");
-    // Down past the size, the field of view, the brightness, the upscaling
-    // and vsync.
-    for _ in 0..5 {
+    // Down past the size, the field of view, the brightness, the night
+    // brightness, the upscaling and vsync.
+    for _ in 0..6 {
         played.tap(Key::ArrowDown);
     }
     played.tap(Key::ArrowLeft);

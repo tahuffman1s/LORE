@@ -33,6 +33,8 @@ pub(crate) const LIGHTING_FUNCTIONS: &[&str] = &[
     "eyeAdaptation",
     "setAmbientOcclusion",
     "ambientOcclusion",
+    "setNightDarkness",
+    "nightDarkness",
 ];
 
 /// What `game.lighting.setEyeAdaptation` takes.
@@ -50,16 +52,21 @@ pub struct EyeSaid {
     /// About how many seconds it takes to get used to the dark (bright
     /// light, three times as fast), from 0 (at once) to 600.
     pub seconds: f32,
+    /// How many stops darker than day a moonlit night is drawn, from 0 to
+    /// 12 (`game.lighting.setNightDarkness`).
+    pub night: f32,
 }
 
 impl Default for EyeSaid {
-    /// The engine's own: open and close up to eight stops, and take a
-    /// second and a half.
+    /// The engine's own: open up to twelve stops and close up to eight,
+    /// take a second and a half, and draw a moonlit night six stops darker
+    /// than day.
     fn default() -> Self {
         Self {
-            opens: 8.0,
+            opens: 12.0,
             closes: 8.0,
             seconds: 1.5,
+            night: 6.0,
         }
     }
 }
@@ -224,6 +231,31 @@ pub(crate) fn lighting(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             state.lighting.changed.set(true);
             Ok(())
         })?,
+    )?;
+    let state = Rc::clone(shared);
+    lighting.set(
+        "setNightDarkness",
+        lua.create_function(move |lua, value: Value| {
+            let stops = number(
+                lua,
+                "game.lighting.setNightDarkness",
+                Some(&value),
+                "how many stops darker than day a moonlit night looks once the eye is used to \
+                 it: 6 is the engine's own, 0 as bright as day, 12 the darkest it takes; \
+                 each stop is half as bright, so 6 is 64 times darker",
+                "game.lighting.setNightDarkness(8)",
+            )?;
+            let mut eye = state.lighting.eye.get();
+            eye.night = stops.clamp(0.0, 12.0);
+            state.lighting.eye.set(eye);
+            state.lighting.changed.set(true);
+            Ok(())
+        })?,
+    )?;
+    let state = Rc::clone(shared);
+    lighting.set(
+        "nightDarkness",
+        lua.create_function(move |_, ()| Ok(f64::from(state.lighting.eye.get().night)))?,
     )?;
     let state = Rc::clone(shared);
     lighting.set(

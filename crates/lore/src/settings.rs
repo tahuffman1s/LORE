@@ -276,6 +276,11 @@ settings! {
     /// How bright the picture is, from 0 (darkest) to 100 (brightest). 50
     /// is as the game was made.
     brightness: f32 = 50.0, Shape::Number(Settings::BRIGHTNESS), "Graphics", "Brightness";
+    /// How much brighter nights are drawn than the game made them, from 0
+    /// (as dark as the game says) to 100 (half as dark). Days are drawn as
+    /// before.
+    night_brightness: f32 = 0.0, Shape::Number(Settings::BRIGHTNESS), "Graphics",
+        "Night brightness";
     /// How much smaller than the window the game is drawn before FSR makes
     /// it full size: smaller is faster. "off" draws every pixel with
     /// nothing done to it, "native" draws every pixel and smooths the
@@ -486,6 +491,13 @@ impl Settings {
     #[must_use]
     pub fn exposure_stops(&self) -> f32 {
         ((self.brightness - 50.0) / 50.0).clamp(-1.0, 1.0) * BRIGHTNESS_STOPS
+    }
+
+    /// How much the player wants nights lifted, as
+    /// `Renderer::set_night_brightness` takes it: from 0 to 1.
+    #[must_use]
+    pub fn night_lift(&self) -> f32 {
+        (self.night_brightness / 100.0).clamp(0.0, 1.0)
     }
 
     /// The most pictures drawn each second, as a whole number: 0 for no
@@ -931,6 +943,7 @@ mod tests {
             ui_size: 125.0,
             field_of_view: 95.0,
             brightness: 65.0,
+            night_brightness: 30.0,
             upscaling: Upscaling::UltraPerformance,
             vsync: false,
             frame_rate_limit: 144.0,
@@ -1025,8 +1038,8 @@ mod tests {
                 "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
                  `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
-                 `rumble`, `ui_size`, `field_of_view`, `brightness`, `upscaling`, `vsync`, \
-                 `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
+                 `rumble`, `ui_size`, `field_of_view`, `brightness`, `night_brightness`, \
+                 `upscaling`, `vsync`, `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
                  `ambient_occlusion`, `contact_shadows`, `anisotropic_filtering`, `bloom`, \
                  `vignette`, `film_grain`, `chromatic_aberration` and `sharpening`.",
                 "line 4: `invert_look` must be `true` or `false`, so it stays `false`.",

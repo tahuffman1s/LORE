@@ -330,6 +330,17 @@ impl Headless {
         self.eye.adaptation = adaptation.sound();
     }
 
+    /// Says how much the player wants nights lifted, from 0 (as dark as the
+    /// game makes them, [`EyeAdaptation::night`]) to 1 (half as dark). It changes only how dark the eye leaves a night, a dusk or a
+    /// dull day: a sunlit view is drawn as before.
+    pub fn set_night_brightness(&mut self, lift: f32) {
+        self.eye.night_brightness = if lift.is_finite() {
+            lift.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
     /// Says how wet the ground is, from 0 for dry to 1 for soaked, with
     /// its puddles as full: rain takes a minute to soak it and fill them,
     /// and a picture of a wet street should not have to wait. The picture

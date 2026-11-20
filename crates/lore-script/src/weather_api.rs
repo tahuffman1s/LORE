@@ -43,6 +43,7 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "starHeight",
     "starNear",
     "starNames",
+    "light",
 ];
 
 /// The real sky a game gets when it says only some of where and when:
@@ -938,6 +939,15 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             }
             let among = heavens.among_stars([x / long, y / long, z / long]);
             Ok(lore_sky::stars::name_near(among, degrees))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "light",
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .map(|heavens| f64::from(heavens.ground_lux())))
         })?,
     )?;
     sky.set(

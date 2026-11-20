@@ -247,6 +247,23 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         light = sane(textureLoad(scene, vec2<i32>(position.xy), 0).rgb);
     }
 
+    // Rods see less finely than cones: a dark place loses its fine detail,
+    // a pixel and a half at most, while what is bright enough for cones (a
+    // lamp, a star) stays sharp. Before the glow is added, so a lamp's halo
+    // is kept whole.
+    if settings.extra.x > 0.0 {
+        let candela = dot(light, LUMA) * bitcast<f32>(settings.flags.w);
+        let dim = settings.extra.x * (1.0 - smoothstep(-7.6, 1.0, log2(max(candela, 1e-6))));
+        if dim > 0.0 {
+            let apart = vec2<f32>(1.5 * dim) / size;
+            let softer = 0.25 * (read(at + vec2<f32>(apart.x, apart.y * 0.5))
+                + read(at - vec2<f32>(apart.x, apart.y * 0.5))
+                + read(at + vec2<f32>(-apart.x * 0.5, apart.y))
+                + read(at + vec2<f32>(apart.x * 0.5, -apart.y)));
+            light = mix(light, softer, dim * 0.6);
+        }
+    }
+
     let bloom = settings.grade2.w;
     if bloom > 0.0 {
         let glowing = sane(textureSampleLevel(glow, filtered, at, 0.0).rgb) * settings.extra.y;
