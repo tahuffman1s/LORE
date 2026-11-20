@@ -69,7 +69,7 @@ const VIEW_BYTES: usize = 272 + 16 + PICTURES * (16 + 64) + SKY_BYTES + 64 + 48;
 /// haze's, one for the fog, one for the wind, one for whoever walks and
 /// nine for the water: the still water the eye is in or nearest, the
 /// wind's waves, the rings round the eye and the eye's own; and two for
-/// the light of lightning, seven for the weather and ten for the sun, the
+/// the light of lightning, seven for the weather and twenty-four for the sun, the
 /// moon and the stars, and three for how the level's still and running water
 /// looks.
 const SKY_BYTES: usize =
@@ -2134,19 +2134,23 @@ impl MeshPipeline {
         // moon and no star.
         let [x, y, z] = lighting.towards_sun;
         let [red, green, blue] = lighting.sun;
-        let heavens = day.map_or(
-            [
-                [x, y, z, 0.0],
-                [0.0; 4],
-                [0.0, 1.0, 0.0, 0.0],
-                [red, green, blue, 0.0],
-                [0.0; 4],
-                [1.0, 0.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0, 1.0],
-                [0.0; 4],
-                [0.0; 4],
-                [1.0; 4],
-            ],
+        let heavens = day.map_or_else(
+            || {
+                let mut rows = [[0.0; 4]; sky::HEAVENS_ROWS];
+                rows[..10].copy_from_slice(&[
+                    [x, y, z, 0.0],
+                    [0.0; 4],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [red, green, blue, 0.0],
+                    [0.0; 4],
+                    [1.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.0, 1.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                    [1.0; 4],
+                ]);
+                rows
+            },
             |day| day.heavens,
         );
         // The sun's shadows of a level that has anything in it, drawn
@@ -4665,20 +4669,20 @@ mod tests {
         assert_eq!(number(&bytes, 476), 0.3, "how strong the tornado is");
         assert_eq!(number(&bytes, 480), 0.4, "how deep the snow lies");
         assert_eq!(number(&bytes, 484), 9.0, "the sun, the moon and the stars");
-        assert_eq!(number(&bytes, 524), 0.5, "the look of the water");
-        assert_eq!(number(&bytes, 535), 0.75, "and how much it bends light");
+        assert_eq!(number(&bytes, 580), 0.5, "the look of the water");
+        assert_eq!(number(&bytes, 591), 0.75, "and how much it bends light");
         assert_eq!(
-            number(&bytes, 551),
+            number(&bytes, 607),
             11.0,
             "the matrix of the picture kept for them to mirror"
         );
         assert_eq!(
-            number(&bytes, 552),
+            number(&bytes, 608),
             0.125,
             "last, the look of running water"
         );
-        assert_eq!(number(&bytes, 563), 0.375);
-        assert_eq!(bytes.len(), 564 * 4);
+        assert_eq!(number(&bytes, 619), 0.375);
+        assert_eq!(bytes.len(), 620 * 4);
     }
 
     #[test]

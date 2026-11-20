@@ -54,6 +54,10 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "milkyWayColor",
     "setLightPollution",
     "lightPollution",
+    "planetDirection",
+    "planetHeight",
+    "planetBrightness",
+    "planetNames",
 ];
 
 /// The words `game.sky.setLightPollution` takes, and the class on Bortle's
@@ -928,6 +932,18 @@ fn star(lua: &Lua, function: &str, value: &Value) -> mlua::Result<&'static lore_
     };
     let name = name.to_string_lossy();
     lore_sky::stars::named(&name).ok_or_else(|| {
+        if let Some(index) = lore_sky::planets::named(&name) {
+            let planet = lore_sky::planets::PLANETS[index].name;
+            let asked = if function.ends_with("Height") {
+                "game.sky.planetHeight"
+            } else {
+                "game.sky.planetDirection"
+            };
+            return fail(
+                lua,
+                format!("{planet} is a planet, not a star: write {asked}(\"{planet}\") instead."),
+            );
+        }
         let suggestion = lore_sky::stars::closest_name(&name)
             .map(|close| format!("Did you mean \"{close}\"? "))
             .unwrap_or_default();
@@ -941,6 +957,45 @@ fn star(lua: &Lua, function: &str, value: &Value) -> mlua::Result<&'static lore_
             ),
         )
     })
+}
+
+/// The planet a script named for `function`, as its place in
+/// [`lore_sky::planets::PLANETS`], or an error that says which there are.
+fn planet(lua: &Lua, function: &str, value: &Value) -> mlua::Result<usize> {
+    let example = format!("{function}(\"Venus\")");
+    let Value::String(name) = value else {
+        return Err(fail(
+            lua,
+            format!(
+                "{function} needs the name of a planet as text, but it was given {}. Write it \
+                 like this: {example}",
+                describe(value)
+            ),
+        ));
+    };
+    let name = name.to_string_lossy();
+    lore_sky::planets::named(&name).ok_or_else(|| {
+        let for_stars = if function.ends_with("Height") {
+            "; for a star, use game.sky.starHeight"
+        } else if function.ends_with("Direction") {
+            "; for a star, use game.sky.starDirection"
+        } else {
+            ""
+        };
+        fail(
+            lua,
+            format!(
+                "{function} knows no planet called \"{name}\". The planets are \"Mercury\", \
+                 \"Venus\", \"Mars\", \"Jupiter\", \"Saturn\", \"Uranus\" and \
+                 \"Neptune\"{for_stars}. Write it like this: {example}"
+            ),
+        )
+    })
+}
+
+/// How high above the horizon a direction in the level is, in degrees.
+fn height_of(towards: [f32; 3]) -> f64 {
+    f64::from(towards[1].clamp(-1.0, 1.0).asin().to_degrees())
 }
 
 /// `game.sky.sunDirection`, `sunHeight`, `moonDirection`, `moonHeight`,
@@ -991,14 +1046,9 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
         "starHeight",
         lua.create_function(move |lua, value: Value| {
             let star = star(lua, "game.sky.starHeight", &value)?;
-            Ok(climate.heavens().map(|heavens| {
-                f64::from(
-                    heavens.world_of(star.towards)[1]
-                        .clamp(-1.0, 1.0)
-                        .asin()
-                        .to_degrees(),
-                )
-            }))
+            Ok(climate
+                .heavens()
+                .map(|heavens| height_of(heavens.world_of(star.towards))))
         })?,
     )?;
     let climate = Rc::clone(&shared.weather);
@@ -1037,8 +1087,67 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             if !(long > 0.0 && long.is_finite()) {
                 return Ok(None);
             }
-            let among = heavens.among_stars([x / long, y / long, z / long]);
-            Ok(lore_sky::stars::name_near(among, degrees))
+            let unit = [x / long, y / long, z / long];
+            let among = heavens.among_stars(unit);
+            let star = lore_sky::stars::name_near(among, degrees).map(|name| {
+                let magnitude =
+                    lore_sky::stars::named(name).map_or(f32::MAX, |star| star.magnitude);
+                (magnitude, name)
+            });
+            // A planet as bright as it is, or brighter, is the one meant.
+            let least = degrees.to_radians().cos();
+            let planet = heavens
+                .planets()
+                .iter()
+                .zip(&lore_sky::planets::PLANETS)
+                .filter(|((at, _), _)| at[0] * unit[0] + at[1] * unit[1] + at[2] * unit[2] >= least)
+                .map(|((_, magnitude), planet)| (*magnitude, planet.name))
+                .min_by(|one, other| one.0.total_cmp(&other.0));
+            Ok(match (star, planet) {
+                (Some(star), Some(planet)) if star.0 < planet.0 => Some(star.1),
+                (_, Some(planet)) => Some(planet.1),
+                (star, None) => star.map(|(_, name)| name),
+            })
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "planetDirection",
+        lua.create_function(move |lua, value: Value| {
+            let index = planet(lua, "game.sky.planetDirection", &value)?;
+            Ok(climate.heavens().map(|heavens| {
+                let [x, y, z] = heavens.planets()[index].0;
+                Vector::new(x, y, z)
+            }))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "planetHeight",
+        lua.create_function(move |lua, value: Value| {
+            let index = planet(lua, "game.sky.planetHeight", &value)?;
+            Ok(climate
+                .heavens()
+                .map(|heavens| height_of(heavens.planets()[index].0)))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "planetBrightness",
+        lua.create_function(move |lua, value: Value| {
+            let index = planet(lua, "game.sky.planetBrightness", &value)?;
+            Ok(climate
+                .heavens()
+                .map(|heavens| f64::from(heavens.planets()[index].1)))
+        })?,
+    )?;
+    sky.set(
+        "planetNames",
+        lua.create_function(|_, ()| {
+            Ok(lore_sky::planets::PLANETS
+                .iter()
+                .map(|planet| planet.name)
+                .collect::<Vec<_>>())
         })?,
     )?;
     let climate = Rc::clone(&shared.weather);

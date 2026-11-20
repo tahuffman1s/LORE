@@ -16,6 +16,7 @@
 //! due south (due north, south of the tropics), as a sundial says, so a
 //! game never has to think about longitude or time zones.
 
+pub mod planets;
 pub mod stars;
 
 use std::f64::consts::TAU;
@@ -61,7 +62,15 @@ pub struct Heavens {
     /// How far the moon is through its month, from 0 at new moon through
     /// 0.5 at full to nearly 1.
     pub moon_age: f32,
+    /// The moment, in days after noon on 1 January 2000: for the made-up
+    /// sky, as if it were [`MADE_UP_DAY`].
+    pub days: f64,
 }
+
+/// The day the made-up sky's planets stand as they did on, counted from
+/// 1 January 2000: the 20th of March 2000, the day a game's real sky starts
+/// from when it says only the place.
+pub const MADE_UP_DAY: i64 = 79;
 
 /// The sine and cosine of an angle in degrees.
 fn sin_cos(degrees: f64) -> (f64, f64) {
@@ -203,6 +212,7 @@ impl SkyPlace {
             // A share of a turn, far below where an f32 stops being exact.
             #[allow(clippy::cast_possible_truncation)]
             moon_age: ((moon_along - sun_along) / 360.0).rem_euclid(1.0) as f32,
+            days,
         }
     }
 }
@@ -257,6 +267,9 @@ impl Heavens {
             turn,
             meridian: noon,
             moon_age: month,
+            // A day count far below where an f64 stops being exact.
+            #[allow(clippy::cast_precision_loss)]
+            days: MADE_UP_DAY as f64 + hours / 24.0 - 0.5,
         }
     }
 
@@ -291,6 +304,13 @@ impl Heavens {
         let east = cross(self.pole, self.meridian);
         let dot = |one: [f32; 3]| (0..3).map(|axis| one[axis] * fixed[axis]).sum::<f32>();
         [dot(self.meridian), dot(east), dot(self.pole)]
+    }
+
+    /// Each of [`planets::PLANETS`] as it is seen now: towards it in the
+    /// level, and how bright it looks, in magnitudes.
+    #[must_use]
+    pub fn planets(&self) -> [([f32; 3], f32); 7] {
+        planets::seen(self.days).map(|planet| (self.world_of(planet.towards), planet.magnitude))
     }
 
     /// How much of the moon's face the sun lights, as seen from here, from

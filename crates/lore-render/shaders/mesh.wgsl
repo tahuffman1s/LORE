@@ -129,9 +129,11 @@ struct View {
     // tinted, as bright as white, and how much brighter than the land the
     // stars and the moon's face are drawn (as much as the eye's night
     // darkening took); the glow of the air overhead; the glow of towns
-    // overhead; and what colour the Milky Way is tinted, and how many times
-    // its real brightness it is drawn.
-    heavens: array<vec4<f32>, 10>,
+    // overhead; what colour the Milky Way is tinted, and how many times
+    // its real brightness it is drawn; and for each planet from row 10
+    // (`PLANET_ROWS` in `sky.rs`), towards it, then its light in lux above
+    // the air, in its own colour.
+    heavens: array<vec4<f32>, 24>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1291,7 +1293,8 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     // Way, as the eye cannot open far enough for it.
     let noticed = smoothstep(0.05, 0.5, stands_out)
         * MILKY_WAY_SEEN / (0.8 * MILKY_WAY_CANDELA) * view.heavens[3].w;
-    return seen + (beyond * noticed + real_stars(among, direction, pixel, sky)) * behind;
+    let points = real_stars(among, direction, pixel, sky) + planets_light(direction, pixel, sky);
+    return seen + (beyond * noticed + points) * behind;
 }
 
 // Where `direction` (in the world) is among the stars: towards right
@@ -1391,32 +1394,10 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) ->
     let square = min(vec2<u32>(max((place + 1.0) * 0.5 * squares, vec2<f32>(0.0))), vec2<u32>(STAR_FACE_SQUARES - 1u));
     let held = star_squares[(face * STAR_FACE_SQUARES + square.y) * STAR_FACE_SQUARES + square.x];
 
-    // A spot as fine as the screen, not the smaller picture the upscaler
-    // starts from: the upscaler's jitter, frame after frame, finds where in
-    // a pixel each star is and keeps it a point at the screen's own size.
-    // (`view.eye.w` is minus one more than the log of how many times
-    // smaller the picture is drawn, when it is.) But never under 0.4 of a
-    // pixel of the picture drawn: finer, the jitter would catch a star whole
-    // in one frame and miss it in the next, and it would twinkle by itself.
-    // Nor wider than its square can hold, however coarse the picture: past
-    // that it would be cut off at the square's edge.
-    var screen_pixel = pixel;
-    if view.eye.w < 0.0 {
-        screen_pixel = pixel / exp2(max(-view.eye.w - 1.0, 0.0));
-    }
-    let spread = clamp(max(0.55 * screen_pixel, 0.4 * pixel), 1e-5, STAR_REACH / 3.0);
-    let fall = 1.0 / (2.0 * spread * spread);
+    let fall = star_fall(pixel);
     let twinkles = twinkling(direction.y);
-    // The faintest star an eye used to the dark sees against the sky, in
-    // lux before the air dims it: Schaefer's (1990) limiting magnitude,
-    // 8.43 - 5 log10(10^(4.316 - B / 5) + 1) for a sky of B magnitudes a
-    // square arcsecond (half a magnitude past the usual observer), which in
-    // light comes to this: magnitude 7.1 at a dark site, 4.7 under a full
-    // moon, 3.6 in a city. Each star fades out from there down to a quarter
-    // of it.
     let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
-    let past = 1.0 + 63.0 * sqrt(max(sky, 0.0));
-    let least = 1.078e-9 * past * past / max(dimmed.g, 1e-6);
+    let least = faintest_seen(sky) / max(dimmed.g, 1e-6);
     var light = vec3<f32>(0.0);
     for (var number = 0u; number < held.y; number++) {
         let at = (held.x + number) * 2u;
@@ -1443,6 +1424,66 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) ->
     // An eye used to the dark sees the stars stand out against it: the
     // night's darkening, which dims the land, is given back to them.
     return light * dimmed * per_lux * view.heavens[6].w;
+}
+
+// How quickly a star's spot of light falls off from its middle, for a
+// pixel `pixel` radians across: one over twice its spread squared.
+fn star_fall(pixel: f32) -> f32 {
+    // A spot as fine as the screen, not the smaller picture the upscaler
+    // starts from: the upscaler's jitter, frame after frame, finds where in
+    // a pixel each star is and keeps it a point at the screen's own size.
+    // (`view.eye.w` is minus one more than the log of how many times
+    // smaller the picture is drawn, when it is.) But never under 0.4 of a
+    // pixel of the picture drawn: finer, the jitter would catch a star whole
+    // in one frame and miss it in the next, and it would twinkle by itself.
+    // Nor wider than its square can hold, however coarse the picture: past
+    // that it would be cut off at the square's edge.
+    var screen_pixel = pixel;
+    if view.eye.w < 0.0 {
+        screen_pixel = pixel / exp2(max(-view.eye.w - 1.0, 0.0));
+    }
+    let spread = clamp(max(0.55 * screen_pixel, 0.4 * pixel), 1e-5, STAR_REACH / 3.0);
+    return 1.0 / (2.0 * spread * spread);
+}
+
+// The light of the faintest star an eye used to the dark sees against a sky
+// `sky` candela a square metre bright, in lux.
+fn faintest_seen(sky: f32) -> f32 {
+    // Callers divide it by what the air lets through, for the light above
+    // the air that is just seen. Schaefer's (1990) limiting magnitude,
+    // 8.43 - 5 log10(10^(4.316 - B / 5) + 1) for a sky of B magnitudes a
+    // square arcsecond (half a magnitude past the usual observer), which in
+    // light comes to this: magnitude 7.1 at a dark site, 4.7 under a full
+    // moon, 3.6 in a city. Each star fades out from there down to a quarter
+    // of it.
+    let past = 1.0 + 63.0 * sqrt(max(sky, 0.0));
+    return 1.078e-9 * past * past;
+}
+
+// The light of the planets along `direction` (in the level), `pixel`
+// radians across, against a sky `sky` candela a square metre bright, as
+// light to draw: points like the stars (`real_stars`), dimmed and yellowed
+// low down as they are and hidden by a bright sky as they are, but steady,
+// as a planet is a disc, not a point, and twinkles little.
+fn planets_light(direction: vec3<f32>, pixel: f32, sky: f32) -> vec3<f32> {
+    let per_lux = view.heavens[5].w;
+    if per_lux <= 0.0 || direction.y <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let fall = star_fall(pixel);
+    let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
+    let least = faintest_seen(sky) / max(dimmed.g, 1e-6);
+    var light = vec3<f32>(0.0);
+    for (var planet = 0u; planet < 7u; planet++) {
+        let off = direction - view.heavens[10u + 2u * planet].xyz;
+        let apart = dot(off, off);
+        if apart * fall < 4.5 {
+            let glow = view.heavens[11u + 2u * planet].rgb;
+            let lux = dot(glow, vec3<f32>(0.2126, 0.7152, 0.0722));
+            light += glow * smoothstep(0.25 * least, least, lux) * exp(-apart * fall);
+        }
+    }
+    return light * fall / PI * dimmed * per_lux * view.heavens[6].w;
 }
 
 // How much a star twinkles, from 0 to 1, at a height whose sine is `rise`:
