@@ -217,6 +217,20 @@ fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
     assert_eq!(printed(), ["1", "10"]);
     assert_eq!(host.take_moon_size(), Some(10.0));
     assert_eq!(host.take_moon_size(), None);
+    let mut host = game(
+        r##"
+        print(game.sky.moonColor())
+        game.sky.setMoonColor("#FF0000")
+        print(game.sky.moonColor())
+        "##,
+    );
+    assert_eq!(printed(), ["#ffffff", "#ff0000"]);
+    let tint = host.take_moon_tint().expect("a colour was said");
+    assert!(
+        tint[0] > 0.99 && tint[1] < 0.01 && tint[2] < 0.01,
+        "{tint:?}"
+    );
+    assert_eq!(host.take_moon_tint(), None);
 }
 
 #[test]
@@ -250,6 +264,8 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "game.lighting.setNightDarkness(8)",
         ),
         ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
+        ("game.sky.setMoonColor(\"black\")", "hide the moon"),
+        ("game.sky.setMoonColor(3)", "a colour in quotes"),
     ] {
         let host = game(script);
         let message = mistake(&host);

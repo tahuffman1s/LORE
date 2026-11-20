@@ -46,6 +46,8 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "light",
     "setMoonSize",
     "moonSize",
+    "setMoonColor",
+    "moonColor",
 ];
 
 /// The real sky a game gets when it says only some of where and when:
@@ -255,6 +257,11 @@ pub struct Climate {
     /// has said and the engine has not yet taken it.
     moon_size: Cell<f32>,
     moon_size_asked: Cell<Option<f32>>,
+    /// What colour the moon is tinted, in linear light, as the script
+    /// wrote it, and whether the engine has yet to take it.
+    moon_tint: Cell<[f32; 3]>,
+    moon_tint_said: RefCell<String>,
+    moon_tint_asked: Cell<bool>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -285,6 +292,9 @@ impl Default for Climate {
             place_changed: Cell::new(false),
             moon_size: Cell::new(1.0),
             moon_size_asked: Cell::new(None),
+            moon_tint: Cell::new([1.0; 3]),
+            moon_tint_said: RefCell::new("#ffffff".to_owned()),
+            moon_tint_asked: Cell::new(false),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -343,6 +353,10 @@ impl Climate {
 
     /// Where the world lies and when its clock started, if it has changed
     /// since this was last asked.
+    pub(crate) fn take_moon_tint(&self) -> Option<[f32; 3]> {
+        self.moon_tint_asked.take().then(|| self.moon_tint.get())
+    }
+
     pub(crate) fn take_moon_size(&self) -> Option<f32> {
         self.moon_size_asked.take()
     }
@@ -970,6 +984,48 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             climate.moon_size_asked.set(Some(size));
             Ok(())
         })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setMoonColor",
+        lua.create_function(move |lua, value: Value| {
+            let (color, _) = crate::hud::color_of(lua, "game.sky.setMoonColor", &value)?;
+            let linear = [color.r, color.g, color.b].map(|part| {
+                if part <= 0.040_45 {
+                    part / 12.92
+                } else {
+                    ((part + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            if linear.iter().all(|part| *part <= 0.0) {
+                return Err(fail(
+                    lua,
+                    "game.sky.setMoonColor was given black, which would hide the moon. Give it \
+                     a colour, or \"white\" for its own. Write it like this: \
+                     game.sky.setMoonColor(\"#ff6040\")",
+                ));
+            }
+            let byte = |part: f32| {
+                // Rounded and brought into 0 to 255 first.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let byte = (part.clamp(0.0, 1.0) * 255.0).round() as u8;
+                byte
+            };
+            climate.moon_tint.set(linear);
+            *climate.moon_tint_said.borrow_mut() = format!(
+                "#{:02x}{:02x}{:02x}",
+                byte(color.r),
+                byte(color.g),
+                byte(color.b)
+            );
+            climate.moon_tint_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "moonColor",
+        lua.create_function(move |_, ()| Ok(climate.moon_tint_said.borrow().clone()))?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(

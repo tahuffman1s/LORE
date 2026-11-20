@@ -379,6 +379,9 @@ impl Game for ScriptGame {
         if let Some(size) = self.host.take_moon_size() {
             frame.set_moon_size(size);
         }
+        if let Some(tint) = self.host.take_moon_tint() {
+            frame.set_moon_tint(tint);
+        }
         if let Some(place) = self.host.take_sky_place() {
             frame.set_sky_place(place);
         }

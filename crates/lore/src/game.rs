@@ -98,6 +98,8 @@ pub struct Frame {
     sky_place: Option<lore_render::SkyPlace>,
     /// How large the moon is drawn, if the game said it this frame.
     moon_size: Option<f32>,
+    /// What colour the moon is tinted, if the game said it this frame.
+    moon_tint: Option<[f32; 3]>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -221,6 +223,7 @@ impl Frame {
             hour: None,
             sky_place: None,
             moon_size: None,
+            moon_tint: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -892,6 +895,17 @@ impl Frame {
     /// How large the moon is drawn, if the game said it this frame.
     pub(crate) fn take_moon_size(&mut self) -> Option<f32> {
         self.moon_size.take()
+    }
+
+    /// Says what colour the moon is tinted, in linear red, green and blue:
+    /// its face, the glow round it and its light on the land.
+    pub fn set_moon_tint(&mut self, tint: [f32; 3]) {
+        self.moon_tint = Some(tint);
+    }
+
+    /// What colour the moon is tinted, if the game said it this frame.
+    pub(crate) fn take_moon_tint(&mut self) -> Option<[f32; 3]> {
+        self.moon_tint.take()
     }
 
     /// Where the world lies, if the game said it this frame.

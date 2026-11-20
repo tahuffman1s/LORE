@@ -612,6 +612,12 @@ impl ScriptHost {
     /// and on what day hour 0 was midnight, if it has changed since this
     /// was last called: the script said it with `game.sky.setLatitude`,
     /// `setNorth` or `setDate`.
+    /// What colour the moon is tinted, in linear light, if the script has
+    /// said since this was last called (`game.sky.setMoonColor`).
+    pub fn take_moon_tint(&mut self) -> Option<[f32; 3]> {
+        self.weather.take_moon_tint()
+    }
+
     /// How large the moon is drawn against its real size, if the script
     /// has said since this was last called (`game.sky.setMoonSize`).
     pub fn take_moon_size(&mut self) -> Option<f32> {

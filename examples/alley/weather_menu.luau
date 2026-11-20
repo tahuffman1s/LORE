@@ -71,6 +71,21 @@ local function setDate(year: number, month: number, day: number)
     game.sky.setDate(year, month, math.clamp(day, 1, daysIn(year, month)))
 end
 
+-- The moon's colours the menu offers, by name, and the name of each.
+local moonLooks = { "natural", "harvest orange", "blood red", "blue", "green", "violet" }
+local moonColours: { [string]: string } = {
+    natural = "#ffffff",
+    ["harvest orange"] = "#ffb060",
+    ["blood red"] = "#ff4020",
+    blue = "#80b0ff",
+    green = "#80ff90",
+    violet = "#c080ff",
+}
+local moonLookOf: { [string]: string } = {}
+for name, hex in moonColours do
+    moonLookOf[hex] = name
+end
+
 local monthNames = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" }
 
 -- The way the player looks, along the ground, as a vector of length 1.
@@ -286,6 +301,29 @@ return menu.new("Weather", {
             return if latitude >= 0 then string.format("%d° N", latitude) else string.format("%d° S", -latitude)
         end,
         color = "#c8c8ff",
+    }),
+    -- How large the moon is drawn, from its real size (half a degree) to ten
+    -- times it: game.sky.setMoonSize(3). Its light stays the same.
+    menu.slider("Moon size", {
+        min = 1,
+        max = 10,
+        step = 0.5,
+        get = game.sky.moonSize,
+        set = game.sky.setMoonSize,
+        format = function(times)
+            return if times == 1 then "real size" else string.format("%g times", times)
+        end,
+        color = "#c8c8ff",
+    }),
+    -- What colour the moon is, face and light: game.sky.setMoonColor("#ff4020").
+    menu.choice("Moon colour", {
+        options = moonLooks,
+        get = function()
+            return moonLookOf[game.sky.moonColor()] or "natural"
+        end,
+        set = function(look)
+            game.sky.setMoonColor(moonColours[look] or "#ffffff")
+        end,
     }),
     menu.info("Moon", {
         text = function()
