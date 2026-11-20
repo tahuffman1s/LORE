@@ -463,8 +463,10 @@ impl Day {
                     heavens.moon_surface(),
                 ],
                 [meridian[0], meridian[1], meridian[2], per_lux],
-                // The moon's colour, a game's to say.
-                [tint[0], tint[1], tint[2], 0.0],
+                // The moon's colour, a game's to say, and how much brighter
+                // the stars and the moon's face are drawn than the land
+                // (`Effects::set_night_darkening` says).
+                [tint[0], tint[1], tint[2], 1.0],
             ],
         }
     }

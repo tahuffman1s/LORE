@@ -189,6 +189,11 @@ pub(crate) struct Eye {
     /// How much the player has asked nights to be lifted, from 0 (as the
     /// game made them) to 1 (half as dark).
     pub(crate) night_brightness: f32,
+    /// How many stops darker the last view was meant to be drawn for being
+    /// night ([`darker`]): what the stars and the moon's face are drawn
+    /// brighter by, as an eye used to the dark sees them standing out
+    /// against it rather than dimming with the land.
+    pub(crate) night_darkening: f32,
     /// How many stops brighter (or, below 0, darker) the picture is drawn
     /// than the sky alone would have it.
     stops: f32,
@@ -204,6 +209,7 @@ impl Eye {
         Self {
             adaptation: adaptation.sound(),
             night_brightness: 0.0,
+            night_darkening: 0.0,
             stops: 0.0,
             cells: vec![0.0; CELLS],
             order: Vec::with_capacity(CELLS),
@@ -238,6 +244,7 @@ impl Eye {
     ) {
         if !self.adaptation.adapts() {
             self.stops = 0.0;
+            self.night_darkening = 0.0;
             return;
         }
         for (cell, word) in self.cells.iter_mut().zip(bytes.as_chunks::<4>().0) {
@@ -259,7 +266,8 @@ impl Eye {
             0.0
         };
         let lift = 1.0 - (1.0 - LIFTED_NIGHT) * self.night_brightness.clamp(0.0, 1.0);
-        let wanted = USUAL_VIEW - darker(ev, self.adaptation.night * lift) - weather - seen;
+        self.night_darkening = darker(ev, self.adaptation.night * lift);
+        let wanted = USUAL_VIEW - self.night_darkening - weather - seen;
         let wanted = wanted.clamp(-self.adaptation.closes, self.adaptation.opens);
         if flash && wanted < self.stops {
             return;
@@ -820,6 +828,25 @@ mod tests {
         usual.see(&even(USUAL_VIEW), NOON, 1.0, true, (0.0, false));
         lifted.see(&even(USUAL_VIEW), NOON, 1.0, true, (0.0, false));
         assert_eq!(usual.multiplier(), lifted.multiplier());
+        // By day nothing is taken, so nothing is given back to the stars.
+        assert_eq!(usual.night_darkening, 0.0);
+        // A moonlit night takes its six stops (three, lifted), which the
+        // stars and the moon get back; an eye that does not adapt takes none.
+        usual.see(&even(moonlit), 2.4, 1.0, true, (0.0, false));
+        lifted.see(&even(moonlit), 2.4, 1.0, true, (0.0, false));
+        assert!(
+            (usual.night_darkening - 6.0).abs() < 0.5,
+            "{}",
+            usual.night_darkening
+        );
+        assert!(
+            (lifted.night_darkening - 3.0).abs() < 0.5,
+            "{}",
+            lifted.night_darkening
+        );
+        let mut fixed = Eye::new(EyeAdaptation::FIXED);
+        fixed.see(&even(moonlit), 2.4, 1.0, true, (0.0, false));
+        assert_eq!(fixed.night_darkening, 0.0);
     }
 
     #[test]

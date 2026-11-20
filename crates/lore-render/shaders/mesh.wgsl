@@ -125,7 +125,8 @@ struct View {
     // of the night sky, and how bright the moon is; where the sky's equator
     // crosses the meridian with the stars turned 0, and how bright a lux
     // of starlight is drawn; and what colour the moon is tinted, as bright
-    // as white.
+    // as white, and how much brighter than the land the stars and the
+    // moon's face are drawn (as much as the eye's night darkening took).
     heavens: array<vec4<f32>, 7>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
@@ -1198,7 +1199,8 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         // tint is as bright as white, so a deep one has a part far over 1,
         // which would burn the face white.
         let face_tint = tint / max(max(tint.r, tint.g), max(tint.b, 1e-3));
-        seen += albedo / MOON_NEAR_MEAN * face_tint * (lit + earthshine) * face * dimmed * rim * up;
+        seen += albedo / MOON_NEAR_MEAN * face_tint * (lit + earthshine) * face * dimmed * rim * up
+            * view.heavens[6].w;
         behind = 1.0 - rim;
     }
     if night <= 0.01 {
@@ -1320,8 +1322,12 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
     // green and blue.
     let rise = clamp(direction.y, 0.0, 1.0);
     let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
-    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * air);
-    return light * dimmed * per_lux;
+    // Counted against straight overhead, as the eye takes the colour of the
+    // sky overhead for white: a high star keeps its colour, a low one yellows.
+    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
+    // An eye used to the dark sees the stars stand out against it: the
+    // night's darkening, which dims the land, is given back to them.
+    return light * dimmed * per_lux * view.heavens[6].w;
 }
 
 // How much a star twinkles, from 0 to 1, at a height whose sine is `rise`:
