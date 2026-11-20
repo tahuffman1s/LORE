@@ -444,6 +444,23 @@ impl Headless {
         self.effects.set_moon_tint(tint);
     }
 
+    /// Says how much towns light the night sky over the world, on John
+    /// Bortle's scale: from 1 (no town at all, the usual, as over a world
+    /// lit by fire) to 9 (an inner city), between whole classes too. Their
+    /// glow brightens the sky, most towards the horizon, lights the land a
+    /// little, and washes out the Milky Way and the faint stars.
+    pub fn set_light_pollution(&mut self, class: f32) {
+        self.effects.set_light_pollution(class);
+    }
+
+    /// Says how the Milky Way is drawn: `times` its real brightness, from
+    /// 0 (not at all) to 10 (1 is the usual), tinted `tint` in linear red,
+    /// green and blue, as bright as before (`[1.0, 1.0, 1.0]` is its own
+    /// colour).
+    pub fn set_milky_way(&mut self, times: f32, tint: [f32; 3]) {
+        self.effects.set_milky_way(times, tint);
+    }
+
     /// Says whether storms send their own bolts to the ground, as they do
     /// until told otherwise. A game that sends them itself with
     /// [`strike`](Self::strike), so that it knows where each fell and can

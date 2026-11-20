@@ -231,6 +231,45 @@ fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
         "{tint:?}"
     );
     assert_eq!(host.take_moon_tint(), None);
+    let mut host = game(
+        r##"
+        print(game.sky.milkyWayBrightness(), game.sky.milkyWayColor())
+        game.sky.setMilkyWayBrightness(-2)
+        game.sky.setMilkyWayColor("#00FF00")
+        print(game.sky.milkyWayBrightness(), game.sky.milkyWayColor())
+        "##,
+    );
+    assert_eq!(printed(), ["1 #ffffff", "0 #00ff00"]);
+    let (times, tint) = host.take_milky_way().expect("the Milky Way was said");
+    assert_eq!(times, 0.0);
+    assert!(tint[1] > 0.99 && tint[0] < 0.01, "{tint:?}");
+    assert_eq!(host.take_milky_way(), None);
+    let mut host = game(
+        r#"
+        print(game.sky.lightPollution())
+        game.sky.setLightPollution(" City ")
+        print(game.sky.lightPollution())
+        game.sky.setLightPollution(12)
+        print(game.sky.lightPollution())
+        "#,
+    );
+    assert_eq!(printed(), ["1", "8", "9"]);
+    assert_eq!(host.take_light_pollution(), Some(9.0));
+    assert_eq!(host.take_light_pollution(), None);
+}
+
+#[test]
+fn town_light_brightens_the_night_on_open_ground() {
+    let _host = game(
+        r#"
+        game.sky.setDate(2000, 3, 6)
+        game.sky.setHour(0)
+        local dark = game.sky.light()
+        game.sky.setLightPollution("city")
+        print(game.sky.light() > dark + 0.05)
+        "#,
+    );
+    assert_eq!(printed(), ["true"]);
 }
 
 #[test]
@@ -266,6 +305,22 @@ fn a_wrong_place_or_date_says_what_to_write() {
         ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
         ("game.sky.setMoonColor(\"black\")", "hide the moon"),
         ("game.sky.setMoonColor(3)", "a colour in quotes"),
+        (
+            "game.sky.setMilkyWayBrightness(\"bright\")",
+            "game.sky.setMilkyWayBrightness(2)",
+        ),
+        (
+            "game.sky.setMilkyWayColor(\"black\")",
+            "game.sky.setMilkyWayBrightness(0)",
+        ),
+        (
+            "game.sky.setLightPollution(\"metropolis\")",
+            "\"none\", \"village\", \"town\" or \"city\"",
+        ),
+        (
+            "game.sky.setLightPollution(true)",
+            "game.sky.setLightPollution(\"town\")",
+        ),
     ] {
         let host = game(script);
         let message = mistake(&host);

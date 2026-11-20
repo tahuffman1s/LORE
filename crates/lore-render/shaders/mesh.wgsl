@@ -123,13 +123,15 @@ struct View {
     // have turned, in radians; the pole they turn about, and how large the
     // moon is (0 when there is no moon and no star at all); the colour of
     // the sun's own disc, and one over what the eye multiplies the picture
-    // by; the light
-    // of the night sky, and how bright the moon is; where the sky's equator
-    // crosses the meridian with the stars turned 0, and how bright a lux
-    // of starlight is drawn; and what colour the moon is tinted, as bright
-    // as white, and how much brighter than the land the stars and the
-    // moon's face are drawn (as much as the eye's night darkening took).
-    heavens: array<vec4<f32>, 7>,
+    // by; the moonlight the air scatters, and how bright the moon is; where
+    // the sky's equator crosses the meridian with the stars turned 0, and
+    // how bright a lux of starlight is drawn; what colour the moon is
+    // tinted, as bright as white, and how much brighter than the land the
+    // stars and the moon's face are drawn (as much as the eye's night
+    // darkening took); the glow of the air overhead; the glow of towns
+    // overhead; and what colour the Milky Way is tinted, and how many times
+    // its real brightness it is drawn.
+    heavens: array<vec4<f32>, 10>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -820,20 +822,43 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     let place = sqrt(angle / 1.5707963) * (SKY_HEIGHTS - 1.0);
     let below = i32(min(floor(place), SKY_HEIGHTS - 2.0));
     let share = clamp(place - f32(below), 0.0, 1.0);
-    let air = mix(view.sky_air[below].rgb, view.sky_air[below + 1].rgb, share);
-    let haze = mix(view.sky_haze[below].rgb, view.sky_haze[below + 1].rgb, share);
+    let air_row = mix(view.sky_air[below], view.sky_air[below + 1], share);
+    let haze_row = mix(view.sky_haze[below], view.sky_haze[below + 1], share);
+    let air = air_row.rgb;
+    let haze = haze_row.rgb;
     // The sky is the sun's own, even when the light on the land is the
     // moon's.
     let to_sun = dot(direction, view.heavens[0].xyz);
     let by_air = 3.0 / (16.0 * PI) * (1.0 + to_sun * to_sun);
     let g = HAZE_ONWARDS;
     let by_haze = (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * to_sun, 1.5));
-    // The night sky has a little light of its own, more of it low down.
-    let above = air * by_air + haze * by_haze
-        + view.heavens[4].rgb * (1.0 + 0.8 * (1.0 - clamp(direction.y, 0.0, 1.0)));
+    // The night sky has a little light of its own: the moonlight the air
+    // scatters, more of it low down; the glow of the air itself; and the
+    // glow of towns, if a game says there are any. How the last two grow
+    // towards the horizon is kept with the heights (`sky::airglow_towards`,
+    // `lore_sky::town_glow_towards`).
+    let rise = clamp(direction.y, 0.0, 1.0);
+    let above = air * by_air + haze * by_haze + view.heavens[4].rgb * (1.0 + 0.8 * (1.0 - rise))
+        + view.heavens[7].rgb * air_row.w + view.heavens[8].rgb * haze_row.w;
     // Under the horizon is dark ground: where a level ends, or has a hole,
     // it does not open onto more sky.
     return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
+}
+
+// How much air a line of sight `rise` (the sine of how high it looks)
+// goes through, against straight up: Kasten and Young's count of it, 38
+// at the horizon.
+fn air_mass(rise: f32) -> f32 {
+    let r = clamp(rise, 0.0, 1.0);
+    return 1.0 / (r + 0.50572 * pow(degrees(asin(r)) + 6.07995, -1.6364));
+}
+
+// How much of red, green and blue light from beyond the air comes through
+// it along a line of sight `rise` high, against straight up: a low star or
+// cloud of the Milky Way is dimmer and yellower (0.11, 0.19 and 0.33
+// magnitudes for each air mass).
+fn through_air_mass(rise: f32) -> vec3<f32> {
+    return exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air_mass(rise) - 1.0, 0.0));
 }
 
 // `colour`, at `world`, as it is seen from the eye, for what does not add
@@ -1073,6 +1098,35 @@ fn struck(colour: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 @group(0) @binding(41) var moon_height: texture_2d<f32>;
 // Reads them from their smaller copies too, round in longitude.
 @group(0) @binding(42) var moon_sampler: sampler;
+// NASA's Milky Way (`moon.rs`), the fourth root of its light, read by the
+// moon's reader: right ascension across, 0 in the middle and growing to the
+// left, declination down, north at the top.
+@group(0) @binding(43) var milky_way: texture_2d<f32>;
+// How bright the Milky Way map's 1 is, in candela a square metre: its
+// brightest cloud, the great star cloud in Sagittarius, 0.8 of it over a
+// degree and a half, is 20.2 magnitudes a square arcsecond.
+const MILKY_WAY_CANDELA: f32 = 1.11e-3;
+// How bright the Milky Way's brightest cloud is shown, in the light the
+// picture has once the eye has opened or closed for the view: clear, with
+// its dark lanes, and far fainter than the moon's face (`MOON_SEEN`).
+const MILKY_WAY_SEEN: f32 = 0.2;
+// How much sky one pixel of the map covers, in radians.
+const MILKY_WAY_PIXEL: f32 = 0.001534;
+// The dust between the planets sends back sunlight: zodiacal light, as
+// Leinert and others measured it (1998), in S10 (the light of one star of
+// magnitude 10 a square degree) along the ecliptic, every 15 degrees from
+// the sun to opposite it, where it rises again (the gegenschein).
+const ZODIACAL_ECLIPTIC: array<f32, 13> = array<f32, 13>(
+    10000.0, 4000.0, 1300.0, 650.0, 340.0, 230.0, 180.0, 150.0, 130.0, 125.0, 130.0, 160.0, 200.0,
+);
+// And at the ecliptic's poles, all round.
+const ZODIACAL_POLE: f32 = 60.0;
+// One S10 in candela a square metre (27.78 magnitudes a square arcsecond).
+const S10_CANDELA: f32 = 8.35e-7;
+// The ecliptic's north pole among the stars (right ascension 18 hours,
+// declination 66.56 degrees), with right ascension 0, 6 hours and the
+// sky's pole as `night_sky` has them.
+const ECLIPTIC_POLE: vec3<f32> = vec3<f32>(0.0, -0.39777, 0.91748);
 // How far across the sky the real moon reaches from its middle, in
 // radians: a quarter of a degree and a little.
 const MOON_RADIUS: f32 = 0.004538;
@@ -1102,7 +1156,10 @@ fn lore_moon_lux(surface: f32, full: f32) -> f32 {
 //
 // The stars are the real ones (`real_stars`), in their places, as bright
 // and of the colours they are, turning about the pole as the hours pass;
-// the Milky Way is a band of cloudy light round the sky. The moon is the
+// the Milky Way is NASA's (`milky_way_light`), its star clouds and dark
+// lanes as they are, and the dust between the planets glows along the
+// ecliptic (`zodiacal_light`), both as bright as they really are and lost
+// under a bright moon or a town's glow. The moon is the
 // real one, from NASA's maps (`moon.rs`), at its real size unless a game
 // says, lit by the sun as moon dust is, so its phase, its terminator and
 // its seas are as they are, its dark side faint with earthshine.
@@ -1213,29 +1270,72 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         return seen;
     }
 
-    // The sky of stars, turned back to where it stood at noon.
+    let among = among_stars(direction);
+    // What lies beyond the air: the Milky Way and the dust between the
+    // planets, dimmed by the air as the stars are.
+    let rise = clamp(direction.y, 0.0, 1.0);
+    let beyond = (milky_way_light(among, pixel) + zodiacal_light(direction, among))
+        * through_air_mass(rise) * up;
+    // A faint glow is seen only as far as it stands out from the sky round
+    // it: under a full moon or a city's glow the Milky Way and the zodiacal
+    // light fade from sight, as they do for an eye, and where the night is
+    // dark they show in full. How bright the sky behind is, in candela a
+    // square metre, says that, and how many faint stars it hides.
+    let grey = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let sky = dot(seen, grey) / max(per_lux, 1e-12);
+    let stands_out = dot(beyond, grey) / max(sky, 1e-12);
+    // What is seen of them is shown as an eye used to the dark sees it,
+    // whatever the eye does for the land (`heavens[3].w` undoes it), as
+    // the moon's face is: its brightest cloud at `MILKY_WAY_SEEN`. Drawn
+    // as bright as it is, the darkest sky would show the faintest Milky
+    // Way, as the eye cannot open far enough for it.
+    let noticed = smoothstep(0.05, 0.5, stands_out)
+        * MILKY_WAY_SEEN / (0.8 * MILKY_WAY_CANDELA) * view.heavens[3].w;
+    return seen + (beyond * noticed + real_stars(among, direction, pixel, sky)) * behind;
+}
+
+// Where `direction` (in the world) is among the stars: towards right
+// ascension 0, 6 hours, and the sky's pole, with the sky of stars turned
+// back to where it stood at noon.
+fn among_stars(direction: vec3<f32>) -> vec3<f32> {
     let pole = view.heavens[2].xyz;
     let turn = view.heavens[1].w;
     let fixed = direction * cos(turn) - cross(pole, direction) * sin(turn)
         + pole * dot(pole, direction) * (1.0 - cos(turn));
-    // Among the stars: towards right ascension 0, 6 hours, and the pole.
     let meridian = view.heavens[5].xyz;
-    let among = vec3<f32>(
-        dot(fixed, meridian), dot(fixed, cross(pole, meridian)), dot(fixed, pole),
-    );
-    // The Milky Way: a band right round the sky along the plane of the
-    // galaxy (its north pole is at right ascension 12h 51m, declination
-    // 27.1°), cloudy and uneven.
-    let off_band = dot(among, vec3<f32>(-0.8676, -0.1981, 0.4560)) / 0.2;
-    let band = exp(-off_band * off_band);
-    let dust = textureSampleLevel(cloud_volume, cloud_sampler, among * 1.7 + 0.2, 0.0).rg;
-    let fine = textureSampleLevel(cloud_volume, cloud_sampler, among * 6.1 + 0.6, 0.0).g;
-    var light = vec3<f32>(0.75, 0.82, 1.0) * band * (0.2 + dust.r) * dust.g * (0.5 + fine) * 0.03;
-    // The thick air low down hides the Milky Way.
-    // As bright as it is: its brightest clouds about twice the night sky's
-    // own glow, some 1.2e-3 candela a square metre at their thickest.
-    let milky = light * 0.025 * view.heavens[5].w * smoothstep(0.0, 0.2, direction.y);
-    return seen + (milky + real_stars(among, direction, pixel)) * behind;
+    return vec3<f32>(dot(fixed, meridian), dot(fixed, cross(pole, meridian)), dot(fixed, pole));
+}
+
+// The light of the Milky Way `among` the stars, in candela a square metre,
+// from NASA's map (`moon.rs`) read from the copy as fine as a pixel of the
+// screen (`pixel` radians across), as bright and tinted as the game says.
+fn milky_way_light(among: vec3<f32>, pixel: f32) -> vec3<f32> {
+    let along = atan2(among.y, among.x);
+    let up = asin(clamp(among.z, -1.0, 1.0));
+    let uv = vec2<f32>(0.5 - along / (2.0 * PI), 0.5 - up / PI);
+    let level = max(log2(pixel / MILKY_WAY_PIXEL), 0.0);
+    let root = textureSampleLevel(milky_way, moon_sampler, uv, level).rgb;
+    let squared = root * root;
+    return squared * squared * MILKY_WAY_CANDELA * view.heavens[9].rgb * view.heavens[9].w;
+}
+
+// The zodiacal light along `direction`, which is `among` the stars, in
+// candela a square metre: brightest along the ecliptic near the sun, a
+// cone after dusk and before dawn, faint round the sky, and a little
+// brighter again opposite the sun. Leinert's table gives it along the
+// ecliptic by how far from the sun; off the ecliptic it falls to half 24
+// degrees away, and at the ecliptic's poles it is the same all round.
+fn zodiacal_light(direction: vec3<f32>, among: vec3<f32>) -> vec3<f32> {
+    let from_sun = degrees(acos(clamp(dot(direction, view.heavens[0].xyz), -1.0, 1.0))) / 15.0;
+    let below = min(u32(from_sun), 11u);
+    let share = clamp(from_sun - f32(below), 0.0, 1.0);
+    let ecliptic = mix(ZODIACAL_ECLIPTIC[below], ZODIACAL_ECLIPTIC[below + 1u], share);
+    let latitude = clamp(dot(among, ECLIPTIC_POLE), -1.0, 1.0);
+    let off = degrees(asin(latitude)) / 24.0;
+    let band = sqrt(1.0 - latitude * latitude) / (1.0 + off * off);
+    let s10 = ZODIACAL_POLE + (ecliptic - ZODIACAL_POLE) * band;
+    // Sunlight, a little redder.
+    return vec3<f32>(1.05, 0.99, 0.92) * s10 * S10_CANDELA;
 }
 
 // The stars' grid and list (`stars.rs`): for each square of a cube among
@@ -1251,15 +1351,18 @@ const STAR_REACH: f32 = 0.007;
 
 // The light the stars send along a line of sight `direction` that is
 // `towards` among the stars (right ascension 0, 6 hours, the pole), `pixel`
-// radians across, as light to draw.
+// radians across, as light to draw, against a sky `sky` candela a square
+// metre bright behind them.
 //
 // Each star is a spot of light whose whole is the light it gives, a little
 // over half a pixel of the screen each way, so that however sharp the
 // picture it is drawn as a point (see `spread` below).
 // The air between dims it, the more the lower it stands, blue light more
 // than red, as a low star is dimmer and yellower; and it twinkles, more
-// the more air its light comes through.
-fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
+// the more air its light comes through. The brighter the sky behind, the
+// fewer the faint stars an eye picks out of it: under a full moon or in a
+// town only the bright ones are left.
+fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) -> vec3<f32> {
     let per_lux = view.heavens[5].w;
     if per_lux <= 0.0 || direction.y <= 0.0 {
         return vec3<f32>(0.0);
@@ -1304,6 +1407,16 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
     let spread = clamp(max(0.55 * screen_pixel, 0.4 * pixel), 1e-5, STAR_REACH / 3.0);
     let fall = 1.0 / (2.0 * spread * spread);
     let twinkles = twinkling(direction.y);
+    // The faintest star an eye used to the dark sees against the sky, in
+    // lux before the air dims it: Schaefer's (1990) limiting magnitude,
+    // 8.43 - 5 log10(10^(4.316 - B / 5) + 1) for a sky of B magnitudes a
+    // square arcsecond (half a magnitude past the usual observer), which in
+    // light comes to this: magnitude 7.1 at a dark site, 4.7 under a full
+    // moon, 3.6 in a city. Each star fades out from there down to a quarter
+    // of it.
+    let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
+    let past = 1.0 + 63.0 * sqrt(max(sky, 0.0));
+    let least = 1.078e-9 * past * past / max(dimmed.g, 1e-6);
     var light = vec3<f32>(0.0);
     for (var number = 0u; number < held.y; number++) {
         let at = (held.x + number) * 2u;
@@ -1317,20 +1430,16 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
             // 1.6e-7 lux, and in full colour by 0.5, 1.6e-6).
             let glow = star_list[at + 1u].rgb;
             let lux = dot(glow, vec3<f32>(0.2126, 0.7152, 0.0722));
-            let seen = mix(vec3<f32>(lux), glow, smoothstep(1.6e-7, 1.6e-6, lux));
+            let seen = mix(vec3<f32>(lux), glow, smoothstep(1.6e-7, 1.6e-6, lux))
+                * smoothstep(0.25 * least, least, lux);
             light += seen * exp(-apart * fall) * twinkle;
         }
     }
     // The whole of a spot is its light: spread over its area.
     light *= fall / PI;
-    // How much more air than straight up the light comes through (Kasten
-    // and Young), and what each magnitude of it a unit of air takes, in red,
-    // green and blue.
-    let rise = clamp(direction.y, 0.0, 1.0);
-    let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
-    // Counted against straight overhead, as the eye takes the colour of the
-    // sky overhead for white: a high star keeps its colour, a low one yellows.
-    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
+    // The air dims it (`through_air_mass`), counted against straight
+    // overhead, as the eye takes the colour of the sky overhead for white: a
+    // high star keeps its colour, a low one yellows.
     // An eye used to the dark sees the stars stand out against it: the
     // night's darkening, which dims the land, is given back to them.
     return light * dimmed * per_lux * view.heavens[6].w;

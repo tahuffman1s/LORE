@@ -48,7 +48,48 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "moonSize",
     "setMoonColor",
     "moonColor",
+    "setMilkyWayBrightness",
+    "milkyWayBrightness",
+    "setMilkyWayColor",
+    "milkyWayColor",
+    "setLightPollution",
+    "lightPollution",
 ];
+
+/// The words `game.sky.setLightPollution` takes, and the class on Bortle's
+/// scale each stands for.
+const LIGHT_POLLUTION_WORDS: [(&str, f32); 4] = [
+    ("none", 1.0),
+    ("village", 3.0),
+    ("town", 5.0),
+    ("city", 8.0),
+];
+
+/// A colour for the sky given to `function`, as the HUD takes colours: in
+/// linear light, and as a hex code to give back to the script.
+fn sky_color(lua: &Lua, function: &str, value: &Value) -> mlua::Result<([f32; 3], String)> {
+    let (color, _) = crate::hud::color_of(lua, function, value)?;
+    let linear = [color.r, color.g, color.b].map(|part| {
+        if part <= 0.040_45 {
+            part / 12.92
+        } else {
+            ((part + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let byte = |part: f32| {
+        // Rounded and brought into 0 to 255 first.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let byte = (part.clamp(0.0, 1.0) * 255.0).round() as u8;
+        byte
+    };
+    let said = format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(color.r),
+        byte(color.g),
+        byte(color.b)
+    );
+    Ok((linear, said))
+}
 
 /// The real sky a game gets when it says only some of where and when:
 /// 45 degrees north, north the level's -z, and 20 March 2000, an equinox
@@ -262,6 +303,17 @@ pub struct Climate {
     moon_tint: Cell<[f32; 3]>,
     moon_tint_said: RefCell<String>,
     moon_tint_asked: Cell<bool>,
+    /// How many times its real brightness the Milky Way is drawn and what
+    /// colour it is tinted (linear light, and as the script wrote it), and
+    /// whether the engine has yet to take them.
+    milky_way_brightness: Cell<f32>,
+    milky_way_tint: Cell<[f32; 3]>,
+    milky_way_tint_said: RefCell<String>,
+    milky_way_asked: Cell<bool>,
+    /// How much towns light the night sky, on Bortle's scale, and whether
+    /// the engine has yet to take it.
+    light_pollution: Cell<f32>,
+    light_pollution_asked: Cell<bool>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -295,6 +347,12 @@ impl Default for Climate {
             moon_tint: Cell::new([1.0; 3]),
             moon_tint_said: RefCell::new("#ffffff".to_owned()),
             moon_tint_asked: Cell::new(false),
+            milky_way_brightness: Cell::new(1.0),
+            milky_way_tint: Cell::new([1.0; 3]),
+            milky_way_tint_said: RefCell::new("#ffffff".to_owned()),
+            milky_way_asked: Cell::new(false),
+            light_pollution: Cell::new(1.0),
+            light_pollution_asked: Cell::new(false),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -359,6 +417,22 @@ impl Climate {
 
     pub(crate) fn take_moon_size(&self) -> Option<f32> {
         self.moon_size_asked.take()
+    }
+
+    /// How bright and what colour the Milky Way is drawn, if the script has
+    /// said either since this was last asked.
+    pub(crate) fn take_milky_way(&self) -> Option<(f32, [f32; 3])> {
+        self.milky_way_asked
+            .take()
+            .then(|| (self.milky_way_brightness.get(), self.milky_way_tint.get()))
+    }
+
+    /// How much towns light the night sky, on Bortle's scale, if the script
+    /// has said since this was last asked.
+    pub(crate) fn take_light_pollution(&self) -> Option<f32> {
+        self.light_pollution_asked
+            .take()
+            .then(|| self.light_pollution.get())
     }
 
     pub(crate) fn take_sky_place(&self) -> Option<SkyPlace> {
@@ -989,14 +1063,7 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     sky.set(
         "setMoonColor",
         lua.create_function(move |lua, value: Value| {
-            let (color, _) = crate::hud::color_of(lua, "game.sky.setMoonColor", &value)?;
-            let linear = [color.r, color.g, color.b].map(|part| {
-                if part <= 0.040_45 {
-                    part / 12.92
-                } else {
-                    ((part + 0.055) / 1.055).powf(2.4)
-                }
-            });
+            let (linear, said) = sky_color(lua, "game.sky.setMoonColor", &value)?;
             if linear.iter().all(|part| *part <= 0.0) {
                 return Err(fail(
                     lua,
@@ -1005,19 +1072,8 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
                      game.sky.setMoonColor(\"#ff6040\")",
                 ));
             }
-            let byte = |part: f32| {
-                // Rounded and brought into 0 to 255 first.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let byte = (part.clamp(0.0, 1.0) * 255.0).round() as u8;
-                byte
-            };
             climate.moon_tint.set(linear);
-            *climate.moon_tint_said.borrow_mut() = format!(
-                "#{:02x}{:02x}{:02x}",
-                byte(color.r),
-                byte(color.g),
-                byte(color.b)
-            );
+            *climate.moon_tint_said.borrow_mut() = said;
             climate.moon_tint_asked.set(true);
             Ok(())
         })?,
@@ -1029,6 +1085,96 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(
+        "setMilkyWayBrightness",
+        lua.create_function(move |lua, value: Value| {
+            let times = number(
+                lua,
+                "game.sky.setMilkyWayBrightness",
+                Some(&value),
+                "how many times its real brightness the Milky Way is drawn, from 0 (not at all) \
+                 to 10; 1 is as it really is",
+                "game.sky.setMilkyWayBrightness(2)",
+            )?
+            .clamp(0.0, 10.0);
+            climate.milky_way_brightness.set(times);
+            climate.milky_way_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "milkyWayBrightness",
+        lua.create_function(move |_, ()| Ok(f64::from(climate.milky_way_brightness.get())))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setMilkyWayColor",
+        lua.create_function(move |lua, value: Value| {
+            let (linear, said) = sky_color(lua, "game.sky.setMilkyWayColor", &value)?;
+            if linear.iter().all(|part| *part <= 0.0) {
+                return Err(fail(
+                    lua,
+                    "game.sky.setMilkyWayColor was given black. To hide the Milky Way, write \
+                     game.sky.setMilkyWayBrightness(0); for a colour, write it like this: \
+                     game.sky.setMilkyWayColor(\"#c0a0ff\")",
+                ));
+            }
+            climate.milky_way_tint.set(linear);
+            *climate.milky_way_tint_said.borrow_mut() = said;
+            climate.milky_way_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "milkyWayColor",
+        lua.create_function(move |_, ()| Ok(climate.milky_way_tint_said.borrow().clone()))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setLightPollution",
+        lua.create_function(move |lua, value: Value| {
+            let class = match &value {
+                Value::String(word) => {
+                    let word = word.to_string_lossy().trim().to_lowercase();
+                    LIGHT_POLLUTION_WORDS
+                        .iter()
+                        .find(|(name, _)| *name == word)
+                        .map(|(_, class)| *class)
+                        .ok_or_else(|| {
+                            fail(
+                                lua,
+                                format!(
+                                    "game.sky.setLightPollution does not know \"{word}\". Give it \
+                                     \"none\", \"village\", \"town\" or \"city\", or a number \
+                                     from 1 (no town) to 9 (an inner city). Write it like this: \
+                                     game.sky.setLightPollution(\"town\")"
+                                ),
+                            )
+                        })?
+                }
+                _ => number(
+                    lua,
+                    "game.sky.setLightPollution",
+                    Some(&value),
+                    "how much towns light the night sky: \"none\", \"village\", \"town\" or \
+                     \"city\", or a number on Bortle's scale from 1 (no town) to 9 (an inner city)",
+                    "game.sky.setLightPollution(\"town\")",
+                )?
+                .clamp(1.0, 9.0),
+            };
+            climate.light_pollution.set(class);
+            climate.light_pollution_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "lightPollution",
+        lua.create_function(move |_, ()| Ok(f64::from(climate.light_pollution.get())))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
         "moonSize",
         lua.create_function(move |_, ()| Ok(f64::from(climate.moon_size.get())))?,
     )?;
@@ -1036,9 +1182,11 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     sky.set(
         "light",
         lua.create_function(move |_, ()| {
-            Ok(climate
-                .heavens()
-                .map(|heavens| f64::from(heavens.ground_lux())))
+            Ok(climate.heavens().map(|heavens| {
+                f64::from(
+                    heavens.ground_lux() + lore_sky::town_glow_lux(climate.light_pollution.get()),
+                )
+            }))
         })?,
     )?;
     sky.set(

@@ -100,6 +100,11 @@ pub struct Frame {
     moon_size: Option<f32>,
     /// What colour the moon is tinted, if the game said it this frame.
     moon_tint: Option<[f32; 3]>,
+    /// How bright and what colour the Milky Way is, if the game said it
+    /// this frame.
+    milky_way: Option<(f32, [f32; 3])>,
+    /// How much towns light the night sky, if the game said it this frame.
+    light_pollution: Option<f32>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -224,6 +229,8 @@ impl Frame {
             sky_place: None,
             moon_size: None,
             moon_tint: None,
+            milky_way: None,
+            light_pollution: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -895,6 +902,29 @@ impl Frame {
     /// How large the moon is drawn, if the game said it this frame.
     pub(crate) fn take_moon_size(&mut self) -> Option<f32> {
         self.moon_size.take()
+    }
+
+    /// Says how the Milky Way is drawn: `times` its real brightness, from
+    /// 0 (not at all) to 10, tinted `tint` in linear red, green and blue
+    /// (`[1.0; 3]` is its own colour).
+    pub fn set_milky_way(&mut self, times: f32, tint: [f32; 3]) {
+        self.milky_way = Some((times, tint));
+    }
+
+    /// How the Milky Way is drawn, if the game said it this frame.
+    pub(crate) fn take_milky_way(&mut self) -> Option<(f32, [f32; 3])> {
+        self.milky_way.take()
+    }
+
+    /// Says how much towns light the night sky, on Bortle's scale from 1
+    /// (none, the usual) to 9 (an inner city).
+    pub fn set_light_pollution(&mut self, class: f32) {
+        self.light_pollution = Some(class);
+    }
+
+    /// How much towns light the night sky, if the game said it this frame.
+    pub(crate) fn take_light_pollution(&mut self) -> Option<f32> {
+        self.light_pollution.take()
     }
 
     /// Says what colour the moon is tinted, in linear red, green and blue:

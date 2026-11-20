@@ -382,6 +382,12 @@ impl Game for ScriptGame {
         if let Some(tint) = self.host.take_moon_tint() {
             frame.set_moon_tint(tint);
         }
+        if let Some((times, tint)) = self.host.take_milky_way() {
+            frame.set_milky_way(times, tint);
+        }
+        if let Some(class) = self.host.take_light_pollution() {
+            frame.set_light_pollution(class);
+        }
         if let Some(place) = self.host.take_sky_place() {
             frame.set_sky_place(place);
         }
