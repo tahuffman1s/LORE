@@ -259,6 +259,26 @@ fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
 }
 
 #[test]
+fn the_planets_are_where_they_were_that_night() {
+    // Mars's great opposition: due south at midnight, low in the far north.
+    let _host = game(
+        r#"
+        game.sky.setLatitude(45)
+        game.sky.setDate(2018, 7, 27)
+        game.sky.setHour(0)
+        local mars = game.sky.planetDirection("mars")
+        local height = game.sky.planetHeight("Mars")
+        print(height > 17 and height < 21)
+        print(mars.z > 0.9 or mars.z > 0.5 and mars.y > 0)
+        print(game.sky.planetBrightness("Mars") < -2.5)
+        print(game.sky.starNear(mars))
+        print(#game.sky.planetNames(), game.sky.planetNames()[2])
+        "#,
+    );
+    assert_eq!(printed(), ["true", "true", "true", "Mars", "7 Venus"]);
+}
+
+#[test]
 fn town_light_brightens_the_night_on_open_ground() {
     let _host = game(
         r#"
@@ -305,6 +325,15 @@ fn a_wrong_place_or_date_says_what_to_write() {
         ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
         ("game.sky.setMoonColor(\"black\")", "hide the moon"),
         ("game.sky.setMoonColor(3)", "a colour in quotes"),
+        (
+            "game.sky.starDirection(\"Jupiter\")",
+            "game.sky.planetDirection(\"Jupiter\")",
+        ),
+        ("game.sky.planetHeight(\"Pluto\")", "\"Neptune\""),
+        (
+            "game.sky.planetDirection(4)",
+            "game.sky.planetDirection(\"Venus\")",
+        ),
         (
             "game.sky.setMilkyWayBrightness(\"bright\")",
             "game.sky.setMilkyWayBrightness(2)",

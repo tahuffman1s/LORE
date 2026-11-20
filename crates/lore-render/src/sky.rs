@@ -287,14 +287,25 @@ pub(crate) struct Day {
     /// at full ([`lore_sky::Heavens::moon_surface`]); where the sky's equator
     /// crosses the meridian with the stars turned 0, and how bright a lux
     /// of starlight is drawn; what colour the moon is tinted; the glow of
-    /// the air overhead; the glow of towns overhead; and what colour the
+    /// the air overhead; the glow of towns overhead; what colour the
     /// Milky Way is tinted, and how many times its real brightness it is
-    /// drawn (`Effects` says these two).
+    /// drawn (`Effects` says these two); and the planets ([`PLANET_ROWS`]).
     pub(crate) heavens: [[f32; 4]; HEAVENS_ROWS],
 }
 
-/// How many rows of four numbers the shader's `heavens` has.
-pub(crate) const HEAVENS_ROWS: usize = 10;
+/// How many rows of four numbers the shader's `heavens` has: ten for the
+/// sun, the moon, the stars and the night's glow, then two for each planet
+/// ([`PLANET_ROWS`]).
+pub(crate) const HEAVENS_ROWS: usize = PLANET_ROWS + 2 * 7;
+
+/// Where in `heavens` the planets start: for each, towards it in the level,
+/// then its light above the air in lux, in its own colour.
+pub(crate) const PLANET_ROWS: usize = 10;
+
+/// The colour of each planet, as bright as white, from its colour index.
+static PLANET_COLOURS: std::sync::LazyLock<[[f32; 3]; 7]> = std::sync::LazyLock::new(|| {
+    lore_sky::planets::PLANETS.map(|planet| lore_sky::stars::colour_of(planet.colour_index))
+});
 
 /// How bright the glow of the air high up is straight overhead on a dark
 /// night, in candela a square metre: 1e-4, 22.6 magnitudes a square
@@ -485,36 +496,51 @@ impl Day {
                 * per_lux
         });
         let airglow = AIRGLOW.map(|part| part * AIRGLOW_CANDELA * per_lux);
+        let mut rows = [[0.0; 4]; HEAVENS_ROWS];
+        for (index, ((towards, magnitude), colour)) in heavens
+            .planets()
+            .iter()
+            .zip(PLANET_COLOURS.iter())
+            .enumerate()
+        {
+            let lux = lore_sky::stars::lux(*magnitude);
+            rows[PLANET_ROWS + 2 * index] = [towards[0], towards[1], towards[2], 0.0];
+            rows[PLANET_ROWS + 2 * index + 1] =
+                [colour[0] * lux, colour[1] * lux, colour[2] * lux, 0.0];
+        }
         Self {
             lighting,
             sky,
             per_lux,
-            heavens: [
-                [sun[0], sun[1], sun[2], night],
-                [moon[0], moon[1], moon[2], turn],
-                // The moon's size, against its real one: a game's to say
-                // (`Effects::set_moon_size` puts it here).
-                [pole[0], pole[1], pole[2], 1.0],
-                [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
-                [
-                    scattered[0],
-                    scattered[1],
-                    scattered[2],
-                    // How bright the lit part of the moon's face is, against
-                    // the whole of it at full moon.
-                    heavens.moon_surface(),
-                ],
-                [meridian[0], meridian[1], meridian[2], per_lux],
-                // The moon's colour, a game's to say, and how much brighter
-                // the stars and the moon's face are drawn than the land
-                // (`Effects::set_night_darkening` says).
-                [tint[0], tint[1], tint[2], 1.0],
-                [airglow[0], airglow[1], airglow[2], 0.0],
-                // The glow of towns and the Milky Way as it really is,
-                // unless a game says otherwise (`Effects` puts them here).
-                [0.0; 4],
-                [1.0; 4],
-            ],
+            heavens: {
+                rows[..PLANET_ROWS].copy_from_slice(&[
+                    [sun[0], sun[1], sun[2], night],
+                    [moon[0], moon[1], moon[2], turn],
+                    // The moon's size, against its real one: a game's to say
+                    // (`Effects::set_moon_size` puts it here).
+                    [pole[0], pole[1], pole[2], 1.0],
+                    [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
+                    [
+                        scattered[0],
+                        scattered[1],
+                        scattered[2],
+                        // How bright the lit part of the moon's face is, against
+                        // the whole of it at full moon.
+                        heavens.moon_surface(),
+                    ],
+                    [meridian[0], meridian[1], meridian[2], per_lux],
+                    // The moon's colour, a game's to say, and how much brighter
+                    // the stars and the moon's face are drawn than the land
+                    // (`Effects::set_night_darkening` says).
+                    [tint[0], tint[1], tint[2], 1.0],
+                    [airglow[0], airglow[1], airglow[2], 0.0],
+                    // The glow of towns and the Milky Way as it really is,
+                    // unless a game says otherwise (`Effects` puts them here).
+                    [0.0; 4],
+                    [1.0; 4],
+                ]);
+                rows
+            },
         }
     }
 }

@@ -1504,9 +1504,40 @@ declare game: {
         --- direction (any length; 2 degrees unless a second number from 0
         --- to 180 says how many), or nil if none is that near or no hour has
         --- been said. With the way the player looks, it says which star they
-        --- are looking at; the name works in game.sky.starDirection.
+        --- are looking at; the name works in game.sky.starDirection. A planet
+        --- within that angle and as bright as the star or brighter is named
+        --- instead ("Jupiter"),
+        --- and that name works in game.sky.planetDirection.
         --- Example: local star = game.sky.starNear(game.player.aim)
         starNear: (direction: vector, degrees: number?) -> string?,
+
+        --- Towards a planet, as a vector of length one, where it is in the sky
+        --- now: "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus" or
+        --- "Neptune", in any case. The planets are drawn where they really
+        --- were on the day game.sky.setDate says (or, before a date is said,
+        --- on 20 March 2000), as bright as they were; Neptune, too faint to
+        --- see, is not drawn but has a direction all the same. Nil if no hour
+        --- has been said.
+        --- Example: local venus = game.sky.planetDirection("Venus")
+        planetDirection: (name: string) -> vector?,
+
+        --- How high a planet stands, in degrees above the horizon (below 0 it
+        --- has set), or nil if no hour has been said. The name in any case.
+        --- Example: local marsUp = (game.sky.planetHeight("Mars") or -90) > 0
+        planetHeight: (name: string) -> number?,
+
+        --- How bright a planet looks, in magnitudes as astronomers give them:
+        --- the smaller, the brighter. Venus is about -4 (the brightest thing
+        --- in the night sky after the moon), Jupiter -2, Saturn 0 to 1, and
+        --- Uranus about 6, just at the edge of sight; Neptune, about 8, needs
+        --- a telescope and is not drawn. The name in any case. Nil if no hour
+        --- has been said.
+        --- Example: print("Mars is at magnitude", game.sky.planetBrightness("Mars"))
+        planetBrightness: (name: string) -> number?,
+
+        --- The names of the planets, nearest the sun first.
+        --- Example: for _, name in game.sky.planetNames() do print(name) end
+        planetNames: () -> {string},
 
         --- The name of every star that has one, brightest first: the names
         --- game.sky.starDirection and starHeight know. A star with more than
