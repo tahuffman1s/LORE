@@ -120,12 +120,15 @@ struct View {
     weather: array<vec4<f32>, 7>,
     // The heavens (`sky.rs`): towards the sun itself, and how far the
     // night has come from 0 to 1; towards the moon, and how far the stars
-    // have turned, in radians; the pole they turn about; the colour of the
-    // sun's own disc, and 1 if there is a moon and stars at all; the light
+    // have turned, in radians; the pole they turn about, and how large the
+    // moon is (0 when there is no moon and no star at all); the colour of
+    // the sun's own disc, and one over what the eye multiplies the picture
+    // by; the light
     // of the night sky, and how bright the moon is; where the sky's equator
     // crosses the meridian with the stars turned 0, and how bright a lux
     // of starlight is drawn; and what colour the moon is tinted, as bright
-    // as white.
+    // as white, and how much brighter than the land the stars and the
+    // moon's face are drawn (as much as the eye's night darkening took).
     heavens: array<vec4<f32>, 7>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
@@ -1079,9 +1082,12 @@ const MOON_FULL_FACE: f32 = 4640.0;
 // The mean of the colour map over the face the Earth sees, each point
 // counted by the part of the round face it fills (`moon.rs`).
 const MOON_NEAR_MEAN: f32 = 0.224;
-// The brightest the face is drawn, in the picture's light, once the eye is
-// used to the dark: bright, with its seas still to be seen.
-const MOON_SEEN: f32 = 6.0;
+// The brightest the face is shown, in the light the picture has once the eye
+// has opened or closed for the view: bright, with its seas still to be seen.
+// An eye looks at the moon by itself and gets used to it, as a camera
+// cannot, so however dark the sky round it, its face is seen like this. By
+// day the real face is fainter than this, and is drawn as it is.
+const MOON_SEEN: f32 = 0.6;
 
 // The light the moon gives a surface facing it, in lux, from how bright
 // its lit part is (`surface`) and how much of it is lit (`full`): near
@@ -1101,7 +1107,7 @@ fn lore_moon_lux(surface: f32, full: f32) -> f32 {
 // says, lit by the sun as moon dust is, so its phase, its terminator and
 // its seas are as they are, its dark side faint with earthshine.
 fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
-    if view.heavens[3].w < 0.5 || direction.y < -0.03 {
+    if view.heavens[2].w <= 0.0 || direction.y < -0.03 {
         return colour;
     }
     var seen = colour;
@@ -1186,7 +1192,9 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         // fills), by day; by night no brighter than an eye used to the dark
         // sees its seas and craters in, which it does by narrowing its view
         // of the moon alone, as a camera cannot.
-        let face = min(MOON_FULL_FACE * per_lux, MOON_SEEN);
+        // `heavens[3].w` undoes the eye's opening, so the face is shown at
+        // `MOON_SEEN` whatever the eye does for the rest of the view.
+        let face = min(MOON_FULL_FACE * per_lux * view.heavens[6].w, MOON_SEEN * view.heavens[3].w);
         // Low down, the air it shines through dims it and turns it orange;
         // high up, the eye takes its colour for white, as it does the
         // sun's, so it is counted against straight overhead.
@@ -1320,8 +1328,12 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
     // green and blue.
     let rise = clamp(direction.y, 0.0, 1.0);
     let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
-    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * air);
-    return light * dimmed * per_lux;
+    // Counted against straight overhead, as the eye takes the colour of the
+    // sky overhead for white: a high star keeps its colour, a low one yellows.
+    let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
+    // An eye used to the dark sees the stars stand out against it: the
+    // night's darkening, which dims the land, is given back to them.
+    return light * dimmed * per_lux * view.heavens[6].w;
 }
 
 // How much a star twinkles, from 0 to 1, at a height whose sine is `rise`:

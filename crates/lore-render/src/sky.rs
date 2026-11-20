@@ -280,7 +280,9 @@ pub(crate) struct Day {
     /// itself, and how far the night has come from 0 to 1; towards the
     /// moon, and how far the stars have turned, in radians; the pole they
     /// turn about, and how large the moon is drawn against its real size;
-    /// the colour of the sun's own disc, and 1; the light of the night sky,
+    /// the colour of the sun's own disc, and one over what the eye
+    /// multiplies the picture by (1 here; `Effects` keeps it); the light of
+    /// the night sky,
     /// and how bright the lit part of the moon's face is against the whole
     /// at full ([`lore_sky::Heavens::moon_surface`]); where the sky's equator
     /// crosses the meridian with the stars turned 0, and how bright a lux
@@ -463,8 +465,10 @@ impl Day {
                     heavens.moon_surface(),
                 ],
                 [meridian[0], meridian[1], meridian[2], per_lux],
-                // The moon's colour, a game's to say.
-                [tint[0], tint[1], tint[2], 0.0],
+                // The moon's colour, a game's to say, and how much brighter
+                // the stars and the moon's face are drawn than the land
+                // (`Effects::set_night_darkening` says).
+                [tint[0], tint[1], tint[2], 1.0],
             ],
         }
     }
