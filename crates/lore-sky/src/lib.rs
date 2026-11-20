@@ -8,14 +8,17 @@
 //! a game that says where its world lies and what day it is (#478), is the
 //! sky over that place on that day.
 //!
-//! The sun and the moon are placed by the low-precision formulas of the
-//! Astronomical Almanac (as in Meeus, "Astronomical Algorithms", 2nd ed.,
-//! 1998, chapters 25 and 47 cut short): the sun to about a hundredth of a
-//! degree and the moon to about a third, less than its own width. The
-//! game's hour is the sun's own time at that place: at 12 the sun stands
-//! due south (due north, south of the tropics), as a sundial says, so a
-//! game never has to think about longitude or time zones.
+//! The sun is placed by the low-precision formula of the Astronomical
+//! Almanac (as in Meeus, "Astronomical Algorithms", 2nd ed., 1998, chapter
+//! 25), to about a hundredth of a degree, and the moon by Meeus's chapter
+//! 47 in full, to about ten arcseconds (`moon.rs`), seen from the place on
+//! the Earth rather than its middle, as eclipses need (#499). The game's
+//! hour is the sun's own time at that place: at 12 the sun stands due
+//! south (due north, south of the tropics), as a sundial says, so a game
+//! never has to think about time zones; a longitude only says which moment
+//! of the world's day that is, for eclipses and the moon's place.
 
+mod moon;
 pub mod planets;
 pub mod stars;
 
@@ -39,6 +42,9 @@ pub struct SkyPlace {
     /// The day the clock's hour 0 is the first midnight of, counted from
     /// 1 January 2000, which is 0.
     pub first_day: i64,
+    /// How far east of Greenwich, in degrees (west below 0): the sun's noon
+    /// here is that many fifteenths of an hour before Greenwich's.
+    pub longitude: f64,
 }
 
 /// Where the lights of the sky stand in the level, at a moment.
@@ -62,6 +68,14 @@ pub struct Heavens {
     /// How far the moon is through its month, from 0 at new moon through
     /// 0.5 at full to nearly 1.
     pub moon_age: f32,
+    /// How far the moon is from here, in kilometres: how large it looks.
+    pub moon_distance: f32,
+    /// How far the sun is from the Earth, in astronomical units.
+    pub sun_distance: f32,
+    /// Towards the middle of the Earth's shadow where it falls at the
+    /// moon's distance, as seen from here: opposite the sun, moved as the
+    /// moon is by seeing it from the Earth's surface.
+    pub shadow: [f32; 3],
     /// The moment, in days after noon on 1 January 2000: for the made-up
     /// sky, as if it were [`MADE_UP_DAY`].
     pub days: f64,
@@ -110,23 +124,10 @@ fn sun_at(days: f64) -> (Equatorial, f64) {
 }
 
 /// Where the moon is `days` after noon on 1 January 2000, as seen from
-/// the middle of the Earth, and how far round the ecliptic it is.
-fn moon_at(days: f64) -> (Equatorial, f64) {
-    let centuries = days / 36_525.0;
-    let wave =
-        |amount: f64, start: f64, rate: f64| amount * (start + rate * centuries).to_radians().sin();
-    let along = 218.32
-        + 481_267.881 * centuries
-        + wave(6.29, 135.0, 477_198.87)
-        + wave(-1.27, 259.3, -413_335.36)
-        + wave(0.66, 235.7, 890_534.22)
-        + wave(0.21, 269.9, 954_397.74)
-        + wave(-0.19, 357.5, 35_999.05)
-        + wave(-0.11, 186.5, 966_404.03);
-    let above = wave(5.13, 93.3, 483_202.02)
-        + wave(0.28, 228.2, 960_400.89)
-        + wave(-0.28, 318.3, 6_003.15)
-        + wave(-0.17, 217.6, -407_332.21);
+/// the middle of the Earth, how far round the ecliptic it is, and how far
+/// away, in kilometres.
+fn moon_at(days: f64) -> (Equatorial, f64, f64) {
+    let (along, above, distance) = moon::ecliptic(days);
     let (sin_along, cos_along) = sin_cos(along);
     let (sin_above, cos_above) = sin_cos(above);
     let (sin_tilt, cos_tilt) = sin_cos(tilt(days));
@@ -139,7 +140,53 @@ fn moon_at(days: f64) -> (Equatorial, f64) {
             declination: z.clamp(-1.0, 1.0).asin(),
         },
         along,
+        distance,
     )
+}
+
+/// How far the sundial runs ahead of the clock `days` after noon on
+/// 1 January 2000, in hours: the equation of time, up to a quarter of an
+/// hour either way through the year.
+#[must_use]
+pub fn equation_of_time(days: f64) -> f64 {
+    let (sun, _) = sun_at(days);
+    let mean = 280.460_618 + 0.985_647_36 * days;
+    ((mean - sun.ascension.to_degrees() + 180.0).rem_euclid(360.0) - 180.0) / 15.0
+}
+
+/// How far the Earth's own even time runs ahead of the clock, which keeps
+/// to its turning, `days` after noon on 1 January 2000, in seconds: delta
+/// T, about 69 seconds in 2024 (NASA's fit for 2005 to 2050, held beyond).
+fn delta_t(days: f64) -> f64 {
+    let years = (days / 365.25).clamp(5.0, 50.0);
+    62.92 + 0.322_17 * years + 0.005_589 * years * years
+}
+
+/// How far the sun is `days` after noon on 1 January 2000, in astronomical
+/// units.
+fn sun_distance(days: f64) -> f64 {
+    let anomaly = (357.528 + 0.985_600_3 * days).to_radians();
+    1.000_14 - 0.016_71 * anomaly.cos() - 0.000_14 * (2.0 * anomaly).cos()
+}
+
+/// The Earth's radius at the equator, in kilometres.
+const EARTH_RADIUS: f64 = 6378.14;
+
+/// `towards`, a direction from the Earth's middle to something `distance`
+/// kilometres away, as seen from its surface here instead, straight up
+/// being +y: nearer things move further, the moon by up to a degree.
+fn from_surface(towards: [f32; 3], distance: f64) -> [f32; 3] {
+    let far = distance / EARTH_RADIUS;
+    let at =
+        [0, 1, 2].map(|axis| f64::from(towards[axis]) * far - if axis == 1 { 1.0 } else { 0.0 });
+    let long = at
+        .iter()
+        .map(|part| part * part)
+        .sum::<f64>()
+        .sqrt()
+        .max(1e-9);
+    #[allow(clippy::cast_possible_truncation)]
+    at.map(|part| (part / long) as f32)
 }
 
 impl SkyPlace {
@@ -188,9 +235,20 @@ impl SkyPlace {
         // The first day's count is far below where an f64 stops being
         // exact for a fraction of a second.
         #[allow(clippy::cast_precision_loss)]
-        let days = self.first_day as f64 + hours / 24.0 - 0.5;
+        let longitude = if self.longitude.is_finite() {
+            (self.longitude + 180.0).rem_euclid(360.0) - 180.0
+        } else {
+            0.0
+        };
+        // The hour is the sundial's; Greenwich's clock is `longitude`
+        // fifteenths of an hour behind it, and behind the sundial by the
+        // equation of time; the moon and the planets keep the Earth's own
+        // time, which runs ahead of the clock by delta T.
+        let sundial = self.first_day as f64 + (hours - longitude / 15.0) / 24.0 - 0.5;
+        let clock = sundial - equation_of_time(sundial) / 24.0;
+        let days = clock + delta_t(clock) / 86_400.0;
         let (sun, sun_along) = sun_at(days);
-        let (moon, moon_along) = moon_at(days);
+        let (moon, moon_along, moon_distance) = moon_at(days);
         // At noon by the sun the sun is due south: the stars' own hour
         // (local sidereal time) is the sun's place among them, plus how
         // far past noon it is.
@@ -203,9 +261,17 @@ impl SkyPlace {
         // taken off.
         #[allow(clippy::cast_possible_truncation)]
         let turn = -sidereal as f32;
+        let sun_towards = self.towards(sun_hour, sun.declination);
+        let moon_towards = self.towards(sidereal - moon.ascension, moon.declination);
+        let moon_seen = from_surface(moon_towards, moon_distance);
+        let near = moon_seen
+            .iter()
+            .zip(moon_towards)
+            .map(|(seen, centre)| seen * centre)
+            .sum::<f32>();
         Heavens {
-            sun: self.towards(sun_hour, sun.declination),
-            moon: self.towards(sidereal - moon.ascension, moon.declination),
+            sun: sun_towards,
+            moon: moon_seen,
             pole,
             turn,
             meridian: self.towards(0.0, 0.0),
@@ -213,6 +279,15 @@ impl SkyPlace {
             #[allow(clippy::cast_possible_truncation)]
             moon_age: ((moon_along - sun_along) / 360.0).rem_euclid(1.0) as f32,
             days,
+            // From here, a little nearer than from the Earth's middle when
+            // it is high: by the Earth's radius times how high it is.
+            #[allow(clippy::cast_possible_truncation)]
+            moon_distance: (moon_distance
+                - EARTH_RADIUS * f64::from(moon_towards[1]) * f64::from(near.signum()))
+                as f32,
+            #[allow(clippy::cast_possible_truncation)]
+            sun_distance: sun_distance(days) as f32,
+            shadow: from_surface(sun_towards.map(|part| -part), moon_distance),
         }
     }
 }
@@ -270,6 +345,10 @@ impl Heavens {
             // A day count far below where an f64 stops being exact.
             #[allow(clippy::cast_precision_loss)]
             days: MADE_UP_DAY as f64 + hours / 24.0 - 0.5,
+            moon_distance: 384_400.0,
+            sun_distance: 1.0,
+            // The made-up moon never meets the shadow: it is put far away.
+            shadow: sun.map(|part| -part),
         }
     }
 
@@ -509,7 +588,7 @@ impl Heavens {
         }
         // About 0.2 magnitudes for each air mass, against overhead.
         let through_air = 10f32.powf(-0.08 * (air_mass(rise) - 1.0));
-        FULL_MOON_LUX * self.moon_share() * through_air
+        FULL_MOON_LUX * self.moon_share() * through_air * self.moon_unshadowed()
     }
 
     /// The light on open level ground under a clear sky, in lux: the sun's
@@ -519,8 +598,217 @@ impl Heavens {
     #[must_use]
     pub fn ground_lux(&self) -> f32 {
         let sun = self.sun[1].clamp(-1.0, 1.0).asin().to_degrees();
-        twilight_lux(sun) + self.moonlight_lux() * self.moon[1].max(0.0) + STARLIGHT_LUX
+        twilight_lux(sun) * self.daylight_left()
+            + self.moonlight_lux() * self.moon[1].max(0.0)
+            + STARLIGHT_LUX
     }
+
+    /// How large the sun looks: the angle from its middle to its edge, in
+    /// radians (about a quarter of a degree).
+    #[must_use]
+    pub fn sun_radius(&self) -> f32 {
+        (696_000.0 / (self.sun_distance.max(0.5) * 149_597_870.7)).asin()
+    }
+
+    /// How large the moon looks, as [`sun_radius`](Self::sun_radius) says
+    /// for the sun: larger when it is near, which is what makes some
+    /// eclipses of the sun total and others a ring.
+    #[must_use]
+    pub fn moon_radius(&self) -> f32 {
+        (1737.4 / self.moon_distance.max(300_000.0)).asin()
+    }
+
+    /// How far from its middle the Earth's full shadow (the umbra) and its
+    /// half shadow (the penumbra) reach where the moon is, in radians, as
+    /// Danjon's rule has it (the air thickens the shadow by a fiftieth).
+    #[must_use]
+    pub fn shadow_radii(&self) -> (f32, f32) {
+        let moon = (EARTH_RADIUS as f32 / self.moon_distance.max(300_000.0)).asin();
+        let sun = 8.794_f32.to_radians() / 3600.0 / self.sun_distance.max(0.5);
+        let width = self.sun_radius();
+        (
+            1.02 * (0.998_34 * moon - width + sun),
+            1.02 * (0.998_34 * moon + width + sun),
+        )
+    }
+
+    /// How much of the sun's face the moon covers, from 0 to 1, by area.
+    #[must_use]
+    pub fn sun_covered(&self) -> f32 {
+        let apart = angle_between(self.sun, self.moon);
+        disc_overlap(self.sun_radius(), self.moon_radius(), apart)
+    }
+
+    /// How much of the sun's light gets past the moon, from 1 down to the
+    /// faint light of the corona at totality (a millionth).
+    #[must_use]
+    pub fn sun_uncovered(&self) -> f32 {
+        (1.0 - self.sun_covered()).max(1e-6)
+    }
+
+    /// How much of the light of the day sky is left in an eclipse of the
+    /// sun, from 1 down to what the sky beyond the moon's shadow still
+    /// sends at totality, deep twilight, two hundred-thousandths: about 2
+    /// lux on the ground, enough to see by.
+    #[must_use]
+    pub fn daylight_left(&self) -> f32 {
+        (1.0 - self.sun_covered()).max(2e-5)
+    }
+
+    /// How much of the sunlight a point of the moon `apart` radians from the
+    /// middle of the Earth's shadow gets, from 1 outside the shadow to the
+    /// sunlight the Earth's air bends into the umbra, red, a few
+    /// ten-thousandths.
+    #[must_use]
+    pub fn shadowed(&self, apart: f32) -> f32 {
+        let (umbra, penumbra) = self.shadow_radii();
+        if apart >= penumbra {
+            1.0
+        } else if apart >= umbra {
+            // In the penumbra the Earth hides part of the sun: a share
+            // growing evenly from its outer edge to the umbra's.
+            ((apart - umbra) / (penumbra - umbra)).max(UMBRA_LIGHT)
+        } else {
+            UMBRA_LIGHT * (0.4 + 0.6 * apart / umbra.max(1e-6))
+        }
+    }
+
+    /// How much of its sunlight the moon's whole face gets: the mean of
+    /// [`shadowed`](Self::shadowed) over its face.
+    #[must_use]
+    pub fn moon_unshadowed(&self) -> f32 {
+        let middle = angle_between(self.moon, self.shadow);
+        let (_, penumbra) = self.shadow_radii();
+        let radius = self.moon_radius();
+        if middle >= penumbra + radius {
+            return 1.0;
+        }
+        // Thirteen points across the face, along the line from the shadow's
+        // middle and either side of it, each for the band it stands for.
+        let mut sum = 0.0;
+        let mut weights = 0.0;
+        for step in -6..=6_i8 {
+            let across = f32::from(step) / 6.0;
+            let weight = (1.0 - across * across).max(0.0).sqrt();
+            sum += self.shadowed((middle + across * radius).abs()) * weight;
+            weights += weight;
+        }
+        sum / weights
+    }
+
+    /// The eclipse seen from here now, if there is one.
+    #[must_use]
+    pub fn eclipse(&self) -> Option<Eclipse> {
+        let (sun, moon) = (self.sun_radius(), self.moon_radius());
+        let apart = angle_between(self.sun, self.moon);
+        if self.sun[1] > -0.02 && apart < sun + moon {
+            return Some(if apart <= (moon - sun).abs() {
+                if moon >= sun {
+                    Eclipse::TotalSolar
+                } else {
+                    Eclipse::AnnularSolar
+                }
+            } else {
+                Eclipse::PartialSolar
+            });
+        }
+        let (umbra, penumbra) = self.shadow_radii();
+        let middle = angle_between(self.moon, self.shadow);
+        if self.moon[1] > -0.02 && middle < penumbra + moon {
+            return Some(if middle + moon <= umbra {
+                Eclipse::TotalLunar
+            } else if middle - moon < umbra {
+                Eclipse::PartialLunar
+            } else {
+                Eclipse::PenumbralLunar
+            });
+        }
+        None
+    }
+}
+
+/// How much of its sunlight the middle of the Earth's full shadow lets
+/// reach the moon, bent round the Earth through its air and reddened: a
+/// moon at the darkest it is in a total eclipse, as Danjon's scale's middle
+/// has it, about magnitude 0 against a full moon's -12.7.
+const UMBRA_LIGHT: f32 = 2e-4;
+
+/// An eclipse of the sun or the moon, as it is seen from one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eclipse {
+    /// The moon hides the sun.
+    TotalSolar,
+    /// The moon is too far to hide the sun: a ring of it shows round the
+    /// moon.
+    AnnularSolar,
+    /// The moon hides some of the sun.
+    PartialSolar,
+    /// The moon is all in the Earth's full shadow, dim and red.
+    TotalLunar,
+    /// Some of the moon is in the Earth's full shadow.
+    PartialLunar,
+    /// The moon is only in the Earth's half shadow, a little dimmed.
+    PenumbralLunar,
+}
+
+impl Eclipse {
+    /// The eclipse in words, as scripts read it: "total solar", "annular
+    /// solar", "partial solar", "total lunar", "partial lunar" or
+    /// "penumbral lunar".
+    #[must_use]
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::TotalSolar => "total solar",
+            Self::AnnularSolar => "annular solar",
+            Self::PartialSolar => "partial solar",
+            Self::TotalLunar => "total lunar",
+            Self::PartialLunar => "partial lunar",
+            Self::PenumbralLunar => "penumbral lunar",
+        }
+    }
+}
+
+/// The angle between two directions, in radians: from the length of their
+/// cross product and their dot product, which stays exact for the tiny
+/// angles of an eclipse, where the arccosine of a dot product near 1 is
+/// good only to about an arcminute.
+fn angle_between(one: [f32; 3], other: [f32; 3]) -> f32 {
+    let dot: f32 = (0..3).map(|axis| one[axis] * other[axis]).sum();
+    let across = cross(one, other);
+    let sine = (across[0] * across[0] + across[1] * across[1] + across[2] * across[2]).sqrt();
+    sine.atan2(dot)
+}
+
+/// How much of a disc `radius` across a disc `other` across hides when their
+/// middles are `apart`, by area, as a share of the first.
+fn disc_overlap(radius: f32, other: f32, apart: f32) -> f32 {
+    if apart >= radius + other {
+        return 0.0;
+    }
+    if apart <= (other - radius).abs() {
+        return if other >= radius {
+            1.0
+        } else {
+            (other * other) / (radius * radius)
+        };
+    }
+    let (r, o, d) = (f64::from(radius), f64::from(other), f64::from(apart));
+    let lens = r
+        * r
+        * ((d * d + r * r - o * o) / (2.0 * d * r))
+            .clamp(-1.0, 1.0)
+            .acos()
+        + o * o
+            * ((d * d + o * o - r * r) / (2.0 * d * o))
+                .clamp(-1.0, 1.0)
+                .acos()
+        - 0.5
+            * ((-d + r + o) * (d + r - o) * (d - r + o) * (d + r + o))
+                .max(0.0)
+                .sqrt();
+    #[allow(clippy::cast_possible_truncation)]
+    let share = (lens / (std::f64::consts::PI * r * r)) as f32;
+    share.clamp(0.0, 1.0)
 }
 
 /// The cross product of two vectors.
@@ -613,7 +901,7 @@ mod tests {
         // Meeus, example 47.a: 12 April 1992 at 0h, right ascension
         // 134.688470 degrees and declination 13.768368.
         let days = days_from_2000(1992, 4, 12) as f64 - 0.5;
-        let (moon, _) = moon_at(days);
+        let (moon, _, _) = moon_at(days);
         assert!((moon.ascension.to_degrees().rem_euclid(360.0) - 134.688_47).abs() < 0.4);
         assert!((moon.declination.to_degrees() - 13.768_368).abs() < 0.4);
     }
@@ -621,6 +909,7 @@ mod tests {
     #[test]
     fn at_noon_the_sun_is_due_south_and_as_high_as_the_season_says() {
         let place = |month, day| SkyPlace {
+            longitude: 0.0,
             latitude: 61.0,
             north: NORTH,
             first_day: days_from_2000(2026, month, day),
@@ -649,6 +938,7 @@ mod tests {
     #[test]
     fn the_sun_rises_in_the_east_and_sets_in_the_west() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2026, 3, 20),
@@ -665,6 +955,7 @@ mod tests {
         );
         // Turned so north is +x, the morning sun is at +z.
         let turned = SkyPlace {
+            longitude: 0.0,
             north: 90.0,
             ..place
         }
@@ -676,6 +967,7 @@ mod tests {
     #[test]
     fn south_of_the_tropics_the_noon_sun_is_to_the_north() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: -34.0,
             north: NORTH,
             first_day: days_from_2000(2026, 6, 21),
@@ -695,6 +987,7 @@ mod tests {
     fn the_moon_is_full_on_the_night_it_was() {
         // A full moon on 20 March 2000 at 04:44 UT; new on 6 March 2000.
         let full = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2000, 3, 20),
@@ -702,6 +995,7 @@ mod tests {
         .heavens(4.7);
         assert!(degrees_between(full.sun, full.moon) > 175.0);
         let midnight = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2000, 3, 20),
@@ -713,6 +1007,7 @@ mod tests {
         );
         assert!(midnight.moon[2] > 0.0);
         let new = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2000, 3, 6),
@@ -725,6 +1020,7 @@ mod tests {
         // A week after new it is at first quarter, a week after full at last.
         let at = |month, day| {
             SkyPlace {
+                longitude: 0.0,
                 latitude: 45.0,
                 north: NORTH,
                 first_day: days_from_2000(2000, month, day),
@@ -739,6 +1035,7 @@ mod tests {
     #[test]
     fn a_star_stands_where_the_almanac_says_and_turns_westward() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2026, 3, 20),
@@ -771,6 +1068,7 @@ mod tests {
     #[test]
     fn the_light_on_the_ground_is_what_a_meter_reads() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: 45.0,
             north: NORTH,
             first_day: days_from_2000(2000, 3, 20),
@@ -795,6 +1093,7 @@ mod tests {
         );
         // A half moon gives about a tenth of a full one.
         let half = SkyPlace {
+            longitude: 0.0,
             first_day: days_from_2000(2000, 3, 13),
             ..place
         }
@@ -806,6 +1105,7 @@ mod tests {
         );
         // No moon: the stars and the night air alone.
         let dark = SkyPlace {
+            longitude: 0.0,
             first_day: days_from_2000(2000, 3, 6),
             ..place
         }
@@ -836,6 +1136,7 @@ mod tests {
     #[test]
     fn the_pole_star_stands_still_as_high_as_the_latitude() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: 61.0,
             north: NORTH,
             first_day: 0,
@@ -852,12 +1153,14 @@ mod tests {
     #[test]
     fn the_same_moment_gives_the_same_sky_and_nonsense_does_not_break_it() {
         let place = SkyPlace {
+            longitude: 0.0,
             latitude: 61.0,
             north: 12.0,
             first_day: 9000,
         };
         assert_eq!(place.heavens(30.25), place.heavens(30.25));
         let broken = SkyPlace {
+            longitude: 0.0,
             latitude: f64::NAN,
             north: f64::INFINITY,
             first_day: 0,
@@ -898,5 +1201,69 @@ mod tests {
         lux *= 2.0 * std::f32::consts::PI * town_glow_candela(9.0);
         assert!((lux / town_glow_lux(9.0) - 1.0).abs() < 1e-3, "{lux}");
         assert!((0.08..0.1).contains(&town_glow_lux(9.0)));
+    }
+
+    /// The sky over `latitude` and `longitude` on `day` `month` `year`, at
+    /// `greenwich` hours of Greenwich's time: each place's own hour is the
+    /// sun's, `longitude` fifteenths of an hour later.
+    fn seen_from(
+        latitude: f64,
+        longitude: f64,
+        (year, month, day): (i64, u32, u32),
+        greenwich: f64,
+    ) -> Heavens {
+        let place = SkyPlace {
+            latitude,
+            north: 0.0,
+            first_day: days_from_2000(year, month, day),
+            longitude,
+        };
+        // The sundial's hour there: Greenwich's clock moved by the
+        // longitude and the equation of time.
+        #[allow(clippy::cast_precision_loss)]
+        let days = days_from_2000(year, month, day) as f64 + greenwich / 24.0 - 0.5;
+        place.heavens(greenwich + longitude / 15.0 + equation_of_time(days))
+    }
+
+    #[test]
+    fn eclipses_happen_where_and_when_they_did() {
+        // The total eclipse of the sun over Dallas, 8 April 2024, 18:42 UT.
+        let dallas = seen_from(32.78, -96.80, (2024, 4, 8), 18.708);
+        assert_eq!(dallas.eclipse(), Some(Eclipse::TotalSolar));
+        assert!(dallas.sun_covered() > 0.999);
+        assert!(dallas.ground_lux() < 30.0, "{}", dallas.ground_lux());
+        // Two hours before, nothing; and in Chicago, only part of it.
+        assert_eq!(seen_from(32.78, -96.80, (2024, 4, 8), 16.7).eclipse(), None);
+        let chicago = seen_from(41.88, -87.63, (2024, 4, 8), 19.12);
+        assert_eq!(chicago.eclipse(), Some(Eclipse::PartialSolar));
+        assert!(
+            (0.8..0.99).contains(&chicago.sun_covered()),
+            "{}",
+            chicago.sun_covered()
+        );
+        // The ring of fire over Albuquerque, 14 October 2023, 16:35 UT.
+        let ring = seen_from(35.08, -106.65, (2023, 10, 14), 16.58);
+        assert_eq!(ring.eclipse(), Some(Eclipse::AnnularSolar));
+        // The moon in the Earth's shadow, 8 November 2022, 10:59 UT, red and
+        // dim over North America before dawn.
+        let red = seen_from(40.0, -100.0, (2022, 11, 8), 10.98);
+        assert_eq!(red.eclipse(), Some(Eclipse::TotalLunar));
+        assert!(red.moon_unshadowed() < 1e-3, "{}", red.moon_unshadowed());
+        // An hour and a half before, it was going in.
+        let going = seen_from(40.0, -100.0, (2022, 11, 8), 9.4);
+        assert_eq!(going.eclipse(), Some(Eclipse::PartialLunar));
+        // The made-up sky has none, all month.
+        for hour in 0..(24 * 30) {
+            assert_eq!(Heavens::at(f64::from(hour), None).eclipse(), None);
+        }
+    }
+
+    #[test]
+    fn overlapping_discs_hide_what_they_should() {
+        assert_eq!(disc_overlap(1.0, 1.0, 2.5), 0.0);
+        assert_eq!(disc_overlap(1.0, 1.1, 0.05), 1.0);
+        assert!((disc_overlap(1.0, 0.5, 0.0) - 0.25).abs() < 1e-6);
+        // Two equal discs half over each other: a known 39 %.
+        assert!((disc_overlap(1.0, 1.0, 1.0) - 0.391).abs() < 1e-3);
     }
 }

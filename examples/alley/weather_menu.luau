@@ -320,6 +320,38 @@ return menu.new("Weather", {
         end,
         color = "#c8c8ff",
     }),
+    -- How far east of Greenwich the alley is: it says which moment of the
+    -- world's day it is, so eclipses fall where they really did. Set Year,
+    -- Month and Day to 8 April 2024 (game.sky.setDate(2024, 4, 8)), Latitude
+    -- to 32.8, this to -96.8 (game.sky.setLongitude(-96.8)) and the Hour to
+    -- 12:14, and the moon hides the sun over Dallas.
+    menu.slider("Longitude", {
+        min = -180,
+        max = 180,
+        -- A tenth of a degree, about eleven kilometres: the path of a total
+        -- eclipse is only a hundred or two wide.
+        step = 0.1,
+        get = function()
+            return game.sky.longitude() or 0
+        end,
+        set = function(longitude)
+            game.sky.setLongitude(longitude)
+        end,
+        format = function(longitude)
+            return if longitude >= 0 then string.format("%.1f° E", longitude) else string.format("%.1f° W", -longitude)
+        end,
+        color = "#c8c8ff",
+    }),
+    menu.info("Eclipse", {
+        text = function()
+            local eclipse = game.sky.eclipse()
+            if not eclipse then
+                return "none"
+            end
+            local covered = game.sky.sunCovered() or 0
+            return if covered > 0 then string.format("%s, %d%% of the sun", eclipse, math.floor(covered * 100 + 0.5)) else eclipse
+        end,
+    }),
     -- How large the moon is drawn, from its real size (half a degree) to ten
     -- times it: game.sky.setMoonSize(3). Its light stays the same.
     menu.slider("Moon size", {

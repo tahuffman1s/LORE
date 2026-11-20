@@ -279,6 +279,27 @@ fn the_planets_are_where_they_were_that_night() {
 }
 
 #[test]
+fn a_script_sees_the_eclipse_over_dallas() {
+    let _host = game(
+        r#"
+        print(game.sky.longitude(), game.sky.eclipse())
+        game.sky.setLatitude(32.78)
+        game.sky.setLongitude(-96.8)
+        game.sky.setDate(2024, 4, 8)
+        game.sky.setHour(12.24)
+        print(game.sky.longitude(), game.sky.eclipse(), game.sky.sunCovered() > 0.999)
+        print(game.sky.light() < 30)
+        game.sky.setHour(10)
+        print(game.sky.eclipse(), game.sky.sunCovered())
+        "#,
+    );
+    assert_eq!(
+        printed(),
+        ["nil nil", "-96.8 total solar true", "true", "nil 0"]
+    );
+}
+
+#[test]
 fn town_light_brightens_the_night_on_open_ground() {
     let _host = game(
         r#"
@@ -325,6 +346,14 @@ fn a_wrong_place_or_date_says_what_to_write() {
         ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
         ("game.sky.setMoonColor(\"black\")", "hide the moon"),
         ("game.sky.setMoonColor(3)", "a colour in quotes"),
+        (
+            "game.sky.setLongitude(200)",
+            "from -180 (west) to 180 (east)",
+        ),
+        (
+            "game.sky.setLongitude(\"west\")",
+            "game.sky.setLongitude(-3.7)",
+        ),
         (
             "game.sky.starDirection(\"Jupiter\")",
             "game.sky.planetDirection(\"Jupiter\")",

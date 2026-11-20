@@ -1426,6 +1426,41 @@ declare game: {
         --- Example: local cold = (game.sky.latitude() or 0) > 55
         latitude: () -> number?,
 
+        --- Says how far east of Greenwich the world lies, in degrees, from -180
+        --- to 180 (west below 0): -3.7 for Madrid, 139.7 for Tokyo, -96.8 for
+        --- Dallas. The hour stays the sun's own, so this changes nothing a
+        --- player sees day to day; it says which moment of the world's day it
+        --- is, so the moon is exactly where it was and eclipses fall where and
+        --- when they did: say it with setLatitude and setDate (see eclipse).
+        --- Until it is said the sky is worked out for Greenwich's line (0).
+        --- Example: game.sky.setLongitude(-96.8)
+        setLongitude: (degrees: number) -> (),
+
+        --- How far east of Greenwich the world lies, as setLongitude said, or
+        --- nil until a place is said (setLatitude, setLongitude, setNorth or
+        --- setDate); the sky then uses Greenwich's line, 0.
+        --- Example: local east = game.sky.longitude()
+        longitude: () -> number?,
+
+        --- The eclipse seen from here now, in words, or nil if there is none
+        --- (or no hour has been said): "total solar" (the moon hides the
+        --- sun; day turns to deep twilight and the corona shows), "annular
+        --- solar" (a ring of the sun shows round the moon), "partial solar",
+        --- "total lunar" (the moon in the Earth's shadow, dim and copper
+        --- red), "partial lunar" or "penumbral lunar". They happen on their
+        --- real dates, over the places they really did, once setDate,
+        --- setLatitude and setLongitude say where and when: setLatitude(32.8),
+        --- setLongitude(-96.8), setDate(2024, 4, 8) and setHour(12.24) is
+        --- the total eclipse over Dallas. Any eclipse of the sun has "solar"
+        --- in its name: string.find(game.sky.eclipse() or "", "solar").
+        --- Example: if game.sky.eclipse() == "total solar" then print("totality!") end
+        eclipse: () -> ("total solar" | "annular solar" | "partial solar" | "total lunar" | "partial lunar" | "penumbral lunar")?,
+
+        --- How much of the sun's face the moon covers now, from 0 to 1, or nil
+        --- if no hour has been said. The light on the land falls with it.
+        --- Example: local covered = game.sky.sunCovered() or 0
+        sunCovered: () -> number?,
+
         --- Says which way north is in the level, as a compass bearing in
         --- degrees: 0 when north is the level's -z (Blender's +y), 90 when
         --- it is +x, turning clockwise seen from above. Turns the whole sky

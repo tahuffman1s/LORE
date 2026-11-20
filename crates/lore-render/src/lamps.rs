@@ -95,7 +95,7 @@ pub(crate) fn per_lux(lighting: &Lighting, heavens: &lore_sky::Heavens, moon_up:
     let drawn = grey(lighting.sun) * lighting.towards_sun[1].max(0.0)
         + std::f32::consts::PI * grey(lighting.sky);
     let degrees = heavens.sun[1].clamp(-1.0, 1.0).asin().to_degrees();
-    let twilight = lore_sky::twilight_lux(degrees);
+    let twilight = lore_sky::twilight_lux(degrees) * heavens.daylight_left();
     // Between the horizon and ten degrees up the twilight is handed over to
     // the engine's own daylight, which is what is drawn when the sun is
     // high.

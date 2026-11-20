@@ -58,6 +58,10 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "planetHeight",
     "planetBrightness",
     "planetNames",
+    "setLongitude",
+    "longitude",
+    "eclipse",
+    "sunCovered",
 ];
 
 /// The words `game.sky.setLightPollution` takes, and the class on Bortle's
@@ -100,6 +104,7 @@ fn sky_color(lua: &Lua, function: &str, value: &Value) -> mlua::Result<([f32; 3]
 /// with a full moon.
 fn usual_place() -> SkyPlace {
     SkyPlace {
+        longitude: 0.0,
         latitude: 45.0,
         north: 0.0,
         first_day: lore_sky::days_from_2000(2000, 3, 20),
@@ -757,6 +762,57 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     sky.set(
         "latitude",
         lua.create_function(move |_, ()| Ok(climate.place.get().map(|place| place.latitude)))?,
+    )?;
+    let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
+    sky.set(
+        "setLongitude",
+        lua.create_function(move |lua, value: Value| {
+            const EXAMPLE: &str = "game.sky.setLongitude(-3.7)";
+            let longitude = degrees(
+                lua,
+                "game.sky.setLongitude",
+                &value,
+                "a number of degrees: how far east of Greenwich the world lies, 0 at Greenwich, \
+                 -3.7 for Madrid, 139.7 for Tokyo, -96.8 for Dallas",
+                EXAMPLE,
+            )?;
+            if !(-180.0..=180.0).contains(&longitude) {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sky.setLongitude was given {longitude}, but a longitude is from \
+                         -180 (west) to 180 (east). Write it like this: {EXAMPLE}"
+                    ),
+                ));
+            }
+            rules_only(lua, &rules, "game.sky.setLongitude")?;
+            climate.change_place(|place| place.longitude = longitude);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "longitude",
+        lua.create_function(move |_, ()| Ok(climate.place.get().map(|place| place.longitude)))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "eclipse",
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .and_then(|heavens| heavens.eclipse())
+                .map(lore_sky::Eclipse::words))
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "sunCovered",
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .map(|heavens| f64::from(heavens.sun_covered())))
+        })?,
     )?;
     let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
     sky.set(
