@@ -51,25 +51,27 @@ local function daysGone(): number
     return (game.sky.hour() or 12) // 24
 end
 
--- What the moon is called, a share of the way round its month.
-local function moonName(month: number): string
-    if month < 0.03 or month > 0.97 then
-        return "new"
-    elseif month < 0.22 then
-        return "waxing crescent"
-    elseif month < 0.28 then
-        return "first quarter"
-    elseif month < 0.47 then
-        return "waxing gibbous"
-    elseif month < 0.53 then
-        return "full"
-    elseif month < 0.72 then
-        return "waning gibbous"
-    elseif month < 0.78 then
-        return "last quarter"
-    end
-    return "waning crescent"
+-- The day it is: the sky's own, or until a date is said, the 20th of
+-- March 2000 that game.sky.setDate starts from.
+local function today(): (number, number, number)
+    local year, month, day = game.sky.date()
+    return year or 2000, month or 3, day or 20
 end
+
+-- How many days a month has, in a year.
+local monthDays = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+local function daysIn(year: number, month: number): number
+    local leap = (year % 4 == 0 and year % 100 ~= 0) or year % 400 == 0
+    return if month == 2 and leap then 29 else monthDays[month]
+end
+
+-- Says the date, the day kept within its month: the 31st of March, moved
+-- to April, is the 30th.
+local function setDate(year: number, month: number, day: number)
+    game.sky.setDate(year, month, math.clamp(day, 1, daysIn(year, month)))
+end
+
+local monthNames = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" }
 
 -- The way the player looks, along the ground, as a vector of length 1.
 local function ahead(): vector
@@ -211,20 +213,89 @@ return menu.new("Weather", {
             game.sky.setDayLength(dayLengths[length] or 0)
         end,
     }),
-    -- The moon goes round its month in twenty-nine and a half days,
-    -- starting nearly full: a day on keeps the hour and moves the moon.
-    menu.slider("Day of the moon", {
-        min = 0,
-        max = 29,
+    -- The date and the place: saying either makes the sky the real one
+    -- over that place on that day, with the moon in the phase it had and
+    -- the stars where they stood. game.sky.setDate(2026, 1, 15).
+    menu.slider("Year", {
+        min = 1900,
+        max = 2100,
         step = 1,
-        get = daysGone,
-        set = function(day)
-            game.sky.setHour(day * 24 + hourOfDay())
+        get = function()
+            return (today())
         end,
-        format = function(day)
-            return string.format("%d, %s", day + 1, moonName(((day + 0.5) / 29.53 + 0.47) % 1))
+        set = function(year)
+            local _, month, day = today()
+            setDate(year, month, day)
+        end,
+        format = function(year)
+            return tostring(year)
         end,
         color = "#c8c8ff",
+    }),
+    menu.slider("Month", {
+        min = 1,
+        max = 12,
+        step = 1,
+        wraps = true,
+        get = function()
+            local _, month = today()
+            return month
+        end,
+        set = function(month)
+            local year, _, day = today()
+            setDate(year, month, day)
+        end,
+        format = function(month)
+            return monthNames[month] or "?"
+        end,
+        color = "#c8c8ff",
+    }),
+    menu.slider("Day", {
+        min = 1,
+        max = 31,
+        step = 1,
+        wraps = true,
+        get = function()
+            local _, _, day = today()
+            return day
+        end,
+        set = function(day)
+            local year, month = today()
+            setDate(year, month, day)
+        end,
+        format = function(day)
+            local year, month = today()
+            return string.format("%d %s", math.min(day, daysIn(year, month)), monthNames[month])
+        end,
+        color = "#c8c8ff",
+    }),
+    -- How far north the alley is: the length of the day, how high the
+    -- sun stands at noon and which stars go round the pole follow it.
+    -- game.sky.setLatitude(51).
+    menu.slider("Latitude", {
+        min = -60,
+        max = 70,
+        step = 1,
+        get = function()
+            return game.sky.latitude() or 45
+        end,
+        set = function(latitude)
+            game.sky.setLatitude(latitude)
+        end,
+        format = function(latitude)
+            return if latitude >= 0 then string.format("%d° N", latitude) else string.format("%d° S", -latitude)
+        end,
+        color = "#c8c8ff",
+    }),
+    menu.info("Moon", {
+        text = function()
+            local phase = game.sky.moonPhase()
+            if not phase then
+                return "no hour said"
+            end
+            local up = (game.sky.moonHeight() or -90) > 0
+            return string.format("%s, %d%% lit, %s", phase, math.floor((game.sky.moonLit() or 0) * 100 + 0.5), if up then "up" else "down")
+        end,
     }),
     menu.slider("Snow lying", { max = 0.6, step = 0.05, get = game.weather.snowDepth, set = game.weather.setSnowDepth, format = centimetres, color = "white" }),
     menu.slider("Ice on water", { max = 0.5, step = 0.02, get = game.weather.ice, set = game.weather.setIce, format = centimetres, color = "#bfe8ff" }),

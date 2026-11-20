@@ -32,26 +32,29 @@
 
 game.input.bind("weather_menu", { "F1", "GamepadSelect" })
 game.input.bind("debug_menu", { "F7" })
-game.input.bind("fluid_menu", { "F2" })
+-- game.input.bind("fluid_menu", { "F2" })
 game.input.bind("frame_meter", { "F12" })
-game.input.bind("clear_fluids", { "F8", "LeftBumper" })
+-- game.input.bind("clear_fluids", { "F8", "LeftBumper" })
+game.input.bind("hide_hud", { "F2", "LeftBumper" })
 
 local menu = require("./menu")
 local weatherMenu = require("./weather_menu")
 local debugMenu = require("./debug_menu")
 local meter = require("./frame_meter")
 local hints = require("./key_hints")
-local fluids = require("./fluids")
-local gun = require("./fluid_gun")
-local fluidMenu = require("./fluid_menu")
+-- local fluids = require("./fluids")
+-- local gun = require("./fluid_gun")
+-- local fluidMenu = require("./fluid_menu")
 local warning = require("./testing_warning")
 require("./lamps")
 
 -- The menus are tabs of one panel, so one gamepad button reaches them all.
-local panel = menu.panel({ weatherMenu, debugMenu.menu, fluidMenu })
+local panel = menu.panel({ weatherMenu, debugMenu.menu })
 
 -- The pause menu, made last so that it is drawn over everything else.
 local pauseMenu = require("./pause_menu")
+
+local drawHud = true
 
 -- The alley starts early in the afternoon, in fair weather.
 game.onStart(function()
@@ -68,19 +71,22 @@ game.onTick(function(step)
         panel:toggle(weatherMenu)
     elseif game.input.justPressed("debug_menu") then
         panel:toggle(debugMenu.menu)
-    elseif game.input.justPressed("fluid_menu") then
-        panel:toggle(fluidMenu)
+    -- elseif game.input.justPressed("fluid_menu") then
+    --    panel:toggle(fluidMenu)
+    elseif game.input.justPressed("hide_hud") and not panel.isOpen then
+        -- In a menu the left bumper goes back a tab, so it hides nothing.
+        drawHud = not drawHud
     elseif game.input.justPressed("frame_meter") then
         meter.cycle()
-    elseif game.input.justPressed("clear_fluids") and not panel.isOpen then
+    -- elseif game.input.justPressed("clear_fluids") and not panel.isOpen then
         -- In a menu the left bumper goes back a tab, so it clears nothing.
-        fluids.clear()
+       --  fluids.clear()
     end
     panel:update()
-    if not panel.isOpen then
-        gun.update()
-    end
-    fluids.update(step)
+    -- if not panel.isOpen then
+        -- gun.update()
+    -- end
+    -- fluids.update(step)
 end)
 
 game.onDraw(function()
@@ -89,7 +95,7 @@ game.onDraw(function()
     meter.draw()
     debugMenu.draw(playing)
     debugMenu.drawShaders()
-    gun.draw(playing)
-    hints.draw(playing)
-    warning.draw(playing)
+    -- gun.draw(playing)
+    hints.draw(playing and drawHud)
+    warning.draw(playing and drawHud)
 end)
