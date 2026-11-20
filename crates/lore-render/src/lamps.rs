@@ -79,64 +79,23 @@ pub(crate) const USUAL_RADIUS: f32 = 0.03;
 /// table 12). This is the exposure of a sunny day, EV100 about 15.
 pub(crate) const DAYLIGHT_PER_LUX: f32 = std::f32::consts::PI / 100_000.0;
 
-/// The light the sun and the sky give level ground under a clear sky while
-/// the sun is low, in lux, by how high the sun is in degrees: the end of
-/// astronomical, nautical and civil twilight (about 3.2 lux, AMS glossary,
-/// "Civil twilight"; 0.008 lux, MacInnis et al. as cited on Wikimedia's
-/// twilight charts), a clear sunset (400 lux, Wikipedia, "Lux"), and two
-/// guesses a little above the horizon that are soon handed over to the
-/// engine's own daylight.
-const TWILIGHT: [(f32, f32); 7] = [
-    (-18.0, 0.000_7),
-    (-12.0, 0.008),
-    (-6.0, 3.2),
-    (-0.8, 400.0),
-    (5.0, 5_000.0),
-    (10.0, 12_000.0),
-    (90.0, 120_000.0),
-];
-
-/// The light of the stars and the night air on level ground, in lux.
-const STARLIGHT_LUX: f32 = 0.002;
-
-/// The light a full moon high in a clear sky gives a surface facing it, in
-/// lux: 0.1 to 0.3 is usual, and Filament's table gives 1 as a round
-/// figure.
-const FULL_MOON_LUX: f32 = 0.3;
-
 /// How bright a lux of lamplight is drawn under `lighting`, the light of
 /// one hour of the engine's day: the light the picture gives the ground
-/// over the light that would really fall there, with the sun `sun_height`
-/// (the sine of its angle above the horizon) and the moon `moon_height`
-/// with `moon_lit` of its face lit and `moon_up` of it over the horizon.
+/// over the light that would really fall there with the sun and the moon
+/// where `heavens` has them ([`lore_sky::Heavens::ground_lux`]), and
+/// `moon_up` of the moon over the horizon.
 ///
 /// By day the engine draws the light that really falls, so this is
 /// [`DAYLIGHT_PER_LUX`]. At dusk and at night the picture is opened up, as
 /// an eye opens, and a lux is drawn brighter: by night about a hundred
 /// thousand times as bright, so that lamps outshine the moon by as much as
 /// real ones do.
-pub(crate) fn per_lux(
-    lighting: &Lighting,
-    sun_height: f32,
-    moon_height: f32,
-    moon_lit: f32,
-    moon_up: f32,
-) -> f32 {
+pub(crate) fn per_lux(lighting: &Lighting, heavens: &lore_sky::Heavens, moon_up: f32) -> f32 {
     let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
     let drawn = grey(lighting.sun) * lighting.towards_sun[1].max(0.0)
         + std::f32::consts::PI * grey(lighting.sky);
-    let degrees = sun_height.clamp(-1.0, 1.0).asin().to_degrees();
-    let twilight = if degrees < TWILIGHT[0].0 {
-        0.0
-    } else {
-        let at = TWILIGHT
-            .windows(2)
-            .find(|pair| degrees <= pair[1].0)
-            .unwrap_or(&TWILIGHT[TWILIGHT.len() - 2..]);
-        let (low, high) = (at[0], at[1]);
-        let share = ((degrees - low.0) / (high.0 - low.0)).clamp(0.0, 1.0);
-        (low.1.ln() + (high.1.ln() - low.1.ln()) * share).exp()
-    };
+    let degrees = heavens.sun[1].clamp(-1.0, 1.0).asin().to_degrees();
+    let twilight = lore_sky::twilight_lux(degrees);
     // Between the horizon and ten degrees up the twilight is handed over to
     // the engine's own daylight, which is what is drawn when the sun is
     // high.
@@ -149,9 +108,8 @@ pub(crate) fn per_lux(
     } else {
         0.0
     };
-    let moon =
-        FULL_MOON_LUX * moon_lit.clamp(0.0, 1.0) * moon_up.clamp(0.0, 1.0) * moon_height.max(0.0);
-    let falls = sun_and_sky + moon + STARLIGHT_LUX;
+    let moon = heavens.moonlight_lux() * moon_up.clamp(0.0, 1.0) * heavens.moon[1].max(0.0);
+    let falls = sun_and_sky + moon + lore_sky::STARLIGHT_LUX;
     if drawn.is_finite() && drawn > 0.0 {
         drawn / falls
     } else {

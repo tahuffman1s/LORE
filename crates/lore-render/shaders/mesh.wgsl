@@ -1141,7 +1141,9 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let fine = textureSampleLevel(cloud_volume, cloud_sampler, among * 6.1 + 0.6, 0.0).g;
     var light = vec3<f32>(0.75, 0.82, 1.0) * band * (0.2 + dust.r) * dust.g * (0.5 + fine) * 0.03;
     // The thick air low down hides the Milky Way.
-    let milky = light * view.heavens[4].w * night * smoothstep(0.0, 0.2, direction.y);
+    // As bright as it is: its brightest clouds about twice the night sky's
+    // own glow, some 1.2e-3 candela a square metre at their thickest.
+    let milky = light * 0.025 * view.heavens[5].w * smoothstep(0.0, 0.2, direction.y);
     return seen + (milky + real_stars(among, direction, pixel)) * behind;
 }
 
@@ -1160,9 +1162,9 @@ const STAR_REACH: f32 = 0.007;
 // `towards` among the stars (right ascension 0, 6 hours, the pole), `pixel`
 // radians across, as light to draw.
 //
-// Each star is a spot of light whose whole is the light it gives, spread a
-// little over half a pixel each way, so that however sharp the picture it
-// is drawn as a point and the upscaler's jitter never makes it flicker.
+// Each star is a spot of light whose whole is the light it gives, a little
+// over half a pixel of the screen each way, so that however sharp the
+// picture it is drawn as a point (see `spread` below).
 // The air between dims it, the more the lower it stands, blue light more
 // than red, as a low star is dimmer and yellower; and it twinkles, more
 // the more air its light comes through.
@@ -1195,9 +1197,20 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
     let square = min(vec2<u32>(max((place + 1.0) * 0.5 * squares, vec2<f32>(0.0))), vec2<u32>(STAR_FACE_SQUARES - 1u));
     let held = star_squares[(face * STAR_FACE_SQUARES + square.y) * STAR_FACE_SQUARES + square.x];
 
-    // A spot never wider than its square can hold, however coarse the
-    // picture: past that it would be cut off at the square's edge.
-    let spread = clamp(0.55 * pixel, 1e-5, STAR_REACH / 3.0);
+    // A spot as fine as the screen, not the smaller picture the upscaler
+    // starts from: the upscaler's jitter, frame after frame, finds where in
+    // a pixel each star is and keeps it a point at the screen's own size.
+    // (`view.eye.w` is minus one more than the log of how many times
+    // smaller the picture is drawn, when it is.) But never under 0.4 of a
+    // pixel of the picture drawn: finer, the jitter would catch a star whole
+    // in one frame and miss it in the next, and it would twinkle by itself.
+    // Nor wider than its square can hold, however coarse the picture: past
+    // that it would be cut off at the square's edge.
+    var screen_pixel = pixel;
+    if view.eye.w < 0.0 {
+        screen_pixel = pixel / exp2(max(-view.eye.w - 1.0, 0.0));
+    }
+    let spread = clamp(max(0.55 * screen_pixel, 0.4 * pixel), 1e-5, STAR_REACH / 3.0);
     let fall = 1.0 / (2.0 * spread * spread);
     let twinkles = twinkling(direction.y);
     var light = vec3<f32>(0.0);
@@ -1208,7 +1221,13 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32>
         let apart = dot(off, off);
         if apart * fall < 4.5 {
             let twinkle = 1.0 + twinkles * sin(view.clouds.y * (7.0 + 5.0 * star.w) + star.w * 40.0);
-            light += star_list[at + 1u].rgb * exp(-apart * fall) * twinkle;
+            // Only a bright star shows its colour to an eye: the faint
+            // ones are seen by rods, which see none (grey at magnitude 3,
+            // 1.6e-7 lux, and in full colour by 0.5, 1.6e-6).
+            let glow = star_list[at + 1u].rgb;
+            let lux = dot(glow, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let seen = mix(vec3<f32>(lux), glow, smoothstep(1.6e-7, 1.6e-6, lux));
+            light += seen * exp(-apart * fall) * twinkle;
         }
     }
     // The whole of a spot is its light: spread over its area.

@@ -189,6 +189,27 @@ fn stars_are_where_they_are_and_can_be_found_by_looking() {
 }
 
 #[test]
+fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
+    let host = game(
+        r#"
+        print(game.sky.light(), game.lighting.nightDarkness())
+        game.sky.setLatitude(45)
+        game.sky.setDate(2000, 3, 20)
+        game.sky.setHour(0)
+        print(game.sky.light() > 0.1 and game.sky.light() < 0.3)
+        game.sky.setDate(2000, 3, 6)
+        print(game.sky.light() < 0.003)
+        game.sky.setHour(12)
+        print(game.sky.light() > 30000)
+        game.lighting.setNightDarkness(20)
+        print(game.lighting.nightDarkness())
+        "#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["nil 6", "true", "true", "true", "12"]);
+}
+
+#[test]
 fn a_wrong_place_or_date_says_what_to_write() {
     for (script, said) in [
         ("game.sky.setLatitude(100)", "from -90"),

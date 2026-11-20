@@ -488,6 +488,17 @@ impl Renderer {
         self.eye.adaptation = adaptation.sound();
     }
 
+    /// Says how much the player wants nights lifted, from 0 (as dark as the
+    /// game makes them, [`EyeAdaptation::night`]) to 1 (half as dark). It changes only how dark the eye leaves a night, a dusk or a
+    /// dull day: a sunlit view is drawn as before.
+    pub fn set_night_brightness(&mut self, lift: f32) {
+        self.eye.night_brightness = if lift.is_finite() {
+            lift.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
     /// Sets where the scene is seen from, from the next frame on.
     ///
     /// Use this for a view that moves smoothly: walking, turning, falling.

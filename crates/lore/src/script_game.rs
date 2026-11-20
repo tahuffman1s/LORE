@@ -389,6 +389,7 @@ impl Game for ScriptGame {
                     opens: eye.opens,
                     closes: eye.closes,
                     seconds: eye.seconds,
+                    night: eye.night,
                 },
             );
             frame.set_ambient_occlusion(occlusion.strength, occlusion.radius);

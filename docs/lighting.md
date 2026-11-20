@@ -142,17 +142,21 @@ out. So the picture adapts as an eye does.
 - That, over the hour's `per_lux`, is the view's real brightness as EV100.
   A view is drawn as bright as the engine draws noon in the open while it
   is above EV100 10, and darker below that: six stops darker at EV100 −6
-  (moonlight), so a night stays a night. This is Unreal's exposure
-  compensation curve.
+  (moonlight), and a quarter more again by EV100 −10 (a night with no moon,
+  7.5 stops), so a night stays a night (#482). This is Unreal's exposure
+  compensation curve. A game sets the six with
+  `game.lighting.setNightDarkness`; the player's `night_brightness` setting
+  lifts it, to half at most, and never touches the day.
 - A shaded alley, an overcast day and dusk open up; a lamplit street
-  closes; a moonlit night is drawn as the sky draws it.
+  closes; a night is drawn as dark as its real light: a half moon gives a
+  tenth of a full one's, a moonless sky only its glowing air and stars.
 - Weather keeps its mood (#405): the eye does not open a dull sky all the
   way back to a clear day's. A grey sky is drawn 0.6 stops darker, steady
   rain 0.6 more, and a storm overhead 3 stops darker (an eighth as bright),
   as a photographer keeps a storm dark. Lightning, which is added light,
   is as bright as ever against it.
-- Opening takes about 1.5 s, closing a third as long, within ±8 stops by
-  default.
+- Opening takes about 1.5 s, closing a third as long; it opens up to 12
+  stops and closes up to 8 by default.
 - `game.lighting.setEyeAdaptation` and `setExposure` change it from Luau.
   The player's brightness setting is on top.
 - Pictures drawn with no window do not adapt unless told to, so tests see

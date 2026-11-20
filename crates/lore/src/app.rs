@@ -515,6 +515,7 @@ impl<G: Game> App<G> {
             renderer.set_upscaling(settings.upscaling);
             renderer.set_vsync(settings.vsync);
             renderer.set_exposure(settings.exposure_stops());
+            renderer.set_night_brightness(settings.night_lift());
             renderer.set_reflections(settings.reflections);
             renderer.set_light_shafts(settings.light_shafts);
             renderer.set_lamp_shadows(settings.lamp_shadows);
@@ -1030,6 +1031,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                         }
                         renderer.set_grid(self.editing);
                         renderer.set_exposure(settings.exposure_stops());
+                        renderer.set_night_brightness(settings.night_lift());
                         renderer.set_reflections(settings.reflections);
                         renderer.set_light_shafts(settings.light_shafts);
                         renderer.set_lamp_shadows(settings.lamp_shadows);

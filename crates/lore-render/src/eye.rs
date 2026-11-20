@@ -56,17 +56,26 @@ const USUAL_VIEW: f32 = -1.7;
 
 /// How much darker a dark view is drawn than a sunlit one: none down to
 /// `BRIGHT_EV` (EV100 10 is an overcast day or a bright room), and from
-/// there evenly more, to `NIGHT_DARKER` stops at `DARK_EV` (EV100 -6 is a
-/// moonlit night) and below.
+/// there evenly more, to the night's darkness ([`EyeAdaptation::night`],
+/// six stops unless a game says) at `DARK_EV` (EV100 -6 is a moonlit
+/// night), and on to a quarter as much again at `DARKEST_EV` (EV100 -10, a
+/// night with no moon, which an eye finds darker than a moonlit one) and
+/// below.
 const BRIGHT_EV: f32 = 10.0;
 const DARK_EV: f32 = -6.0;
-const NIGHT_DARKER: f32 = 6.0;
+const DARKEST_EV: f32 = -10.0;
 
 /// How many stops darker a view whose real light is `ev` (EV100) is drawn
-/// than a sunlit one.
-fn darker(ev: f32) -> f32 {
-    NIGHT_DARKER * ((BRIGHT_EV - ev) / (BRIGHT_EV - DARK_EV)).clamp(0.0, 1.0)
+/// than a sunlit one, with a moonlit night `night` stops darker.
+fn darker(ev: f32, night: f32) -> f32 {
+    let to_moonlit = ((BRIGHT_EV - ev) / (BRIGHT_EV - DARK_EV)).clamp(0.0, 1.0);
+    let to_moonless = ((DARK_EV - ev) / (DARK_EV - DARKEST_EV)).clamp(0.0, 1.0);
+    night * (to_moonlit + 0.25 * to_moonless)
 }
+
+/// How much of the night's darkness the player's night brightness leaves
+/// at its brightest: half.
+const LIFTED_NIGHT: f32 = 0.5;
 
 /// How many stops darker than a clear day the eye leaves a view under a
 /// grey sky, in steady rain, and under a storm at its darkest.
@@ -113,6 +122,11 @@ pub struct EyeAdaptation {
     /// About how many seconds the eye takes to get used to the dark; it
     /// gets used to bright light three times as fast. 0 is at once.
     pub seconds: f32,
+    /// How many stops darker than day a moonlit night is drawn once the
+    /// eye is used to it, from 0 (as bright as day) to 12: 6 unless a game
+    /// says. A night with no moon is a quarter as much again darker; dusk
+    /// and a dull day between. Only an eye that adapts draws it.
+    pub night: f32,
 }
 
 impl EyeAdaptation {
@@ -121,7 +135,11 @@ impl EyeAdaptation {
         opens: 0.0,
         closes: 0.0,
         seconds: 0.0,
+        night: 6.0,
     };
+
+    /// How dark a moonlit night is drawn unless a game says.
+    pub const USUAL_NIGHT: f32 = 6.0;
 
     /// The same, brought into range.
     #[must_use]
@@ -137,6 +155,7 @@ impl EyeAdaptation {
             opens: within(self.opens, 16.0),
             closes: within(self.closes, 16.0),
             seconds: within(self.seconds, 600.0),
+            night: within(self.night, 12.0),
         }
     }
 
@@ -148,15 +167,17 @@ impl EyeAdaptation {
 }
 
 impl Default for EyeAdaptation {
-    /// Eight stops either way: how dark each view is drawn is then the
-    /// eye's own doing (sunlit views as noon, darker views darker, a
-    /// moonlit night six stops darker), and the limits only stop the
-    /// extremes. A second and a half to get used to the dark.
+    /// Twelve stops open and eight closed: how dark each view is drawn is
+    /// then the eye's own doing (sunlit views as noon, darker views darker,
+    /// a moonlit night six stops darker and one with no moon 7.5), and
+    /// the limits only stop the extremes. A second and a half to get used
+    /// to the dark.
     fn default() -> Self {
         Self {
-            opens: 8.0,
+            opens: 12.0,
             closes: 8.0,
             seconds: 1.5,
+            night: Self::USUAL_NIGHT,
         }
     }
 }
@@ -165,6 +186,9 @@ impl Default for EyeAdaptation {
 /// seen.
 pub(crate) struct Eye {
     pub(crate) adaptation: EyeAdaptation,
+    /// How much the player has asked nights to be lifted, from 0 (as the
+    /// game made them) to 1 (half as dark).
+    pub(crate) night_brightness: f32,
     /// How many stops brighter (or, below 0, darker) the picture is drawn
     /// than the sky alone would have it.
     stops: f32,
@@ -179,6 +203,7 @@ impl Eye {
     pub(crate) fn new(adaptation: EyeAdaptation) -> Self {
         Self {
             adaptation: adaptation.sound(),
+            night_brightness: 0.0,
             stops: 0.0,
             cells: vec![0.0; CELLS],
             order: Vec::with_capacity(CELLS),
@@ -233,7 +258,8 @@ impl Eye {
         } else {
             0.0
         };
-        let wanted = USUAL_VIEW - darker(ev) - weather - seen;
+        let lift = 1.0 - (1.0 - LIFTED_NIGHT) * self.night_brightness.clamp(0.0, 1.0);
+        let wanted = USUAL_VIEW - darker(ev, self.adaptation.night * lift) - weather - seen;
         let wanted = wanted.clamp(-self.adaptation.closes, self.adaptation.opens);
         if flash && wanted < self.stops {
             return;
@@ -762,10 +788,38 @@ mod tests {
             true,
             (0.0, false),
         );
-        assert!((eye.multiplier() - 8.0_f32.exp2()).abs() < 1e-1);
+        let most = EyeAdaptation::default().opens;
+        assert!(
+            (eye.multiplier() / most.exp2() - 1.0).abs() < 1e-3,
+            "{}",
+            eye.multiplier()
+        );
         // Far brighter: no more than it may close.
         eye.see(&even(USUAL_VIEW + 12.0), NOON, 1.0, true, (0.0, false));
         assert!((eye.multiplier() - (-8.0_f32).exp2()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_night_with_no_moon_is_darker_and_a_player_can_lift_it() {
+        // Moonlight: six stops; no moon: a quarter as much again; a bright
+        // room: none.
+        assert!((darker(-6.0, 6.0) - 6.0).abs() < 1e-5);
+        assert!((darker(-10.0, 6.0) - 7.5).abs() < 1e-5);
+        assert!((darker(-20.0, 6.0) - 7.5).abs() < 1e-5);
+        assert_eq!(darker(10.0, 6.0), 0.0);
+        // The player's night brightness halves it at most, and leaves a
+        // sunlit view as it was.
+        let mut lifted = Eye::new(EyeAdaptation::default());
+        lifted.night_brightness = 1.0;
+        let mut usual = Eye::new(EyeAdaptation::default());
+        let moonlit = (0.002_f32 * 2.4).log2();
+        usual.see(&even(moonlit), 2.4, 1.0, true, (0.0, false));
+        lifted.see(&even(moonlit), 2.4, 1.0, true, (0.0, false));
+        let lift = (lifted.multiplier() / usual.multiplier()).log2();
+        assert!((2.5..=3.5).contains(&lift), "{lift}");
+        usual.see(&even(USUAL_VIEW), NOON, 1.0, true, (0.0, false));
+        lifted.see(&even(USUAL_VIEW), NOON, 1.0, true, (0.0, false));
+        assert_eq!(usual.multiplier(), lifted.multiplier());
     }
 
     #[test]

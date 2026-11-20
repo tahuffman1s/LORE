@@ -1007,10 +1007,11 @@ declare game: {
 
         --- Says how the eye adapts. The eye draws a sunlit view as bright
         --- as noon, and a darker view darker, down to six stops darker for
-        --- a moonlit one, so that a night stays a night: a street in
+        --- a moonlit one (setNightDarkness changes that), so that a night
+        --- stays a night: a street in
         --- shade or a dusk opens up, a street under lamps closes down.
         --- `opens` is the most stops brighter a view may be drawn than the
-        --- sky alone would draw it (8 as made), `closes` the most stops
+        --- sky alone would draw it (12 as made), `closes` the most stops
         --- darker (8), and `seconds` about how long the eye takes to get
         --- used to the dark (1.5; more is slower), bright light taking a
         --- third as long. Each from 0. `opens = 1` keeps a cave dark for a
@@ -1023,6 +1024,22 @@ declare game: {
         --- How the eye adapts, as `setEyeAdaptation` takes it.
         --- Example: print(game.lighting.eyeAdaptation().opens)
         eyeAdaptation: () -> { opens: number, closes: number, seconds: number },
+
+        --- Says how dark night looks once the eye is used to it: how many
+        --- stops darker than day a moonlit night is drawn, from 0 (as bright
+        --- as day) to 12. 6 is the engine's own. Each stop is half as bright,
+        --- so 6 stops is 64 times darker than day. A night with no moon is
+        --- darker still: 7.5 stops at the usual 6 (a quarter more, whatever
+        --- the number), and dusk and a dull day are between. The
+        --- light itself stays real (a full moon 0.3 lux, the stars 0.002):
+        --- this is how the eye sees it. The player's "night_brightness"
+        --- setting can lift it.
+        --- Example: game.lighting.setNightDarkness(8)
+        setNightDarkness: (stops: number) -> (),
+
+        --- How dark night looks, as setNightDarkness takes it.
+        --- Example: local stops = game.lighting.nightDarkness()
+        nightDarkness: () -> number,
 
         --- The soft shade in corners, under things and where something
         --- stands on the ground (ambient occlusion). `strength` is how dark
@@ -1496,6 +1513,16 @@ declare game: {
         --- one ("Polaris", "North Star") is listed by the first.
         --- Example: for _, name in game.sky.starNames() do print(name) end
         starNames: () -> {string},
+
+        --- How much light falls on open level ground now under a clear sky,
+        --- in lux: the sun's and the sky's, the moon's and the stars'.
+        --- About 100000 at noon, 3 at the end of dusk, 0.3 under a full moon
+        --- high in the sky, 0.03 under a half moon and 0.002 with no moon.
+        --- Shade, cloud and lamps are not counted, so a storm gives the same
+        --- number as a clear sky. Nil if no hour has been said, as
+        --- game.sky.sunHeight is.
+        --- Example: local dark = (game.sky.light() or math.huge) < 0.05
+        light: () -> number?,
     },
 
     --- The weather: say it in one word with game.weather.set, or a number
@@ -1918,6 +1945,8 @@ declare game: {
     --- 0.1 to 3), "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"
     --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
+    --- "night_brightness" (from 0, as dark as the game says, to 100, half
+    --- as dark; days are unchanged),
     --- "upscaling" ("off", "native", "quality", "balanced", "performance"
     --- or "ultra-performance"), "vsync" (true or false),
     --- "frame_rate_limit" (30 to 1000, or 0 for no limit), "reflections",

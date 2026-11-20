@@ -324,6 +324,103 @@ impl Heavens {
     }
 }
 
+/// The light the sun and the sky give level ground under a clear sky, in
+/// lux, by how high the sun is in degrees: the end of astronomical,
+/// nautical and civil twilight (0.000 7, 0.008 and about 3.2 lux: AMS
+/// glossary, "Civil twilight"; MacInnis et al. as cited on Wikimedia's
+/// twilight charts), a clear sunset (400 lux, Wikipedia, "Lux"), and a
+/// guess five degrees up, joining [`daylight_lux`] at ten.
+pub const TWILIGHT: [(f32, f32); 6] = [
+    (-18.0, 0.000_7),
+    (-12.0, 0.008),
+    (-6.0, 3.2),
+    (-0.8, 400.0),
+    (5.0, 5_000.0),
+    (10.0, 16_000.0),
+];
+
+/// The light of a clear day on level ground with the sun `degrees` high,
+/// ten or more: about 120 000 lux times the sine of its height to the
+/// power 1.15, which is 54 000 at 30 degrees and 102 000 at 60, as light
+/// meters under a clear sky read (Filament measured 130 000 with the sun
+/// high in March).
+#[must_use]
+pub fn daylight_lux(degrees: f32) -> f32 {
+    120_000.0 * degrees.clamp(0.0, 90.0).to_radians().sin().powf(1.15)
+}
+
+/// The light of the stars and the night air on level ground, in lux.
+pub const STARLIGHT_LUX: f32 = 0.002;
+
+/// The light a full moon high in a clear sky gives a surface facing it, in
+/// lux: 0.1 to 0.3 is usual.
+pub const FULL_MOON_LUX: f32 = 0.3;
+
+/// The light of the sun and the sky on level ground under a clear sky with
+/// the sun `degrees` high: as [`TWILIGHT`] says, in between by the
+/// logarithm, and [`daylight_lux`] from ten degrees up.
+#[must_use]
+pub fn twilight_lux(degrees: f32) -> f32 {
+    if !degrees.is_finite() || degrees < TWILIGHT[0].0 {
+        return 0.0;
+    }
+    if degrees >= TWILIGHT[TWILIGHT.len() - 1].0 {
+        return daylight_lux(degrees);
+    }
+    let at = TWILIGHT
+        .windows(2)
+        .find(|pair| degrees <= pair[1].0)
+        .unwrap_or(&TWILIGHT[TWILIGHT.len() - 2..]);
+    let (low, high) = (at[0], at[1]);
+    let share = ((degrees - low.0) / (high.0 - low.0)).clamp(0.0, 1.0);
+    (low.1.ln() + (high.1.ln() - low.1.ln()) * share).exp()
+}
+
+/// How much more air than straight up light comes through from something
+/// whose height has the sine `rise` (Kasten and Young, 1989).
+fn air_mass(rise: f32) -> f32 {
+    let rise = rise.clamp(0.0, 1.0);
+    1.0 / (rise + 0.505_72 * (rise.asin().to_degrees() + 6.079_95).powf(-1.636_4))
+}
+
+impl Heavens {
+    /// How bright the moon is for its phase, as a share of a full moon's
+    /// light: a half moon gives about a tenth, not half, as the shadows of
+    /// its hills fall across it away from full (the lunar phase law of
+    /// Allen's Astrophysical Quantities, magnitude 0.026 a degree of phase
+    /// angle and 4e-9 times its fourth power).
+    #[must_use]
+    pub fn moon_share(&self) -> f32 {
+        let between: f32 = (0..3).map(|axis| self.sun[axis] * self.moon[axis]).sum();
+        // The angle at the moon between the sun and the Earth.
+        let phase = 180.0 - between.clamp(-1.0, 1.0).acos().to_degrees();
+        10f32.powf(-0.4 * (0.026 * phase + 4e-9 * phase.powi(4)))
+    }
+
+    /// The light the moon gives a surface facing it, in lux, after the air
+    /// it comes through; none while it is down.
+    #[must_use]
+    pub fn moonlight_lux(&self) -> f32 {
+        let rise = self.moon[1];
+        if rise <= 0.0 {
+            return 0.0;
+        }
+        // About 0.2 magnitudes for each air mass, against overhead.
+        let through_air = 10f32.powf(-0.08 * (air_mass(rise) - 1.0));
+        FULL_MOON_LUX * self.moon_share() * through_air
+    }
+
+    /// The light on open level ground under a clear sky, in lux: the sun's
+    /// and the sky's, the moon's, and the stars'. About 100 000 at noon,
+    /// 3 at the end of dusk, 0.3 under a full moon and 0.002 on a night
+    /// with no moon.
+    #[must_use]
+    pub fn ground_lux(&self) -> f32 {
+        let sun = self.sun[1].clamp(-1.0, 1.0).asin().to_degrees();
+        twilight_lux(sun) + self.moonlight_lux() * self.moon[1].max(0.0) + STARLIGHT_LUX
+    }
+}
+
 /// The cross product of two vectors.
 fn cross(one: [f32; 3], other: [f32; 3]) -> [f32; 3] {
     [
@@ -567,6 +664,52 @@ mod tests {
             (0..3).all(|axis| (back[axis] - sirius[axis]).abs() < 1e-4),
             "{back:?} {sirius:?}"
         );
+    }
+
+    #[test]
+    fn the_light_on_the_ground_is_what_a_meter_reads() {
+        let place = SkyPlace {
+            latitude: 45.0,
+            north: NORTH,
+            first_day: days_from_2000(2000, 3, 20),
+        };
+        // Midnight under the full moon of 20 March 2000, 45 degrees up.
+        let full = place.heavens(0.0);
+        // A full moon is a few degrees off the line through the sun, so a
+        // little short of its fullest.
+        assert!(full.moon_share() > 0.85, "{}", full.moon_share());
+        assert!(
+            (0.1..0.3).contains(&full.ground_lux()),
+            "{}",
+            full.ground_lux()
+        );
+        // A half moon gives about a tenth of a full one.
+        let half = SkyPlace {
+            first_day: days_from_2000(2000, 3, 13),
+            ..place
+        }
+        .heavens(18.0);
+        assert!(
+            (0.05..0.16).contains(&half.moon_share()),
+            "{}",
+            half.moon_share()
+        );
+        // No moon: the stars and the night air alone.
+        let dark = SkyPlace {
+            first_day: days_from_2000(2000, 3, 6),
+            ..place
+        }
+        .heavens(0.0);
+        assert!(
+            (dark.ground_lux() - STARLIGHT_LUX).abs() < 0.001,
+            "{}",
+            dark.ground_lux()
+        );
+        // Noon, and the end of dusk.
+        assert!(place.heavens(12.0).ground_lux() > 30_000.0);
+        assert!((twilight_lux(-6.0) - 3.2).abs() < 1e-3);
+        assert_eq!(twilight_lux(-30.0), 0.0);
+        assert_eq!(twilight_lux(f32::NAN), 0.0);
     }
 
     #[test]

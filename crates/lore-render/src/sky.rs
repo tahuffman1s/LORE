@@ -324,12 +324,16 @@ impl Day {
             meridian,
             ..
         } = heavens;
+        let heavens = &heavens;
         let usual = Lighting::default();
         let noon = usual.towards_sun;
         // How much of the moon's face the sun lights, as seen from here.
         let between: f32 = (0..3).map(|axis| sun[axis] * moon[axis]).sum();
         let lit = (1.0 - between) * 0.5;
         let moon_up = eased(-0.03, 0.1, moon[1]);
+        // How much of a full moon's light this moon gives, after the air:
+        // a half moon about a tenth.
+        let moon_bright = heavens.moonlight_lux() / lore_sky::FULL_MOON_LUX;
 
         let grey = |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
         // The sun is dimmed and reddened by the air its light comes
@@ -345,9 +349,12 @@ impl Day {
         let sunlight = [0, 1, 2]
             .map(|colour| usual.sun[colour] * (-stopped[colour] * more).exp().min(1.0) * up);
         // Moonlight is the sun's, a great deal fainter, and looks blue to
-        // an eye in the dark. It is far brighter here than it is, as a
-        // night on film is: the picture has one exposure, and the true
-        // figure, a four-hundred-thousandth, would show nothing.
+        // an eye in the dark. It is drawn far brighter than it is, and a
+        // lux of any light at night with it ([`per_lux`](crate::lamps::per_lux)): the picture's
+        // numbers could not hold the true figure, a four-hundred-
+        // thousandth. How dark the night looks is the eye's to say
+        // ([`crate::eye`]). Between full moon and half it falls to a tenth,
+        // as the real one does.
         //
         // There is one light on the land, so the moon takes over from the
         // sun only where the sun gives none: its light comes up after the
@@ -356,7 +363,7 @@ impl Day {
         // either still shone, every shadow would swing round at once.
         let after_sun = 1.0 - eased(-SUN_GONE - 0.065, -SUN_GONE, sun[1]);
         let moonlight = [0.6, 0.75, 1.0]
-            .map(|part: f32| part * grey(usual.sun) * 0.25 * lit * moon_up * after_sun);
+            .map(|part: f32| part * grey(usual.sun) * 0.25 * moon_bright * moon_up * after_sun);
         let by_sun = sun[1] > -SUN_GONE;
         let (towards, light) = if by_sun {
             (sun, sunlight)
@@ -375,7 +382,7 @@ impl Day {
         let night = 1.0 - eased(-0.2, -0.02, sun[1]);
         // A night with no moon is black but for the stars; the moon is
         // what lights one, by how much of its face is lit.
-        let dark = grey(usual.sky) * (0.12 + 0.9 * lit * moon_up);
+        let dark = grey(usual.sky) * (0.12 + 0.9 * moon_bright * moon_up);
         let from_day = usual.sky.map(|part| part * day);
         let lighting = Lighting {
             towards_sun: towards,
@@ -416,7 +423,21 @@ impl Day {
             sky: from_day,
             ..lighting
         });
-        let per_lux = crate::lamps::per_lux(&lighting, sun[1], moon[1], lit, moon_up);
+        let per_lux = crate::lamps::per_lux(&lighting, heavens, moon_up);
+        // The night sky's own light, as bright as it really is: the glow of
+        // the air high up and of the dust between the planets, about 0.04
+        // of a lux on level ground less what the stars drawn one by one
+        // give (some 6e-4 candela a square metre, 21.5 magnitudes a square
+        // arcsecond), greenish grey; and the moon's light that the air
+        // scatters, about 3 % of it, blue. Drawn as bright as a lux is
+        // drawn at this hour.
+        let glow_lux = 0.6 * lore_sky::STARLIGHT_LUX;
+        let scattered_lux = 0.03 * heavens.moonlight_lux() * moon_up;
+        let night_glow = [0, 1, 2].map(|colour| {
+            ([0.85, 1.0, 0.9][colour] * glow_lux + [0.6, 0.75, 1.15][colour] * scattered_lux)
+                / std::f32::consts::PI
+                * per_lux
+        });
         Self {
             lighting,
             sky,
@@ -427,10 +448,10 @@ impl Day {
                 [pole[0], pole[1], pole[2], 0.0],
                 [usual.sun[0], usual.sun[1], usual.sun[2], 1.0],
                 [
-                    0.45 * dark * 0.012 * night,
-                    0.6 * dark * 0.012 * night,
-                    dark * 0.012 * night,
-                    // A bright moon drowns the faint stars.
+                    night_glow[0],
+                    night_glow[1],
+                    night_glow[2],
+                    // How bright the moon's face is drawn (#481 makes it real).
                     grey(usual.sky) * 1.6 * (1.0 - 0.45 * lit * moon_up),
                 ],
                 [meridian[0], meridian[1], meridian[2], per_lux],
