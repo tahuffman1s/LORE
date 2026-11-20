@@ -132,8 +132,13 @@ struct View {
     // overhead; what colour the Milky Way is tinted, and how many times
     // its real brightness it is drawn; and for each planet from row 10
     // (`PLANET_ROWS` in `sky.rs`), towards it, then its light in lux above
-    // the air, in its own colour.
-    heavens: array<vec4<f32>, 24>,
+    // the air, in its own colour; and from row 24 the eclipses
+    // (`ECLIPSE_ROWS` in `sky.rs`): towards the middle of the Earth's
+    // shadow and how far its full shadow reaches; how far its half shadow
+    // reaches, how much of the sun the moon covers, how much of its
+    // sunlight the moon gets, and how wide the sun is; how wide the moon
+    // really is, and how much of the corona shows.
+    heavens: array<vec4<f32>, 27>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1145,6 +1150,34 @@ const MOON_NEAR_MEAN: f32 = 0.224;
 // day the real face is fainter than this, and is drawn as it is.
 const MOON_SEEN: f32 = 0.6;
 
+// How much of its sunlight a point of the moon `at` (a direction in the
+// level) gets, in red, green and blue, as an eye looking at the moon sees
+// it: outside the Earth's shadow all of it; in its half shadow less, as the
+// Earth hides more of the sun; in its full shadow only the sunlight bent
+// into it through the Earth's air, a few ten-thousandths and red, bluer at
+// the shadow's edge where it comes through the ozone. As `Heavens::shadowed`
+// works it out, but seen through an eye that has got used to the dimmed
+// moon: its light to the power 0.4, so a moon in totality is a dim copper
+// disc, not gone.
+fn moon_in_shadow(at: vec3<f32>) -> vec3<f32> {
+    let umbra = view.heavens[24].w;
+    if umbra <= 0.0 {
+        return vec3<f32>(1.0);
+    }
+    let penumbra = view.heavens[25].x;
+    let apart = acos(clamp(dot(at, view.heavens[24].xyz), -1.0, 1.0));
+    if apart >= penumbra {
+        return vec3<f32>(1.0);
+    }
+    if apart >= umbra {
+        return vec3<f32>(pow(max((apart - umbra) / (penumbra - umbra), 2e-4), 0.4));
+    }
+    let deep = 2e-4 * (0.4 + 0.6 * apart / umbra);
+    let edge = smoothstep(0.85, 1.0, apart / umbra);
+    let colour = mix(vec3<f32>(2.13, 0.73, 0.33), vec3<f32>(0.75, 1.0, 1.35), edge * 0.6);
+    return colour * pow(deep, 0.4);
+}
+
 // The light the moon gives a surface facing it, in lux, from how bright
 // its lit part is (`surface`) and how much of it is lit (`full`): near
 // enough to `Heavens::moonlight_lux` for the glow round it.
@@ -1190,9 +1223,12 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     // Only while the moon is up: set, it lights no air over this place.
     let moon_risen = smoothstep(-0.03, 0.02, towards.y);
     let tint = view.heavens[6].rgb;
+    // In the Earth's shadow the moon gives the air less light to scatter.
+    let unshadowed = select(1.0, view.heavens[25].z, view.heavens[24].w > 0.0);
     seen += vec3<f32>(0.85, 0.9, 1.0) * tint * lore_moon_lux(surface, full) * 0.03 * lobe * per_lux
-        * up * moon_risen;
-    let radius = MOON_RADIUS * max(view.heavens[2].w, 1.0);
+        * up * moon_risen * unshadowed;
+    let real_radius = select(MOON_RADIUS, view.heavens[26].x, view.heavens[26].x > 0.0);
+    let radius = real_radius * max(view.heavens[2].w, 1.0);
     // The sky's north and west across the moon's face: the moon's north
     // is its north, and its east (where Mare Crisium is) is the sky's west.
     let sky_pole = view.heavens[2].xyz;
@@ -1265,7 +1301,11 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         // tint is as bright as white, so a deep one has a part far over 1,
         // which would burn the face white.
         let face_tint = tint / max(max(tint.r, tint.g), max(tint.b, 1e-3));
-        seen += albedo / MOON_NEAR_MEAN * face_tint * (lit + earthshine) * face * dimmed * rim * up;
+        // In the Earth's shadow: dimmed, then dark copper red in the full
+        // shadow (`moon_in_shadow`), at the place on the real moon this is.
+        let at_real = normalize(towards + (direction - towards) / max(view.heavens[2].w, 1.0));
+        let shadowed = moon_in_shadow(at_real);
+        seen += albedo / MOON_NEAR_MEAN * face_tint * (lit * shadowed + earthshine) * face * dimmed * rim * up;
         behind = 1.0 - rim;
     }
     if night <= 0.01 {
@@ -2735,6 +2775,15 @@ fn fragment_sky(beyond: Beyond) -> Pixel {
     return pixel;
 }
 
+// How much of the sun's red, green and blue light comes through the air
+// to a line of sight `rise` high (the sine of its height), against noon's
+// (Kasten and Young's count of the air).
+fn sun_through_air(rise: f32) -> vec3<f32> {
+    let r = clamp(rise, 0.0, 1.0);
+    let air = 1.0 / (r + 0.50572 * pow(degrees(asin(r)) + 6.07995, -1.6364));
+    return exp(-vec3<f32>(0.066, 0.139, 0.285) * (air - 1.0));
+}
+
 // The light that comes along `direction` (length one) out of the sky: the
 // clear sky, its clouds, and the fog and rain in front of them. With
 // `whole`, everything drawn behind the picture: the stars and the moon,
@@ -2771,13 +2820,38 @@ fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<
     // come through, which is many times as much when it stands low (Kasten
     // and Young's count of it).
     var disc = vec3<f32>(0.0);
+    let sun_radius = select(0.00465, view.heavens[25].w, view.heavens[25].w > 0.0);
     let beside = cross(direction, view.heavens[0].xyz);
-    let out = dot(beside, beside) / (0.00465 * 0.00465);
-    if whole && dot(direction, view.heavens[0].xyz) > 0.0 && out < 1.0 {
-        let rise = clamp(direction.y, 0.0, 1.0);
-        let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
+    let out = dot(beside, beside) / (sun_radius * sun_radius);
+    let sunward = dot(direction, view.heavens[0].xyz) > 0.0;
+    if whole && sunward && out < 1.0 {
         disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
-            * exp(-vec3<f32>(0.066, 0.139, 0.285) * (air - 1.0));
+            * sun_through_air(direction.y);
+    }
+    // In an eclipse the moon's dark disc hides the sun's, at the size the
+    // moon is drawn; and when it hides it all, the sun's corona shows round
+    // it, pearly white and streaked, about a millionth as bright as its
+    // face.
+    if whole && sunward && view.heavens[25].y > 0.0 {
+        let moon_radius = view.heavens[26].x * max(view.heavens[2].w, 1.0);
+        let off_moon = cross(direction, view.heavens[1].xyz);
+        let from_moon = sqrt(dot(off_moon, off_moon));
+        let past_moon = smoothstep(moon_radius - speck, moon_radius + speck, from_moon);
+        disc *= past_moon;
+        let corona = view.heavens[26].y;
+        let away = sqrt(out);
+        if corona > 0.0 && away < 8.0 {
+            // Streamers along the sun's equator and plumes at its poles,
+            // turned to the sky's north.
+            let north = normalize(view.heavens[2].xyz - view.heavens[0].xyz * dot(view.heavens[2].xyz, view.heavens[0].xyz) + vec3<f32>(0.0, 1e-5, 0.0));
+            let across = dot(normalize(beside + vec3<f32>(1e-7)), north);
+            let streaked = 0.55 + 0.45 * across * across * across * across
+                + 0.15 * sin(atan2(across, dot(normalize(beside + vec3<f32>(1e-7)), cross(north, view.heavens[0].xyz))) * 7.0);
+            // Its inner part falls off steeply from the sun's edge.
+            let falls = pow(max(away, 1.0), -6.0);
+            disc += vec3<f32>(1.0, 0.97, 0.92) * sun_through_air(direction.y) * 1.5e-6 * corona
+                * falls * streaked * past_moon;
+        }
     }
 
     // The clouds: the line of sight is walked through the layer they form

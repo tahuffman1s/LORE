@@ -296,7 +296,14 @@ pub(crate) struct Day {
 /// How many rows of four numbers the shader's `heavens` has: ten for the
 /// sun, the moon, the stars and the night's glow, then two for each planet
 /// ([`PLANET_ROWS`]).
-pub(crate) const HEAVENS_ROWS: usize = PLANET_ROWS + 2 * 7;
+pub(crate) const HEAVENS_ROWS: usize = ECLIPSE_ROWS + 3;
+
+/// Where in `heavens` the eclipses are: towards the middle of the Earth's
+/// shadow, and how far its full shadow reaches; how far its half shadow
+/// reaches, how much of the sun the moon covers, how much of its sunlight
+/// the moon gets, and how wide the sun is; how wide the moon is, and how
+/// much of the corona shows.
+pub(crate) const ECLIPSE_ROWS: usize = PLANET_ROWS + 2 * 7;
 
 /// Where in `heavens` the planets start: for each, towards it in the level,
 /// then its light above the air in lux, in its own colour.
@@ -421,6 +428,10 @@ impl Day {
         // sun's has gone, two degrees down, over the next four degrees,
         // and at dawn goes before the sun's comes. Handed over while
         // either still shone, every shadow would swing round at once.
+        // The moon hides the sun's light, and the sky's that it lights,
+        // all but the sky beyond its shadow (`daylight_left`).
+        let sunlight = sunlight.map(|part| part * heavens.sun_uncovered());
+        let uncovered = heavens.daylight_left();
         let after_sun = 1.0 - eased(-SUN_GONE - 0.065, -SUN_GONE, sun[1]);
         let moonlight = [0, 1, 2]
             .map(|colour| [0.6, 0.75, 1.0][colour] * tint[colour])
@@ -439,8 +450,10 @@ impl Day {
         };
         // The sky's own light fades through dusk, and is gone when the sun
         // is twelve degrees down; the night has a little of its own.
-        let day = eased(-0.21, 0.3, sun[1]).powf(1.5);
-        let night = 1.0 - eased(-0.2, -0.02, sun[1]);
+        let day = eased(-0.21, 0.3, sun[1]).powf(1.5) * uncovered;
+        // In a total eclipse the stars come out.
+        let covered = heavens.sun_covered();
+        let night = (1.0 - eased(-0.2, -0.02, sun[1])).max(eased(0.995, 0.999_99, covered));
         // A night with no moon is black but for the stars; the moon is
         // what lights one, by how much of its face is lit.
         let dark = grey(usual.sky) * (0.12 + 0.9 * moon_bright * moon_up);
@@ -496,7 +509,17 @@ impl Day {
                 * per_lux
         });
         let airglow = AIRGLOW.map(|part| part * AIRGLOW_CANDELA * per_lux);
+        let (umbra, penumbra) = heavens.shadow_radii();
+        let shadow = heavens.shadow;
         let mut rows = [[0.0; 4]; HEAVENS_ROWS];
+        rows[ECLIPSE_ROWS] = [shadow[0], shadow[1], shadow[2], umbra];
+        rows[ECLIPSE_ROWS + 1] = [
+            penumbra,
+            covered,
+            heavens.moon_unshadowed(),
+            heavens.sun_radius(),
+        ];
+        rows[ECLIPSE_ROWS + 2] = [heavens.moon_radius(), eased(0.99, 1.0, covered), 0.0, 0.0];
         for (index, ((towards, magnitude), colour)) in heavens
             .planets()
             .iter()
