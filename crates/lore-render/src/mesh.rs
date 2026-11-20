@@ -323,7 +323,7 @@ impl Default for Lighting {
 
 impl Lighting {
     /// Up 50 degrees, to the right and towards the default camera. Length one.
-    const TOWARDS_SUN: [f32; 3] = [0.399_44, 0.768_92, 0.499_3];
+    const TOWARDS_SUN: [f32; 3] = lore_sky::USUAL_TOWARDS_SUN;
     const GROUND: [f32; 3] = [0.20, 0.19, 0.17];
 
     /// The light `scene` asks for: its first sun, with the usual sky and

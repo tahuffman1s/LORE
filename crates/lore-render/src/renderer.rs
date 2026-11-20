@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use ash::vk;
 use lore_assets::Scene;
+use lore_sky::SkyPlace;
 use lore_ui::DrawList;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -576,6 +577,17 @@ impl Renderer {
     /// starts, the level's own light is the light and it is always day.
     pub fn set_hour(&mut self, hour: Option<f64>) {
         self.effects.set_hour(hour);
+    }
+
+    /// Says where on the Earth the world lies, which way north is in the
+    /// level and on what day the clock's hour 0 was midnight: the sun, the
+    /// moon and the stars then stand where they really would there, the
+    /// hour being the sun's own time (at 12 the sun is due south, or due
+    /// north south of the tropics). With `None`, which is how a level
+    /// starts, the sky is a made-up one whose sun rises at six and sets at
+    /// six.
+    pub fn set_sky_place(&mut self, place: Option<SkyPlace>) {
+        self.effects.set_sky_place(place);
     }
 
     /// Says whether storms send their own bolts to the ground, as they do

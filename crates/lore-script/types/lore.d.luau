@@ -1387,6 +1387,84 @@ declare game: {
         --- How many minutes a day lasts, or 0 if the hours do not pass.
         --- Example: if game.sky.dayLength() == 0 then game.sky.setDayLength(30) end
         dayLength: () -> number,
+
+        --- Says how far north of the equator the world lies, in degrees:
+        --- 0 at the equator, 61 for the far north, negative for the south.
+        --- From then on the sky is the real one there: long summer days
+        --- and short winter ones, the sun low in the north's winter, the
+        --- pole star as high as the latitude. The hour is the sun's own
+        --- time there: at 12 the sun stands due south (due north, south of
+        --- the tropics). Saying any one of the latitude, north or the date
+        --- is enough to have the real sky; what is not said is 45 degrees
+        --- north, north at the level's -z and 20 March 2000 (an equinox,
+        --- with a full moon), and latitude(), north() and date() give those.
+        --- Until then the sky is a made-up one whose sun rises at 6 and sets
+        --- at 18. The place and the date are kept when the script is read
+        --- again.
+        --- Example: game.sky.setLatitude(61)
+        setLatitude: (degrees: number) -> (),
+
+        --- The latitude the sky is worked out for, or nil if the sky is the
+        --- made-up one.
+        --- Example: local cold = (game.sky.latitude() or 0) > 55
+        latitude: () -> number?,
+
+        --- Says which way north is in the level, as a compass bearing in
+        --- degrees: 0 when north is the level's -z (Blender's +y), 90 when
+        --- it is +x, turning clockwise seen from above. Turns the whole sky
+        --- with it: the sun rises in the east, which is the level's +x when
+        --- north is 0 and +z when north is 90.
+        --- Example: game.sky.setNorth(90)
+        setNorth: (degrees: number) -> (),
+
+        --- Which way north is in the level, or nil if the sky is the
+        --- made-up one.
+        --- Example: local north = game.sky.north()
+        north: () -> number?,
+
+        --- Says what day it is: the year, the month (1 to 12) and the day.
+        --- The moon has the phase it had that night, the sun the height of
+        --- that season, and the date moves on at each midnight as the hours
+        --- pass. An hour said past 24 is kept as that hour of this day.
+        --- Example: game.sky.setDate(2026, 3, 20)
+        setDate: (year: number, month: number, day: number) -> (),
+
+        --- The day it is now, as the year, the month and the day, or nil
+        --- if the sky is the made-up one.
+        --- Example: local year, month, day = game.sky.date()
+        date: () -> (number?, number?, number?),
+
+        --- The way towards the sun, as a vector one long (y is up), or nil
+        --- if no hour has been said: call game.sky.setHour (or
+        --- setDayLength) first.
+        --- Example: local sun = game.sky.sunDirection()
+        sunDirection: () -> vector?,
+
+        --- How high the sun stands, in degrees: 90 overhead, 0 on the
+        --- horizon, below 0 under it. Dusk ends and the stars come out
+        --- when it is 6 degrees under. Nil if no hour has been said.
+        --- Example: local dark = (game.sky.sunHeight() or 90) < -6
+        sunHeight: () -> number?,
+
+        --- The way towards the moon, or nil if no hour has been said.
+        --- Example: local moon = game.sky.moonDirection()
+        moonDirection: () -> vector?,
+
+        --- How high the moon stands, in degrees, or nil if no hour has been said.
+        --- Example: local moonUp = (game.sky.moonHeight() or -90) > 0
+        moonHeight: () -> number?,
+
+        --- The moon's phase in words: "new", "waxing crescent", "first
+        --- quarter", "waxing gibbous", "full", "waning gibbous", "last
+        --- quarter" or "waning crescent". Nil if no hour has been said:
+        --- call game.sky.setHour (or setDayLength) first.
+        --- Example: if game.sky.moonPhase() == "full" then print("The wolves are out") end
+        moonPhase: () -> ("new" | "waxing crescent" | "first quarter" | "waxing gibbous" | "full" | "waning gibbous" | "last quarter" | "waning crescent")?,
+
+        --- How much of the moon's face is lit, from 0 at new moon to 1 at
+        --- full, or nil if no hour has been said.
+        --- Example: local moonlight = game.sky.moonLit() or 0
+        moonLit: () -> number?,
     },
 
     --- The weather: say it in one word with game.weather.set, or a number

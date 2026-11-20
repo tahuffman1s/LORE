@@ -22,6 +22,8 @@ lore-ui = { path = "../lore-ui" }
 # their values and compiling them to SPIR-V while the game runs. (The build
 # script uses the same crate for the engine's own shaders.)
 lore-shader = { path = "../lore-shader" }
+# Where the sun, the moon and the stars stand, worked out as scripts work it out.
+lore-sky = { path = "../lore-sky" }
 # Turns the font's outlines into pixels for HUD and menu text. Pure Rust.
 fontdue = { version = "0.9", default-features = false, features = ["std"] }
 # FSR 3.1 upscaling, built from source.

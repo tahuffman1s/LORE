@@ -857,6 +857,7 @@ impl<G: Game> App<G> {
         let treads = frame.take_treads();
         let (strikes, storminess) = (frame.take_strikes(), frame.take_storminess());
         let hour = frame.take_hour();
+        let sky_place = frame.take_sky_place();
         if let (Some(renderer), Some(lamps)) = (&mut self.renderer, frame.take_lamps()) {
             renderer.set_lamps(lamps);
         }
@@ -944,6 +945,10 @@ impl<G: Game> App<G> {
             }
             if let Some(weather) = weather {
                 renderer.set_weather(weather);
+            }
+            // The place before the hour, so the sky is worked out once.
+            if sky_place.is_some() {
+                renderer.set_sky_place(sky_place);
             }
             if hour.is_some() {
                 renderer.set_hour(hour);

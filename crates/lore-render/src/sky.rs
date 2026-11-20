@@ -13,6 +13,7 @@
 //! sun, which the shader works out for each pixel.
 
 use crate::mesh::Lighting;
+use lore_sky::{Heavens, SkyPlace};
 
 /// How much of the sky the clouds cover, from 0 to 1, and how high they
 /// are, in metres. Fair-weather clouds; weather will set these (#130).
@@ -301,35 +302,27 @@ impl Day {
     /// one turn in twenty-nine and a half days, which is what gives it
     /// its phases: it starts nearly full, rising as the sun sets.
     pub(crate) fn at(hours: f64) -> Self {
+        Self::lit_by(Heavens::at(hours, None))
+    }
+
+    /// The real sky over `place`, `hours` after its first midnight, an
+    /// hour being the sun's own time there (see [`lore_sky`]).
+    pub(crate) fn over(place: &SkyPlace, hours: f64) -> Self {
+        Self::lit_by(place.heavens(hours))
+    }
+
+    /// The light and the sky under the sun, the moon and the stars where
+    /// `heavens` puts them.
+    fn lit_by(heavens: Heavens) -> Self {
+        let Heavens {
+            sun,
+            moon,
+            pole,
+            turn,
+            ..
+        } = heavens;
         let usual = Lighting::default();
-        let hours = if hours.is_finite() { hours } else { 12.0 };
         let noon = usual.towards_sun;
-        let flat = (noon[0] * noon[0] + noon[2] * noon[2]).sqrt().max(1e-6);
-        // Where the sun sets: level, and at right angles to its noon.
-        let west = [noon[2] / flat, 0.0, -noon[0] / flat];
-        let pole = [
-            noon[1] * west[2] - noon[2] * west[1],
-            noon[2] * west[0] - noon[0] * west[2],
-            noon[0] * west[1] - noon[1] * west[0],
-        ];
-        #[allow(clippy::cast_possible_truncation)]
-        let turn = ((hours - 12.0).rem_euclid(24.0) / 24.0 * std::f64::consts::TAU) as f32;
-        let round = |turn: f32, lean: f32| {
-            let (aside, along) = turn.sin_cos();
-            let at =
-                [0, 1, 2].map(|axis| (noon[axis] + pole[axis] * lean) * along + west[axis] * aside);
-            let long = at
-                .iter()
-                .map(|part| part * part)
-                .sum::<f32>()
-                .sqrt()
-                .max(1e-6);
-            at.map(|part| part / long)
-        };
-        let sun = round(turn, 0.0);
-        #[allow(clippy::cast_possible_truncation)]
-        let month = (hours / 24.0 / 29.53 + 0.47).rem_euclid(1.0) as f32;
-        let moon = round(turn - month * std::f32::consts::TAU, 0.09);
         // How much of the moon's face the sun lights, as seen from here.
         let between: f32 = (0..3).map(|axis| sun[axis] * moon[axis]).sum();
         let lit = (1.0 - between) * 0.5;

@@ -1,0 +1,12 @@
+[package]
+name = "lore-sky"
+description = "Where the sun, the moon and the stars stand for LORE: the real sky over a place and a date, or a made-up one"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
