@@ -864,6 +864,7 @@ impl<G: Game> App<G> {
         let milky_way = frame.take_milky_way();
         let light_pollution = frame.take_light_pollution();
         let aurora = frame.take_aurora();
+        let meteors = frame.take_meteors();
         if let (Some(renderer), Some(lamps)) = (&mut self.renderer, frame.take_lamps()) {
             renderer.set_lamps(lamps);
         }
@@ -970,6 +971,9 @@ impl<G: Game> App<G> {
             }
             if let Some(kp) = aurora {
                 renderer.set_aurora(kp);
+            }
+            if let Some(times) = meteors {
+                renderer.set_meteors(times);
             }
             if hour.is_some() {
                 renderer.set_hour(hour);

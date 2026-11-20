@@ -132,6 +132,8 @@ pub struct ScriptHost {
     respawn: bool,
     /// The player died and the script has not been told yet.
     spawn_due: bool,
+    /// The game's time the last meteors were looked for at, in seconds.
+    meteors_seen: Option<f64>,
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
@@ -301,6 +303,7 @@ impl ScriptHost {
             kept: Rc::default(),
             respawn: false,
             spawn_due: false,
+            meteors_seen: None,
             audio: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
@@ -374,6 +377,7 @@ impl ScriptHost {
         if !stopped {
             self.weather.step(step);
         }
+        self.meteors_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
             self.call_all(|handlers| &handlers.spawn, ());
@@ -637,6 +641,37 @@ impl ScriptHost {
     /// (`game.sky.setLightPollution`).
     pub fn take_light_pollution(&mut self) -> Option<f32> {
         self.weather.take_light_pollution()
+    }
+
+    /// How many times the real rate meteors cross the sky, if the script
+    /// has said since this was last called (`game.sky.setMeteors`).
+    pub fn take_meteors(&mut self) -> Option<f32> {
+        self.weather.take_meteors()
+    }
+
+    /// Tells the script of the meteors that appeared since the last tick:
+    /// its `game.sky.onMeteor` functions, with where each appeared and burnt
+    /// out, how bright it was and its shower. They are the ones the renderer
+    /// draws, worked out from the game's time.
+    fn meteors_due(&mut self) {
+        let now = self.clock.now();
+        let Some(was) = self.meteors_seen.replace(now) else {
+            return;
+        };
+        let climate = Rc::clone(&self.weather);
+        climate.meteors_between(was, now, |meteor| {
+            let [x, y, z] = meteor.from;
+            let [tx, ty, tz] = meteor.to;
+            self.call_all(
+                |handlers| &handlers.meteor,
+                (
+                    mlua::Vector::new(x, y, z),
+                    mlua::Vector::new(tx, ty, tz),
+                    f64::from(meteor.magnitude),
+                    meteor.shower,
+                ),
+            );
+        });
     }
 
     /// How stormy the aurora is, the Kp index from 0 to 9, if the script

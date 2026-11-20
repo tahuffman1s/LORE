@@ -141,8 +141,11 @@ struct View {
     // aurora (`AURORA_ROWS` in `sky.rs`): towards the magnetic pole along
     // the ground and how far the middle of its ring is that way, in
     // kilometres; how far the ring reaches either side, how bright its
-    // brightest curtains are drawn, and how stormy (Kp), 0 with none.
-    heavens: array<vec4<f32>, 29>,
+    // brightest curtains are drawn, and how stormy (Kp), 0 with none; and
+    // from row 29 the meteors in the sky (`METEOR_ROWS`), two rows each:
+    // where it appeared and how far through its flight it is, then where it
+    // burns out and its light in lux now (0 for none).
+    heavens: array<vec4<f32>, 45>,
     // How the level's water looks, if its game has said (`fluid.rs`), as
     // three rows. What a metre of it takes of red, green and blue light,
     // and 1 if it has a look at all (else the row and the two after are
@@ -1351,7 +1354,8 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
             seen += aurora / candela * shown * view.heavens[3].w * up * night;
         }
     }
-    let points = real_stars(among, direction, pixel, sky) + planets_light(direction, pixel, sky);
+    let points = real_stars(among, direction, pixel, sky) + planets_light(direction, pixel, sky)
+        + meteors_light(direction, pixel, sky);
     return seen + (beyond * noticed + points) * behind;
 }
 
@@ -1589,6 +1593,59 @@ fn aurora_light(direction: vec3<f32>) -> vec3<f32> {
     // A curtain seen side on is some 60 km of it: that is its full
     // brightness. The air in front dims it as it dims a star.
     return light / 60.0 * bright * through_air_mass(max(direction.y, 0.0));
+}
+
+// The light of the shooting stars along `direction` (in the level), `pixel`
+// radians across, against a sky `sky` candela a square metre bright, as
+// light to draw. Each is a bright head, a point as a star is, moving along
+// its path from where it appeared to where it burns out, and behind it a
+// thin train along the same path, fading back from the head. Dimmed by the
+// air and hidden by a bright sky as the stars are, and seen as they are by
+// an eye used to the dark.
+fn meteors_light(direction: vec3<f32>, pixel: f32, sky: f32) -> vec3<f32> {
+    let per_lux = view.heavens[5].w;
+    if per_lux <= 0.0 || direction.y <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let fall = star_fall(pixel);
+    let spread = inverseSqrt(2.0 * fall);
+    let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
+    let least = faintest_seen(sky) / max(dimmed.g, 1e-6);
+    var light = 0.0;
+    for (var meteor = 0u; meteor < 8u; meteor++) {
+        let lux = view.heavens[30u + 2u * meteor].w;
+        if lux <= 0.0 {
+            continue;
+        }
+        let start = view.heavens[29u + 2u * meteor].xyz;
+        let through = view.heavens[29u + 2u * meteor].w;
+        let to = view.heavens[30u + 2u * meteor].xyz;
+        let path = acos(clamp(dot(start, to), -1.0, 1.0));
+        let head = normalize(mix(start, to, through));
+        let seen = smoothstep(0.25 * least, least, lux);
+        // Its head: a spot whose whole is its light.
+        let off = direction - head;
+        let peak = lux * seen * fall / PI;
+        light += peak * exp(-dot(off, off) * fall);
+        // Its train: how far this line of sight is start the path, and how
+        // far along it, behind the head.
+        let across_path = normalize(cross(start, to) + vec3<f32>(1e-7));
+        let aside = dot(direction, across_path);
+        if abs(aside) < 4.0 * spread {
+            let on = direction - across_path * aside;
+            let along = atan2(dot(on, cross(across_path, start)), dot(on, start)) / max(path, 1e-5);
+            let behind = through - along;
+            if behind >= 0.0 && along >= 0.0 {
+                // The eye keeps the streak the head has just drawn: a line as
+                // fine as the head, nearly as bright where the head has just
+                // been, fading back over a third of its path.
+                let length = max(0.35 * path, spread);
+                light += 0.6 * peak * exp(-behind * path / length) * exp(-aside * aside * fall);
+            }
+        }
+    }
+    // A little green-white, start the metals burning in it.
+    return vec3<f32>(0.92, 1.03, 0.9) * light * dimmed * per_lux * view.heavens[6].w;
 }
 
 // How quickly a star's spot of light falls off from its middle, for a

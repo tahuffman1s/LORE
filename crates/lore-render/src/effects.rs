@@ -295,6 +295,8 @@ pub(crate) struct Effects {
     light_pollution: f32,
     /// How stormy the aurora is, the Kp index from 0 (none) to 9.
     aurora: f32,
+    /// How many times the real rate meteors cross the sky.
+    meteors: f32,
     /// How many times its real brightness the Milky Way is drawn, and what
     /// colour it is tinted, as bright as white.
     milky_way: f32,
@@ -347,6 +349,7 @@ impl Effects {
             moon_tint: [1.0; 3],
             light_pollution: 1.0,
             aurora: 0.0,
+            meteors: 1.0,
             milky_way: 1.0,
             milky_way_tint: [1.0; 3],
             night_darkening: 0.0,
@@ -872,6 +875,47 @@ impl Effects {
         if let Some((hour, _)) = self.day {
             self.day = Some((hour, self.sky_at(hour)));
         }
+    }
+
+    /// Says how many times the real rate meteors cross the sky: 0 for none,
+    /// 1 (the usual) for the real one, up to 1000 for a storm of them, as
+    /// the Leonids of 1966 were.
+    pub(crate) fn set_meteors(&mut self, times: f32) {
+        self.meteors = if times.is_finite() {
+            times.clamp(0.0, 1000.0)
+        } else {
+            1.0
+        };
+    }
+
+    /// Puts the meteors in the sky at `seconds` of the game's time into the
+    /// sky to be drawn: as `lore_sky::meteors` works them out, so a script
+    /// hears of the same ones. Every frame.
+    pub(crate) fn show_meteors(&mut self, seconds: f64) {
+        let Some((hour, day)) = &mut self.day else {
+            return;
+        };
+        let rows = &mut day.heavens[crate::sky::METEOR_ROWS..];
+        for meteor in rows.chunks_mut(2) {
+            meteor[0][3] = -1.0;
+        }
+        if self.meteors <= 0.0 {
+            return;
+        }
+        let heavens = lore_sky::Heavens::at(*hour, self.place.as_ref());
+        let mut shown = 0;
+        lore_sky::meteors::alive(seconds, &heavens, self.meteors, |meteor, through| {
+            if shown < crate::sky::METEORS {
+                // It flares and dies away over its flight.
+                let flare = (std::f32::consts::PI * through).sin().max(0.0).sqrt();
+                let lux = lore_sky::stars::lux(meteor.magnitude) * flare;
+                let [x, y, z] = meteor.from;
+                rows[2 * shown] = [x, y, z, through];
+                let [x, y, z] = meteor.to;
+                rows[2 * shown + 1] = [x, y, z, lux];
+                shown += 1;
+            }
+        });
     }
 
     /// Says how many times its real brightness the Milky Way is drawn, from

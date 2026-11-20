@@ -324,6 +324,36 @@ fn the_aurora_shows_in_the_far_north_at_night() {
 }
 
 #[test]
+fn a_script_hears_of_the_perseids() {
+    let mut host = game(
+        r#"
+        print(game.sky.meteors(), game.sky.meteorShower())
+        game.sky.setLatitude(45)
+        game.sky.setDate(2026, 8, 12)
+        game.sky.setHour(2.5)
+        print(game.sky.meteorShower())
+        game.sky.setMeteors(1000)
+        local seen, perseids = 0, 0
+        game.sky.onMeteor(function(from, to, brightness, shower)
+            seen += 1
+            if shower == "Perseids" then
+                perseids += 1
+            end
+            assert(from.y > 0 and brightness < 7)
+        end)
+        game.after(30, function()
+            print(seen > 100, perseids * 2 > seen)
+        end)
+        "#,
+    );
+    assert_eq!(host.take_meteors(), Some(1000.0));
+    for _ in 0..(31 * 60) {
+        host.tick(&lore_input::InputFrame::default(), 1.0 / 60.0);
+    }
+    assert_eq!(printed(), ["1 nil", "Perseids", "true true"]);
+}
+
+#[test]
 fn town_light_brightens_the_night_on_open_ground() {
     let _host = game(
         r#"
@@ -379,6 +409,7 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "\"none\", \"quiet\", \"active\", \"storm\" or \"great storm\"",
         ),
         ("game.sky.setAurora(true)", "game.sky.setAurora(\"storm\")"),
+        ("game.sky.setMeteors(\"lots\")", "game.sky.setMeteors(10)"),
         (
             "game.sky.setLongitude(\"west\")",
             "game.sky.setLongitude(-3.7)",

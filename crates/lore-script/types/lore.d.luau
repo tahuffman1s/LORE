@@ -1492,6 +1492,41 @@ declare game: {
         --- Example: if (game.sky.auroraSeen() or 0) > 0.05 then print("look north!") end
         auroraSeen: () -> number?,
 
+        --- How many times the real rate shooting stars cross the sky: from 0
+        --- (none) to 1000 (a meteor storm, as the Leonids of 1966 were); 1 is
+        --- the usual, and setMeteors(1) puts it back. Below 0 is taken as 0
+        --- and above 1000 as 1000; meteors() gives the rate used. At the real rate a dark night has a
+        --- few an hour, and on their nights the great showers many more,
+        --- streaming from their radiants: the Perseids in mid-August, the
+        --- Geminids in mid-December, the Quadrantids in early January and
+        --- the Lyrids, Eta Aquariids, Orionids and Leonids. A bright moon or
+        --- town light hides the fainter ones. Kept when the script is read
+        --- again.
+        --- Example: game.sky.setMeteors(10)
+        setMeteors: (times: number) -> (),
+
+        --- How many times the real rate shooting stars cross the sky: the rate
+        --- setMeteors took, brought into 0 to 1000.
+        --- Example: local times = game.sky.meteors()
+        meteors: () -> number,
+
+        --- The meteor shower on now, the strongest at a tenth or more of its
+        --- peak: "Quadrantids", "Lyrids", "Eta Aquariids", "Perseids",
+        --- "Orionids", "Leonids" or "Geminids", or nil (none, or no hour said).
+        --- Example: local shower = game.sky.meteorShower()
+        meteorShower: () -> ("Quadrantids" | "Lyrids" | "Eta Aquariids" | "Perseids" | "Orionids" | "Leonids" | "Geminids")?,
+
+        --- Calls `handler` each time a shooting star appears: where it
+        --- appears and where it burns out (directions, as planetDirection
+        --- gives), how bright it is in magnitudes (the smaller, the brighter;
+        --- below 0 is a fireball), and its shower's name, or nil for a
+        --- sporadic one. They are the very ones drawn, worked out from the
+        --- game's time, every one of them; none before an hour is said, and
+        --- none while time is stopped. It runs on the game's tick, as the
+        --- game's rules do, so it may change the game.
+        --- Example: game.sky.onMeteor(function(from, to, brightness, shower) if brightness < 0 then print("a fireball!") end end)
+        onMeteor: (handler: (from: vector, to: vector, brightness: number, shower: ("Quadrantids" | "Lyrids" | "Eta Aquariids" | "Perseids" | "Orionids" | "Leonids" | "Geminids")?) -> ()) -> (),
+
         --- Says which way north is in the level, as a compass bearing in
         --- degrees: 0 when north is the level's -z (Blender's +y), 90 when
         --- it is +x, turning clockwise seen from above. Turns the whole sky

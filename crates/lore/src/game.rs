@@ -107,6 +107,9 @@ pub struct Frame {
     light_pollution: Option<f32>,
     /// How stormy the aurora is, if the game said it this frame.
     aurora: Option<f32>,
+    /// How many times the real rate meteors cross the sky, if the game said
+    /// it this frame.
+    meteors: Option<f32>,
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
@@ -234,6 +237,7 @@ impl Frame {
             milky_way: None,
             light_pollution: None,
             aurora: None,
+            meteors: None,
             lamps: Vec::new(),
             lamps_said: false,
             shaders: crate::game_shaders::ShaderList::default(),
@@ -938,6 +942,18 @@ impl Frame {
     /// How stormy the aurora is, if the game said it this frame.
     pub(crate) fn take_aurora(&mut self) -> Option<f32> {
         self.aurora.take()
+    }
+
+    /// Says how many times the real rate meteors cross the sky: 0 for
+    /// none, 1 for the real one, up to 1000.
+    pub fn set_meteors(&mut self, times: f32) {
+        self.meteors = Some(times);
+    }
+
+    /// How many times the real rate meteors cross the sky, if the game said
+    /// it this frame.
+    pub(crate) fn take_meteors(&mut self) -> Option<f32> {
+        self.meteors.take()
     }
 
     /// Says what colour the moon is tinted, in linear red, green and blue:

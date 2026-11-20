@@ -296,7 +296,17 @@ pub(crate) struct Day {
 /// How many rows of four numbers the shader's `heavens` has: ten for the
 /// sun, the moon, the stars and the night's glow, then two for each planet
 /// ([`PLANET_ROWS`]).
-pub(crate) const HEAVENS_ROWS: usize = AURORA_ROWS + 2;
+pub(crate) const HEAVENS_ROWS: usize = METEOR_ROWS + 2 * METEORS;
+
+/// How many meteors can be drawn at once.
+pub(crate) const METEORS: usize = 8;
+
+/// Where in `heavens` the meteors in the sky are, two rows each: where it
+/// appeared and how far through its flight it is (below 0 for no meteor);
+/// where it burns out and its light in lux now. Written every frame
+/// (`Effects::show_meteors`), and left out of what says whether the sky
+/// has changed.
+pub(crate) const METEOR_ROWS: usize = AURORA_ROWS + 2;
 
 /// Where in `heavens` the aurora is: towards the magnetic pole along the
 /// ground, and how far the middle of its ring is that way, in kilometres;
@@ -518,6 +528,9 @@ impl Day {
         let (umbra, penumbra) = heavens.shadow_radii();
         let shadow = heavens.shadow;
         let mut rows = [[0.0; 4]; HEAVENS_ROWS];
+        for meteor in 0..METEORS {
+            rows[METEOR_ROWS + 2 * meteor][3] = -1.0;
+        }
         rows[ECLIPSE_ROWS] = [shadow[0], shadow[1], shadow[2], umbra];
         rows[ECLIPSE_ROWS + 1] = [
             penumbra,

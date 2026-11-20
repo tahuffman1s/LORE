@@ -454,6 +454,23 @@ return menu.new("Weather", {
             game.sky.setAurora(auroraKp[word] or 0)
         end,
     }),
+    -- How many shooting stars cross the sky, against the real rate:
+    -- game.sky.setMeteors(10), up to 1000 for a meteor storm. On 12 August
+    -- (the Perseids) or 14 December (the Geminids) the real rate is already
+    -- a shower.
+    menu.slider("Shooting stars", {
+        min = 0,
+        max = 1000,
+        step = 5,
+        get = game.sky.meteors,
+        set = game.sky.setMeteors,
+        format = function(times)
+            local shower = game.sky.meteorShower()
+            local rate = if times == 0 then "none" elseif times == 1 then "as they are" else string.format("%g times", times)
+            return if shower then rate .. ", " .. shower else rate
+        end,
+        color = "#c8c8ff",
+    }),
     menu.slider("Snow lying", { max = 0.6, step = 0.05, get = game.weather.snowDepth, set = game.weather.setSnowDepth, format = centimetres, color = "white" }),
     menu.slider("Ice on water", { max = 0.5, step = 0.02, get = game.weather.ice, set = game.weather.setIce, format = centimetres, color = "#bfe8ff" }),
     menu.button("Lightning", {

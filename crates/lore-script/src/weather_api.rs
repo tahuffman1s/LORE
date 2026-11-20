@@ -65,6 +65,10 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "setAurora",
     "aurora",
     "auroraSeen",
+    "setMeteors",
+    "meteors",
+    "meteorShower",
+    "onMeteor",
 ];
 
 /// The words `game.sky.setAurora` takes, and the Kp index each stands for.
@@ -339,6 +343,10 @@ pub struct Climate {
     /// yet to take it.
     aurora: Cell<f32>,
     aurora_asked: Cell<bool>,
+    /// How many times the real rate meteors cross the sky, and whether the
+    /// engine has yet to take it.
+    meteors: Cell<f32>,
+    meteors_asked: Cell<bool>,
     /// The depth of snow and the thickness of ice the script asked for
     /// and the engine has not yet taken.
     snow_asked: Cell<Option<f32>>,
@@ -380,6 +388,8 @@ impl Default for Climate {
             light_pollution_asked: Cell::new(false),
             aurora: Cell::new(0.0),
             aurora_asked: Cell::new(false),
+            meteors: Cell::new(1.0),
+            meteors_asked: Cell::new(false),
             day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
@@ -458,6 +468,26 @@ impl Climate {
     /// asked.
     pub(crate) fn take_aurora(&self) -> Option<f32> {
         self.aurora_asked.take().then(|| self.aurora.get())
+    }
+
+    /// How many times the real rate meteors cross the sky, if the script
+    /// has said since this was last asked.
+    pub(crate) fn take_meteors(&self) -> Option<f32> {
+        self.meteors_asked.take().then(|| self.meteors.get())
+    }
+
+    /// The meteors that appeared after `after` and up to `until`, the
+    /// game's time in seconds, as the renderer draws them: each given to
+    /// `seen`. None until the hour has been said.
+    pub(crate) fn meteors_between(
+        &self,
+        after: f64,
+        until: f64,
+        seen: impl FnMut(lore_sky::meteors::Meteor),
+    ) {
+        if let Some(heavens) = self.heavens() {
+            lore_sky::meteors::born(after, until, &heavens, self.meteors.get(), seen);
+        }
     }
 
     /// How much towns light the night sky, on Bortle's scale, if the script
@@ -885,6 +915,49 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
                 aurora.share_seen() * aurora.brightness / lore_sky::aurora::brightness(9.0) * dark;
             Ok(Some(f64::from(share)))
         })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setMeteors",
+        lua.create_function(move |lua, value: Value| {
+            let times = number(
+                lua,
+                "game.sky.setMeteors",
+                Some(&value),
+                "how many times the real rate shooting stars cross the sky, from 0 (none) to \
+                 1000 (a storm of them); 1 is the real one",
+                "game.sky.setMeteors(10)",
+            )?
+            .clamp(0.0, 1000.0);
+            climate.meteors.set(times);
+            climate.meteors_asked.set(true);
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "meteors",
+        lua.create_function(move |_, ()| Ok(f64::from(climate.meteors.get())))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "meteorShower",
+        lua.create_function(move |_, ()| {
+            Ok(climate
+                .heavens()
+                .and_then(|heavens| lore_sky::meteors::shower_now(&heavens)))
+        })?,
+    )?;
+    let list: fn(&mut Handlers) -> &mut Vec<Function> = |handlers| &mut handlers.meteor;
+    sky.set(
+        "onMeteor",
+        crate::api::on_event(
+            lua,
+            shared,
+            "sky.onMeteor",
+            "game.sky.onMeteor(function(from, to, brightness, shower) ... end)",
+            list,
+        )?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(

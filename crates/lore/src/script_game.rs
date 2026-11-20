@@ -391,6 +391,9 @@ impl Game for ScriptGame {
         if let Some(kp) = self.host.take_aurora() {
             frame.set_aurora(kp);
         }
+        if let Some(times) = self.host.take_meteors() {
+            frame.set_meteors(times);
+        }
         if let Some(place) = self.host.take_sky_place() {
             frame.set_sky_place(place);
         }
