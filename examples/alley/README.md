@@ -51,7 +51,7 @@ It also writes `places.luau`, where the named places are (see below).
 | key | gamepad | what it does |
 |---|---|---|
 | Escape | Start | the pause menu: the game stands still, with Resume, Settings (sound, controls and graphics, each in force at once) and Quit |
-| F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the moon, snow, ice, lightning and a tornado that comes down the alley to you |
+| F1 | Select | the weather menu: every kind of weather, cloud, storms, rain, warmth, wind, fog, the hour, the date and the latitude (the real sky over that place on that day), the moon, snow, ice, lightning and a tornado that comes down the alley to you |
 | F7 | Select, then a bumper | the debug menu: walk, fly or noclip, fly speed, the speed of time, a jump to each named place, two switches for the game-shader demonstrations (an old-photo screen effect and a glowing blue dumpster, from `shaders/`, both off to begin with), and what the player is doing |
 | F12 | in the debug menu | the frame meter: off, one line, or numbers with a graph |
 | F8 | left bumper | clear away every fluid |
@@ -98,6 +98,13 @@ a fair sky the sun shines down the length of the alley instead: the east
 wall and a strip of floor are in sun and everything across the alley
 throws a long shadow along it. Rain suits it too: the potholes fill and
 the ground runs to the drains.
+
+The weather menu's **Year**, **Month**, **Day** and **Latitude** rows put
+the alley under the real sky of that place and day (`game.sky.setDate`,
+`game.sky.setLatitude`): long light summer evenings in the north, a low
+winter sun, the moon in the phase it had that night and the stars where
+they stood. The **Moon** row says its phase, how much of it is lit and
+whether it is up.
 
 ## Named places
 
