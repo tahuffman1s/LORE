@@ -15,9 +15,10 @@ time as fast as you like. A menu lists famous events to jump straight to:
   aurora of May 2024, the midnight sun at North Cape, and a moonless night
   in Death Valley.
 
-Each eclipse lands in the middle of totality as the engine works it out,
-and a test (`every_planetarium_event_lands_on_what_it_promises`) checks
-that every event still lands on what it promises.
+Each eclipse lands in its middle (totality, or the ring for the annular
+one) as the engine works it out, and a test
+(`every_planetarium_event_lands_on_what_it_promises`) checks that every
+event still lands on what it promises.
 
 The whole game is Luau. Every call it makes is one of `game.sky`'s, so it
 doubles as a tour of what that API can do.

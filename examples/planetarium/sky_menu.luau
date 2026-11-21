@@ -36,14 +36,21 @@ end
 
 local function setDatePart(part: string, value: number)
     local year, month, date, hours = dateParts()
-    if part == "year" then
-        year = value
-    elseif part == "month" then
-        month = value
-    else
+    if part == "day" then
+        -- A day past the end of a month runs into the next, as Feb 30 is Mar 2.
         date = value
+    else
+        if part == "year" then
+            year = value
+        else
+            month = value
+        end
+        -- Changing the month or the year keeps the day inside that month,
+        -- so 31 January and one month on is 29 February, not 2 March.
+        local first = clock.daysFrom2000(year, month, 1)
+        local nextYear, nextMonth = if month == 12 then year + 1 else year, month % 12 + 1
+        date = math.min(date, clock.daysFrom2000(nextYear, nextMonth, 1) - first)
     end
-    -- A day past the end of a month runs into the next, as Feb 30 is Mar 2.
     clock.setMoment(clock.daysFrom2000(year, month, 1) + date - 1 + hours / 24)
 end
 
@@ -78,7 +85,9 @@ local timeMenu = menu.new("Time", {
         format = function(day) return tostring(math.floor(day + 0.5)) end,
     }),
     menu.slider("Month", {
-        min = 1, max = 12, step = 1, wraps = true,
+        -- A slider that wraps treats its far end as its near end, so 13 is
+        -- January again and December is a stop of its own.
+        min = 1, max = 13, step = 1, wraps = true,
         get = function() return select(2, dateParts()) end,
         set = function(month) setDatePart("month", math.floor(month + 0.5)) end,
         format = function(month) return MONTHS[math.clamp(math.floor(month + 0.5), 1, 12)] end,

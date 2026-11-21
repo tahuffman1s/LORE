@@ -741,3 +741,27 @@ fn the_planetarium_time_tab_runs_and_turns_the_clock() {
         "sunrise at {hour}"
     );
 }
+
+#[test]
+fn the_planetarium_month_slider_stops_at_every_month() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    // Down from "Time lapse" past Hour and Day to Month, and on to August's
+    // last day first, so a month change has a day to keep inside it.
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowDown);
+    for _ in 0..27 {
+        played.tap(Key::ArrowRight);
+    }
+    assert_eq!(played.value_of("Date"), "Sat 31 Aug 2024");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    // 31 August, a month on, is the last day of September, not 1 October.
+    assert_eq!(played.value_of("Date"), "Mon 30 Sep 2024");
+    for month in ["October", "November", "December", "January"] {
+        played.tap(Key::ArrowRight);
+        assert_eq!(played.value_of("Month"), month);
+    }
+}

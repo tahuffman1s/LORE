@@ -97,15 +97,22 @@ local function setEngineMoment(moment: number)
     game.sky.setHour((moment - day) * 24)
 end
 
+-- How far the far side's sundial runs ahead of the observer's, in days, at
+-- the same instant: half a day, ahead going east to it and behind going west.
+local function farSideAhead(): number
+    if not kept.flipped then
+        return 0
+    end
+    return (wrapLongitude(kept.longitude + 180) - kept.longitude) / 360
+end
+
 -- The observer's moment, local sundial time, in days since 1 January 2000.
--- On the far side it is twelve hours later by the sun, at the same instant.
 function clock.moment(): number
-    local moment = engineMoment()
-    return if kept.flipped then moment - 0.5 else moment
+    return engineMoment() - farSideAhead()
 end
 
 function clock.setMoment(moment: number)
-    setEngineMoment(if kept.flipped then moment + 0.5 else moment)
+    setEngineMoment(moment + farSideAhead())
 end
 
 -- Moves the moment by `days` (a fraction for hours: 1 / 24 is an hour).
@@ -168,7 +175,7 @@ end
 
 -- "14:05" from a number of hours.
 function clock.hhmm(hours: number): string
-    local minutes = math.floor((hours % 24) * 60 + 0.5) % 1440
+    local minutes = math.floor((hours % 24) * 60) % 1440
     return string.format("%02d:%02d", minutes // 60, minutes % 60)
 end
 
