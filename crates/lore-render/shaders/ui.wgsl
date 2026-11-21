@@ -99,10 +99,32 @@ fn linear(srgb: vec3<f32>) -> vec3<f32> {
 fn fragment(corner: Corner) -> @location(0) vec4<f32> {
     var covered: f32;
     var tint = vec3<f32>(1.0);
+    // How far one pixel of the screen reaches in the atlas, across and down.
+    // Worked out here, before any branch, as the shader may only ask how a
+    // value changes from pixel to pixel where every pixel takes the same path.
+    let step_x = dpdx(corner.atlas_at);
+    let step_y = dpdy(corner.atlas_at);
     if corner.shape.y > 1.5 {
-        // A picture: its colour times the piece's, faded at its edge.
+        // A picture: its colour times the piece's, faded at its edge. Drawn
+        // smaller than it is, one read per pixel would skip most of its
+        // pixels, and thin lines in it would break up and shimmer as it
+        // moves; so the pixels under each pixel of the screen are averaged,
+        // up to four by four reads of them.
         let size = vec2<f32>(textureDimensions(images));
-        let texel = textureSampleLevel(images, smooth_sampler, corner.atlas_at / size, 0.0);
+        let reads = vec2<u32>(clamp(ceil(vec2<f32>(length(step_x), length(step_y))), vec2<f32>(1.0), vec2<f32>(4.0)));
+        var texel = vec4<f32>(0.0);
+        for (var i = 0u; i < reads.x; i++) {
+            for (var j = 0u; j < reads.y; j++) {
+                let share = (vec2<f32>(f32(i), f32(j)) + 0.5) / vec2<f32>(reads) - 0.5;
+                let at = corner.atlas_at + step_x * share.x + step_y * share.y;
+                let read = textureSampleLevel(images, smooth_sampler, at / size, 0.0);
+                // Colours weighted by how solid they are, so the see-through
+                // pixels round a line don't darken its edge.
+                texel += vec4<f32>(read.rgb * read.a, read.a);
+            }
+        }
+        texel /= f32(reads.x * reads.y);
+        texel = vec4<f32>(texel.rgb / max(texel.a, 1e-5), texel.a);
         let edge = clamp(0.5 - (max(abs(corner.offset.x) - corner.half_size.x, abs(corner.offset.y) - corner.half_size.y)), 0.0, 1.0);
         covered = texel.a * edge;
         tint = texel.rgb;

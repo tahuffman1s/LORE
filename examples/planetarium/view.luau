@@ -213,38 +213,30 @@ function view.ahead(): vector
 end
 
 -- Where labels are on the screen this picture, so no two overlap: each is
--- left out if it would cover one already there. Planets go first, then the
--- sun and the moon, the brightest stars, and the constellations' names.
+-- left out if it would cover one already there, a part of the HUD, or the
+-- edge of the screen. Planets go first, then the sun and the moon, the
+-- brightest stars, and the constellations' names.
 local claimed: { { number } } = {}
--- How far from the middle of the screen a label may reach, in HUD pixels:
--- inside the edge of a screen as wide as 16 by 9, so none is cut off.
-local REACH_ACROSS, REACH_DOWN = 860, 500
+local reachAcross, reachDown = 860, 480
 
--- Where the HUD's panels are, kept clear of labels: centre and size, from
--- the middle of a 16 by 9 screen (the HUD keeps inside its middle 90%).
-local PANELS = {
-    { -649, -430, 430, 112 }, -- where you stand, top left
-    { 694, -403, 340, 166 }, -- the time, top right
-    { 0, -425, 640, 122 }, -- the compass and what is going on, top
-    { 0, 420, 960, 140 }, -- a caption, bottom
-    { 400, 470, 930, 40 }, -- the keys, bottom right
-    { -764, 460, 210, 60 }, -- the zoom, bottom left
-}
-
--- Forgets where labels were, keeping the HUD's panels clear: call it once
--- a picture, before any claims.
-function view.beginLabels()
+-- Starts the labels of a picture: forgets where labels were, and keeps
+-- clear `areas` (boxes from the middle of the screen: centre across,
+-- centre down, width, height), such as the HUD's panels, and the edge of
+-- the HUD's room.
+function view.beginLabels(areas: { { number } })
     table.clear(claimed)
-    for _, panel in PANELS do
-        table.insert(claimed, panel)
+    for _, area in areas do
+        table.insert(claimed, area)
     end
+    local wide, high = game.hud.size()
+    reachAcross, reachDown = wide / 2, high / 2
 end
 
 -- Takes the box `width` by `height` round (`across`, `down`) for a label,
 -- unless it would cover one already taken or reach past the screen's edge.
 -- Says whether it was taken.
 function view.claim(across: number, down: number, width: number, height: number): boolean
-    if math.abs(across) + width / 2 > REACH_ACROSS or math.abs(down) + height / 2 > REACH_DOWN then
+    if math.abs(across) + width / 2 > reachAcross or math.abs(down) + height / 2 > reachDown then
         return false
     end
     local pad = 6

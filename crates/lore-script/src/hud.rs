@@ -23,7 +23,8 @@ use crate::api::{Shared, describe, fail};
 use crate::error::closest;
 
 /// Every function on `game.hud`.
-pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph", "line", "image"];
+pub(crate) const HUD_FUNCTIONS: &[&str] =
+    &["text", "bar", "box", "frameGraph", "line", "image", "size"];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
@@ -809,6 +810,29 @@ impl UserData for PieceRef {
     }
 }
 
+/// How much room the HUD has: the width and height of the part of the
+/// screen it is laid out in (inside the safe margin), in pixels on a screen
+/// 1080 high, taking the player's HUD size setting off, as it scales every
+/// piece.
+fn hud_size(shared: &Shared) -> [f32; 2] {
+    let screen = shared.input.borrow().screen;
+    let [x, y, ..] = lore_ui::hud_area(Anchor::TopLeft, [0.0; 2], [0.0; 2], screen);
+    let percent = shared
+        .settings
+        .all()
+        .iter()
+        .find(|setting| setting.name == "ui_size")
+        .and_then(|setting| match setting.value {
+            crate::SettingValue::Number(number) => Some(number),
+            _ => None,
+        })
+        .unwrap_or(100.0);
+    // A share of a few, far below where an f32 stops being exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let scale = (percent / 100.0).max(0.1) as f32;
+    [(screen[0] - 2.0 * x) / scale, (screen[1] - 2.0 * y) / scale]
+}
+
 /// Where `entry` is on the screen as the last tick's input saw it, and as
 /// the rules last left it: `[x, y, width, height]` in pixels on a screen
 /// 1080 high.
@@ -1391,6 +1415,14 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     hud.set("frameGraph", function(lua, shared, Kind::Graph)?)?;
     hud.set("line", function(lua, shared, Kind::Line)?)?;
     hud.set("image", function(lua, shared, Kind::Image)?)?;
+    let sized = Rc::clone(shared);
+    hud.set(
+        "size",
+        lua.create_function(move |_, ()| {
+            let [width, height] = hud_size(&sized);
+            Ok((f64::from(width), f64::from(height)))
+        })?,
+    )?;
     Ok(hud)
 }
 

@@ -187,7 +187,7 @@ game.onDraw(function()
     panel:draw()
     view.startFrame()
     -- Labels before the constellations' names, which give way to them.
-    view.beginLabels()
+    view.beginLabels(hud.areas())
     view.drawLabels(playing)
     skyArt.draw(playing)
 
@@ -222,13 +222,15 @@ game.onDraw(function()
         captionNote = captionText,
         captionShown = math.max(captionShown, 0),
         keys = {
-            { label("move"), "zoom and time" },
+            -- Most wanted first: a narrow screen keeps these and leaves out
+            -- from the end.
             { label("interact"), "menus" },
+            { label("pause"), "pause" },
+            { label("move"), "zoom and time" },
             { label("jump"), "labels" },
             { label("reload"), "constellations" },
             { label("map"), "figures" },
             { label("use_item"), "ground" },
-            { label("pause"), "pause" },
         },
     })
 end)
