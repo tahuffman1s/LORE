@@ -581,3 +581,163 @@ fn the_jungle_has_the_pause_menu_beside_its_weather_panel() {
     assert_eq!(played.set(), "gameplay");
     assert!(!played.host().paused() && !played.shows("Resume"));
 }
+
+#[test]
+fn the_planetarium_holds_the_observer_still_and_the_walking_keys_zoom() {
+    let mut played = Played::example("planetarium", true);
+    assert!(
+        played.shows("Death Valley, California   36.5° N, 116.9° W"),
+        "{:?}",
+        played.words()
+    );
+    // Its first sky is seen at its widest, through the player's own setting.
+    assert_eq!(played.settings.field_of_view, 110.0);
+    played.input.press(Key::W);
+    for _ in 0..30 {
+        played.step();
+    }
+    played.input.release(Key::W);
+    played.step();
+    assert!(played.settings.field_of_view < 100.0);
+    let [x, y, z] = played.world.player().position;
+    assert!(
+        x.abs() + y.abs() + z.abs() < 0.01,
+        "the observer moved to {x} {y} {z}"
+    );
+    // The pause menu shows the player's own field of view, and closing it
+    // zooms in again.
+    played.tap(Key::Escape);
+    assert!(played.host().paused());
+    assert_eq!(
+        played.settings.field_of_view,
+        Settings::default().field_of_view
+    );
+    played.tap(Key::Escape);
+    assert!(played.settings.field_of_view < 100.0);
+}
+
+#[test]
+fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    assert_eq!(played.set(), "menu");
+    assert!(played.shows("Eclipses") && played.shows("Total solar eclipse, 2024"));
+    played.tap(Key::Enter);
+    played.step();
+    assert_eq!(played.set(), "gameplay");
+    assert!(
+        played.shows("Total solar eclipse, 100% of the sun covered"),
+        "{:?}",
+        played.words()
+    );
+    assert!(played.shows("Time: Stopped"));
+    // Time runs faster with D, as the left stick would push it.
+    played.tap(Key::D);
+    assert!(played.shows("Time: Real time"), "{:?}", played.words());
+}
+
+#[test]
+fn the_planetarium_shows_the_hidden_half_at_the_same_moment() {
+    let mut played = Played::example("planetarium", true);
+    let moment = |played: &Played| {
+        (played.words().into_iter())
+            .find(|words| words.contains("local solar time"))
+            .map(str::to_owned)
+    };
+    let before = moment(&played);
+    assert!(before.is_some(), "{:?}", played.words());
+    played.tap(Key::G);
+    assert!(played.shows("Hidden half: the sky below your feet, turned overhead"));
+    // The far side's sky is drawn, but the clock is still the observer's.
+    assert_eq!(moment(&played), before);
+    played.tap(Key::G);
+    assert!(!played.shows("Hidden half: the sky below your feet, turned overhead"));
+    assert_eq!(moment(&played), before);
+}
+
+/// Every event in the planetarium's lists lands on what it is there for, as
+/// the HUD tells it: an eclipse at its middle, a shower on its night.
+#[test]
+fn every_planetarium_event_lands_on_what_it_promises() {
+    const TOTAL_SOLAR: &str = "Total solar eclipse, 100% of the sun covered";
+    const TOTAL_LUNAR: &str = "Total lunar eclipse";
+    let eclipses = [
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        "Annular solar eclipse",
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_LUNAR,
+        TOTAL_LUNAR,
+        TOTAL_LUNAR,
+    ];
+    let night = [
+        "The Perseids are falling",
+        "The Geminids are falling",
+        "The Leonids are falling",
+        "",
+        "",
+        "",
+        "The northern lights are out",
+        "",
+        "",
+    ];
+    let mut played = Played::example("planetarium", true);
+    for (tab, list) in [eclipses.as_slice(), night.as_slice()]
+        .into_iter()
+        .enumerate()
+    {
+        for (row, expected) in list.iter().enumerate() {
+            played.tap(Key::E);
+            for _ in 0..tab {
+                played.tap(Key::E);
+            }
+            // A menu keeps its chosen row, so the next event is one down.
+            if row > 0 {
+                played.tap(Key::ArrowDown);
+            }
+            played.tap(Key::Enter);
+            played.step();
+            assert_eq!(played.set(), "gameplay");
+            if expected.is_empty() {
+                continue;
+            }
+            assert!(
+                played.words().iter().any(|words| words.contains(expected)),
+                "event {} of tab {tab}: {:?}",
+                row + 1,
+                played.words()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_planetarium_time_tab_runs_and_turns_the_clock() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert!(played.shows("Time lapse"), "{:?}", played.words());
+    assert_eq!(played.value_of("Date"), "Sun 4 Aug 2024");
+    assert_eq!(played.value_of("Time lapse"), "<  Real time  >");
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Time lapse"), "<  10x  >");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Hour"), "22:45");
+    // Down past Day, Month and Year to "Next sunrise".
+    for _ in 0..4 {
+        played.tap(Key::ArrowDown);
+    }
+    played.tap(Key::Enter);
+    assert_eq!(played.value_of("Date"), "Mon 5 Aug 2024");
+    let hour = played.value_of("Hour");
+    assert!(
+        hour.as_str() > "04:30" && hour.as_str() < "05:30",
+        "sunrise at {hour}"
+    );
+}
