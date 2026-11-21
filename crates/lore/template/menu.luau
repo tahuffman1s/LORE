@@ -70,15 +70,34 @@ local TEXT = 26 -- the size of the words
 local LABEL_WIDE = 270 -- the room for a row's name; its value starts after it
 local BAR_WIDE = 210 -- a slider's bar, at the right of the row
 
--- Colours.
-local BACK = "#0c0e13e6" -- behind the whole menu: dark, so the words read on any sky
-local CHOSEN = "#ffffff2e" -- behind the chosen row
-local NOT_CHOSEN = "#00000000" -- behind the others: clear, but still under the pointer
-local WORDS = "white"
-local CHOSEN_WORDS = "#ffd25a"
-local QUIET = "#ffffff99" -- tabs not shown, the line of keys
-local ON = "#7ee08a"
-local OFF = "#ffffff80"
+-- How the menus look. A game can change any of these before it makes its
+-- menus (and before it requires pause_menu.luau, which makes its own), to
+-- give every menu, the pause menu's too, a look of its own:
+--
+--     local menu = require("./menu")
+--     menu.style.back = "#101830e0"
+--     menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
+--     menu.style.shadow = "#00000066" -- a shadow behind each menu
+--
+-- Colours are names or hex codes, as the HUD takes them. `accent` and
+-- `shadow` are off (nil) unless a game says them; each costs a few HUD
+-- pieces a menu.
+menu.style = {
+    back = "#0c0e13e6", -- behind the whole menu: dark, so the words read on any sky
+    chosen = "#ffffff2e", -- behind the chosen row, and the tab in front
+    words = "white",
+    chosenWords = "#ffd25a",
+    quiet = "#ffffff99", -- tabs not shown, the line of keys, rows that only tell
+    on = "#7ee08a",
+    off = "#ffffff80",
+    bar = "#6fa8ff", -- a slider's bar, unless the row says its own colour
+    knob = "white",
+    accent = nil :: string?,
+    shadow = nil :: string?,
+}
+local style = menu.style
+-- Behind the rows that are not chosen: clear, but still under the pointer.
+local NOT_CHOSEN = "#00000000"
 
 -- One row of a menu, as the functions below make it. The fields after
 -- `color` are its HUD pieces, which `menu.new` makes.
@@ -199,6 +218,10 @@ export type Menu = typeof(setmetatable(
         width: number,
         height: number,
         back: HudBox,
+        -- Only with menu.style.shadow and menu.style.accent.
+        shadow: HudBox?,
+        accentLine: HudBox?,
+        marker: HudBox?,
     },
     Menu
 ))
@@ -213,6 +236,11 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
     local right = options and options.right or 40
     local down = options and options.down or 40
     local width = options and options.width or 820
+    local height = TOP + #rows * ROW + FOOT
+    -- Made before the menu's own back, so it is drawn under it.
+    local shadow = if style.shadow
+        then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow })
+        else nil
     local self = setmetatable({
         title = title,
         rows = rows,
@@ -221,9 +249,16 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         right = right,
         down = down,
         width = width,
-        height = TOP + #rows * ROW + FOOT,
-        back = game.hud.box({ right = right, down = down, width = width, height = TOP + #rows * ROW + FOOT, color = BACK }),
+        height = height,
+        back = game.hud.box({ right = right, down = down, width = width, height = height, color = style.back }),
+        shadow = shadow,
+        accentLine = nil :: HudBox?,
+        marker = nil :: HudBox?,
     }, Menu)
+    if style.accent then
+        self.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent })
+        self.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent })
+    end
     self.back.visible = false
     for number, row in rows do
         local top = down + TOP + (number - 1) * ROW
@@ -233,12 +268,12 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         if row.kind ~= "info" then
             row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN })
         end
-        row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = WORDS })
-        row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = WORDS })
+        row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = style.words })
+        row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words })
         if row.kind == "slider" then
             local barLeft = right + width - 24 - BAR_WIDE
-            row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or "#6fa8ff" })
-            row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = "white" })
+            row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or style.bar })
+            row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = style.knob })
         end
         row.pieces = {}
         for _, piece in { row.box or false, row.name, row.value, row.bar or false, row.knob or false } :: { any } do
@@ -255,6 +290,11 @@ end
 
 function Menu.setVisible(self: Menu, visible: boolean)
     self.back.visible = visible
+    for _, piece in { self.shadow, self.accentLine, self.marker } :: { HudBox? } do
+        if piece then
+            piece.visible = visible
+        end
+    end
     for _, row in self.rows do
         for _, piece in row.pieces do
             piece.visible = visible
@@ -433,14 +473,18 @@ function Menu.draw(self: Menu)
         local chosen = number == self.chosen
         local box, name, value = row.box, row.name, row.value
         if box then
-            box.color = if chosen then CHOSEN else NOT_CHOSEN
+            box.color = if chosen then style.chosen else NOT_CHOSEN
+        end
+        local marker = self.marker
+        if chosen and marker then
+            marker.down = self.down + TOP + (number - 1) * ROW
         end
         if name and value then
-            name.color = if chosen then CHOSEN_WORDS elseif row.kind == "info" then QUIET else WORDS
+            name.color = if chosen then style.chosenWords elseif row.kind == "info" then style.quiet else style.words
             value.text = words(row)
-            value.color = if row.kind == "toggle" and row.get and not row.get() then OFF
-                elseif row.kind == "toggle" then ON
-                else WORDS
+            value.color = if row.kind == "toggle" and row.get and not row.get() then style.off
+                elseif row.kind == "toggle" then style.on
+                else style.words
         end
         local bar, knob, get = row.bar, row.knob, row.get
         if bar and knob and get then
@@ -505,10 +549,10 @@ function menu.panel(menus: { Menu }): Panel
         -- A tab is as wide as its title, near enough.
         local wide = #each.title * 15 + 36
         marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN })
-        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = QUIET })
+        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet })
         across += wide + 8
     end
-    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = QUIET })
+    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet })
     local self = setmetatable({
         menus = menus,
         current = first,
@@ -612,8 +656,8 @@ function Panel.draw(self: Panel)
     end
     for number, each in self.menus do
         local front = rawequal(each, self.current)
-        self.tabs[number].color = if front then WORDS else QUIET
-        self.marks[number].color = if front and #self.menus > 1 then CHOSEN else NOT_CHOSEN
+        self.tabs[number].color = if front then style.words else style.quiet
+        self.marks[number].color = if front and #self.menus > 1 then style.chosen else NOT_CHOSEN
     end
     self.current:draw()
     local label = game.input.label

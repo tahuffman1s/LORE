@@ -142,6 +142,16 @@ function clock.dateText(days: number): string
     return string.format("%s %d %s %s", WEEKDAYS[days % 7 + 1], day, MONTHS[month], yearText)
 end
 
+-- The moment in parts: the date as words, the local sundial time and the
+-- time in UTC, each as "14:05".
+function clock.parts(): (string, string, string)
+    local moment = clock.moment()
+    local day = math.floor(moment)
+    local hours = (moment - day) * 24
+    local utc = hours - kept.longitude / 15 - equationOfTime(moment)
+    return clock.dateText(day), clock.hhmm(hours), clock.hhmm(utc)
+end
+
 -- The moment as words: the date, the local sundial time and UTC.
 function clock.describe(): string
     local moment = clock.moment()

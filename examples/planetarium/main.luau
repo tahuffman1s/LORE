@@ -21,27 +21,28 @@
 -- events.luau lists the events, view.luau holds you in place and zooms and
 -- labels, and sky_menu.luau builds the menus with menu.luau.
 
+-- The menus' look, said before any menu is made (the pause menu's too):
+-- dark glass, gold for what is chosen, and a shadow behind each.
+local menu = require("./menu")
+menu.style.back = "#0a1022e8"
+menu.style.chosen = "#ffd27a1c"
+menu.style.chosenWords = "#ffd27a"
+menu.style.words = "#eef3ff"
+menu.style.quiet = "#9fb0d4"
+menu.style.on = "#8fe3b0"
+menu.style.off = "#9fb0d480"
+menu.style.bar = "#ffd27a"
+menu.style.accent = "#ffd27a"
+menu.style.shadow = "#00000066"
+
 local clock = require("./clock")
 local view = require("./view")
 local skyArt = require("./sky_art")
 local events = require("./events")
 local skyMenu = require("./sky_menu")
+local hud = require("./hud")
 
 local panel = skyMenu.panel
-
--- The HUD, made before the pause menu so that it is drawn over all of it.
-local WORDS = "#e8eef8"
-local QUIET = "#ffffff99"
-local place = game.hud.text("", { at = "top", down = 10, size = 26, color = WORDS })
-local moment = game.hud.text("", { at = "top", down = 42, size = 24, color = WORDS })
-local speed = game.hud.text("", { at = "top", down = 72, size = 22, color = QUIET })
-local happening = game.hud.text("", { at = "top", down = 102, size = 24, color = "#ffd25a" })
-local dot = game.hud.box({ at = "center", width = 4, height = 4, color = "#ffffff80" })
-local target = game.hud.text("", { at = "center", down = 34, size = 22, color = WORDS })
-local zoomText = game.hud.text("", { at = "bottom left", size = 22, color = QUIET })
-local caption = game.hud.text("", { at = "bottom", down = -84, size = 30, color = WORDS })
-local captionNote = game.hud.text("", { at = "bottom", down = -50, size = 22, color = WORDS })
-local hints = game.hud.text("", { at = "bottom", size = 20, color = QUIET })
 
 -- The pause menu, made last so that it is drawn over everything else.
 local pauseMenu = require("./pause_menu")
@@ -49,6 +50,7 @@ local pauseMenu = require("./pause_menu")
 -- How long the caption of the last jump stays, in seconds of play.
 local CAPTION_SECONDS = 9
 local captionLeft = 0
+local captionTitle, captionText = "", ""
 
 -- Goes to an event: its place, its moment, how fast time runs, what else
 -- the sky shows, and the way to look.
@@ -69,8 +71,8 @@ local function jump(event: events.Event)
     if facing then
         view.lookAlong(facing)
     end
-    caption.text = event.name .. "   " .. event.place
-    captionNote.text = event.note
+    captionTitle = event.name .. "   ·   " .. event.place
+    captionText = event.note
     captionLeft = CAPTION_SECONDS
 end
 
@@ -171,42 +173,40 @@ game.onDraw(function()
     skyArt.draw(playing)
     view.drawLabels(playing)
 
-    place.text = clock.placeName() .. "   " .. latLong()
-    moment.text = clock.describe()
-    speed.text = "Time: " .. clock.speeds[clock.speed()].name
-    happening.text = whatIsHappening()
-    for _, piece in { place, moment, speed, happening } :: { any } do
-        piece.visible = not panel.isOpen
-    end
-
     local aim = game.player.aim
     local name = view.lookingAt()
     local height = math.floor(view.height(aim) + 0.5)
-    local where = string.format(
-        "%d° %s, %s (%d°)",
-        math.abs(height),
-        if height < 0 then "below the horizon" else "up",
-        view.compass(view.bearing(aim)),
-        math.floor(view.bearing(aim) + 0.5)
-    )
-    target.text = if name then name .. "   " .. where else where
-    target.visible = playing
-    dot.visible = playing
-    zoomText.text = string.format("Zoom %.1fx", view.magnification())
-    zoomText.visible = playing
-
-    caption.visible = playing and captionLeft > 0
-    captionNote.visible = caption.visible
-
+    local date, time, utc = clock.parts()
     local label = game.input.label
-    hints.text = string.format(
-        "%s: up/down zoom, left/right time lapse   %s menus   %s labels   %s constellations   %s ground   %s pause",
-        label("move"),
-        label("interact"),
-        label("jump"),
-        label("reload"),
-        label("use_item"),
-        label("pause")
-    )
-    hints.visible = playing
+    -- The caption slides in over half a second and fades over its last.
+    local shownFor = CAPTION_SECONDS - captionLeft
+    local captionShown = math.min(shownFor / 0.5, captionLeft / 1.0, 1)
+    hud.draw({
+        playing = playing,
+        place = clock.placeName(),
+        where = latLong(),
+        date = date,
+        time = time,
+        utc = utc,
+        speed = clock.speed(),
+        speedName = clock.speeds[clock.speed()].name,
+        happening = whatIsHappening(),
+        bearing = view.bearing(aim),
+        height = height,
+        target = name,
+        targetDetail = if name then string.format("%d° %s", math.abs(height), if height < 0 then "below the horizon" else "up") else "",
+        zoom = view.zoom(),
+        magnification = view.magnification(),
+        caption = captionTitle,
+        captionNote = captionText,
+        captionShown = math.max(captionShown, 0),
+        keys = {
+            { label("move"), "zoom and time" },
+            { label("interact"), "menus" },
+            { label("jump"), "labels" },
+            { label("reload"), "constellations" },
+            { label("use_item"), "ground" },
+            { label("pause"), "pause" },
+        },
+    })
 end)

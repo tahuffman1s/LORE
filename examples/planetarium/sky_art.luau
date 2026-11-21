@@ -3,10 +3,11 @@
 --
 -- The HUD draws boxes and text, not lines, so a line between two stars is a
 -- row of small dots, following the sky between its stars and stopping short
--- of each so the star itself shows. The HUD holds 1024 pieces in all and the
--- menus need most of the rest, so the lines share 500 dots: the dots of the
--- lines on the screen are spread to fit, close together when zoomed in on a
--- few lines and further apart across the whole sky.
+-- of each so the star itself shows. The HUD holds 1024 pieces in all, and
+-- the menus and the rest of the HUD need most of them, so the lines share
+-- 400 dots: the dots of the lines on the screen are spread to fit, close
+-- together when zoomed in on a few lines and further apart across the
+-- whole sky.
 
 local view = require("./view")
 local starfield = require("./starfield")
@@ -44,7 +45,7 @@ end
 local CLOSEST = 8
 local GAP = 7
 -- How many dots there are for all the lines.
-local MOST_DOTS = 500
+local MOST_DOTS = 400
 local DOT = 3
 local LINE_COLOR = "#8fb2ffb0"
 local NAME_COLOR = "#9db8ffa0"

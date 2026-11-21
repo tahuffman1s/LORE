@@ -586,7 +586,7 @@ fn the_jungle_has_the_pause_menu_beside_its_weather_panel() {
 fn the_planetarium_holds_the_observer_still_and_the_walking_keys_zoom() {
     let mut played = Played::example("planetarium", true);
     assert!(
-        played.shows("Death Valley, California   36.5° N, 116.9° W"),
+        played.shows("Death Valley, California") && played.shows("36.5° N, 116.9° W"),
         "{:?}",
         played.words()
     );
@@ -630,10 +630,10 @@ fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
         "{:?}",
         played.words()
     );
-    assert!(played.shows("Time: Stopped"));
+    assert!(played.shows("Stopped"));
     // Time runs faster with D, as the left stick would push it.
     played.tap(Key::D);
-    assert!(played.shows("Time: Real time"), "{:?}", played.words());
+    assert!(played.shows("Real time"), "{:?}", played.words());
 }
 
 #[test]
@@ -788,11 +788,9 @@ fn the_planetarium_planets_tab_says_where_each_is_and_turns_to_it() {
     played.tap(Key::Enter);
     played.step();
     assert_eq!(played.set(), "gameplay");
+    // The name under the crosshair is Saturn's.
     assert!(
-        played
-            .words()
-            .iter()
-            .any(|words| words.starts_with("Saturn   ")),
+        played.shows("Saturn") && played.shows("22° up"),
         "{:?}",
         played.words()
     );

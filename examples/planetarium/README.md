@@ -51,6 +51,17 @@ aurora, the Milky Way, town lights, the size of the moon and exposure.
 Time lapse goes from stopped and real time up to a day a second. Time only
 runs forward, so the Time tab has buttons to step back an hour or a day.
 
+## How it looks
+
+The HUD is cards of dark glass with gold accents (`hud.luau`, built with
+`theme.luau`): where you stand, a large clock with the time lapse as a row
+of pips, a compass along the top that slides as you turn, a gold banner
+when an eclipse, a meteor shower or the aurora is on, a crosshair that
+names what it's on, and a zoom gauge. Jumping to an event slides its
+caption in as a lower third, and it fades out again. The menus, the pause
+menu's too, take the same look through `menu.style` in `menu.luau`, set at
+the top of `main.luau`.
+
 ## Constellations and planets
 
 Thirty-four constellations are traced as dotted stick figures with their
