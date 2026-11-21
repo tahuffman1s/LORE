@@ -110,7 +110,7 @@ impl Played {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, position, .. } => Some((text.to_owned(), position)),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .collect();
     }
@@ -580,4 +580,218 @@ fn the_jungle_has_the_pause_menu_beside_its_weather_panel() {
     played.tap(Key::Escape);
     assert_eq!(played.set(), "gameplay");
     assert!(!played.host().paused() && !played.shows("Resume"));
+}
+
+#[test]
+fn the_planetarium_holds_the_observer_still_and_the_walking_keys_zoom() {
+    let mut played = Played::example("planetarium", true);
+    assert!(
+        played.shows("Death Valley, California") && played.shows("36.5° N, 116.9° W"),
+        "{:?}",
+        played.words()
+    );
+    // Its first sky is seen at its widest, through the player's own setting.
+    assert_eq!(played.settings.field_of_view, 110.0);
+    played.input.press(Key::W);
+    for _ in 0..30 {
+        played.step();
+    }
+    played.input.release(Key::W);
+    played.step();
+    assert!(played.settings.field_of_view < 100.0);
+    let [x, y, z] = played.world.player().position;
+    assert!(
+        x.abs() + y.abs() + z.abs() < 0.01,
+        "the observer moved to {x} {y} {z}"
+    );
+    // The pause menu shows the player's own field of view, and closing it
+    // zooms in again.
+    played.tap(Key::Escape);
+    assert!(played.host().paused());
+    assert_eq!(
+        played.settings.field_of_view,
+        Settings::default().field_of_view
+    );
+    played.tap(Key::Escape);
+    assert!(played.settings.field_of_view < 100.0);
+}
+
+#[test]
+fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    assert_eq!(played.set(), "menu");
+    assert!(played.shows("Eclipses") && played.shows("Total solar eclipse, 2024"));
+    played.tap(Key::Enter);
+    played.step();
+    assert_eq!(played.set(), "gameplay");
+    assert!(
+        played.shows("Total solar eclipse, 100% of the sun covered"),
+        "{:?}",
+        played.words()
+    );
+    assert!(played.shows("Stopped"));
+    // Time runs faster with D, as the left stick would push it.
+    played.tap(Key::D);
+    assert!(played.shows("Real time"), "{:?}", played.words());
+}
+
+#[test]
+fn the_planetarium_has_no_ground_until_g_brings_it_back() {
+    let mut played = Played::example("planetarium", true);
+    let ground = |played: &mut Played| {
+        // The Sky tab, the sixth, from the Eclipses the menu opens at.
+        played.tap(Key::E);
+        for _ in 0..5 {
+            played.tap(Key::E);
+        }
+        let shown = played.value_of("Ground");
+        played.tap(Key::Escape);
+        shown
+    };
+    assert_eq!(ground(&mut played), "off");
+    played.tap(Key::G);
+    assert_eq!(ground(&mut played), "on");
+    played.tap(Key::G);
+    assert_eq!(ground(&mut played), "off");
+}
+
+#[test]
+fn every_planetarium_event_lands_on_what_it_promises() {
+    const TOTAL_SOLAR: &str = "Total solar eclipse, 100% of the sun covered";
+    const TOTAL_LUNAR: &str = "Total lunar eclipse";
+    let eclipses = [
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        "Annular solar eclipse",
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_SOLAR,
+        TOTAL_LUNAR,
+        TOTAL_LUNAR,
+        TOTAL_LUNAR,
+    ];
+    let night = [
+        "The Perseids are falling",
+        "The Geminids are falling",
+        "The Leonids are falling",
+        "",
+        "",
+        "",
+        "The northern lights are out",
+        "",
+        "",
+    ];
+    let mut played = Played::example("planetarium", true);
+    for (tab, list) in [eclipses.as_slice(), night.as_slice()]
+        .into_iter()
+        .enumerate()
+    {
+        for (row, expected) in list.iter().enumerate() {
+            played.tap(Key::E);
+            for _ in 0..tab {
+                played.tap(Key::E);
+            }
+            // A menu keeps its chosen row, so the next event is one down.
+            if row > 0 {
+                played.tap(Key::ArrowDown);
+            }
+            played.tap(Key::Enter);
+            played.step();
+            assert_eq!(played.set(), "gameplay");
+            if expected.is_empty() {
+                continue;
+            }
+            assert!(
+                played.words().iter().any(|words| words.contains(expected)),
+                "event {} of tab {tab}: {:?}",
+                row + 1,
+                played.words()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_planetarium_time_tab_runs_and_turns_the_clock() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert!(played.shows("Time lapse"), "{:?}", played.words());
+    assert_eq!(played.value_of("Date"), "Sun 4 Aug 2024");
+    assert_eq!(played.value_of("Time lapse"), "<  Real time  >");
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Time lapse"), "<  10x  >");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Hour"), "22:45");
+    // Down past Day, Month and Year to "Next sunrise".
+    for _ in 0..4 {
+        played.tap(Key::ArrowDown);
+    }
+    played.tap(Key::Enter);
+    assert_eq!(played.value_of("Date"), "Mon 5 Aug 2024");
+    let hour = played.value_of("Hour");
+    assert!(
+        hour.as_str() > "04:30" && hour.as_str() < "05:30",
+        "sunrise at {hour}"
+    );
+}
+
+#[test]
+fn the_planetarium_month_slider_stops_at_every_month() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    // Down from "Time lapse" past Hour and Day to Month, and on to August's
+    // last day first, so a month change has a day to keep inside it.
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowDown);
+    for _ in 0..27 {
+        played.tap(Key::ArrowRight);
+    }
+    assert_eq!(played.value_of("Date"), "Sat 31 Aug 2024");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    // 31 August, a month on, is the last day of September, not 1 October.
+    assert_eq!(played.value_of("Date"), "Mon 30 Sep 2024");
+    for month in ["October", "November", "December", "January"] {
+        played.tap(Key::ArrowRight);
+        assert_eq!(played.value_of("Month"), month);
+    }
+}
+
+#[test]
+fn the_planetarium_planets_tab_says_where_each_is_and_turns_to_it() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert!(
+        played.shows("Planets") && played.shows("Neptune"),
+        "{:?}",
+        played.words()
+    );
+    // Death Valley on a moonless August night: Saturn is up in the south-east.
+    let saturn = played.value_of("Saturn");
+    assert_eq!(saturn, "22° up, SE, magnitude 0.7");
+    // Down past the sun, the moon, Mercury, Venus, Mars and Jupiter.
+    for _ in 0..6 {
+        played.tap(Key::ArrowDown);
+    }
+    played.tap(Key::Enter);
+    played.step();
+    assert_eq!(played.set(), "gameplay");
+    // The name under the crosshair is Saturn's.
+    assert!(
+        played.shows("Saturn") && played.shows("22° up"),
+        "{:?}",
+        played.words()
+    );
 }

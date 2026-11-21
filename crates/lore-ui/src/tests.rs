@@ -83,7 +83,7 @@ fn rects(ui: &Ui) -> Vec<([f32; 2], [f32; 2], Color)> {
                 color,
                 ..
             } => Some((position, size, color)),
-            Draw::Text { .. } => None,
+            Draw::Text { .. } | Draw::Turned { .. } => None,
         })
         .collect()
 }
@@ -93,7 +93,7 @@ fn texts(ui: &Ui) -> Vec<String> {
         .iter()
         .filter_map(|draw| match draw {
             Draw::Text { text, .. } => Some(text.to_owned()),
-            Draw::Rect { .. } => None,
+            Draw::Rect { .. } | Draw::Turned { .. } => None,
         })
         .collect()
 }
@@ -1818,4 +1818,40 @@ fn the_wheel_and_a_drag_add_up() {
     at.wheel = 0.0;
     ui.update(&at, 1.0 / 60.0, HD);
     assert_eq!(find(&ui, "Item 9")[1], start - 100.0 - 102.0);
+}
+
+#[test]
+fn a_turned_box_and_an_image_are_drawn_turned_and_resized() {
+    let mut ui = Ui::default();
+    let card = ui.hud_rect(Anchor::TopLeft, [10.0, 20.0], [100.0, 40.0], Color::WHITE);
+    let picture = ui.hud_image(Anchor::TopLeft, [0.0, 0.0], [64.0, 32.0], 3, Color::WHITE);
+    // Unturned and square-cornered, a box is drawn as it always was.
+    ui.update(&UiInput::default(), 1.0 / 60.0, [1920, 1080]);
+    assert_eq!(rects(&ui).len(), 1);
+    ui.set_size(card, [200.0, 50.0]).unwrap();
+    ui.set_angle(card, 0.5).unwrap();
+    ui.set_corner(card, 6.0).unwrap();
+    ui.set_angle(picture, -1.0).unwrap();
+    ui.update(&UiInput::default(), 1.0 / 60.0, [1920, 1080]);
+    let turned: Vec<_> = ui
+        .draw()
+        .iter()
+        .filter_map(|draw| match draw {
+            Draw::Turned {
+                size,
+                angle,
+                corner,
+                image,
+                ..
+            } => Some((size, angle, corner, image)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turned.len(), 2);
+    assert_eq!(turned[0], ([200.0, 50.0], 0.5, 6.0, None));
+    assert_eq!(turned[1], ([64.0, 32.0], -1.0, 0.0, Some(3)));
+    // Only boxes and images turn, and only boxes and bars and images resize.
+    let words = ui.hud_text(Anchor::TopLeft, [0.0, 0.0], 20.0, "hi");
+    assert!(ui.set_angle(words, 1.0).is_err());
+    assert!(ui.set_size(words, [1.0, 1.0]).is_err());
 }

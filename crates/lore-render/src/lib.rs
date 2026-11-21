@@ -77,6 +77,7 @@ pub use lamps::{Beam, Lamp, MOST_LAMPS};
 pub use look::{Look, LookShares, ToneMapping};
 pub use lore_sky::{Heavens, SkyPlace, date_from_2000, days_from_2000};
 pub use occlusion::AmbientOcclusion;
+pub use overlay::HudImage;
 #[cfg(feature = "panels")]
 pub use panels::Panels;
 pub use renderer::{RenderConfig, Renderer};

@@ -269,6 +269,12 @@ declare extern type HudBar with
     --- Example: health.value = 70 / 100
     value: number
 
+    --- Its size when full, in pixels on a screen 1080 high. Set them to
+    --- resize it.
+    --- Example: health.width = 400
+    width: number
+    height: number
+
     --- The colour of the full part: a name or a hex code, as for text.
     --- Example: health.color = "orange"
     color: string
@@ -321,6 +327,22 @@ declare extern type HudBox with
     --- Example: dot.color = "green"
     color: string
 
+    --- Its size, in pixels on a screen 1080 high. Set them to resize it.
+    --- Example: dot.width = 12
+    width: number
+    height: number
+
+    --- How round its corners are, in pixels on a screen 1080 high: 0 is
+    --- square, half its height a pill.
+    --- Example: panel.corner = 12
+    corner: number
+
+    --- How far it is turned about its middle, in degrees clockwise. Where
+    --- it is pinned is where it would be unturned, and the pointer finds it
+    --- there too.
+    --- Example: needle.rotation = 45
+    rotation: number
+
     --- False hides it until it is set to true again.
     --- Example: dot.visible = false
     visible: boolean
@@ -358,6 +380,104 @@ declare extern type HudBox with
     --- between 0 and 1, so a drag past the end of a slider reads past 1:
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = dot:pointerAt()
+    function pointerAt(self): (number, number)
+end
+
+--- A straight line on the HUD, such as a line between two stars of a
+--- star chart or a pointer: what `game.hud.line` gives. It runs from
+--- `right` and `down` to `toRight` and `toDown`, each measured from the
+--- point it is pinned to.
+--- Example: local line = game.hud.line({ at = "center", toRight = 120, toDown = 40 })
+declare extern type HudLine with
+    --- The colour: a name or a hex code, as for text.
+    --- Example: line.color = "#8fb2ffb0"
+    color: string
+
+    --- False hides it until it is set to true again.
+    --- Example: line.visible = false
+    visible: boolean
+
+    --- Where it starts, right of and below where it is pinned, in pixels
+    --- on a screen 1080 high (below 0 is left or up).
+    --- Example: line.right, line.down = -50, 20
+    right: number
+    down: number
+
+    --- Where it ends, measured the same way.
+    --- Example: line.toRight, line.toDown = 80, -30
+    toRight: number
+    toDown: number
+
+    --- How thick it is, in pixels on a screen 1080 high.
+    --- Example: line.thickness = 3
+    thickness: number
+
+    --- True while the pointer is near it, in the box round it, as this tick
+    --- saw it. See HudText's `hovered`.
+    --- Example: if line.hovered then line.color = "yellow" end
+    hovered: boolean
+
+    --- True from the tick a click begins near it until it is let go. See
+    --- HudText's `pressed`.
+    --- Example: if line.pressed then line.color = "red" end
+    pressed: boolean
+
+    --- Takes it off the HUD for good.
+    --- Example: line:remove()
+    function remove(self): ()
+
+    --- Where the pointer is across the box round it, from 0 to 1. See
+    --- HudText's `pointerAt`.
+    --- Example: local across, down = line:pointerAt()
+    function pointerAt(self): (number, number)
+end
+
+--- One of the game's pictures on the HUD: what `game.hud.image` gives.
+--- Pictures are PNG files in a folder called `images` in the game's
+--- folder, named without the folder and `.png`: `images/stars/orion.png`
+--- is "stars/orion".
+--- Example: local compass = game.hud.image("compass", { at = "top", width = 200 })
+declare extern type HudImage with
+    --- What it is tinted with: "white" (the usual) shows it as it is, and
+    --- a see-through colour fades it: "#ffffff80" is half see-through.
+    --- Example: compass.color = "#ffffff60"
+    color: string
+
+    --- False hides it until it is set to true again.
+    --- Example: compass.visible = false
+    visible: boolean
+
+    --- How far it sits right of and below where it is pinned, in pixels on
+    --- a screen 1080 high (below 0 is left or up).
+    --- Example: compass.down = 20
+    right: number
+    down: number
+
+    --- Its size on the screen, in pixels on a screen 1080 high.
+    --- Example: compass.width = 300
+    width: number
+    height: number
+
+    --- How far it is turned about its middle, in degrees clockwise.
+    --- Example: compass.rotation = -game.player.aim.x * 90
+    rotation: number
+
+    --- True while the pointer is over it, unturned. See HudText's `hovered`.
+    --- Example: if compass.hovered then compass.color = "#ffffffff" end
+    hovered: boolean
+
+    --- True from the tick a click begins on it until it is let go. See
+    --- HudText's `pressed`.
+    --- Example: if compass.pressed then print("compass!") end
+    pressed: boolean
+
+    --- Takes it off the HUD for good.
+    --- Example: compass:remove()
+    function remove(self): ()
+
+    --- Where the pointer is across it, from 0 to 1. See HudText's
+    --- `pointerAt`.
+    --- Example: local across, down = compass:pointerAt()
     function pointerAt(self): (number, number)
 end
 
@@ -1683,6 +1803,25 @@ declare game: {
         --- Example: local size = game.sky.moonSize()
         moonSize: () -> number,
 
+        --- Says whether the sky's dark ground is drawn below the horizon:
+        --- true (the usual) or false. It is the backdrop beyond the level,
+        --- not the level's own ground, which is always drawn. With false
+        --- the sky goes all the way round, as in a planetarium or with
+        --- Stellarium's ground turned off: where the level has no land you
+        --- see the stars, the planets, the moon, the Milky Way and the sun
+        --- below your feet where they really are, dimmed near the horizon
+        --- by the air as they are above it; where it has land, you see the
+        --- land. Shooting stars and the aurora, which are in the air
+        --- overhead, stay above the horizon. Kept when the script is read
+        --- again; setGround(true) puts the ground back.
+        --- Example: game.sky.setGround(false)
+        setGround: (shown: boolean) -> (),
+
+        --- Whether the sky's dark ground is drawn below the horizon, as
+        --- setGround was told: true unless it was told false.
+        --- Example: local shown = game.sky.ground()
+        ground: () -> boolean,
+
         --- Says how bright the Milky Way is drawn: how many times its real
         --- brightness, from 0 (not at all) to 10. 1 is as it really is, the
         --- usual: on a dark night with no moon, a band of star clouds and
@@ -1952,7 +2091,7 @@ declare game: {
     --- Pieces made at the top of the file are made again when the script is
     --- saved, so the HUD follows the file as you edit it. For a list that
     --- grows and shrinks, make as many pieces as it can have and hide the
-    --- ones not in use; a HUD holds up to 1024 pieces.
+    --- ones not in use; a HUD holds up to 4096 pieces.
     ---
     --- Every piece takes these options, all of which can be left out:
     ---   at: where on the screen it is pinned: "top left" (the default),
@@ -1989,8 +2128,36 @@ declare game: {
         --- Puts a plain box on the HUD. Its own options:
         ---   width, height: its size in pixels on a screen 1080 high. 100
         ---     by 100 if left out.
+        ---   corner: how round its corners are, in the same pixels. 0 if
+        ---     left out.
+        ---   rotation: how far it is turned about its middle, in degrees
+        ---     clockwise. 0 if left out.
         --- Example: local dot = game.hud.box({ at = "center", width = 6, height = 6 })
-        box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBox,
+        --- Example: local card = game.hud.box({ width = 400, height = 120, corner = 14, color = "#0a1022c8" })
+        box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, corner: number?, rotation: number?, color: string? }?) -> HudBox,
+
+        --- Puts a straight line on the HUD. Its own options:
+        ---   right, down: where it starts, from the point `at` pins to.
+        ---   toRight, toDown: where it ends, measured the same way. 100 and
+        ---     0 if left out.
+        ---   thickness: how thick it is, in pixels on a screen 1080 high. 2
+        ---     if left out.
+        --- Example: local line = game.hud.line({ at = "center", right = -60, toRight = 60, thickness = 2 })
+        line: (options: { at: HudPlace?, right: number?, down: number?, toRight: number?, toDown: number?, thickness: number?, color: string? }?) -> HudLine,
+
+        --- Puts one of the game's pictures on the HUD: a PNG file in the
+        --- game's `images` folder, by its name there without `.png`
+        --- (`images/stars/orion.png` is "stars/orion"). A name that is no
+        --- picture is a mistake that says the nearest. Its own options:
+        ---   width, height: its size in pixels on a screen 1080 high. As
+        ---     big as the picture is if both are left out; with only one,
+        ---     the other keeps the picture's shape.
+        ---   rotation: how far it is turned about its middle, in degrees
+        ---     clockwise. 0 if left out.
+        ---   color: what it is tinted with; "white", the usual, shows it as
+        ---     it is, and "#ffffff80" half see-through.
+        --- Example: local compass = game.hud.image("compass", { at = "top", width = 200 })
+        image: (name: string, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, rotation: number?, color: string? }?) -> HudImage,
 
         --- Puts a graph of the last frame times on the HUD, drawn against
         --- lines at 60 and 30 frames a second. Its own options:

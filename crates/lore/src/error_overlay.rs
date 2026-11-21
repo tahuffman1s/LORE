@@ -365,7 +365,9 @@ mod tests {
         for draw in buffer.draw() {
             match draw {
                 Draw::Text { text, .. } => words.push(text.to_owned()),
-                Draw::Rect { position, size, .. } => boxes.push((position, size)),
+                Draw::Rect { position, size, .. } | Draw::Turned { position, size, .. } => {
+                    boxes.push((position, size));
+                }
             }
         }
         (words, boxes)

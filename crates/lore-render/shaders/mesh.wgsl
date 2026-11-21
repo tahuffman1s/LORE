@@ -829,10 +829,32 @@ const CLOUD_LOW_STEPS: i32 = 22;
 const HAZE_ONWARDS: f32 = 0.8;
 
 // The light that comes from `direction` out of a clear sky.
+// Whether the sky goes on below the horizon (`game.sky.setGround(false)`):
+// no dark ground is drawn there, and the stars, the planets, the moon, the
+// Milky Way and the sun are drawn where they are.
+fn open_below() -> bool {
+    return view.heavens[26].z > 0.5;
+}
+
+// How high a line of sight looks for the air it goes through: as it is,
+// or, below the horizon of a sky that goes on, mirrored, so the air near
+// the horizon dims and reddens what is below it as it does what is above.
+fn seen_rise(rise: f32) -> f32 {
+    return select(rise, abs(rise), open_below());
+}
+
+// How much of the sky is drawn at a height whose sine is `rise`, fading out
+// between `low` and `high` below the ground, or all of it where the sky goes
+// on below the horizon.
+fn above_ground(rise: f32, low: f32, high: f32) -> f32 {
+    return select(smoothstep(low, high, rise), 1.0, open_below());
+}
+
 fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     // The heights are evenly spaced in the square root of the angle above
-    // the horizon. Below it, the sky is as it is at the horizon.
-    let angle = asin(clamp(direction.y, 0.0, 1.0));
+    // the horizon. Below it, the sky is as it is at the horizon, or the
+    // mirror of above where the sky goes on.
+    let angle = asin(clamp(seen_rise(direction.y), 0.0, 1.0));
     let place = sqrt(angle / 1.5707963) * (SKY_HEIGHTS - 1.0);
     let below = i32(min(floor(place), SKY_HEIGHTS - 2.0));
     let share = clamp(place - f32(below), 0.0, 1.0);
@@ -851,12 +873,12 @@ fn sky_colour(direction: vec3<f32>) -> vec3<f32> {
     // glow of towns, if a game says there are any. How the last two grow
     // towards the horizon is kept with the heights (`sky::airglow_towards`,
     // `lore_sky::town_glow_towards`).
-    let rise = clamp(direction.y, 0.0, 1.0);
+    let rise = clamp(seen_rise(direction.y), 0.0, 1.0);
     let above = air * by_air + haze * by_haze + view.heavens[4].rgb * (1.0 + 0.8 * (1.0 - rise))
         + view.heavens[7].rgb * air_row.w + view.heavens[8].rgb * haze_row.w;
     // Under the horizon is dark ground: where a level ends, or has a hole,
-    // it does not open onto more sky.
-    return mix(above, view.ground.rgb * 0.25, smoothstep(0.0, 0.1, -direction.y));
+    // it does not open onto more sky, unless the game says it does.
+    return mix(above, view.ground.rgb * 0.25, select(smoothstep(0.0, 0.1, -direction.y), 0.0, open_below()));
 }
 
 // How much air a line of sight `rise` (the sine of how high it looks)
@@ -1206,7 +1228,7 @@ fn lore_moon_lux(surface: f32, full: f32) -> f32 {
 // says, lit by the sun as moon dust is, so its phase, its terminator and
 // its seas are as they are, its dark side faint with earthshine.
 fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
-    if view.heavens[2].w <= 0.0 || direction.y < -0.03 {
+    if view.heavens[2].w <= 0.0 || (direction.y < -0.03 && !open_below()) {
         return colour;
     }
     var seen = colour;
@@ -1217,7 +1239,7 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let sun = view.heavens[0].xyz;
     let per_lux = view.heavens[5].w;
     let surface = view.heavens[4].w;
-    let up = smoothstep(-0.03, 0.02, direction.y);
+    let up = above_ground(direction.y, -0.03, 0.02);
     // How much of its face is lit, as seen from here.
     let full = (1.0 - dot(sun, towards)) * 0.5;
     let near = dot(direction, towards);
@@ -1300,7 +1322,7 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
         // Low down, the air it shines through dims it and turns it orange;
         // high up, the eye takes its colour for white, as it does the
         // sun's, so it is counted against straight overhead.
-        let rise = clamp(direction.y, 0.0, 1.0);
+        let rise = clamp(seen_rise(direction.y), 0.0, 1.0);
         let air = 1.0 / (rise + 0.50572 * pow(degrees(asin(rise)) + 6.07995, -1.6364));
         let dimmed = exp(-0.921 * vec3<f32>(0.11, 0.19, 0.33) * max(air - 1.0, 0.0));
         let rim = smoothstep(1.0, 1.0 - 2.5 * pixel / radius, out);
@@ -1322,7 +1344,7 @@ fn night_sky(colour: vec3<f32>, direction: vec3<f32>, pixel: f32) -> vec3<f32> {
     let among = among_stars(direction);
     // What lies beyond the air: the Milky Way and the dust between the
     // planets, dimmed by the air as the stars are.
-    let rise = clamp(direction.y, 0.0, 1.0);
+    let rise = clamp(seen_rise(direction.y), 0.0, 1.0);
     let beyond = (milky_way_light(among, pixel) + zodiacal_light(direction, among))
         * through_air_mass(rise) * up;
     // A faint glow is seen only as far as it stands out from the sky round
@@ -1429,7 +1451,7 @@ const STAR_REACH: f32 = 0.007;
 // town only the bright ones are left.
 fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) -> vec3<f32> {
     let per_lux = view.heavens[5].w;
-    if per_lux <= 0.0 || direction.y <= 0.0 {
+    if per_lux <= 0.0 || (direction.y <= 0.0 && !open_below()) {
         return vec3<f32>(0.0);
     }
     // The face of the cube it goes through, and its square there.
@@ -1457,8 +1479,8 @@ fn real_stars(towards: vec3<f32>, direction: vec3<f32>, pixel: f32, sky: f32) ->
     let held = star_squares[(face * STAR_FACE_SQUARES + square.y) * STAR_FACE_SQUARES + square.x];
 
     let fall = star_fall(pixel);
-    let twinkles = twinkling(direction.y);
-    let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
+    let twinkles = twinkling(seen_rise(direction.y));
+    let dimmed = through_air_mass(clamp(seen_rise(direction.y), 0.0, 1.0));
     let least = faintest_seen(sky) / max(dimmed.g, 1e-6);
     var light = vec3<f32>(0.0);
     for (var number = 0u; number < held.y; number++) {
@@ -1689,11 +1711,11 @@ fn faintest_seen(sky: f32) -> f32 {
 // as a planet is a disc, not a point, and twinkles little.
 fn planets_light(direction: vec3<f32>, pixel: f32, sky: f32) -> vec3<f32> {
     let per_lux = view.heavens[5].w;
-    if per_lux <= 0.0 || direction.y <= 0.0 {
+    if per_lux <= 0.0 || (direction.y <= 0.0 && !open_below()) {
         return vec3<f32>(0.0);
     }
     let fall = star_fall(pixel);
-    let dimmed = through_air_mass(clamp(direction.y, 0.0, 1.0));
+    let dimmed = through_air_mass(clamp(seen_rise(direction.y), 0.0, 1.0));
     let least = faintest_seen(sky) / max(dimmed.g, 1e-6);
     var light = vec3<f32>(0.0);
     for (var planet = 0u; planet < 7u; planet++) {
@@ -2990,7 +3012,7 @@ fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<
         shut = smoothstep(0.6, 1.0, view.clouds.x);
         let grey = mix(
             storm_haze(normalize(vec3<f32>(direction.x, 0.02, direction.z))), view.ground.rgb * 0.25,
-            smoothstep(0.0, 0.1, -direction.y),
+            select(smoothstep(0.0, 0.1, -direction.y), 0.0, open_below()),
         );
         colour = mix(colour, grey, shut);
     }
@@ -3008,7 +3030,7 @@ fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<
     let sunward = dot(direction, view.heavens[0].xyz) > 0.0;
     if whole && sunward && out < 1.0 {
         disc = pow(vec3<f32>(sqrt(1.0 - out)), vec3<f32>(0.397, 0.503, 0.652))
-            * sun_through_air(direction.y);
+            * sun_through_air(seen_rise(direction.y));
     }
     // In an eclipse the moon's dark disc hides the sun's, at the size the
     // moon is drawn; and when it hides it all, the sun's corona shows round
@@ -3031,7 +3053,7 @@ fn sky_along(direction: vec3<f32>, start: f32, speck: f32, whole: bool) -> vec3<
                 + 0.15 * sin(atan2(across, dot(normalize(beside + vec3<f32>(1e-7)), cross(north, view.heavens[0].xyz))) * 7.0);
             // Its inner part falls off steeply from the sun's edge.
             let falls = pow(max(away, 1.0), -6.0);
-            disc += vec3<f32>(1.0, 0.97, 0.92) * sun_through_air(direction.y) * 1.5e-6 * corona
+            disc += vec3<f32>(1.0, 0.97, 0.92) * sun_through_air(seen_rise(direction.y)) * 1.5e-6 * corona
                 * falls * streaked * past_moon;
         }
     }

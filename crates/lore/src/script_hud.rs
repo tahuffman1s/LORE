@@ -255,7 +255,33 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> Placed {
         HudShape::Bar { value, size } => {
             ui.hud_bar(piece.anchor, piece.offset, *size, piece.color, *value)
         }
-        HudShape::Box { size } => ui.hud_rect(piece.anchor, piece.offset, *size, piece.color),
+        HudShape::Box {
+            size,
+            corner,
+            rotation,
+        } => {
+            let widget = ui.hud_rect(piece.anchor, piece.offset, *size, piece.color);
+            // The widget is this UI's own HUD rectangle, so neither can fail.
+            let _ = ui.set_corner(widget, *corner);
+            let _ = ui.set_angle(widget, rotation.to_radians());
+            widget
+        }
+        HudShape::Line { to, thickness } => {
+            let (offset, size, angle) =
+                lore_ui::hud_line(piece.anchor, piece.offset, *to, *thickness);
+            let widget = ui.hud_rect(piece.anchor, offset, size, piece.color);
+            let _ = ui.set_angle(widget, angle);
+            widget
+        }
+        HudShape::Image {
+            image,
+            size,
+            rotation,
+        } => {
+            let widget = ui.hud_image(piece.anchor, piece.offset, *size, *image, piece.color);
+            let _ = ui.set_angle(widget, rotation.to_radians());
+            widget
+        }
         // The frame graph is drawn by the engine from the frame times.
         HudShape::Graph { size, frames } => {
             return Placed::Graph(Box::new(Graph::new(ui, piece, *size, *frames)));
@@ -268,16 +294,42 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> Placed {
 }
 
 /// Makes `widget` show what `piece` now holds. Where a piece is pinned
-/// and how big it is never change, so only the rest is copied.
+/// never changes, so only the rest is copied.
 fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
     // `widget` was made from this piece by `add`, so it is of the kind
     // each of these takes and none of them can fail.
-    let _ = match &piece.shape {
-        HudShape::Text { text, .. } => ui.set_text(widget, text),
-        HudShape::Bar { value, .. } => ui.set_bar(widget, *value),
-        HudShape::Box { .. } | HudShape::Graph { .. } => Ok(()),
-    };
+    let mut offset = piece.offset;
+    match &piece.shape {
+        HudShape::Text { text, .. } => {
+            let _ = ui.set_text(widget, text);
+        }
+        HudShape::Bar { value, size } => {
+            let _ = ui.set_bar(widget, *value);
+            let _ = ui.set_size(widget, *size);
+        }
+        HudShape::Box {
+            size,
+            corner,
+            rotation,
+        } => {
+            let _ = ui.set_size(widget, *size);
+            let _ = ui.set_corner(widget, *corner);
+            let _ = ui.set_angle(widget, rotation.to_radians());
+        }
+        HudShape::Line { to, thickness } => {
+            let (placed, size, angle) =
+                lore_ui::hud_line(piece.anchor, piece.offset, *to, *thickness);
+            offset = placed;
+            let _ = ui.set_size(widget, size);
+            let _ = ui.set_angle(widget, angle);
+        }
+        HudShape::Image { size, rotation, .. } => {
+            let _ = ui.set_size(widget, *size);
+            let _ = ui.set_angle(widget, rotation.to_radians());
+        }
+        HudShape::Graph { .. } => {}
+    }
     let _ = ui.set_color(widget, piece.color);
-    let _ = ui.set_offset(widget, piece.offset);
+    let _ = ui.set_offset(widget, offset);
     let _ = ui.set_shown(widget, piece.visible);
 }

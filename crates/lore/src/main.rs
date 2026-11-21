@@ -445,6 +445,7 @@ fn check(folder: &Path) -> Result<(), String> {
     // Read before the script runs, so a sound that cannot be played is not
     // one the script is let play. Each such file is logged as it is found.
     game.check_sounds();
+    game.check_images();
     let mut input = lore::input::Input::new(config.actions.clone());
     // Something is under the pointer all through, so code that only runs
     // while a piece of the HUD is hovered runs too.

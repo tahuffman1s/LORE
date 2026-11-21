@@ -44,6 +44,14 @@ fn main() -> Result<(), UiError> {
             } => {
                 println!("text  {size:6.0} high    at {x:6.0}, {y:<6.0} \"{text}\"");
             }
+            Draw::Turned {
+                position: [x, y],
+                size: [w, h],
+                angle,
+                ..
+            } => {
+                println!("turned {w:5.0} x {h:<5.0} at {x:6.0}, {y:<6.0} by {angle:.2}");
+            }
         }
     }
     Ok(())

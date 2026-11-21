@@ -295,6 +295,7 @@ fn start(
         game,
         editing,
         renderer: None,
+        hud_images: None,
         lighting: None,
         occlusion: None,
         game_look: None,
@@ -367,6 +368,8 @@ struct App<G> {
     gamepads: Gamepads,
     /// Draws into the window. Declared before it so it is dropped first.
     renderer: Option<Renderer>,
+    /// The game's HUD images, until a renderer takes them.
+    hud_images: Option<Vec<lore_render::HudImage>>,
     /// The game's own exposure and how the eye adapts, and how dark the
     /// shade in corners is and how far round it is searched for, as the
     /// game last said them, and whether the renderer has them: kept for a
@@ -860,6 +863,10 @@ impl<G: Game> App<G> {
         let hour = frame.take_hour();
         let sky_place = frame.take_sky_place();
         let moon_size = frame.take_moon_size();
+        let ground = frame.take_ground();
+        if let Some(images) = frame.take_hud_images() {
+            self.hud_images = Some(images);
+        }
         let moon_tint = frame.take_moon_tint();
         let milky_way = frame.take_milky_way();
         let light_pollution = frame.take_light_pollution();
@@ -959,6 +966,13 @@ impl<G: Game> App<G> {
             }
             if let Some(size) = moon_size {
                 renderer.set_moon_size(size);
+            }
+            if let Some(shown) = ground {
+                renderer.set_ground(shown);
+            }
+            // Kept until there is a renderer to take them.
+            if let Some(images) = self.hud_images.take() {
+                renderer.set_hud_images(&images);
             }
             if let Some(tint) = moon_tint {
                 renderer.set_moon_tint(tint);

@@ -218,6 +218,16 @@ fn the_light_on_the_ground_is_real_and_a_night_can_be_made_darker() {
     assert_eq!(host.take_moon_size(), Some(10.0));
     assert_eq!(host.take_moon_size(), None);
     let mut host = game(
+        r#"
+        print(game.sky.ground())
+        game.sky.setGround(false)
+        print(game.sky.ground())
+        "#,
+    );
+    assert_eq!(printed(), ["true", "false"]);
+    assert_eq!(host.take_ground(), Some(false));
+    assert_eq!(host.take_ground(), None);
+    let mut host = game(
         r##"
         print(game.sky.moonColor())
         game.sky.setMoonColor("#FF0000")
@@ -398,6 +408,7 @@ fn a_wrong_place_or_date_says_what_to_write() {
             "game.lighting.setNightDarkness(8)",
         ),
         ("game.sky.setMoonSize(\"big\")", "game.sky.setMoonSize(3)"),
+        ("game.sky.setGround(0)", "game.sky.setGround(false)"),
         ("game.sky.setMoonColor(\"black\")", "hide the moon"),
         ("game.sky.setMoonColor(3)", "a colour in quotes"),
         (

@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn every_game_has_the_same_menus() {
         let examples = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
-        for game in ["hello", "jungle", "alley"] {
+        for game in ["hello", "jungle", "alley", "planetarium"] {
             for (file, template) in [("pause_menu.luau", PAUSE_MENU), ("menu.luau", MENU_KIT)] {
                 let copy = fs::read_to_string(format!("{examples}/{game}/{file}")).unwrap();
                 assert!(

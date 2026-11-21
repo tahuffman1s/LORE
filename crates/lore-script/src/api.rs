@@ -171,6 +171,8 @@ pub(crate) struct Shared {
     pub shaders: Rc<crate::shader_api::ShaderState>,
     /// The HUD this version has made with `game.hud`.
     pub hud: HudState,
+    /// The game's HUD images, by name: what `game.hud.image` can show.
+    pub images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The script files this version has read, and what `require` gave for each.
     pub modules: Modules,
     /// The tables this version asked for with `game.keep`.
@@ -820,7 +822,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 39] = [
+        let groups: [(&str, &[&str]); 43] = [
             ("game.", GAME_FUNCTIONS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
@@ -834,6 +836,10 @@ mod tests {
             ("HudBox:", hud::PIECE_METHODS),
             ("HudGraph.", hud::GRAPH_FIELDS),
             ("HudGraph:", hud::PIECE_METHODS),
+            ("HudLine.", hud::LINE_FIELDS),
+            ("HudLine:", hud::PIECE_METHODS),
+            ("HudImage.", hud::IMAGE_FIELDS),
+            ("HudImage:", hud::PIECE_METHODS),
             ("game.frames.", FRAMES_FUNCTIONS),
             ("game.input.", INPUT_FUNCTIONS),
             ("game.settings.", SETTINGS_FUNCTIONS),

@@ -436,6 +436,15 @@ impl Headless {
         self.effects.set_moon_size(size);
     }
 
+    /// Says whether dark ground is drawn below the horizon, where the
+    /// level has nothing (the usual), or the sky goes all the way round:
+    /// the stars, the planets, the moon, the Milky Way and the sun drawn
+    /// below the horizon where they are. Shooting stars and the aurora,
+    /// which are in the air overhead, stay above it.
+    pub fn set_ground(&mut self, shown: bool) {
+        self.effects.set_ground(shown);
+    }
+
     /// Says what colour the moon is tinted, in linear red, green and
     /// blue: its face, the glow round it and its light on the land, all as
     /// bright as before. `[1.0, 1.0, 1.0]` is its own colour (the usual); a
@@ -666,6 +675,15 @@ impl Headless {
     /// [`Renderer::set_ui`](crate::Renderer::set_ui) does.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
         self.overlay.set(list);
+    }
+
+    /// Gives the HUD the game's pictures: a `Draw::Turned` with
+    /// `image: Some(n)` shows the `n`th. Each is shrunk by halves until it
+    /// is at most 2048 pixels either way, and they are packed into one
+    /// picture of at most 4096 by 4096; one that does not fit is left out
+    /// with a warning.
+    pub fn set_hud_images(&mut self, images: &[crate::HudImage]) {
+        self.overlay.set_images(images);
     }
 
     /// Draws the editor's panels over every frame from now on, as
@@ -1198,6 +1216,40 @@ mod tests {
         // Under the horizon there is ground, not more sky.
         let [red, green, blue] = middle(&mut headless, 0.9, -0.8);
         assert!(red + green + blue < 150, "below: {red} {green} {blue}");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn with_no_ground_the_sky_goes_on_below_the_horizon() {
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_hour(Some(12.0));
+        let below = |headless: &mut Headless| {
+            let camera = Camera {
+                yaw: 0.9,
+                pitch: -0.8,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        let [red, green, blue] = below(&mut headless);
+        assert!(red + green + blue < 150, "ground: {red} {green} {blue}");
+        // With no ground, the sky below is the sky above, mirrored: blue.
+        headless.set_ground(false);
+        let [red, green, blue] = below(&mut headless);
+        assert!(blue >= red && blue > 90, "no ground: {red} {green} {blue}");
+        headless.set_ground(true);
+        let [red, green, blue] = below(&mut headless);
+        assert!(
+            red + green + blue < 150,
+            "ground again: {red} {green} {blue}"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }
@@ -3305,6 +3357,59 @@ mod tests {
         assert_eq!(without, headless.screenshot(&Camera::default()).unwrap());
         // A frame can be drawn after one was read back.
         headless.render(&Camera::default()).unwrap();
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_turned_box_and_a_picture_are_drawn_where_they_are_put() {
+        const SIZE: [usize; 2] = [192, 108];
+        let Some(mut headless) = headless(192, 108) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // Midnight, so the sky behind is dark and white shows.
+        headless.set_hour(Some(0.0));
+        headless.set_hud_images(&[crate::HudImage {
+            size: [4, 4],
+            rgba: [255, 0, 0, 255].repeat(16),
+        }]);
+        let mut ui = lore_ui::Ui::default();
+        // On a screen 108 high, ten HUD units are a pixel. A white bar 600
+        // long and 40 thick turned upright stands across the middle; the
+        // picture, 400 square, sits 500 to the right of it.
+        let bar = ui.hud_rect(
+            lore_ui::Anchor::Center,
+            [0.0, 0.0],
+            [600.0, 40.0],
+            lore_ui::Color::WHITE,
+        );
+        ui.set_angle(bar, std::f32::consts::FRAC_PI_2).unwrap();
+        ui.hud_image(
+            lore_ui::Anchor::Center,
+            [500.0, 0.0],
+            [400.0, 400.0],
+            0,
+            lore_ui::Color::WHITE,
+        );
+        ui.update(&lore_ui::UiInput::default(), 1.0 / 60.0, [192, 108]);
+        headless.set_ui(ui.draw());
+        let picture = headless.screenshot(&Camera::default()).unwrap();
+        let [red, green, blue] = pixel(&picture, SIZE[0], 96, 30);
+        assert!(
+            red > 200 && green > 200 && blue > 200,
+            "on the upright bar: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 120, 30);
+        assert!(
+            red + green + blue < 300,
+            "beside it, the night: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 146, 54);
+        assert!(
+            red > 150 && green < 90 && blue < 90,
+            "in the picture: {red} {green} {blue}"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

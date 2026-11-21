@@ -192,7 +192,22 @@ pub fn open_with_settings(
         let source = opened.read_text(&name)?;
         scripts.push((name, source));
     }
-    let game = ScriptGame::from_sources_with_settings(scripts, actions, settings);
+    // And every HUD image, by its name inside `images`.
+    let pictures: Vec<String> = opened
+        .files()
+        .filter(|name| name.starts_with("images/") && name.to_ascii_lowercase().ends_with(".png"))
+        .map(str::to_owned)
+        .collect();
+    let mut images = Vec::with_capacity(pictures.len());
+    for file in pictures {
+        let bytes = opened.read(&file)?;
+        let name = file["images/".len()..file.len() - ".png".len()].to_owned();
+        match crate::hud_images::decode_png(&bytes) {
+            Ok(image) => images.push((name, image)),
+            Err(problem) => log::warn!("{file} in the pack cannot be shown on the HUD: {problem}."),
+        }
+    }
+    let game = ScriptGame::from_sources_with_images(scripts, images, actions, settings);
     // Nothing is played while a script loads, so the sounds can follow it.
     let sounds = Sounds::in_pack(&mut opened);
     for problem in sounds.problems() {

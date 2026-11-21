@@ -34,7 +34,8 @@ pub enum Anchor {
 
 impl Anchor {
     /// How far across and down the screen the anchor is, each 0, a half or 1.
-    pub(crate) const fn fractions(self) -> [f32; 2] {
+    #[must_use]
+    pub const fn fractions(self) -> [f32; 2] {
         match self {
             Self::TopLeft => [0.0, 0.0],
             Self::Top => [0.5, 0.0],
@@ -148,6 +149,18 @@ pub(crate) enum Kind {
         anchor: Anchor,
         offset: [f32; 2],
         color: Color,
+        /// How round its corners are, in reference pixels.
+        corner: f32,
+        /// How far it is turned about its middle, in radians clockwise.
+        angle: f32,
+    },
+    /// One of the game's pictures, tinted by `color`.
+    HudImage {
+        anchor: Anchor,
+        offset: [f32; 2],
+        color: Color,
+        image: u32,
+        angle: f32,
     },
 }
 
@@ -167,6 +180,7 @@ impl Kind {
             Self::HudText { .. } => "HUD text",
             Self::HudBar { .. } => "HUD bar",
             Self::HudRect { .. } => "HUD rectangle",
+            Self::HudImage { .. } => "HUD image",
         }
     }
 

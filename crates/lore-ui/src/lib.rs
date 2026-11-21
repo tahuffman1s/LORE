@@ -85,7 +85,7 @@ pub use build::ScreenBuilder;
 pub use draw::{Draw, DrawBuffer, DrawIter, DrawList};
 pub use error::UiError;
 pub use input::{Direction, InputMode, UiInput};
-pub use layout::{hud_area, hud_text_size};
+pub use layout::{hud_area, hud_line, hud_text_size};
 pub use node::{Anchor, ScreenId, WidgetId};
 pub use theme::{Color, EstimatedText, SMALLEST_TEXT, TextMeasure, Theme};
 pub use ui::{ButtonNames, Ui, UiEvent, Value};

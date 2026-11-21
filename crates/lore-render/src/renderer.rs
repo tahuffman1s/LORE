@@ -609,6 +609,15 @@ impl Renderer {
         self.effects.set_moon_size(size);
     }
 
+    /// Says whether dark ground is drawn below the horizon, where the
+    /// level has nothing (the usual), or the sky goes all the way round:
+    /// the stars, the planets, the moon, the Milky Way and the sun drawn
+    /// below the horizon where they are. Shooting stars and the aurora,
+    /// which are in the air overhead, stay above it.
+    pub fn set_ground(&mut self, shown: bool) {
+        self.effects.set_ground(shown);
+    }
+
     /// Says what colour the moon is tinted, in linear red, green and
     /// blue: its face, the glow round it and its light on the land, all as
     /// bright as before. `[1.0, 1.0, 1.0]` is its own colour (the usual); a
@@ -960,10 +969,19 @@ impl Renderer {
     /// # }
     /// ```
     ///
-    /// At most 8192 boxes and letters are drawn in a frame; the rest are
+    /// At most 16384 boxes and letters are drawn in a frame; the rest are
     /// left out and a warning is logged once.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
         self.overlay.set(list);
+    }
+
+    /// Gives the HUD the game's pictures: a `Draw::Turned` with
+    /// `image: Some(n)` shows the `n`th. Each is shrunk by halves until it
+    /// is at most 2048 pixels either way, and they are packed into one
+    /// picture of at most 4096 by 4096; one that does not fit is left out
+    /// with a warning.
+    pub fn set_hud_images(&mut self, images: &[crate::HudImage]) {
+        self.overlay.set_images(images);
     }
 
     /// Draws the editor's panels over every frame from now on, on top of

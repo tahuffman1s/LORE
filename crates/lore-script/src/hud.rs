@@ -23,7 +23,7 @@ use crate::api::{Shared, describe, fail};
 use crate::error::closest;
 
 /// Every function on `game.hud`.
-pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph"];
+pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph", "line", "image"];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
@@ -31,18 +31,35 @@ pub(crate) const TEXT_FIELDS: &[&str] = &[
     "text", "color", "visible", "right", "down", "hovered", "pressed",
 ];
 pub(crate) const BAR_FIELDS: &[&str] = &[
-    "value", "color", "visible", "right", "down", "hovered", "pressed",
+    "value", "color", "visible", "right", "down", "width", "height", "hovered", "pressed",
 ];
-pub(crate) const BOX_FIELDS: &[&str] = &["color", "visible", "right", "down", "hovered", "pressed"];
+pub(crate) const BOX_FIELDS: &[&str] = &[
+    "color", "visible", "right", "down", "width", "height", "corner", "rotation", "hovered",
+    "pressed",
+];
+pub(crate) const LINE_FIELDS: &[&str] = &[
+    "color",
+    "visible",
+    "right",
+    "down",
+    "toRight",
+    "toDown",
+    "thickness",
+    "hovered",
+    "pressed",
+];
+pub(crate) const IMAGE_FIELDS: &[&str] = &[
+    "color", "visible", "right", "down", "width", "height", "rotation", "hovered", "pressed",
+];
 pub(crate) const GRAPH_FIELDS: &[&str] = &["visible", "right", "down", "hovered", "pressed"];
 #[cfg(test)]
 pub(crate) const PIECE_METHODS: &[&str] = &["remove", "pointerAt"];
 
 /// The most pieces a HUD holds. Far more than a game shows at once, with
 /// room for a few menus of rows that are made once and hidden until they
-/// are opened: reaching it means pieces are being made over and over by
-/// mistake.
-const MAX_PIECES: usize = 1024;
+/// are opened and for star charts of lines: reaching it means pieces are
+/// being made over and over by mistake.
+const MAX_PIECES: usize = 4096;
 
 /// The most characters of a piece of text that are kept. Scripts write
 /// their own, so one can be any length.
@@ -58,6 +75,8 @@ const TALLEST_TEXT: f32 = 400.0;
 const TEXT_SIZE: f32 = 28.0;
 const BAR_SIZE: [f32; 2] = [300.0, 24.0];
 const BOX_SIZE: [f32; 2] = [100.0, 100.0];
+const LINE_THICKNESS: f32 = 2.0;
+const LINE_TO: [f32; 2] = [100.0, 0.0];
 const GRAPH_SIZE: [f32; 2] = [240.0, 80.0];
 
 /// How many frames a graph shows when the script does not say, and the
@@ -115,6 +134,27 @@ pub enum HudShape {
     Box {
         /// The box's `[width, height]`.
         size: [f32; 2],
+        /// How round its corners are, in pixels on a screen 1080 high.
+        corner: f32,
+        /// How far it is turned about its middle, in degrees clockwise.
+        rotation: f32,
+    },
+    /// A straight line from the piece's offset to `to`, both measured from
+    /// the point it is pinned to.
+    Line {
+        /// The other end, `[right, down]` from where the line is pinned.
+        to: [f32; 2],
+        /// How thick it is.
+        thickness: f32,
+    },
+    /// One of the game's pictures, from its `images` folder.
+    Image {
+        /// Which, in the order [`ScriptHost::hud_images`](crate::ScriptHost::hud_images) gives.
+        image: u32,
+        /// Its `[width, height]` on the screen.
+        size: [f32; 2],
+        /// How far it is turned about its middle, in degrees clockwise.
+        rotation: f32,
     },
     /// A graph of the last frame times, drawn against lines at 60 and 30
     /// frames a second. The engine fills it in itself.
@@ -149,6 +189,8 @@ enum Kind {
     Bar,
     Box,
     Graph,
+    Line,
+    Image,
 }
 
 impl Kind {
@@ -159,6 +201,8 @@ impl Kind {
             Self::Bar => "game.hud.bar",
             Self::Box => "game.hud.box",
             Self::Graph => "game.hud.frameGraph",
+            Self::Line => "game.hud.line",
+            Self::Image => "game.hud.image",
         }
     }
 
@@ -170,6 +214,8 @@ impl Kind {
             Self::Bar => "health",
             Self::Box => "dot",
             Self::Graph => "graph",
+            Self::Line => "line",
+            Self::Image => "picture",
         }
     }
 
@@ -180,6 +226,8 @@ impl Kind {
             Self::Bar => "a HUD bar",
             Self::Box => "a HUD box",
             Self::Graph => "a HUD graph",
+            Self::Line => "a HUD line",
+            Self::Image => "a HUD image",
         }
     }
 
@@ -189,14 +237,31 @@ impl Kind {
             Self::Bar => BAR_FIELDS,
             Self::Box => BOX_FIELDS,
             Self::Graph => GRAPH_FIELDS,
+            Self::Line => LINE_FIELDS,
+            Self::Image => IMAGE_FIELDS,
         }
     }
 
     fn options(self) -> &'static [&'static str] {
         match self {
             Self::Text => &["at", "right", "down", "size", "color"],
-            Self::Bar | Self::Box => &["at", "right", "down", "width", "height", "color"],
+            Self::Bar => &["at", "right", "down", "width", "height", "color"],
+            Self::Box => &[
+                "at", "right", "down", "width", "height", "corner", "rotation", "color",
+            ],
             Self::Graph => &["at", "right", "down", "width", "height", "frames"],
+            Self::Line => &[
+                "at",
+                "right",
+                "down",
+                "toRight",
+                "toDown",
+                "thickness",
+                "color",
+            ],
+            Self::Image => &[
+                "at", "right", "down", "width", "height", "rotation", "color",
+            ],
         }
     }
 
@@ -209,6 +274,12 @@ impl Kind {
             }
             Self::Box => "local dot = game.hud.box({ at = \"center\", width = 6, height = 6 })",
             Self::Graph => "local graph = game.hud.frameGraph({ at = \"top right\" })",
+            Self::Line => {
+                "local line = game.hud.line({ at = \"center\", toRight = 120, toDown = 40, thickness = 2 })"
+            }
+            Self::Image => {
+                "local picture = game.hud.image(\"compass\", { at = \"top\", width = 200 })"
+            }
         }
     }
 }
@@ -512,6 +583,25 @@ impl UserData for PieceRef {
                         ("value", HudShape::Bar { value, .. }) => {
                             Ok(Value::Number(f64::from(*value)))
                         }
+                        (
+                            "width" | "height",
+                            HudShape::Bar { size, .. }
+                            | HudShape::Box { size, .. }
+                            | HudShape::Image { size, .. },
+                        ) => Ok(Value::Number(f64::from(size[usize::from(key == "height")]))),
+                        ("corner", HudShape::Box { corner, .. }) => {
+                            Ok(Value::Number(f64::from(*corner)))
+                        }
+                        (
+                            "rotation",
+                            HudShape::Box { rotation, .. } | HudShape::Image { rotation, .. },
+                        ) => Ok(Value::Number(f64::from(*rotation))),
+                        ("toRight" | "toDown", HudShape::Line { to, .. }) => {
+                            Ok(Value::Number(f64::from(to[usize::from(key == "toDown")])))
+                        }
+                        ("thickness", HudShape::Line { thickness, .. }) => {
+                            Ok(Value::Number(f64::from(*thickness)))
+                        }
                         ("color", _) => lua.create_string(&entry.color).map(Value::String),
                         ("visible", _) => Ok(Value::Boolean(entry.piece.visible)),
                         ("right", _) => Ok(Value::Number(f64::from(entry.piece.offset[0]))),
@@ -631,6 +721,68 @@ impl UserData for PieceRef {
                             ((), changed)
                         })
                     }
+                    "width" | "height" if matches!(kind, Kind::Bar | Kind::Box | Kind::Image) => {
+                        let new =
+                            field_number(lua, kind, &key, &value, "200")?.clamp(0.0, FURTHEST);
+                        let axis = usize::from(key == "height");
+                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
+                            HudShape::Bar { size, .. }
+                            | HudShape::Box { size, .. }
+                            | HudShape::Image { size, .. } => {
+                                let changed = size[axis] != new;
+                                size[axis] = new;
+                                entry.settle(&shared);
+                                ((), changed)
+                            }
+                            _ => ((), false),
+                        })
+                    }
+                    "corner" if kind == Kind::Box => {
+                        let new = field_number(lua, kind, &key, &value, "8")?.clamp(0.0, FURTHEST);
+                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
+                            HudShape::Box { corner, .. } if *corner != new => {
+                                *corner = new;
+                                ((), true)
+                            }
+                            _ => ((), false),
+                        })
+                    }
+                    "rotation" if matches!(kind, Kind::Box | Kind::Image) => {
+                        let new = field_number(lua, kind, &key, &value, "45")?;
+                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
+                            HudShape::Box { rotation, .. } | HudShape::Image { rotation, .. }
+                                if *rotation != new =>
+                            {
+                                *rotation = new;
+                                ((), true)
+                            }
+                            _ => ((), false),
+                        })
+                    }
+                    "toRight" | "toDown" if kind == Kind::Line => {
+                        let new = field_number(lua, kind, &key, &value, "120")?
+                            .clamp(-FURTHEST, FURTHEST);
+                        let axis = usize::from(key == "toDown");
+                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
+                            HudShape::Line { to, .. } => {
+                                let changed = to[axis] != new;
+                                to[axis] = new;
+                                entry.settle(&shared);
+                                ((), changed)
+                            }
+                            _ => ((), false),
+                        })
+                    }
+                    "thickness" if kind == Kind::Line => {
+                        let new = field_number(lua, kind, &key, &value, "2")?.clamp(0.0, FURTHEST);
+                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
+                            HudShape::Line { thickness, .. } if *thickness != new => {
+                                *thickness = new;
+                                ((), true)
+                            }
+                            _ => ((), false),
+                        })
+                    }
                     _ => return Err(no_such_field(lua, kind, &key)),
                 };
                 set.ok_or_else(|| removed(lua, kind))
@@ -647,7 +799,27 @@ fn area(shared: &Shared, entry: &Entry) -> [f32; 4] {
     let piece = &entry.piece;
     let size = match &piece.shape {
         HudShape::Text { size, .. } => shared.tools.text_size(&entry.ruled.text, *size),
-        HudShape::Bar { size, .. } | HudShape::Box { size } | HudShape::Graph { size, .. } => *size,
+        HudShape::Bar { size, .. }
+        | HudShape::Box { size, .. }
+        | HudShape::Graph { size, .. }
+        | HudShape::Image { size, .. } => *size,
+        // A line is hit anywhere in the box round it, a few pixels wider
+        // than it is thick so a thin one can still be pointed at.
+        HudShape::Line { to, thickness } => {
+            let from = entry.ruled.offset;
+            let [across, down] = piece.anchor.fractions();
+            let pad = thickness.max(8.0) / 2.0;
+            let left = from[0].min(to[0]) - pad;
+            let top = from[1].min(to[1]) - pad;
+            let size = [
+                (from[0] - to[0]).abs() + 2.0 * pad,
+                (from[1] - to[1]).abs() + 2.0 * pad,
+            ];
+            // Offsets are from the point the piece is pinned to; a box
+            // pinned a share `f` across sits `f` of its width further left.
+            let offset = [left + across * size[0], top + down * size[1]];
+            return lore_ui::hud_area(piece.anchor, offset, size, screen);
+        }
     };
     lore_ui::hud_area(piece.anchor, entry.ruled.offset, size, screen)
 }
@@ -759,6 +931,69 @@ fn distance(lua: &Lua, kind: Kind, key: &str, value: &Value) -> mlua::Result<f32
         format!(
             "{}'s `{key}` needs a number, in pixels on a screen 1080 high, but it was \
              given {}. Write it like this: {}.{key} = -40",
+            capitalised(kind.name()),
+            match value {
+                Value::Number(_) => "a number that is infinite or not a number",
+                other => describe(other),
+            },
+            kind.word()
+        ),
+    ))
+}
+
+/// Which of the game's images is called `name`, or a mistake that lists
+/// them, or says where to put one.
+fn image_named(lua: &Lua, shared: &Shared, name: &str) -> mlua::Result<u32> {
+    if let Some(index) = shared.images.iter().position(|info| info.name == name) {
+        // Far fewer images than a u32 counts.
+        #[allow(clippy::cast_possible_truncation)]
+        return Ok(index as u32);
+    }
+    let mut message = format!("There is no image called \"{name}\".");
+    if let Some(near) = closest(name, shared.images.iter().map(|info| info.name.as_str())) {
+        let _ = write!(message, " Did you mean \"{near}\"?");
+    } else if !shared.images.is_empty() {
+        let names: Vec<&str> = shared
+            .images
+            .iter()
+            .map(|info| info.name.as_str())
+            .collect();
+        let _ = write!(message, " The images are: {}.", names.join(", "));
+    }
+    let _ = write!(
+        message,
+        " To add one, put {name}.png in a folder called images inside the game's folder."
+    );
+    Err(fail(lua, message))
+}
+
+/// A number for a piece's field `key`, finite.
+fn field_number(
+    lua: &Lua,
+    kind: Kind,
+    key: &str,
+    value: &Value,
+    example: &str,
+) -> mlua::Result<f32> {
+    // A HUD needs no more precision than an f32 holds.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let number = match value {
+        Value::Number(number) => *number as f32,
+        Value::Integer(number) => *number as f32,
+        _ => f32::NAN,
+    };
+    if number.is_finite() {
+        return Ok(number);
+    }
+    let meaning = match key {
+        "rotation" => "in degrees, clockwise",
+        _ => "in pixels on a screen 1080 high",
+    };
+    Err(fail(
+        lua,
+        format!(
+            "{}'s `{key}` needs a number, {meaning}, but it was given {}. Write it like this: \
+             {}.{key} = {example}",
             capitalised(kind.name()),
             match value {
                 Value::Number(_) => "a number that is infinite or not a number",
@@ -925,6 +1160,15 @@ struct Options {
     color_text: String,
     /// How many frames a graph shows.
     frames: u16,
+    /// Whether `width` and `height` were said, for an image that keeps its
+    /// shape when only one is.
+    said: [bool; 2],
+    /// A box's corners and a box's or image's turn, in degrees.
+    corner: f32,
+    rotation: f32,
+    /// A line's other end and thickness.
+    to: [f32; 2],
+    thickness: f32,
 }
 
 /// Reads the table of options for a new piece of `kind`.
@@ -936,12 +1180,18 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
         size: match kind {
             Kind::Text => [0.0, TEXT_SIZE],
             Kind::Bar => BAR_SIZE,
-            Kind::Box => BOX_SIZE,
+            Kind::Box | Kind::Image => BOX_SIZE,
             Kind::Graph => GRAPH_SIZE,
+            Kind::Line => [0.0; 2],
         },
         color: Color::WHITE,
         color_text: "white".to_owned(),
         frames: GRAPH_FRAMES,
+        said: [false; 2],
+        corner: 0.0,
+        rotation: 0.0,
+        to: LINE_TO,
+        thickness: LINE_THICKNESS,
     };
     let options = match options {
         Value::Nil => return Ok(read),
@@ -1005,7 +1255,9 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
                 read.size[1] = number(&format!("the height of the text {PIXELS}"), "48")?
                     .clamp(0.0, TALLEST_TEXT);
             }
-            "width" | "height" if kind != Kind::Text => {
+            "width" | "height"
+                if matches!(kind, Kind::Bar | Kind::Box | Kind::Graph | Kind::Image) =>
+            {
                 let side = number(PIXELS, "200")?;
                 if side <= 0.0 {
                     return Err(fail(
@@ -1018,6 +1270,28 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
                     ));
                 }
                 read.size[usize::from(key == "height")] = side.min(FURTHEST);
+                read.said[usize::from(key == "height")] = true;
+            }
+            "corner" if kind == Kind::Box => {
+                read.corner = number(&format!("how round the corners are {PIXELS}"), "8")?
+                    .clamp(0.0, FURTHEST);
+            }
+            "rotation" if matches!(kind, Kind::Box | Kind::Image) => {
+                read.rotation = number(
+                    "how far it is turned about its middle, in degrees clockwise",
+                    "45",
+                )?;
+            }
+            "toRight" | "toDown" if kind == Kind::Line => {
+                read.to[usize::from(key == "toDown")] = number(
+                    &format!("where the line's other end is from `at`, {PIXELS}"),
+                    "120",
+                )?
+                .clamp(-FURTHEST, FURTHEST);
+            }
+            "thickness" if kind == Kind::Line => {
+                read.thickness =
+                    number(&format!("how thick the line is {PIXELS}"), "2")?.clamp(0.0, FURTHEST);
             }
             "frames" if kind == Kind::Graph => {
                 let wanted = number(
@@ -1046,6 +1320,14 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
             "color" if kind != Kind::Graph => {
                 (read.color, read.color_text) =
                     color_of(lua, &format!("{function}'s `color`"), &value)?;
+            }
+            "width" | "height" | "size" if kind == Kind::Line => {
+                return Err(fail(
+                    lua,
+                    "game.hud.line has no `width` or `height`: it runs from `right` and \
+                     `down` to `toRight` and `toDown`, `thickness` thick. Write it like \
+                     this: { right = 0, down = 0, toRight = 120, toDown = 40, thickness = 2 }",
+                ));
             }
             "size" => {
                 return Err(fail(
@@ -1089,6 +1371,8 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     hud.set("bar", function(lua, shared, Kind::Bar)?)?;
     hud.set("box", function(lua, shared, Kind::Box)?)?;
     hud.set("frameGraph", function(lua, shared, Kind::Graph)?)?;
+    hud.set("line", function(lua, shared, Kind::Line)?)?;
+    hud.set("image", function(lua, shared, Kind::Image)?)?;
     Ok(hud)
 }
 
@@ -1101,7 +1385,20 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
         let function = kind.function();
         let more_than_options = !second.is_nil() || !extra.is_nil();
         let (first, options) = match kind {
-            Kind::Box | Kind::Graph => (Value::Nil, first),
+            Kind::Box | Kind::Graph | Kind::Line => (Value::Nil, first),
+            Kind::Image => {
+                if matches!(first, Value::Table(_)) && second.is_nil() {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.hud.image takes the name of a picture first, as text, and \
+                             the options second. Write it like this: {}",
+                            kind.example()
+                        ),
+                    ));
+                }
+                (first, second)
+            }
             // The options alone: the words or the number were left out.
             Kind::Text | Kind::Bar if matches!(first, Value::Table(_)) && second.is_nil() => {
                 let missing = match kind {
@@ -1128,7 +1425,16 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 value: fraction(lua, function, &first)?,
                 size: [0.0; 2],
             },
-            Kind::Box | Kind::Graph => {
+            Kind::Image => {
+                let name = text_of(lua, function, &first, kind.example())?;
+                let image = image_named(lua, &shared, &name)?;
+                HudShape::Image {
+                    image,
+                    size: [0.0; 2],
+                    rotation: 0.0,
+                }
+            }
+            Kind::Box | Kind::Graph | Kind::Line => {
                 if more_than_options {
                     return Err(fail(
                         lua,
@@ -1139,13 +1445,20 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                         ),
                     ));
                 }
-                if kind == Kind::Graph {
-                    HudShape::Graph {
+                match kind {
+                    Kind::Graph => HudShape::Graph {
                         size: [0.0; 2],
                         frames: GRAPH_FRAMES,
-                    }
-                } else {
-                    HudShape::Box { size: [0.0; 2] }
+                    },
+                    Kind::Line => HudShape::Line {
+                        to: LINE_TO,
+                        thickness: LINE_THICKNESS,
+                    },
+                    _ => HudShape::Box {
+                        size: [0.0; 2],
+                        corner: 0.0,
+                        rotation: 0.0,
+                    },
                 }
             }
         };
@@ -1159,11 +1472,38 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 value,
                 size: read.size,
             },
-            HudShape::Box { .. } => HudShape::Box { size: read.size },
+            HudShape::Box { .. } => HudShape::Box {
+                size: read.size,
+                corner: read.corner,
+                rotation: read.rotation,
+            },
             HudShape::Graph { .. } => HudShape::Graph {
                 size: read.size,
                 frames: read.frames,
             },
+            HudShape::Line { .. } => HudShape::Line {
+                to: read.to,
+                thickness: read.thickness,
+            },
+            HudShape::Image { image, .. } => {
+                // As big as the picture is, unless the script says; with only
+                // one side said, the other keeps the picture's shape.
+                let own = shared
+                    .images
+                    .get(image as usize)
+                    .map_or([1.0, 1.0], |info| info.size.map(|side| side as f32));
+                let size = match read.said {
+                    [true, true] => read.size,
+                    [true, false] => [read.size[0], read.size[0] * own[1] / own[0]],
+                    [false, true] => [read.size[1] * own[0] / own[1], read.size[1]],
+                    [false, false] => own,
+                };
+                HudShape::Image {
+                    image,
+                    size,
+                    rotation: read.rotation,
+                }
+            }
         };
         let piece = HudPiece {
             shape,

@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, once};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
-use crate::overlay::{ATLAS_HEIGHT, ATLAS_WIDTH, MOST_QUADS, Overlay, QUAD_BYTES};
+use crate::overlay::{ATLAS_HEIGHT, ATLAS_WIDTH, ImageAtlas, MOST_QUADS, Overlay, QUAD_BYTES};
 use crate::scene::Picture;
 use crate::swapchain::COLOUR;
 use crate::tonemap::stores_srgb;
@@ -28,6 +28,10 @@ const SCREEN_BYTES: usize = 16;
 
 /// One byte a pixel: how much of it a letter covers.
 const ATLAS_FORMAT: vk::Format = vk::Format::R8_UNORM;
+
+/// The game's HUD images: four bytes a pixel, the colours as stored, with
+/// the sRGB curve, as box and letter colours are handed to the shader.
+const IMAGES_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
 /// What one frame in progress needs for itself.
 struct Slot {
@@ -50,6 +54,8 @@ pub(crate) struct UiPass {
     set: vk::DescriptorSet,
     sampler: vk::Sampler,
     atlas: Picture,
+    /// The game's HUD images, packed; one clear pixel until there are any.
+    images: Picture,
     /// Whether the atlas on the graphics card has been given anything yet.
     filled: bool,
     /// Which slot the frame being recorded uses and how many quads it has.
@@ -85,6 +91,7 @@ impl UiPass {
             set: vk::DescriptorSet::null(),
             sampler: vk::Sampler::null(),
             atlas: Picture::null(),
+            images: Picture::null(),
             filled: false,
             frame: None,
             format,
@@ -130,11 +137,16 @@ impl UiPass {
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(1),
+                .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1),
@@ -212,6 +224,8 @@ impl UiPass {
             ];
             device.update_descriptor_sets(&writes, &[]);
         }
+        // Until the game gives pictures, the shader reads one clear pixel.
+        pass.set_images(&ImageAtlas::default())?;
 
         // SAFETY: `code` is SPIR-V produced and validated by naga at build time.
         let module = unsafe {
@@ -251,6 +265,10 @@ impl UiPass {
                 .location(3)
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(48),
+            vk::VertexInputAttributeDescription::default()
+                .location(4)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(56),
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&vertex_bindings)
@@ -328,6 +346,123 @@ impl UiPass {
         self.format
     }
 
+    /// Gives the shader `atlas`, the game's HUD images packed into one
+    /// picture, in place of the one it had. Waits for the graphics card to
+    /// finish what it was doing first: images change when a game starts or
+    /// is saved, not every frame.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the graphics driver reports a failure.
+    pub(crate) fn set_images(&mut self, atlas: &ImageAtlas) -> Result<(), RenderError> {
+        let doing = "copying the HUD's images to the graphics card";
+        let gpu = Arc::clone(&self.gpu);
+        let device = gpu.device();
+        let clear = [0_u8; 4];
+        let (size, pixels) = if atlas.size[0] > 0 && atlas.size[1] > 0 {
+            (atlas.size, atlas.rgba.as_slice())
+        } else {
+            ([1, 1], clear.as_slice())
+        };
+        let mut picture = Picture::null();
+        let made = (|| {
+            picture.create(
+                &gpu,
+                vk::Extent2D {
+                    width: size[0],
+                    height: size[1],
+                },
+                IMAGES_FORMAT,
+                vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+                COLOUR,
+                doing,
+            )?;
+            let staging = Buffer::staging(&gpu, pixels.len() as u64, doing)?;
+            staging.fill(pixels, doing)?;
+            let barrier = || {
+                vk::ImageMemoryBarrier2::default()
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(picture.image)
+                    .subresource_range(COLOUR)
+            };
+            let copy = [vk::BufferImageCopy::default()
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: size[0],
+                    height: size[1],
+                    depth: 1,
+                })];
+            // SAFETY: the picture and the staging buffer live until `once`
+            // has waited for the commands; the picture is written in the
+            // layout the first barrier leaves it in, and left for shaders.
+            unsafe {
+                once(&gpu, doing, |commands| {
+                    let to_fill = [barrier()
+                        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)];
+                    let to_read = [barrier()
+                        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                    device.cmd_pipeline_barrier2(
+                        commands,
+                        &vk::DependencyInfo::default().image_memory_barriers(&to_fill),
+                    );
+                    device.cmd_copy_buffer_to_image(
+                        commands,
+                        staging.handle,
+                        picture.image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &copy,
+                    );
+                    device.cmd_pipeline_barrier2(
+                        commands,
+                        &vk::DependencyInfo::default().image_memory_barriers(&to_read),
+                    );
+                })?;
+            }
+            Ok::<(), RenderError>(())
+        })();
+        if let Err(error) = made {
+            // SAFETY: nothing has used the new picture; destroying what was
+            // made of it, or a null handle, is allowed.
+            unsafe { picture.destroy(&gpu) };
+            return Err(error);
+        }
+        // SAFETY: waiting for the device to go idle means no frame still
+        // reads the old picture through the set, and the set is not bound in
+        // any command buffer being recorded: the HUD binds it when it draws,
+        // after this. The new picture is ready to be read.
+        unsafe {
+            device
+                .device_wait_idle()
+                .map_err(RenderError::driver(doing))?;
+            let images = [vk::DescriptorImageInfo::default()
+                .image_view(picture.view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            let writes = [vk::WriteDescriptorSet::default()
+                .dst_set(self.set)
+                .dst_binding(2)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .image_info(&images)];
+            device.update_descriptor_sets(&writes, &[]);
+            self.images.destroy(&gpu);
+        }
+        self.images = picture;
+        Ok(())
+    }
+
     /// Gets `overlay` ready to be drawn by the frame being recorded: its
     /// boxes and letters go to the graphics card, with any letters it has
     /// not seen before.
@@ -353,6 +488,9 @@ impl UiPass {
         overlay: &mut Overlay,
     ) -> Result<(), RenderError> {
         self.frame = None;
+        if let Some(images) = overlay.take_images() {
+            self.set_images(images)?;
+        }
         let count = overlay.count();
         let index = frame % self.slots.len().max(1);
         let Some(slot) = self.slots.get(index) else {
@@ -538,6 +676,7 @@ impl Drop for UiPass {
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_sampler(self.sampler, None);
             self.atlas.destroy(&self.gpu);
+            self.images.destroy(&self.gpu);
         }
     }
 }
