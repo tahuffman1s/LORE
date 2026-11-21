@@ -15,7 +15,16 @@ use crate::game::Frame;
 pub(crate) struct HudPictures {
     source: Source,
     shown: Option<Vec<HudImageInfo>>,
+    /// When each file of a game's folder was last changed, as handed over,
+    /// so a picture saved again is read again though its size is the same.
+    changed: Vec<Option<std::time::SystemTime>>,
+    /// Frames since the files were last looked at.
+    since_look: u32,
 }
+
+/// How many frames go by between looks at whether a picture was saved:
+/// about a second, a dozen small reads of a folder's listing.
+const LOOK_EVERY: u32 = 60;
 
 #[derive(Debug, Default)]
 enum Source {
@@ -33,7 +42,7 @@ impl HudPictures {
     pub(crate) fn in_folder(folder: &Path) -> Self {
         Self {
             source: Source::Folder(folder.to_owned()),
-            shown: None,
+            ..Self::default()
         }
     }
 
@@ -41,7 +50,7 @@ impl HudPictures {
     pub(crate) fn given(images: Vec<(String, HudImage)>) -> Self {
         Self {
             source: Source::Given(images),
-            shown: None,
+            ..Self::default()
         }
     }
 
@@ -50,11 +59,34 @@ impl HudPictures {
     pub(crate) fn follow(&mut self, host: &ScriptHost, frame: &mut Frame) {
         let now = host.hud_images();
         if self.shown.as_deref() == Some(now) {
-            return;
+            self.since_look += 1;
+            if self.since_look < LOOK_EVERY {
+                return;
+            }
+            self.since_look = 0;
+            if self.modified(now) == self.changed {
+                return;
+            }
         }
         let pictures = now.iter().map(|info| self.read(info)).collect();
         frame.set_hud_images(pictures);
+        self.changed = self.modified(now);
         self.shown = Some(now.to_vec());
+    }
+
+    /// When each image's file was last changed, for a game's folder.
+    fn modified(&self, images: &[HudImageInfo]) -> Vec<Option<std::time::SystemTime>> {
+        let Source::Folder(folder) = &self.source else {
+            return Vec::new();
+        };
+        images
+            .iter()
+            .map(|info| {
+                file_of(folder, &info.name)
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .and_then(|data| data.modified().ok())
+            })
+            .collect()
     }
 
     /// The pixels of one image, or a single clear pixel (logged) if it

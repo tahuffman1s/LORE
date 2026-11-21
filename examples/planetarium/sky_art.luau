@@ -1,17 +1,21 @@
 -- What the planetarium draws over the sky: the constellations' stick figures
--- and names, and a ring round each planet in its own colour.
+-- and names, their pictures from an old star atlas, and a ring round each
+-- planet in its own colour.
 --
--- The HUD draws boxes and text, not lines, so a line between two stars is a
--- row of small dots, following the sky between its stars and stopping short
--- of each so the star itself shows. The HUD holds 1024 pieces in all, and
--- the menus and the rest of the HUD need most of them, so the lines share
--- 400 dots: the dots of the lines on the screen are spread to fit, close
--- together when zoomed in on a few lines and further apart across the
--- whole sky.
+-- A line between two stars is one HUD line. The view is a perspective one,
+-- in which every great circle of the sky is a straight line, so a straight
+-- line between two stars on the screen is exactly the path between them;
+-- one that passes behind the observer is cut where it leaves the view.
+--
+-- Each picture is one HUD image, laid on its stars every picture: the stars
+-- marked on it (constellation_art.luau) are found on the screen, and the
+-- turn, size and place that best lay the marks on them is worked out (a
+-- least-squares fit of a turn and a scale).
 
 local view = require("./view")
 local starfield = require("./starfield")
 local constellations = require("./constellations")
+local art = require("./constellation_art")
 
 local skyArt = {}
 
@@ -19,6 +23,8 @@ local kept = game.keep("planetarium sky art", {
     lines = true,
     names = true,
     planets = true,
+    figures = true,
+    figureStrength = 0.5,
 })
 
 function skyArt.lines(): boolean
@@ -39,23 +45,41 @@ end
 function skyArt.setPlanets(on: boolean)
     kept.planets = on
 end
+function skyArt.figures(): boolean
+    return kept.figures
+end
+function skyArt.setFigures(on: boolean)
+    kept.figures = on
+end
+-- How strongly the pictures show, from 0 (not at all) to 1.
+function skyArt.figureStrength(): number
+    return kept.figureStrength
+end
+function skyArt.setFigureStrength(share: number)
+    kept.figureStrength = math.clamp(share, 0, 1)
+end
 
--- How close the dots of a line may be, and how far a line stops short of
--- its stars, in HUD pixels.
-local CLOSEST = 8
-local GAP = 7
--- How many dots there are for all the lines.
-local MOST_DOTS = 400
-local DOT = 3
-local LINE_COLOR = "#8fb2ffb0"
+local LINE_COLOR = "#8fb2ffa0"
 local NAME_COLOR = "#9db8ffa0"
+-- How far a line stops short of each of its stars, in HUD pixels, so the
+-- star itself shows.
+local GAP = 9
 
 -- Pieces are made once, before the pause menu, and moved every picture.
-local dots = {}
-for number = 1, MOST_DOTS do
-    local dot = game.hud.box({ at = "center", width = DOT, height = DOT, color = LINE_COLOR })
-    dot.visible = false
-    dots[number] = dot
+-- The pictures first, so the lines and names are drawn over them.
+local pictures = {}
+for number, each in art do
+    local picture = game.hud.image(each.image, { at = "center", color = "#ffffff00" })
+    picture.visible = false
+    pictures[number] = picture
+end
+local lines = {}
+for _, constellation in constellations do
+    for _, pair in constellation.lines do
+        local line = game.hud.line({ at = "center", thickness = 1.5, color = LINE_COLOR })
+        line.visible = false
+        table.insert(lines, { piece = line, from = pair[1], to = pair[2] })
+    end
 end
 local names = {}
 for number, constellation in constellations do
@@ -64,116 +88,196 @@ for number, constellation in constellations do
     names[number] = text
 end
 
--- A planet's ring: four thin boxes round it, as the sides of a square.
-local RING = 18
+-- A planet's ring: a round-cornered box in its colour, faint, with a solid
+-- dot of the same colour at its middle drawn by the sky itself.
+local RING = 22
 local planetRings = {}
 for _, planet in view.planets do
-    local color = view.planetColors[planet]
-    local ring = {}
-    for side = 1, 4 do
-        local across = side <= 2
-        local box = game.hud.box({
-            at = "center",
-            width = if across then RING else 2,
-            height = if across then 2 else RING,
-            color = color,
-        })
-        box.visible = false
-        ring[side] = box
-    end
+    local ring = game.hud.box({
+        at = "center",
+        width = RING,
+        height = RING,
+        corner = RING / 2,
+        color = view.planetColors[planet] .. "38",
+    })
+    ring.visible = false
     planetRings[planet] = ring
 end
 
 -- Says once which star names the sky does not know, so a typo in
--- constellations.luau is found.
+-- constellations.luau or constellation_art.luau is found.
 local checked = false
 local function checkNames()
     checked = true
     local unknown = {}
+    local function check(name: string)
+        if starfield.direction(name) == nil and not table.find(unknown, name) then
+            table.insert(unknown, name)
+        end
+    end
     for _, constellation in constellations do
-        for _, line in constellation.lines do
-            for _, name in line do
-                if starfield.direction(name) == nil and not table.find(unknown, name) then
-                    table.insert(unknown, name)
-                end
-            end
+        for _, pair in constellation.lines do
+            check(pair[1])
+            check(pair[2])
+        end
+    end
+    for _, each in art do
+        for _, star in each.stars do
+            check(star[1])
         end
     end
     if #unknown > 0 then
-        print("constellations.luau names stars the sky does not know, so their lines are left out: " .. table.concat(unknown, ", "))
+        print("The planetarium names stars the sky does not know, so what uses them is left out: " .. table.concat(unknown, ", "))
     end
 end
 
-local function hideFrom(pieces: { any }, first: number)
-    for number = first, #pieces do
-        pieces[number].visible = false
-    end
+-- The point `share` of the way from `a` to `b` along the sky.
+local function between(a: vector, b: vector, share: number): vector
+    return vector.normalize(a * (1 - share) + b * share)
 end
 
--- How long the line from `a` to `b` is on the screen, in HUD pixels: 0 if
--- neither end nor its middle is on the screen.
-local function lengthOnScreen(a: vector, b: vector, perDegree: number): number
-    if view.project(a) == nil and view.project(b) == nil and view.project(vector.normalize(a + b)) == nil then
-        return 0
+-- Lays one line between the stars in directions `a` and `b`, cut where it
+-- passes behind the observer and stopping short of each star.
+local function placeLine(line: HudLine, a: vector, b: vector)
+    local ahead = view.ahead()
+    local da, db = vector.dot(a, ahead), vector.dot(b, ahead)
+    -- Both behind: nothing to draw. One behind: cut it where it is still
+    -- far enough ahead to place.
+    local near = 0.05
+    if da < near and db < near then
+        line.visible = false
+        return
     end
-    return math.deg(math.acos(math.clamp(vector.dot(a, b), -1, 1))) * perDegree
+    local cutA, cutB = a, b
+    if da < near then
+        cutA = between(b, a, (db - near) / (db - da))
+    elseif db < near then
+        cutB = between(a, b, (da - near) / (da - db))
+    end
+    if (a.y < -0.01 or b.y < -0.01) and game.sky.ground() then
+        line.visible = false
+        return
+    end
+    local ax, ay = view.place(cutA)
+    local bx, by = view.place(cutB)
+    if not (ax and ay and bx and by) then
+        line.visible = false
+        return
+    end
+    local dx, dy = bx - ax, by - ay
+    local length = math.sqrt(dx * dx + dy * dy)
+    -- Off the screen altogether, or too short to see past its stars.
+    if length <= 2 * GAP or math.max(ax, bx) < -1200 or math.min(ax, bx) > 1200
+        or math.max(ay, by) < -700 or math.min(ay, by) > 700
+    then
+        line.visible = false
+        return
+    end
+    local trimA = if cutA == a then GAP / length else 0
+    local trimB = if cutB == b then GAP / length else 0
+    line.right, line.down = ax + dx * trimA, ay + dy * trimA
+    line.toRight, line.toDown = bx - dx * trimB, by - dy * trimB
+    line.visible = true
 end
 
--- Draws the dots of one line from `a` to `b`, `spacing` apart, starting at
--- dot `used` + 1. Gives back how many dots are used after it.
-local function drawLine(a: vector, b: vector, used: number, perDegree: number, spacing: number): number
-    local length = lengthOnScreen(a, b, perDegree)
-    if length <= 2 * GAP then
-        return used
+-- Lays picture `number` on its stars, or hides it if too few of them are
+-- in front of the observer to place it.
+local function placePicture(number: number, strength: number)
+    local each = art[number]
+    local picture = pictures[number]
+    local marks, spots = {}, {}
+    local middle = vector.zero
+    for _, star in each.stars do
+        middle += starfield.direction(star[1]) or vector.zero
     end
-    local count = math.min(math.floor((length - 2 * GAP) / spacing), 200)
-    for step = 0, count do
-        if used >= MOST_DOTS then
-            return used
+    -- A picture comes up as it nears the middle of the view, and fades away
+    -- towards the edges, where the view's perspective stretches it.
+    local nearMiddle = if vector.magnitude(middle) > 0 then vector.dot(vector.normalize(middle), view.ahead()) else 0
+    strength *= math.clamp((nearMiddle - 0.55) / 0.3, 0, 1)
+    if strength <= 0.01 then
+        picture.visible = false
+        return
+    end
+    for _, star in each.stars do
+        local direction = starfield.direction(star[1])
+        if direction then
+            local x, y, depth = view.place(direction)
+            if x and y and depth > 0.2 then
+                table.insert(marks, { star[2], star[3] })
+                table.insert(spots, { x, y })
+            end
         end
-        local share = (GAP + step * spacing) / length
-        local across, down = view.project(vector.normalize(a * (1 - share) + b * share))
-        if across and down then
-            used += 1
-            local dot = dots[used]
-            dot.right = across
-            dot.down = down
-            dot.visible = true
-        end
     end
-    return used
+    if #marks < 2 then
+        picture.visible = false
+        return
+    end
+    -- The middles of the marks on the picture and of the stars on the screen.
+    local px, py, qx, qy = 0, 0, 0, 0
+    for index, mark in marks do
+        px += mark[1]
+        py += mark[2]
+        qx += spots[index][1]
+        qy += spots[index][2]
+    end
+    px, py, qx, qy = px / #marks, py / #marks, qx / #marks, qy / #marks
+    -- The turn and scale that best lay the marks on the stars (the screen's
+    -- y runs down, as the picture's does, so a turn is clockwise as seen).
+    local a, b, spread = 0, 0, 0
+    for index, mark in marks do
+        local mx, my = mark[1] - px, mark[2] - py
+        local sx, sy = spots[index][1] - qx, spots[index][2] - qy
+        a += sx * mx + sy * my
+        b += sy * mx - sx * my
+        spread += mx * mx + my * my
+    end
+    if spread <= 0 then
+        picture.visible = false
+        return
+    end
+    local scale = math.sqrt(a * a + b * b) / spread
+    local turn = math.atan2(b, a)
+    local width, height = each.size[1] * scale, each.size[2] * scale
+    -- Too small to make out, or so large it is all one corner of it.
+    if width < 40 or width > 6000 then
+        picture.visible = false
+        return
+    end
+    local cx, cy = each.size[1] / 2 - px, each.size[2] / 2 - py
+    local c, s = math.cos(turn), math.sin(turn)
+    picture.right = qx + (cx * c - cy * s) * scale
+    picture.down = qy + (cx * s + cy * c) * scale
+    picture.width, picture.height = width, height
+    picture.rotation = math.deg(turn)
+    picture.color = string.format("#ffffff%02x", math.floor(strength * 255 + 0.5))
+    picture.visible = true
 end
 
--- Every picture, after view.startFrame: the figures, their names and the
--- planets' rings.
+-- Every picture, after view.startFrame: the pictures, the figures, their
+-- names and the planets' rings.
 function skyArt.draw(shown: boolean)
     if shown and not checked then
         checkNames()
     end
-    local used = 0
-    if shown and kept.lines then
-        local perDegree = view.pixelsPerDegree()
-        -- First how much line there is on the screen, to spread the dots.
-        local total = 0
-        for _, constellation in constellations do
-            for _, line in constellation.lines do
-                local a, b = starfield.direction(line[1]), starfield.direction(line[2])
-                if a and b then
-                    total += math.max(lengthOnScreen(a, b, perDegree) - 2 * GAP, 0)
-                end
-            end
-        end
-        local spacing = math.max(CLOSEST, total / MOST_DOTS)
-        for _, constellation in constellations do
-            for _, line in constellation.lines do
-                local a, b = starfield.direction(line[1]), starfield.direction(line[2])
-                if a and b then
-                    used = drawLine(a, b, used, perDegree, spacing)
-                end
-            end
+    for number, picture in pictures do
+        if shown and kept.figures and kept.figureStrength > 0 then
+            placePicture(number, kept.figureStrength)
+        else
+            picture.visible = false
         end
     end
-    hideFrom(dots, used + 1)
+
+    for _, each in lines do
+        local a, b = nil, nil
+        if shown and kept.lines then
+            a, b = starfield.direction(each.from), starfield.direction(each.to)
+        end
+        if a and b then
+            placeLine(each.piece, a, b)
+        else
+            each.piece.visible = false
+        end
+    end
 
     for number, constellation in constellations do
         local text = names[number]
@@ -181,8 +285,8 @@ function skyArt.draw(shown: boolean)
         if shown and kept.names then
             -- The name goes at the middle of the figure's stars.
             local sum = vector.zero
-            for _, line in constellation.lines do
-                for _, name in line do
+            for _, pair in constellation.lines do
+                for _, name in pair do
                     sum += starfield.direction(name) or vector.zero
                 end
             end
@@ -203,18 +307,11 @@ function skyArt.draw(shown: boolean)
         if direction then
             across, down = view.project(direction)
         end
-        -- Pinned at the middle of the screen, a box is centred on its
-        -- offset: the top and bottom sit half a ring above and below the
-        -- planet, the left and right half a ring either side.
-        local half = RING / 2 - 1
-        for side, box in ring do
-            if across and down then
-                box.right = across + (if side == 3 then -half elseif side == 4 then half else 0)
-                box.down = down + (if side == 1 then -half elseif side == 2 then half else 0)
-                box.visible = true
-            else
-                box.visible = false
-            end
+        if across and down then
+            ring.right, ring.down = across, down
+            ring.visible = true
+        else
+            ring.visible = false
         end
     end
 end

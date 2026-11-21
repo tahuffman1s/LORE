@@ -13,6 +13,7 @@ theme.ice = "#8fd3ff"
 theme.text = "#eef3ff"
 theme.muted = "#9fb0d4"
 theme.faint = "#9fb0d440"
+theme.corner = 12 -- how round the cards' corners are
 
 -- `color` with its see-through part times `share` (0 gone, 1 as it is). A
 -- colour is "#rrggbb" or "#rrggbbaa".
@@ -120,7 +121,7 @@ end
 -- Makes a card of glass, hidden until shown. `at` is where it is pinned on
 -- the screen, as game.hud takes it; `right` and `down` move it from there.
 -- With `accent`, a strip of that colour runs down its left side.
-function theme.card(settings: { at: string, right: number?, down: number?, width: number, height: number, accent: string?, shadow: boolean? }): Card
+function theme.card(settings: { at: string, right: number?, down: number?, width: number, height: number, accent: string?, shadow: boolean?, corner: number? }): Card
     local self = setmetatable({
         at = settings.at,
         right = settings.right or 0,
@@ -130,13 +131,15 @@ function theme.card(settings: { at: string, right: number?, down: number?, width
         boxes = {},
         texts = {},
     }, Card)
+    -- Round corners, and the light edge and gold strip kept inside them.
+    local corner = settings.corner or theme.corner
     if settings.shadow ~= false then
-        self:box(5, 7, settings.width, settings.height, theme.shadow)
+        self:box(5, 7, settings.width, settings.height, theme.shadow).corner = corner
     end
-    self:box(0, 0, settings.width, settings.height, theme.glass)
-    self:box(0, 0, settings.width, 1, theme.edge)
+    self:box(0, 0, settings.width, settings.height, theme.glass).corner = corner
+    self:box(corner, 0, settings.width - 2 * corner, 1, theme.edge)
     if settings.accent then
-        self:box(0, 0, 3, settings.height, settings.accent)
+        self:box(0, corner, 3, settings.height - 2 * corner, settings.accent).corner = 1.5
     end
     return self
 end

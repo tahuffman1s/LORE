@@ -194,6 +194,24 @@ function view.project(direction: vector): (number?, number?)
     return across, down
 end
 
+-- Where `direction` falls on the screen as `view.project` says, but on or
+-- off the screen alike, and whatever the ground: for drawing lines and
+-- pictures that reach past the edge. Also how far ahead it is, along the
+-- way the observer looks (the cosine of the angle off it); nil, nil, 0 for
+-- one too near behind the observer to place.
+function view.place(direction: vector): (number?, number?, number)
+    local depth = vector.dot(direction, ahead)
+    if depth < 0.02 then
+        return nil, nil, depth
+    end
+    return vector.dot(direction, right) / depth * scale, -vector.dot(direction, up) / depth * scale, depth
+end
+
+-- The way the observer looks, this picture.
+function view.ahead(): vector
+    return ahead
+end
+
 -- The labels, made once. Made before the pause menu, so it is drawn over them.
 local LABEL_COLOR = "#cfe3ffcc"
 local tags = {}

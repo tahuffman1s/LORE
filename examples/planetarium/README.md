@@ -37,6 +37,7 @@ lore run
 | Menus | E | Y |
 | Labels: stars and planets, planets only, none | Space | A |
 | Constellations on or off | R | X |
+| Figures from Urania's Mirror on or off | M | d-pad up |
 | Ground below the horizon on or off | G | right bumper |
 | Pause and settings | Esc | Start |
 
@@ -45,7 +46,8 @@ and **Night sky** to jump to an event, **Planets** to see where the sun,
 the moon and each planet are and turn to one, **Time** for the time lapse, the
 hour and the date, plus the next sunrise or sunset, **Place** to stand
 anywhere on Earth, and **Sky** for labels, the ground, the constellations
-and their names, the planets' rings, zoom, shooting stars, the
+and their names, the planets' rings, the figures and how strongly they
+show, zoom, shooting stars, the
 aurora, the Milky Way, town lights, the size of the moon and exposure.
 
 Time lapse goes from stopped and real time up to a day a second. Time only
@@ -64,21 +66,53 @@ the top of `main.luau`.
 
 ## Constellations and planets
 
-Thirty-four constellations are traced as dotted stick figures with their
-names: the northern ones, the zodiac and the brightest of the south.
+Thirty-four constellations are traced as stick figures with their names:
+the northern ones, the zodiac and the brightest of the south.
 `constellations.luau` lists them as pairs of star names, so adding one is
-a few lines. The HUD draws boxes and text, not lines, and holds 1,024
-pieces in all, so the lines share 500 dots. Across the whole sky the
-dots spread out to fit; zoom in and they close up into solid lines.
+a few lines. Each line is one `game.hud.line`. The view is a perspective
+one, where the shortest path between two stars is a straight line on the
+screen, so a straight line between them is exact.
+
+Twelve of them also show their figure as it was engraved in Urania's
+Mirror (1824): the Great Bear, the Swan, the Lion, the Scorpion,
+Andromeda, the Eagle, the Great Dog, Cassiopeia, Perseus, the Charioteer,
+Pegasus and Hercules. Each figure is a `game.hud.image` laid on its own
+stars every frame. A few stars were marked on each card, and the game
+works out the turn, size and place that put those marks on the real
+stars. A figure fades in as it comes near the middle of the view, where
+the perspective doesn't stretch it, so M (or the Figures row in the Sky
+tab) and the strength slider are all you need.
 
 Each planet has a ring and a label in its own colour, Neptune too: the
 sky doesn't draw it because it's too faint to see, but the ring shows
 where it is. The Planets tab says how high and which way each one is, and
 how bright, and turns you to it.
 
-The figures don't look a star up by name each picture, which would be
-slow. `starfield.luau` reads each star once and works out where it is now
-from two reference stars, since the whole sky only ever turns.
+The lines and labels don't look a star up by name each frame, which would
+be slow. `starfield.luau` reads each star once and works out where it is
+now from two reference stars, since the whole sky only ever turns.
+
+### Where the figures come from
+
+The figures are from *Urania's Mirror; or, a view of the Heavens*, a set
+of 32 star chart cards engraved by Sidney Hall and published in London in
+1824, which is in the public domain. `build_art.py` makes
+`images/art/*.png` and `constellation_art.luau` from these scans on
+Wikimedia Commons, keeping each figure as light line art with its card's
+colours as a faint wash:
+
+- [Ursa Major](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Ursa_Major.jpg)
+- [Lacerta, Cygnus, Lyra, Vulpecula and Anser](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Lacerta,_Cygnus,_Lyra,_Vulpecula_and_Anser.jpg)
+- [Leo Major and Leo Minor](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Leo_Major_and_Leo_Minor.jpg)
+- [Scorpio](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Scorpio.jpg)
+- [Gloria Frederici, Andromeda, and Triangula](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Gloria_Frederici,_Andromeda,_and_Triangula.jpg)
+- [Delphinus, Sagitta, Aquila, and Antinous](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Delphinus,_Sagitta,_Aquila,_and_Antinous.jpg)
+- [Canis Major](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Canis_Major.jpg)
+- [Cassiopeia](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Cassiopeia_(image_right_side_up).jpg)
+- [Perseus](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Perseus.jpg)
+- [Auriga](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Auriga.jpg)
+- [Pegasus and Equuleus](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Pegasus_and_Equuleus_(best_currently_available_version_-_2014).jpg)
+- [Hercules and Corona Borealis](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Hercules_and_Corona_Borealis.jpg)
 
 ## The sky all the way round
 

@@ -185,6 +185,12 @@ local skyTab = menu.new("Sky", {
     menu.toggle("Constellations", { get = skyArt.lines, set = skyArt.setLines }),
     menu.toggle("Their names", { get = skyArt.names, set = skyArt.setNames }),
     menu.toggle("Planet rings", { get = skyArt.planets, set = skyArt.setPlanets }),
+    menu.toggle("Figures", { get = skyArt.figures, set = skyArt.setFigures }),
+    menu.slider("Figure strength", {
+        min = 0, max = 1, step = 0.05,
+        get = skyArt.figureStrength, set = skyArt.setFigureStrength,
+        format = menu.percent,
+    }),
     menu.slider("Zoom", {
         min = 0, max = 1, step = 0.05,
         get = view.zoom, set = view.setZoom,

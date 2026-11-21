@@ -12,6 +12,7 @@
 --   E                  the menus: events, time, place, sky (Y)
 --   Space              labels: stars and planets, planets only, or none (A)
 --   R                  constellations on or off (X)
+--   M                  the figures from Urania's Mirror on or off (d-pad up)
 --   G                  the ground below the horizon on or off: off, the sky
 --                      goes all the way round (right bumper)
 --   Esc                the pause menu and settings (Start)
@@ -130,6 +131,9 @@ game.onTick(function(step)
         skyArt.setLines(on)
         skyArt.setNames(on)
     end
+    if game.input.justPressed("map") then
+        skyArt.setFigures(not skyArt.figures())
+    end
     if game.input.justPressed("use_item") then
         game.sky.setGround(not game.sky.ground())
     end
@@ -205,6 +209,7 @@ game.onDraw(function()
             { label("interact"), "menus" },
             { label("jump"), "labels" },
             { label("reload"), "constellations" },
+            { label("map"), "figures" },
             { label("use_item"), "ground" },
             { label("pause"), "pause" },
         },
