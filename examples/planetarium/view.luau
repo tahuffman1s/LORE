@@ -212,11 +212,57 @@ function view.ahead(): vector
     return ahead
 end
 
+-- Where labels are on the screen this picture, so no two overlap: each is
+-- left out if it would cover one already there. Planets go first, then the
+-- sun and the moon, the brightest stars, and the constellations' names.
+local claimed: { { number } } = {}
+-- How far from the middle of the screen a label may reach, in HUD pixels:
+-- inside the edge of a screen as wide as 16 by 9, so none is cut off.
+local REACH_ACROSS, REACH_DOWN = 860, 500
+
+-- Where the HUD's panels are, kept clear of labels: centre and size, from
+-- the middle of a 16 by 9 screen (the HUD keeps inside its middle 90%).
+local PANELS = {
+    { -649, -430, 430, 112 }, -- where you stand, top left
+    { 694, -403, 340, 166 }, -- the time, top right
+    { 0, -425, 640, 122 }, -- the compass and what is going on, top
+    { 0, 420, 960, 140 }, -- a caption, bottom
+    { 400, 470, 930, 40 }, -- the keys, bottom right
+    { -764, 460, 210, 60 }, -- the zoom, bottom left
+}
+
+-- Forgets where labels were, keeping the HUD's panels clear: call it once
+-- a picture, before any claims.
+function view.beginLabels()
+    table.clear(claimed)
+    for _, panel in PANELS do
+        table.insert(claimed, panel)
+    end
+end
+
+-- Takes the box `width` by `height` round (`across`, `down`) for a label,
+-- unless it would cover one already taken or reach past the screen's edge.
+-- Says whether it was taken.
+function view.claim(across: number, down: number, width: number, height: number): boolean
+    if math.abs(across) + width / 2 > REACH_ACROSS or math.abs(down) + height / 2 > REACH_DOWN then
+        return false
+    end
+    local pad = 6
+    for _, box in claimed do
+        if math.abs(box[1] - across) * 2 < box[3] + width + pad and math.abs(box[2] - down) * 2 < box[4] + height + pad then
+            return false
+        end
+    end
+    table.insert(claimed, { across, down, width, height })
+    return true
+end
+
 -- The labels, made once. Made before the pause menu, so it is drawn over them.
-local LABEL_COLOR = "#cfe3ffcc"
+local LABEL_COLOR = "#dbe5ffa8"
+local BRIGHT_COLOR = "#ffe7b0d0"
 local tags = {}
 for number = 1, STARS + #view.planets + 2 do
-    local tag = game.hud.text("", { at = "center", size = 20, color = LABEL_COLOR })
+    local tag = game.hud.text("", { at = "center", size = 14, color = LABEL_COLOR })
     tag.visible = false
     tags[number] = tag
 end
@@ -239,8 +285,8 @@ local function place(tag: HudText, name: string, direction: vector?, color: stri
     tag.text = name
     tag.color = color
     tag.right = across
-    tag.down = down + 18
-    tag.visible = true
+    tag.down = down + 16
+    tag.visible = view.claim(across, down + 16, tag.width, tag.height)
 end
 
 -- Every picture, after view.startFrame: moves the labels to where their
@@ -264,11 +310,11 @@ function view.drawLabels(shown: boolean)
         used += 1
         place(tags[used], name, direction, color)
     end
-    label("Sun", game.sky.sunDirection(), LABEL_COLOR)
-    label("Moon", game.sky.moonDirection(), LABEL_COLOR)
     for _, planet in view.planets do
         label(planet, game.sky.planetDirection(planet), view.planetColors[planet])
     end
+    label("Sun", game.sky.sunDirection(), BRIGHT_COLOR)
+    label("Moon", game.sky.moonDirection(), BRIGHT_COLOR)
     if choice == "Planets and bright stars" then
         for _, star in starNames do
             label(star, starfield.direction(star), LABEL_COLOR)

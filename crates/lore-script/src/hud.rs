@@ -28,7 +28,7 @@ pub(crate) const HUD_FUNCTIONS: &[&str] = &["text", "bar", "box", "frameGraph", 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
 pub(crate) const TEXT_FIELDS: &[&str] = &[
-    "text", "color", "visible", "right", "down", "hovered", "pressed",
+    "text", "color", "visible", "right", "down", "width", "height", "hovered", "pressed",
 ];
 pub(crate) const BAR_FIELDS: &[&str] = &[
     "value", "color", "visible", "right", "down", "width", "height", "hovered", "pressed",
@@ -580,6 +580,14 @@ impl UserData for PieceRef {
                         ("text", HudShape::Text { text, .. }) => {
                             lua.create_string(text).map(Value::String)
                         }
+                        // How big the words are drawn, measured in the HUD's
+                        // own font, for laying other pieces out round them.
+                        ("width" | "height", HudShape::Text { text, size }) => {
+                            let measured = shared.tools.text_size(text, *size);
+                            Ok(Value::Number(f64::from(
+                                measured[usize::from(key == "height")],
+                            )))
+                        }
                         ("value", HudShape::Bar { value, .. }) => {
                             Ok(Value::Number(f64::from(*value)))
                         }
@@ -720,6 +728,16 @@ impl UserData for PieceRef {
                             entry.settle(&shared);
                             ((), changed)
                         })
+                    }
+                    "width" | "height" if kind == Kind::Text => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "A HUD text's `{key}` says how big its words are drawn, so it \
+                                 cannot be set. Change the words, or make it bigger with `size` \
+                                 when it is made: game.hud.text(\"Hello\", {{ size = 48 }})"
+                            ),
+                        ));
                     }
                     "width" | "height" if matches!(kind, Kind::Bar | Kind::Box | Kind::Image) => {
                         let new =

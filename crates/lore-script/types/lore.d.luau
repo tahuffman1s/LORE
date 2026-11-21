@@ -212,6 +212,14 @@ declare extern type HudText with
     --- Example: ammo.text = game.player.ammo .. " / " .. game.player.reserve
     text: string
 
+    --- How big the words are drawn, in pixels on a screen 1080 high,
+    --- measured in the HUD's own font: for laying other pieces out round
+    --- them, such as a box behind them. Read only; they change with the
+    --- words.
+    --- Example: panel.width = ammo.width + 24
+    width: number
+    height: number
+
     --- The colour: a name ("white", "black", "gray", "red", "orange",
     --- "yellow", "green", "blue", "purple", "pink") or a hex code such as
     --- "#ff8800". Two more hex digits make it see-through: "#ffffff80".

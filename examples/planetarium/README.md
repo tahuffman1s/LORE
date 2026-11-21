@@ -73,8 +73,8 @@ a few lines. Each line is one `game.hud.line`. The view is a perspective
 one, where the shortest path between two stars is a straight line on the
 screen, so a straight line between them is exact.
 
-Fourteen of them also show their figure as it was engraved in Urania's
-Mirror (1824): the Great Bear, the Swan, the Lion, the Scorpion,
+Fifteen of them also show their figure as it was engraved in Urania's
+Mirror (1824): Orion, the Great Bear, the Swan, the Lion, the Scorpion,
 Andromeda, the Eagle, the Great Dog, Cassiopeia, Perseus, the Charioteer,
 Pegasus, Hercules, the Bull and the Twins. Each figure is a `game.hud.image` laid on its own
 stars every frame. A few stars were marked on each card, and the game
@@ -113,6 +113,7 @@ colours as a faint wash:
 - [Auriga](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Auriga.jpg)
 - [Pegasus and Equuleus](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Pegasus_and_Equuleus_(best_currently_available_version_-_2014).jpg)
 - [Hercules and Corona Borealis](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Hercules_and_Corona_Borealis.jpg)
+- [Orion](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Orion_(best_currently_available_version_-_2014).jpg)
 - [Taurus](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Taurus.jpg)
 - [Gemini](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Gemini.jpg)
 

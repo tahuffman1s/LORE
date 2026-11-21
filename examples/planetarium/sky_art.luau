@@ -24,7 +24,7 @@ local kept = game.keep("planetarium sky art", {
     names = true,
     planets = true,
     figures = true,
-    figureStrength = 0.5,
+    figureStrength = 0.35,
 })
 
 function skyArt.lines(): boolean
@@ -60,7 +60,7 @@ function skyArt.setFigureStrength(share: number)
 end
 
 local LINE_COLOR = "#8fb2ffa0"
-local NAME_COLOR = "#9db8ffa0"
+local NAME_COLOR = "#9fb4e690"
 -- How far a line stops short of each of its stars, in HUD pixels, so the
 -- star itself shows.
 local GAP = 9
@@ -83,7 +83,7 @@ for _, constellation in constellations do
 end
 local names = {}
 for number, constellation in constellations do
-    local text = game.hud.text(string.upper(constellation.name), { at = "center", size = 16, color = NAME_COLOR })
+    local text = game.hud.text(string.upper(constellation.name), { at = "center", size = 12, color = NAME_COLOR })
     text.visible = false
     names[number] = text
 end
@@ -259,9 +259,13 @@ function skyArt.draw(shown: boolean)
     if shown and not checked then
         checkNames()
     end
+    -- The figures belong to the night: by day they would hide the sky they
+    -- are drawn on, so they fade to a third as the light grows past dusk.
+    local lux = game.sky.light() or 0
+    local night = 1 - 0.65 * math.clamp((math.log10(math.max(lux, 1e-4)) - 0) / 3, 0, 1)
     for number, picture in pictures do
         if shown and kept.figures and kept.figureStrength > 0 then
-            placePicture(number, kept.figureStrength)
+            placePicture(number, kept.figureStrength * night)
         else
             picture.visible = false
         end
@@ -295,7 +299,7 @@ function skyArt.draw(shown: boolean)
                 if across and down then
                     text.right = across
                     text.down = down
-                    text.visible = true
+                    text.visible = view.claim(across, down, text.width, text.height)
                 end
             end
         end

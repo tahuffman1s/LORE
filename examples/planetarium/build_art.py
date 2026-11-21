@@ -45,7 +45,7 @@ LONGEST = 720
 
 # Each figure: the game's name for the constellation, the card's file on
 # Commons, the box round the figure and the marked stars, all in pixels of
-# the card at MARKED_WIDTH wide (Pegasus's card is 990 wide).
+# the card at MARKED_WIDTH wide (Pegasus's card is 990 wide, Orion's 960).
 CARDS = [
     ("Ursa Major", "ursa_major", "Sidney Hall - Urania's Mirror - Ursa Major.jpg", 1280,
      (150, 100, 1060, 830), [("Dubhe", 668, 280), ("Phecda", 533, 422), ("Alkaid", 200, 470), ("Merak", 665, 375)]),
@@ -69,6 +69,8 @@ CARDS = [
      (280, 260, 1130, 1890), [("Capella", 770, 705), ("Menkalinan", 465, 750), ("Elnath", 772, 1745)]),
     ("Pegasus", "pegasus", "Sidney Hall - Urania's Mirror - Pegasus and Equuleus (best currently available version - 2014).jpg", 990,
      (40, 40, 950, 650), [("Markab", 432, 410), ("Scheat", 448, 178), ("Algenib", 140, 425), ("Enif", 765, 500)]),
+    ("Orion", "orion", "Sidney Hall - Urania's Mirror - Orion (best currently available version - 2014).jpg", 960,
+     (40, 50, 930, 1320), [("Betelgeuse", 278, 602), ("Bellatrix", 546, 652), ("Mintaka", 481, 888), ("Saiph", 346, 1213), ("Rigel", 627, 1168)]),
     ("Taurus", "taurus", "Sidney Hall - Urania's Mirror - Taurus.jpg", 1280,
      (180, 60, 1175, 820), [("Aldebaran", 593, 402), ("Elnath", 296, 76), ("Tianguan", 221, 268), ("Alcyone", 873, 197)]),
     ("Gemini", "gemini", "Sidney Hall - Urania's Mirror - Gemini.jpg", 1280,
@@ -170,6 +172,12 @@ def line_art(rgb, near_figure=True):
     body = smoothstep(0.3, 0.65, body)
     colour = pastel * (1 - lines[..., None]) + lines[..., None]
     alpha = np.clip(lines * 0.95 + body * 0.22, 0, 1)
+    # Faded out over the last few dozen pixels of the box, so where a figure
+    # was cut from its card leaves no hard edge on the sky.
+    tall, wide = alpha.shape
+    ys, xs = np.mgrid[0:tall, 0:wide]
+    edge = np.minimum(np.minimum(xs, wide - 1 - xs), np.minimum(ys, tall - 1 - ys))
+    alpha *= smoothstep(0.0, 36.0, edge.astype(np.float32))
     out = np.concatenate([colour, alpha[..., None]], axis=2)
     return (out * 255 + 0.5).astype(np.uint8)
 

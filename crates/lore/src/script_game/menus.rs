@@ -630,10 +630,10 @@ fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
         "{:?}",
         played.words()
     );
-    assert!(played.shows("Stopped"));
+    assert!(played.shows("STOPPED"));
     // Time runs faster with D, as the left stick would push it.
     played.tap(Key::D);
-    assert!(played.shows("Real time"), "{:?}", played.words());
+    assert!(played.shows("REAL TIME"), "{:?}", played.words());
 }
 
 #[test]
@@ -790,7 +790,7 @@ fn the_planetarium_planets_tab_says_where_each_is_and_turns_to_it() {
     assert_eq!(played.set(), "gameplay");
     // The name under the crosshair is Saturn's.
     assert!(
-        played.shows("Saturn") && played.shows("22° up"),
+        played.shows("Saturn") && played.shows("ALT 22°   ·   SE"),
         "{:?}",
         played.words()
     );
