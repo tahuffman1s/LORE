@@ -17,5 +17,7 @@ return {
     { name = "Perseus", image = "art/perseus", size = { 720, 536 }, stars = { { "Mirfak", 329.9, 172.9 }, { "Algol", 337.2, 320.6 }, { "Zeta Persei", 135.3, 475.5 } } },
     { name = "Auriga", image = "art/auriga", size = { 390, 720 }, stars = { { "Capella", 224.5, 205.0 }, { "Menkalinan", 84.7, 225.6 }, { "Elnath", 225.9, 681.9 } } },
     { name = "Pegasus", image = "art/pegasus", size = { 720, 483 }, stars = { { "Markab", 311.0, 295.7 }, { "Scheat", 323.2, 108.2 }, { "Algenib", 78.4, 306.0 }, { "Enif", 573.4, 364.3 } } },
+    { name = "Taurus", image = "art/taurus", size = { 720, 550 }, stars = { { "Aldebaran", 298.6, 248.4 }, { "Elnath", 84.6, 12.8 }, { "Tianguan", 27.7, 152.9 }, { "Alcyone", 502.1, 99.3 } } },
+    { name = "Gemini", image = "art/gemini", size = { 663, 720 }, stars = { { "Castor", 196.9, 152.8 }, { "Pollux", 118.4, 262.8 }, { "Mebsuta", 491.1, 352.3 }, { "Wasat", 248.2, 431.8 }, { "Alhena", 523.4, 610.7 } } },
     { name = "Hercules", image = "art/hercules", size = { 547, 720 }, stars = { { "Rasalgethi", 216.1, 574.3 }, { "Kornephoros", 371.4, 467.8 }, { "Eta Herculis", 310.7, 180.3 }, { "Sarin", 210.8, 401.5 } } },
 } :: { Art }

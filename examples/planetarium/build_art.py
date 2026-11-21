@@ -69,6 +69,10 @@ CARDS = [
      (280, 260, 1130, 1890), [("Capella", 770, 705), ("Menkalinan", 465, 750), ("Elnath", 772, 1745)]),
     ("Pegasus", "pegasus", "Sidney Hall - Urania's Mirror - Pegasus and Equuleus (best currently available version - 2014).jpg", 990,
      (40, 40, 950, 650), [("Markab", 432, 410), ("Scheat", 448, 178), ("Algenib", 140, 425), ("Enif", 765, 500)]),
+    ("Taurus", "taurus", "Sidney Hall - Urania's Mirror - Taurus.jpg", 1280,
+     (180, 60, 1175, 820), [("Aldebaran", 593, 402), ("Elnath", 296, 76), ("Tianguan", 221, 268), ("Alcyone", 873, 197)]),
+    ("Gemini", "gemini", "Sidney Hall - Urania's Mirror - Gemini.jpg", 1280,
+     (170, 52, 900, 845), [("Castor", 387, 222), ("Pollux", 302, 340), ("Mebsuta", 710, 440), ("Wasat", 443, 528), ("Alhena", 745, 725)]),
     ("Hercules", "hercules", "Sidney Hall - Urania's Mirror - Hercules and Corona Borealis.jpg", 1280,
      (400, 50, 1000, 840), [("Rasalgethi", 638, 680), ("Kornephoros", 808, 562), ("Eta Herculis", 742, 246), ("Sarin", 633, 490)]),
 ]
