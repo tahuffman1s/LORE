@@ -36,27 +36,28 @@ lore run
 | Time lapse slower or faster | A and D | left stick left and right |
 | Menus | E | Y |
 | Labels: stars and planets, planets only, none | Space | A |
-| The hidden half | G | right bumper |
+| Ground below the horizon on or off | G | right bumper |
 | Pause and settings | Esc | Start |
 
 In the menus, Q and E (or the bumpers) go from tab to tab: **Eclipses**
 and **Night sky** to jump to an event, **Time** for the time lapse, the
 hour and the date, plus the next sunrise or sunset, **Place** to stand
-anywhere on Earth, and **Sky** for labels, zoom, shooting stars, the
+anywhere on Earth, and **Sky** for labels, the ground, zoom, shooting stars, the
 aurora, the Milky Way, town lights, the size of the moon and exposure.
 
 Time lapse goes from stopped and real time up to a day a second. Time only
 runs forward, so the Time tab has buttons to step back an hour or a day.
 
-## The hidden half
+## The sky all the way round
 
-The engine draws dark ground below the horizon, so half the sky is always
-under your feet. The hidden half (G, or the toggle in the Place tab) shows
-that half: it draws the sky from the far side of the Earth at the same
-instant, with north kept where it was. That turns the sky over about the
-north-south line, so what was beneath you is now above you. The sun is in
-that half at night, so expect daylight. The clock still shows your own
-time and place.
+The planetarium starts with `game.sky.setGround(false)`, so no dark ground
+is drawn below the horizon: the stars, the planets, the moon, the Milky
+Way and the sun carry on under your feet where they really are, and the
+readout under the crosshair says how far below the horizon you are
+looking. At night the sun is down there. Shooting stars and the aurora
+happen in the air overhead, so they stay above the horizon. G (or the
+Ground row in the Sky tab) puts the ground back, to see the sky as someone
+standing there would.
 
 ## What it can't do
 

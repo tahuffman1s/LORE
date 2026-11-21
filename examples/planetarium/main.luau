@@ -11,8 +11,8 @@
 --   A and D            time runs slower or faster (left stick left and right)
 --   E                  the menus: events, time, place, sky (Y)
 --   Space              labels: stars and planets, planets only, or none (A)
---   G                  the hidden half: the sky below your feet, turned
---                      overhead (right bumper)
+--   G                  the ground below the horizon on or off: off, the sky
+--                      goes all the way round (right bumper)
 --   Esc                the pause menu and settings (Start)
 --
 -- Nothing here is engine code: every part is a file beside this one, and
@@ -34,10 +34,6 @@ local place = game.hud.text("", { at = "top", down = 10, size = 26, color = WORD
 local moment = game.hud.text("", { at = "top", down = 42, size = 24, color = WORDS })
 local speed = game.hud.text("", { at = "top", down = 72, size = 22, color = QUIET })
 local happening = game.hud.text("", { at = "top", down = 102, size = 24, color = "#ffd25a" })
-local flippedNote = game.hud.text(
-    "Hidden half: the sky below your feet, turned overhead",
-    { at = "top", down = 134, size = 22, color = "#ff9d57" }
-)
 local dot = game.hud.box({ at = "center", width = 4, height = 4, color = "#ffffff80" })
 local target = game.hud.text("", { at = "center", down = 34, size = 22, color = WORDS })
 local zoomText = game.hud.text("", { at = "bottom left", size = 22, color = QUIET })
@@ -55,9 +51,6 @@ local captionLeft = 0
 -- Goes to an event: its place, its moment, how fast time runs, what else
 -- the sky shows, and the way to look.
 local function jump(event: events.Event)
-    if clock.flipped() then
-        clock.setFlipped(false)
-    end
     clock.setPlace(event.latitude, event.longitude, event.place)
     local year, month, day = table.unpack(event.date)
     clock.setMoment(clock.daysFrom2000(year, month, day) + event.hour / 24)
@@ -129,7 +122,7 @@ game.onTick(function(step)
         view.setLabels(view.labelChoices[labelsAt])
     end
     if game.input.justPressed("use_item") then
-        clock.setFlipped(not clock.flipped())
+        game.sky.setGround(not game.sky.ground())
     end
 end)
 
@@ -173,17 +166,17 @@ game.onDraw(function()
     moment.text = clock.describe()
     speed.text = "Time: " .. clock.speeds[clock.speed()].name
     happening.text = whatIsHappening()
-    flippedNote.visible = clock.flipped()
     for _, piece in { place, moment, speed, happening } :: { any } do
         piece.visible = not panel.isOpen
     end
-    flippedNote.visible = flippedNote.visible and not panel.isOpen
 
     local aim = game.player.aim
     local name = view.lookingAt()
+    local height = math.floor(view.height(aim) + 0.5)
     local where = string.format(
-        "%d° up, %s (%d°)",
-        math.floor(view.height(aim) + 0.5),
+        "%d° %s, %s (%d°)",
+        math.abs(height),
+        if height < 0 then "below the horizon" else "up",
         view.compass(view.bearing(aim)),
         math.floor(view.bearing(aim) + 0.5)
     )
@@ -198,7 +191,7 @@ game.onDraw(function()
 
     local label = game.input.label
     hints.text = string.format(
-        "%s: up/down zoom, left/right time lapse   %s menus   %s labels   %s hidden half   %s pause",
+        "%s: up/down zoom, left/right time lapse   %s menus   %s labels   %s ground   %s pause",
         label("move"),
         label("interact"),
         label("jump"),

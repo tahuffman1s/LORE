@@ -1683,6 +1683,25 @@ declare game: {
         --- Example: local size = game.sky.moonSize()
         moonSize: () -> number,
 
+        --- Says whether the sky's dark ground is drawn below the horizon:
+        --- true (the usual) or false. It is the backdrop beyond the level,
+        --- not the level's own ground, which is always drawn. With false
+        --- the sky goes all the way round, as in a planetarium or with
+        --- Stellarium's ground turned off: where the level has no land you
+        --- see the stars, the planets, the moon, the Milky Way and the sun
+        --- below your feet where they really are, dimmed near the horizon
+        --- by the air as they are above it; where it has land, you see the
+        --- land. Shooting stars and the aurora, which are in the air
+        --- overhead, stay above the horizon. Kept when the script is read
+        --- again; setGround(true) puts the ground back.
+        --- Example: game.sky.setGround(false)
+        setGround: (shown: boolean) -> (),
+
+        --- Whether the sky's dark ground is drawn below the horizon, as
+        --- setGround was told: true unless it was told false.
+        --- Example: local shown = game.sky.ground()
+        ground: () -> boolean,
+
         --- Says how bright the Milky Way is drawn: how many times its real
         --- brightness, from 0 (not at all) to 10. 1 is as it really is, the
         --- usual: on a dark night with no moon, a band of star clouds and

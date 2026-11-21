@@ -436,6 +436,15 @@ impl Headless {
         self.effects.set_moon_size(size);
     }
 
+    /// Says whether dark ground is drawn below the horizon, where the
+    /// level has nothing (the usual), or the sky goes all the way round:
+    /// the stars, the planets, the moon, the Milky Way and the sun drawn
+    /// below the horizon where they are. Shooting stars and the aurora,
+    /// which are in the air overhead, stay above it.
+    pub fn set_ground(&mut self, shown: bool) {
+        self.effects.set_ground(shown);
+    }
+
     /// Says what colour the moon is tinted, in linear red, green and
     /// blue: its face, the glow round it and its light on the land, all as
     /// bright as before. `[1.0, 1.0, 1.0]` is its own colour (the usual); a
@@ -1198,6 +1207,40 @@ mod tests {
         // Under the horizon there is ground, not more sky.
         let [red, green, blue] = middle(&mut headless, 0.9, -0.8);
         assert!(red + green + blue < 150, "below: {red} {green} {blue}");
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn with_no_ground_the_sky_goes_on_below_the_horizon() {
+        const SIZE: [usize; 2] = [96, 64];
+        let Some(mut headless) = headless(96, 64) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_hour(Some(12.0));
+        let below = |headless: &mut Headless| {
+            let camera = Camera {
+                yaw: 0.9,
+                pitch: -0.8,
+                ..Camera::default()
+            };
+            let picture = headless.screenshot(&camera).unwrap();
+            let at = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4;
+            [picture[at], picture[at + 1], picture[at + 2]].map(i32::from)
+        };
+        let [red, green, blue] = below(&mut headless);
+        assert!(red + green + blue < 150, "ground: {red} {green} {blue}");
+        // With no ground, the sky below is the sky above, mirrored: blue.
+        headless.set_ground(false);
+        let [red, green, blue] = below(&mut headless);
+        assert!(blue >= red && blue > 90, "no ground: {red} {green} {blue}");
+        headless.set_ground(true);
+        let [red, green, blue] = below(&mut headless);
+        assert!(
+            red + green + blue < 150,
+            "ground again: {red} {green} {blue}"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

@@ -637,26 +637,25 @@ fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
 }
 
 #[test]
-fn the_planetarium_shows_the_hidden_half_at_the_same_moment() {
+fn the_planetarium_has_no_ground_until_g_brings_it_back() {
     let mut played = Played::example("planetarium", true);
-    let moment = |played: &Played| {
-        (played.words().into_iter())
-            .find(|words| words.contains("local solar time"))
-            .map(str::to_owned)
+    let ground = |played: &mut Played| {
+        // The Sky tab, five tabs along from the Eclipses the menu opens at.
+        played.tap(Key::E);
+        for _ in 0..4 {
+            played.tap(Key::E);
+        }
+        let shown = played.value_of("Ground");
+        played.tap(Key::Escape);
+        shown
     };
-    let before = moment(&played);
-    assert!(before.is_some(), "{:?}", played.words());
+    assert_eq!(ground(&mut played), "off");
     played.tap(Key::G);
-    assert!(played.shows("Hidden half: the sky below your feet, turned overhead"));
-    // The far side's sky is drawn, but the clock is still the observer's.
-    assert_eq!(moment(&played), before);
+    assert_eq!(ground(&mut played), "on");
     played.tap(Key::G);
-    assert!(!played.shows("Hidden half: the sky below your feet, turned overhead"));
-    assert_eq!(moment(&played), before);
+    assert_eq!(ground(&mut played), "off");
 }
 
-/// Every event in the planetarium's lists lands on what it is there for, as
-/// the HUD tells it: an eclipse at its middle, a shower on its night.
 #[test]
 fn every_planetarium_event_lands_on_what_it_promises() {
     const TOTAL_SOLAR: &str = "Total solar eclipse, 100% of the sun covered";

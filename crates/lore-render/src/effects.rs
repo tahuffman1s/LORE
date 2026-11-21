@@ -288,6 +288,8 @@ pub(crate) struct Effects {
     place: Option<SkyPlace>,
     /// How large the moon is drawn, against its real size.
     moon_size: f32,
+    /// Whether dark ground is drawn below the horizon.
+    ground_below: bool,
     /// What colour the moon is tinted, as bright as white.
     moon_tint: [f32; 3],
     /// How much towns light the night sky, on Bortle's scale from 1 (none)
@@ -346,6 +348,7 @@ impl Effects {
             day: None,
             place: None,
             moon_size: 1.0,
+            ground_below: true,
             moon_tint: [1.0; 3],
             light_pollution: 1.0,
             aurora: 0.0,
@@ -824,6 +827,18 @@ impl Effects {
         }
     }
 
+    /// Says whether dark ground is drawn below the horizon (the usual),
+    /// or the sky goes all the way round.
+    pub(crate) fn set_ground(&mut self, shown: bool) {
+        if shown == self.ground_below {
+            return;
+        }
+        self.ground_below = shown;
+        if let Some((hour, _)) = self.day {
+            self.day = Some((hour, self.sky_at(hour)));
+        }
+    }
+
     /// Says what colour the moon is tinted, in linear light, made as
     /// bright as white: its face, the glow round it and its light on the
     /// land. `[1.0; 3]` is its own colour.
@@ -977,6 +992,9 @@ impl Effects {
             self.moon_tint,
         );
         day.heavens[2][3] = self.moon_size;
+        // 1 where the sky goes on below the horizon (`open_below` in the
+        // shader).
+        day.heavens[sky::ECLIPSE_ROWS + 2][2] = if self.ground_below { 0.0 } else { 1.0 };
         day.heavens[6][3] = self.night_darkening.exp2();
         day.heavens[3][3] = 1.0 / self.eye_multiplier;
         // Town glow lights the land from the whole sky, as a lux of any

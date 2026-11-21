@@ -167,8 +167,6 @@ local placeMenu = menu.new("Place", {
         set = function(longitude) clock.setPlace(clock.latitude(), longitude) end,
         format = function(longitude) return degrees(longitude, "E", "W") end,
     }),
-    menu.toggle("Hidden half", { get = clock.flipped, set = clock.setFlipped }),
-    menu.info("", { text = function() return "Turns the sky below your feet overhead" end }),
 })
 
 local METEORS = { { "None", 0 }, { "Real rate", 1 }, { "10x", 10 }, { "100x", 100 }, { "Storm (1000x)", 1000 } }
@@ -182,6 +180,7 @@ local TOWN_CLASSES = { 1, 3, 5, 8 }
 
 local skyTab = menu.new("Sky", {
     menu.choice("Labels", { options = view.labelChoices, get = view.labels, set = view.setLabels }),
+    menu.toggle("Ground", { get = game.sky.ground, set = game.sky.setGround }),
     menu.slider("Zoom", {
         min = 0, max = 1, step = 0.05,
         get = view.zoom, set = view.setZoom,

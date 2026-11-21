@@ -98,6 +98,9 @@ pub struct Frame {
     sky_place: Option<lore_render::SkyPlace>,
     /// How large the moon is drawn, if the game said it this frame.
     moon_size: Option<f32>,
+    /// Whether dark ground is drawn below the horizon, if the game said it
+    /// this frame.
+    ground: Option<bool>,
     /// What colour the moon is tinted, if the game said it this frame.
     moon_tint: Option<[f32; 3]>,
     /// How bright and what colour the Milky Way is, if the game said it
@@ -233,6 +236,7 @@ impl Frame {
             hour: None,
             sky_place: None,
             moon_size: None,
+            ground: None,
             moon_tint: None,
             milky_way: None,
             light_pollution: None,
@@ -909,6 +913,18 @@ impl Frame {
     /// How large the moon is drawn, if the game said it this frame.
     pub(crate) fn take_moon_size(&mut self) -> Option<f32> {
         self.moon_size.take()
+    }
+
+    /// Says whether dark ground is drawn below the horizon (the usual), or
+    /// the sky goes all the way round, its stars below the player's feet.
+    pub fn set_ground(&mut self, shown: bool) {
+        self.ground = Some(shown);
+    }
+
+    /// Whether dark ground is drawn below the horizon, if the game said it
+    /// this frame.
+    pub(crate) fn take_ground(&mut self) -> Option<bool> {
+        self.ground.take()
     }
 
     /// Says how the Milky Way is drawn: `times` its real brightness, from

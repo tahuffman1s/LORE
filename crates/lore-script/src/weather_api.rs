@@ -46,6 +46,8 @@ pub(crate) const SKY_FUNCTIONS: &[&str] = &[
     "light",
     "setMoonSize",
     "moonSize",
+    "setGround",
+    "ground",
     "setMoonColor",
     "moonColor",
     "setMilkyWayBrightness",
@@ -323,6 +325,10 @@ pub struct Climate {
     /// has said and the engine has not yet taken it.
     moon_size: Cell<f32>,
     moon_size_asked: Cell<Option<f32>>,
+    /// Whether dark ground is drawn below the horizon, and what the script
+    /// said of it that the engine has not yet taken.
+    ground: Cell<bool>,
+    ground_asked: Cell<Option<bool>>,
     /// What colour the moon is tinted, in linear light, as the script
     /// wrote it, and whether the engine has yet to take it.
     moon_tint: Cell<[f32; 3]>,
@@ -377,6 +383,8 @@ impl Default for Climate {
             place_changed: Cell::new(false),
             moon_size: Cell::new(1.0),
             moon_size_asked: Cell::new(None),
+            ground: Cell::new(true),
+            ground_asked: Cell::new(None),
             moon_tint: Cell::new([1.0; 3]),
             moon_tint_said: RefCell::new("#ffffff".to_owned()),
             moon_tint_asked: Cell::new(false),
@@ -454,6 +462,12 @@ impl Climate {
 
     pub(crate) fn take_moon_size(&self) -> Option<f32> {
         self.moon_size_asked.take()
+    }
+
+    /// Whether dark ground is drawn below the horizon, if the script has
+    /// said since this was last asked.
+    pub(crate) fn take_ground(&self) -> Option<bool> {
+        self.ground_asked.take()
     }
 
     /// How bright and what colour the Milky Way is drawn, if the script has
@@ -1506,6 +1520,32 @@ fn lights(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
     sky.set(
         "moonSize",
         lua.create_function(move |_, ()| Ok(f64::from(climate.moon_size.get())))?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "setGround",
+        lua.create_function(move |lua, value: Value| {
+            let Value::Boolean(shown) = value else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sky.setGround needs true or false, but it was given {}. It says \
+                         whether dark ground is drawn below the horizon: false lets the sky \
+                         go all the way round, with the stars below your feet, and true puts \
+                         the ground back. Write it like this: game.sky.setGround(false)",
+                        describe(&value)
+                    ),
+                ));
+            };
+            climate.ground.set(shown);
+            climate.ground_asked.set(Some(shown));
+            Ok(())
+        })?,
+    )?;
+    let climate = Rc::clone(&shared.weather);
+    sky.set(
+        "ground",
+        lua.create_function(move |_, ()| Ok(climate.ground.get()))?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(

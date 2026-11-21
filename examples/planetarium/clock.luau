@@ -1,16 +1,10 @@
 -- Where and when the sky is: the observer's place on the Earth, the moment,
--- how fast time runs, and the "hidden half" switch.
+-- and how fast time runs.
 --
 -- The engine keeps the moment as a date and an hour of the sun's own time
 -- (a sundial's: 12 is when the sun stands due south). This file turns that
 -- into one number, the days since 1 January 2000, so a moment can be moved
 -- by an hour or a day without minding months and years.
---
--- The hidden half: the engine draws dark ground below the horizon, so half
--- the sky is always under your feet. The far side of the Earth (the
--- antipode, at the same instant) sees exactly that half overhead. Standing
--- there with north kept where it was turns the sky over about the
--- north-south line: what was beneath you is now above you.
 
 local clock = {}
 
@@ -19,7 +13,6 @@ local kept = game.keep("planetarium clock", {
     latitude = 36.46,
     longitude = -116.87,
     place = "Death Valley, California",
-    flipped = false,
     speed = 1,
 })
 
@@ -70,49 +63,25 @@ local function wrapLongitude(degrees: number): number
     return (degrees + 180) % 360 - 180
 end
 
--- Tells the engine where to draw the sky from: the observer's place, or
--- its antipode while the hidden half is shown.
+-- Tells the engine where the observer stands.
 local function applyPlace()
-    if kept.flipped then
-        game.sky.setLatitude(-kept.latitude)
-        game.sky.setLongitude(wrapLongitude(kept.longitude + 180))
-    else
-        game.sky.setLatitude(kept.latitude)
-        game.sky.setLongitude(kept.longitude)
-    end
+    game.sky.setLatitude(kept.latitude)
+    game.sky.setLongitude(kept.longitude)
 end
 
--- The moment the engine is drawing, in days since 1 January 2000 at the
--- local sundial's midnight.
-local function engineMoment(): number
+-- The moment, local sundial time, in days since 1 January 2000 at the local
+-- sundial's midnight.
+function clock.moment(): number
     local year, month, day = game.sky.date()
     local hour = game.sky.hour() or 12
     return clock.daysFrom2000(year or 2000, month or 3, day or 20) + (hour % 24) / 24
 end
 
-local function setEngineMoment(moment: number)
+function clock.setMoment(moment: number)
     local day = math.floor(moment)
     local year, month, date = clock.dateFrom2000(day)
     game.sky.setDate(year, month, date)
     game.sky.setHour((moment - day) * 24)
-end
-
--- How far the far side's sundial runs ahead of the observer's, in days, at
--- the same instant: half a day, ahead going east to it and behind going west.
-local function farSideAhead(): number
-    if not kept.flipped then
-        return 0
-    end
-    return (wrapLongitude(kept.longitude + 180) - kept.longitude) / 360
-end
-
--- The observer's moment, local sundial time, in days since 1 January 2000.
-function clock.moment(): number
-    return engineMoment() - farSideAhead()
-end
-
-function clock.setMoment(moment: number)
-    setEngineMoment(moment + farSideAhead())
 end
 
 -- Moves the moment by `days` (a fraction for hours: 1 / 24 is an hour).
@@ -138,19 +107,6 @@ function clock.setPlace(latitude: number, longitude: number, name: string?)
     kept.latitude = math.clamp(latitude, -90, 90)
     kept.longitude = wrapLongitude(longitude)
     kept.place = name or string.format("%.1f°, %.1f°", kept.latitude, kept.longitude)
-    applyPlace()
-    clock.setMoment(moment)
-end
-
-function clock.flipped(): boolean
-    return kept.flipped
-end
-
--- Shows the hidden half (the sky below the horizon, turned overhead), or
--- puts the sky back the right way up. The moment stays the same.
-function clock.setFlipped(on: boolean)
-    local moment = clock.moment()
-    kept.flipped = on
     applyPlace()
     clock.setMoment(moment)
 end
@@ -219,6 +175,8 @@ end
 -- when the game starts, and again when the script is read again.
 function clock.start()
     game.sky.setNorth(0)
+    -- No ground below the horizon: the sky goes all the way round.
+    game.sky.setGround(false)
     applyPlace()
     game.sky.setDayLength(clock.speeds[kept.speed].minutes)
 end

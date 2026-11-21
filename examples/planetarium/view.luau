@@ -151,9 +151,10 @@ end
 local starNames: { string } = {}
 
 -- Puts `tag` under the object in `direction`, or hides it if the object is
--- below the horizon, behind the observer or off the screen.
+-- under the ground (when there is ground), behind the observer or off the
+-- screen.
 local function place(tag: HudText, name: string, direction: vector?, ahead: vector, right: vector, up: vector, scale: number)
-    if direction == nil or direction.y < -0.01 then
+    if direction == nil or (direction.y < -0.01 and game.sky.ground()) then
         tag.visible = false
         return
     end

@@ -628,6 +628,12 @@ impl ScriptHost {
         self.weather.take_moon_size()
     }
 
+    /// Whether dark ground is drawn below the horizon, if the script has
+    /// said since this was last called (`game.sky.setGround`).
+    pub fn take_ground(&mut self) -> Option<bool> {
+        self.weather.take_ground()
+    }
+
     /// How many times its real brightness the Milky Way is drawn and what
     /// colour it is tinted, in linear light, if the script has said either
     /// since this was last called (`game.sky.setMilkyWayBrightness`,

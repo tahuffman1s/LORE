@@ -860,6 +860,7 @@ impl<G: Game> App<G> {
         let hour = frame.take_hour();
         let sky_place = frame.take_sky_place();
         let moon_size = frame.take_moon_size();
+        let ground = frame.take_ground();
         let moon_tint = frame.take_moon_tint();
         let milky_way = frame.take_milky_way();
         let light_pollution = frame.take_light_pollution();
@@ -959,6 +960,9 @@ impl<G: Game> App<G> {
             }
             if let Some(size) = moon_size {
                 renderer.set_moon_size(size);
+            }
+            if let Some(shown) = ground {
+                renderer.set_ground(shown);
             }
             if let Some(tint) = moon_tint {
                 renderer.set_moon_tint(tint);
