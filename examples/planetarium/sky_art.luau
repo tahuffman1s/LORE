@@ -249,7 +249,7 @@ local function placePicture(number: number, strength: number)
     picture.down = qy + (cx * s + cy * c) * scale
     picture.width, picture.height = width, height
     picture.rotation = math.deg(turn)
-    picture.color = string.format("#ffffff%02x", math.floor(strength * 255 + 0.5))
+    picture.color = string.format("%s%02x", each.tint, math.floor(strength * 255 + 0.5))
     picture.visible = true
 end
 

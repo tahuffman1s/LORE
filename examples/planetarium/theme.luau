@@ -48,6 +48,9 @@ export type Panel = typeof(setmetatable(
         height: number,
         boxes: { { piece: HudBox, color: string } },
         texts: { { piece: HudText, color: string } },
+        -- Its shadow, outline and glass, which follow its size; none if bare.
+        frame: { HudBox },
+        corner: number,
     },
     Panel
 ))
@@ -105,6 +108,44 @@ function Panel.placeText(self: Panel, piece: HudText, across: number, down: numb
     piece.right, piece.down = self:offset(left, down, width, height)
 end
 
+-- Changes the panel's size, keeping it pinned where it is: its shadow,
+-- outline and glass follow. Its other pieces are placed by the caller, as
+-- where they go depends on the size.
+function Panel.resize(self: Panel, width: number, height: number)
+    self.width, self.height = width, height
+    local frame = self.frame
+    if #frame == 3 then
+        self:placeBox(frame[1], 0, 6, width, height)
+        self:placeBox(frame[2], -1, -1, width + 2, height + 2)
+        self:placeBox(frame[3], 0, 0, width, height)
+    end
+end
+
+-- Moves the whole panel, from where it is pinned.
+function Panel.moveTo(self: Panel, right: number, down: number)
+    self.right, self.down = right, down
+    self:resize(self.width, self.height)
+end
+
+-- Puts `text` in `piece`, shortened with an ellipsis if it would be wider
+-- than `most`. Gives back whether it had to be shortened.
+function theme.fit(piece: HudText, text: string, most: number): boolean
+    piece.text = text
+    if piece.width <= most then
+        return false
+    end
+    local length = utf8.len(text) or #text
+    while length > 1 do
+        length -= 1
+        local cut = string.sub(text, 1, (utf8.offset(text, length + 1) or (#text + 1)) - 1)
+        piece.text = string.gsub(cut, "[%s,·]+$", "") .. "…"
+        if piece.width <= most then
+            break
+        end
+    end
+    return true
+end
+
 function Panel.setVisible(self: Panel, visible: boolean)
     for _, each in self.boxes do
         each.piece.visible = visible
@@ -136,14 +177,18 @@ function theme.panel(settings: { at: string, right: number?, down: number?, widt
         height = settings.height,
         boxes = {},
         texts = {},
+        frame = {},
+        corner = settings.corner or theme.corner,
     }, Panel)
     if not settings.bare then
-        local corner = settings.corner or theme.corner
+        local corner = self.corner
         local w, h = settings.width, settings.height
-        self:box(0, 6, w, h, theme.shadow, corner)
-        -- A one-pixel outline: a faint box, and the glass one pixel inside it.
-        self:box(-1, -1, w + 2, h + 2, theme.outline, corner + 1)
-        self:box(0, 0, w, h, theme.glass, corner)
+        self.frame = {
+            self:box(0, 6, w, h, theme.shadow, corner),
+            -- A one-pixel outline: a faint box, and the glass one pixel inside it.
+            self:box(-1, -1, w + 2, h + 2, theme.outline, corner + 1),
+            self:box(0, 0, w, h, theme.glass, corner),
+        }
     end
     self:setVisible(false)
     return self

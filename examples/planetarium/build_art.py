@@ -41,7 +41,7 @@ AGENT = "lore-planetarium-build/0.1 (https://github.com/tahuffman1s/LORE)"
 # The width the cards were marked at, in pixels: Commons' 1280 wide render.
 MARKED_WIDTH = 1280
 # The longest side of a finished picture.
-LONGEST = 720
+LONGEST = 1024
 
 # Each figure: the game's name for the constellation, the card's file on
 # Commons, the box round the figure and the marked stars, all in pixels of
@@ -122,26 +122,41 @@ def smoothstep(low, high, values):
 
 
 def line_art(rgb, near_figure=True):
-    """Light line art on nothing from a piece of a card, as RGBA bytes. With
+    """Light line art on nothing from a piece of a card, as RGBA bytes at
+    twice the piece's size (shrunk later, which smooths every line). With
     `near_figure`, lines far from the figure's colours (the dotted borders
     between constellations, lettering) are left out; a figure the card left
     uncoloured, as Cygnus's swan is, keeps every line in its box."""
-    rgb = rgb.astype(np.float32) / 255.0
+    piece = Image.fromarray(rgb)
+    piece = piece.resize((piece.width * 2, piece.height * 2), Image.LANCZOS)
+    rgb = np.asarray(piece).astype(np.float32) / 255.0
     lum = rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
-    paper = np.percentile(lum, 92)
-    # The engraved lines: darker than what is round them.
-    lines = np.clip((ndimage.gaussian_filter(lum, 2.0) - lum) * 7.0, 0, 1)
+    # The paper, made even: each pixel against the paper's own brightness
+    # round it (from the brightest nearby, so ink does not darken it), which
+    # takes away stains, fading and the scan's uneven light.
+    paper = ndimage.gaussian_filter(ndimage.maximum_filter(lum, 31), 24)
+    flat = np.clip(lum / np.maximum(paper, 0.2), 0, 1)
+    # The paper's grain calmed without softening the lines.
+    flat = ndimage.gaussian_filter(ndimage.median_filter(flat, 3), 0.8)
+    # The engraved lines: darker than what is round them at a fine scale.
+    lines = smoothstep(0.08, 0.32, (ndimage.gaussian_filter(flat, 3.0) - flat) * 6.0)
+    # Specks on their own are grain, not engraving.
+    marks, count = ndimage.label(lines > 0.25)
+    if count:
+        areas = ndimage.sum(np.ones_like(lines), marks, index=np.arange(1, count + 1))
+        speck = np.concatenate([[False], areas < 40])
+        lines[speck[marks]] = 0
     # The figure's body: darker or more coloured than the paper, smoothly.
     sat = rgb.max(axis=2) - rgb.min(axis=2)
     paper_sat = np.percentile(sat, 20)
     body = np.maximum(
-        (paper - ndimage.gaussian_filter(lum, 6.0)) / 0.4,
-        (ndimage.gaussian_filter(sat, 6.0) - paper_sat) / 0.3,
+        (1 - ndimage.gaussian_filter(flat, 10.0)) / 0.45,
+        (ndimage.gaussian_filter(sat, 10.0) - paper_sat) / 0.3,
     )
-    body = np.clip(body, 0, 1)
+    body = smoothstep(0.25, 0.6, body)
     # The stars printed on the card and the lettering: small dark pieces on
     # their own, taken away so the real stars show.
-    dark = lum < 0.5
+    dark = flat < 0.55
     pieces, count = ndimage.label(dark)
     sizes = ndimage.sum(np.ones_like(lum), pieces, index=np.arange(1, count + 1))
     boxes = ndimage.find_objects(pieces)
@@ -150,36 +165,36 @@ def line_art(rgb, near_figure=True):
         if box is None:
             continue
         tall, wide = box[0].stop - box[0].start, box[1].stop - box[1].start
-        small[index] = 4 <= area <= 900 and max(tall, wide) <= 46
-    erase = ndimage.binary_dilation(small[pieces], iterations=3)
+        small[index] = 12 <= area <= 3600 and max(tall, wide) <= 92
+    erase = ndimage.binary_dilation(small[pieces], iterations=5)
     lines[erase] = 0
-    body[erase] = 0
     if near_figure:
-        region = ndimage.binary_dilation(body > 0.2, iterations=8)
-        lines *= ndimage.gaussian_filter(region.astype(np.float32), 3.0)
-    # The card's colours, where they are not ink: each pixel's own hue, from
-    # the pixels round it that are neither dark nor erased, brightened to a
-    # pastel.
-    keep = ((lum > 0.35) & ~erase).astype(np.float32)
-    weight = ndimage.gaussian_filter(keep, 5.0) + 1e-4
-    hue = np.stack([ndimage.gaussian_filter(rgb[..., c] * keep, 5.0) / weight for c in range(3)], axis=2)
+        region = ndimage.binary_dilation(body > 0.2, iterations=16)
+        lines *= ndimage.gaussian_filter(region.astype(np.float32), 6.0)
+    # A smooth wash of the card's colours over the body: each part of the
+    # figure's hue, from the pixels round it that are neither ink nor erased,
+    # brightened to a pastel.
+    keep = ((flat > 0.45) & ~erase).astype(np.float32)
+    weight = ndimage.gaussian_filter(keep, 14.0) + 1e-4
+    hue = np.stack([ndimage.gaussian_filter(rgb[..., c] * keep, 14.0) / weight for c in range(3)], axis=2)
     hue = hue / np.maximum(hue.max(axis=2, keepdims=True), 1e-3)
-    pastel = hue * 0.7 + 0.3
-    # The paper's own grain and stains are not the figure: only lines and
-    # body clearly stronger than them are kept, so the paper comes out as
-    # nothing at all.
-    lines = smoothstep(0.18, 0.55, lines)
-    body = smoothstep(0.3, 0.65, body)
+    pastel = hue * 0.65 + 0.35
+    wash = ndimage.gaussian_filter(body, 3.0) * 0.2
     colour = pastel * (1 - lines[..., None]) + lines[..., None]
-    alpha = np.clip(lines * 0.95 + body * 0.22, 0, 1)
+    alpha = np.clip(np.maximum(lines * 0.95, wash), 0, 1)
     # Faded out over the last few dozen pixels of the box, so where a figure
     # was cut from its card leaves no hard edge on the sky.
     tall, wide = alpha.shape
     ys, xs = np.mgrid[0:tall, 0:wide]
     edge = np.minimum(np.minimum(xs, wide - 1 - xs), np.minimum(ys, tall - 1 - ys))
-    alpha *= smoothstep(0.0, 36.0, edge.astype(np.float32))
+    alpha *= smoothstep(0.0, 72.0, edge.astype(np.float32))
     out = np.concatenate([colour, alpha[..., None]], axis=2)
-    return (out * 255 + 0.5).astype(np.uint8)
+    # The figure's own colour, from its coloured body rather than its white
+    # lines, for the tint it is drawn with.
+    weight = (body * (1 - lines))[..., None]
+    tint = (hue * weight).sum(axis=(0, 1)) / max(float(weight.sum()), 1.0)
+    tint = tint / max(float(tint.max()), 1e-3)
+    return (out * 255 + 0.5).astype(np.uint8), tint
 
 
 def main():
@@ -192,21 +207,30 @@ def main():
         rgb = np.asarray(card)
         lum = (rgb.astype(np.float32) / 255.0) @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
         left, top, right, bottom = (round(v * scale) for v in crop)
-        art = line_art(rgb[top:bottom, left:right], near_figure=key != "cygnus")
+        art, figure_tint = line_art(rgb[top:bottom, left:right], near_figure=key != "cygnus")
         picture = Image.fromarray(art, "RGBA")
         shrink = min(1.0, LONGEST / max(picture.size))
         if shrink < 1.0:
             picture = picture.resize((round(picture.width * shrink), round(picture.height * shrink)), Image.LANCZOS)
-        # 256 colours, alpha among them, is a third of the size and looks
-        # the same faded over a night sky.
-        picture.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).save(
-            OUT / f"{key}.png", optimize=True
-        )
+        # Kept as grey and see-through, the figure's colour said once in the
+        # Luau file and laid on as a tint: half the size of full colour.
+        # Where nothing shows the grey is nothing too, and both are a little
+        # coarser than the eye can tell on a faded figure; PNG packs that
+        # into far less room.
+        pixels = np.asarray(picture).astype(np.float32)
+        alpha = pixels[..., 3]
+        tint = figure_tint * 255.0
+        grey = pixels[..., :3].max(axis=2)
+        grey[alpha < 3] = 0
+        pack = np.stack([(grey // 4) * 4, (alpha // 4) * 4], axis=2).astype(np.uint8)
+        Image.fromarray(pack, "LA").save(OUT / f"{key}.png", optimize=True)
         stars = []
         for star, x, y in anchors:
             sx, sy = snap(lum, x * scale, y * scale)
-            stars.append((star, (sx - left) * shrink, (sy - top) * shrink))
-        entries.append((name, key, picture.size, stars, title))
+            # The art is made at twice the piece's size before shrinking.
+            stars.append((star, (sx - left) * 2 * shrink, (sy - top) * 2 * shrink))
+        hex_tint = "#%02x%02x%02x" % tuple(int(round(min(255.0, c * 0.75 + 255.0 * 0.25))) for c in tint)
+        entries.append((name, key, picture.size, stars, title, hex_tint))
 
     lines = [
         "-- Where each constellation's picture lies: the stars it was fitted to,",
@@ -214,13 +238,13 @@ def main():
         "-- Written by build_art.py from Urania's Mirror (1824), public domain;",
         "-- see README.md for each card's page on Wikimedia Commons.",
         "",
-        "export type Art = { name: string, image: string, size: { number }, stars: { { any } } }",
+        "export type Art = { name: string, image: string, tint: string, size: { number }, stars: { { any } } }",
         "",
         "return {",
     ]
-    for name, key, size, stars, _ in entries:
+    for name, key, size, stars, _, tint in entries:
         marks = ", ".join(f'{{ "{star}", {x:.1f}, {y:.1f} }}' for star, x, y in stars)
-        lines.append(f'    {{ name = "{name}", image = "art/{key}", size = {{ {size[0]}, {size[1]} }}, stars = {{ {marks} }} }},')
+        lines.append(f'    {{ name = "{name}", image = "art/{key}", tint = "{tint}", size = {{ {size[0]}, {size[1]} }}, stars = {{ {marks} }} }},')
     lines.append("} :: { Art }")
     (HERE / "constellation_art.luau").write_text("\n".join(lines) + "\n")
     print("Wrote images/art/*.png and constellation_art.luau")

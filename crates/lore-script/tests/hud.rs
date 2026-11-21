@@ -417,7 +417,7 @@ fn mistakes_in_making_a_piece_say_what_to_write() {
         ),
         (
             "game.hud.label(\"Hi\")",
-            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph, line, image.",
+            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph, line, image, size.",
         ),
         (
             "game.hud.txet(\"Hi\")",
@@ -652,4 +652,16 @@ fn a_text_says_how_big_its_words_are_and_that_cannot_be_set() {
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
     let error = mistake(r#"local t = game.hud.text("Hi"); t.width = 5"#);
     assert!(error.contains("cannot be set"), "{error}");
+}
+
+#[test]
+fn the_hud_says_how_much_room_it_has() {
+    let host = host(
+        r#"
+        local width, height = game.hud.size()
+        print(width, height)
+        assert(width > height and height > 900 and height < 1080, "a wide screen inside its margin")
+        "#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }

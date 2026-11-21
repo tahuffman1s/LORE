@@ -60,7 +60,11 @@ The HUD is cards of dark glass with gold accents (`hud.luau`, built with
 of pips, a compass along the top that slides as you turn, a gold banner
 when an eclipse, a meteor shower or the aurora is on, a crosshair that
 names what it's on, and a zoom gauge. Jumping to an event slides its
-caption in as a lower third, and it fades out again. The menus, the pause
+caption in as a lower third, and it fades out again. The layout measures
+its words every frame against `game.hud.size()`, so it fits any window:
+long names shorten with an ellipsis, the caption wraps, the compass takes
+the room left between the corner panels, and key prompts give way, least
+needed first, on a narrow screen. The menus, the pause
 menu's too, take the same look through `menu.style` in `menu.luau`, set at
 the top of `main.luau`.
 
@@ -98,8 +102,8 @@ The figures are from *Urania's Mirror; or, a view of the Heavens*, a set
 of 32 star chart cards engraved by Sidney Hall and published in London in
 1824, which is in the public domain. `build_art.py` makes
 `images/art/*.png` and `constellation_art.luau` from these scans on
-Wikimedia Commons, keeping each figure as light line art with its card's
-colours as a faint wash:
+Wikimedia Commons, keeping each figure as clean line art in one tint taken
+from its card's colours (grey and alpha PNGs, coloured by the script):
 
 - [Ursa Major](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Ursa_Major.jpg)
 - [Lacerta, Cygnus, Lyra, Vulpecula and Anser](https://commons.wikimedia.org/wiki/File:Sidney_Hall_-_Urania%27s_Mirror_-_Lacerta,_Cygnus,_Lyra,_Vulpecula_and_Anser.jpg)

@@ -2144,6 +2144,15 @@ declare game: {
         --- Example: local card = game.hud.box({ width = 400, height = 120, corner = 14, color = "#0a1022c8" })
         box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, corner: number?, rotation: number?, color: string? }?) -> HudBox,
 
+        --- How much room the HUD has: the width and height of the part of
+        --- the screen pieces are laid out in, in pixels on a screen 1080
+        --- high, with the player's HUD size setting taken into account. The
+        --- height is about 970 at the usual size; the width depends on the
+        --- shape of the screen (about 1730 on a wide one, 1300 on a 4:3
+        --- one). Ask each picture, as the window can be resized.
+        --- Example: local width, height = game.hud.size()
+        size: () -> (number, number),
+
         --- Puts a straight line on the HUD. Its own options:
         ---   right, down: where it starts, from the point `at` pins to.
         ---   toRight, toDown: where it ends, measured the same way. 100 and
