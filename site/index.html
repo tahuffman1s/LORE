@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LORE — Lovely Open Rust Engine</title>
-<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source engine for single-player open-world adventures and action RPGs, in first or third person. Rust core, Luau scripting, Vulkan 1.3.">
+<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source game engine for big single-player worlds: adventures and action RPGs. Rust core, Luau scripting, Vulkan 1.3.">
 <meta property="og:title" content="LORE — Lovely Open Rust Engine">
 <meta property="og:description" content="A free, open-source engine for single-player open-world adventures and action RPGs.">
 <meta name="color-scheme" content="dark light">
@@ -68,10 +68,6 @@
   h1 em { font-style: normal; color: var(--accent); }
   .expand { font-size: 15px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted); margin: 0 0 26px; }
   .lead { font-size: clamp(19px, 2.6vw, 23px); max-width: 620px; margin: 0 0 34px; text-wrap: balance; }
-  .views { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: -14px 0 30px; font-size: 13.5px; color: var(--muted); }
-  .views span { display: inline-flex; align-items: center; gap: 8px; }
-  .views b { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-  .views b.ring { background: none; border: 2px solid var(--accent); }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .btn {
     display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 650;
@@ -100,22 +96,10 @@
     border: 1px solid var(--line); overflow-x: auto; font-size: 14.5px; line-height: 1.65;
   }
   .kw { color: var(--kw); } .str { color: var(--str); } .com { color: var(--com); } .num { color: var(--num); }
-  .tag { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-bottom: 10px; }
-  .tag.now { border-color: var(--accent); color: var(--accent); }
-  .tag a { text-decoration: none; }
-  pre .now { color: var(--str); } pre .later { color: var(--com); }
-  h3.over { margin: 0 0 10px; font-size: 16px; }
-  .two { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; margin-top: 8px; }
   .note { font-size: 13.5px; color: var(--muted); margin-top: 10px; }
   ul.checks { list-style: none; padding: 0; margin: 0; }
   ul.checks li { padding: 9px 0 9px 26px; position: relative; border-bottom: 1px solid var(--line); }
   ul.checks li::before { content: ""; position: absolute; left: 4px; top: 19px; width: 8px; height: 8px; border: 2px solid var(--accent); border-radius: 50%; }
-
-  ol.road { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
-  ol.road li { display: grid; grid-template-columns: 64px 1fr; gap: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; }
-  ol.road b { color: var(--accent); }
-  ol.road strong { display: block; }
-  ol.road span { color: var(--muted); font-size: 15.5px; }
 
   footer { border-top: 1px solid var(--line); padding: 36px 0 56px; color: var(--muted); font-size: 14.5px; }
   footer a { color: var(--text); }
@@ -127,11 +111,11 @@
   <nav class="wrap" aria-label="Main">
     <a class="brand mono" href="#top">LO<span>RE</span></a>
     <ul>
-      <li class="hide"><a href="#idea">The idea</a></li>
+      <li class="hide"><a href="#idea">How it works</a></li>
+      <li class="hide"><a href="#today">Showcase</a></li>
       <li class="hide"><a href="#sky">The sky</a></li>
       <li class="hide"><a href="#scripting">Scripting</a></li>
       <li><a href="docs/index.html">Docs</a></li>
-      <li><a href="#roadmap">Roadmap</a></li>
       <li><a href="https://github.com/tahuffman1s/LORE">GitHub</a></li>
     </ul>
   </nav>
@@ -141,15 +125,13 @@
   <div class="hero">
     <div class="orbit" aria-hidden="true"><i></i></div>
     <div class="wrap">
-      <div class="status"><i></i>Early development — today you can walk a level in first person. Third person, NPCs, saving and open worlds are planned.</div>
+      <div class="status"><i></i>Free and open source · Rust, Luau and Vulkan</div>
       <h1>LO<em>RE</em></h1>
       <p class="expand mono">Lovely Open Rust Engine</p>
-      <p class="lead">A free, open-source engine for single-player open-world adventures and action RPGs, in first or third person. Easy to make, fast to play, and worth looking at.</p>
-      <p class="views mono"><span><b></b>the player: first person</span><span><b class="ring"></b>the camera behind them: third person</span></p>
+      <p class="lead">A game engine for the kind of game you get lost in: big single-player worlds, dungeons, swords, bows and magic. It's quick to pick up, fast to play, and it looks great.</p>
       <div class="cta">
-        <a class="btn primary" href="docs/first-steps.html">Try the ten-minute tutorial</a>
+        <a class="btn primary" href="docs/first-steps.html">Make a game in ten minutes</a>
         <a class="btn" href="https://github.com/tahuffman1s/LORE">View on GitHub</a>
-        <a class="btn" href="#roadmap">See the roadmap</a>
       </div>
     </div>
   </div>
@@ -157,82 +139,69 @@
   <section id="idea">
     <div class="wrap split">
       <div>
-        <h2>A game is a folder you can read</h2>
-        <p class="sub">Everything a game is made of is a text file beside its level. Save one and the running game changes. Two people can change the same game and their work merges. And <span class="mono">lore check</span> reads all of it without opening a window, and says what to fix.</p>
+        <h2>Your game is just a folder</h2>
+        <p class="sub">No project file, no import step, no editor you're locked into. A LORE game is a handful of text files sitting next to your level. Save one and the running game picks up the change straight away. Run <span class="mono">lore check</span> and it reads the whole thing without opening a window, then tells you exactly what to fix.</p>
         <ul class="checks">
-          <li>No project file, no import step, no node graphs</li>
-          <li>Levels come from Blender and are never rewritten by the engine</li>
-          <li>Your own editor stays first-class, with autocomplete</li>
+          <li>Build your levels in Blender; the engine never rewrites them</li>
+          <li>Use the code editor you already like, with autocomplete</li>
+          <li>Plain text, so two people's changes merge cleanly</li>
         </ul>
       </div>
       <div>
 <pre class="mono">my-game/
- main.luau the rules        <span class="now">works today</span>
- level.glb the place        <span class="now">works today</span>
- map.toml  what is where    <span class="now">works today</span>
- shaders/  how it looks     <span class="now">works today</span>
- people    who lives there  <span class="later">planned</span>
- talk      what they say    <span class="later">planned</span>
- quests    what to do       <span class="later">planned</span></pre>
-        <p class="note">The planned names are a sketch and will change as each piece is designed.</p>
+ main.luau   the rules
+ level.glb   the place
+ map.toml    what goes where
+ shaders/    how it looks
+ sounds/     how it sounds</pre>
       </div>
     </div>
   </section>
 
   <section id="today">
     <div class="wrap">
-      <h2>What it draws today</h2>
-      <p class="sub">Three example games come with the engine: a jungle with a creek and a lake, a city alley, and a yard of tanks to play with fluids in. These pictures are the alley and the yard, as <span class="mono">lore run</span> draws them. Its menus, its pause and settings screens, its frame meter and its fluid gun are a few hundred lines of Luau.</p>
+      <h2>See it in action</h2>
+      <p class="sub">LORE ships with three example games: a jungle with a creek and a lake, a city back alley, and a yard full of tanks for playing with fluids. Everything below is a straight capture from <span class="mono">lore run</span>. The menus, pause screen, settings, frame meter and that fluid gun? A few hundred lines of Luau.</p>
       <div class="grid shots">
-        <figure class="card"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."><figcaption><span class="tag now">Runs today</span><h3>Fluids a script controls</h3><p>Water is the first; honey, oil, tar, acid, lava and mercury are water with a few numbers changed. They fly, splash, run down walls, pool, and change how you walk.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-fluid-menu.jpg" width="1280" height="720" loading="lazy" alt="A menu over the alley with three tabs, Weather, Debug and Fluid. The Fluid tab lists slime's colour, how far you see into it, how thick, slippery, sticky and bouncy it is, each with a slider."><figcaption><span class="tag now">Runs today</span><h3>Changed while it lies there</h3><p>Every row is one field of a kind of fluid. Drag one and every drop of it in the world changes. Keys, mouse and gamepad all work the menu.</p></figcaption></figure>
-        <figure class="card"><img src="img/fluids-cascade.jpg" width="1280" height="720" loading="lazy" alt="Four steel basins of water stepping down across a concrete yard under a blue sky. A tap pours into the highest, and water falls in a sheet over the low front edge of each into the one below."><figcaption><span class="tag now">Runs today</span><h3>Pools that fill and run over</h3><p>A lake, a tank or a tub holds an amount. What is poured in raises it; past its brim it runs out over the lowest stretch of its rim and fills whatever is below. Nothing here moves the water from basin to basin but the water.</p></figcaption></figure>
-        <figure class="card"><img src="img/fluids-honey-plunge.jpg" width="1280" height="720" loading="lazy" alt="A raised deck with square pits, each full of a different liquid: amber honey, green slime, glowing lava, clear water. Drops of honey fly up from the honey pit where someone has just fallen in, and a panel says it holds honey, heavier than you and thick."><figcaption><span class="tag now">Runs today</span><h3>Swum in by what it is</h3><p>A pool can be any fluid, or a mix. You ride high on brine and stand on mercury, sink in a light oil, crawl through honey, stick in tar, and what you throw up when you fall in is drops of that.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-lamps-at-dusk.jpg" width="1280" height="720" loading="lazy" alt="The same alley at dusk under a violet sky. Lamps on the walls and the street at its end light the brickwork orange and leave pools of light on the ground."><figcaption><span class="tag now">Runs today</span><h3>Real light, from noon to night</h3><p>Lamps are given in lumens, as bulbs are sold, are as bright against the sun and moon as real ones, and cast soft shadows. Light bounces: a lamp's light thrown back off the street fills the shadows round it, and a shut room stays dark at noon. The picture adapts as an eye does: a shaded street and a dusk open up, a lamplit street closes down.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."><figcaption><span class="tag now">Runs today</span><h3>Tools written in the game's own script</h3><p>Fly, walk through walls, slow time, jump to a place, read a frame meter. A script binds its own keys and draws its own menus.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."><figcaption><h3>Fluids you can script</h3><p>Water is just the start. Honey, oil, tar, acid, lava and mercury are all water with a few numbers changed. They fly, splash, run down walls, pool up, and change how you move through them.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-fluid-menu.jpg" width="1280" height="720" loading="lazy" alt="A menu over the alley with three tabs, Weather, Debug and Fluid. The Fluid tab lists slime's colour, how far you see into it, how thick, slippery, sticky and bouncy it is, each with a slider."><figcaption><h3>Tweak it while it's on the ground</h3><p>Each slider is one property of a fluid. Drag it and every drop of that fluid in the world changes on the spot. Keyboard, mouse and gamepad all work.</p></figcaption></figure>
+        <figure class="card"><img src="img/fluids-cascade.jpg" width="1280" height="720" loading="lazy" alt="Four steel basins of water stepping down across a concrete yard under a blue sky. A tap pours into the highest, and water falls in a sheet over the low front edge of each into the one below."><figcaption><h3>Pools that fill up and spill over</h3><p>Lakes, tanks and tubs hold a real amount of water. Pour more in and the level rises; once it's past the brim it spills over the lowest point and fills whatever's below. Nothing is faking this. It's just the water.</p></figcaption></figure>
+        <figure class="card"><img src="img/fluids-honey-plunge.jpg" width="1280" height="720" loading="lazy" alt="A raised deck with square pits, each full of a different liquid: amber honey, green slime, glowing lava, clear water. Drops of honey fly up from the honey pit where someone has just fallen in, and a panel says it holds honey, heavier than you and thick."><figcaption><h3>Every fluid swims differently</h3><p>Float high in brine, stand on mercury, sink in light oil, crawl through honey, get stuck in tar. Jump in and the splash is made of whatever you landed in.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-lamps-at-dusk.jpg" width="1280" height="720" loading="lazy" alt="The same alley at dusk under a violet sky. Lamps on the walls and the street at its end light the brickwork orange and leave pools of light on the ground."><figcaption><h3>Real light, noon to midnight</h3><p>Lamps are rated in lumens, like the bulbs you buy, and hold up properly against the sun and moon. Shadows are soft, light bounces off the street into dark corners, and a closed room stays dark at midday. Exposure adapts the way your eyes do.</p></figcaption></figure>
+        <figure class="card"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."><figcaption><h3>Debug tools, written in script</h3><p>Fly, noclip through walls, slow down time, teleport, check the frame rate. Your game binds its own keys and draws its own menus, so you can build tools like these too.</p></figcaption></figure>
       </div>
     </div>
   </section>
 
   <section id="sky">
     <div class="wrap">
-      <h2>The real sky</h2>
-      <p class="sub">Give a world a place on the Earth and a date, and its sky is the one that was there: the sun, the moon with its phases and its craters, the 8,699 stars an eye can see, the planets, the Milky Way, all where they stood that night and as bright as they were. Eclipses happen on their real dates over the places they really did, and the showers of shooting stars on their real nights. A game can change any of it from its script. These are moving pictures from the engine, with no window open.</p>
+      <h2>The real sky, over your world</h2>
+      <p class="sub">Tell LORE where on Earth your world is and what day it is, and you get the sky that was actually there. The sun, the moon with its phases and craters, all 8,699 stars you can see with the naked eye, the planets and the Milky Way, each in the right place and at the right brightness. Eclipses and meteor showers show up on their real dates, and your script can change any of it. These clips were rendered by the engine itself.</p>
       <div class="grid shots">
-        <figure class="card"><img src="img/sky-dusk-to-night.gif" width="560" height="315" loading="lazy" alt="Hours pass in a few seconds by a jungle lake. The sky goes from day to violet dusk over the trees, the land darkens, and stars come out and wheel overhead."><figcaption><span class="tag now">Runs today</span><h3>Dusk falls, and the stars come out</h3><p>The sky's colour is worked out from where the sun is. Night is as dark as it really is, and the picture adapts to it as an eye does: the land fades while the stars and the Milky Way stand out. <span class="mono">game.sky.setDayLength(24)</span></p></figcaption></figure>
-        <figure class="card"><img src="img/sky-solar-eclipse.gif" width="560" height="315" loading="lazy" alt="Over a canopy of trees the blue noon sky darkens to deep twilight as the moon covers the sun; stars and the sun's pearly corona appear, then daylight returns."><figcaption><span class="tag now">Runs today</span><h3>The eclipse of 8 April 2024, over Dallas</h3><p>Totality as it was, minute for minute: day falls to deep twilight, the corona and the planets come out, and the light on the land falls with it. <span class="mono">game.sky.eclipse()</span> says it is on.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-eclipse-close.gif" width="560" height="315" loading="lazy" alt="A close view of the sun as the moon's dark disc crosses it, from a full disc to a thin crescent, totality, and back."><figcaption><span class="tag now">Runs today</span><h3>The moon across the sun</h3><p>The moon is placed to ten arcseconds and seen from where you stand, at its real size, so some eclipses are total and others leave a ring of fire.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-lunar-eclipse.gif" width="560" height="315" loading="lazy" alt="The full moon slips into the Earth's shadow: a dark bite spreads across it until the whole moon glows a dim copper red among the stars."><figcaption><span class="tag now">Runs today</span><h3>The moon turns red</h3><p>The total eclipse of the moon of 8 November 2022: dimmed in the Earth's half shadow, then copper in its full shadow, with the stars coming out round it as its light on the land fades.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-aurora.gif" width="560" height="315" loading="lazy" alt="Green curtains of the aurora with red above them fold across the night sky as the view turns, over the dark horizon."><figcaption><span class="tag now">Runs today</span><h3>The aurora</h3><p>Curtains green below and red above, in a ring round the magnetic pole that reaches nearer the equator the stronger the storm: overhead in the far north, low in the north of the middle latitudes in a great storm. <span class="mono">game.sky.setAurora("storm")</span></p></figcaption></figure>
-        <figure class="card"><img src="img/sky-meteors.gif" width="560" height="315" loading="lazy" alt="Thin streaks of shooting stars cross a starry sky with the Milky Way, all running away from one point in the north-east."><figcaption><span class="tag now">Runs today</span><h3>The Perseids</h3><p>Shooting stars at their real rates, and the great showers on their real nights, streaming from their radiants. A script hears of the very ones drawn. Here sped up a thousand times. <span class="mono">game.sky.onMeteor(function(from, to, brightness, shower) end)</span></p></figcaption></figure>
-      </div>
-    </div>
-  </section>
-
-  <section id="different">
-    <div class="wrap">
-      <h2>Where it is going</h2>
-      <p class="sub">LORE starts from <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>, an engine for multiplayer shooters, drops the multiplayer, and turns toward big worlds with people and stories in them. These ideas are the plan. None of them is built yet; each links to the work.</p>
-      <div class="grid">
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/31">Planned · #31, #32</a></span><h3>One world, either view</h3><p>First and third person are the same game with a different camera. Choosing is one line in a script, and one button for the player if the game allows it.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/57">Planned · #57, #58</a></span><h3>People who explain themselves</h3><p>What an NPC does is a short list of "when this, do that". Ask any NPC why, and it answers in one sentence.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/73">Planned · #73, #70</a></span><h3>Save anywhere, for free</h3><p>The whole world is one snapshot, so a save needs nothing listed by the game. The same trick lets <span class="mono">lore check</span> live a day in seconds and say which NPC got stuck.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/76">Planned · #76, #77</a></span><h3>A story has one home</h3><p>What has happened is kept in one book of facts, <span class="mono">game.lore</span>. Quests, conversations written like a screenplay, and NPCs all read it.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/281">Planned · #281, #282</a></span><h3>A world you can see across</h3><p>One continuous world, kept in pieces that load as you cross it with no loading screen, and drawn to the horizon from stand-ins the engine makes by itself.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/284">Planned · #284, #289</a></span><h3>Land that grows by rule</h3><p>Grass, trees and rocks place themselves from a few lines you can read. Name a region once and its weather, music and creatures follow.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/296">Planned · #296, #297</a></span><h3>Sketch a map, walk it</h3><p>In the editor, paint mountains, water, forest and roads from above. Seconds later you are standing in it.</p></div>
-        <div class="card"><span class="tag"><a href="https://github.com/tahuffman1s/LORE/issues/268">Planned · #264, #268</a></span><h3>Enemies, bosses, companions</h3><p>An enemy is a kind you describe once. A boss is a list of phases. A companion takes orders with one button and a look.</p></div>
+        <figure class="card"><img src="img/sky-dusk-to-night.gif" width="560" height="315" loading="lazy" alt="Hours pass in a few seconds by a jungle lake. The sky goes from day to violet dusk over the trees, the land darkens, and stars come out and wheel overhead."><figcaption><h3>Dusk, then stars</h3><p>Sky colour comes from where the sun actually is. Night gets properly dark, and as your eyes adjust the land fades while the stars and the Milky Way come through. <span class="mono">game.sky.setDayLength(24)</span></p></figcaption></figure>
+        <figure class="card"><img src="img/sky-solar-eclipse.gif" width="560" height="315" loading="lazy" alt="Over a canopy of trees the blue noon sky darkens to deep twilight as the moon covers the sun; stars and the sun's pearly corona appear, then daylight returns."><figcaption><h3>Dallas, 8 April 2024</h3><p>The total eclipse, minute by minute. Daylight drops to deep twilight, the corona and planets appear, and the light on the ground dims with it. <span class="mono">game.sky.eclipse()</span> tells your script it's happening.</p></figcaption></figure>
+        <figure class="card"><img src="img/sky-eclipse-close.gif" width="560" height="315" loading="lazy" alt="A close view of the sun as the moon's dark disc crosses it, from a full disc to a thin crescent, totality, and back."><figcaption><h3>The moon crossing the sun</h3><p>The moon is placed to within ten arcseconds, at its true size from where you're standing. That's why some eclipses go total and others leave a ring of fire.</p></figcaption></figure>
+        <figure class="card"><img src="img/sky-lunar-eclipse.gif" width="560" height="315" loading="lazy" alt="The full moon slips into the Earth's shadow: a dark bite spreads across it until the whole moon glows a dim copper red among the stars."><figcaption><h3>A blood moon</h3><p>The lunar eclipse of 8 November 2022. The moon dims, then turns copper in Earth's shadow, and the stars come out around it as its light on the land fades.</p></figcaption></figure>
+        <figure class="card"><img src="img/sky-aurora.gif" width="560" height="315" loading="lazy" alt="Green curtains of the aurora with red above them fold across the night sky as the view turns, over the dark horizon."><figcaption><h3>Northern lights</h3><p>Green curtains with red above, circling the magnetic pole. The bigger the storm, the further south they reach: overhead in the far north, low on the horizon further down when a big one hits. <span class="mono">game.sky.setAurora("storm")</span></p></figcaption></figure>
+        <figure class="card"><img src="img/sky-meteors.gif" width="560" height="315" loading="lazy" alt="Thin streaks of shooting stars cross a starry sky with the Milky Way, all running away from one point in the north-east."><figcaption><h3>The Perseids</h3><p>Shooting stars at their real rates, with the big showers on their real nights, streaming from the right point in the sky. Your script hears about every one that's drawn. Sped up a thousand times here. <span class="mono">game.sky.onMeteor(function(from, to, brightness, shower) end)</span></p></figcaption></figure>
       </div>
     </div>
   </section>
 
   <section id="scripting">
-    <div class="wrap">
-      <h2>Scripting that reads like the game</h2>
-      <p class="sub">Games are written in Luau, a small typed scripting language. The goal is that someone who has played games can read a script and guess what it does.</p>
-      <div class="two">
-        <div>
-          <h3 class="over"><span class="tag now">Runs today</span></h3>
+    <div class="wrap split">
+      <div>
+        <h2>Scripts that read like the game</h2>
+        <p class="sub">You write your game in Luau, a small, fast, typed scripting language. The idea is simple: if you've played games, you should be able to read a script and guess what it does.</p>
+        <ul class="checks">
+          <li>Save the file and the running game updates</li>
+          <li>Actions like <span class="mono">"jump"</span> work the same on keyboard and gamepad</li>
+          <li>Draw HUD text and bars, play sounds and build menus from the same script</li>
+          <li>Errors show up in-game and tell you what to do next</li>
+        </ul>
+        <p class="note">Want the full list? See <a href="docs/index.html#today">what you can do today</a>.</p>
+      </div>
+      <div>
 <pre class="mono"><span class="com">-- main.luau</span>
 game.onStart(<span class="kw">function</span>()
   print(<span class="str">"Hello from Luau!"</span>)
@@ -244,81 +213,41 @@ game.onTick(<span class="kw">function</span>(step)
     print(<span class="str">"Jump!"</span>)
   <span class="kw">end</span>
 <span class="kw">end</span>)</pre>
-          <p class="note">Save the file and the running game updates. <span class="mono">"jump"</span> is an action, so the same line works on a keyboard and a gamepad. A game also draws its own level, puts text and bars on the HUD, plays sounds and has a pause menu with settings, written in the same script: <a href="docs/index.html#today">what works today</a>.</p>
-        </div>
-        <div>
-          <h3 class="over"><span class="tag">A sketch — does not run yet</span></h3>
-<pre class="mono">game.view = <span class="str">"third"</span>
-
-<span class="kw">local</span> guard = game.npc {
-  name = <span class="str">"Guard"</span>, at = <span class="str">"Gate"</span>,
-}
-
-guard:does {
-  { when = <span class="str">"sees an enemy"</span>, doing = <span class="str">"attack"</span> },
-  { when = <span class="str">"heard something"</span>,
-    doing = <span class="str">"investigate"</span> },
-  { otherwise = <span class="str">"patrol"</span>, along = <span class="str">"Gate walk"</span> },
-}
-
-print(guard:why())
-<span class="com">-- Guard is investigating a sound he heard
--- 4 seconds ago at the well.</span></pre>
-          <p class="note">This is where the script API is heading. Every name here will be researched and may change before it is built.</p>
-        </div>
       </div>
     </div>
   </section>
 
   <section id="why">
     <div class="wrap">
-      <h2>What it is aiming for</h2>
-      <p class="sub">Four goals, in priority order. When they conflict, the earlier one wins.</p>
+      <h2>What we care about</h2>
+      <p class="sub">Four things, in this order. When two of them pull in different directions, the one higher up wins.</p>
       <div class="grid">
-        <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>From install to a game you can walk around in minutes, with error messages that tell you what to do next. This is the "lovely".</p></div>
-        <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, stable frame rates and low input latency on mid-range hardware.</p></div>
-        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>Single-player worlds you explore on foot: open worlds, dungeons, people, quests, melee, bows and magic. No multiplayer, 2D, VR or visual scripting to learn around.</p></div>
-        <div class="card"><span class="n mono">04</span><h3>Modern</h3><p>Vulkan 1.3 rendering, FSR 3.1 upscaling and first-class controller support.</p></div>
+        <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>Go from install to walking around your own game in minutes. When something breaks, the error tells you how to fix it. That's the "lovely" in the name.</p></div>
+        <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, steady frame rates and low input lag on ordinary hardware. If we claim it's fast, there's a benchmark to back it up.</p></div>
+        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>Single-player worlds you explore on foot. No multiplayer, no 2D, no visual scripting, nothing to learn around that you didn't come for.</p></div>
+        <div class="card"><span class="n mono">04</span><h3>Modern</h3><p>Vulkan 1.3, FSR 3.1 upscaling, real-world light and first-class controller support. Pretty matters.</p></div>
       </div>
     </div>
   </section>
 
   <section id="tech">
     <div class="wrap">
-      <h2>Under it</h2>
-      <p class="sub">What the engine is made of. There are no downloads yet: it is built from source.</p>
+      <h2>Under the hood</h2>
+      <p class="sub">Build it from source with one Cargo command.</p>
       <div class="grid">
-        <div class="card"><h3>Rust core</h3><p>Memory-safe engine code, built with one command.</p></div>
-        <div class="card"><h3>Single-player only</h3><p>Nothing connects to anything, and there are no teams, rounds or scores to win. Every part of the engine serves one player in one world.</p></div>
-        <div class="card"><h3>Controller parity</h3><p>Every action bindable on a gamepad. Nothing keyboard-only.</p></div>
-        <div class="card"><h3>Linux, Windows, macOS</h3><p>The engine runs on Linux and Windows. Packaging a game works on Linux today; Windows is planned and macOS is a stretch goal.</p></div>
+        <div class="card"><h3>Rust core</h3><p>Memory-safe engine code with a fixed simulation tick, so the same input always gives the same world.</p></div>
+        <div class="card"><h3>Built for one player</h3><p>No servers, no netcode, no matchmaking. Every part of the engine is there to serve one player in one world.</p></div>
+        <div class="card"><h3>Controllers first</h3><p>Every action can be bound to a gamepad, and the menus are just as happy with one as with a mouse.</p></div>
+        <div class="card"><h3>Linux and Windows</h3><p>Runs on both, and <span class="mono">lore package</span> turns your game into a Linux download in one step.</p></div>
       </div>
-    </div>
-  </section>
-
-  <section id="roadmap">
-    <div class="wrap">
-      <h2>Roadmap</h2>
-      <p class="sub">Work is tracked in the open as <a href="https://github.com/tahuffman1s/LORE/milestones">GitHub milestones</a>, built earliest milestone first.</p>
-      <ol class="road">
-        <li><b class="mono">M0</b><div><strong>Foundations</strong><span>Window, input, Vulkan, Luau scripts, and removing the multiplayer LORE was born with.</span></div></li>
-        <li><b class="mono">M1</b><div><strong>Walk the world</strong><span>One player in first or third person: move, climb, use things, fight, hear and pause.</span></div></li>
-        <li><b class="mono">M2</b><div><strong>People and creatures</strong><span>NPCs that find their way, see and hear, follow rules you can read, and say why. Enemies, bosses, flying enemies and companions.</span></div></li>
-        <li><b class="mono">M3</b><div><strong>Stories</strong><span>Saving, <span class="mono">game.lore</span>, conversations, quests, items, equipment, skills, magic and dungeons.</span></div></li>
-        <li><b class="mono">M4</b><div><strong>Open worlds</strong><span>One continuous world: streaming, terrain, growth by rule, water, sky, regions, encounters, and a map you sketch and then walk.</span></div></li>
-        <li><b class="mono">M5</b><div><strong>Modern graphics</strong><span>Lighting, shadows, anti-aliasing, effects and performance budgets.</span></div></li>
-        <li><b class="mono">M6</b><div><strong>Ship</strong><span>Packaged builds for each platform, and releases of the engine.</span></div></li>
-        <li><b class="mono">M7</b><div><strong>Editor</strong><span>Fly around a level, place things and people, block out geometry, press play.</span></div></li>
-        <li><b class="mono">M8</b><div><strong>Tools</strong><span>A debugger, replays, and jumping to any point in a story.</span></div></li>
-      </ol>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    LORE is free software under your choice of the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license, and a fork of <a href="https://github.com/tahuffman1s/FOSSPS">FOSSPS</a>.
-    Follow or contribute on <a href="https://github.com/tahuffman1s/LORE">GitHub</a>; ideas and bug reports go in <a href="https://github.com/tahuffman1s/LORE/issues">issues</a>.
+    LORE is free software, yours under either the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license.
+    Come say hi on <a href="https://github.com/tahuffman1s/LORE">GitHub</a>, and drop ideas and bug reports in the <a href="https://github.com/tahuffman1s/LORE/issues">issues</a>.
   </div>
 </footer>
 

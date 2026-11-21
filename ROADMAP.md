@@ -4,24 +4,22 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 
 ## Already built
 
-LORE is a fork of [FOSSPS](https://github.com/tahuffman1s/FOSSPS) and starts with what it had. `FOSSPS#N` is an issue or pull request there.
-
-- A window, a main loop that steps the game at a fixed tick at any frame rate and blends the view between ticks (FOSSPS#1, #9), and keyboard, mouse and gamepad input through one action map
-- A Vulkan 1.3 renderer: glTF levels and models, PBR materials, a sun light, HDR and tone mapping, FSR 3.1 upscaling (FOSSPS#2, FOSSPS#5, FOSSPS#58, FOSSPS#59, FOSSPS#15, FOSSPS#16)
-- Luau scripts that reload on save, split over files, with errors that say what to do (FOSSPS#3)
-- `lore new`, `run`, `check`, `package`, `bench` and `edit` (FOSSPS#4, FOSSPS#18, FOSSPS#17, FOSSPS#38)
-- Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level (FOSSPS#6, FOSSPS#64)
-- Weapons in engine code: hitscan and projectile, recoil, reload (FOSSPS#7)
+- A window, a main loop that steps the game at a fixed tick at any frame rate and blends the view between ticks, and keyboard, mouse and gamepad input through one action map
+- A Vulkan 1.3 renderer: glTF levels and models, PBR materials, a sun light, HDR and tone mapping, FSR 3.1 upscaling
+- Luau scripts that reload on save, split over files, with errors that say what to do
+- `lore new`, `run`, `check`, `package`, `bench` and `edit`
+- Collision and a first-person character controller: walk, jump, crouch, sprint, in a game's own level
+- Weapons in engine code: hitscan and projectile, recoil, reload
 - Scripts hand the player weapons, tune them and make their own, and are told of every shot, hit and reload; the engine fires them (#8)
 - Scripts wait, repeat and move numbers over time with no clock and no frame-time maths: `game.after`, `game.every`, `game.tween`, `game.time`, and `game.onDraw` for what is only shown (#11)
-- HUD and menus worked by controller, positional sound, sounds from scripts (FOSSPS#8, FOSSPS#9, FOSSPS#130)
+- HUD and menus worked by controller, positional sound, sounds from scripts
 - A running game is heard with no script code: footsteps, landings, gunfire, empty clicks and reloads, each a noise the game lists with a place and a loudness (#16)
 - Scripts put text, bars and boxes on the HUD and change them as the game goes on: `game.hud` (#14)
 - One world, stepped on the fixed tick with the player's input and giving the same result from the same input at any frame rate, with no network layer under it (#278)
 - No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead (#279)
 - One player, who is `game.player` to a script from its first line: no list of players, no joining or leaving, and a script that asks for them is told what to write instead. `lore check` tells a script of pretend shots at a training dummy and at a wall, and of the player dying (#280)
 - The standard controls are an adventure's: `use_item`, `next_item`, `previous_item`, `map` and `inventory`, and no `scoreboard` or `grenade` (#313, #317)
-- The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand (FOSSPS#38 to FOSSPS#42)
+- The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
 
 ## M0 — Foundations
