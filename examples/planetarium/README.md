@@ -36,17 +36,38 @@ lore run
 | Time lapse slower or faster | A and D | left stick left and right |
 | Menus | E | Y |
 | Labels: stars and planets, planets only, none | Space | A |
+| Constellations on or off | R | X |
 | Ground below the horizon on or off | G | right bumper |
 | Pause and settings | Esc | Start |
 
 In the menus, Q and E (or the bumpers) go from tab to tab: **Eclipses**
-and **Night sky** to jump to an event, **Time** for the time lapse, the
+and **Night sky** to jump to an event, **Planets** to see where the sun,
+the moon and each planet are and turn to one, **Time** for the time lapse, the
 hour and the date, plus the next sunrise or sunset, **Place** to stand
-anywhere on Earth, and **Sky** for labels, the ground, zoom, shooting stars, the
+anywhere on Earth, and **Sky** for labels, the ground, the constellations
+and their names, the planets' rings, zoom, shooting stars, the
 aurora, the Milky Way, town lights, the size of the moon and exposure.
 
 Time lapse goes from stopped and real time up to a day a second. Time only
 runs forward, so the Time tab has buttons to step back an hour or a day.
+
+## Constellations and planets
+
+Thirty-four constellations are traced as dotted stick figures with their
+names: the northern ones, the zodiac and the brightest of the south.
+`constellations.luau` lists them as pairs of star names, so adding one is
+a few lines. The HUD draws boxes and text, not lines, and holds 1,024
+pieces in all, so the lines share 500 dots. Across the whole sky the
+dots spread out to fit; zoom in and they close up into solid lines.
+
+Each planet has a ring and a label in its own colour, Neptune too: the
+sky doesn't draw it because it's too faint to see, but the ring shows
+where it is. The Planets tab says how high and which way each one is, and
+how bright, and turns you to it.
+
+The figures don't look a star up by name each picture, which would be
+slow. `starfield.luau` reads each star once and works out where it is now
+from two reference stars, since the whole sky only ever turns.
 
 ## The sky all the way round
 

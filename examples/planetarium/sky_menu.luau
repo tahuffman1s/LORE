@@ -6,6 +6,7 @@
 local menu = require("./menu")
 local clock = require("./clock")
 local view = require("./view")
+local skyArt = require("./sky_art")
 local events = require("./events")
 
 local skyMenu = {}
@@ -181,6 +182,9 @@ local TOWN_CLASSES = { 1, 3, 5, 8 }
 local skyTab = menu.new("Sky", {
     menu.choice("Labels", { options = view.labelChoices, get = view.labels, set = view.setLabels }),
     menu.toggle("Ground", { get = game.sky.ground, set = game.sky.setGround }),
+    menu.toggle("Constellations", { get = skyArt.lines, set = skyArt.setLines }),
+    menu.toggle("Their names", { get = skyArt.names, set = skyArt.setNames }),
+    menu.toggle("Planet rings", { get = skyArt.planets, set = skyArt.setPlanets }),
     menu.slider("Zoom", {
         min = 0, max = 1, step = 0.05,
         get = view.zoom, set = view.setZoom,
@@ -245,10 +249,47 @@ local skyTab = menu.new("Sky", {
     }),
 })
 
+-- One row for each planet, and the sun and the moon: where it is now, and a
+-- press turns the view to it.
+local function whereIs(name: string): string
+    local direction = view.find(name)
+    if direction == nil then
+        return ""
+    end
+    local height = math.floor(view.height(direction) + 0.5)
+    local words = string.format(
+        "%d° %s, %s",
+        math.abs(height),
+        if height < 0 then "below" else "up",
+        view.compass(view.bearing(direction))
+    )
+    local brightness = if table.find(view.planets, name) then game.sky.planetBrightness(name) else nil
+    if brightness then
+        words ..= string.format(", magnitude %.1f", brightness)
+    end
+    return words
+end
+
+local planetRows = {}
+for _, name in { "Sun", "Moon", table.unpack(view.planets) } do
+    table.insert(planetRows, menu.button(name, {
+        text = function() return whereIs(name) end,
+        press = function()
+            local direction = view.find(name)
+            if direction then
+                view.lookAlong(direction)
+                view.setZoom(if name == "Sun" or name == "Moon" then 0.6 else 0.8)
+            end
+            skyMenu.panel:close()
+        end,
+    }))
+end
+local planetsMenu = menu.new("Planets", planetRows)
+
 local eclipseMenu = menu.new("Eclipses", eventRows(events.eclipses))
 local nightMenu = menu.new("Night sky", eventRows(events.night))
 
 skyMenu.events = eclipseMenu
-skyMenu.panel = menu.panel({ eclipseMenu, nightMenu, timeMenu, placeMenu, skyTab })
+skyMenu.panel = menu.panel({ eclipseMenu, nightMenu, planetsMenu, timeMenu, placeMenu, skyTab })
 
 return skyMenu

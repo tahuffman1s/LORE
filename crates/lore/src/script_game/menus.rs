@@ -640,9 +640,9 @@ fn the_planetarium_jumps_to_an_eclipse_from_its_menu() {
 fn the_planetarium_has_no_ground_until_g_brings_it_back() {
     let mut played = Played::example("planetarium", true);
     let ground = |played: &mut Played| {
-        // The Sky tab, five tabs along from the Eclipses the menu opens at.
+        // The Sky tab, the sixth, from the Eclipses the menu opens at.
         played.tap(Key::E);
-        for _ in 0..4 {
+        for _ in 0..5 {
             played.tap(Key::E);
         }
         let shown = played.value_of("Ground");
@@ -720,6 +720,7 @@ fn the_planetarium_time_tab_runs_and_turns_the_clock() {
     played.tap(Key::E);
     played.tap(Key::E);
     played.tap(Key::E);
+    played.tap(Key::E);
     assert!(played.shows("Time lapse"), "{:?}", played.words());
     assert_eq!(played.value_of("Date"), "Sun 4 Aug 2024");
     assert_eq!(played.value_of("Time lapse"), "<  Real time  >");
@@ -747,6 +748,7 @@ fn the_planetarium_month_slider_stops_at_every_month() {
     played.tap(Key::E);
     played.tap(Key::E);
     played.tap(Key::E);
+    played.tap(Key::E);
     // Down from "Time lapse" past Hour and Day to Month, and on to August's
     // last day first, so a month change has a day to keep inside it.
     played.tap(Key::ArrowDown);
@@ -763,4 +765,35 @@ fn the_planetarium_month_slider_stops_at_every_month() {
         played.tap(Key::ArrowRight);
         assert_eq!(played.value_of("Month"), month);
     }
+}
+
+#[test]
+fn the_planetarium_planets_tab_says_where_each_is_and_turns_to_it() {
+    let mut played = Played::example("planetarium", true);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    played.tap(Key::E);
+    assert!(
+        played.shows("Planets") && played.shows("Neptune"),
+        "{:?}",
+        played.words()
+    );
+    // Death Valley on a moonless August night: Saturn is up in the south-east.
+    let saturn = played.value_of("Saturn");
+    assert_eq!(saturn, "22° up, SE, magnitude 0.7");
+    // Down past the sun, the moon, Mercury, Venus, Mars and Jupiter.
+    for _ in 0..6 {
+        played.tap(Key::ArrowDown);
+    }
+    played.tap(Key::Enter);
+    played.step();
+    assert_eq!(played.set(), "gameplay");
+    assert!(
+        played
+            .words()
+            .iter()
+            .any(|words| words.starts_with("Saturn   ")),
+        "{:?}",
+        played.words()
+    );
 }

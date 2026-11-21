@@ -11,6 +11,7 @@
 --   A and D            time runs slower or faster (left stick left and right)
 --   E                  the menus: events, time, place, sky (Y)
 --   Space              labels: stars and planets, planets only, or none (A)
+--   R                  constellations on or off (X)
 --   G                  the ground below the horizon on or off: off, the sky
 --                      goes all the way round (right bumper)
 --   Esc                the pause menu and settings (Start)
@@ -22,6 +23,7 @@
 
 local clock = require("./clock")
 local view = require("./view")
+local skyArt = require("./sky_art")
 local events = require("./events")
 local skyMenu = require("./sky_menu")
 
@@ -121,6 +123,11 @@ game.onTick(function(step)
         labelsAt = labelsAt % #view.labelChoices + 1
         view.setLabels(view.labelChoices[labelsAt])
     end
+    if game.input.justPressed("reload") then
+        local on = not skyArt.lines()
+        skyArt.setLines(on)
+        skyArt.setNames(on)
+    end
     if game.input.justPressed("use_item") then
         game.sky.setGround(not game.sky.ground())
     end
@@ -160,6 +167,8 @@ end
 game.onDraw(function()
     local playing = not panel.isOpen and not pauseMenu.isOpen()
     panel:draw()
+    view.startFrame()
+    skyArt.draw(playing)
     view.drawLabels(playing)
 
     place.text = clock.placeName() .. "   " .. latLong()
@@ -191,10 +200,11 @@ game.onDraw(function()
 
     local label = game.input.label
     hints.text = string.format(
-        "%s: up/down zoom, left/right time lapse   %s menus   %s labels   %s ground   %s pause",
+        "%s: up/down zoom, left/right time lapse   %s menus   %s labels   %s constellations   %s ground   %s pause",
         label("move"),
         label("interact"),
         label("jump"),
+        label("reload"),
         label("use_item"),
         label("pause")
     )

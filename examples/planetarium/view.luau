@@ -30,7 +30,9 @@ view.labelChoices = { "Planets and bright stars", "Planets, sun and moon", "Off"
 
 -- How many of the brightest named stars are labelled.
 local STARS = 30
-local PLANETS = { "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus" }
+-- Neptune is too faint for the eye, so the sky does not draw it, but its
+-- label and marker say where it is.
+view.planets = { "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune" }
 
 local function fovOf(zoom: number): number
     return WIDEST + (CLOSEST - WIDEST) * zoom
@@ -92,7 +94,7 @@ function view.find(name: string): vector?
     elseif lower == "moon" then
         return game.sky.moonDirection()
     end
-    for _, planet in PLANETS do
+    for _, planet in view.planets do
         if string.lower(planet) == lower then
             return game.sky.planetDirection(planet)
         end
@@ -139,10 +141,64 @@ function view.update(paused: boolean)
     end
 end
 
+local starfield = require("./starfield")
+
+-- The planets' own colours, for their labels and markers.
+view.planetColors = {
+    Mercury = "#c9c3b8", Venus = "#fff2c4", Mars = "#ff8a5c", Jupiter = "#f3d9a8",
+    Saturn = "#f0cf7a", Uranus = "#9fe6ec", Neptune = "#7fa4ff",
+}
+
+-- The camera this picture, made by view.startFrame.
+local ahead, right, up = vector.create(0, 0, -1), vector.create(1, 0, 0), vector.create(0, 1, 0)
+local scale = 540
+
+-- Works out the camera for this picture: call it once at the start of
+-- game.onDraw, before view.project. Says false while the sky has no hour.
+function view.startFrame(): boolean
+    ahead = game.player.aim
+    right = vector.cross(ahead, vector.create(0, 1, 0))
+    if vector.magnitude(right) < 1e-4 then
+        right = vector.create(1, 0, 0)
+    end
+    right = vector.normalize(right)
+    up = vector.cross(right, ahead)
+    -- Pixels on a screen 1080 high per unit across the view at distance 1,
+    -- taking off the player's HUD size, which scales every offset.
+    local fov = game.settings.get("field_of_view")
+    scale = 540 / math.tan(math.rad(fov / 2)) / (game.settings.get("ui_size") / 100)
+    return starfield.startFrame()
+end
+
+-- How many HUD pixels one degree of sky spans in the middle of the view.
+function view.pixelsPerDegree(): number
+    return scale * math.pi / 180
+end
+
+-- Where `direction` falls on the screen, as HUD offsets from its middle, or
+-- nil if it is behind the observer, off the screen, or under the ground
+-- while there is ground.
+function view.project(direction: vector): (number?, number?)
+    if direction.y < -0.01 and game.sky.ground() then
+        return nil, nil
+    end
+    local depth = vector.dot(direction, ahead)
+    if depth < 0.05 then
+        return nil, nil
+    end
+    local across = vector.dot(direction, right) / depth * scale
+    local down = -vector.dot(direction, up) / depth * scale
+    if math.abs(down) > 560 or math.abs(across) > 1100 then
+        return nil, nil
+    end
+    return across, down
+end
+
 -- The labels, made once. Made before the pause menu, so it is drawn over them.
+local LABEL_COLOR = "#cfe3ffcc"
 local tags = {}
-for number = 1, STARS + #PLANETS + 2 do
-    local tag = game.hud.text("", { at = "center", size = 20, color = "#cfe3ffcc" })
+for number = 1, STARS + #view.planets + 2 do
+    local tag = game.hud.text("", { at = "center", size = 20, color = LABEL_COLOR })
     tag.visible = false
     tags[number] = tag
 end
@@ -151,34 +207,26 @@ end
 local starNames: { string } = {}
 
 -- Puts `tag` under the object in `direction`, or hides it if the object is
--- under the ground (when there is ground), behind the observer or off the
--- screen.
-local function place(tag: HudText, name: string, direction: vector?, ahead: vector, right: vector, up: vector, scale: number)
-    if direction == nil or (direction.y < -0.01 and game.sky.ground()) then
-        tag.visible = false
-        return
+-- not on the screen, or is in the middle of it, where the line under the
+-- crosshair already names what is there.
+local function place(tag: HudText, name: string, direction: vector?, color: string)
+    local across, down = nil, nil
+    if direction then
+        across, down = view.project(direction)
     end
-    local depth = vector.dot(direction, ahead)
-    if depth < 0.05 then
-        tag.visible = false
-        return
-    end
-    local across = vector.dot(direction, right) / depth * scale
-    local down = -vector.dot(direction, up) / depth * scale
-    -- Off the screen, or in the middle of it, where the line under the
-    -- crosshair already names what is there.
-    local central = math.abs(across) < 60 and math.abs(down) < 40
-    if central or math.abs(down) > 560 or math.abs(across) > 1100 then
+    if across == nil or down == nil or (math.abs(across) < 60 and math.abs(down) < 40) then
         tag.visible = false
         return
     end
     tag.text = name
+    tag.color = color
     tag.right = across
     tag.down = down + 18
     tag.visible = true
 end
 
--- Every picture: moves the labels to where their objects are.
+-- Every picture, after view.startFrame: moves the labels to where their
+-- objects are.
 function view.drawLabels(shown: boolean)
     local choice = kept.labels
     if not shown or choice == "Off" then
@@ -193,31 +241,19 @@ function view.drawLabels(shown: boolean)
             starNames[number] = all[number]
         end
     end
-    local ahead = game.player.aim
-    local right = vector.cross(ahead, vector.create(0, 1, 0))
-    if vector.magnitude(right) < 1e-4 then
-        right = vector.create(1, 0, 0)
-    end
-    right = vector.normalize(right)
-    local up = vector.cross(right, ahead)
-    -- Pixels on a screen 1080 high per unit across the view at distance 1,
-    -- taking off the player's HUD size, which scales every offset.
-    local fov = game.settings.get("field_of_view")
-    local scale = 540 / math.tan(math.rad(fov / 2)) / (game.settings.get("ui_size") / 100)
-
     local used = 0
-    local function label(name: string, direction: vector?)
+    local function label(name: string, direction: vector?, color: string)
         used += 1
-        place(tags[used], name, direction, ahead, right, up, scale)
+        place(tags[used], name, direction, color)
     end
-    label("Sun", game.sky.sunDirection())
-    label("Moon", game.sky.moonDirection())
-    for _, planet in PLANETS do
-        label(planet, game.sky.planetDirection(planet))
+    label("Sun", game.sky.sunDirection(), LABEL_COLOR)
+    label("Moon", game.sky.moonDirection(), LABEL_COLOR)
+    for _, planet in view.planets do
+        label(planet, game.sky.planetDirection(planet), view.planetColors[planet])
     end
     if choice == "Planets and bright stars" then
         for _, star in starNames do
-            label(star, game.sky.starDirection(star))
+            label(star, starfield.direction(star), LABEL_COLOR)
         end
     end
     for number = used + 1, #tags do
