@@ -25,16 +25,17 @@
 -- The menus' look, said before any menu is made (the pause menu's too):
 -- dark glass, gold for what is chosen, and a shadow behind each.
 local menu = require("./menu")
-menu.style.back = "#0a1022e8"
-menu.style.chosen = "#ffd27a1c"
-menu.style.chosenWords = "#ffd27a"
-menu.style.words = "#eef3ff"
-menu.style.quiet = "#9fb0d4"
-menu.style.on = "#8fe3b0"
-menu.style.off = "#9fb0d480"
-menu.style.bar = "#ffd27a"
-menu.style.accent = "#ffd27a"
-menu.style.shadow = "#00000066"
+menu.style.back = "#070b18eb"
+menu.style.chosen = "#e9c27a1a"
+menu.style.chosenWords = "#e9c27a"
+menu.style.words = "#f2f5fb"
+menu.style.quiet = "#8f9cbc"
+menu.style.on = "#9fe0b8"
+menu.style.off = "#8f9cbc80"
+menu.style.bar = "#e9c27a"
+menu.style.knob = "#f2f5fb"
+menu.style.accent = "#e9c27a"
+menu.style.shadow = "#00000070"
 
 local clock = require("./clock")
 local view = require("./view")
@@ -52,6 +53,12 @@ local pauseMenu = require("./pause_menu")
 local CAPTION_SECONDS = 9
 local captionLeft = 0
 local captionTitle, captionText = "", ""
+
+-- The keys show bright for a while after the game starts or a menu closes,
+-- then dim, so they are there when wanted and quiet after.
+local KEYS_BRIGHT = 10
+local keysFor = 0
+local wasInMenu = false
 
 -- Goes to an event: its place, its moment, how fast time runs, what else
 -- the sky shows, and the way to look.
@@ -108,6 +115,11 @@ game.onTick(function(step)
         return
     end
     captionLeft = math.max(0, captionLeft - step)
+    keysFor += step
+    if wasInMenu and not panel.isOpen then
+        keysFor = 0
+    end
+    wasInMenu = panel.isOpen
     if game.input.justPressed("interact") then
         panel:toggle(skyMenu.events)
     end
@@ -174,8 +186,10 @@ game.onDraw(function()
     local playing = not panel.isOpen and not pauseMenu.isOpen()
     panel:draw()
     view.startFrame()
-    skyArt.draw(playing)
+    -- Labels before the constellations' names, which give way to them.
+    view.beginLabels()
     view.drawLabels(playing)
+    skyArt.draw(playing)
 
     local aim = game.player.aim
     local name = view.lookingAt()
@@ -198,7 +212,10 @@ game.onDraw(function()
         bearing = view.bearing(aim),
         height = height,
         target = name,
-        targetDetail = if name then string.format("%d° %s", math.abs(height), if height < 0 then "below the horizon" else "up") else "",
+        targetDetail = if name
+            then string.format("%s %d°   ·   %s", if height < 0 then "BELOW" else "ALT", math.abs(height), view.compass(view.bearing(aim)))
+            else "",
+        keysShown = 1 - 0.65 * math.clamp(keysFor - KEYS_BRIGHT, 0, 1),
         zoom = view.zoom(),
         magnification = view.magnification(),
         caption = captionTitle,

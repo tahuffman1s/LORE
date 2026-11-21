@@ -438,7 +438,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, right, down, width, height, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -632,4 +632,24 @@ fn an_image_is_named_by_its_file_and_keeps_its_shape_when_one_side_is_said() {
         "{error}"
     );
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn a_text_says_how_big_its_words_are_and_that_cannot_be_set() {
+    let mut host = running(
+        r#"
+        local short = game.hud.text("Hi", { size = 20 })
+        local long = game.hud.text("Hello, world", { size = 20 })
+        local tall = game.hud.text("Hi", { size = 40 })
+        game.onTick(function()
+            assert(long.width > short.width * 2, "longer words are wider")
+            assert(tall.height > short.height * 1.5, "bigger words are taller")
+            assert(short.width > 0)
+        end)
+        "#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let error = mistake(r#"local t = game.hud.text("Hi"); t.width = 5"#);
+    assert!(error.contains("cannot be set"), "{error}");
 }

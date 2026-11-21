@@ -1,19 +1,32 @@
--- How the planetarium looks: its colours, and cards of dark glass to put
--- words on. A card is a few HUD boxes (a soft shadow, the glass, a light
--- edge along its top, and a gold strip if it has one) and is made once and
--- then shown, hidden, moved or faded.
+-- How the planetarium looks: one palette, one scale of text sizes, and
+-- panels of dark glass to put words on. A panel is a few HUD boxes and its
+-- words, made once and then shown, hidden, moved or faded.
+--
+-- Everything is laid out in pixels on a screen 1080 high, against the edge
+-- of the screen it is pinned to, so it stays put on any screen.
 
 local theme = {}
 
-theme.glass = "#0a1022c8" -- the cards
-theme.shadow = "#00000059"
-theme.edge = "#ffffff1f" -- the light line along a card's top
-theme.gold = "#ffd27a"
-theme.ice = "#8fd3ff"
-theme.text = "#eef3ff"
-theme.muted = "#9fb0d4"
-theme.faint = "#9fb0d440"
-theme.corner = 12 -- how round the cards' corners are
+-- Colours.
+theme.text = "#f2f5fb"
+theme.muted = "#8f9cbc"
+theme.faint = "#8f9cbc55"
+theme.accent = "#e9c27a" -- gold, for what matters now
+theme.glass = "#070b18b8"
+theme.outline = "#ffffff16"
+theme.shadow = "#00000066"
+
+-- Text sizes, smallest first: labels in capitals, small print, body,
+-- titles, and the clock.
+theme.micro = 13
+theme.small = 16
+theme.body = 19
+theme.title = 26
+theme.display = 44
+
+-- How round panels are, and how far words sit in from their edges.
+theme.corner = 10
+theme.inset = 20
 
 -- `color` with its see-through part times `share` (0 gone, 1 as it is). A
 -- colour is "#rrggbb" or "#rrggbbaa".
@@ -23,10 +36,10 @@ function theme.fade(color: string, share: number): string
     return string.format("%s%02x", base, math.floor(alpha * math.clamp(share, 0, 1) + 0.5))
 end
 
-local Card = {}
-Card.__index = Card
+local Panel = {}
+Panel.__index = Panel
 
-export type Card = typeof(setmetatable(
+export type Panel = typeof(setmetatable(
     {} :: {
         at: string,
         right: number,
@@ -36,70 +49,63 @@ export type Card = typeof(setmetatable(
         boxes: { { piece: HudBox, color: string } },
         texts: { { piece: HudText, color: string } },
     },
-    Card
+    Panel
 ))
 
--- Where a piece `width` by `height` goes so that its top left corner is
--- `across` and `down` from the card's top left corner, given that every
--- piece is pinned to the card's own place on the screen.
-function Card.offset(self: Card, across: number, down: number, width: number, height: number): (number, number)
-    local at = self.at
-    local right = self.right + across
-    if string.find(at, "right") then
-        right = self.right + across - self.width + width
-    elseif at == "top" or at == "bottom" or at == "center" then
-        right = self.right + across - self.width / 2 + width / 2
-    end
-    local lower = self.down + down
-    if string.find(at, "bottom") then
-        lower = self.down + down - self.height + height
-    elseif at == "left" or at == "right" or at == "center" then
-        lower = self.down + down - self.height / 2 + height / 2
-    end
-    return right, lower
+-- How far across and down the screen a place is: 0, a half or 1.
+local function fractions(at: string): (number, number)
+    local across = if string.find(at, "left") then 0 elseif string.find(at, "right") then 1 else 0.5
+    local down = if string.find(at, "top") then 0 elseif string.find(at, "bottom") then 1 else 0.5
+    return across, down
 end
 
--- A box inside the card.
-function Card.box(self: Card, across: number, down: number, width: number, height: number, color: string): HudBox
+-- The offset that puts a piece `width` by `height` with its top left corner
+-- `across` and `down` from the panel's top left corner. Every piece is
+-- pinned where the panel is, and a piece pinned a share `f` of the way
+-- across the screen sits `f` of its own width further left.
+function Panel.offset(self: Panel, across: number, down: number, width: number, height: number): (number, number)
+    local fx, fy = fractions(self.at)
+    return self.right + across - fx * (self.width - width), self.down + down - fy * (self.height - height)
+end
+
+-- A box inside the panel. With `corner`, its corners are rounded.
+function Panel.box(self: Panel, across: number, down: number, width: number, height: number, color: string, corner: number?): HudBox
     local right, lower = self:offset(across, down, width, height)
-    local piece = game.hud.box({ at = self.at :: any, right = right, down = lower, width = width, height = height, color = color })
+    local piece = game.hud.box({ at = self.at :: any, right = right, down = lower, width = width, height = height, color = color, corner = corner })
     table.insert(self.boxes, { piece = piece, color = color })
     return piece
 end
 
--- Words inside the card, `down` from its top. The HUD sizes text itself, so
--- which edge of the words `across` says depends on where the card is
--- pinned: their left edge on a card at the left of the screen, their right
--- edge on one at the right, their middle on one in the middle.
-function Card.text(self: Card, text: string, across: number, down: number, size: number, color: string): HudText
+-- Moves and resizes a box made with Panel.box.
+function Panel.placeBox(self: Panel, piece: HudBox, across: number, down: number, width: number, height: number)
+    piece.width, piece.height = width, height
+    piece.right, piece.down = self:offset(across, down, width, height)
+end
+
+-- Words inside the panel, their top `down` from the panel's top. `align`
+-- says which edge of the words `across` is: "left" (the usual), "right" or
+-- "center". The words are measured, so any of the three is exact.
+function Panel.text(self: Panel, text: string, across: number, down: number, size: number, color: string, align: string?): HudText
     local piece = game.hud.text(text, { at = self.at :: any, size = size, color = color })
     table.insert(self.texts, { piece = piece, color = color })
-    self:placeText(piece, across, down, size)
+    self:placeText(piece, across, down, align)
     return piece
 end
 
--- Moves words already in the card, as Card.text places them. Its height
--- is taken as 1.25 times its size, which is near enough for the HUD's font.
-function Card.placeText(self: Card, piece: HudText, across: number, down: number, size: number)
-    local at = self.at
-    local height = size * 1.25
-    local pinnedRight = string.find(at, "right") ~= nil
-    local pinnedMiddle = at == "top" or at == "bottom" or at == "center"
-    local x
-    if pinnedRight then
-        x = self.right - self.width + across
-    elseif pinnedMiddle then
-        x = self.right + across - self.width / 2
-    else
-        x = self.right + across
+-- Moves words made with Panel.text, as it places them. Call it again after
+-- changing the words of any but left-aligned text on a left-pinned panel.
+function Panel.placeText(self: Panel, piece: HudText, across: number, down: number, align: string?)
+    local width, height = piece.width, piece.height
+    local left = across
+    if align == "right" then
+        left = across - width
+    elseif align == "center" then
+        left = across - width / 2
     end
-    local _, lower = self:offset(0, down, 0, height)
-    piece.right = x
-    piece.down = lower
+    piece.right, piece.down = self:offset(left, down, width, height)
 end
 
--- Shows or hides the whole card.
-function Card.setVisible(self: Card, visible: boolean)
+function Panel.setVisible(self: Panel, visible: boolean)
     for _, each in self.boxes do
         each.piece.visible = visible
     end
@@ -108,8 +114,8 @@ function Card.setVisible(self: Card, visible: boolean)
     end
 end
 
--- Fades the whole card: 1 as made, 0 gone.
-function Card.setFade(self: Card, share: number)
+-- Fades the whole panel: 1 as made, 0 gone.
+function Panel.setFade(self: Panel, share: number)
     for _, each in self.boxes do
         each.piece.color = theme.fade(each.color, share)
     end
@@ -118,10 +124,10 @@ function Card.setFade(self: Card, share: number)
     end
 end
 
--- Makes a card of glass, hidden until shown. `at` is where it is pinned on
--- the screen, as game.hud takes it; `right` and `down` move it from there.
--- With `accent`, a strip of that colour runs down its left side.
-function theme.card(settings: { at: string, right: number?, down: number?, width: number, height: number, accent: string?, shadow: boolean?, corner: number? }): Card
+-- A panel, hidden until shown. `at` is where it is pinned on the screen, as
+-- game.hud takes it; `right` and `down` move it from there. Unless told
+-- `bare`, it has a soft shadow, dark glass and a faint outline.
+function theme.panel(settings: { at: string, right: number?, down: number?, width: number, height: number, bare: boolean?, corner: number? }): Panel
     local self = setmetatable({
         at = settings.at,
         right = settings.right or 0,
@@ -130,17 +136,16 @@ function theme.card(settings: { at: string, right: number?, down: number?, width
         height = settings.height,
         boxes = {},
         texts = {},
-    }, Card)
-    -- Round corners, and the light edge and gold strip kept inside them.
-    local corner = settings.corner or theme.corner
-    if settings.shadow ~= false then
-        self:box(5, 7, settings.width, settings.height, theme.shadow).corner = corner
+    }, Panel)
+    if not settings.bare then
+        local corner = settings.corner or theme.corner
+        local w, h = settings.width, settings.height
+        self:box(0, 6, w, h, theme.shadow, corner)
+        -- A one-pixel outline: a faint box, and the glass one pixel inside it.
+        self:box(-1, -1, w + 2, h + 2, theme.outline, corner + 1)
+        self:box(0, 0, w, h, theme.glass, corner)
     end
-    self:box(0, 0, settings.width, settings.height, theme.glass).corner = corner
-    self:box(corner, 0, settings.width - 2 * corner, 1, theme.edge)
-    if settings.accent then
-        self:box(0, corner, 3, settings.height - 2 * corner, settings.accent).corner = 1.5
-    end
+    self:setVisible(false)
     return self
 end
 
