@@ -381,6 +381,32 @@ impl Ui {
                 anchor,
                 offset,
                 color,
+                corner: 0.0,
+                angle: 0.0,
+            },
+            size,
+            "",
+        )
+    }
+
+    /// Adds one of the game's pictures to the HUD, `size` big and tinted
+    /// by `color` (white leaves it as it is). `image` is which of the
+    /// pictures the renderer was given, counting from 0.
+    pub fn hud_image(
+        &mut self,
+        anchor: Anchor,
+        offset: [f32; 2],
+        size: [f32; 2],
+        image: u32,
+        color: Color,
+    ) -> WidgetId {
+        self.add_hud(
+            Kind::HudImage {
+                anchor,
+                offset,
+                color,
+                image,
+                angle: 0.0,
             },
             size,
             "",
@@ -533,7 +559,8 @@ impl Ui {
         match &mut node.kind {
             Kind::HudText { color, .. }
             | Kind::HudBar { color, .. }
-            | Kind::HudRect { color, .. } => {
+            | Kind::HudRect { color, .. }
+            | Kind::HudImage { color, .. } => {
                 *color = new;
                 Ok(())
             }
@@ -555,7 +582,8 @@ impl Ui {
         match &mut self.node(widget)?.kind {
             Kind::HudText { offset, .. }
             | Kind::HudBar { offset, .. }
-            | Kind::HudRect { offset, .. } => {
+            | Kind::HudRect { offset, .. }
+            | Kind::HudImage { offset, .. } => {
                 *offset = new;
                 Ok(())
             }
@@ -575,12 +603,82 @@ impl Ui {
     pub fn set_shown(&mut self, widget: WidgetId, shown: bool) -> Result<(), UiError> {
         let node = self.node(widget)?;
         match &node.kind {
-            Kind::HudText { .. } | Kind::HudBar { .. } | Kind::HudRect { .. } => {
+            Kind::HudText { .. }
+            | Kind::HudBar { .. }
+            | Kind::HudRect { .. }
+            | Kind::HudImage { .. } => {
                 node.visible = shown;
                 Ok(())
             }
             other => Err(UiError::WrongKind {
                 expected: "HUD piece",
+                found: other.name(),
+            }),
+        }
+    }
+
+    /// Changes the `[width, height]` of a HUD bar (when full), rectangle
+    /// or image, in pixels on a screen 1080 high. Below 0 is taken as 0.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD bar,
+    /// rectangle or image.
+    pub fn set_size(&mut self, widget: WidgetId, new: [f32; 2]) -> Result<(), UiError> {
+        let node = self.node(widget)?;
+        match &node.kind {
+            Kind::HudBar { .. } | Kind::HudRect { .. } | Kind::HudImage { .. } => {
+                node.size = new.map(|part| if part.is_finite() { part.max(0.0) } else { 0.0 });
+                Ok(())
+            }
+            other => Err(UiError::WrongKind {
+                expected: "HUD bar, rectangle or image",
+                found: other.name(),
+            }),
+        }
+    }
+
+    /// Turns a HUD rectangle or image about its middle: `angle` radians,
+    /// clockwise on the screen. Where it is pinned is where it would be
+    /// unturned.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD rectangle or
+    /// image.
+    pub fn set_angle(&mut self, widget: WidgetId, new: f32) -> Result<(), UiError> {
+        let new = if new.is_finite() { new } else { 0.0 };
+        match &mut self.node(widget)?.kind {
+            Kind::HudRect { angle, .. } | Kind::HudImage { angle, .. } => {
+                *angle = new;
+                Ok(())
+            }
+            other => Err(UiError::WrongKind {
+                expected: "HUD rectangle or image",
+                found: other.name(),
+            }),
+        }
+    }
+
+    /// Rounds the corners of a HUD rectangle: `radius` in pixels on a
+    /// screen 1080 high, held to half its shorter side when drawn.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD rectangle.
+    pub fn set_corner(&mut self, widget: WidgetId, radius: f32) -> Result<(), UiError> {
+        let radius = if radius.is_finite() {
+            radius.max(0.0)
+        } else {
+            0.0
+        };
+        match &mut self.node(widget)?.kind {
+            Kind::HudRect { corner, .. } => {
+                *corner = radius;
+                Ok(())
+            }
+            other => Err(UiError::WrongKind {
+                expected: "HUD rectangle",
                 found: other.name(),
             }),
         }

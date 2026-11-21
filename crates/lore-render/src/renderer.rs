@@ -969,10 +969,19 @@ impl Renderer {
     /// # }
     /// ```
     ///
-    /// At most 8192 boxes and letters are drawn in a frame; the rest are
+    /// At most 16384 boxes and letters are drawn in a frame; the rest are
     /// left out and a warning is logged once.
     pub fn set_ui(&mut self, list: DrawList<'_>) {
         self.overlay.set(list);
+    }
+
+    /// Gives the HUD the game's pictures: a `Draw::Turned` with
+    /// `image: Some(n)` shows the `n`th. Each is shrunk by halves until it
+    /// is at most 2048 pixels either way, and they are packed into one
+    /// picture of at most 4096 by 4096; one that does not fit is left out
+    /// with a warning.
+    pub fn set_hud_images(&mut self, images: &[crate::HudImage]) {
+        self.overlay.set_images(images);
     }
 
     /// Draws the editor's panels over every frame from now on, on top of

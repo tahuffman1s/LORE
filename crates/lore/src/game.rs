@@ -98,6 +98,8 @@ pub struct Frame {
     sky_place: Option<lore_render::SkyPlace>,
     /// How large the moon is drawn, if the game said it this frame.
     moon_size: Option<f32>,
+    /// The game's HUD images, if they changed this frame.
+    hud_images: Option<Vec<lore_render::HudImage>>,
     /// Whether dark ground is drawn below the horizon, if the game said it
     /// this frame.
     ground: Option<bool>,
@@ -236,6 +238,7 @@ impl Frame {
             hour: None,
             sky_place: None,
             moon_size: None,
+            hud_images: None,
             ground: None,
             moon_tint: None,
             milky_way: None,
@@ -915,6 +918,17 @@ impl Frame {
         self.moon_size.take()
     }
 
+    /// Hands over the game's HUD images: what a HUD image piece numbered
+    /// `n` shows is the `n`th. Said when they change, not every frame.
+    pub fn set_hud_images(&mut self, images: Vec<lore_render::HudImage>) {
+        self.hud_images = Some(images);
+    }
+
+    /// The game's HUD images, if they changed this frame.
+    pub(crate) fn take_hud_images(&mut self) -> Option<Vec<lore_render::HudImage>> {
+        self.hud_images.take()
+    }
+
     /// Says whether dark ground is drawn below the horizon (the usual), or
     /// the sky goes all the way round, its stars below the player's feet.
     pub fn set_ground(&mut self, shown: bool) {
@@ -1296,7 +1310,7 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .collect()
     }

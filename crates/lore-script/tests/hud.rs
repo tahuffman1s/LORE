@@ -107,13 +107,22 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             size: [300.0, 24.0]
         }
     );
-    assert_eq!(pieces[4].shape, HudShape::Box { size: [6.0, 6.0] });
+    assert_eq!(
+        pieces[4].shape,
+        HudShape::Box {
+            size: [6.0, 6.0],
+            corner: 0.0,
+            rotation: 0.0
+        }
+    );
     assert_eq!(pieces[4].anchor, Anchor::Center);
     assert_eq!(pieces[4].color, Color::rgba(0.0, 0.0, 0.0, 128.0 / 255.0));
     assert_eq!(
         pieces[5].shape,
         HudShape::Box {
-            size: [100.0, 100.0]
+            size: [100.0, 100.0],
+            corner: 0.0,
+            rotation: 0.0
         }
     );
     assert_eq!(pieces.len(), 6);
@@ -291,16 +300,16 @@ fn the_hud_can_be_changed_while_a_picture_is_drawn() {
 #[test]
 fn a_piece_made_on_every_tick_is_stopped_and_explained() {
     let mut host = running(r#"game.onTick(function() game.hud.text("Score: 0") end)"#);
-    for _ in 0..1100 {
+    for _ in 0..4200 {
         tick(&mut host);
     }
     let error = host.last_error().expect("too many pieces");
     assert!(
-        error.message.contains("already has 1024 pieces")
+        error.message.contains("already has 4096 pieces")
             && error.message.contains("at the top of the file"),
         "{error}"
     );
-    assert_eq!(pieces(&host).len(), 1024);
+    assert_eq!(pieces(&host).len(), 4096);
 }
 
 #[test]
@@ -408,7 +417,7 @@ fn mistakes_in_making_a_piece_say_what_to_write() {
         ),
         (
             "game.hud.label(\"Hi\")",
-            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph.",
+            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph, line, image.",
         ),
         (
             "game.hud.txet(\"Hi\")",
@@ -462,7 +471,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, right, down, width, height, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",
@@ -514,5 +523,113 @@ fn a_save_makes_the_hud_again_from_the_new_file() {
     assert_ne!(host.hud_layout(), before);
     let pieces = pieces(&host);
     assert_eq!(pieces.iter().map(text).collect::<Vec<_>>(), ["new"]);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn a_line_runs_between_its_two_ends_and_each_end_can_move() {
+    let mut host = running(
+        r#"
+        local line = game.hud.line({ at = "center", right = -10, down = 5, toRight = 30, toDown = -20, thickness = 3, color = "red" })
+        game.onTick(function()
+            line.toRight = 50
+            line.thickness = 1
+            print(line.right, line.down, line.toRight, line.toDown, line.thickness)
+        end)
+        "#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let piece = &pieces(&host)[0];
+    assert_eq!(piece.offset, [-10.0, 5.0]);
+    assert_eq!(
+        piece.shape,
+        HudShape::Line {
+            to: [50.0, -20.0],
+            thickness: 1.0
+        }
+    );
+}
+
+#[test]
+fn a_box_can_be_resized_rounded_and_turned() {
+    let mut host = running(
+        r#"
+        local card = game.hud.box({ width = 40, height = 20, corner = 6, rotation = 30 })
+        game.onTick(function()
+            card.width = 80
+            card.rotation = 90
+            print(card.width, card.height, card.corner, card.rotation)
+        end)
+        "#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        pieces(&host)[0].shape,
+        HudShape::Box {
+            size: [80.0, 20.0],
+            corner: 6.0,
+            rotation: 90.0
+        }
+    );
+}
+
+#[test]
+fn an_image_is_named_by_its_file_and_keeps_its_shape_when_one_side_is_said() {
+    let folder = std::env::temp_dir().join(format!("lore-hud-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(folder.join("images/stars")).unwrap();
+    // A PNG header is all the script reads: 200 by 100 pixels.
+    let mut png = vec![
+        0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', 0, 0, 0, 13,
+    ];
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&200_u32.to_be_bytes());
+    png.extend_from_slice(&100_u32.to_be_bytes());
+    std::fs::write(folder.join("images/stars/orion.png"), &png).unwrap();
+    std::fs::write(folder.join("images/compass.png"), &png).unwrap();
+    std::fs::write(
+        folder.join("main.luau"),
+        r#"
+        local a = game.hud.image("stars/orion", { width = 50, rotation = 10 })
+        local b = game.hud.image("compass")
+        "#,
+    )
+    .unwrap();
+    let host = ScriptHost::open(&folder, lore_input::ActionMap::standard()).unwrap();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let names: Vec<&str> = host
+        .hud_images()
+        .iter()
+        .map(|info| info.name.as_str())
+        .collect();
+    assert_eq!(names, ["compass", "stars/orion"]);
+    let made = pieces(&host);
+    assert_eq!(
+        made[0].shape,
+        HudShape::Image {
+            image: 1,
+            size: [50.0, 25.0],
+            rotation: 10.0
+        }
+    );
+    assert_eq!(
+        made[1].shape,
+        HudShape::Image {
+            image: 0,
+            size: [200.0, 100.0],
+            rotation: 0.0
+        }
+    );
+
+    std::fs::write(folder.join("main.luau"), r#"game.hud.image("stars/orian")"#).unwrap();
+    let host = ScriptHost::open(&folder, lore_input::ActionMap::standard()).unwrap();
+    let error = host.last_error().expect("no such image");
+    assert!(
+        error.message.contains("no image called \"stars/orian\"")
+            && error.message.contains("Did you mean \"stars/orion\"?"),
+        "{error}"
+    );
     let _ = std::fs::remove_dir_all(&folder);
 }

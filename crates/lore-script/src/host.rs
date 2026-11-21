@@ -137,6 +137,11 @@ pub struct ScriptHost {
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
+    /// The HUD images of a game given as text, which has no folder to
+    /// look in: see [`from_sources_with_images`](Self::from_sources_with_images).
+    given_images: Rc<Vec<crate::images::HudImageInfo>>,
+    /// The HUD images the running version knows.
+    images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The kinds of weapon in effect and who holds which. Kept here so a
     /// save empties nobody's hands.
     weapons: Rc<WeaponState>,
@@ -222,6 +227,7 @@ impl ScriptHost {
             Files::Folder(folder.to_owned()),
             actions,
             settings,
+            Vec::new(),
         ))
     }
 
@@ -281,11 +287,40 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings)
+        Self::with_files(files, actions, settings, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_settings`](Self::from_sources_with_settings)
+    /// does, with the HUD images it has: a packaged game's, read from its
+    /// pack, as a game on disk has them read from its `images` folder.
+    #[must_use]
+    pub fn from_sources_with_images(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<crate::images::HudImageInfo>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings, images)
+    }
+
+    /// The game's HUD images, by name, sorted, as the running script knows
+    /// them: the `n`th is what a HUD image piece with image `n` shows. For
+    /// a game on disk they are read again from its `images` folder each
+    /// time the script is.
+    #[must_use]
+    pub fn hud_images(&self) -> &[crate::images::HudImageInfo] {
+        &self.images
     }
 
     /// A host running the `main.luau` in `files`.
-    fn with_files(files: Files, actions: ActionMap, settings: Vec<Setting>) -> Self {
+    fn with_files(
+        files: Files,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        images: Vec<crate::images::HudImageInfo>,
+    ) -> Self {
         let files = Rc::new(files);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
@@ -305,6 +340,8 @@ impl ScriptHost {
             spawn_due: false,
             meteors_seen: None,
             audio: Rc::default(),
+            given_images: Rc::new(images),
+            images: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
             live_set: Rc::default(),
@@ -1428,7 +1465,11 @@ impl ScriptHost {
 
     /// Starts a fresh VM and runs the game's `main.luau` in it. Also gives
     /// the files that were looked for, whether or not it worked.
-    fn build(&self) -> (Touched, Result<Version, ScriptError>) {
+    fn build(&mut self) -> (Touched, Result<Version, ScriptError>) {
+        self.images = match self.files.as_ref() {
+            Files::Folder(folder) => Rc::new(crate::images::scan(folder)),
+            Files::Memory(_) => Rc::clone(&self.given_images),
+        };
         let shared = Rc::new(Shared {
             actions: Rc::clone(&self.actions),
             bound: RefCell::new(Vec::new()),
@@ -1453,6 +1494,7 @@ impl ScriptHost {
             look: Rc::clone(&self.look),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
+            images: Rc::clone(&self.images),
             modules: Modules::new(Rc::clone(&self.files)),
             kept: Kept::default(),
             store: Rc::clone(&self.kept),

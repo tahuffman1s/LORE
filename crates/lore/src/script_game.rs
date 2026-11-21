@@ -47,6 +47,8 @@ pub struct ScriptGame {
     hud: ScriptHud,
     /// The sounds the script can play by name.
     sounds: Sounds,
+    /// The pictures the script can show on its HUD.
+    pictures: crate::hud_images::HudPictures,
     /// What is placed in the level.
     map: Map,
     /// The map's file, looked at for saves. Only a game opened from a
@@ -85,6 +87,7 @@ impl ScriptGame {
             errors: None,
             hud: ScriptHud::default(),
             sounds: Sounds::starter(),
+            pictures: crate::hud_images::HudPictures::default(),
             map: Map::default(),
             map_file: None,
             map_error: None,
@@ -108,6 +111,14 @@ impl ScriptGame {
         self.sounds = sounds;
         self.name_sounds();
         self
+    }
+
+    /// Logs each of the game's HUD images that cannot be shown, saying
+    /// what is wrong with it. For `lore check`.
+    pub fn check_images(&self) {
+        for problem in self.pictures.problems() {
+            log::warn!("{problem}");
+        }
     }
 
     /// The sounds the game's script can play.
@@ -219,6 +230,7 @@ impl ScriptGame {
             errors: Some(ErrorOverlay::default()),
             hud: ScriptHud::default(),
             sounds: Sounds::in_folder(folder),
+            pictures: crate::hud_images::HudPictures::in_folder(folder),
             map,
             map_file: Some(map_file),
             map_error,
@@ -266,6 +278,35 @@ impl ScriptGame {
         let host =
             ScriptHost::from_sources_with_settings(scripts, actions.clone(), settings.described());
         Self::without_files(host, settings)
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_settings`](Self::from_sources_with_settings)
+    /// does, with HUD images already read, by name: a packaged game's.
+    #[must_use]
+    pub fn from_sources_with_images(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<(String, lore_render::HudImage)>,
+        actions: &ActionMap,
+        settings: Settings,
+    ) -> Self {
+        let mut infos: Vec<lore_script::HudImageInfo> = images
+            .iter()
+            .map(|(name, image)| lore_script::HudImageInfo {
+                name: name.clone(),
+                size: image.size,
+            })
+            .collect();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        let host = ScriptHost::from_sources_with_images(
+            scripts,
+            infos,
+            actions.clone(),
+            settings.described(),
+        );
+        let mut game = Self::without_files(host, settings);
+        game.pictures = crate::hud_images::HudPictures::given(images);
+        game
     }
 
     /// Places `map` in the game's level, as a packaged game does with the
@@ -379,6 +420,7 @@ impl Game for ScriptGame {
         if let Some(size) = self.host.take_moon_size() {
             frame.set_moon_size(size);
         }
+        self.pictures.follow(&self.host, frame);
         if let Some(shown) = self.host.take_ground() {
             frame.set_ground(shown);
         }
@@ -514,7 +556,7 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .collect()
     }
@@ -578,7 +620,7 @@ mod tests {
                     color,
                     ..
                 } => Some((position, size, color)),
-                Draw::Text { .. } => None,
+                Draw::Text { .. } | Draw::Turned { .. } => None,
             })
             .collect()
     }
@@ -723,7 +765,7 @@ mod tests {
                 Draw::Rect {
                     position, color, ..
                 } => Some((position, color)),
-                Draw::Text { .. } => None,
+                Draw::Text { .. } | Draw::Turned { .. } => None,
             })
             .collect()
     }
@@ -788,7 +830,7 @@ mod tests {
             .iter()
             .find_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .unwrap_or_default();
         assert_eq!(said, "Cross");
@@ -1086,7 +1128,7 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .collect();
         rig.list = frame.take_shader_list();

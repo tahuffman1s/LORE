@@ -34,7 +34,24 @@ pub(crate) fn hud(node: &Node, theme: &Theme, painter: &mut Painter<'_>) {
                 0.0,
             );
         }
-        Kind::HudRect { color, .. } => painter.rect(rect, *color, 0.0),
+        Kind::HudRect {
+            color,
+            corner,
+            angle,
+            ..
+        } => {
+            if *angle == 0.0 {
+                painter.rect(rect, *color, *corner);
+            } else {
+                painter.turned(rect, *angle, *color, *corner, None);
+            }
+        }
+        Kind::HudImage {
+            color,
+            image,
+            angle,
+            ..
+        } => painter.turned(rect, *angle, *color, 0.0, Some(*image)),
         _ => {}
     }
 }

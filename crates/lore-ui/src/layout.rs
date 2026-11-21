@@ -100,7 +100,10 @@ pub(crate) fn measure_screen(
                 }
                 [bar.max(page[0]), theme.row_height + theme.gap + page[1]]
             }
-            Kind::HudText { .. } | Kind::HudBar { .. } | Kind::HudRect { .. } => continue,
+            Kind::HudText { .. }
+            | Kind::HudBar { .. }
+            | Kind::HudRect { .. }
+            | Kind::HudImage { .. } => continue,
         };
         nodes[index].size = size;
     }
@@ -232,6 +235,43 @@ pub fn hud_area(anchor: Anchor, offset: [f32; 2], size: [f32; 2], screen: [f32; 
     [placed.x, placed.y, placed.w, placed.h]
 }
 
+/// The box a HUD line is drawn as: a HUD rectangle pinned at `anchor`,
+/// `thickness` high and as long as the line, turned about its middle. The
+/// line runs from `from` to `to`, each an offset from the point `anchor`
+/// pins to, `[right, down]` in pixels on a screen 1080 high. Gives the
+/// rectangle's offset and size, and how far it is turned in radians,
+/// clockwise on the screen.
+///
+/// ```
+/// use lore_ui::{Anchor, hud_line};
+///
+/// let (offset, size, angle) = hud_line(Anchor::TopLeft, [0.0, 0.0], [30.0, 40.0], 2.0);
+/// assert_eq!(size, [50.0, 2.0]);
+/// assert_eq!(offset, [-10.0, 19.0]);
+/// assert!((angle - 0.9273).abs() < 1e-4);
+/// ```
+#[must_use]
+pub fn hud_line(
+    anchor: Anchor,
+    from: [f32; 2],
+    to: [f32; 2],
+    thickness: f32,
+) -> ([f32; 2], [f32; 2], f32) {
+    let [across, down] = anchor.fractions();
+    let [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+    let size = [dx.hypot(dy), thickness.max(0.0)];
+    let angle = if size[0] > 0.0 { dy.atan2(dx) } else { 0.0 };
+    let middle = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
+    // A piece pinned at a share `f` of the way across sits at
+    // `f * (screen - width) + offset`, so its middle is at
+    // `f * screen + offset + width * (0.5 - f)`.
+    let offset = [
+        middle[0] - size[0] * (0.5 - across),
+        middle[1] - size[1] * (0.5 - down),
+    ];
+    (offset, size, angle)
+}
+
 /// The middle of a screen of `size` that a share `margin` of each edge is
 /// kept clear of.
 pub(crate) fn safe_area(size: [f32; 2], margin: f32) -> Rect {
@@ -268,9 +308,9 @@ pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) 
             node.size = hud_text_size(&node.text, *size, measure);
             (*anchor, *offset)
         }
-        Kind::HudBar { anchor, offset, .. } | Kind::HudRect { anchor, offset, .. } => {
-            (*anchor, *offset)
-        }
+        Kind::HudBar { anchor, offset, .. }
+        | Kind::HudRect { anchor, offset, .. }
+        | Kind::HudImage { anchor, offset, .. } => (*anchor, *offset),
         _ => return,
     };
     node.rect = pin(anchor, offset, node.size, safe);

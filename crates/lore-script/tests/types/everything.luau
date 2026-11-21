@@ -180,6 +180,12 @@ local ammo = game.hud.text("30 / 90", { at = "bottom right", right = -20, down =
 local count = game.hud.text(3)
 local health = game.hud.bar(1, { at = "bottom left", width = 300, height = 24, color = "red" })
 local dot = game.hud.box({ at = "center", width = 6, height = 6, color = "#ffffff80" })
+local card = game.hud.box({ width = 300, height = 80, corner = 12, rotation = 5 })
+card.width, card.height, card.corner, card.rotation = 320, 90, 14, 0
+local line: HudLine = game.hud.line({ at = "center", right = -40, toRight = 40, toDown = 10, thickness = 2, color = "white" })
+line.toRight, line.toDown, line.thickness = 60, 0, 3
+local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, rotation = 15, color = "#ffffffc0" })
+picture.width, picture.height, picture.rotation = 140, 140, 30
 game.hud.box()
 
 game.onDraw(function()

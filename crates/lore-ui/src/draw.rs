@@ -1,4 +1,5 @@
-//! What to draw this frame: filled boxes and pieces of text.
+//! What to draw this frame: filled boxes, pieces of text, and boxes turned
+//! about their middle or filled with one of the game's pictures.
 
 use std::fmt::{self, Write};
 
@@ -31,6 +32,25 @@ pub enum Draw<'a> {
         /// The words.
         text: &'a str,
     },
+    /// A box turned about its middle, or a picture: a HUD line, a turned
+    /// HUD box or a HUD image.
+    Turned {
+        /// The top-left corner the box has before it is turned.
+        position: [f32; 2],
+        /// Width and height.
+        size: [f32; 2],
+        /// How far it is turned about its middle, in radians, clockwise
+        /// on the screen.
+        angle: f32,
+        /// The fill colour, or what a picture is tinted with: white leaves
+        /// it as it is, and its alpha fades the picture.
+        color: Color,
+        /// How round the corners of a box are; 0 is square.
+        corner: f32,
+        /// Which of the pictures given to the renderer fills it, in the
+        /// order given; `None` for a plain box.
+        image: Option<u32>,
+    },
 }
 
 /// A draw command as stored: text is a range into one shared string, so
@@ -42,6 +62,14 @@ pub(crate) enum Command {
         size: [f32; 2],
         color: Color,
         corner: f32,
+    },
+    Turned {
+        position: [f32; 2],
+        size: [f32; 2],
+        angle: f32,
+        color: Color,
+        corner: f32,
+        image: Option<u32>,
     },
     Text {
         position: [f32; 2],
@@ -65,6 +93,7 @@ pub(crate) enum Command {
 ///     match draw {
 ///         Draw::Rect { position, size, .. } => println!("box at {position:?}, {size:?}"),
 ///         Draw::Text { position, text, .. } => println!("\"{text}\" at {position:?}"),
+///         Draw::Turned { position, angle, .. } => println!("turned {angle} at {position:?}"),
 ///     }
 /// }
 /// ```
@@ -160,7 +189,7 @@ impl DrawBuffer {
                     start: start + shift,
                     end: end + shift,
                 },
-                rect @ Command::Rect { .. } => rect,
+                other @ (Command::Rect { .. } | Command::Turned { .. }) => other,
             }));
     }
 
@@ -196,6 +225,21 @@ impl<'a> Iterator for DrawIter<'a> {
                 size,
                 color,
                 corner,
+            },
+            Command::Turned {
+                position,
+                size,
+                angle,
+                color,
+                corner,
+                image,
+            } => Draw::Turned {
+                position,
+                size,
+                angle,
+                color,
+                corner,
+                image,
             },
             Command::Text {
                 position,
@@ -242,6 +286,31 @@ impl Painter<'_> {
             size: [rect.w * scale, rect.h * scale],
             color,
             corner: corner * scale,
+        });
+    }
+
+    /// A box turned `angle` radians clockwise about its middle, or filled
+    /// with picture `image`. A turned box is not cut by a clip: only HUD
+    /// pieces are turned, and the HUD is never clipped.
+    pub(crate) fn turned(
+        &mut self,
+        rect: Rect,
+        angle: f32,
+        color: Color,
+        corner: f32,
+        image: Option<u32>,
+    ) {
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let scale = self.scale;
+        self.commands.push(Command::Turned {
+            position: [rect.x * scale, rect.y * scale],
+            size: [rect.w * scale, rect.h * scale],
+            angle,
+            color,
+            corner: corner * scale,
+            image,
         });
     }
 

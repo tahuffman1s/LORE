@@ -21,13 +21,25 @@ pub(crate) const ATLAS_HEIGHT: u32 = 1024;
 
 /// The most boxes and letters drawn in one frame; the rest are left out.
 ///
-/// A full settings screen is under two thousand. The limit is what a
-/// frame's buffer on the graphics card is sized for.
-pub(crate) const MOST_QUADS: usize = 8192;
+/// A full settings screen is under two thousand; a HUD of a few thousand
+/// pieces, such as a planetarium's star charts, fits beside one. The limit
+/// is what a frame's buffer on the graphics card is sized for.
+pub(crate) const MOST_QUADS: usize = 16_384;
 
 /// The bytes one box or letter takes in the buffer the shader reads:
-/// fourteen `f32`s, laid out as `shaders/ui.wgsl` expects.
-pub(crate) const QUAD_BYTES: usize = 56;
+/// sixteen `f32`s, laid out as `shaders/ui.wgsl` expects.
+pub(crate) const QUAD_BYTES: usize = 64;
+
+/// What a quad is, as the shader's `shape.y` says it.
+const BOX: f32 = 0.0;
+const LETTER: f32 = 1.0;
+const IMAGE: f32 = 2.0;
+
+/// The widest and tallest the picture holding a game's HUD images may be,
+/// in pixels: 64 megabytes at the most. An image larger than just under
+/// half of it either way is shrunk by halves until it is not, so two fit
+/// side by side with the pixel kept clear between pictures.
+pub(crate) const MOST_IMAGE_ATLAS: u32 = 4096;
 
 /// The largest letters are drawn, in pixels. Larger text is drawn this
 /// size, so that no text can ask for a picture of a letter the size of a
@@ -172,10 +184,164 @@ impl Atlas {
     }
 }
 
+/// One of a game's pictures for its HUD: what `game.hud.image` shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HudImage {
+    /// Width and height, in pixels.
+    pub size: [u32; 2],
+    /// Four bytes a pixel, red, green, blue and alpha, row by row from the
+    /// top, as a PNG file holds them (the colours with the sRGB curve).
+    pub rgba: Vec<u8>,
+}
+
+/// Every HUD image packed into one picture for the shader.
+#[derive(Debug, Default)]
+pub(crate) struct ImageAtlas {
+    /// Its width and height, in pixels; zero while there are no images.
+    pub size: [u32; 2],
+    pub rgba: Vec<u8>,
+    /// Where each image is in it, in the order given: left, top, width and
+    /// height in pixels. `None` for one that did not fit.
+    places: Vec<Option<[f32; 4]>>,
+}
+
+impl ImageAtlas {
+    /// Packs `images` in rows, tallest first, into a picture as small as
+    /// holds them. An image that does not fit, after shrinking, is left out
+    /// and said once.
+    fn pack(images: &[HudImage]) -> Self {
+        let half = MOST_IMAGE_ATLAS / 2 - 1;
+        let shrunk: Vec<HudImage> = images.iter().map(|image| shrink(image, half)).collect();
+        let mut order: Vec<usize> = (0..shrunk.len()).collect();
+        order.sort_by_key(|&index| std::cmp::Reverse(shrunk[index].size[1]));
+        // About square for all of them together, as wide as the widest, and
+        // at least a quarter of the most, so a few small ones share rows.
+        let area: f64 = shrunk
+            .iter()
+            .map(|image| f64::from(image.size[0] + 1) * f64::from(image.size[1] + 1))
+            .sum();
+        // A width in pixels, far below where the casts lose anything.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let square = (area.sqrt() * 1.1) as u32;
+        let widest = shrunk
+            .iter()
+            .map(|image| image.size[0] + 1)
+            .max()
+            .unwrap_or(0);
+        let width = widest
+            .max(square)
+            .clamp(MOST_IMAGE_ATLAS / 4, MOST_IMAGE_ATLAS);
+        let mut places = vec![None; shrunk.len()];
+        let (mut x, mut y, mut row) = (0_u32, 0_u32, 0_u32);
+        let mut corners = vec![[0_u32; 2]; shrunk.len()];
+        for &index in &order {
+            let [w, h] = shrunk[index].size;
+            if w == 0 || h == 0 {
+                continue;
+            }
+            if x + w > width {
+                x = 0;
+                y += row + 1;
+                row = 0;
+            }
+            if y + h > MOST_IMAGE_ATLAS {
+                log::warn!(
+                    "A HUD image ({w} by {h} pixels) is not drawn: the game's images do not all \
+                     fit in the {MOST_IMAGE_ATLAS} by {MOST_IMAGE_ATLAS} pixels kept for them. \
+                     Make some of them smaller."
+                );
+                continue;
+            }
+            corners[index] = [x, y];
+            // Far below where f32 stops being exact.
+            #[allow(clippy::cast_precision_loss)]
+            {
+                places[index] = Some([x as f32, y as f32, w as f32, h as f32]);
+            }
+            x += w + 1;
+            row = row.max(h);
+        }
+        let height = if places.iter().any(Option::is_some) {
+            (y + row).min(MOST_IMAGE_ATLAS)
+        } else {
+            0
+        };
+        let mut rgba = vec![0; (width * height * 4) as usize];
+        if height > 0 {
+            for (index, image) in shrunk.iter().enumerate() {
+                if places[index].is_none() {
+                    continue;
+                }
+                let [left, top] = corners[index];
+                let [w, h] = image.size;
+                for line in 0..h {
+                    let from = (line * w * 4) as usize;
+                    let to = (((top + line) * width + left) * 4) as usize;
+                    let length = (w * 4) as usize;
+                    if let (Some(source), Some(target)) = (
+                        image.rgba.get(from..from + length),
+                        rgba.get_mut(to..to + length),
+                    ) {
+                        target.copy_from_slice(source);
+                    }
+                }
+            }
+        }
+        Self {
+            size: if height > 0 { [width, height] } else { [0, 0] },
+            rgba,
+            places,
+        }
+    }
+}
+
+/// `image` halved until it is no wider or taller than `most`, each pixel
+/// of a halving the mean of the four it stands for.
+fn shrink(image: &HudImage, most: u32) -> HudImage {
+    let mut image = image.clone();
+    let wanted = (image.size[0] * image.size[1] * 4) as usize;
+    if image.rgba.len() != wanted {
+        // Not what it says it is: shown as nothing.
+        return HudImage {
+            size: [0, 0],
+            rgba: Vec::new(),
+        };
+    }
+    while image.size[0] > most || image.size[1] > most {
+        let [w, h] = image.size.map(|side| (side / 2).max(1));
+        let mut rgba = vec![0_u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                for channel in 0..4 {
+                    let mut sum = 0_u32;
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let sx = (x * 2 + dx).min(image.size[0] - 1);
+                        let sy = (y * 2 + dy).min(image.size[1] - 1);
+                        sum += u32::from(
+                            image.rgba[((sy * image.size[0] + sx) * 4 + channel) as usize],
+                        );
+                    }
+                    // The mean of four bytes is a byte.
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        rgba[((y * w + x) * 4 + channel) as usize] = (sum / 4) as u8;
+                    }
+                }
+            }
+        }
+        image = HudImage { size: [w, h], rgba };
+    }
+    image
+}
+
 /// The boxes and letters to draw over the picture, ready for the shader.
 pub(crate) struct Overlay {
     font: Font,
     atlas: Atlas,
+    /// The game's HUD images, packed.
+    images: ImageAtlas,
+    /// Whether `images` has changed since the graphics card got a copy.
+    images_changed: bool,
     /// `QUAD_BYTES` for each box and letter, back to front.
     quads: Vec<u8>,
     /// Whether leaving something out has been logged, so it is said once.
@@ -187,9 +353,23 @@ impl Overlay {
         Self {
             font,
             atlas: Atlas::new(),
+            images: ImageAtlas::default(),
+            images_changed: false,
             quads: Vec::new(),
             warned: false,
         }
+    }
+
+    /// Replaces the HUD's images with `images`: what a `Draw::Turned`
+    /// with `image: Some(n)` shows is the `n`th.
+    pub(crate) fn set_images(&mut self, images: &[HudImage]) {
+        self.images = ImageAtlas::pack(images);
+        self.images_changed = true;
+    }
+
+    /// The packed images, if they have changed since this was last called.
+    pub(crate) fn take_images(&mut self) -> Option<&ImageAtlas> {
+        std::mem::take(&mut self.images_changed).then_some(&self.images)
     }
 
     /// The font the text is drawn in.
@@ -242,8 +422,45 @@ impl Overlay {
                     } else {
                         0.0
                     };
-                    left_out |=
-                        !self.push([left, top, width, height], [0.0; 4], color, [corner, 0.0]);
+                    left_out |= !self.push(
+                        [left, top, width, height],
+                        [0.0; 4],
+                        color,
+                        [corner, BOX],
+                        0.0,
+                    );
+                }
+                Draw::Turned {
+                    position,
+                    size,
+                    angle,
+                    color,
+                    corner,
+                    image,
+                } => {
+                    let visible = position.iter().chain(&size).all(|value| value.is_finite())
+                        && size[0] > 0.0
+                        && size[1] > 0.0;
+                    if !visible {
+                        continue;
+                    }
+                    let angle = if angle.is_finite() { angle } else { 0.0 };
+                    let corner = if corner.is_finite() {
+                        corner.clamp(0.0, size[0].min(size[1]) / 2.0)
+                    } else {
+                        0.0
+                    };
+                    let rect = [position[0], position[1], size[0], size[1]];
+                    left_out |= match image {
+                        None => !self.push(rect, [0.0; 4], color, [corner, BOX], angle),
+                        Some(number) => match self.images.places.get(number as usize) {
+                            Some(Some(place)) => {
+                                !self.push(rect, *place, color, [0.0, IMAGE], angle)
+                            }
+                            // An image that is not there draws nothing.
+                            _ => false,
+                        },
+                    };
                 }
                 Draw::Text {
                     position,
@@ -321,7 +538,7 @@ impl Overlay {
                 f32::from(glyph.size[0]),
                 f32::from(glyph.size[1]),
             ];
-            left_out |= !self.push(rect, from, color, [0.0, 1.0]);
+            left_out |= !self.push(rect, from, color, [0.0, LETTER], 0.0);
         });
         if stopped {
             return Err(Full);
@@ -330,7 +547,15 @@ impl Overlay {
     }
 
     /// Adds one quad, unless the frame is full. Returns whether it was added.
-    fn push(&mut self, rect: [f32; 4], from: [f32; 4], color: Color, shape: [f32; 2]) -> bool {
+    /// `angle` turns it about its middle, in radians clockwise.
+    fn push(
+        &mut self,
+        rect: [f32; 4],
+        from: [f32; 4],
+        color: Color,
+        shape: [f32; 2],
+        angle: f32,
+    ) -> bool {
         if self.quads.len() >= MOST_QUADS * QUAD_BYTES {
             return false;
         }
@@ -341,7 +566,13 @@ impl Overlay {
                 0.0
             }
         });
-        for value in rect.iter().chain(&from).chain(&colour).chain(&shape) {
+        for value in rect
+            .iter()
+            .chain(&from)
+            .chain(&colour)
+            .chain(&shape)
+            .chain(&[angle, 0.0])
+        {
             self.quads.extend_from_slice(&value.to_ne_bytes());
         }
         true
@@ -395,6 +626,8 @@ mod tests {
         colour: [f32; 4],
         corner: f32,
         letter: bool,
+        image: bool,
+        angle: f32,
     }
 
     fn quads(overlay: &Overlay) -> Vec<Quad> {
@@ -413,6 +646,8 @@ mod tests {
                     colour: [number(8), number(9), number(10), number(11)],
                     corner: number(12),
                     letter: number(13) == 1.0,
+                    image: number(13) == 2.0,
+                    angle: number(14),
                 }
             })
             .collect()
@@ -537,7 +772,7 @@ mod tests {
                         (position[1] + size[1]).round() - top,
                     ])
                 }
-                Draw::Text { .. } => None,
+                Draw::Text { .. } | Draw::Turned { .. } => None,
             })
             .collect();
         let boxes: Vec<_> = drawn.iter().filter(|quad| !quad.letter).collect();
@@ -583,7 +818,8 @@ mod tests {
         let mut overlay = Overlay::new(Font::bundled());
         let mut buffer = DrawBuffer::default();
         let long = line(&"x".repeat(1000), 24.0, [0.0, 0.0]);
-        for _ in 0..10 {
+        // Twenty thousand letters: more than one frame draws.
+        for _ in 0..20 {
             buffer.add(long.draw());
         }
         overlay.set(buffer.draw());
@@ -603,5 +839,69 @@ mod tests {
         assert!(!Font::bundled().has('語'));
         overlay.set(line("語", 40.0, [0.0, 0.0]).draw());
         assert_eq!(overlay.count(), 1);
+    }
+
+    fn picture(size: [u32; 2], value: u8) -> HudImage {
+        HudImage {
+            size,
+            rgba: vec![value; (size[0] * size[1] * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn a_turned_box_keeps_its_angle_and_an_image_reads_its_own_place() {
+        let mut overlay = Overlay::new(Font::bundled());
+        overlay.set_images(&[picture([8, 4], 200), picture([16, 16], 100)]);
+        let (size, rgba) = {
+            let atlas = overlay.take_images().expect("new images are handed over");
+            (atlas.size, atlas.rgba.clone())
+        };
+        assert!(size[0] >= 16 && size[1] >= 16);
+        assert!(overlay.take_images().is_none(), "once");
+
+        let mut ui = Ui::default();
+        let line = ui.hud_rect(Anchor::TopLeft, [10.0, 10.0], [50.0, 2.0], Color::WHITE);
+        ui.set_angle(line, 0.75).unwrap();
+        ui.hud_image(
+            Anchor::TopLeft,
+            [100.0, 100.0],
+            [32.0, 16.0],
+            0,
+            Color::WHITE,
+        );
+        ui.hud_image(
+            Anchor::TopLeft,
+            [200.0, 100.0],
+            [32.0, 32.0],
+            7,
+            Color::WHITE,
+        );
+        ui.update(&UiInput::default(), 1.0 / 60.0, [1920, 1080]);
+        let mut buffer = DrawBuffer::default();
+        buffer.add(ui.draw());
+        overlay.set(buffer.draw());
+        let drawn = quads(&overlay);
+        // The line, and the first image; the eighth image is not there.
+        assert_eq!(drawn.len(), 2, "{drawn:?}");
+        assert!((drawn[0].angle - 0.75).abs() < 1e-6 && !drawn[0].image);
+        assert!(drawn[1].image);
+        assert_eq!(drawn[1].from[2..], [8.0, 4.0]);
+        let [x, y, ..] = drawn[1].from.map(|value| value as usize);
+        let width = size[0] as usize;
+        assert_eq!(rgba[(y * width + x) * 4], 200);
+    }
+
+    #[test]
+    fn a_huge_image_is_shrunk_and_what_does_not_fit_is_left_out() {
+        let packed = ImageAtlas::pack(&[picture([5000, 100], 50)]);
+        let place = packed.places[0].expect("shrunk to fit");
+        assert!(place[2] <= (MOST_IMAGE_ATLAS / 2) as f32, "{place:?}");
+        // Five pictures each as big as a picture is kept cannot all fit.
+        let side = MOST_IMAGE_ATLAS / 2 - 1;
+        let tall = picture([side, side], 1);
+        let packed = ImageAtlas::pack(&vec![tall; 5]);
+        let placed = packed.places.iter().filter(|place| place.is_some()).count();
+        assert_eq!(placed, 4);
+        assert!(packed.size[0] <= MOST_IMAGE_ATLAS && packed.size[1] <= MOST_IMAGE_ATLAS);
     }
 }

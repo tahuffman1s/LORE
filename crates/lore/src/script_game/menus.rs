@@ -110,7 +110,7 @@ impl Played {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, position, .. } => Some((text.to_owned(), position)),
-                Draw::Rect { .. } => None,
+                Draw::Rect { .. } | Draw::Turned { .. } => None,
             })
             .collect();
     }

@@ -677,6 +677,15 @@ impl Headless {
         self.overlay.set(list);
     }
 
+    /// Gives the HUD the game's pictures: a `Draw::Turned` with
+    /// `image: Some(n)` shows the `n`th. Each is shrunk by halves until it
+    /// is at most 2048 pixels either way, and they are packed into one
+    /// picture of at most 4096 by 4096; one that does not fit is left out
+    /// with a warning.
+    pub fn set_hud_images(&mut self, images: &[crate::HudImage]) {
+        self.overlay.set_images(images);
+    }
+
     /// Draws the editor's panels over every frame from now on, as
     /// [`Renderer::set_panels`](crate::Renderer::set_panels) does.
     #[cfg(feature = "panels")]
@@ -3348,6 +3357,59 @@ mod tests {
         assert_eq!(without, headless.screenshot(&Camera::default()).unwrap());
         // A frame can be drawn after one was read back.
         headless.render(&Camera::default()).unwrap();
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_turned_box_and_a_picture_are_drawn_where_they_are_put() {
+        const SIZE: [usize; 2] = [192, 108];
+        let Some(mut headless) = headless(192, 108) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        // Midnight, so the sky behind is dark and white shows.
+        headless.set_hour(Some(0.0));
+        headless.set_hud_images(&[crate::HudImage {
+            size: [4, 4],
+            rgba: [255, 0, 0, 255].repeat(16),
+        }]);
+        let mut ui = lore_ui::Ui::default();
+        // On a screen 108 high, ten HUD units are a pixel. A white bar 600
+        // long and 40 thick turned upright stands across the middle; the
+        // picture, 400 square, sits 500 to the right of it.
+        let bar = ui.hud_rect(
+            lore_ui::Anchor::Center,
+            [0.0, 0.0],
+            [600.0, 40.0],
+            lore_ui::Color::WHITE,
+        );
+        ui.set_angle(bar, std::f32::consts::FRAC_PI_2).unwrap();
+        ui.hud_image(
+            lore_ui::Anchor::Center,
+            [500.0, 0.0],
+            [400.0, 400.0],
+            0,
+            lore_ui::Color::WHITE,
+        );
+        ui.update(&lore_ui::UiInput::default(), 1.0 / 60.0, [192, 108]);
+        headless.set_ui(ui.draw());
+        let picture = headless.screenshot(&Camera::default()).unwrap();
+        let [red, green, blue] = pixel(&picture, SIZE[0], 96, 30);
+        assert!(
+            red > 200 && green > 200 && blue > 200,
+            "on the upright bar: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 120, 30);
+        assert!(
+            red + green + blue < 300,
+            "beside it, the night: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 146, 54);
+        assert!(
+            red > 150 && green < 90 && blue < 90,
+            "in the picture: {red} {green} {blue}"
+        );
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }
