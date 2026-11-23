@@ -4,116 +4,220 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LORE — Lovely Open Rust Engine</title>
-<meta name="description" content="LORE (Lovely Open Rust Engine) is a free, open-source game engine for big single-player worlds: adventures and action RPGs. Rust core, Luau scripting, Vulkan 1.3.">
+<meta name="description" content="LORE is a free, open-source game engine for big single-player worlds: adventures and action RPGs. Rust core, Luau scripting, Vulkan 1.3.">
 <meta property="og:title" content="LORE — Lovely Open Rust Engine">
 <meta property="og:description" content="A free, open-source engine for single-player open-world adventures and action RPGs.">
+<meta property="og:image" content="img/alley-lamps-at-dusk.jpg">
 <meta name="color-scheme" content="dark light">
 <style>
   :root {
-    --bg: #0d0f12; --panel: #15181d; --line: #262b33;
-    --text: #e8eaed; --muted: #9aa3ae; --accent: #ff6f91; --accent-ink: #1c0a10;
-    --code-bg: #0a0c0f; --kw: #ff9d57; --str: #9bd68a; --com: #6b7480; --num: #7cc4ff;
+    --bg: #111012; --bg-2: #18161a; --line: #2b282e; --line-2: #3a363d;
+    --text: #ede7dd; --muted: #a59d92; --faint: #6f6860;
+    --accent: #f2a65a; --accent-ink: #1d1105;
+    --code-bg: #0b0a0c; --code-text: #e2dcd2;
+    --kw: #f2a65a; --str: #a7d38f; --com: #7a7268; --num: #8cc8f0;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: #f7f6f3; --panel: #ffffff; --line: #dedbd4;
-      --text: #17191c; --muted: #5b6370; --accent: #c2255c; --accent-ink: #ffffff;
-      --code-bg: #14171b; --kw: #ff9d57; --str: #9bd68a; --com: #7d8793; --num: #7cc4ff;
+      --bg: #f5f0e7; --bg-2: #ebe4d8; --line: #d9d0c1; --line-2: #c6bba9;
+      --text: #1e1a15; --muted: #625a4f; --faint: #8f8576;
+      --accent: #a5520f; --accent-ink: #fff8ef;
     }
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
+    font: 17px/1.62 var(--sans); -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
-  a { color: inherit; }
-  .mono { font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  .narrow { max-width: 680px; }
+  a { color: inherit; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--accent); }
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+  h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -.01em; }
+  h2 { font-size: clamp(30px, 4.4vw, 44px); line-height: 1.08; margin: 0 0 14px; }
+  h3 { font-size: 21px; line-height: 1.25; margin: 0 0 6px; }
+  p { margin: 0 0 14px; }
+  .muted { color: var(--muted); }
+  .kicker { font: 600 12.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  header { border-bottom: 1px solid var(--line); }
-  nav { display: flex; align-items: center; justify-content: space-between; height: 60px; }
-  .brand { font-weight: 800; letter-spacing: .06em; text-decoration: none; }
-  .brand span { color: var(--accent); }
-  nav ul { display: flex; gap: 22px; list-style: none; margin: 0; padding: 0; font-size: 15px; }
-  nav ul a { text-decoration: none; color: var(--muted); }
-  nav ul a:hover { color: var(--text); }
+  /* Header */
+  header.top { position: absolute; inset: 0 0 auto; z-index: 5; }
+  header.top nav { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { font: 700 18px/1 var(--mono); letter-spacing: .08em; text-decoration: none; color: #f4eee4; }
+  .brand span { color: #f2a65a; }
+  header.top ul { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; font-size: 15px; }
+  header.top ul a { text-decoration: none; color: rgba(244, 238, 228, .78); }
+  header.top ul a:hover { color: #fff; }
 
-  .hero { padding: 84px 0 72px; position: relative; overflow: hidden; }
-  /* The mark: a player (the dot) and a camera that can sit in their eyes or circle behind them. */
-  .orbit {
-    position: absolute; right: -80px; top: 50%; width: 420px; height: 420px; margin-top: -210px;
-    border: 1px solid var(--line); border-radius: 50%; opacity: .9; pointer-events: none;
-    animation: orbit 48s linear infinite;
+  /* Hero: a real frame from the alley example, darkened so the words read */
+  .hero {
+    position: relative; min-height: min(88vh, 760px); display: flex; align-items: flex-end;
+    padding: 120px 0 64px; color: #f4eee4; background: #14100d;
   }
-  .orbit::before {
-    content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px;
-    border-radius: 50%; background: var(--accent);
+  .hero picture, .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .hero::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(10, 8, 10, .55) 0%, rgba(10, 8, 10, .1) 30%, rgba(10, 8, 10, .35) 60%, rgba(10, 8, 10, .92) 100%);
   }
-  .orbit i {
-    position: absolute; left: 50%; top: -8px; width: 16px; height: 16px; margin-left: -8px;
-    border-radius: 50%; border: 2px solid var(--accent); background: var(--bg);
-  }
-  @keyframes orbit { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .orbit { animation: none; transform: rotate(40deg); } }
-  .hero > .wrap { position: relative; z-index: 1; }
-  .status {
-    display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; margin-bottom: 26px;
-    border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
-    font-size: 13px; color: var(--muted);
-  }
-  .status i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-  h1 { font-size: clamp(44px, 9vw, 88px); line-height: 1; margin: 0 0 6px; letter-spacing: -.02em; font-weight: 800; }
-  h1 em { font-style: normal; color: var(--accent); }
-  .expand { font-size: 15px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted); margin: 0 0 26px; }
-  .lead { font-size: clamp(19px, 2.6vw, 23px); max-width: 620px; margin: 0 0 34px; text-wrap: balance; }
-  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .hero .wrap { position: relative; z-index: 1; width: 100%; }
+  .hero h1 { font-size: clamp(64px, 13vw, 148px); line-height: .9; margin: 0 0 10px; letter-spacing: -.03em; }
+  .hero .expand { font: 500 13px/1.4 var(--mono); letter-spacing: .26em; text-transform: uppercase; color: rgba(244, 238, 228, .7); margin: 0 0 22px; }
+  .hero .lead { font-size: clamp(19px, 2.3vw, 23px); line-height: 1.45; max-width: 600px; margin: 0 0 28px; text-wrap: pretty; }
+  .hero .caption { position: absolute; right: 20px; bottom: 18px; z-index: 1; font-size: 12.5px; color: rgba(244, 238, 228, .55); }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
   .btn {
-    display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 650;
-    text-decoration: none; border: 1px solid var(--line); background: var(--panel);
+    display: inline-block; padding: 12px 20px; border-radius: 6px; font-weight: 650; font-size: 16px;
+    text-decoration: none; border: 1px solid rgba(244, 238, 228, .35); color: inherit;
   }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary { background: #f2a65a; border-color: #f2a65a; color: #1d1105; }
   .btn:hover { filter: brightness(1.08); }
+  .small-print { font-size: 14px; color: rgba(244, 238, 228, .62); margin: 18px 0 0; }
 
-  section { padding: 64px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 30px; margin: 0 0 8px; letter-spacing: -.01em; }
-  .sub { color: var(--muted); margin: 0 0 32px; max-width: 640px; }
-  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
-  .card h3 { margin: 0 0 6px; font-size: 18px; }
-  .card p { margin: 0; color: var(--muted); font-size: 15.5px; }
-  .card .n { color: var(--accent); font-size: 13px; margin-bottom: 10px; display: block; }
-  .shots { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-  figure.card { margin: 0; padding: 0; overflow: hidden; }
-  figure.card img { display: block; width: 100%; height: auto; }
-  figure.card figcaption { padding: 18px 22px 22px; }
+  section { padding: 88px 0; }
+  section + section { border-top: 1px solid var(--line); }
+  .intro { max-width: 680px; margin-bottom: 40px; }
+  .intro p { color: var(--muted); font-size: 18px; }
 
-  .split { display: grid; gap: 32px; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; }
-  @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } .orbit { display: none; } nav ul li.hide { display: none; } pre { font-size: 12px; padding: 14px; } }
+  /* Sky player */
+  .sky { display: grid; gap: 28px; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); align-items: start; }
+  .screen { background: #000; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+  .screen video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+  .scrub { padding: 14px 16px 12px; background: var(--bg-2); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; margin-top: -10px; padding-top: 22px; }
+  .scrub-row { display: flex; align-items: center; gap: 14px; }
+  .play {
+    flex: none; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line-2);
+    background: var(--bg); cursor: pointer; display: grid; place-items: center;
+  }
+  .play svg { width: 14px; height: 14px; fill: currentColor; }
+  .play .i-play { display: none; }
+  .play[aria-pressed="false"] .i-play { display: block; }
+  .play[aria-pressed="false"] .i-pause { display: none; }
+  .track { position: relative; flex: 1; }
+  input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); height: 28px; cursor: pointer; }
+  .marks { position: relative; height: 22px; margin-top: 2px; }
+  .marks button {
+    position: absolute; transform: translateX(-50%); white-space: nowrap; background: none; border: 0; padding: 2px 4px;
+    font-size: 12.5px; color: var(--muted); cursor: pointer;
+  }
+  .marks button:first-child { transform: none; padding-left: 0; }
+  .marks button:last-child:not(:first-child) { transform: translateX(-100%); padding-right: 0; }
+  .marks button:hover { color: var(--accent); }
+  .marks button::before { content: ""; position: absolute; left: 50%; top: -6px; width: 1px; height: 5px; background: var(--line-2); }
+  .marks button:first-child::before { left: 0; }
+  .marks button:last-child:not(:first-child)::before { left: auto; right: 0; }
+  .speed { font-size: 12.5px; color: var(--faint); margin: 8px 0 0; }
+
+  .events { list-style: none; margin: 0 0 22px; padding: 0; border-top: 1px solid var(--line); }
+  .events button {
+    width: 100%; display: flex; gap: 14px; align-items: center; text-align: left; cursor: pointer;
+    padding: 10px 6px; background: none; border: 0; border-bottom: 1px solid var(--line);
+  }
+  .events img { flex: none; width: 72px; height: 40.5px; object-fit: cover; border-radius: 4px; opacity: .75; }
+  .events b { display: block; font-weight: 600; font-size: 15.5px; }
+  .events small { display: block; color: var(--faint); font-size: 13px; }
+  .events button:hover img { opacity: 1; }
+  .events button[aria-pressed="true"] { background: var(--bg-2); }
+  .events button[aria-pressed="true"] img { opacity: 1; outline: 2px solid var(--accent); }
+  .events button[aria-pressed="true"] b { color: var(--accent); }
+  .about h3 { margin-top: 0; }
+  .about p { color: var(--muted); font-size: 16px; }
   pre {
-    margin: 0; padding: 20px; border-radius: 12px; background: var(--code-bg); color: #dfe3e8;
-    border: 1px solid var(--line); overflow-x: auto; font-size: 14.5px; line-height: 1.65;
+    margin: 0; padding: 16px 18px; border-radius: 8px; background: var(--code-bg); color: var(--code-text);
+    border: 1px solid var(--line); overflow-x: auto; font: 13.5px/1.65 var(--mono);
   }
   .kw { color: var(--kw); } .str { color: var(--str); } .com { color: var(--com); } .num { color: var(--num); }
-  .note { font-size: 13.5px; color: var(--muted); margin-top: 10px; }
-  ul.checks { list-style: none; padding: 0; margin: 0; }
-  ul.checks li { padding: 9px 0 9px 26px; position: relative; border-bottom: 1px solid var(--line); }
-  ul.checks li::before { content: ""; position: absolute; left: 4px; top: 19px; width: 8px; height: 8px; border: 2px solid var(--accent); border-radius: 50%; }
 
-  footer { border-top: 1px solid var(--line); padding: 36px 0 56px; color: var(--muted); font-size: 14.5px; }
-  footer a { color: var(--text); }
+  /* Stills */
+  .gallery { display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 72px; }
+  .gallery figure { margin: 0; grid-column: span 2; }
+  .gallery figure.wide { grid-column: span 3; }
+  .gallery button.shot { display: block; width: 100%; padding: 0; border: 0; background: #000; cursor: zoom-in; border-radius: 8px; overflow: hidden; }
+  .gallery img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; transition: transform .4s ease; }
+  .gallery button.shot:hover img { transform: scale(1.025); }
+  .gallery figcaption { padding: 12px 2px 0; }
+  .gallery figcaption h3 { font-size: 19px; }
+  .gallery figcaption p { color: var(--muted); font-size: 15.5px; margin: 0; }
+
+  /* Lightbox */
+  dialog.lightbox {
+    width: min(1200px, 100vw - 24px); max-width: none; max-height: calc(100vh - 24px); padding: 0; border: 0;
+    background: transparent; color: #f4eee4; overflow: visible;
+  }
+  dialog.lightbox::backdrop { background: rgba(6, 5, 6, .92); }
+  .lb-frame { position: relative; }
+  .lb-frame img { display: block; width: 100%; height: auto; max-height: calc(100vh - 160px); object-fit: contain; border-radius: 6px; background: #000; }
+  .lb-text { display: flex; gap: 20px; justify-content: space-between; align-items: flex-start; padding: 14px 2px 0; }
+  .lb-text h3 { color: #f4eee4; margin: 0 0 4px; }
+  .lb-text p { margin: 0; color: rgba(244, 238, 228, .72); font-size: 15.5px; max-width: 760px; }
+  .lb-count { font: 13px var(--mono); color: rgba(244, 238, 228, .5); white-space: nowrap; }
+  .lb-btn {
+    position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%;
+    border: 0; background: rgba(10, 8, 10, .6); color: #fff; font-size: 22px; line-height: 1; cursor: pointer;
+  }
+  .lb-btn:hover { background: rgba(10, 8, 10, .85); }
+  .lb-prev { left: 10px; } .lb-next { right: 10px; }
+  .lb-close { position: absolute; top: -6px; right: -6px; transform: none; width: 38px; height: 38px; font-size: 20px; }
+
+  /* Everything else */
+  .features { display: grid; gap: 0 40px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .feature { padding: 22px 0 24px; border-top: 1px solid var(--line); }
+  .feature h3 { font-size: 19.5px; }
+  .feature p { color: var(--muted); font-size: 15.5px; margin: 0 0 10px; }
+  .feature code { color: var(--accent); font-size: 13px; }
+  .group-title { grid-column: 1 / -1; font: 600 12.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint); padding: 34px 0 14px; }
+  .group-title:first-child { padding-top: 0; }
+
+  /* Scripting */
+  .split { display: grid; gap: 36px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .term .bar { font: 12.5px var(--mono); color: var(--faint); margin: 18px 0 6px; }
+  .term .ok { color: var(--str); }
+  .term .note { font-size: 14px; color: var(--faint); margin: 10px 0 0; }
+
+  .not-yet { background: var(--bg-2); }
+  .not-yet p { font-size: 18px; }
+  dl.rules { margin: 26px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 22px; }
+  dl.rules dt { font-family: var(--serif); font-weight: 600; font-size: 19px; }
+  dl.rules dd { margin: 0; color: var(--muted); }
+
+  footer { border-top: 1px solid var(--line); padding: 40px 0 60px; color: var(--muted); font-size: 15px; }
+  footer p { margin: 0 0 8px; }
+
+  @media (max-width: 920px) {
+    .sky { grid-template-columns: minmax(0, 1fr); }
+    .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gallery figure, .gallery figure.wide { grid-column: span 1; }
+  }
+  @media (max-width: 680px) {
+    header.top ul li.hide { display: none; }
+    section { padding: 64px 0; }
+    .features, .split, .gallery { grid-template-columns: minmax(0, 1fr); }
+    .hero .caption { display: none; }
+    .hero::after { background: linear-gradient(180deg, rgba(10, 8, 10, .6) 0%, rgba(10, 8, 10, .45) 40%, rgba(10, 8, 10, .95) 100%); }
+    .marks button { font-size: 11.5px; }
+    dl.rules { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    dl.rules dd { margin-bottom: 12px; }
+    .lb-btn { top: auto; bottom: 8px; transform: none; }
+    .lb-close { top: 6px; right: 6px; bottom: auto; }
+  }
 </style>
 </head>
 <body>
 
-<header>
+<header class="top">
   <nav class="wrap" aria-label="Main">
-    <a class="brand mono" href="#top">LO<span>RE</span></a>
+    <a class="brand" href="#top">LO<span>RE</span></a>
     <ul>
-      <li class="hide"><a href="#idea">How it works</a></li>
-      <li class="hide"><a href="#today">Showcase</a></li>
-      <li class="hide"><a href="#sky">The sky</a></li>
+      <li class="hide"><a href="#showcase">Showcase</a></li>
+      <li class="hide"><a href="#features">Features</a></li>
       <li class="hide"><a href="#scripting">Scripting</a></li>
       <li><a href="docs/index.html">Docs</a></li>
       <li><a href="https://github.com/tahuffman1s/LORE">GitHub</a></li>
@@ -123,67 +227,107 @@
 
 <main id="top">
   <div class="hero">
-    <div class="orbit" aria-hidden="true"><i></i></div>
+    <img src="img/alley-lamps-at-dusk.jpg" width="1280" height="720" alt="">
     <div class="wrap">
-      <div class="status"><i></i>Free and open source · Rust, Luau and Vulkan</div>
-      <h1>LO<em>RE</em></h1>
-      <p class="expand mono">Lovely Open Rust Engine</p>
-      <p class="lead">A game engine for the kind of game you get lost in: big single-player worlds, dungeons, swords, bows and magic. It's quick to pick up, fast to play, and it looks great.</p>
+      <h1>LORE</h1>
+      <p class="expand">Lovely Open Rust Engine</p>
+      <p class="lead">A free game engine for big single-player games, the kind where you leave the road to see what's over the hill. The engine is Rust, your game is Luau, and the picture comes from Vulkan.</p>
       <div class="cta">
         <a class="btn primary" href="docs/first-steps.html">Make a game in ten minutes</a>
-        <a class="btn" href="https://github.com/tahuffman1s/LORE">View on GitHub</a>
+        <a class="btn" href="https://github.com/tahuffman1s/LORE">Source on GitHub</a>
       </div>
+      <p class="small-print">Early and moving fast. Runs on Linux and Windows. MIT or Apache 2.0, your pick.</p>
     </div>
+    <span class="caption">The alley example at dusk, lit by its own lamps. Straight from <code>lore run</code>.</span>
   </div>
 
-  <section id="idea">
-    <div class="wrap split">
-      <div>
-        <h2>Your game is just a folder</h2>
-        <p class="sub">No project file, no import step, no editor you're locked into. A LORE game is a handful of text files sitting next to your level. Save one and the running game picks up the change straight away. Run <span class="mono">lore check</span> and it reads the whole thing without opening a window, then tells you exactly what to fix.</p>
-        <ul class="checks">
-          <li>Build your levels in Blender; the engine never rewrites them</li>
-          <li>Use the code editor you already like, with autocomplete</li>
-          <li>Plain text, so two people's changes merge cleanly</li>
-        </ul>
+  <section id="showcase">
+    <div class="wrap">
+      <div class="intro">
+        <p class="kicker">Showcase</p>
+        <h2>What it looks like right now</h2>
+        <p>Every picture and clip here came out of the engine, running the example games that ship with it: a jungle with a creek and a lake, a city back alley, a yard of tanks for playing with fluids, and a planetarium. Nothing has been touched up.</p>
       </div>
-      <div>
-<pre class="mono">my-game/
- main.luau   the rules
- level.glb   the place
- map.toml    what goes where
- shaders/    how it looks
- sounds/     how it sounds</pre>
+
+      <div class="sky" id="sky-player">
+        <div>
+          <div class="screen">
+            <video id="sky-video" muted playsinline loop preload="metadata" poster="img/sky/dusk-to-night.jpg" aria-describedby="sky-about"></video>
+          </div>
+          <div class="scrub">
+            <div class="scrub-row">
+              <button class="play" id="sky-play" type="button" aria-pressed="false" aria-label="Play">
+                <svg class="i-play" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1l11 6-11 6z"/></svg>
+                <svg class="i-pause" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1h4v12H2zM8 1h4v12H8z"/></svg>
+              </button>
+              <div class="track">
+                <input id="sky-scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Time through the clip">
+                <div class="marks" id="sky-marks"></div>
+              </div>
+            </div>
+            <p class="speed" id="sky-speed"></p>
+          </div>
+        </div>
+
+        <div>
+          <ul class="events" id="sky-events" aria-label="Sky clips"></ul>
+          <div class="about" id="sky-about" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="gallery" id="gallery">
+        <figure class="wide">
+          <button class="shot" type="button"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."></button>
+          <figcaption><h3>Fluids you can shoot around</h3><p>Water is the start. Honey, oil, tar, acid, lava and mercury are the same stuff with different numbers. It flies, splashes, runs down walls and pools in the low spots.</p></figcaption>
+        </figure>
+        <figure class="wide">
+          <button class="shot" type="button"><img src="img/fluids-cascade.jpg" width="1280" height="720" loading="lazy" alt="Four steel basins of water stepping down across a concrete yard under a blue sky. A tap pours into the highest, and water falls in a sheet over the low front edge of each into the one below."></button>
+          <figcaption><h3>Basins that fill and spill</h3><p>A tank holds an actual amount of water. Keep pouring and it rises, goes over the lowest part of the rim, and fills the next one down. No script moves the water between them.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/fluids-honey-plunge.jpg" width="1280" height="720" loading="lazy" alt="A raised deck with square pits, each full of a different liquid: amber honey, green slime, glowing lava, clear water. Drops of honey fly up from the honey pit where someone has just fallen in, and a panel says it holds honey, heavier than you and thick."></button>
+          <figcaption><h3>Ten pits, ten swims</h3><p>Ride high on mercury, sink in oil unless you kick, crawl through honey, get stuck in tar. The splash is made of whatever you jumped into.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/alley-fluid-menu.jpg" width="1280" height="720" loading="lazy" alt="A menu over the alley with three tabs, Weather, Debug and Fluid. The Fluid tab lists slime's colour, how far you see into it, how thick, slippery, sticky and bouncy it is, each with a slider."></button>
+          <figcaption><h3>Change a fluid while it's spilt</h3><p>Each slider is one property. Drag it and every drop of that fluid in the world changes. The whole menu is a Luau script, and it works on a gamepad.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."></button>
+          <figcaption><h3>Debug tools you write yourself</h3><p>Fly, go through walls, slow time down, jump between places, watch the frame rate. None of it is built in. It's a few hundred lines of script in the alley example, so you can copy it or make your own.</p></figcaption>
+        </figure>
       </div>
     </div>
   </section>
 
-  <section id="today">
+  <section id="features">
     <div class="wrap">
-      <h2>See it in action</h2>
-      <p class="sub">LORE ships with three example games: a jungle with a creek and a lake, a city back alley, and a yard full of tanks for playing with fluids. Everything below is a straight capture from <span class="mono">lore run</span>. The menus, pause screen, settings, frame meter and that fluid gun? A few hundred lines of Luau.</p>
-      <div class="grid shots">
-        <figure class="card"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."><figcaption><h3>Fluids you can script</h3><p>Water is just the start. Honey, oil, tar, acid, lava and mercury are all water with a few numbers changed. They fly, splash, run down walls, pool up, and change how you move through them.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-fluid-menu.jpg" width="1280" height="720" loading="lazy" alt="A menu over the alley with three tabs, Weather, Debug and Fluid. The Fluid tab lists slime's colour, how far you see into it, how thick, slippery, sticky and bouncy it is, each with a slider."><figcaption><h3>Tweak it while it's on the ground</h3><p>Each slider is one property of a fluid. Drag it and every drop of that fluid in the world changes on the spot. Keyboard, mouse and gamepad all work.</p></figcaption></figure>
-        <figure class="card"><img src="img/fluids-cascade.jpg" width="1280" height="720" loading="lazy" alt="Four steel basins of water stepping down across a concrete yard under a blue sky. A tap pours into the highest, and water falls in a sheet over the low front edge of each into the one below."><figcaption><h3>Pools that fill up and spill over</h3><p>Lakes, tanks and tubs hold a real amount of water. Pour more in and the level rises; once it's past the brim it spills over the lowest point and fills whatever's below. Nothing is faking this. It's just the water.</p></figcaption></figure>
-        <figure class="card"><img src="img/fluids-honey-plunge.jpg" width="1280" height="720" loading="lazy" alt="A raised deck with square pits, each full of a different liquid: amber honey, green slime, glowing lava, clear water. Drops of honey fly up from the honey pit where someone has just fallen in, and a panel says it holds honey, heavier than you and thick."><figcaption><h3>Every fluid swims differently</h3><p>Float high in brine, stand on mercury, sink in light oil, crawl through honey, get stuck in tar. Jump in and the splash is made of whatever you landed in.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-lamps-at-dusk.jpg" width="1280" height="720" loading="lazy" alt="The same alley at dusk under a violet sky. Lamps on the walls and the street at its end light the brickwork orange and leave pools of light on the ground."><figcaption><h3>Real light, noon to midnight</h3><p>Lamps are rated in lumens, like the bulbs you buy, and hold up properly against the sun and moon. Shadows are soft, light bounces off the street into dark corners, and a closed room stays dark at midday. Exposure adapts the way your eyes do.</p></figcaption></figure>
-        <figure class="card"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."><figcaption><h3>Debug tools, written in script</h3><p>Fly, noclip through walls, slow down time, teleport, check the frame rate. Your game binds its own keys and draws its own menus, so you can build tools like these too.</p></figcaption></figure>
+      <div class="intro">
+        <p class="kicker">Features</p>
+        <h2>The rest of what's in the box</h2>
+        <p>Not everything has a picture on this page yet, but all of it runs today. Most of it you can try by opening one of the examples with <code>lore run</code>.</p>
       </div>
-    </div>
-  </section>
+      <div class="features">
+        <div class="group-title">The world</div>
+        <div class="feature"><h3>Light</h3><p>Lamps are rated in lumens, like a bulb from the shop, and hold up against the sun and moon. Shadows are soft, light bounces into dark corners, and your eyes adjust going in and out.</p></div>
+        <div class="feature"><h3>Weather</h3><p>One word sets it, from clear through storm to blizzard, or turn cloud, rain, wind, fog and warmth one at a time. Cool it and rain turns to sleet, then snow that settles, and the lake freezes until it holds you.</p><code>game.weather.set("blizzard", 60)</code></div>
+        <div class="feature"><h3>Swimming</h3><p>Wade in and rings and a wake spread from your legs. Get deep enough and you swim by strokes. Duck under and sunbeams come down through the water, your breath goes up in bubbles, and the world goes muffled.</p></div>
+        <div class="feature"><h3>One wind</h3><p>The same wind bends the trees, pushes the clouds along and ruffles the water, so they all agree about which way it's blowing.</p><code>game.weather.setGusts(1)</code></div>
+        <div class="feature"><h3>Wet streets and reflections</h3><p>Rain darkens rough ground, puddles collect in the dips, and smooth surfaces mirror what's around them.</p></div>
+        <div class="feature"><h3>Sound you don't have to code</h3><p>Footsteps, landings, splashes, swimming strokes and bubbles come for free. Thicker fluids sound lower and duller, and spilt fluid is heard where it lands.</p></div>
 
-  <section id="sky">
-    <div class="wrap">
-      <h2>The real sky, over your world</h2>
-      <p class="sub">Tell LORE where on Earth your world is and what day it is, and you get the sky that was actually there. The sun, the moon with its phases and craters, all 8,699 stars you can see with the naked eye, the planets and the Milky Way, each in the right place and at the right brightness. Eclipses and meteor showers show up on their real dates, and your script can change any of it. These clips were rendered by the engine itself.</p>
-      <div class="grid shots">
-        <figure class="card"><img src="img/sky-dusk-to-night.gif" width="560" height="315" loading="lazy" alt="Hours pass in a few seconds by a jungle lake. The sky goes from day to violet dusk over the trees, the land darkens, and stars come out and wheel overhead."><figcaption><h3>Dusk, then stars</h3><p>Sky colour comes from where the sun actually is. Night gets properly dark, and as your eyes adjust the land fades while the stars and the Milky Way come through. <span class="mono">game.sky.setDayLength(24)</span></p></figcaption></figure>
-        <figure class="card"><img src="img/sky-solar-eclipse.gif" width="560" height="315" loading="lazy" alt="Over a canopy of trees the blue noon sky darkens to deep twilight as the moon covers the sun; stars and the sun's pearly corona appear, then daylight returns."><figcaption><h3>Dallas, 8 April 2024</h3><p>The total eclipse, minute by minute. Daylight drops to deep twilight, the corona and planets appear, and the light on the ground dims with it. <span class="mono">game.sky.eclipse()</span> tells your script it's happening.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-eclipse-close.gif" width="560" height="315" loading="lazy" alt="A close view of the sun as the moon's dark disc crosses it, from a full disc to a thin crescent, totality, and back."><figcaption><h3>The moon crossing the sun</h3><p>The moon is placed to within ten arcseconds, at its true size from where you're standing. That's why some eclipses go total and others leave a ring of fire.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-lunar-eclipse.gif" width="560" height="315" loading="lazy" alt="The full moon slips into the Earth's shadow: a dark bite spreads across it until the whole moon glows a dim copper red among the stars."><figcaption><h3>A blood moon</h3><p>The lunar eclipse of 8 November 2022. The moon dims, then turns copper in Earth's shadow, and the stars come out around it as its light on the land fades.</p></figcaption></figure>
-        <figure class="card"><img src="img/sky-aurora.gif" width="560" height="315" loading="lazy" alt="Green curtains of the aurora with red above them fold across the night sky as the view turns, over the dark horizon."><figcaption><h3>Northern lights</h3><p>Green curtains with red above, circling the magnetic pole. The bigger the storm, the further south they reach: overhead in the far north, low on the horizon further down when a big one hits. <span class="mono">game.sky.setAurora("storm")</span></p></figcaption></figure>
-        <figure class="card"><img src="img/sky-meteors.gif" width="560" height="315" loading="lazy" alt="Thin streaks of shooting stars cross a starry sky with the Milky Way, all running away from one point in the north-east."><figcaption><h3>The Perseids</h3><p>Shooting stars at their real rates, with the big showers on their real nights, streaming from the right point in the sky. Your script hears about every one that's drawn. Sped up a thousand times here. <span class="mono">game.sky.onMeteor(function(from, to, brightness, shower) end)</span></p></figcaption></figure>
+        <div class="group-title">Making the game</div>
+        <div class="feature"><h3>Live scripting</h3><p>Write the rules in Luau, save, and the running game picks it up. Errors appear in the game and say what to change.</p><code>game.after(60, function() ... end)</code></div>
+        <div class="feature"><h3>HUD and menus</h3><p>Text, bars, boxes and menus come from your script. The pause menu in a new game is a script too, settings and all, and you can change any of it.</p><code>pause_menu.luau</code></div>
+        <div class="feature"><h3>Your own shaders</h3><p>Write WGSL for a screen effect, one material, or one kind of fluid. It reloads on save; a mistake shows the line while the last working version keeps drawing.</p><code>shaders/</code></div>
+        <div class="feature"><h3>An editor for levels</h3><p>Fly around your level, place and drag spawn points, and press F5 to play from where the camera is. It saves to <code>map.toml</code> as you go and never touches the level file.</p><code>lore edit</code></div>
+        <div class="feature"><h3>A checker that plays your game</h3><p>Runs your game for a second with no window, presses every button, and tells you what broke. It also catches rules that change with the frame rate.</p><code>lore check</code></div>
+        <div class="feature"><h3>A download in one step</h3><p>Turns your game into a Linux <code>.tar.gz</code>, or a single AppImage. Windows and macOS packages aren't there yet.</p><code>lore package --appimage</code></div>
+
+        <div class="group-title">Under the hood</div>
+        <div class="feature"><h3>Controllers count</h3><p>Every action works on a gamepad, and so does every menu. Bindings live in a text file you can edit.</p></div>
+        <div class="feature"><h3>FSR 3.1 upscaling</h3><p>Draw at a lower resolution and let FSR bring it up to full size. Pick the quality in the pause menu.</p></div>
+        <div class="feature"><h3>Same input, same world</h3><p>The game steps at a fixed tick, so the same input gives the same result at any frame rate. That's what will make saves and replays cheap.</p><code>lore bench</code></div>
       </div>
     </div>
   </section>
@@ -191,65 +335,257 @@
   <section id="scripting">
     <div class="wrap split">
       <div>
+        <p class="kicker">Scripting</p>
         <h2>Scripts that read like the game</h2>
-        <p class="sub">You write your game in Luau, a small, fast, typed scripting language. The idea is simple: if you've played games, you should be able to read a script and guess what it does.</p>
-        <ul class="checks">
-          <li>Save the file and the running game updates</li>
-          <li>Actions like <span class="mono">"jump"</span> work the same on keyboard and gamepad</li>
-          <li>Draw HUD text and bars, play sounds and build menus from the same script</li>
-          <li>Errors show up in-game and tell you what to do next</li>
-        </ul>
-        <p class="note">Want the full list? See <a href="docs/index.html#today">what you can do today</a>.</p>
+        <p class="muted">You write your game in Luau, the small typed language Roblox made. The bet is that if you've played games, you can read a LORE script and guess what it does.</p>
+        <p class="muted">A game is a folder you can read: <code>main.luau</code> for the rules, <code>level.glb</code> for the place (make it in Blender), <code>map.toml</code> for what goes where. It's plain text, so two people's changes merge, and your editor gets autocomplete from the type definitions LORE ships.</p>
+        <p class="muted">Want the details? <a href="docs/first-steps.html">First steps</a> walks you through it, and the <a href="docs/index.html">docs</a> list everything a script can do.</p>
       </div>
-      <div>
-<pre class="mono"><span class="com">-- main.luau</span>
-game.onStart(<span class="kw">function</span>()
-  print(<span class="str">"Hello from Luau!"</span>)
-<span class="kw">end</span>)
+      <div class="term">
+<pre><span class="com">-- main.luau, from the first-steps tutorial</span>
+<span class="kw">local</span> saved = game.keep(<span class="str">"saved"</span>, { jumps = <span class="num">0</span> })
+<span class="kw">local</span> counter = game.hud.text(<span class="str">"Jumps: "</span> .. saved.jumps, { at = <span class="str">"top"</span>, down = <span class="num">40</span>, size = <span class="num">48</span> })
 
-game.onTick(<span class="kw">function</span>(step)
+game.onTick(<span class="kw">function</span>()
   <span class="kw">if</span> game.input.justPressed(<span class="str">"jump"</span>) <span class="kw">then</span>
-    game.input.rumble(<span class="num">0.2</span>, <span class="num">0.6</span>, <span class="num">0.1</span>)
-    print(<span class="str">"Jump!"</span>)
+    saved.jumps += <span class="num">1</span>
+    counter.text = <span class="str">"Jumps: "</span> .. saved.jumps
+    print(<span class="str">"Jump number "</span> .. saved.jumps)
   <span class="kw">end</span>
 <span class="kw">end</span>)</pre>
+        <div class="bar">$ lore check</div>
+<pre>[INFO] Jump number 1
+[INFO] Jump number 2
+<span class="ok">main.luau is fine</span>: it loaded and ran for 60 ticks (1 second of game time) with its player in it and no errors.</pre>
+        <p class="note">It jumped twice because two things are bound to jump: a key and a gamepad button. Change the file while the game runs and the counter keeps its count.</p>
       </div>
     </div>
   </section>
 
-  <section id="why">
-    <div class="wrap">
-      <h2>What we care about</h2>
-      <p class="sub">Four things, in this order. When two of them pull in different directions, the one higher up wins.</p>
-      <div class="grid">
-        <div class="card"><span class="n mono">01</span><h3>Easy</h3><p>Go from install to walking around your own game in minutes. When something breaks, the error tells you how to fix it. That's the "lovely" in the name.</p></div>
-        <div class="card"><span class="n mono">02</span><h3>Fast</h3><p>High, steady frame rates and low input lag on ordinary hardware. If we claim it's fast, there's a benchmark to back it up.</p></div>
-        <div class="card"><span class="n mono">03</span><h3>Focused</h3><p>Single-player worlds you explore on foot. No multiplayer, no 2D, no visual scripting, nothing to learn around that you didn't come for.</p></div>
-        <div class="card"><span class="n mono">04</span><h3>Modern</h3><p>Vulkan 1.3, FSR 3.1 upscaling, real-world light and first-class controller support. Pretty matters.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="tech">
-    <div class="wrap">
-      <h2>Under the hood</h2>
-      <p class="sub">Build it from source with one Cargo command.</p>
-      <div class="grid">
-        <div class="card"><h3>Rust core</h3><p>Memory-safe engine code with a fixed simulation tick, so the same input always gives the same world.</p></div>
-        <div class="card"><h3>Built for one player</h3><p>No servers, no netcode, no matchmaking. Every part of the engine is there to serve one player in one world.</p></div>
-        <div class="card"><h3>Controllers first</h3><p>Every action can be bound to a gamepad, and the menus are just as happy with one as with a mouse.</p></div>
-        <div class="card"><h3>Linux and Windows</h3><p>Runs on both, and <span class="mono">lore package</span> turns your game into a Linux download in one step.</p></div>
-      </div>
+  <section class="not-yet">
+    <div class="wrap narrow">
+      <p class="kicker">Where it stands</p>
+      <h2>What it can't do yet</h2>
+      <p>LORE is young. Nothing has health yet, so there's no combat damage. There are no people to talk to and no quests. A level loads all at once rather than streaming in as you walk, and you only play in first person for now. These are the next things on the list, and the <a href="https://github.com/tahuffman1s/LORE/issues?q=is%3Aopen+label%3Aroadmap">roadmap issues</a> show the order.</p>
+      <p class="muted">Four rules decide what goes in. When two disagree, the one higher up wins.</p>
+      <dl class="rules">
+        <dt>Easy</dt><dd>You should be walking around your own game minutes after installing. Errors tell you how to fix them.</dd>
+        <dt>Fast</dt><dd>High, steady frame rates and low input lag on ordinary hardware, with a benchmark behind every claim.</dd>
+        <dt>Focused</dt><dd>Single-player worlds you explore on foot. No multiplayer, no 2D, no VR, no visual scripting.</dd>
+        <dt>Modern</dt><dd>Current rendering, upscaling, proper controller support. A sky worth stopping for.</dd>
+      </dl>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    LORE is free software, yours under either the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license.
-    Come say hi on <a href="https://github.com/tahuffman1s/LORE">GitHub</a>, and drop ideas and bug reports in the <a href="https://github.com/tahuffman1s/LORE/issues">issues</a>.
+    <p>LORE is free software under the <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-MIT">MIT</a> or <a href="https://github.com/tahuffman1s/LORE/blob/main/LICENSE-APACHE">Apache 2.0</a> license. Bugs and ideas go in the <a href="https://github.com/tahuffman1s/LORE/issues">issues</a>.</p>
+    <p>The moon's maps and the Milky Way are from NASA's Scientific Visualization Studio; the star list is from Wikidata.</p>
   </div>
 </footer>
 
+<dialog class="lightbox" id="lightbox" aria-label="Picture">
+  <div class="lb-frame">
+    <img id="lb-img" src="" alt="">
+    <button class="lb-btn lb-prev" type="button" aria-label="Previous picture">&#8249;</button>
+    <button class="lb-btn lb-next" type="button" aria-label="Next picture">&#8250;</button>
+    <button class="lb-btn lb-close" type="button" aria-label="Close">&#215;</button>
+  </div>
+  <div class="lb-text"><div><h3 id="lb-title"></h3><p id="lb-text"></p></div><span class="lb-count" id="lb-count"></span></div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // The sky clips. Marks are fractions of the clip, read off the frames.
+  var clips = [
+    {
+      id: "dusk-to-night", title: "Dusk, then stars", when: "The jungle lake, an evening in five seconds",
+      text: "The sky's colour is worked out from where the sun is, so sunset and dusk come out right on their own. When night comes it is actually dark. Give your eyes a moment and the land fades while the stars and the Milky Way come through.",
+      code: '<span class="com">-- a whole day in 24 minutes</span>\ngame.sky.setDayLength(<span class="num">24</span>)',
+      marks: [[0, "Late afternoon"], [0.4, "Dusk"], [0.75, "Stars"]],
+      speed: "Hours squeezed into seconds."
+    },
+    {
+      id: "solar-eclipse", title: "Total eclipse", when: "Dallas, 8 April 2024",
+      text: "Midday drops to deep twilight in a few minutes. The corona comes out round the sun, a planet shows up beside it, and the light on the trees fades with the sky. Drag to the middle for totality.",
+      code: 'game.sky.setLatitude(<span class="num">32.8</span>)\ngame.sky.setLongitude(<span class="num">-96.8</span>)\ngame.sky.setDate(<span class="num">2024</span>, <span class="num">4</span>, <span class="num">8</span>)\ngame.sky.setHour(<span class="num">12.24</span>)',
+      marks: [[0, "Partial"], [0.5, "Totality"], [1, "Daylight back"]],
+      speed: "About an hour of the eclipse, sped up."
+    },
+    {
+      id: "eclipse-close", title: "The moon crossing the sun", when: "The same eclipse, zoomed in",
+      text: "The moon is placed to within about ten arcseconds, and its size in the sky depends on how far away it is that day. That's the difference between a total eclipse and a ring of fire. Totality only lasts a moment here; the button below finds it.",
+      code: '<span class="kw">if</span> game.sky.eclipse() == <span class="str">"total solar"</span> <span class="kw">then</span>\n  print(<span class="str">"totality!"</span>)\n<span class="kw">end</span>',
+      marks: [[0, "First bite"], [0.5, "Totality"], [1, "Moving off"]],
+      speed: "The whole eclipse, sped up."
+    },
+    {
+      id: "lunar-eclipse", title: "Blood moon", when: "8 November 2022",
+      text: "Earth's shadow takes a bite out of the full moon, then the whole thing goes a dull copper. With the moonlight gone, stars come out around it.",
+      code: 'game.sky.setDate(<span class="num">2022</span>, <span class="num">11</span>, <span class="num">8</span>)',
+      marks: [[0, "Full moon"], [0.2, "Shadow arrives"], [0.55, "Copper"]],
+      speed: "Hours of the eclipse, sped up."
+    },
+    {
+      id: "aurora", title: "Northern lights", when: "A big storm, seen from the far north",
+      text: "Green curtains with red over the top, in a ring round the magnetic pole. The stronger the storm, the further south it reaches: overhead in the Arctic, low on the horizon further down.",
+      code: 'game.sky.setAurora(<span class="str">"storm"</span>)',
+      marks: [],
+      speed: "The view turns slowly while the curtains move."
+    },
+    {
+      id: "meteors", title: "The Perseids", when: "Mid-August, any year",
+      text: "Shooting stars at their real rates, with the big showers on their real nights, all streaming out of the right point in the sky. Your script is told about every one that gets drawn.",
+      code: 'game.sky.onMeteor(<span class="kw">function</span>(from, to, brightness, shower)\n  <span class="kw">if</span> brightness &lt; <span class="num">0</span> <span class="kw">then</span> print(<span class="str">"a fireball!"</span>) <span class="kw">end</span>\n<span class="kw">end</span>)',
+      marks: [],
+      speed: "A thousand times faster than life."
+    }
+  ];
+
+  var video = document.getElementById("sky-video");
+  var scrub = document.getElementById("sky-scrub");
+  var play = document.getElementById("sky-play");
+  var marks = document.getElementById("sky-marks");
+  var list = document.getElementById("sky-events");
+  var about = document.getElementById("sky-about");
+  var speed = document.getElementById("sky-speed");
+  var buttons = [];
+  // WebM (VP9) where the browser has it, H.264 everywhere else.
+  var ext = video.canPlayType('video/webm; codecs="vp9"') ? ".webm" : ".mp4";
+  var dragging = false;
+  var wantPlay = !reduceMotion;
+  var inView = false;
+
+  function setPlaying(on) {
+    play.setAttribute("aria-pressed", on ? "true" : "false");
+    play.setAttribute("aria-label", on ? "Pause" : "Play");
+  }
+
+  function startIfWanted() {
+    if (wantPlay && inView) {
+      var p = video.play();
+      if (p && p.catch) p.catch(function () { setPlaying(false); });
+    }
+  }
+
+  function seek(fraction) {
+    if (!isFinite(video.duration)) return;
+    // Stop just short of the end so a looping clip does not jump to the start.
+    video.currentTime = Math.min(fraction, 0.999) * video.duration;
+    scrub.value = Math.round(fraction * 1000);
+  }
+
+  function choose(i) {
+    var clip = clips[i];
+    buttons.forEach(function (b, j) { b.setAttribute("aria-pressed", j === i ? "true" : "false"); });
+    video.poster = "img/sky/" + clip.id + ".jpg";
+    video.src = "img/sky/" + clip.id + ext;
+    scrub.value = 0;
+    about.innerHTML = "";
+    var h = document.createElement("h3"); h.textContent = clip.title;
+    var p = document.createElement("p"); p.textContent = clip.text;
+    var pre = document.createElement("pre"); pre.innerHTML = clip.code;
+    about.append(h, p, pre);
+    speed.textContent = clip.speed;
+    marks.innerHTML = "";
+    clip.marks.forEach(function (m) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = m[1];
+      b.style.left = (m[0] * 100) + "%";
+      b.setAttribute("aria-label", "Jump to " + m[1].toLowerCase());
+      b.addEventListener("click", function () {
+        wantPlay = false; video.pause();
+        if (video.readyState >= 1) seek(m[0]);
+        else video.addEventListener("loadedmetadata", function once() { video.removeEventListener("loadedmetadata", once); seek(m[0]); });
+      });
+      marks.appendChild(b);
+    });
+    marks.style.display = clip.marks.length ? "" : "none";
+    startIfWanted();
+  }
+
+  clips.forEach(function (clip, i) {
+    var li = document.createElement("li");
+    var b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = '<img alt="" loading="lazy" width="72" height="41"><span><b></b><small></small></span>';
+    b.querySelector("img").src = "img/sky/" + clip.id + ".jpg";
+    b.querySelector("b").textContent = clip.title;
+    b.querySelector("small").textContent = clip.when;
+    b.addEventListener("click", function () { choose(i); });
+    li.appendChild(b); list.appendChild(li); buttons.push(b);
+  });
+
+  video.addEventListener("play", function () { setPlaying(true); });
+  video.addEventListener("pause", function () { setPlaying(false); });
+  video.addEventListener("timeupdate", function () {
+    if (!dragging && isFinite(video.duration) && video.duration > 0) {
+      scrub.value = Math.round(video.currentTime / video.duration * 1000);
+    }
+  });
+  play.addEventListener("click", function () {
+    if (video.paused) { wantPlay = true; inView = true; startIfWanted(); }
+    else { wantPlay = false; video.pause(); }
+  });
+  video.addEventListener("click", function () { play.click(); });
+  scrub.addEventListener("input", function () {
+    dragging = true; wantPlay = false; video.pause();
+    seek(scrub.value / 1000);
+  });
+  scrub.addEventListener("change", function () { dragging = false; });
+
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(function (entries) {
+      inView = entries[0].isIntersecting;
+      if (inView) startIfWanted(); else if (!video.paused) video.pause();
+    }, { threshold: 0.4 }).observe(video);
+  } else {
+    inView = true;
+  }
+  choose(0);
+
+  // The lightbox for the stills.
+  var box = document.getElementById("lightbox");
+  var shots = Array.prototype.slice.call(document.querySelectorAll("#gallery figure"));
+  var lbImg = document.getElementById("lb-img");
+  var lbTitle = document.getElementById("lb-title");
+  var lbText = document.getElementById("lb-text");
+  var lbCount = document.getElementById("lb-count");
+  var current = 0;
+
+  function show(i) {
+    current = (i + shots.length) % shots.length;
+    var fig = shots[current];
+    var img = fig.querySelector("img");
+    lbImg.src = img.src; lbImg.alt = img.alt;
+    lbTitle.textContent = fig.querySelector("h3").textContent;
+    lbText.textContent = fig.querySelector("figcaption p").textContent;
+    lbCount.textContent = (current + 1) + " / " + shots.length;
+  }
+
+  if (typeof box.showModal === "function") {
+    shots.forEach(function (fig, i) {
+      fig.querySelector("button.shot").addEventListener("click", function () { show(i); box.showModal(); });
+    });
+    box.querySelector(".lb-prev").addEventListener("click", function () { show(current - 1); });
+    box.querySelector(".lb-next").addEventListener("click", function () { show(current + 1); });
+    box.querySelector(".lb-close").addEventListener("click", function () { box.close(); });
+    box.addEventListener("click", function (e) { if (e.target === box) box.close(); });
+    box.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft") { show(current - 1); e.preventDefault(); }
+      else if (e.key === "ArrowRight") { show(current + 1); e.preventDefault(); }
+    });
+  } else {
+    shots.forEach(function (fig) {
+      fig.querySelector("button.shot").addEventListener("click", function () { window.open(fig.querySelector("img").src); });
+    });
+  }
+})();
+</script>
 </body>
 </html>
