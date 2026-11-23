@@ -135,6 +135,44 @@
   }
   .kw { color: var(--kw); } .str { color: var(--str); } .com { color: var(--com); } .num { color: var(--num); }
 
+  /* Same place, different weather */
+  .place { display: grid; gap: 28px; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); align-items: start; margin-top: 72px; }
+  .stage { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+  .stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .5s ease; }
+  .stage img.on { opacity: 1; }
+  .place h3, .compare-head h3 { font-size: 24px; margin: 0 0 6px; }
+  .chips { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; padding: 0; }
+  .chips button {
+    padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-2); background: none; cursor: pointer; font-size: 14.5px;
+  }
+  .chips button:hover { border-color: var(--accent); }
+  .chips button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .note-text { color: var(--muted); font-size: 16px; }
+
+  /* Drag to compare */
+  .compare-wrap { margin-top: 72px; }
+  .compare-head { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; align-items: end; margin-bottom: 14px; }
+  .compare-head .chips { margin: 0; }
+  .compare { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); touch-action: pan-y; }
+  .compare img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .compare-over { position: absolute; inset: 0; clip-path: inset(0 0 0 50%); }
+  .compare-line { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 8px rgba(0, 0, 0, .5); pointer-events: none; }
+  .compare-line span {
+    position: absolute; top: 50%; left: 50%; width: 38px; height: 38px; margin: -19px 0 0 -19px; border-radius: 50%;
+    background: rgba(10, 8, 10, .7); border: 2px solid #fff;
+  }
+  .compare-line span::before, .compare-line span::after {
+    content: ""; position: absolute; top: 50%; width: 0; height: 0; margin-top: -5px; border: 5px solid transparent;
+  }
+  .compare-line span::before { left: 5px; border-right-color: #fff; }
+  .compare-line span::after { right: 5px; border-left-color: #fff; }
+  .compare-tag { position: absolute; top: 12px; padding: 4px 10px; border-radius: 4px; background: rgba(10, 8, 10, .65); color: #fff; font-size: 13px; pointer-events: none; }
+  .compare-tag.left { left: 12px; } .compare-tag.right { right: 12px; }
+  .compare { cursor: ew-resize; user-select: none; }
+  .compare input[type=range] { position: absolute; left: 0; bottom: 0; width: 100%; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+  .compare:focus-within .compare-line span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .compare-wrap .note-text { margin-top: 14px; max-width: 760px; }
+
   /* Stills */
   .gallery { display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 72px; }
   .gallery figure { margin: 0; grid-column: span 2; }
@@ -191,7 +229,7 @@
   footer p { margin: 0 0 8px; }
 
   @media (max-width: 920px) {
-    .sky { grid-template-columns: minmax(0, 1fr); }
+    .sky, .place { grid-template-columns: minmax(0, 1fr); }
     .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .gallery figure, .gallery figure.wide { grid-column: span 1; }
@@ -275,6 +313,53 @@
         </div>
       </div>
 
+      <div class="place" id="weather">
+        <div>
+          <div class="stage" id="weather-stage">
+            <img class="on" src="img/jungle-morning.jpg" width="1280" height="720" alt="Early morning by the jungle lake: lily pads on clear green water, a mossy bank and stones in the foreground, trees in soft haze beyond.">
+            <img src="img/jungle-golden.jpg" width="1280" height="720" loading="lazy" alt="The same lake view near sunset: warm gold light across the trees, a pink sky, and the water shining amber.">
+            <img src="img/jungle-storm.jpg" width="1280" height="720" loading="lazy" alt="The same lake in a storm: dark grey sky, rain streaking across, the water dull green, and a bolt of lightning coming down beyond the far shore.">
+            <img src="img/jungle-snow.jpg" width="1280" height="720" loading="lazy" alt="The same lake in winter: the water frozen white over, snow falling, and snow lying on the banks under grey trees.">
+          </div>
+        </div>
+        <div>
+          <h3>One lake, four days</h3>
+          <p class="muted">Same spot by the jungle lake, same camera. The only thing that changes is a couple of lines of script.</p>
+          <ul class="chips" id="weather-chips" aria-label="Weather">
+            <li><button type="button" aria-pressed="true">Morning</button></li>
+            <li><button type="button" aria-pressed="false">Golden hour</button></li>
+            <li><button type="button" aria-pressed="false">Storm</button></li>
+            <li><button type="button" aria-pressed="false">Snow and ice</button></li>
+          </ul>
+          <p class="note-text" id="weather-text"></p>
+          <pre id="weather-code"></pre>
+        </div>
+      </div>
+
+      <div class="compare-wrap">
+        <div class="compare-head">
+          <div>
+            <h3>The alley, noon against&hellip;</h3>
+            <p class="muted">Drag across the picture. Same camera both sides.</p>
+          </div>
+          <ul class="chips" id="compare-chips" aria-label="Compare noon with">
+            <li><button type="button" aria-pressed="true">Rain at night</button></li>
+            <li><button type="button" aria-pressed="false">Snow</button></li>
+          </ul>
+        </div>
+        <div class="compare" id="compare">
+          <img src="img/alley-noon.jpg" width="1280" height="720" loading="lazy" alt="The alley at noon from its south end: brick walls, a dumpster, litter on dry asphalt, sun on the far buildings.">
+          <div class="compare-over" id="compare-over">
+            <img id="compare-img" src="img/alley-rain-night.jpg" width="1280" height="720" loading="lazy" alt="The same alley on a rainy night: lamps light the brick orange, rain streaks down, and the ground is wet and dark.">
+          </div>
+          <div class="compare-line" id="compare-line" aria-hidden="true"><span></span></div>
+          <span class="compare-tag left">Noon</span>
+          <span class="compare-tag right" id="compare-tag">Rain at night</span>
+          <input id="compare-range" type="range" min="0" max="100" value="50" aria-label="Move the line between noon and the other picture">
+        </div>
+        <p class="note-text" id="compare-text"></p>
+      </div>
+
       <div class="gallery" id="gallery">
         <figure class="wide">
           <button class="shot" type="button"><img src="img/alley-water-jet.jpg" width="1280" height="720" loading="lazy" alt="A back alley between brick buildings, littered with rubbish. A white jet of water arcs from the lower right into a puddle that mirrors a traffic cone and the sky."></button>
@@ -295,6 +380,18 @@
         <figure>
           <button class="shot" type="button"><img src="img/alley-debug-menu.jpg" width="1280" height="720" loading="lazy" alt="The Debug tab of the same menu, seen while flying above a basketball court between buildings: movement, fly speed, the speed of time, places to jump to, and where the player is."></button>
           <figcaption><h3>Debug tools you write yourself</h3><p>Fly, go through walls, slow time down, jump between places, watch the frame rate. None of it is built in. It's a few hundred lines of script in the alley example, so you can copy it or make your own.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/jungle-underwater.jpg" width="1280" height="720" loading="lazy" alt="Under the jungle lake looking up: green water, the rippled underside of the surface, the trees seen bent through it, and a patch of blue sky."></button>
+          <figcaption><h3>Under the surface</h3><p>Duck under the lake and look up. The trees show through the rippling surface, and sunlight comes down in shafts. Everything you hear goes muffled too.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/sky-milky-way.jpg" width="1280" height="720" loading="lazy" alt="The planetarium example: the Milky Way's bright core over the south from Death Valley at 10:30 at night, with Scorpius drawn as a figure over its stars and the constellations labelled."></button>
+          <figcaption><h3>A whole game about the sky</h3><p>The planetarium example is all Luau. This is Death Valley on 4 August 2024, with Scorpius drawn over its stars. Every call it makes is a <code>game.sky</code> one.</p></figcaption>
+        </figure>
+        <figure>
+          <button class="shot" type="button"><img src="img/sky-orion.jpg" width="1280" height="720" loading="lazy" alt="The planetarium looking south on a January night over Arizona: Orion and Canis Major drawn as figures over their stars, with Betelgeuse, Rigel and Sirius labelled."></button>
+          <figcaption><h3>Orion in January</h3><p>Pick a place and a date and look up. The constellation art is pictures the script puts on the HUD, lined up with the real stars as you turn.</p></figcaption>
         </figure>
       </div>
     </div>
@@ -548,6 +645,95 @@ game.onTick(<span class="kw">function</span>()
     inView = true;
   }
   choose(0);
+
+  // One lake, four kinds of weather: the same camera each time.
+  var weathers = [
+    {
+      text: "Half past seven in the morning. Mist hangs in the trees, and the far bank fades into it.",
+      code: 'game.sky.setHour(<span class="num">7.6</span>)\ngame.weather.setFog(<span class="num">0.25</span>)'
+    },
+    {
+      text: "Just before six in the evening. The light goes gold and the sky turns pink, from nothing but where the sun is.",
+      code: 'game.sky.setHour(<span class="num">17.9</span>)'
+    },
+    {
+      text: "Storm cloud, wind in the trees, rain on the water, and lightning wherever the script puts it.",
+      code: 'game.weather.set(<span class="str">"storm"</span>)\ngame.weather.strike(vector.create(<span class="num">20</span>, <span class="num">0</span>, <span class="num">-66</span>))'
+    },
+    {
+      text: "Below freezing, rain turns to snow and the snow settles. Leave it cold long enough and the lake ices over until you can walk on it.",
+      code: 'game.weather.set(<span class="str">"snow"</span>)\ngame.weather.setTemperature(<span class="num">-10</span>)\ngame.weather.setIce(<span class="num">0.3</span>)'
+    }
+  ];
+  var stageImgs = document.querySelectorAll("#weather-stage img");
+  var weatherButtons = document.querySelectorAll("#weather-chips button");
+  var weatherText = document.getElementById("weather-text");
+  var weatherCode = document.getElementById("weather-code");
+  function pickWeather(i) {
+    stageImgs.forEach(function (img, j) { img.classList.toggle("on", j === i); });
+    weatherButtons.forEach(function (b, j) { b.setAttribute("aria-pressed", j === i ? "true" : "false"); });
+    weatherText.textContent = weathers[i].text;
+    weatherCode.innerHTML = weathers[i].code;
+  }
+  weatherButtons.forEach(function (b, i) { b.addEventListener("click", function () { pickWeather(i); }); });
+  pickWeather(0);
+
+  // The alley: noon on the left, the chosen picture on the right.
+  var compares = [
+    {
+      src: "img/alley-rain-night.jpg", tag: "Rain at night",
+      alt: "The same alley on a rainy night: lamps light the brick orange, rain streaks down, and the ground is wet and dark.",
+      text: "Ten to ten at night, in the rain. The wall lamps take over from the sun and light the brick orange, and the ground goes dark and wet."
+    },
+    {
+      src: "img/alley-snow.jpg", tag: "Snow",
+      alt: "The same alley in snow: a white floor, snow on the dumpster lid and the crates, flakes in the air and a pale sky.",
+      text: "Half past nine on a snowy morning. The snow settles on the ground and on top of whatever is lying about."
+    }
+  ];
+  var compare = document.getElementById("compare");
+  var over = document.getElementById("compare-over");
+  var line = document.getElementById("compare-line");
+  var range = document.getElementById("compare-range");
+  var compareImg = document.getElementById("compare-img");
+  var compareTag = document.getElementById("compare-tag");
+  var compareText = document.getElementById("compare-text");
+  var compareButtons = document.querySelectorAll("#compare-chips button");
+  function setSplit(percent) {
+    over.style.clipPath = "inset(0 0 0 " + percent + "%)";
+    line.style.left = percent + "%";
+  }
+  range.addEventListener("input", function () { setSplit(range.value); });
+  // Drag (or tap) anywhere on the picture; the range stays for the keyboard.
+  var dragging = false;
+  function follow(e) {
+    var box = compare.getBoundingClientRect();
+    var percent = Math.max(0, Math.min(100, (e.clientX - box.left) / box.width * 100));
+    range.value = Math.round(percent);
+    setSplit(percent);
+  }
+  compare.addEventListener("pointerdown", function (e) {
+    dragging = true;
+    compare.setPointerCapture(e.pointerId);
+    follow(e);
+    range.focus({ preventScroll: true });
+    e.preventDefault();
+  });
+  compare.addEventListener("pointermove", function (e) { if (dragging) follow(e); });
+  compare.addEventListener("pointerup", function () { dragging = false; });
+  compare.addEventListener("pointercancel", function () { dragging = false; });
+  function pickCompare(i) {
+    compareButtons.forEach(function (b, j) { b.setAttribute("aria-pressed", j === i ? "true" : "false"); });
+    compareImg.src = compares[i].src;
+    compareImg.alt = compares[i].alt;
+    compareTag.textContent = compares[i].tag;
+    compareText.textContent = compares[i].text;
+  }
+  compareButtons.forEach(function (b, i) { b.addEventListener("click", function () { pickCompare(i); }); });
+  pickCompare(0);
+  setSplit(range.value);
+  // Preload the other side so switching doesn't flash.
+  new Image().src = compares[1].src;
 
   // The lightbox for the stills.
   var box = document.getElementById("lightbox");
