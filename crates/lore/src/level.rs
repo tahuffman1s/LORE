@@ -105,6 +105,74 @@ pub fn load(folder: &Path) -> Result<Option<Scene>, LevelError> {
     from_bytes(&path.display().to_string(), &bytes).map(Some)
 }
 
+/// A game's `level.glb` on disk, watched for the next export.
+///
+/// Exporting the level again from Blender shows up in a game that is
+/// running, as saving a script does: ask [`changed`](Self::changed) every
+/// frame and use the level it hands back.
+#[derive(Debug)]
+pub struct LevelFile {
+    folder: PathBuf,
+    /// The file as it was when last read here.
+    known: Option<crate::map::Stamp>,
+    /// A newer state seen once, waiting to be seen again.
+    pending: Option<crate::map::Stamp>,
+    next_poll: std::time::Instant,
+}
+
+/// How often the level file is looked at.
+const POLL_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl LevelFile {
+    /// Watches the level of the game in `folder`, taking the file as it is
+    /// now to be the one already loaded.
+    #[must_use]
+    pub fn watch(folder: &Path) -> Self {
+        Self {
+            folder: folder.to_owned(),
+            known: crate::map::stamp(&folder.join(LEVEL_FILE)),
+            pending: None,
+            next_poll: std::time::Instant::now() + POLL_EVERY,
+        }
+    }
+
+    /// The level, if the file was saved since it was last read, or what is
+    /// wrong with it as it now is.
+    ///
+    /// Call this every frame; it looks at the file at most four times a
+    /// second. A change must look the same on two looks in a row, so a file
+    /// the 3D tool is still writing is not read half-done, and a file that
+    /// is gone (some tools save by deleting and renaming) is not a change:
+    /// the level stays as it was.
+    pub fn changed(&mut self) -> Option<Result<Scene, LevelError>> {
+        let now = std::time::Instant::now();
+        if now < self.next_poll {
+            return None;
+        }
+        self.next_poll = now + POLL_EVERY;
+        let seen = crate::map::stamp(&self.folder.join(LEVEL_FILE));
+        if seen.is_none() || seen == self.known {
+            self.pending = None;
+            None
+        } else if seen == self.pending {
+            self.known = seen;
+            self.pending = None;
+            // Gone between the look and the read: the next look decides.
+            load(&self.folder).transpose()
+        } else {
+            self.pending = seen;
+            None
+        }
+    }
+
+    /// Looks at the file on the next call to [`changed`](Self::changed),
+    /// however lately it was looked at: for tests.
+    #[cfg(test)]
+    pub(crate) fn look_now(&mut self) {
+        self.next_poll = std::time::Instant::now();
+    }
+}
+
 /// Reads a level that is already in memory, as a packaged game's is. `name`
 /// is what messages call the file.
 ///
@@ -159,6 +227,48 @@ mod tests {
         let _ = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder).unwrap();
         folder
+    }
+
+    #[test]
+    fn a_saved_level_is_noticed_once_it_has_stopped_changing() {
+        let folder = scratch("watched");
+        let path = folder.join(LEVEL_FILE);
+        fs::write(&path, STARTER_LEVEL).unwrap();
+        let mut file = LevelFile::watch(&folder);
+        file.look_now();
+        assert!(file.changed().is_none(), "nothing was saved yet");
+
+        // Half an export: seen, but not read until it looks the same twice.
+        fs::write(&path, &STARTER_LEVEL[..2000]).unwrap();
+        file.look_now();
+        assert!(file.changed().is_none());
+        // The export finishes before the second look, so that is what is read.
+        let mut whole = STARTER_LEVEL.to_vec();
+        whole.extend_from_slice(&[0; 4]);
+        fs::write(&path, &whole).unwrap();
+        file.look_now();
+        assert!(file.changed().is_none(), "it changed again");
+        file.look_now();
+        let level = file.changed().unwrap().unwrap();
+        assert_eq!(summary(&level), "22 shapes placed, 744 triangles");
+        file.look_now();
+        assert!(file.changed().is_none(), "read once");
+
+        // A file that cannot be read says so, once.
+        fs::write(&path, "not a level").unwrap();
+        file.look_now();
+        assert!(file.changed().is_none());
+        file.look_now();
+        let said = file.changed().unwrap().unwrap_err().to_string();
+        assert!(said.contains("is not a glTF file"), "{said}");
+
+        // A file that is gone is not a change.
+        fs::remove_file(&path).unwrap();
+        file.look_now();
+        assert!(file.changed().is_none());
+        file.look_now();
+        assert!(file.changed().is_none());
+        let _ = fs::remove_dir_all(&folder);
     }
 
     #[test]

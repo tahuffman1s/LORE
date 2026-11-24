@@ -757,6 +757,8 @@ fn run(folder: &Path) -> Result<(), String> {
     let mut config = player_config();
     let game = open(folder, &mut config, "run")?;
     config.level = cli::load_level(folder).map_err(|error| not_started(&error, "run"))?;
+    // Exporting the level again shows up in the open window.
+    config.level_folder = Some(folder.to_owned());
 
     match scaffold::refresh_types(folder) {
         Ok(true) => log::info!(

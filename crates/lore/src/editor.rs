@@ -663,6 +663,15 @@ impl Editor {
 }
 
 impl Game for Editor {
+    fn level_saved(&mut self, level: &lore_assets::Scene) {
+        self.ground = Ground::for_editor(Some(level), self.ground.tick_rate);
+        self.panels.set_level(level);
+        self.level_lamps = crate::lamps::of_level(level);
+        if let Some(play) = &mut self.play {
+            play.level_saved(level);
+        }
+    }
+
     fn tick(&mut self, input: &InputFrame, step: f32) {
         if self.play.is_some() {
             // The map goes on being saved, and read again when something
@@ -960,6 +969,10 @@ pub fn run(
 ) -> Result<(), AppError> {
     let mut config = Config {
         level,
+        // Exporting the level again shows up in the editor as it is.
+        level_folder: placed
+            .as_ref()
+            .and_then(|(_, file)| file.path().parent().map(std::path::Path::to_owned)),
         title: if name.is_empty() {
             "LORE editor".to_owned()
         } else {

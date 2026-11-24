@@ -21,6 +21,15 @@ pub trait Game {
     fn frame(&mut self, frame: &mut Frame) {
         let _ = frame;
     }
+
+    /// Called when the game's level was saved again while the game runs
+    /// (see [`Config::level_folder`](crate::Config::level_folder)), with
+    /// the new level. What is drawn has already changed; a game that
+    /// walks its level makes the new shapes solid here. The default does
+    /// nothing.
+    fn level_saved(&mut self, level: &lore_assets::Scene) {
+        let _ = level;
+    }
 }
 
 /// A borrowed game is a game, so one can be run and looked at afterwards.
@@ -31,6 +40,10 @@ impl<G: Game + ?Sized> Game for &mut G {
 
     fn frame(&mut self, frame: &mut Frame) {
         (**self).frame(frame);
+    }
+
+    fn level_saved(&mut self, level: &lore_assets::Scene) {
+        (**self).level_saved(level);
     }
 }
 
@@ -123,6 +136,9 @@ pub struct Frame {
     figure_joints: Vec<lore_assets::Transform>,
     /// The game's own shaders, kept between frames.
     shaders: crate::game_shaders::ShaderList,
+    /// What is wrong with the level file as it was last saved, if it could
+    /// not be read: the level that was showing is kept.
+    level_problem: Option<std::rc::Rc<str>>,
     /// The game's own exposure in stops and how the eye adapts, if the
     /// game said them this frame.
     lighting: Option<(f32, lore_render::EyeAdaptation)>,
@@ -267,6 +283,7 @@ impl Frame {
             figures: Vec::new(),
             figure_joints: Vec::new(),
             shaders: crate::game_shaders::ShaderList::default(),
+            level_problem: None,
             lighting: None,
             occlusion: None,
             look: None,
@@ -1181,6 +1198,19 @@ impl Frame {
     }
 
     /// The game's shaders, for the game to follow its script's.
+    /// Says what is wrong with the level file as last saved, for this frame.
+    #[must_use]
+    pub(crate) fn with_level_problem(mut self, problem: Option<std::rc::Rc<str>>) -> Self {
+        self.level_problem = problem;
+        self
+    }
+
+    /// What is wrong with the level file as it was last saved, if it could
+    /// not be read.
+    pub(crate) fn level_problem(&self) -> Option<&std::rc::Rc<str>> {
+        self.level_problem.as_ref()
+    }
+
     pub(crate) fn shader_list(&mut self) -> &mut crate::game_shaders::ShaderList {
         &mut self.shaders
     }
