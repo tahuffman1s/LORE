@@ -1366,6 +1366,54 @@ impl ScriptHost {
         self.things.set_placed(placed);
     }
 
+    /// Whether the player may pick up the thing placed as `id`: it moves,
+    /// and it is light enough or the script said it may be carried.
+    #[must_use]
+    pub fn carryable(&self, id: &str) -> bool {
+        (self.running.as_ref())
+            .is_some_and(|version| self.things.carryable_by(&version.shared.thing_uses, id))
+    }
+
+    /// Says which thing the player carries, by its id: what
+    /// `game.player.carrying` reads.
+    pub fn set_carrying(&mut self, id: Option<&str>) {
+        self.things.set_carrying(id);
+    }
+
+    /// Tells the script the player picked up the thing placed as `id`
+    /// (`game.onPickUp`).
+    pub fn picked_up(&mut self, id: &str) {
+        self.tell_carry(id, true, false);
+    }
+
+    /// Tells the script the player let go of the thing placed as `id`,
+    /// throwing it or not (`game.onDrop`).
+    pub fn dropped(&mut self, id: &str, thrown: bool) {
+        self.tell_carry(id, false, thrown);
+    }
+
+    fn tell_carry(&mut self, id: &str, picked: bool, thrown: bool) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::thing_api::carry_handlers(&shared, picked);
+        if handlers.is_empty() {
+            return;
+        }
+        let Ok(thing) = crate::thing_api::handle(&version.vm, &shared, id) else {
+            return;
+        };
+        for handler in handlers {
+            let went = if picked {
+                self.call(&shared, &handler, thing.clone())
+            } else {
+                self.call(&shared, &handler, (thing.clone(), thrown))
+            };
+            if self.paused || !went {
+                break;
+            }
+        }
+    }
+
     /// Says how the solid thing placed as `id` is moving and where it has
     /// got to: what a script reads as its `position`, `velocity`, `moves`,
     /// `weight` and `resting`. Call it each tick for things that move.

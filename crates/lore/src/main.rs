@@ -524,6 +524,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut pairs = 0;
     let mut used = 0;
     let mut zones = 0;
+    let mut carrying = false;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -644,6 +645,25 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         game.host_mut().set_use_target(None, 0.0);
         used = usable.len();
+        // The first thing that can be carried is said to be picked up,
+        // put down, picked up again and thrown.
+        let mut carried = None;
+        game.host().each_usable(|id, _, _| {
+            if carried.is_none() && game.host().carryable(id) {
+                carried = Some(id.to_owned());
+            }
+        });
+        if let Some(id) = &carried {
+            for thrown in [false, true] {
+                game.host_mut().set_carrying(Some(id));
+                game.host_mut().picked_up(id);
+                game.tick(input.tick(), step);
+                game.host_mut().set_carrying(None);
+                game.host_mut().dropped(id, thrown);
+                game.tick(input.tick(), step);
+            }
+        }
+        carrying = carried.is_some();
         // And the player is said to walk into each zone the script
         // watches and out again.
         zones = game.host_mut().pretend_zone_crossings();
@@ -773,6 +793,13 @@ fn check(folder: &Path) -> Result<(), String> {
              with no errors. Nobody walked up to them: whether a player can reach each is \
              for `lore run`."
         ),
+    }
+    if carrying {
+        println!(
+            "The player was said to pick up the first thing that can be carried, put it \
+             down, pick it up again and throw it, so game.onPickUp and game.onDrop ran, \
+             with no errors. Nothing was really lifted."
+        );
     }
     match zones {
         0 => {}

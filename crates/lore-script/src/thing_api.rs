@@ -51,10 +51,11 @@ pub(crate) const THING_FIELDS: &[&str] = &[
     "moves",
     "weight",
     "resting",
+    "carryable",
 ];
 
 /// What can be set on a thing.
-const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable"];
+const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable", "carryable"];
 
 /// What a thing can be asked.
 pub(crate) const THING_METHODS: &[&str] = &[
@@ -157,6 +158,9 @@ pub struct ThingMotion {
     pub position: [f32; 3],
     /// How far it is turned to the left now, in degrees.
     pub facing: f32,
+    /// Where the middle of its shape is, in metres: what a player looks
+    /// at to use it or pick it up.
+    pub middle: [f32; 3],
     /// How fast it is moving, in metres a second.
     pub velocity: [f32; 3],
     /// Whether it can be moved: it falls and can be pushed.
@@ -184,7 +188,15 @@ pub enum ThingAsk {
         /// Where the point it is placed by goes, in metres.
         position: [f32; 3],
     },
+    /// The player lets go of what they carry.
+    Drop,
 }
+
+/// The heaviest thing the player picks up, by default, in kilograms: a
+/// crate or a barrel, not a cart.
+pub const DEFAULT_CARRY_WEIGHT: f32 = 40.0;
+/// The carry weights a script may ask for, in kilograms.
+const CARRY_WEIGHTS: (f32, f32) = (0.0, 1000.0);
 
 /// The most asks kept between two ticks; more is a script stuck in a loop.
 const MOST_ASKS: usize = 256;
@@ -233,6 +245,11 @@ pub(crate) struct ThingState {
     moving: RefCell<HashMap<String, ThingMotion>>,
     /// What scripts asked of solid things since the engine last took it.
     asks: RefCell<Vec<ThingAsk>>,
+    /// The id of the thing the player carries, as the engine last said.
+    carrying: RefCell<Option<String>>,
+    /// The heaviest thing the player picks up, in kilograms, if a script
+    /// has said: [`DEFAULT_CARRY_WEIGHT`] until then.
+    carry_weight: Cell<Option<f32>>,
 }
 
 /// Someone walking into a zone or out of it.
@@ -333,6 +350,7 @@ impl ThingState {
         Some(ThingMotion {
             position: thing.position,
             facing: thing.facing,
+            middle: thing.position,
             velocity: [0.0; 3],
             moves,
             weight: if moves {
@@ -368,6 +386,8 @@ impl ThingState {
 pub(crate) struct ThingUses {
     /// How each usable thing is used, by its id.
     uses: RefCell<HashMap<String, UseSaid>>,
+    /// Which things the script said may or may not be carried, by id.
+    carryable: RefCell<HashMap<String, bool>>,
     /// Whether the engine shows its own prompt.
     prompt: Cell<bool>,
 }
@@ -376,6 +396,7 @@ impl Default for ThingUses {
     fn default() -> Self {
         Self {
             uses: RefCell::default(),
+            carryable: RefCell::default(),
             prompt: Cell::new(true),
         }
     }
@@ -394,13 +415,68 @@ impl ThingState {
         mut see: impl FnMut(&str, [f32; 3], &UseSaid),
     ) {
         let uses = said.uses.borrow();
+        let carried = self.carrying.borrow();
+        let pick_up = UseSaid {
+            text: "Pick up".to_owned(),
+            handled: true,
+            ..UseSaid::default()
+        };
+        let moving = self.moving.borrow();
         for thing in self.placed.borrow().iter() {
-            if let Some(said) = uses.get(&thing.id)
-                && said.usable
-                && said.handled
-            {
-                see(&thing.id, thing.position, said);
+            // What is in the hands is let go of, not used again.
+            if carried.as_deref() == Some(thing.id.as_str()) {
+                continue;
             }
+            // A solid thing is looked at in its middle, not at its foot.
+            let at = moving
+                .get(&thing.id)
+                .map_or(thing.position, |told| told.middle);
+            match uses.get(&thing.id) {
+                Some(said_of_it) if said_of_it.usable && said_of_it.handled => {
+                    see(&thing.id, at, said_of_it);
+                }
+                // What can be carried is picked up by using it, with no
+                // line of script: the script's words and reach, if any.
+                Some(said_of_it) if said_of_it.usable && self.carryable_by(said, &thing.id) => {
+                    let pick_up = UseSaid {
+                        handled: true,
+                        text: if said_of_it.text == UseSaid::default().text {
+                            pick_up.text.clone()
+                        } else {
+                            said_of_it.text.clone()
+                        },
+                        seconds: 0.0,
+                        ..said_of_it.clone()
+                    };
+                    see(&thing.id, at, &pick_up);
+                }
+                None if self.carryable_by(said, &thing.id) => {
+                    see(&thing.id, at, &pick_up);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether the player may pick up the thing placed as `id`: the script
+    /// said so, or it moves and is light enough.
+    pub(crate) fn carryable_by(&self, said: &ThingUses, id: &str) -> bool {
+        if let Some(said) = said.carryable.borrow().get(id) {
+            return *said && self.motion(id).is_some_and(|motion| motion.moves);
+        }
+        let limit = self.carry_weight.get().unwrap_or(DEFAULT_CARRY_WEIGHT);
+        (self.motion(id)).is_some_and(|motion| motion.moves && motion.weight <= limit)
+    }
+
+    /// The heaviest thing the player picks up, in kilograms.
+    pub(crate) fn carry_weight(&self) -> f32 {
+        self.carry_weight.get().unwrap_or(DEFAULT_CARRY_WEIGHT)
+    }
+
+    pub(crate) fn set_carrying(&self, id: Option<&str>) {
+        let mut now = self.carrying.borrow_mut();
+        if now.as_deref() != id {
+            *now = id.map(str::to_owned);
         }
     }
 
@@ -419,11 +495,18 @@ impl ThingState {
             return None;
         }
         let target = self.target.borrow();
-        let uses = said.uses.borrow();
-        let said = uses
-            .get(target.as_deref()?)
-            .filter(|said| said.usable && said.handled)?;
-        Some((said.text.clone(), self.progress.get()))
+        let target = target.as_deref()?;
+        // What is in the hands is let go of.
+        if self.carrying.borrow().as_deref() == Some(target) {
+            return Some(("Drop".to_owned(), 0.0));
+        }
+        let mut words = None;
+        self.each_usable(said, |id, _, said| {
+            if id == target {
+                words = Some(said.text.clone());
+            }
+        });
+        Some((words?, self.progress.get()))
     }
 
     fn find(&self, id: &str) -> Option<Placed> {
@@ -572,6 +655,50 @@ pub(crate) fn use_prompt(lua: &Lua, shared: &Rc<Shared>, shown: &Value) -> mlua:
     Ok(())
 }
 
+/// The thing the player carries, for `game.player.carrying`.
+pub(crate) fn carrying(lua: &Lua, shared: &Shared) -> mlua::Result<Option<AnyUserData>> {
+    let carried = shared.things.carrying.borrow().clone();
+    match carried {
+        Some(id) if shared.things.find(&id).is_some() => handle(lua, shared, &id).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// `game.player:drop()`.
+pub(crate) fn drop_carried(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
+    crate::time_api::rules_only(lua, shared, "game.player:drop")?;
+    if shared.things.carrying.borrow().is_some() {
+        shared.things.ask(ThingAsk::Drop);
+    }
+    Ok(())
+}
+
+/// `game.player:setCarryWeight(kilograms)`.
+pub(crate) fn set_carry_weight(lua: &Lua, shared: &Rc<Shared>, weight: &Value) -> mlua::Result<()> {
+    let weight = number(
+        lua,
+        "game.player:setCarryWeight",
+        Some(weight),
+        "the heaviest thing the player picks up, in kilograms, from 0 (nothing) to 1000",
+        "game.player:setCarryWeight(80)",
+    )?
+    .clamp(CARRY_WEIGHTS.0, CARRY_WEIGHTS.1);
+    crate::time_api::rules_only(lua, shared, "game.player:setCarryWeight")?;
+    shared.things.carry_weight.set(Some(weight));
+    Ok(())
+}
+
+/// The functions to call when the player picks a thing up (`picked`) or
+/// lets it go.
+pub(crate) fn carry_handlers(shared: &Shared, picked: bool) -> Vec<Function> {
+    let handlers = shared.handlers.borrow();
+    if picked {
+        handlers.picked_up.clone()
+    } else {
+        handlers.dropped.clone()
+    }
+}
+
 /// The thing the player would use now, for `game.player.lookingAt`.
 pub(crate) fn looking_at(lua: &Lua, shared: &Shared) -> mlua::Result<Option<AnyUserData>> {
     let target = shared.things.target.borrow().clone();
@@ -647,6 +774,40 @@ impl UserData for ThingRef {
         fields.add_field_method_get("resting", |lua, this| {
             let (shared, placed) = this.placed(lua, "resting")?;
             Ok(shared.things.motion(&placed.id).is_none_or(|m| m.resting))
+        });
+        fields.add_field_method_get("carryable", |lua, this| {
+            let (shared, placed) = this.placed(lua, "carryable")?;
+            Ok(shared.things.carryable_by(&shared.thing_uses, &placed.id))
+        });
+        fields.add_field_method_set("carryable", |lua, this, value: Value| {
+            let Value::Boolean(carryable) = value else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "A thing's `carryable` is true or false, but it was given {}. Write it \
+                         like this: statue.carryable = false",
+                        describe(&value)
+                    ),
+                ));
+            };
+            let (shared, placed) = this.placed(lua, "carryable")?;
+            if carryable
+                && !shared
+                    .things
+                    .motion(&placed.id)
+                    .is_some_and(|motion| motion.moves)
+            {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "\"{}\" cannot be carried: it does not move. Give it a model and \
+                         `moves = true` in the map (its properties in `lore edit`) first.",
+                        called(&placed)
+                    ),
+                ));
+            }
+            (shared.thing_uses.carryable.borrow_mut()).insert(placed.id, carryable);
+            Ok(())
         });
         fields.add_field_method_get("usable", |lua, this| {
             Ok(this

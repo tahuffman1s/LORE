@@ -302,20 +302,64 @@ impl Bodies {
     }
 
     /// Tells `level` where every body is now, so that what walks, is shot
-    /// or looks through the level meets them too.
-    pub fn show_to(&self, level: &Level) {
+    /// or looks through the level meets them too. The body numbered `held`
+    /// is said to be far under the world: what someone carries is not in
+    /// their own way. Every body keeps its place in the list.
+    pub fn show_to(&self, level: &Level, held: Option<usize>) {
         level.set_solids(
             self.handles
                 .iter()
                 .zip(&self.shapes)
-                .filter_map(|(handle, shape)| {
+                .enumerate()
+                .filter_map(|(nth, (handle, shape))| {
                     let body = self.world.bodies.get(*handle)?;
+                    let pose = if held == Some(nth) {
+                        Pose::from_translation(Vector::new(0.0, -1.0e6, 0.0))
+                    } else {
+                        *body.position()
+                    };
                     Some(Solid {
                         shape: shape.solid(),
-                        pose: *body.position(),
+                        pose,
                     })
                 }),
         );
+    }
+
+    /// Carries the body numbered `body` toward `target`, where its middle
+    /// should be: it is given the speed that would get it there in a few
+    /// ticks, no more than `fastest` metres a second, and stops spinning.
+    /// It still meets walls and other bodies on the way, so what is in the
+    /// way holds it back. Call it every tick while it is carried.
+    pub fn carry(&mut self, body: usize, target: [f32; 3], fastest: f32) {
+        /// How much of the way there it is sent each second.
+        const PULL: f64 = 30.0;
+        let target = wide(target);
+        let Some(body) = (self.handles.get(body))
+            .and_then(|handle| self.world.bodies.get_mut(*handle))
+            .filter(|body| body.is_dynamic() && target.is_finite())
+        else {
+            return;
+        };
+        let mut speed = (target - body.translation()) * PULL;
+        let fastest = f64::from(fastest.max(0.0));
+        if speed.length() > fastest {
+            speed = speed.normalize_or_zero() * fastest;
+        }
+        body.set_linvel(speed, true);
+        body.set_angvel(Vector::ZERO, true);
+    }
+
+    /// Sends the body numbered `body` off at `velocity` metres a second,
+    /// as a throw does.
+    pub fn fling(&mut self, body: usize, velocity: [f32; 3]) {
+        let velocity = wide(velocity);
+        if let Some(body) = (self.handles.get(body))
+            .and_then(|handle| self.world.bodies.get_mut(*handle))
+            .filter(|body| body.is_dynamic() && velocity.is_finite())
+        {
+            body.set_linvel(velocity, true);
+        }
     }
 }
 
@@ -504,7 +548,7 @@ mod tests {
                 .raycast([0.0, 0.5, 0.0], [0.0, 0.0, -1.0], 50.0)
                 .is_none()
         );
-        bodies.show_to(&level);
+        bodies.show_to(&level, None);
         let hit = level
             .raycast([0.0, 0.5, 0.0], [0.0, 0.0, -1.0], 50.0)
             .unwrap();
@@ -521,6 +565,57 @@ mod tests {
             .raycast([0.0, 3.0, -5.0], [0.0, -1.0, 0.0], 50.0)
             .unwrap();
         assert!((down.distance - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_carried_body_follows_the_hand_is_held_back_by_a_wall_and_can_be_thrown() {
+        // A wall across at z = -3.
+        let level = Level::from_triangles(&[
+            [[-40.0, 0.0, -40.0], [40.0, 0.0, -40.0], [40.0, 0.0, 40.0]],
+            [[-40.0, 0.0, -40.0], [40.0, 0.0, 40.0], [-40.0, 0.0, 40.0]],
+            [[-9.0, 0.0, -3.0], [9.0, 0.0, -3.0], [9.0, 9.0, -3.0]],
+            [[-9.0, 0.0, -3.0], [9.0, 9.0, -3.0], [-9.0, 9.0, -3.0]],
+        ]);
+        let mut bodies = Bodies::new(&level, 60);
+        let held = bodies.add(&crate_at([0.0, 0.5, 0.0]));
+        // Held at chest height a metre and a half ahead: it comes there
+        // and stays, against gravity.
+        for _ in 0..60 {
+            bodies.carry(held, [0.0, 1.3, -1.5], 12.0);
+            bodies.step(20.0);
+        }
+        let at = bodies.state(held).unwrap().position;
+        assert!(
+            (at[1] - 1.3).abs() < 0.05 && (at[2] + 1.5).abs() < 0.05,
+            "{at:?}"
+        );
+        // Asked to go through the wall, it stops at it.
+        for _ in 0..60 {
+            bodies.carry(held, [0.0, 1.3, -5.0], 12.0);
+            bodies.step(20.0);
+        }
+        let at = bodies.state(held).unwrap().position;
+        assert!(at[2] > -2.6, "through the wall: {at:?}");
+        // While it is carried the level does not count it in the way.
+        bodies.show_to(&level, Some(held));
+        assert!(
+            level
+                .raycast([0.0, 1.3, 0.0], [0.0, 0.0, -1.0], 2.4)
+                .is_none()
+        );
+        bodies.show_to(&level, None);
+        assert!(
+            level
+                .raycast([0.0, 1.3, 0.0], [0.0, 0.0, -1.0], 2.4)
+                .is_some()
+        );
+        // Thrown back, it flies off and lands.
+        bodies.fling(held, [0.0, 3.0, 9.0]);
+        bodies.step(20.0);
+        assert!(bodies.state(held).unwrap().velocity[2] > 8.0);
+        settle(&mut bodies, 300);
+        let landed = bodies.state(held).unwrap();
+        assert!(landed.position[2] > 2.0 && landed.resting, "{landed:?}");
     }
 
     #[test]
@@ -549,7 +644,7 @@ mod tests {
             }
             let before = std::time::Instant::now();
             bodies.step(20.0);
-            bodies.show_to(&level);
+            bodies.show_to(&level, None);
             slowest = slowest.max(before.elapsed());
         }
         let moving = started.elapsed() / 600;

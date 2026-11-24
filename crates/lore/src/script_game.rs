@@ -169,6 +169,8 @@ impl ScriptGame {
                 lore_script::ThingMotion {
                     position: entity.position,
                     facing: entity.facing,
+                    // Where it stands until a world says where its shape is.
+                    middle: entity.position,
                     velocity: [0.0; 3],
                     moves,
                     weight: if moves { weight } else { 0.0 },

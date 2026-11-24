@@ -50,7 +50,26 @@ struct Stood {
 pub(super) struct Things {
     bodies: Bodies,
     stood: Vec<Stood>,
+    /// Which thing the player carries.
+    carried: Option<usize>,
+    /// Whether what is carried has reached the hands yet.
+    held_close: bool,
 }
+
+/// How fast a carried thing is brought to the hands, at most, in metres a
+/// second: quick enough to keep up with a sprint and a turn of the head.
+const CARRY_SPEED: f32 = 14.0;
+
+/// Further than this from where the hands hold it, in metres, a carried
+/// thing has caught on something and is let go rather than dragged
+/// through it.
+const LET_GO: f32 = 1.1;
+
+/// How hard a throw is, in kilogram metres a second, and the fastest
+/// anything leaves the hands, in metres a second: a light thing flies, a
+/// heavy one is lobbed.
+const THROW: f32 = 260.0;
+const FASTEST_THROW: f32 = 13.0;
 
 /// What a map said that could not be done, for the log.
 pub(super) type Problems = Vec<String>;
@@ -164,8 +183,16 @@ impl Things {
                 now: state,
             });
         }
-        bodies.show_to(level);
-        (Self { bodies, stood }, problems)
+        bodies.show_to(level, None);
+        (
+            Self {
+                bodies,
+                stood,
+                carried: None,
+                held_close: false,
+            },
+            problems,
+        )
     }
 
     /// Whether there are no solid things.
@@ -185,7 +212,7 @@ impl Things {
                 stood.now = now;
             }
         }
-        self.bodies.show_to(level);
+        self.bodies.show_to(level, self.carried);
     }
 
     /// The player pushes what they are walking into: each thing they
@@ -208,8 +235,11 @@ impl Things {
             player.position[1] + rules.standing_height * 0.55,
             player.position[2],
         ];
-        let bodies = &mut self.bodies;
+        let (bodies, carried) = (&mut self.bodies, self.carried);
         player.touching(level, rules, TOUCH, |body, toward| {
+            if carried == Some(body) {
+                return;
+            }
             // Only what is in the way of where they are going, and not
             // what is under their feet.
             let into = toward[0] * wish[0] + toward[2] * wish[1];
@@ -244,6 +274,7 @@ impl Things {
             see(
                 &stood.id,
                 Told {
+                    middle: now.position,
                     position: std::array::from_fn(|i| now.position[i] - back[i]),
                     facing: facing.to_degrees(),
                     velocity: now.velocity,
@@ -283,6 +314,81 @@ impl Things {
         true
     }
 
+    /// The id of the thing the player carries.
+    pub(super) fn carried(&self) -> Option<&str> {
+        self.carried
+            .and_then(|body| self.stood.get(body))
+            .map(|stood| stood.id.as_str())
+    }
+
+    /// The player takes the thing placed as `id` in their hands. Says
+    /// whether there is such a thing and it can be moved.
+    pub(super) fn pick_up(&mut self, id: &str) -> bool {
+        let Some(body) = self.stood.iter().position(|stood| stood.id == id) else {
+            return false;
+        };
+        if !self.bodies.moves(body) {
+            return false;
+        }
+        self.carried = Some(body);
+        true
+    }
+
+    /// Brings what the player carries toward `hands`, where its middle is
+    /// held. Says false if it has caught on something and been let go.
+    pub(super) fn hold(&mut self, hands: [f32; 3]) -> bool {
+        let Some(body) = self.carried else {
+            return true;
+        };
+        let Some(state) = self.bodies.state(body) else {
+            self.carried = None;
+            return false;
+        };
+        let off: f32 = (0..3)
+            .map(|i| (state.position[i] - hands[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        // Only once it has been brought to the hands: it starts wherever
+        // it was picked up from.
+        if self.held_close && off > LET_GO {
+            self.let_go(None);
+            return false;
+        }
+        self.held_close |= off < LET_GO * 0.5;
+        self.bodies.carry(body, hands, CARRY_SPEED);
+        true
+    }
+
+    /// The player lets go of what they carry: dropped where it is, or
+    /// thrown toward `mark` from `speed`, the speed the player is moving at.
+    pub(super) fn let_go(&mut self, thrown: Option<([f32; 3], [f32; 3])>) {
+        let Some(body) = self.carried.take() else {
+            return;
+        };
+        self.held_close = false;
+        let Some(state) = self.bodies.state(body) else {
+            return;
+        };
+        let velocity = match thrown {
+            Some((mark, moving)) => {
+                let to: [f32; 3] = std::array::from_fn(|i| mark[i] - state.position[i]);
+                let far = to.iter().map(|part| part * part).sum::<f32>().sqrt();
+                let pace = (THROW / self.bodies.mass(body).max(0.1)).min(FASTEST_THROW);
+                if far > 1e-3 {
+                    // A little up, so it carries to what the crosshair is on.
+                    std::array::from_fn(|i| {
+                        to[i] / far * pace + moving[i] + if i == 1 { pace * 0.12 } else { 0.0 }
+                    })
+                } else {
+                    moving
+                }
+            }
+            // Dropped, it keeps only the player's own speed.
+            None => state.velocity.map(|part| part.clamp(-3.0, 3.0)),
+        };
+        self.bodies.fling(body, velocity);
+    }
+
     /// How many things are moving and not asleep.
     #[cfg(test)]
     pub(super) fn awake(&self) -> usize {
@@ -302,6 +408,7 @@ impl Things {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Told {
     pub(super) position: [f32; 3],
+    pub(super) middle: [f32; 3],
     pub(super) facing: f32,
     pub(super) velocity: [f32; 3],
     pub(super) moves: bool,

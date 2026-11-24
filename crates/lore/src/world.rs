@@ -104,7 +104,15 @@ pub struct World {
     /// tick sets no memory aside.
     usable: Vec<using::Usable>,
     usable_ids: Vec<String>,
+    /// Whether the fire button was down on the last tick: a throw is a
+    /// press, not a hold.
+    fire_was: bool,
 }
+
+/// How far in front of the eyes a carried thing is held, and how far under
+/// them, in metres.
+const CARRY_AHEAD: f32 = 1.35;
+const CARRY_LOW: f32 = 0.35;
 
 /// The unit vector the eyes look along at `yaw` and `pitch`, as the
 /// player physics has it: yaw 0 looks along -Z and turns left as it grows.
@@ -229,6 +237,7 @@ impl World {
             using: using::Using::default(),
             usable: Vec::new(),
             usable_ids: Vec::new(),
+            fire_was: false,
         };
         // The ground's still water is the world's pools, of the kinds its
         // sheets say, and its script is told what they are called. Here,
@@ -262,6 +271,7 @@ impl World {
                 lore_script::ThingMotion {
                     position: told.position,
                     facing: told.facing,
+                    middle: told.middle,
                     velocity: told.velocity,
                     moves: told.moves,
                     weight: told.weight,
@@ -675,6 +685,14 @@ impl Game for World {
             match ask {
                 lore_script::ThingAsk::Push { id, impulse } => self.things.push(&id, impulse),
                 lore_script::ThingAsk::Put { id, position } => self.things.put(&id, position),
+                lore_script::ThingAsk::Drop => {
+                    if let Some(carried) = self.things.carried().map(str::to_owned) {
+                        self.things.let_go(None);
+                        self.game.host_mut().set_carrying(None);
+                        self.game.host_mut().dropped(&carried, false);
+                    }
+                    true
+                }
             };
         }
         self.fluids.step(
@@ -754,6 +772,7 @@ impl Game for World {
                     lore_script::ThingMotion {
                         position: told.position,
                         facing: told.facing,
+                        middle: told.middle,
                         velocity: told.velocity,
                         moves: told.moves,
                         weight: told.weight,
@@ -806,13 +825,52 @@ impl Game for World {
         });
         let chosen = (self.using.target.as_deref())
             .and_then(|target| self.usable_ids.iter().position(|id| id == target));
-        let meant = using::pick(&self.usable, eyes, from, aim, level, chosen);
-        let target = meant.map(|nth| self.usable_ids[nth].as_str());
-        let seconds = meant.map_or(0.0, |nth| self.usable[nth].seconds);
-        let (used, progress) = self.using.tick(target, seconds, asked.interact, *tick);
-        host.set_use_target(target, progress);
-        if let (true, Some(target)) = (used, target) {
-            host.use_thing(target);
+        let throwing = asked.fire && !self.fire_was;
+        self.fire_was = asked.fire;
+        if let Some(carried) = self.things.carried() {
+            // What is in the hands is held out in front, a little under
+            // the eyes so it does not fill the view. The use button lets
+            // it go and the fire button throws it at what the crosshair
+            // is on. Caught on a wall, it is let go by itself.
+            let hands: [f32; 3] = std::array::from_fn(|i| {
+                eyes[i] + aim[i] * CARRY_AHEAD - if i == 1 { CARRY_LOW } else { 0.0 }
+            });
+            let (used, _) = self.using.tick(Some(carried), 0.0, asked.interact, *tick);
+            host.set_use_target(Some(carried), 0.0);
+            let let_go = if throwing {
+                Some(Some((motion.aim_point, player.velocity)))
+            } else if used {
+                Some(None)
+            } else {
+                None
+            };
+            let carried = carried.to_owned();
+            match let_go {
+                Some(thrown) => {
+                    self.things.let_go(thrown);
+                    host.set_carrying(None);
+                    host.dropped(&carried, thrown.is_some());
+                }
+                None if !self.things.hold(hands) => {
+                    host.set_carrying(None);
+                    host.dropped(&carried, false);
+                }
+                None => {}
+            }
+        } else {
+            let meant = using::pick(&self.usable, eyes, from, aim, level, chosen);
+            let target = meant.map(|nth| self.usable_ids[nth].as_str());
+            let seconds = meant.map_or(0.0, |nth| self.usable[nth].seconds);
+            let (used, progress) = self.using.tick(target, seconds, asked.interact, *tick);
+            host.set_use_target(target, progress);
+            if let (true, Some(target)) = (used, target) {
+                host.use_thing(target);
+                // Using what can be carried picks it up.
+                if host.carryable(target) && self.things.pick_up(target) {
+                    host.set_carrying(Some(target));
+                    host.picked_up(target);
+                }
+            }
         }
         // Who walked into a zone the script watches, and who left.
         host.step_zones();
@@ -2415,6 +2473,161 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("moves = true"), "{message}");
+    }
+
+    #[test]
+    fn the_player_picks_a_crate_up_carries_it_and_throws_it() {
+        use lore_input::{Key, MouseButton};
+        use lore_ui::Draw;
+
+        /// A game with a thing two metres ahead with these map properties
+        /// and this script, the player looking down at it.
+        fn game_with(properties: &str, script: &str) -> (Playing, lore_input::Input) {
+            let map = crate::map::Map::parse(
+                "map.toml",
+                &format!(
+                    "version = 1\n[[entity]]\nid = \"box\"\ntype = \"prop\"\nname = \"Box\"\n\
+                     position = [0, 0, -2]\n[entity.properties]\nmodel = \"crate\"\n{properties}"
+                ),
+            )
+            .unwrap();
+            let actions = ActionMap::standard();
+            let script = ScriptGame::from_pack_parts(
+                [("main.luau".to_owned(), script.to_owned())],
+                Vec::new(),
+                map,
+                &actions,
+                crate::settings::Settings::default(),
+            );
+            let mut game = Playing::start(script, None, &actions, 60);
+            game.pitch = -0.5;
+            let mut input = lore_input::Input::new(actions);
+            for _ in 0..20 {
+                game.tick(input.tick(), STEP);
+            }
+            (game, input)
+        }
+        fn words(game: &mut Playing, input: &lore_input::Input) -> Vec<String> {
+            let mut frame = Frame::between_ticks(input, 1.0, STEP);
+            game.frame(&mut frame);
+            frame
+                .take_ui()
+                .draw()
+                .iter()
+                .filter_map(|draw| match draw {
+                    Draw::Text { text, .. } => Some(text.to_owned()),
+                    Draw::Rect { .. } | Draw::Turned { .. } => None,
+                })
+                .collect()
+        }
+        fn crate_at(game: &Playing) -> ([f32; 3], [f32; 3]) {
+            let mut at = ([0.0; 3], [0.0; 3]);
+            game.world
+                .things
+                .each(|_, told| at = (told.middle, told.velocity));
+            at
+        }
+
+        let (mut game, mut input) = game_with(
+            "moves = true\n",
+            r#"local box = game.thing("Box")
+            local picked, dropped, thrown = 0, 0, 0
+            game.onPickUp(function(thing) assert(thing == box) picked += 1 end)
+            game.onDrop(function(thing, wasThrown)
+                assert(thing == box)
+                dropped += 1
+                if wasThrown then thrown += 1 end
+            end)
+            game.onTick(function()
+                assert(box.carryable and game.player.carryWeight == 40)
+                assert((game.player.carrying == box) == (picked > dropped))
+                if thrown == 1 then assert(dropped == 2) end
+            end)"#,
+        );
+        // Light enough to carry, so it says so with no line of script.
+        assert_eq!(words(&mut game, &input), ["E", "Pick up"]);
+        input.press(Key::E);
+        game.tick(input.tick(), STEP);
+        input.release(Key::E);
+        for _ in 0..40 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        assert_eq!(game.world.things.carried(), Some("box"));
+        assert_eq!(words(&mut game, &input), ["E", "Drop"]);
+        // It is held out in front of the eyes and a little under them.
+        let eyes = game.world.player().eye_position();
+        let (held, _) = crate_at(&game);
+        assert!(
+            (held[2] - (eyes[2] - 1.35 * 0.5f32.cos())).abs() < 0.15,
+            "{held:?}"
+        );
+        assert!(held[1] > 0.4 && held[1] < eyes[1], "{held:?}");
+        // Walking backward, it comes along and does not stop the player.
+        input.press(Key::S);
+        for _ in 0..90 {
+            game.tick(input.tick(), STEP);
+        }
+        input.release(Key::S);
+        let (held, _) = crate_at(&game);
+        let player = game.world.player().position;
+        assert!(
+            player[2] > 4.0,
+            "the crate held the player back: {player:?}"
+        );
+        assert!(
+            (held[2] - player[2] + 1.18).abs() < 0.3,
+            "{held:?} {player:?}"
+        );
+        // Put down with the same button, and picked up again.
+        input.press(Key::E);
+        game.tick(input.tick(), STEP);
+        input.release(Key::E);
+        game.tick(input.tick(), STEP);
+        assert_eq!(game.world.things.carried(), None);
+        for _ in 0..60 {
+            game.tick(input.tick(), STEP);
+        }
+        input.press(Key::E);
+        game.tick(input.tick(), STEP);
+        input.release(Key::E);
+        for _ in 0..40 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.things.carried(), Some("box"));
+        // Thrown with the fire button, toward what the crosshair is on.
+        game.pitch = 0.2;
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        input.press(MouseButton::MouseLeft);
+        game.tick(input.tick(), STEP);
+        input.release(MouseButton::MouseLeft);
+        game.tick(input.tick(), STEP);
+        assert_eq!(game.world.things.carried(), None);
+        let (_, flying) = crate_at(&game);
+        assert!(flying[2] < -8.0 && flying[1] > 1.0, "{flying:?}");
+        for _ in 0..20 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+
+        // Too heavy: nothing offers to pick it up, and E does nothing.
+        let (mut heavy, mut input) = game_with("moves = true\nweight = 90\n", "");
+        assert!(words(&mut heavy, &input).is_empty());
+        input.press(Key::E);
+        heavy.tick(input.tick(), STEP);
+        assert_eq!(heavy.world.things.carried(), None);
+        // Unless the game says the player is that strong, or that it may be.
+        let (mut strong, input) = game_with(
+            "moves = true\nweight = 90\n",
+            "game.onStart(function() game.player:setCarryWeight(100) end)",
+        );
+        assert_eq!(words(&mut strong, &input), ["E", "Pick up"]);
+        // And a script says what may not be carried.
+        let (mut fixed, input) =
+            game_with("moves = true\n", "game.thing(\"Box\").carryable = false");
+        assert!(words(&mut fixed, &input).is_empty());
     }
 
     #[test]
