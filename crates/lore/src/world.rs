@@ -107,6 +107,9 @@ pub struct World {
     /// Whether the fire button was down on the last tick: a throw is a
     /// press, not a hold.
     fire_was: bool,
+    /// The level's ladders: what the map places as type `ladder`, each
+    /// the space a climber is on it in.
+    ladders: Vec<lore_script::Placed>,
     /// Which solid thing the player stood on after the last tick.
     standing_on: Option<usize>,
     /// How far what the player stood on has turned them since the view
@@ -151,6 +154,8 @@ fn motion_of(player: &Player, aim: [f32; 3]) -> Motion {
         crouched: player.crouched,
         sprinting: player.sprinting,
         swimming: player.swimming,
+        on_ladder: player.on_ladder,
+        climbing: player.hoist > 0.0,
         // Until the tick works out what is in the way: far along the look.
         aim_point: {
             let eye = player.eye_position();
@@ -217,6 +222,7 @@ impl World {
         game.host_mut()
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
         let things = Self::things_of(&game, &ground);
+        let ladders = crate::script_game::ladders_of(game.map());
         let mut world = Self {
             game,
             ground,
@@ -243,6 +249,7 @@ impl World {
             usable: Vec::new(),
             usable_ids: Vec::new(),
             fire_was: false,
+            ladders,
             standing_on: None,
             carried_turn: 0.0,
         };
@@ -740,6 +747,7 @@ impl Game for World {
         let mut moving = asked.movement;
         moving.mode = mode_of(self.game.host().movement());
         let said = self.game.host().moves();
+        let can = self.game.host().abilities();
         let settings = MoveSettings {
             fly_speed: self.game.host().fly_speed(),
             walk_speed: said.walk_speed,
@@ -751,8 +759,16 @@ impl Game for World {
                 / rules.swim_speed.max(f32::EPSILON),
             jump_height: said.jump_height,
             gravity: said.gravity,
+            // What the game lets the player do: each is a switch.
+            vault_height: if can.vault { said.vault_height } else { 0.0 },
+            climb_height: if can.climb { said.climb_height } else { 0.0 },
+            ladder_speed: said.ladder_speed,
+            swim: can.swim,
             ..*rules
         };
+        // At one of the level's ladders, for someone who climbs them.
+        moving.ladder =
+            can.ladders && (self.ladders.iter()).any(|ladder| ladder.holds(player.position));
         let rules = &settings;
         if moving.mode == MoveMode::Walk {
             // A gale pushes the player, a tornado takes them off their feet,
@@ -2943,6 +2959,84 @@ mod tests {
         );
         let message = said("game.thing(\"Fixed\"):turnTo(90, \"slowly\")");
         assert!(message.contains("how many seconds it takes"), "{message}");
+    }
+
+    #[test]
+    fn climbing_and_ladders_are_each_one_switch() {
+        use lore_input::Key;
+
+        /// Holds forward and jump (or forward alone) for four seconds and
+        /// says how high the player got, where they ended, and whether the
+        /// script ever read them as climbing or on a ladder.
+        fn played(things: &str, script: &str, jump: bool) -> (f32, [f32; 3]) {
+            let (mut game, mut input) = game_on_map(things, script);
+            input.press(Key::W);
+            if jump {
+                input.press(Key::Space);
+            }
+            let mut highest: f32 = 0.0;
+            for _ in 0..240 {
+                game.tick(input.tick(), STEP);
+                highest = highest.max(game.world.player().position[1]);
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            (highest, game.world.player().position)
+        }
+
+        // Two fixed crates, one on the other: a wall two metres high.
+        let wall = [
+            solid_thing("Low", [0.0, 0.0, -2.5], "model = \"crate\""),
+            solid_thing("High", [0.0, 1.0, -2.5], "model = \"crate\""),
+        ]
+        .concat();
+        // By the usual rules a jump does not get up it.
+        let (highest, _) = played(&wall, "", true);
+        assert!(highest < 1.3, "{highest}");
+        // One line, and the player pulls themselves up onto it.
+        let (_, at) = played(
+            &wall,
+            r#"local climbed = false
+            game.onStart(function()
+                assert(not game.player:can("climb") and game.player:can("swim"))
+                game.player:setAbility("climb", true)
+                assert(game.player:can("climb") and game.player.climbHeight == 2.2)
+            end)
+            game.onTick(function()
+                if game.player.climbing then climbed = true end
+                if game.player.position.y > 1.9 then assert(climbed) end
+            end)"#,
+            true,
+        );
+        assert!(at[1] > 1.9 || at[2] < -3.2, "never got up: {at:?}");
+
+        // A ladder in the way: walked past until the game says ladders
+        // are climbed, then climbed by holding forward.
+        // It stands against a wall five crates high, as a ladder does.
+        let mut ladder = "[[entity]]\nid = \"l\"\ntype = \"ladder\"\nposition = [0, 0, -2]\n\
+                          [entity.properties]\nheight = 6\n"
+            .to_owned();
+        for row in 0..5u8 {
+            ladder.push_str(&solid_thing(
+                &format!("Wall{row}"),
+                [0.0, f32::from(row), -3.0],
+                "model = \"crate\"",
+            ));
+        }
+        let ladder = ladder.as_str();
+        let (highest, at) = played(ladder, "", false);
+        assert!(highest < 0.1 && at[2] > -2.3, "{highest} {at:?}");
+        let (highest, _) = played(
+            ladder,
+            r#"local seen = false
+            game.onStart(function() game.player:setAbility("ladders", true) end)
+            game.onTick(function()
+                if game.player.onLadder then seen = true end
+                if game.player.position.y > 3 then assert(seen) end
+            end)"#,
+            false,
+        );
+        // Up the wall and onto its top.
+        assert!(highest > 4.9, "climbed only to {highest}");
     }
 
     #[test]

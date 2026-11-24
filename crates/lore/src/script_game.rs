@@ -79,6 +79,27 @@ const NOTHING_PLACED: &str = "The game runs with nothing placed in its level. Fi
 const KEEPS_MAP: &str = "The game keeps the map it had. Fix this and save the file: the \
                          game picks it up by itself.";
 
+/// The ladders `map` places: everything of type `ladder`, as the space
+/// someone climbing it is in. One the map gives no size is a metre square
+/// and three metres high.
+pub(crate) fn ladders_of(map: &Map) -> Vec<lore_script::Placed> {
+    use lore_script::PlacedValue;
+
+    let mut ladders: Vec<lore_script::Placed> = placed_of(map)
+        .into_iter()
+        .filter(|placed| placed.kind == "ladder")
+        .collect();
+    for ladder in &mut ladders {
+        for side in ["width", "depth"] {
+            let said = |name: &str| ladder.properties.iter().any(|(known, _)| known == name);
+            if !said(side) && !said("radius") {
+                (ladder.properties).push((side.to_owned(), PlacedValue::Number(1.0)));
+            }
+        }
+    }
+    ladders
+}
+
 /// What is placed in `map`, as the script is told it (`game.thing`).
 fn placed_of(map: &Map) -> Vec<lore_script::Placed> {
     use crate::map::Value;

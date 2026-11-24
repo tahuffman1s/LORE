@@ -1601,6 +1601,13 @@ impl ScriptHost {
         self.tools.moves()
     }
 
+    /// What the script lets the player do besides walk, jump and crouch
+    /// (`game.player:setAbility`): swim, until it says otherwise.
+    #[must_use]
+    pub fn abilities(&self) -> crate::Abilities {
+        self.tools.abilities()
+    }
+
     /// The game's actions with the ones the script made with
     /// `game.input.bind`: a copy of the map the script reads.
     ///

@@ -51,6 +51,10 @@ pub struct MoveInput {
     /// How the player moves. Flying goes where the eyes look (pitch
     /// included), jump rises, crouch sinks and sprint is faster.
     pub mode: MoveMode,
+    /// The player is at a ladder: forward climbs it and back goes down,
+    /// nothing pulls them off it, and holding jump lets go. Whoever steps
+    /// the player says so each tick, from where the level's ladders are.
+    pub ladder: bool,
 }
 
 impl MoveInput {
@@ -111,6 +115,20 @@ pub struct MoveSettings {
     pub sprint_speed: f32,
     /// Top speed while crouched.
     pub crouch_speed: f32,
+    /// The highest thing the player gets over or onto with forward and
+    /// jump held against it, in metres above their feet: a fence, a crate,
+    /// a window sill. 0, the default, is no vaulting.
+    pub vault_height: f32,
+    /// The highest ledge the player pulls themselves up onto with forward
+    /// and jump held against the wall under it, in metres above their
+    /// feet: from the ground or part way through a jump. 0, the default,
+    /// is no climbing. It counts when it is more than `vault_height`.
+    pub climb_height: f32,
+    /// How fast a ladder is climbed, in metres per second.
+    pub ladder_speed: f32,
+    /// Whether the player swims in water too deep to stand in. Without
+    /// it they sink and walk on the bottom.
+    pub swim: bool,
     /// How fast an unhurried swimmer goes along the surface, averaged over
     /// a stroke: each pull surges ahead of this and each glide falls behind.
     /// Under water the same strokes go a fifth faster.
@@ -158,6 +176,10 @@ impl Default for MoveSettings {
             walk_speed: 4.5,
             sprint_speed: 6.5,
             crouch_speed: 2.0,
+            vault_height: 0.0,
+            climb_height: 0.0,
+            ladder_speed: 2.2,
+            swim: true,
             swim_speed: 1.0,
             swim_sprint_speed: 1.7,
             breath_time: 30.0,
