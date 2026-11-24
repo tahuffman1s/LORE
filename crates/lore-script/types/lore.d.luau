@@ -219,7 +219,8 @@ declare extern type Character with
     --- character runs where the stick points) or the way the camera looks
     --- ("aim", strafing, as over-the-shoulder aiming does). It turns at a
     --- speed, never snapping round. In first person the body always faces
-    --- the way the camera looks.
+    --- the way the camera looks. Standing still, it lets the look turn up
+    --- to 60° on its own, then steps round on the spot to face it.
     --- Example: game.onTick(function() game.player:setFacing(if game.input.pressed("aim") then "aim" else "move") end)
     function setFacing(self, facing: "move" | "aim"): ()
 
