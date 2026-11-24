@@ -573,6 +573,17 @@ fn check(folder: &Path) -> Result<(), String> {
             error.file
         ));
     }
+    // The models the script named are read, as a played game reads them.
+    let models = cli::check_models(&mut game);
+    if !models.is_empty() {
+        for problem in &models {
+            eprintln!("{problem}");
+        }
+        return Err(format!(
+            "{ENTRY_SCRIPT} names a model that cannot be used (shown above). Fix the file or \
+             the name, then run `lore check` again."
+        ));
+    }
     // Whether the rules depend on how often a picture is drawn: the game
     // is played again from the start at other paces.
     let paced = cli::paced(

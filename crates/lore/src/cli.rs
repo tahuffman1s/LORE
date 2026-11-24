@@ -182,6 +182,35 @@ fn rules_by_tick(game: &mut ScriptGame, actions: &ActionMap, pictures: &[u32]) -
     done
 }
 
+/// Reads the model files the script last named, the body it asked for
+/// (`game.player:setModel`) and the thing it put in the player's hand
+/// (`game.player:hold`), and says what is wrong with each that cannot be
+/// used: for `lore check`, where no body is ever drawn and such a file
+/// would otherwise first fail while the game is played. A body that lacks
+/// some of the bones the mannequin's clips move is said in the log, as it
+/// is when the game runs.
+pub fn check_models(game: &mut ScriptGame) -> Vec<String> {
+    let mut problems = Vec::new();
+    if let Some(model) = game.host().take_body_model()
+        && !lore_script::BUILT_IN_MODELS.contains(&model.as_str())
+    {
+        let read = game.read_model(&model).and_then(|scene| {
+            crate::character::Character::with_mannequin_clips(scene)
+                .map_err(|error| error.to_string())
+        });
+        if let Err(why) = read {
+            problems.push(format!("game.player:setModel(\"{model}\"): {why}"));
+        }
+    }
+    if let Some(Some(held)) = game.host().take_held()
+        && crate::props::built_in(&held.model).is_none()
+        && let Err(why) = game.read_model(&held.model)
+    {
+        problems.push(format!("game.player:hold(\"{}\"): {why}", held.model));
+    }
+    problems
+}
+
 /// Checks that the game in `folder` is there, without running its script,
 /// or says how to get one. `command` is as for [`open_game`].
 ///
