@@ -34,6 +34,10 @@ egui = { version = "0.36.2", default-features = false, optional = true }
 # Draws egui with raw `ash` handles, inside a pass of ours. MIT.
 egui-ash-renderer = { version = "0.13", default-features = false, optional = true }
 
+[dev-dependencies]
+# Poses LORE's mannequin for the tests that draw it bent.
+lore-anim = { path = "../lore-anim" }
+
 [build-dependencies]
 # Compiles the shaders in `shaders/` to SPIR-V (through naga), so no system
 # shader compiler is needed. The same crate checks a game's own shaders.

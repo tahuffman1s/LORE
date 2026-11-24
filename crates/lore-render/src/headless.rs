@@ -15,6 +15,7 @@ use crate::camera::Camera;
 use crate::effects::{Air, Effects, Splash};
 use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
+use crate::figures::Figures;
 use crate::fluid::{FluidDrop, FluidLook, PoolDrawn};
 use crate::font::Font;
 use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
@@ -91,6 +92,8 @@ pub struct Headless {
     tonemap: TonemapPipeline,
     mesh: MeshPipeline,
     meshes: Option<Meshes>,
+    /// The models added, and the figures of the frame.
+    figures: Figures,
     /// What a splash threw up, and what is stirring the water.
     effects: Effects,
     /// Whether the editor's ground grid is drawn.
@@ -219,6 +222,7 @@ impl Headless {
             tonemap,
             mesh,
             meshes: None,
+            figures: Figures::default(),
             effects: Effects::new(),
             grid: false,
             lamps: Vec::new(),
@@ -281,6 +285,25 @@ impl Headless {
         // Nothing of the old level belongs in the new one's first frame.
         self.view.cut();
         Ok(())
+    }
+
+    /// Uploads a model to be drawn as a [`Figure`](crate::Figure), as
+    /// [`Renderer::add_model`](crate::Renderer::add_model) does.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the graphics card runs out of memory or its driver reports a
+    /// failure.
+    pub fn add_model(&mut self, scene: &Scene) -> Result<crate::ModelId, RenderError> {
+        self.figures.add(&self.gpu, scene, self.filtering)
+    }
+
+    /// The models to draw besides the level, as
+    /// [`Renderer::set_figures`](crate::Renderer::set_figures) says. Each
+    /// picture drawn after this is the next frame: drawn again with no new
+    /// list, nothing has moved.
+    pub fn set_figures(&mut self, figures: &[crate::Figure<'_>]) {
+        self.figures.set(figures);
     }
 
     /// Sets the game's own shaders, as
@@ -728,6 +751,10 @@ impl Headless {
             // SAFETY: every frame is waited for, so nothing is being drawn.
             unsafe { meshes.set_filtering(self.filtering) }?;
         }
+        if self.figures.filtering_differs(self.filtering) {
+            // SAFETY: as for the level's.
+            unsafe { self.figures.set_filtering(self.filtering) }?;
+        }
         #[cfg(feature = "panels")]
         self.panels.prepare(&self.gpu, FORMAT, 1)?;
         // What flies moves on by a frame, unless time is held still.
@@ -805,6 +832,7 @@ impl Headless {
             self.view.lamp_shadows = self.lamp_shadows;
             self.view.bounce = self.bounce;
             self.view.shade = self.shade;
+            self.figures.ready();
             self.view.record(
                 self.commands,
                 0,
@@ -823,6 +851,7 @@ impl Headless {
                     lamps: &self.lamps,
                     surfaces: self.shaders.surface_draws(),
                     fluids: self.shaders.fluid_draws(),
+                    figures: Some(&self.figures),
                 },
                 camera,
                 FRAME_SECONDS,
