@@ -750,7 +750,18 @@ impl Character {
     /// from there: against a wall on the right, the camera hangs nearer the
     /// head rather than giving up the view.
     fn free_boom(&self, eye: [f32; 3], look: (f32, f32), level: &Level) -> ([f32; 3], [f32; 3]) {
-        let (pivot, shoulder, end) = self.boom_points(eye, look);
+        let (mut pivot, mut shoulder, mut end) = self.boom_points(eye, look);
+        // Under a low ceiling the pivot rises only as far as there is room
+        // over the eyes, and the whole boom hangs lower with it.
+        let rise = pivot[1] - eye[1];
+        if rise.abs() > 1e-4
+            && let Some(clear) = level.ball_cast(eye, pivot, CAMERA_RADIUS)
+        {
+            let lowered = rise * (1.0 - (clear - 0.01 / rise.abs()).max(0.0));
+            pivot[1] -= lowered;
+            shoulder[1] -= lowered;
+            end[1] -= lowered;
+        }
         // Stopped a little short of what it touched, so the boom cast from
         // there does not start against it.
         let side = level
@@ -1064,6 +1075,104 @@ mod tests {
             camera[0] < 0.4 - CAMERA_RADIUS + 0.01,
             "out of the wall: {camera:?}"
         );
+    }
+
+    /// A flat sheet with corners `a`, `b`, `c` and `d` in order, as two
+    /// triangles.
+    fn sheet(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
+        [[a, b, c], [a, c, d]]
+    }
+
+    /// A room round the origin: walls at x = ±`half_width` and z =
+    /// ±`half_length`, a floor at 0 and a ceiling at `height`.
+    fn room(half_width: f32, half_length: f32, height: f32) -> Level {
+        let (w, l, h) = (half_width, half_length, height);
+        let sheets = [
+            sheet([-w, 0.0, -l], [w, 0.0, -l], [w, 0.0, l], [-w, 0.0, l]),
+            sheet([-w, h, -l], [w, h, -l], [w, h, l], [-w, h, l]),
+            sheet([-w, 0.0, -l], [-w, 0.0, l], [-w, h, l], [-w, h, -l]),
+            sheet([w, 0.0, -l], [w, 0.0, l], [w, h, l], [w, h, -l]),
+            sheet([-w, 0.0, -l], [w, 0.0, -l], [w, h, -l], [-w, h, -l]),
+            sheet([-w, 0.0, l], [w, 0.0, l], [w, h, l], [-w, h, l]),
+        ];
+        Level::from_triangles(&sheets.concat())
+    }
+
+    /// Looks every way round in `level` from a standing start, with the
+    /// camera asked for both where a tick left the look and after a quick
+    /// turn of the mouse no tick has seen, and hands each camera to `check`.
+    fn look_all_round(level: &Level, mut check: impl FnMut([f32; 3], (f32, f32))) {
+        let mut character = Character::mannequin().unwrap();
+        character.view = View::Third;
+        let player = standing();
+        let eye = player.eye_position();
+        for turn in 0..24u8 {
+            let yaw = f32::from(turn) * std::f32::consts::TAU / 24.0;
+            for tip in -4..=4i8 {
+                let pitch = f32::from(tip) * 0.3;
+                for _ in 0..6 {
+                    character.tick(&player, (yaw, pitch), level, 1.0 / 60.0, |_, _| {});
+                }
+                for alpha in [0.0, 0.5, 1.0] {
+                    check(
+                        character.camera(alpha, eye, (yaw, pitch), level),
+                        (yaw, pitch),
+                    );
+                }
+                // A flick between two ticks: the boom is checked again.
+                let flicked = (yaw + 1.3, (pitch - 0.5).clamp(-1.5, 1.5));
+                check(character.camera(0.5, eye, flicked, level), flicked);
+            }
+        }
+    }
+
+    /// How far inside a wall the camera may be said to be: the sums of a
+    /// sweep end a hair short of exact.
+    const SLACK: f32 = 0.02;
+
+    #[test]
+    fn in_a_corridor_the_camera_stays_between_the_walls_however_the_player_looks() {
+        // 1.8 m wide and 2.4 m high: narrower than the boom is long.
+        let corridor = room(0.9, 8.0, 2.4);
+        let free = 0.9 - CAMERA_RADIUS + SLACK;
+        look_all_round(&corridor, |camera, look| {
+            assert!(
+                camera[0].abs() <= free,
+                "through a side wall at {look:?}: {camera:?}"
+            );
+            assert!(
+                camera[1] >= CAMERA_RADIUS - SLACK && camera[1] <= 2.4 - CAMERA_RADIUS + SLACK,
+                "through the floor or ceiling at {look:?}: {camera:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn against_a_wall_the_camera_never_shows_its_inside() {
+        // The player's back is half a metre from the end wall of a wide room.
+        let wide = room(6.0, 0.9, 4.0);
+        look_all_round(&wide, |camera, look| {
+            assert!(
+                camera[2].abs() <= 0.9 - CAMERA_RADIUS + SLACK,
+                "through an end wall at {look:?}: {camera:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn under_a_low_ceiling_the_camera_stays_under_it() {
+        // 30 cm over the eyes: the boom would hang higher than that.
+        let low = room(8.0, 8.0, 1.9);
+        look_all_round(&low, |camera, look| {
+            assert!(
+                camera[1] <= 1.9 - CAMERA_RADIUS + SLACK,
+                "through the ceiling at {look:?}: {camera:?}"
+            );
+            assert!(
+                camera[1] >= CAMERA_RADIUS - SLACK,
+                "through the floor at {look:?}: {camera:?}"
+            );
+        });
     }
 
     #[test]
