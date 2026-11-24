@@ -1495,3 +1495,38 @@ fn check_fails_on_a_sound_file_that_cannot_be_played_and_says_what_to_do() {
     );
     assert!(said.contains("run `lore check` again"), "{said}");
 }
+
+#[test]
+fn check_reads_the_models_a_script_names() {
+    let folder = scratch("check-models");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    let script = folder.join("game/main.luau");
+
+    // The engine's own body and things are always there.
+    fs::write(
+        &script,
+        "game.player:setModel(\"mannequin_female\")\ngame.player:hold(\"torch\")\n",
+    )
+    .unwrap();
+    let output = lore(&folder, &["check", "game"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // A file that is not in the game's folder is said, with both names.
+    fs::write(
+        &script,
+        "game.player:setModel(\"models/hero.glb\")\ngame.player:hold(\"models/axe.glb\")\n",
+    )
+    .unwrap();
+    let output = lore(&folder, &["check", "game"]);
+    assert!(!output.status.success());
+    let said = stderr(&output);
+    assert!(
+        said.contains("game.player:setModel(\"models/hero.glb\"):"),
+        "{said}"
+    );
+    assert!(
+        said.contains("game.player:hold(\"models/axe.glb\"):"),
+        "{said}"
+    );
+    assert!(said.contains("names a model that cannot be used"), "{said}");
+}
