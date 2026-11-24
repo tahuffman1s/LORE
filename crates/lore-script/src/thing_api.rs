@@ -52,6 +52,8 @@ pub(crate) const THING_FIELDS: &[&str] = &[
     "weight",
     "resting",
     "carryable",
+    "sliding",
+    "isOpen",
 ];
 
 /// What can be set on a thing.
@@ -59,7 +61,19 @@ const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable",
 
 /// What a thing can be asked.
 pub(crate) const THING_METHODS: &[&str] = &[
-    "onUse", "property", "onEnter", "onLeave", "has", "push", "teleport",
+    "onUse",
+    "property",
+    "onEnter",
+    "onLeave",
+    "has",
+    "push",
+    "teleport",
+    "moveTo",
+    "turnTo",
+    "open",
+    "close",
+    "onArrive",
+    "onBlocked",
 ];
 
 /// How close the player's eyes must be to use a thing, by default, in metres.
@@ -169,6 +183,10 @@ pub struct ThingMotion {
     pub weight: f32,
     /// Whether it has come to rest.
     pub resting: bool,
+    /// Whether it is sliding or turning somewhere (`moveTo`, a door opening).
+    pub sliding: bool,
+    /// For a thing that opens as a door does: whether it is open.
+    pub open: Option<bool>,
 }
 
 /// What a script asked of a solid thing, for the engine to do.
@@ -190,6 +208,24 @@ pub enum ThingAsk {
     },
     /// The player lets go of what they carry.
     Drop,
+    /// Slide a thing nothing pushes about, and turn it.
+    Glide {
+        /// The thing's id.
+        id: String,
+        /// Where the point it is placed by goes, in metres, or as it is.
+        position: Option<[f32; 3]>,
+        /// How far to the left it is turned at the end, in degrees, or as it is.
+        facing: Option<f32>,
+        /// How long it takes, in seconds.
+        seconds: f32,
+    },
+    /// Open or shut a door.
+    Open {
+        /// The thing's id.
+        id: String,
+        /// Open, not shut.
+        open: bool,
+    },
 }
 
 /// The heaviest thing the player picks up, by default, in kilograms: a
@@ -359,6 +395,8 @@ impl ThingState {
                 0.0
             },
             resting: true,
+            sliding: false,
+            open: (flag("opens") && !moves).then_some(false),
         })
     }
 
@@ -452,6 +490,17 @@ impl ThingState {
                 }
                 None if self.carryable_by(said, &thing.id) => {
                     see(&thing.id, at, &pick_up);
+                }
+                // A door opens and shuts by being used, with no line of script.
+                None => {
+                    if let Some(open) = moving.get(&thing.id).and_then(|told| told.open) {
+                        let door = UseSaid {
+                            text: if open { "Close" } else { "Open" }.to_owned(),
+                            handled: true,
+                            ..UseSaid::default()
+                        };
+                        see(&thing.id, at, &door);
+                    }
                 }
                 _ => {}
             }
@@ -655,6 +704,80 @@ pub(crate) fn use_prompt(lua: &Lua, shared: &Rc<Shared>, shown: &Value) -> mlua:
     Ok(())
 }
 
+/// How long a slide or a turn takes: what the script wrote, or a second.
+fn glide_seconds(lua: &Lua, method: &str, seconds: &Value, example: &str) -> mlua::Result<f32> {
+    match seconds {
+        Value::Nil => Ok(1.0),
+        given => Ok(number(
+            lua,
+            method,
+            Some(given),
+            "after where to go, how many seconds it takes, from 0 (at once) to 600",
+            example,
+        )?
+        .clamp(0.0, 600.0)),
+    }
+}
+
+/// An error unless `placed` is a solid thing that nothing pushes about,
+/// which is what a script can slide and turn.
+fn slides(lua: &Lua, shared: &Shared, placed: &Placed, done: &str) -> mlua::Result<()> {
+    match shared.things.motion(&placed.id) {
+        Some(motion) if !motion.moves => Ok(()),
+        Some(_) => Err(fail(
+            lua,
+            format!(
+                "\"{}\" cannot be {done}: it falls and is pushed about (`moves = true` in \
+                 the map), so it goes where it is knocked. Use thing:teleport or thing:push \
+                 on it, or take `moves` off it in the map to move it by script.",
+                called(placed)
+            ),
+        )),
+        None => Err(fail(
+            lua,
+            format!(
+                "\"{}\" cannot be {done}: it has no model, so there is nothing there to \
+                 move. Give it one in the map (its properties in `lore edit`), such as \
+                 `model = \"crate\"`.",
+                called(placed)
+            ),
+        )),
+    }
+}
+
+/// The functions to call when the thing placed as `id` gets where it was
+/// sliding to (`arrived`), or finds someone in its way.
+pub(crate) fn slide_handlers(shared: &Shared, id: &str, arrived: bool) -> Vec<Function> {
+    let handlers = shared.handlers.borrow();
+    let list = if arrived {
+        &handlers.arrived
+    } else {
+        &handlers.blocked
+    };
+    list.iter()
+        .filter(|(known, _)| &**known == id)
+        .map(|(_, handler)| handler.clone())
+        .collect()
+}
+
+/// The ids of the things this version of the script hears arrive
+/// (`arrived`) or be blocked, each once, in the order they were said.
+pub(crate) fn slide_watched(shared: &Shared, arrived: bool) -> Vec<String> {
+    let handlers = shared.handlers.borrow();
+    let list = if arrived {
+        &handlers.arrived
+    } else {
+        &handlers.blocked
+    };
+    let mut ids: Vec<String> = Vec::new();
+    for (id, _) in list {
+        if !ids.iter().any(|known| known == &**id) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
 /// The thing the player carries, for `game.player.carrying`.
 pub(crate) fn carrying(lua: &Lua, shared: &Shared) -> mlua::Result<Option<AnyUserData>> {
     let carried = shared.things.carrying.borrow().clone();
@@ -774,6 +897,14 @@ impl UserData for ThingRef {
         fields.add_field_method_get("resting", |lua, this| {
             let (shared, placed) = this.placed(lua, "resting")?;
             Ok(shared.things.motion(&placed.id).is_none_or(|m| m.resting))
+        });
+        fields.add_field_method_get("sliding", |lua, this| {
+            let (shared, placed) = this.placed(lua, "sliding")?;
+            Ok(shared.things.motion(&placed.id).is_some_and(|m| m.sliding))
+        });
+        fields.add_field_method_get("isOpen", |lua, this| {
+            let (shared, placed) = this.placed(lua, "isOpen")?;
+            Ok(shared.things.motion(&placed.id).and_then(|m| m.open) == Some(true))
         });
         fields.add_field_method_get("carryable", |lua, this| {
             let (shared, placed) = this.placed(lua, "carryable")?;
@@ -952,6 +1083,127 @@ impl UserData for ThingRef {
             });
             Ok(())
         });
+        methods.add_function(
+            "moveTo",
+            |lua, (this, place, seconds): (Value, Value, Value)| {
+                const EXAMPLE: &str = "lift:moveTo(game.thing(\"Top floor\"), 4)";
+                let this = receiver(lua, &this, "moveTo", "(vector.create(0, 6, 0), 4)")?;
+                let (shared, placed) = this.placed(lua, "place")?;
+                let position = match &place {
+                    Value::Vector(at) => [at.x(), at.y(), at.z()],
+                    Value::UserData(other) => match other.borrow::<ThingRef>() {
+                        Ok(other) => other.placed(lua, "position")?.1.position,
+                        Err(_) => {
+                            return Err(fail(
+                                lua,
+                                format!(
+                                    "moveTo needs where to go: a place as a vector, or \
+                                     another thing to go to. Write it like this: {EXAMPLE}"
+                                ),
+                            ));
+                        }
+                    },
+                    other => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "moveTo needs where to go: a place as a vector, or another \
+                                 thing to go to. It was given {}. Write it like this: {EXAMPLE}",
+                                describe(other)
+                            ),
+                        ));
+                    }
+                };
+                let seconds = glide_seconds(lua, "moveTo", &seconds, EXAMPLE)?;
+                crate::time_api::rules_only(lua, &shared, "thing:moveTo")?;
+                slides(lua, &shared, &placed, "moved")?;
+                shared.things.ask(ThingAsk::Glide {
+                    id: placed.id,
+                    position: Some(position),
+                    facing: None,
+                    seconds,
+                });
+                Ok(())
+            },
+        );
+        methods.add_function(
+            "turnTo",
+            |lua, (this, degrees, seconds): (Value, Value, Value)| {
+                const EXAMPLE: &str = "gate:turnTo(90, 1.5)";
+                let this = receiver(lua, &this, "turnTo", "(90, 1.5)")?;
+                let (shared, placed) = this.placed(lua, "facing")?;
+                let degrees = number(
+                    lua,
+                    "turnTo",
+                    Some(&degrees),
+                    "how far to the left the thing is turned at the end, in degrees",
+                    EXAMPLE,
+                )?;
+                let seconds = glide_seconds(lua, "turnTo", &seconds, EXAMPLE)?;
+                crate::time_api::rules_only(lua, &shared, "thing:turnTo")?;
+                slides(lua, &shared, &placed, "turned")?;
+                shared.things.ask(ThingAsk::Glide {
+                    id: placed.id,
+                    position: None,
+                    facing: Some(degrees),
+                    seconds,
+                });
+                Ok(())
+            },
+        );
+        for (method, open) in [("open", true), ("close", false)] {
+            methods.add_function(method, move |lua, this: Value| {
+                let this = receiver(lua, &this, method, "()")?;
+                let (shared, placed) = this.placed(lua, "door")?;
+                crate::time_api::rules_only(lua, &shared, method)?;
+                if shared
+                    .things
+                    .motion(&placed.id)
+                    .and_then(|m| m.open)
+                    .is_none()
+                {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "\"{}\" is not a door, so it cannot be told to {method}. Give it \
+                             a model and `opens = true` in the map (its properties in `lore \
+                             edit`); or turn it yourself with thing:turnTo(90, 1).",
+                            called(&placed)
+                        ),
+                    ));
+                }
+                shared.things.ask(ThingAsk::Open {
+                    id: placed.id,
+                    open,
+                });
+                Ok(())
+            });
+        }
+        for (method, arrived) in [("onArrive", true), ("onBlocked", false)] {
+            methods.add_function(method, move |lua, (this, handler): (Value, Value)| {
+                let this = receiver(lua, &this, method, "(function() ... end)")?;
+                let Value::Function(handler) = handler else {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{method} needs the function to call, but it was given {}. Write \
+                             it like this: lift:{method}(function() print(\"{method}\") end)",
+                            describe(&handler)
+                        ),
+                    ));
+                };
+                this.placed(lua, method)?;
+                let shared = shared_of(lua)?;
+                let mut handlers = shared.handlers.borrow_mut();
+                let list = if arrived {
+                    &mut handlers.arrived
+                } else {
+                    &mut handlers.blocked
+                };
+                list.push((Rc::clone(&this.0), handler));
+                Ok(())
+            });
+        }
         methods.add_function("onUse", |lua, (this, handler): (Value, Value)| {
             const EXAMPLE: &str = "door:onUse(function() print(\"It opens.\") end)";
             let this = receiver(lua, &this, "onUse", "(function() ... end)")?;

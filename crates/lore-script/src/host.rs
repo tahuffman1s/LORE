@@ -1366,6 +1366,59 @@ impl ScriptHost {
         self.things.set_placed(placed);
     }
 
+    /// Tells the script the thing placed as `id` got where it was sliding
+    /// to (`thing:onArrive`).
+    pub fn thing_arrived(&mut self, id: &str) {
+        self.tell_slide(id, true, None);
+    }
+
+    /// Tells the script the thing placed as `id` found `who` in its way
+    /// and is waiting for them (`thing:onBlocked`).
+    pub fn thing_blocked(&mut self, id: &str, who: CharacterId) {
+        self.tell_slide(id, false, Some(who));
+    }
+
+    /// Tells the script that each thing it listens to arrived where it was
+    /// going and found the player in its way, though nothing moved: for
+    /// `lore check`, so those functions are run. Says how many things.
+    pub fn pretend_slides(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let arrive = crate::thing_api::slide_watched(&shared, true);
+        let block = crate::thing_api::slide_watched(&shared, false);
+        for id in &arrive {
+            self.thing_arrived(id);
+        }
+        for id in &block {
+            self.thing_blocked(id, CharacterId::PLAYER);
+        }
+        arrive.len() + block.iter().filter(|id| !arrive.contains(id)).count()
+    }
+
+    fn tell_slide(&mut self, id: &str, arrived: bool, who: Option<CharacterId>) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::thing_api::slide_handlers(&shared, id, arrived);
+        if handlers.is_empty() {
+            return;
+        }
+        let Ok(thing) = crate::thing_api::handle(&version.vm, &shared, id) else {
+            return;
+        };
+        let who = who.and_then(|who| shared.handles.character(&version.vm, who).ok());
+        for handler in handlers {
+            let went = match &who {
+                Some(who) => self.call(&shared, &handler, (thing.clone(), who.clone())),
+                None => self.call(&shared, &handler, thing.clone()),
+            };
+            if self.paused || !went {
+                break;
+            }
+        }
+    }
+
     /// Whether the player may pick up the thing placed as `id`: it moves,
     /// and it is light enough or the script said it may be carried.
     #[must_use]

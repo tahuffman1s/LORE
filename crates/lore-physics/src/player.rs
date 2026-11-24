@@ -261,14 +261,15 @@ impl Player {
     /// Calls `see` with each of the things that move about in `level`
     /// ([`Level::set_solids`]) that the player touches or stands within
     /// `gap` metres of: its place in the list the level was given, and
-    /// which way it lies from the player, one unit long. What they walk
-    /// into can then be pushed.
+    /// which way it lies from the player, one unit long, and how far off
+    /// it is in metres (below 0: how deep the player is in it). What they
+    /// walk into can then be pushed, and what is under their feet known.
     pub fn touching(
         &self,
         level: &Level,
         settings: &MoveSettings,
         gap: f32,
-        mut see: impl FnMut(usize, [f32; 3]),
+        mut see: impl FnMut(usize, [f32; 3], f32),
     ) {
         let middle =
             Vector::from_array(self.position) + Vector::Y * (settings.height(self.crouched) / 2.0);
@@ -276,8 +277,8 @@ impl Player {
             &settings.shape(self.crouched),
             middle,
             gap,
-            |nth, toward| {
-                see(nth, toward.to_array());
+            |nth, toward, apart| {
+                see(nth, toward.to_array(), apart);
             },
         );
     }

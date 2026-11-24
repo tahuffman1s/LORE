@@ -43,6 +43,59 @@ struct Stood {
     /// Where it was on the tick before the newest, and where it is now.
     before: BodyState,
     now: BodyState,
+    /// For a thing nothing pushes about: where the point it is placed by
+    /// is and how far it is turned to the left, in radians. A script or a
+    /// door's opening slides and turns it from here.
+    placed: Option<([f32; 3], f32)>,
+    /// The slide it is on, if it is on one.
+    glide: Option<Glide>,
+    /// For a thing the map says opens as a door does: how far it is
+    /// turned when shut and when open, in radians, and which it is.
+    door: Option<Door>,
+    /// Whether someone was in its way on the last tick it tried to move.
+    blocked: bool,
+    /// Whether someone has been in its way since it last moved freely, so
+    /// the script is told once and not on every tick.
+    blocked_since: bool,
+    /// Whether it moved on the last tick, and did not wait.
+    advanced: bool,
+}
+
+/// A thing sliding and turning from one placing to another.
+#[derive(Debug, Clone, Copy)]
+struct Glide {
+    from: ([f32; 3], f32),
+    to: ([f32; 3], f32),
+    /// How long it takes, and how much of that has gone, in seconds.
+    seconds: f32,
+    gone: f32,
+}
+
+/// A thing that opens as a door does.
+#[derive(Debug, Clone, Copy)]
+struct Door {
+    shut: f32,
+    open: f32,
+    is_open: bool,
+}
+
+/// How far a door swings open, in degrees to the left, unless the map
+/// says (`swing`), and how long it takes, in seconds.
+const DOOR_SWING: f32 = 100.0;
+const DOOR_SECONDS: f32 = 0.7;
+
+/// Deeper than this into a thing that is sliding, in metres, someone is
+/// caught by it and not just touched: it waits for them.
+pub(super) const CAUGHT: f32 = 0.07;
+
+/// What happened to the things that slide, over one tick.
+#[derive(Debug, Default)]
+pub(super) struct Slid {
+    /// The ids of the things that got where they were going.
+    pub(super) arrived: Vec<String>,
+    /// How the thing under the rider's feet moved them: how far, and how
+    /// far round to the left, in radians.
+    pub(super) carried: ([f32; 3], f32),
 }
 
 /// Every solid thing in the world.
@@ -175,12 +228,32 @@ impl Things {
             let Some(state) = bodies.state(body) else {
                 continue;
             };
+            let yaw = entity.facing.to_radians();
+            let door = (flag("opens") && !moves).then(|| {
+                let swing = match entity.properties.get("swing") {
+                    // An angle needs no more than an f32 holds.
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(Value::Number(swing)) if swing.is_finite() => *swing as f32,
+                    _ => DOOR_SWING,
+                };
+                Door {
+                    shut: yaw,
+                    open: yaw + swing.to_radians(),
+                    is_open: false,
+                }
+            });
             stood.push(Stood {
                 id: entity.id.clone(),
                 model: solid.model,
                 middle: solid.middle,
                 before: state,
                 now: state,
+                placed: (!moves).then_some((entity.position, yaw)),
+                glide: None,
+                door,
+                blocked: false,
+                blocked_since: false,
+                advanced: false,
             });
         }
         bodies.show_to(level, None);
@@ -230,13 +303,8 @@ impl Things {
         if self.stood.is_empty() || (wish[0] == 0.0 && wish[1] == 0.0) {
             return;
         }
-        let chest = [
-            player.position[0],
-            player.position[1] + rules.standing_height * 0.55,
-            player.position[2],
-        ];
         let (bodies, carried) = (&mut self.bodies, self.carried);
-        player.touching(level, rules, TOUCH, |body, toward| {
+        player.touching(level, rules, TOUCH, |body, toward, _| {
             if carried == Some(body) {
                 return;
             }
@@ -255,7 +323,8 @@ impl Things {
             let short = (rules.walk_speed * PUSHING_PACE - along).max(0.0);
             let shove = (PUSH * step * into).min(bodies.mass(body) * short);
             if shove > 0.0 {
-                bodies.push(body, [wish[0] * shove, 0.0, wish[1] * shove], Some(chest));
+                // Through its middle, so it slides along and is not tipped over.
+                bodies.push(body, [wish[0] * shove, 0.0, wish[1] * shove], None);
             }
         });
     }
@@ -280,7 +349,9 @@ impl Things {
                     velocity: now.velocity,
                     moves: self.bodies.moves(body),
                     weight: self.bodies.mass(body),
-                    resting: now.resting,
+                    resting: now.resting && stood.glide.is_none(),
+                    sliding: stood.glide.is_some(),
+                    open: stood.door.map(|door| door.is_open),
                 },
             );
         }
@@ -312,6 +383,181 @@ impl Things {
             stood.now = now;
         }
         true
+    }
+
+    /// Sends the thing placed as `id` sliding to `position` (the point it
+    /// is placed by) and turning to `facing` degrees to the left, either
+    /// left as it is with `None`, over `seconds`.
+    ///
+    /// # Errors
+    ///
+    /// Says why not: there is no such solid thing, or it is one that falls
+    /// and is pushed, which goes where it is knocked.
+    pub(super) fn glide(
+        &mut self,
+        id: &str,
+        position: Option<[f32; 3]>,
+        facing: Option<f32>,
+        seconds: f32,
+    ) -> Result<(), &'static str> {
+        let Some(stood) = self.stood.iter_mut().find(|stood| stood.id == id) else {
+            return Err("it has no model, so there is nothing to move");
+        };
+        let Some(from) = stood.placed else {
+            return Err("it falls and is pushed about, so it goes where it is knocked");
+        };
+        let to = (
+            position.unwrap_or(from.0),
+            facing.map_or(from.1, f32::to_radians),
+        );
+        stood.glide = Some(Glide {
+            from,
+            to,
+            seconds: seconds.max(0.0),
+            gone: 0.0,
+        });
+        Ok(())
+    }
+
+    /// Whether the thing placed as `id` opens as a door does, and if so
+    /// whether it is open (or on its way to being).
+    pub(super) fn door(&self, id: &str) -> Option<bool> {
+        let stood = self.stood.iter().find(|stood| stood.id == id)?;
+        stood.door.map(|door| door.is_open)
+    }
+
+    /// Opens or shuts the door placed as `id`. Says whether it is a door.
+    pub(super) fn open(&mut self, id: &str, open: bool) -> bool {
+        let Some(stood) = self.stood.iter_mut().find(|stood| stood.id == id) else {
+            return false;
+        };
+        let (Some(door), Some(from)) = (&mut stood.door, stood.placed) else {
+            return false;
+        };
+        if door.is_open != open || stood.glide.is_none() {
+            door.is_open = open;
+            let to = if open { door.open } else { door.shut };
+            // A door half way round takes the rest of the time.
+            let whole = (door.open - door.shut).abs().max(1e-3);
+            stood.glide = Some(Glide {
+                from,
+                to: (from.0, to),
+                seconds: DOOR_SECONDS * ((to - from.1).abs() / whole).min(1.0),
+                gone: 0.0,
+            });
+        }
+        true
+    }
+
+    /// Moves every sliding thing on by one tick of `step` seconds, before
+    /// the bodies are stepped, and says what came of it. `rider` is the
+    /// thing someone stands on and where their feet are: they are told how
+    /// it moved them. A thing that was blocked on the last tick waits.
+    pub(super) fn slide(&mut self, step: f32, rider: Option<(usize, [f32; 3])>) -> Slid {
+        let mut slid = Slid::default();
+        for (body, stood) in self.stood.iter_mut().enumerate() {
+            let (Some(glide), Some(placed)) = (&mut stood.glide, stood.placed) else {
+                continue;
+            };
+            if stood.blocked {
+                // Whoever was in the way has this tick to get out of it.
+                stood.blocked = false;
+                stood.advanced = false;
+                continue;
+            }
+            stood.advanced = true;
+            glide.gone += step;
+            let share = if glide.seconds > 0.0 {
+                (glide.gone / glide.seconds).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            // Eased in and out, so nothing starts or stops with a jolt.
+            let eased = share * share * (3.0 - 2.0 * share);
+            let next = (
+                std::array::from_fn(|i| {
+                    glide.from.0[i] + (glide.to.0[i] - glide.from.0[i]) * eased
+                }),
+                glide.from.1 + (glide.to.1 - glide.from.1) * eased,
+            );
+            if let Some((under, feet)) = rider
+                && under == body
+            {
+                // Whoever stands on it goes with it and turns with it:
+                // their place from the thing's own point, turned as it turns.
+                let turn = next.1 - placed.1;
+                let (sin, cos) = turn.sin_cos();
+                let (x, z) = (feet[0] - placed.0[0], feet[2] - placed.0[2]);
+                let there = [
+                    next.0[0] + x * cos + z * sin,
+                    feet[1] + (next.0[1] - placed.0[1]),
+                    next.0[2] - x * sin + z * cos,
+                ];
+                slid.carried = (std::array::from_fn(|i| there[i] - feet[i]), turn);
+            }
+            stood.placed = Some(next);
+            let offset = turned(yaw_turn(next.1), stood.middle);
+            self.bodies
+                .slide(body, std::array::from_fn(|i| next.0[i] + offset[i]), next.1);
+            if share >= 1.0 {
+                stood.glide = None;
+                slid.arrived.push(stood.id.clone());
+            }
+        }
+        slid
+    }
+
+    /// Says that someone is caught in the thing numbered `body`, which is
+    /// sliding: it goes back to where it was a tick ago and waits. Gives
+    /// its id the first time, and `None` while it goes on being blocked or
+    /// if it was not sliding.
+    pub(super) fn caught_in(&mut self, body: usize, step: f32) -> Option<&str> {
+        let stood = self.stood.get_mut(body)?;
+        let (Some(glide), Some(_)) = (&mut stood.glide, stood.placed) else {
+            return None;
+        };
+        glide.gone = (glide.gone - step).max(0.0);
+        let share = if glide.seconds > 0.0 {
+            (glide.gone / glide.seconds).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let eased = share * share * (3.0 - 2.0 * share);
+        let back = (
+            std::array::from_fn(|i| glide.from.0[i] + (glide.to.0[i] - glide.from.0[i]) * eased),
+            glide.from.1 + (glide.to.1 - glide.from.1) * eased,
+        );
+        stood.placed = Some(back);
+        let offset = turned(yaw_turn(back.1), stood.middle);
+        self.bodies
+            .slide(body, std::array::from_fn(|i| back.0[i] + offset[i]), back.1);
+        let first = !stood.blocked_since;
+        stood.blocked = true;
+        stood.blocked_since = true;
+        first.then_some(stood.id.as_str())
+    }
+
+    /// Says that nobody is caught in the thing numbered `body` any more.
+    pub(super) fn clear_of(&mut self, body: usize) {
+        // Only a tick on which it moved and caught nobody shows the way
+        // is clear: on the tick it waits, nobody is caught either.
+        if let Some(stood) = self.stood.get_mut(body)
+            && (stood.advanced || stood.glide.is_none())
+        {
+            stood.blocked_since = false;
+        }
+    }
+
+    /// Whether the thing numbered `body` is sliding now.
+    pub(super) fn sliding(&self, body: usize) -> bool {
+        self.stood
+            .get(body)
+            .is_some_and(|stood| stood.glide.is_some())
+    }
+
+    /// How many solid things there are.
+    pub(super) fn len(&self) -> usize {
+        self.stood.len()
     }
 
     /// The id of the thing the player carries.
@@ -414,6 +660,10 @@ pub(super) struct Told {
     pub(super) moves: bool,
     pub(super) weight: f32,
     pub(super) resting: bool,
+    /// Whether it is sliding or turning somewhere.
+    pub(super) sliding: bool,
+    /// For a door: whether it is open.
+    pub(super) open: Option<bool>,
 }
 
 /// What takes a thing's model into the world, `alpha` of the way from

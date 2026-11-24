@@ -774,13 +774,14 @@ impl Level {
     /// Which of the things that move about in the level the capsule
     /// `shape` at `centre` touches or is within `gap` metres of: its place
     /// in the list given to [`set_solids`](Self::set_solids), and which
-    /// way it lies from the capsule, one unit long.
+    /// way it lies from the capsule, one unit long, and how far off it is
+    /// (below 0: how deep the capsule is in it).
     pub(crate) fn touching(
         &self,
         shape: &Capsule,
         centre: Vector,
         gap: f32,
-        mut see: impl FnMut(usize, Vector),
+        mut see: impl FnMut(usize, Vector, f32),
     ) {
         let here = Pose::from_translation(centre.as_dvec3());
         for (nth, (solid, pose)) in self.solids.read().iter().enumerate() {
@@ -788,7 +789,9 @@ impl Level {
             if let Ok(Some(contact)) = contact
                 && let Some(toward) = contact.normal1.try_normalize()
             {
-                see(nth, toward.as_vec3());
+                // How far apart they are: below 0, how deep one is in the other.
+                #[allow(clippy::cast_possible_truncation)]
+                see(nth, toward.as_vec3(), contact.dist as f32);
             }
         }
     }

@@ -175,6 +175,8 @@ impl ScriptGame {
                     moves,
                     weight: if moves { weight } else { 0.0 },
                     resting: true,
+                    sliding: false,
+                    open: (flag("opens") && !moves).then_some(false),
                 },
             ));
         }

@@ -112,6 +112,9 @@ pub(crate) struct Handlers {
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
+    /// `thing:onArrive` and `thing:onBlocked`, each with the thing's id.
+    pub arrived: Vec<(Rc<str>, Function)>,
+    pub blocked: Vec<(Rc<str>, Function)>,
     /// `game.onPickUp` and `game.onDrop`.
     pub picked_up: Vec<Function>,
     pub dropped: Vec<Function>,

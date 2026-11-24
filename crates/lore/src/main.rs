@@ -525,6 +525,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut used = 0;
     let mut zones = 0;
     let mut carrying = false;
+    let mut slides = 0;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -668,6 +669,10 @@ fn check(folder: &Path) -> Result<(), String> {
         // watches and out again.
         zones = game.host_mut().pretend_zone_crossings();
         game.tick(input.tick(), step);
+        // And each thing the script slides about is said to have arrived,
+        // and to have found the player in its way.
+        slides = game.host_mut().pretend_slides();
+        game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -794,6 +799,14 @@ fn check(folder: &Path) -> Result<(), String> {
              light enough to pick up) was used once, with no errors. Nobody walked up to \
              them: whether a player can reach each is for `lore run`."
         ),
+    }
+    if slides > 0 {
+        println!(
+            "{slides} of the things the script slides about (thing:onArrive, thing:onBlocked) \
+             {} said to have arrived, or to have found the player in the way, with no \
+             errors. Nothing really moved.",
+            if slides == 1 { "was" } else { "were" }
+        );
     }
     if carrying {
         println!(
