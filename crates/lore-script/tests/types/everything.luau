@@ -575,3 +575,24 @@ game.onTick(function()
         game.quit()
     end
 end)
+
+-- Health.
+game.player:setMaxHealth(150)
+game.player:setHealth(120)
+game.player:heal(10)
+game.onDamage(function(hurt: Hurt)
+    local who: Character = hurt.victim
+    local amount: number = hurt.amount
+    local how: string = hurt.how
+    local died: boolean = hurt.died
+    print(who.name, amount, how, died, hurt.from)
+end)
+game.onDeath(function(victim: Character, killer: Character?)
+    print(victim.health, victim.maxHealth, victim.dead, killer)
+    victim:setHealth(victim.maxHealth)
+end)
+game.onTick(function()
+    if game.input.justPressed("use_item") then
+        game.player:damage(5, { how = "thorns", from = game.player })
+    end
+end)

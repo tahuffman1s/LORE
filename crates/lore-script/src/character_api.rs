@@ -25,7 +25,7 @@ use crate::weapon_api;
 /// What can be read from a character.
 pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "name", "position", "weapon", "ammo", "reserve", "velocity", "eye", "aim", "grounded",
-    "movement", "flySpeed", "view", "facing", "model", "clips",
+    "movement", "flySpeed", "view", "facing", "model", "clips", "health", "maxHealth", "dead",
 ];
 
 /// What a character can be told to do.
@@ -44,6 +44,10 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "stop",
     "isPlaying",
     "onMoment",
+    "setHealth",
+    "setMaxHealth",
+    "heal",
+    "damage",
 ];
 
 /// How high the eyes are above the feet of a character the engine has said
@@ -72,7 +76,13 @@ struct Entry {
     position: [f32; 3],
     /// How it is moving, as the engine last said.
     motion: Option<Motion>,
+    /// How much health it has, and the most it can have.
+    health: f32,
+    max_health: f32,
 }
+
+/// The health every character starts with.
+pub const DEFAULT_HEALTH: f32 = 100.0;
 
 /// Who is in the world, shared by the host and every version of the
 /// script. The player is always the first.
@@ -88,6 +98,8 @@ impl Default for Characters {
             name: PLAYER_NAME.to_owned(),
             position: [0.0; 3],
             motion: None,
+            health: DEFAULT_HEALTH,
+            max_health: DEFAULT_HEALTH,
         };
         Self {
             here: RefCell::new(vec![player]),
@@ -106,8 +118,30 @@ impl Characters {
             name: name.to_owned(),
             position: [0.0; 3],
             motion: None,
+            health: DEFAULT_HEALTH,
+            max_health: DEFAULT_HEALTH,
         });
         id
+    }
+
+    /// A character's health and the most it can have.
+    pub fn health(&self, id: CharacterId) -> Option<(f32, f32)> {
+        let here = self.here.borrow();
+        let entry = here.iter().find(|entry| entry.id == id)?;
+        Some((entry.health, entry.max_health))
+    }
+
+    /// Sets a character's health (kept from 0 to its most) and, if given,
+    /// the most it can have. Gives the health before and after.
+    pub fn set_health(&self, id: CharacterId, health: f32, max: Option<f32>) -> Option<(f32, f32)> {
+        let mut here = self.here.borrow_mut();
+        let entry = here.iter_mut().find(|entry| entry.id == id)?;
+        if let Some(max) = max {
+            entry.max_health = max.max(0.0);
+        }
+        let before = entry.health;
+        entry.health = health.clamp(0.0, entry.max_health);
+        Some((before, entry.health))
     }
 
     /// Takes a character out. False if it was not here, and for the
@@ -297,6 +331,18 @@ impl UserData for CharacterRef {
                 crate::tools_api::DEFAULT_FLY_SPEED
             })
         });
+        fields.add_field_method_get("health", |lua, this| {
+            this.read(lua, "health")?;
+            Ok(shared_of(lua)?.characters.health(this.0).map_or(0.0, |h| h.0))
+        });
+        fields.add_field_method_get("maxHealth", |lua, this| {
+            this.read(lua, "maxHealth")?;
+            Ok(shared_of(lua)?.characters.health(this.0).map_or(0.0, |h| h.1))
+        });
+        fields.add_field_method_get("dead", |lua, this| {
+            this.read(lua, "dead")?;
+            Ok(shared_of(lua)?.characters.health(this.0).is_none_or(|h| h.0 <= 0.0))
+        });
         fields.add_field_method_get("view", |lua, this| {
             this.read(lua, "view")?;
             only_player(lua, *this, "view", "seen in first or third person")?;
@@ -360,6 +406,26 @@ impl UserData for CharacterRef {
             let this = receiver(lua, &this, "setFlySpeed", "(20)")?;
             only_player(lua, this, "setFlySpeed", "given a flying speed")?;
             crate::tools_api::set_fly_speed(lua, &shared_of(lua)?, &speed)
+        });
+        methods.add_function("setHealth", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "setHealth", "(100)")?;
+            this.read(lua, "setHealth")?;
+            crate::health_api::set_health(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function("setMaxHealth", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "setMaxHealth", "(150)")?;
+            this.read(lua, "setMaxHealth")?;
+            crate::health_api::set_max_health(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function("heal", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "heal", "(25)")?;
+            this.read(lua, "heal")?;
+            crate::health_api::heal(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function("damage", |lua, (this, points, options): (Value, Value, Value)| {
+            let this = receiver(lua, &this, "damage", "(10, { how = \"spikes\" })")?;
+            this.read(lua, "damage")?;
+            crate::health_api::damage(lua, &shared_of(lua)?, this.0, &points, &options)
         });
         methods.add_function("setView", |lua, (this, view): (Value, Value)| {
             let this = receiver(lua, &this, "setView", "(\"third\")")?;
@@ -431,6 +497,14 @@ impl UserData for CharacterRef {
 }
 
 /// The character `value` stands for; the player when it is not one.
+/// The character a script value is, if it is one.
+pub(crate) fn id_of_value(_lua: &Lua, value: &Value) -> Option<CharacterId> {
+    match value {
+        Value::UserData(value) => character_id(value),
+        _ => None,
+    }
+}
+
 fn id_of(value: &Value) -> CharacterId {
     match value {
         Value::UserData(value) => character_id(value).unwrap_or(CharacterId::PLAYER),

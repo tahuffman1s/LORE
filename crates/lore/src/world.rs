@@ -636,6 +636,13 @@ impl Game for World {
         // is told of below and in its own tick, and how they are moving.
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
+        // A hard landing hurts, through the same path as a weapon.
+        if walking && player.grounded && !before.grounded {
+            let hurt = fall_damage(-before.velocity[1]);
+            if hurt > 0.0 {
+                host.damage(CharacterId::PLAYER, hurt, None, "fall");
+            }
+        }
         let aim = aim_of(asked.movement.yaw, asked.pitch);
         host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
         // What was heard of the tick just run: when a foot came down, and
@@ -898,6 +905,22 @@ pub struct Playing {
     /// The player's body, and the camera at its eyes or over its shoulder.
     /// `None` only if the engine's own body could not be read.
     character: Option<Character>,
+}
+
+/// How fast a body may hit the ground unhurt, in metres a second: a drop
+/// of about six metres (v² = 2gh).
+const SAFE_LANDING: f32 = 11.0;
+
+/// The health a landing at `speed` metres a second takes: none up to
+/// [`SAFE_LANDING`], then growing with the square of the excess, as the
+/// energy to soak up does. Ten metres takes about 18 points of 100;
+/// twenty, about 150.
+fn fall_damage(speed: f32) -> f32 {
+    if !speed.is_finite() || speed <= SAFE_LANDING {
+        return 0.0;
+    }
+    let over = speed - SAFE_LANDING;
+    2.0 * over * over
 }
 
 /// The most marks on the water kept for a frame to show.
@@ -1662,6 +1685,16 @@ mod tests {
         }
         // Drawing does not change the game: the ticks are where they were.
         assert_eq!(game.seen(), after);
+    }
+
+    #[test]
+    fn a_hard_landing_hurts_and_a_short_drop_does_not() {
+        let from = |metres: f32| fall_damage((2.0 * 9.81 * metres).sqrt());
+        assert_eq!(from(3.0), 0.0);
+        assert_eq!(from(6.0), 0.0);
+        assert!((10.0..30.0).contains(&from(10.0)), "{}", from(10.0));
+        assert!(from(20.0) > 100.0, "{}", from(20.0));
+        assert_eq!(fall_damage(f32::NAN), 0.0);
     }
 
     #[test]

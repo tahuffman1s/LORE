@@ -97,6 +97,20 @@ declare extern type Character with
     --- Example: print(game.player.model)
     model: string
 
+    --- How much health the character has, from 0 to `maxHealth`. Every
+    --- character starts with 100. Weapons, hard landings and `damage` take
+    --- it; `heal` and `setHealth` give it back.
+    --- Example: if game.player.health < 25 then print("Low health") end
+    health: number
+
+    --- The most health the character can have: 100 until `setMaxHealth`.
+    --- Example: print(game.player.maxHealth)
+    maxHealth: number
+
+    --- True once the character's health has reached 0.
+    --- Example: if game.player.dead then print("Game over") end
+    dead: boolean
+
     --- The names of the clips the body can play, for `game.player:play`.
     --- Example: for _, clip in game.player.clips do print(clip) end
     clips: { string }
@@ -135,6 +149,26 @@ declare extern type Character with
     --- `game.player` can be changed so far.
     --- Example: game.player:setFlySpeed(30)
     function setFlySpeed(self, metresPerSecond: number): ()
+
+    --- Sets the character's health, from 0 to its most. Setting it above
+    --- 0 brings back the dead.
+    --- Example: game.onDeath(function(victim) victim:setHealth(victim.maxHealth) end)
+    function setHealth(self, points: number): ()
+
+    --- Sets the most health the character can have. One at full health
+    --- stays full.
+    --- Example: game.player:setMaxHealth(150)
+    function setMaxHealth(self, points: number): ()
+
+    --- Gives back health, up to its most. The dead stay dead.
+    --- Example: game.player:heal(25)
+    function heal(self, points: number): ()
+
+    --- Takes health away through the one path every hurt takes, so
+    --- `game.onDamage` and `game.onDeath` hear of it. `from` is who did it
+    --- and `how` a word for what did it ("script" if not given).
+    --- Example: game.player:damage(10, { how = "spikes" })
+    function damage(self, points: number, options: { from: Character?, how: string? }?): ()
 
     --- Sees the world from the eyes ("first") or from behind and over a
     --- shoulder ("third"). The camera travels between the two rather than
@@ -198,6 +232,21 @@ declare extern type Character with
     --- twice, at any frame rate. Only `game.player` has moments so far.
     --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
     function onMoment(self, name: string, handler: (clip: string) -> ()): ()
+end
+
+--- A hurt: what a `game.onDamage` function is handed.
+--- Example: game.onDamage(function(hurt) if hurt.how == "fall" then print("Ouch") end end)
+declare extern type Hurt with
+    --- Who was hurt.
+    victim: Character
+    --- How many health points were taken.
+    amount: number
+    --- Who did it, if anyone did.
+    from: Character?
+    --- What did it: "fall", a weapon's name, or the word a script gave.
+    how: string
+    --- True if it took the last of their health.
+    died: boolean
 end
 
 --- Where a shot landed: what a `game.onWeaponHit` function is handed.
@@ -1564,6 +1613,20 @@ declare game: {
     --- is not `game.onReload`, which is about the script file being saved.
     --- Example: game.onWeaponReload(function(shooter) print(shooter.reserve .. " spare") end)
     onWeaponReload: (handler: (shooter: Character) -> ()) -> (),
+
+    --- Calls `handler` for every hurt, whoever or whatever did it: a
+    --- weapon, a fall, or a script's `damage`. It is handed what happened:
+    --- `victim`, `amount` (health points taken), `from` (who did it, if
+    --- anyone), `how` ("fall", a weapon's name, or the script's word) and
+    --- `died`. Heard on the tick it happened.
+    --- Example: game.onDamage(function(hurt) print(hurt.victim.name .. " lost " .. hurt.amount) end)
+    onDamage: (handler: (hurt: Hurt) -> ()) -> (),
+
+    --- Calls `handler` when a character's health reaches 0, with who died
+    --- and who killed them (nil if no one did). Nothing else happens on
+    --- death: the game says what does.
+    --- Example: game.onDeath(function(victim) if victim == game.player then game.player:setHealth(100) end end)
+    onDeath: (handler: (victim: Character, killer: Character?) -> ()) -> (),
 
     --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
     --- inside the game's folder, named without the folder and without `.wav`

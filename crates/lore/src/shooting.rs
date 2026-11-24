@@ -182,7 +182,13 @@ impl Shooting {
             match told {
                 Told::Fired => host.weapon_fired(CharacterId::PLAYER),
                 Told::Reloading => host.weapon_reloading(CharacterId::PLAYER),
-                Told::Hit(hit) => host.weapon_hit(&hit),
+                Told::Hit(hit) => {
+                    host.weapon_hit(&hit);
+                    // A hit hurts through the one path every hurt takes.
+                    if let Some(victim) = hit.victim {
+                        host.damage(victim, hit.damage, Some(hit.shooter), &hit.weapon);
+                    }
+                }
             }
         }
     }

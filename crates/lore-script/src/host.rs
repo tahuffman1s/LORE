@@ -159,6 +159,8 @@ pub struct ScriptHost {
     shaders: Rc<ShaderState>,
     /// The player's body and camera; they outlive a reload too.
     body: Rc<crate::body_api::BodyState>,
+    /// Hurts the script has not yet heard of; they outlive a reload too.
+    health: Rc<crate::health_api::HealthState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
     /// How many versions of the script have run: each has its own HUD.
@@ -351,6 +353,7 @@ impl ScriptHost {
             fluids: Rc::default(),
             lamps: Rc::default(),
             body: Rc::default(),
+            health: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
             versions: 0,
@@ -426,7 +429,9 @@ impl ScriptHost {
         if !stopped {
             self.run_timers();
         }
+        self.hurts_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
+        self.hurts_due();
         if !stopped {
             self.clock.end_tick();
         }
@@ -735,6 +740,49 @@ impl ScriptHost {
             for handler in crate::body_api::moment_handlers(&shared, &moment) {
                 if !self.call(&shared, &handler, clip.clone()) {
                     return;
+                }
+            }
+        }
+    }
+
+    /// Hurts `victim` by `amount` health points, as `how` says ("fall", a
+    /// weapon's name), by `from` if someone did it: the one path every hurt
+    /// takes. The health changes at once; the script's `game.onDamage` and
+    /// (if it died of it) `game.onDeath` functions hear of it on its tick.
+    /// Gives back whether it died of it.
+    pub fn damage(&mut self, victim: CharacterId, amount: f32, from: Option<CharacterId>, how: &str) -> bool {
+        crate::health_api::hurt(&self.characters, &self.health, victim, amount, from, how)
+    }
+
+    /// A character's health and the most it can have, or `None` for one
+    /// that is not in the world.
+    #[must_use]
+    pub fn health(&self, id: CharacterId) -> Option<(f32, f32)> {
+        self.characters.health(id)
+    }
+
+    /// Tells the script of the hurts since it last heard: `game.onDamage`
+    /// for each, then `game.onDeath` for each that died of it.
+    fn hurts_due(&mut self) {
+        let hurts = self.health.take();
+        if hurts.is_empty() || self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let (vm, shared) = (version.vm.clone(), Rc::clone(&version.shared));
+        for hurt in &hurts {
+            if let Ok(table) = crate::health_api::hurt_table(&vm, &shared, hurt) {
+                self.call_all(|handlers| &handlers.damage, table);
+            }
+            if hurt.died {
+                let victim = shared.handles.character(&vm, hurt.victim);
+                let killer = hurt.from.filter(|f| shared.characters.has(*f)).map(|f| shared.handles.character(&vm, f));
+                if let Ok(victim) = victim {
+                    let killer = match killer {
+                        Some(Ok(k)) => mlua::Value::UserData(k),
+                        _ => mlua::Value::Nil,
+                    };
+                    self.call_all(|handlers| &handlers.death, (victim, killer));
                 }
             }
         }
@@ -1555,6 +1603,7 @@ impl ScriptHost {
             lamps: Rc::clone(&self.lamps),
             shaders: Rc::clone(&self.shaders),
             body: Rc::clone(&self.body),
+            health: Rc::clone(&self.health),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             audio: Rc::clone(&self.audio),
