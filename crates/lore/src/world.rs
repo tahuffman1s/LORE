@@ -1248,7 +1248,7 @@ impl Playing {
     }
 
     /// Hands the frame the player's body, drawn between the last two ticks.
-    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3]) {
+    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3], pitch: f32) {
         let Some(character) = &mut self.character else {
             return;
         };
@@ -1262,7 +1262,7 @@ impl Playing {
             None => player.position,
         };
         let model = std::sync::Arc::clone(character.model());
-        let drawn = character.figures(frame.alpha(), feet, camera);
+        let drawn = character.figures(frame.alpha(), feet, camera, pitch);
         frame.show_figure(&model, &drawn);
     }
 
@@ -1502,7 +1502,7 @@ impl Game for Playing {
             )
         });
         frame.look_from(camera, seen.yaw, seen.pitch);
-        self.show_body(frame, camera);
+        self.show_body(frame, camera, seen.pitch);
         self.show_water(frame, seen.eye);
         for tread in self.treads.drain(..) {
             frame.tread(tread);
