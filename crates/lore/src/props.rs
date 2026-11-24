@@ -10,7 +10,9 @@ use std::sync::{Arc, OnceLock};
 
 use lore_assets::{Instance, Material, Mesh, MeshPart, Scene};
 
-use crate::standin::{at, block};
+use lore_physics::BodyShape;
+
+use crate::standin::{at, block, face};
 
 /// One box of a held thing: its middle on the axis, its size, its colour,
 /// how metallic and how rough it is.
@@ -113,6 +115,182 @@ pub(crate) fn built_in(name: &str) -> Option<Arc<Scene>> {
     made.get(at).cloned()
 }
 
+/// A thing that stands in a level and is solid: its model, the shape it
+/// collides as, where that shape's middle is from where the thing is
+/// placed, and how heavy it is if it moves, in kilograms.
+#[derive(Debug, Clone)]
+pub(crate) struct Solid {
+    pub(crate) model: Arc<Scene>,
+    pub(crate) shape: BodyShape,
+    pub(crate) middle: [f32; 3],
+    pub(crate) weight: f32,
+    /// Where it turns about, from where it is placed, if it hangs on a
+    /// hinge when it moves: a door's edge.
+    pub(crate) hinge: Option<[f32; 3]>,
+}
+
+/// The names of the solid things the engine has, as a map gives them.
+pub(crate) const SOLID_NAMES: [&str; 3] = ["crate", "barrel", "door"];
+
+/// How many sides the barrel has.
+const BARREL_SIDES: u8 = 14;
+
+/// A scene of one mesh in one colour.
+fn one(name: &str, part: MeshPart, color: [f32; 4], roughness: f32) -> Scene {
+    let mut scene = Scene::default();
+    scene.materials.push(Material {
+        name: Some(name.to_owned()),
+        base_color: color,
+        roughness,
+        ..Material::default()
+    });
+    scene.meshes.push(Mesh {
+        name: Some(name.to_owned()),
+        parts: vec![part],
+    });
+    scene.instances.push(Instance {
+        mesh: 0,
+        transform: at([0.0; 3], [1.0; 3]),
+        mirrored: false,
+        name: Some(name.to_owned()),
+        extras: None,
+    });
+    scene
+}
+
+/// An upright barrel standing on the origin: `radius` across and `high`.
+fn barrel(radius: f32, high: f32) -> MeshPart {
+    let mut part = MeshPart::default();
+    let point = |turn: u8, y: f32| {
+        let angle = f32::from(turn) * std::f32::consts::TAU / f32::from(BARREL_SIDES);
+        [radius * angle.cos(), y, radius * angle.sin()]
+    };
+    for side in 0..BARREL_SIDES {
+        let (from, to) = (side, side + 1);
+        let middle = (f32::from(side) + 0.5) * std::f32::consts::TAU / f32::from(BARREL_SIDES);
+        face(
+            &mut part,
+            [
+                point(to, 0.0),
+                point(from, 0.0),
+                point(from, high),
+                point(to, high),
+            ],
+            [middle.cos(), 0.0, middle.sin()],
+        );
+        // The lid and the bottom, a slice each: a face with two corners
+        // in one place is a triangle.
+        let top = [0.0, high, 0.0];
+        face(
+            &mut part,
+            [top, point(to, high), point(from, high), top],
+            [0.0, 1.0, 0.0],
+        );
+        face(
+            &mut part,
+            [[0.0; 3], point(from, 0.0), point(to, 0.0), [0.0; 3]],
+            [0.0, -1.0, 0.0],
+        );
+    }
+    part
+}
+
+/// The solid thing called `name`, if the engine has one: a crate a metre
+/// each way, a barrel, or a door hung by its edge. Each stands on where it
+/// is placed.
+pub(crate) fn solid(name: &str) -> Option<Solid> {
+    static MADE: OnceLock<[Arc<Scene>; 3]> = OnceLock::new();
+    let made = MADE.get_or_init(|| {
+        [
+            Arc::new(one("crate", block(), [0.52, 0.36, 0.2, 1.0], 0.85)),
+            Arc::new(one(
+                "barrel",
+                barrel(0.35, 1.0),
+                [0.38, 0.25, 0.14, 1.0],
+                0.75,
+            )),
+            // A door a metre wide and two high, its hinge along the edge
+            // it is placed at.
+            Arc::new({
+                let mut door = one("door", block(), [0.33, 0.22, 0.13, 1.0], 0.8);
+                door.instances[0].transform = at([0.5, 0.0, 0.0], [1.0, 2.0, 0.06]);
+                door
+            }),
+        ]
+    });
+    let (nth, shape, middle, weight, hinge) = match name {
+        "crate" => (
+            0,
+            BodyShape::Box { half: [0.5; 3] },
+            [0.0, 0.5, 0.0],
+            20.0,
+            None,
+        ),
+        "barrel" => (
+            1,
+            BodyShape::Barrel {
+                radius: 0.35,
+                half_height: 0.5,
+            },
+            [0.0, 0.5, 0.0],
+            30.0,
+            None,
+        ),
+        "door" => (
+            2,
+            BodyShape::Box {
+                half: [0.5, 1.0, 0.03],
+            },
+            [0.5, 1.0, 0.0],
+            25.0,
+            Some([0.0, 1.0, 0.0]),
+        ),
+        _ => return None,
+    };
+    Some(Solid {
+        model: Arc::clone(&made[nth]),
+        shape,
+        middle,
+        weight,
+        hinge,
+    })
+}
+
+/// A model of a game's own as a solid thing: it collides as the box that
+/// holds all of it, and weighs as much as that box of water would, a tenth
+/// as dense (a crate, not a block of stone), unless the map says.
+pub(crate) fn solid_of(model: Scene) -> Option<Solid> {
+    let (mut low, mut high) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for instance in &model.instances {
+        let Some(mesh) = model.meshes.get(instance.mesh as usize) else {
+            continue;
+        };
+        for point in mesh.parts.iter().flat_map(|part| &part.positions) {
+            let t = &instance.transform;
+            for axis in 0..3 {
+                let placed = t[0][axis] * point[0]
+                    + t[1][axis] * point[1]
+                    + t[2][axis] * point[2]
+                    + t[3][axis];
+                low[axis] = low[axis].min(placed);
+                high[axis] = high[axis].max(placed);
+            }
+        }
+    }
+    if (0..3).any(|axis| !(high[axis] - low[axis]).is_finite() || high[axis] < low[axis]) {
+        return None;
+    }
+    let half: [f32; 3] = std::array::from_fn(|axis| ((high[axis] - low[axis]) / 2.0).max(0.01));
+    let litres = 8.0 * half[0] * half[1] * half[2] * 1000.0;
+    Some(Solid {
+        model: Arc::new(model),
+        shape: BodyShape::Box { half },
+        middle: std::array::from_fn(|axis| (high[axis] + low[axis]) / 2.0),
+        weight: (litres * 0.1).clamp(0.5, 5000.0),
+        hinge: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +314,27 @@ mod tests {
             );
         }
         assert!(built_in("spoon").is_none());
+        // The solid things are made too, each with a model and a weight.
+        for name in SOLID_NAMES {
+            let thing = solid(name).unwrap();
+            assert!(
+                !thing.model.meshes[0].parts[0].positions.is_empty(),
+                "{name}"
+            );
+            assert!(thing.weight > 0.0 && thing.middle[1] > 0.0, "{name}");
+        }
+        assert!(solid("anvil").is_none() && solid("door").unwrap().hinge.is_some());
+        // A model of a game's own is the box that holds it.
+        let own = solid_of((*solid("door").unwrap().model).clone()).unwrap();
+        assert_eq!(
+            own.shape,
+            BodyShape::Box {
+                half: [0.5, 1.0, 0.03]
+            }
+        );
+        assert_eq!(own.middle, [0.5, 1.0, 0.0]);
+        assert!((own.weight - 12.0).abs() < 0.01, "{}", own.weight);
+        assert!(solid_of(Scene::default()).is_none());
         // Made once: asking again hands out the same one.
         assert!(Arc::ptr_eq(
             &built_in("sword").unwrap(),

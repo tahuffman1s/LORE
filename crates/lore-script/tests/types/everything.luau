@@ -518,6 +518,14 @@ if false then
     local bridge: Thing = game.zone("Bridge")
     print(bridge)
 end
+for _, solid: Thing in game.things("prop") do
+    local speed: vector = solid.velocity
+    print(speed, solid.moves, solid.weight, solid.resting)
+    if solid.moves then
+        solid:push(vector.create(0, 60, -120))
+        solid:teleport(vector.create(0, 2, 0))
+    end
+end
 local chests: { Thing } = game.things("chest")
 print(#chests)
 if false then
