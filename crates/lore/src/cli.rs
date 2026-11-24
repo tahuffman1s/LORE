@@ -208,6 +208,30 @@ pub fn check_models(game: &mut ScriptGame) -> Vec<String> {
     {
         problems.push(format!("game.player:hold(\"{}\"): {why}", held.model));
     }
+    // And the models the map gives the things it places.
+    for entity in game.map().entities() {
+        if let Some(crate::map::Value::Text(model)) = entity.properties.get("model")
+            && crate::props::solid(model).is_none()
+        {
+            let called = if entity.name.is_empty() {
+                &entity.id
+            } else {
+                &entity.name
+            };
+            match game.read_model(model).map(crate::props::solid_of) {
+                Ok(Some(_)) => {}
+                Ok(None) => problems.push(format!(
+                    "\"{called}\" in {} has the model \"{model}\", which has no shape in it.",
+                    crate::map::MAP_FILE
+                )),
+                Err(why) => problems.push(format!(
+                    "\"{called}\" in {} has the model \"{model}\": {why} The engine's own \
+                     are \"crate\", \"barrel\" and \"door\".",
+                    crate::map::MAP_FILE
+                )),
+            }
+        }
+    }
     problems
 }
 

@@ -667,8 +667,8 @@ fn check(folder: &Path) -> Result<(), String> {
             eprintln!("{problem}");
         }
         return Err(format!(
-            "{ENTRY_SCRIPT} names a model that cannot be used (shown above). Fix the file or \
-             the name, then run `lore check` again."
+            "The game names a model that cannot be used (shown above), in {ENTRY_SCRIPT} or \
+             in its map. Fix the file or the name, then run `lore check` again."
         ));
     }
     // Whether the rules depend on how often a picture is drawn: the game

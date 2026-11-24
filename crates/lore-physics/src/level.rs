@@ -6,7 +6,7 @@ use crate::medium::Medium;
 use parry3d::glamx::Vec3;
 use parry3d::math::{Pose, Vector as Wide};
 use parry3d::query::{self, Ray, RayCast, ShapeCastOptions};
-use parry3d::shape::{Ball, Capsule, TriMesh};
+use parry3d::shape::{Ball, Capsule, Cuboid, Cylinder, Shape, TriMesh};
 
 /// A triangle thinner than this (twice its area, in square metres) is left
 /// out: it has no direction to push the player in.
@@ -59,6 +59,86 @@ pub struct Level {
     standing: Vec<Standing>,
     /// The hollows found while a game runs, and how each stands.
     found: Found,
+    /// The things that move about in the level, where each is now.
+    solids: Solids,
+}
+
+/// The shape of a thing that moves about in a level, about its own middle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SolidShape {
+    /// A box: half its size along x, y and z.
+    Box {
+        /// Half the box's size along each axis.
+        half: [f32; 3],
+    },
+    /// An upright barrel.
+    Barrel {
+        /// Half its width.
+        radius: f32,
+        /// Half its height.
+        half_height: f32,
+    },
+    /// A ball.
+    Ball {
+        /// Half its width.
+        radius: f32,
+    },
+}
+
+/// A thing that moves about in a level: what the player walks into and
+/// stands on, a shot stops at and a camera stays out of, beside the
+/// level's own shapes.
+#[derive(Debug, Clone, Copy)]
+pub struct Solid {
+    /// Its shape.
+    pub shape: SolidShape,
+    /// Where it is and how it is turned.
+    pub pose: Pose,
+}
+
+/// A solid with its shape ready to be asked about.
+#[derive(Clone, Copy)]
+enum Shaped {
+    Box(Cuboid),
+    Barrel(Cylinder),
+    Ball(Ball),
+}
+
+impl Shaped {
+    fn of(shape: SolidShape) -> Self {
+        match shape {
+            SolidShape::Box { half } => Self::Box(Cuboid::new(Wide::new(
+                f64::from(half[0]),
+                f64::from(half[1]),
+                f64::from(half[2]),
+            ))),
+            SolidShape::Barrel {
+                radius,
+                half_height,
+            } => Self::Barrel(Cylinder::new(f64::from(half_height), f64::from(radius))),
+            SolidShape::Ball { radius } => Self::Ball(Ball::new(f64::from(radius))),
+        }
+    }
+
+    fn shape(&self) -> &dyn Shape {
+        match self {
+            Self::Box(shape) => shape,
+            Self::Barrel(shape) => shape,
+            Self::Ball(shape) => shape,
+        }
+    }
+}
+
+/// Where the things that move about in a level are, said through a level
+/// many hold, as the rise and the ice are.
+#[derive(Default)]
+struct Solids(std::sync::RwLock<Vec<(Shaped, Pose)>>);
+
+impl Solids {
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<(Shaped, Pose)>> {
+        // A holder that panicked while it had the list left it whole.
+        (self.0.read()).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// Hollows that fluid was found lying in while a game ran, each with how
@@ -74,6 +154,12 @@ impl Found {
 
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, Vec<(std::sync::Arc<Water>, Standing)>> {
         (self.0.write()).unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Clone for Solids {
+    fn clone(&self) -> Self {
+        Self(std::sync::RwLock::new(self.read().clone()))
     }
 }
 
@@ -581,6 +667,7 @@ impl Level {
             ice: Rise::default(),
             standing: Vec::new(),
             found: Found::default(),
+            solids: Solids::default(),
         }
     }
 
@@ -597,7 +684,6 @@ impl Level {
     /// no length, when a number is not a number, or in an empty level.
     #[must_use]
     pub fn raycast(&self, from: [f32; 3], direction: [f32; 3], reach: f32) -> Option<RayHit> {
-        let mesh = self.mesh.as_ref()?;
         let from = Vector::from_array(from);
         let heading = Vector::from_array(direction).try_normalize()?;
         if !(from.is_finite() && heading.is_finite() && reach > 0.0) {
@@ -605,7 +691,17 @@ impl Level {
         }
         let ray = Ray::new(from.as_dvec3(), heading.as_dvec3());
         let reach = f64::from(reach.min(FARTHEST_RAY));
-        let hit = mesh.cast_local_ray_and_get_normal(&ray, reach, false)?;
+        // The level's own shapes, and whichever thing in it is nearer.
+        let mut hit = (self.mesh.as_ref())
+            .and_then(|mesh| mesh.cast_local_ray_and_get_normal(&ray, reach, false));
+        for (solid, pose) in self.solids.read().iter() {
+            let within = hit.as_ref().map_or(reach, |hit| hit.time_of_impact);
+            if let Some(nearer) = (solid.shape()).cast_ray_and_get_normal(pose, &ray, within, true)
+            {
+                hit = Some(nearer);
+            }
+        }
+        let hit = hit?;
         let normal = hit.normal.as_vec3().try_normalize()?;
         // A triangle seen from behind reports its back; face the looker.
         let normal = if normal.dot(heading) > 0.0 {
@@ -628,7 +724,6 @@ impl Level {
     /// number.
     #[must_use]
     pub fn ball_cast(&self, from: [f32; 3], to: [f32; 3], radius: f32) -> Option<f32> {
-        let mesh = self.mesh.as_ref()?;
         let (from, to) = (Vector::from_array(from), Vector::from_array(to));
         if !(from.is_finite() && to.is_finite() && radius.is_finite() && radius > 0.0) {
             return None;
@@ -640,19 +735,62 @@ impl Level {
             stop_at_penetration: true,
             compute_impact_geometry_on_penetration: false,
         };
-        let hit = query::cast_shapes(
-            &Pose::IDENTITY,
-            Wide::ZERO,
-            mesh,
-            &Pose::from_translation(from.as_dvec3()),
-            travel,
-            &Ball::new(f64::from(radius)),
-            options,
-        )
-        .ok()
-        .flatten()?;
-        let fraction = hit.time_of_impact as f32;
+        let start = Pose::from_translation(from.as_dvec3());
+        let ball = Ball::new(f64::from(radius));
+        let against = |pose: &Pose, shape: &dyn Shape| {
+            query::cast_shapes(pose, Wide::ZERO, shape, &start, travel, &ball, options)
+                .ok()
+                .flatten()
+                .map(|hit| hit.time_of_impact)
+        };
+        // The level's own shapes, and whichever thing in it is nearer.
+        let mut nearest = (self.mesh.as_ref()).and_then(|mesh| against(&Pose::IDENTITY, mesh));
+        for (solid, pose) in self.solids.read().iter() {
+            if let Some(hit) = against(pose, solid.shape())
+                && nearest.is_none_or(|nearest| hit < nearest)
+            {
+                nearest = Some(hit);
+            }
+        }
+        let fraction = nearest? as f32;
         fraction.is_finite().then(|| fraction.clamp(0.0, 1.0))
+    }
+
+    /// The level's own shapes, for a world of bodies to land on.
+    pub(crate) fn mesh(&self) -> Option<&TriMesh> {
+        self.mesh.as_ref()
+    }
+
+    /// Says where the things that move about in the level are now. Whoever
+    /// holds the level, and every copy of it, meets them from the next
+    /// question on: they are walked into and stood on, stop a shot and
+    /// keep a camera out, as the level's own shapes do.
+    pub fn set_solids(&self, solids: impl Iterator<Item = Solid>) {
+        let mut kept = (self.solids.0.write()).unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.clear();
+        kept.extend(solids.map(|solid| (Shaped::of(solid.shape), solid.pose)));
+    }
+
+    /// Which of the things that move about in the level the capsule
+    /// `shape` at `centre` touches or is within `gap` metres of: its place
+    /// in the list given to [`set_solids`](Self::set_solids), and which
+    /// way it lies from the capsule, one unit long.
+    pub(crate) fn touching(
+        &self,
+        shape: &Capsule,
+        centre: Vector,
+        gap: f32,
+        mut see: impl FnMut(usize, Vector),
+    ) {
+        let here = Pose::from_translation(centre.as_dvec3());
+        for (nth, (solid, pose)) in self.solids.read().iter().enumerate() {
+            let contact = query::contact(&here, shape, pose, solid.shape(), f64::from(gap));
+            if let Ok(Some(contact)) = contact
+                && let Some(toward) = contact.normal1.try_normalize()
+            {
+                see(nth, toward.as_vec3());
+            }
+        }
     }
 
     /// Whether the first surface a ray from `from` along `direction` meets,
@@ -695,7 +833,6 @@ impl Level {
         travel: Vector,
         gap: f32,
     ) -> Option<Touch> {
-        let mesh = self.mesh.as_ref()?;
         let (travel, gap) = (travel.as_dvec3(), f64::from(gap));
         let length = travel.length();
         let heading = travel.try_normalize()?;
@@ -706,17 +843,23 @@ impl Level {
             stop_at_penetration: false,
             compute_impact_geometry_on_penetration: true,
         };
-        let hit = query::cast_shapes(
-            &Pose::IDENTITY,
-            Wide::ZERO,
-            mesh,
-            &Pose::from_translation(centre.as_dvec3()),
-            heading * (length + gap),
-            shape,
-            options,
-        )
-        .ok()
-        .flatten()?;
+        let start = Pose::from_translation(centre.as_dvec3());
+        let reach = heading * (length + gap);
+        let against = |pose: &Pose, solid: &dyn Shape| {
+            query::cast_shapes(pose, Wide::ZERO, solid, &start, reach, shape, options)
+                .ok()
+                .flatten()
+        };
+        // The level's own shapes, and whichever thing in it is met sooner.
+        let mut hit = (self.mesh.as_ref()).and_then(|mesh| against(&Pose::IDENTITY, mesh));
+        for (solid, pose) in self.solids.read().iter() {
+            if let Some(sooner) = against(pose, solid.shape())
+                && (hit.as_ref()).is_none_or(|hit| sooner.time_of_impact < hit.time_of_impact)
+            {
+                hit = Some(sooner);
+            }
+        }
+        let hit = hit?;
         let normal = hit.normal1.try_normalize()?;
         // Back along the path far enough to leave `gap` square to the surface.
         let head_on = (-heading.dot(normal)).max(1.0e-3);
@@ -752,16 +895,24 @@ impl Level {
         centre: Vector,
         gap: f32,
     ) -> Option<(Vector, f32)> {
-        let mesh = self.mesh.as_ref()?;
-        let contact = query::contact(
-            &Pose::IDENTITY,
-            mesh,
-            &Pose::from_translation(centre.as_dvec3()),
-            shape,
-            f64::from(gap),
-        )
-        .ok()
-        .flatten()?;
+        let here = Pose::from_translation(centre.as_dvec3());
+        let against = |pose: &Pose, solid: &dyn Shape| {
+            query::contact(pose, solid, &here, shape, f64::from(gap))
+                .ok()
+                .flatten()
+        };
+        // The level's own shapes, and whichever thing in it is closer.
+        let mut contact = (self.mesh.as_ref()).and_then(|mesh| against(&Pose::IDENTITY, mesh));
+        for (solid, pose) in self.solids.read().iter() {
+            if let Some(closer) = against(pose, solid.shape())
+                && contact
+                    .as_ref()
+                    .is_none_or(|contact| closer.dist < contact.dist)
+            {
+                contact = Some(closer);
+            }
+        }
+        let contact = contact?;
         let normal = contact.normal1.try_normalize()?;
         contact
             .dist
@@ -773,10 +924,19 @@ impl Level {
     /// further down than `reach`.
     pub(crate) fn surface_below(&self, from: Vector, reach: f32) -> Option<Vector> {
         let ray = Ray::new(from.as_dvec3(), Wide::NEG_Y);
-        let hit =
-            self.mesh
-                .as_ref()?
-                .cast_local_ray_and_get_normal(&ray, f64::from(reach), false)?;
+        let mut hit = (self.mesh.as_ref())
+            .and_then(|mesh| mesh.cast_local_ray_and_get_normal(&ray, f64::from(reach), false));
+        // A thing stood on is floor as well.
+        for (solid, pose) in self.solids.read().iter() {
+            let within = hit
+                .as_ref()
+                .map_or(f64::from(reach), |hit| hit.time_of_impact);
+            if let Some(nearer) = (solid.shape()).cast_ray_and_get_normal(pose, &ray, within, true)
+            {
+                hit = Some(nearer);
+            }
+        }
+        let hit = hit?;
         // A triangle seen from behind reports its back; either side is floor.
         let normal = hit.normal.as_vec3().try_normalize()?;
         Some(if normal.y < 0.0 { -normal } else { normal })

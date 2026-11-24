@@ -32,6 +32,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod bodies;
 mod fly;
 mod footing;
 mod level;
@@ -43,8 +44,9 @@ mod slide;
 mod tests;
 mod water;
 
+pub use bodies::{Bodies, BodyShape, BodySpec, BodyState};
 pub use footing::Footing;
-pub use level::{Level, PoolHere, RayHit, Stand};
+pub use level::{Level, PoolHere, RayHit, Solid, SolidShape, Stand};
 pub use medium::Medium;
 pub use player::Player;
 pub use settings::{MoveInput, MoveMode, MoveSettings};

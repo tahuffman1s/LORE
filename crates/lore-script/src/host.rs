@@ -1366,6 +1366,19 @@ impl ScriptHost {
         self.things.set_placed(placed);
     }
 
+    /// Says how the solid thing placed as `id` is moving and where it has
+    /// got to: what a script reads as its `position`, `velocity`, `moves`,
+    /// `weight` and `resting`. Call it each tick for things that move.
+    pub fn set_thing_motion(&mut self, id: &str, motion: crate::ThingMotion) {
+        self.things.set_motion(id, motion);
+    }
+
+    /// What scripts asked of solid things since this was last called
+    /// (`thing:push`, `thing:teleport`), in the order they asked.
+    pub fn take_thing_asks(&mut self) -> Vec<crate::ThingAsk> {
+        self.things.take_asks()
+    }
+
     /// Calls `see` with every thing the player can use now: its id, where
     /// it is and how it is used (`thing:onUse`, `thing.useText`).
     pub fn each_usable(&self, see: impl FnMut(&str, [f32; 3], &crate::UseSaid)) {

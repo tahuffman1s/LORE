@@ -14,6 +14,7 @@ lore-assets = { path = "../lore-assets" }
 # double-precision build: against a triangle hundreds of metres across, such
 # as a level's ground, single precision is out by centimetres (#261).
 parry3d = { package = "parry3d-f64", version = "0.31", default-features = false, features = ["required-features", "std", "alloc", "enhanced-determinism"] }
+rapier3d = { package = "rapier3d-f64", version = "0.36", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism"] }
 
 # Sine and cosine that give the same digits on every machine.
 libm = "0.2"

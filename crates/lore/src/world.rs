@@ -96,6 +96,8 @@ pub struct World {
     teleported: Option<Option<(f32, f32)>>,
     /// Every drop of fluid in the world, and what the script said of them.
     fluids: fluids::WorldFluids,
+    /// The solid things in the level: crates, barrels, doors.
+    things: things::Things,
     /// What the use button is doing, and which thing the player means.
     using: using::Using,
     /// The things that can be used and their ids, kept between ticks so a
@@ -201,6 +203,7 @@ impl World {
         let aim = aim_of(asked.movement.yaw, 0.0);
         game.host_mut()
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
+        let things = Self::things_of(&game, &ground);
         let mut world = Self {
             game,
             ground,
@@ -222,6 +225,7 @@ impl World {
             thunder: Vec::with_capacity(MOST_THUNDER),
             teleported: None,
             fluids: fluids::WorldFluids::default(),
+            things,
             using: using::Using::default(),
             usable: Vec::new(),
             usable_ids: Vec::new(),
@@ -232,7 +236,39 @@ impl World {
         // started from the editor and one in a test all have them: a
         // world given its level some other way once had none.
         (world.fluids).take_level(&world.ground.level, world.game.host_mut());
+        world.tell_things();
         world
+    }
+
+    /// The solid things the game's map places on `ground`. What the map
+    /// asks for that cannot be done is logged.
+    fn things_of(game: &ScriptGame, ground: &Ground) -> things::Things {
+        let (things, problems) =
+            things::Things::of(game.map(), &ground.level, ground.tick_rate, |file| {
+                game.read_model(file)
+            });
+        for problem in problems {
+            log::warn!("{problem}");
+        }
+        things
+    }
+
+    /// Tells the script where every solid thing is and how it is moving.
+    fn tell_things(&mut self) {
+        let host = self.game.host_mut();
+        self.things.each(|id, told| {
+            host.set_thing_motion(
+                id,
+                lore_script::ThingMotion {
+                    position: told.position,
+                    facing: told.facing,
+                    velocity: told.velocity,
+                    moves: told.moves,
+                    weight: told.weight,
+                    resting: told.resting,
+                },
+            );
+        });
     }
 
     /// Plays the game in `level`, usually the game's `level.glb` as
@@ -277,6 +313,9 @@ impl World {
         // What a script made of how the player moves is not the level's.
         ground.rules = self.ground.rules;
         self.ground = ground;
+        // Solid things stand on the new shapes, back where the map has them.
+        self.things = Self::things_of(&self.game, &self.ground);
+        self.tell_things();
         (self.fluids).take_level(&self.ground.level, self.game.host_mut());
     }
 
@@ -630,6 +669,14 @@ impl Game for World {
         // The fluids move, with what the script asked of them in its last
         // tick, and what is now under the player's feet is found.
         self.fluids.hear(self.game.host_mut());
+        // What the script asked of solid things in its last tick is done
+        // before they move.
+        for ask in self.game.host_mut().take_thing_asks() {
+            match ask {
+                lore_script::ThingAsk::Push { id, impulse } => self.things.push(&id, impulse),
+                lore_script::ThingAsk::Put { id, position } => self.things.put(&id, position),
+            };
+        }
         self.fluids.step(
             &self.ground.level,
             self.ground.step,
@@ -680,10 +727,41 @@ impl Game for World {
         let before = *player;
         let walking = moving.mode == MoveMode::Walk;
         player.step(level, rules, &moving, *tick);
+        // What the player walks into is pushed, and every solid thing
+        // moves on by a tick.
+        if walking {
+            let (sin, cos) = moving.yaw.sin_cos();
+            let wish = [
+                -sin * moving.forward + cos * moving.right,
+                -cos * moving.forward - sin * moving.right,
+            ];
+            let long = wish[0].hypot(wish[1]);
+            if long > 0.1 {
+                let wish = [wish[0] / long, wish[1] / long];
+                (self.things).pushed_by(player, rules, level, wish, *tick);
+            }
+        }
+        self.things.step(rules.gravity, level);
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick, and how they are moving.
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
+        // And where every solid thing has got to.
+        if !self.things.is_empty() {
+            self.things.each(|id, told| {
+                host.set_thing_motion(
+                    id,
+                    lore_script::ThingMotion {
+                        position: told.position,
+                        facing: told.facing,
+                        velocity: told.velocity,
+                        moves: told.moves,
+                        weight: told.weight,
+                        resting: told.resting,
+                    },
+                );
+            });
+        }
         // A hard landing hurts, through the same path as a weapon.
         if walking && player.grounded && !before.grounded {
             let hurt = fall_damage(-before.velocity[1]);
@@ -873,6 +951,7 @@ impl Game for World {
             frame.strike(stroke);
         }
         self.fluids.frame(frame);
+        self.things.frame(frame, alpha);
         self.game.frame(frame);
         // After the script's own frame, which says the weather as it
         // asked for it: this is the weather with what followed from it.
@@ -1687,6 +1766,7 @@ impl Game for Playing {
     }
 }
 
+mod things;
 mod using;
 
 #[cfg(test)]
@@ -2203,6 +2283,138 @@ mod tests {
             words(&mut game, &input).is_empty(),
             "no prompt for what cannot be used"
         );
+    }
+
+    #[test]
+    fn the_player_pushes_a_crate_is_stopped_by_a_heavy_one_and_stands_on_a_fixed_one() {
+        use lore_input::Key;
+
+        /// Walks forward for four seconds toward a thing two metres ahead
+        /// with these map properties, and says where the thing and the
+        /// player ended (how far along -Z), how many things are awake, and
+        /// what the script read of it.
+        fn walked_into(properties: &str) -> (f32, f32, usize) {
+            let map = crate::map::Map::parse(
+                "map.toml",
+                &format!(
+                    "version = 1\n[[entity]]\nid = \"box\"\ntype = \"prop\"\nname = \"Box\"\n\
+                     position = [0, 0, -2]\n[entity.properties]\nmodel = \"crate\"\n{properties}"
+                ),
+            )
+            .unwrap();
+            let actions = ActionMap::standard();
+            let script = ScriptGame::from_pack_parts(
+                [(
+                    "main.luau".to_owned(),
+                    r#"local box = game.thing("Box")
+                    local started = box.position
+                    game.onTick(function()
+                        -- A script reads where it has got to and how it moves.
+                        assert(box.moves == (box.weight > 0))
+                        if not box.moves then assert(box.position == started and box.resting) end
+                    end)"#
+                        .to_owned(),
+                )],
+                Vec::new(),
+                map,
+                &actions,
+                crate::settings::Settings::default(),
+            );
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = lore_input::Input::new(actions);
+            input.press(Key::W);
+            for _ in 0..240 {
+                game.tick(input.tick(), STEP);
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            let mut at = [0.0; 3];
+            game.world.things.each(|_, told| at = told.position);
+            (
+                -at[2],
+                -game.world.player().position[2],
+                game.world.things.awake(),
+            )
+        }
+
+        // A 20 kg crate goes along in front of the player.
+        let (crate_at, player_at, _) = walked_into("moves = true\n");
+        assert!(crate_at > 6.0, "pushed only to {crate_at}");
+        // The player is behind it, touching: half a crate and their own
+        // half-width back.
+        assert!(
+            (crate_at - player_at - 0.85).abs() < 0.2,
+            "crate {crate_at}, player {player_at}"
+        );
+
+        // Two tonnes does not move, and the player does not walk through it.
+        let (heavy_at, player_at, _) = walked_into("moves = true\nweight = 2000\n");
+        assert!((heavy_at - 2.0).abs() < 0.05, "{heavy_at}");
+        assert!(player_at < 1.2 && player_at > 1.0, "{player_at}");
+
+        // One that does not move is as solid, and costs nothing: none awake.
+        let (fixed_at, player_at, awake) = walked_into("");
+        assert_eq!(fixed_at, 2.0);
+        assert!(player_at < 1.2 && player_at > 1.0, "{player_at}");
+        assert_eq!(awake, 0);
+
+        // The same walk twice leaves the crate in the very same place.
+        assert_eq!(walked_into("moves = true\n"), walked_into("moves = true\n"));
+    }
+
+    #[test]
+    fn a_script_shoves_and_moves_a_thing_and_a_fixed_one_says_why_not() {
+        let map = crate::map::Map::parse(
+            "map.toml",
+            "version = 1\n\
+             [[entity]]\nid = \"a\"\ntype = \"prop\"\nname = \"Barrel\"\nposition = [5, 0, 0]\n\
+             [entity.properties]\nmodel = \"barrel\"\nmoves = true\n\
+             [[entity]]\nid = \"b\"\ntype = \"prop\"\nname = \"Wall crate\"\nposition = [9, 0, 0]\n\
+             [entity.properties]\nmodel = \"crate\"\n",
+        )
+        .unwrap();
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_pack_parts(
+            [(
+                "main.luau".to_owned(),
+                r#"local barrel = game.thing("Barrel")
+                local ticks = 0
+                game.onTick(function()
+                    ticks += 1
+                    if ticks == 90 then
+                        assert(barrel.weight == 30 and barrel.resting and barrel.moves)
+                        barrel:push(vector.create(0, 0, -150))
+                    elseif ticks == 94 then
+                        assert(barrel.velocity.z < -2 and not barrel.resting)
+                    elseif ticks == 260 then
+                        assert(barrel.position.z < -0.5, tostring(barrel.position))
+                        barrel:teleport(vector.create(-4, 3, 0))
+                    elseif ticks == 262 then
+                        assert(math.abs(barrel.position.x + 4) < 0.01, tostring(barrel.position))
+                        assert(barrel.position.y > 2.5)
+                    elseif ticks == 270 then
+                        game.thing("Wall crate"):push(vector.create(0, 0, 9))
+                    end
+                end)"#
+                    .to_owned(),
+            )],
+            Vec::new(),
+            map,
+            &actions,
+            crate::settings::Settings::default(),
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        for _ in 0..269 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        game.tick(input.tick(), STEP);
+        let message = &game.world.game.host().last_error().unwrap().message;
+        assert!(
+            message.contains("\"Wall crate\" cannot be pushed"),
+            "{message}"
+        );
+        assert!(message.contains("moves = true"), "{message}");
     }
 
     #[test]

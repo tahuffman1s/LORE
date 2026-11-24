@@ -386,3 +386,62 @@ fn a_zone_the_map_lacks_is_an_error_that_lists_the_zones() {
     let message = &empty.last_error().unwrap().message;
     assert!(message.contains("The map has no zones yet"), "{message}");
 }
+
+#[test]
+fn what_the_map_says_moves_is_known_from_the_scripts_first_line() {
+    let thing = |id: &str, properties: Vec<(&str, PlacedValue)>| Placed {
+        id: id.to_owned(),
+        kind: "prop".to_owned(),
+        name: id.to_owned(),
+        position: [1.0, 0.0, 2.0],
+        facing: 0.0,
+        properties: properties
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect(),
+    };
+    let text = |words: &str| PlacedValue::Text(words.to_owned());
+    let mut host = ScriptHost::from_sources_with_placed(
+        [(
+            "main.luau".to_owned(),
+            r#"local crate, heavy, fixed, marker =
+                game.thing("crate"), game.thing("heavy"), game.thing("fixed"), game.thing("marker")
+            assert(crate.moves and crate.weight == 20 and crate.resting)
+            assert(crate.velocity == vector.create(0, 0, 0))
+            assert(heavy.moves and heavy.weight == 300)
+            assert(not fixed.moves and fixed.weight == 0 and fixed.resting)
+            assert(not marker.moves and marker.weight == 0)
+            game.onTick(function() crate:push(vector.create(0, 0, -100)) end)"#
+                .to_owned(),
+        )],
+        Vec::new(),
+        ActionMap::standard(),
+        Vec::new(),
+        vec![
+            thing(
+                "crate",
+                vec![("model", text("crate")), ("moves", PlacedValue::Flag(true))],
+            ),
+            thing(
+                "heavy",
+                vec![
+                    ("model", text("barrel")),
+                    ("moves", PlacedValue::Flag(true)),
+                    ("weight", PlacedValue::Number(300.0)),
+                ],
+            ),
+            thing("fixed", vec![("model", text("crate"))]),
+            thing("marker", Vec::new()),
+        ],
+    );
+    assert_eq!(host.last_error(), None);
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    assert_eq!(
+        host.take_thing_asks(),
+        [lore_script::ThingAsk::Push {
+            id: "crate".to_owned(),
+            impulse: [0.0, 0.0, -100.0],
+        }]
+    );
+}

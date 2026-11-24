@@ -47,13 +47,19 @@ pub(crate) const THING_FIELDS: &[&str] = &[
     "useReach",
     "useSeconds",
     "usable",
+    "velocity",
+    "moves",
+    "weight",
+    "resting",
 ];
 
 /// What can be set on a thing.
 const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable"];
 
 /// What a thing can be asked.
-pub(crate) const THING_METHODS: &[&str] = &["onUse", "property", "onEnter", "onLeave", "has"];
+pub(crate) const THING_METHODS: &[&str] = &[
+    "onUse", "property", "onEnter", "onLeave", "has", "push", "teleport",
+];
 
 /// How close the player's eyes must be to use a thing, by default, in metres.
 pub const DEFAULT_REACH: f32 = 2.5;
@@ -144,6 +150,45 @@ impl Placed {
     }
 }
 
+/// How a solid thing is moving, as the engine says each tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThingMotion {
+    /// Where it is now, in metres: the point it was placed by.
+    pub position: [f32; 3],
+    /// How far it is turned to the left now, in degrees.
+    pub facing: f32,
+    /// How fast it is moving, in metres a second.
+    pub velocity: [f32; 3],
+    /// Whether it can be moved: it falls and can be pushed.
+    pub moves: bool,
+    /// How heavy it is, in kilograms; 0 for one that is fixed.
+    pub weight: f32,
+    /// Whether it has come to rest.
+    pub resting: bool,
+}
+
+/// What a script asked of a solid thing, for the engine to do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThingAsk {
+    /// Shove it: an impulse in kilogram metres a second.
+    Push {
+        /// The thing's id.
+        id: String,
+        /// The shove.
+        impulse: [f32; 3],
+    },
+    /// Put it somewhere, at rest.
+    Put {
+        /// The thing's id.
+        id: String,
+        /// Where the point it is placed by goes, in metres.
+        position: [f32; 3],
+    },
+}
+
+/// The most asks kept between two ticks; more is a script stuck in a loop.
+const MOST_ASKS: usize = 256;
+
 /// How a thing is used, as the script said it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseSaid {
@@ -184,6 +229,10 @@ pub(crate) struct ThingState {
     /// Who is inside which watched zone: the zone's id and the character,
     /// as of the last tick.
     inside: RefCell<Vec<(String, crate::CharacterId)>>,
+    /// How each solid thing is moving, by its id, as the engine last said.
+    moving: RefCell<HashMap<String, ThingMotion>>,
+    /// What scripts asked of solid things since the engine last took it.
+    asks: RefCell<Vec<ThingAsk>>,
 }
 
 /// Someone walking into a zone or out of it.
@@ -232,6 +281,78 @@ impl ThingState {
         }
         *inside = now;
         crossings
+    }
+
+    /// Says how the solid thing placed as `id` is moving. A thing that has
+    /// moved is read where it now is.
+    pub(crate) fn set_motion(&self, id: &str, motion: ThingMotion) {
+        if let Some(thing) = self
+            .placed
+            .borrow_mut()
+            .iter_mut()
+            .find(|thing| thing.id == id)
+        {
+            thing.position = motion.position;
+            thing.facing = motion.facing;
+        }
+        let mut moving = self.moving.borrow_mut();
+        match moving.get_mut(id) {
+            Some(known) => *known = motion,
+            None => {
+                moving.insert(id.to_owned(), motion);
+            }
+        }
+    }
+
+    /// How the thing placed as `id` is moving: what the engine last said,
+    /// or, before it has said anything (while the script's first lines
+    /// run), what the map's own properties say of a thing standing still.
+    fn motion(&self, id: &str) -> Option<ThingMotion> {
+        if let Some(told) = self.moving.borrow().get(id) {
+            return Some(*told);
+        }
+        let placed = self.placed.borrow();
+        let thing = placed.iter().find(|thing| thing.id == id)?;
+        let property = |name: &str| {
+            (thing.properties.iter())
+                .find(|(known, _)| known == name)
+                .map(|(_, value)| value)
+        };
+        let Some(PlacedValue::Text(model)) = property("model") else {
+            return None;
+        };
+        let flag = |name: &str| matches!(property(name), Some(PlacedValue::Flag(true)));
+        let moves = flag("moves") || flag("hinge");
+        // The engine's own models, as `lore` weighs them.
+        let usual = match model.as_str() {
+            "crate" => 20.0,
+            "barrel" => 30.0,
+            "door" => 25.0,
+            _ => 0.0,
+        };
+        Some(ThingMotion {
+            position: thing.position,
+            facing: thing.facing,
+            velocity: [0.0; 3],
+            moves,
+            weight: if moves {
+                thing.size("weight").unwrap_or(usual)
+            } else {
+                0.0
+            },
+            resting: true,
+        })
+    }
+
+    pub(crate) fn take_asks(&self) -> Vec<ThingAsk> {
+        std::mem::take(&mut *self.asks.borrow_mut())
+    }
+
+    fn ask(&self, ask: ThingAsk) {
+        let mut asks = self.asks.borrow_mut();
+        if asks.len() < MOST_ASKS {
+            asks.push(ask);
+        }
     }
 
     /// Whether anyone is noted as inside a zone: so a tick with no zones
@@ -510,6 +631,23 @@ impl UserData for ThingRef {
         fields.add_field_method_get("facing", |lua, this| {
             Ok(this.placed(lua, "facing")?.1.facing)
         });
+        fields.add_field_method_get("velocity", |lua, this| {
+            let (shared, placed) = this.placed(lua, "velocity")?;
+            let [x, y, z] = (shared.things.motion(&placed.id)).map_or([0.0; 3], |m| m.velocity);
+            Ok(mlua::Vector::new(x, y, z))
+        });
+        fields.add_field_method_get("moves", |lua, this| {
+            let (shared, placed) = this.placed(lua, "moves")?;
+            Ok(shared.things.motion(&placed.id).is_some_and(|m| m.moves))
+        });
+        fields.add_field_method_get("weight", |lua, this| {
+            let (shared, placed) = this.placed(lua, "weight")?;
+            Ok(shared.things.motion(&placed.id).map_or(0.0, |m| m.weight))
+        });
+        fields.add_field_method_get("resting", |lua, this| {
+            let (shared, placed) = this.placed(lua, "resting")?;
+            Ok(shared.things.motion(&placed.id).is_none_or(|m| m.resting))
+        });
         fields.add_field_method_get("usable", |lua, this| {
             Ok(this
                 .said(lua, "usable")?
@@ -582,6 +720,77 @@ impl UserData for ThingRef {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_function("push", |lua, (this, impulse): (Value, Value)| {
+            const EXAMPLE: &str = "crate:push(vector.create(0, 60, -120))";
+            let this = receiver(lua, &this, "push", "(vector.create(0, 60, -120))")?;
+            let Value::Vector(impulse) = impulse else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "push needs the shove as a vector: which way, and how hard in kilogram \
+                         metres a second (a thing's weight times the speed it should leave \
+                         at). It was given {}. Write it like this: {EXAMPLE}",
+                        describe(&impulse)
+                    ),
+                ));
+            };
+            let (shared, placed) = this.placed(lua, "place")?;
+            crate::time_api::rules_only(lua, &shared, "thing:push")?;
+            if !shared
+                .things
+                .motion(&placed.id)
+                .is_some_and(|motion| motion.moves)
+            {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "\"{}\" cannot be pushed: it does not move. Give it a model and \
+                         `moves = true` in the map (its properties in `lore edit`), and it \
+                         falls, rolls and can be shoved.",
+                        called(&placed)
+                    ),
+                ));
+            }
+            shared.things.ask(ThingAsk::Push {
+                id: placed.id,
+                impulse: [impulse.x(), impulse.y(), impulse.z()],
+            });
+            Ok(())
+        });
+        methods.add_function("teleport", |lua, (this, position): (Value, Value)| {
+            let this = receiver(lua, &this, "teleport", "(vector.create(0, 2, 0))")?;
+            let Value::Vector(position) = position else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "teleport needs where to put the thing, as a vector in metres, but it \
+                         was given {}. Write it like this: crate:teleport(vector.create(0, 2, 0))",
+                        describe(&position)
+                    ),
+                ));
+            };
+            let (shared, placed) = this.placed(lua, "place")?;
+            crate::time_api::rules_only(lua, &shared, "thing:teleport")?;
+            if !shared
+                .things
+                .motion(&placed.id)
+                .is_some_and(|motion| motion.moves)
+            {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "\"{}\" cannot be put somewhere else: it does not move. Give it a \
+                         model and `moves = true` in the map (its properties in `lore edit`).",
+                        called(&placed)
+                    ),
+                ));
+            }
+            shared.things.ask(ThingAsk::Put {
+                id: placed.id,
+                position: [position.x(), position.y(), position.z()],
+            });
+            Ok(())
+        });
         methods.add_function("onUse", |lua, (this, handler): (Value, Value)| {
             const EXAMPLE: &str = "door:onUse(function() print(\"It opens.\") end)";
             let this = receiver(lua, &this, "onUse", "(function() ... end)")?;

@@ -258,6 +258,30 @@ impl Player {
         [x, y + self.eye_height, z]
     }
 
+    /// Calls `see` with each of the things that move about in `level`
+    /// ([`Level::set_solids`]) that the player touches or stands within
+    /// `gap` metres of: its place in the list the level was given, and
+    /// which way it lies from the player, one unit long. What they walk
+    /// into can then be pushed.
+    pub fn touching(
+        &self,
+        level: &Level,
+        settings: &MoveSettings,
+        gap: f32,
+        mut see: impl FnMut(usize, [f32; 3]),
+    ) {
+        let middle =
+            Vector::from_array(self.position) + Vector::Y * (settings.height(self.crouched) / 2.0);
+        level.touching(
+            &settings.shape(self.crouched),
+            middle,
+            gap,
+            |nth, toward| {
+                see(nth, toward.to_array());
+            },
+        );
+    }
+
     /// Moves the player through `level` for one tick of `dt` seconds.
     ///
     /// Call this at a fixed rate with the same `dt` every time (for example

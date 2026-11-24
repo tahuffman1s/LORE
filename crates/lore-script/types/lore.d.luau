@@ -400,6 +400,16 @@ end
 --- script's. `onUse`, `useText`, `useReach`, `useSeconds` and `usable` are
 --- said again each time the script loads, so write them at the top of the
 --- file, not inside a function that runs once.
+---
+--- A thing is a point with a name until the map gives it a `model`: then it
+--- is drawn and is solid, so the player walks into it and stands on it and
+--- a shot stops at it. The engine has "crate", "barrel" and "door"; a
+--- model of your own is a .glb file in the game's folder, which is solid
+--- as the box that holds it. With `moves = true` as well it falls, rolls,
+--- stacks and is pushed by whoever walks into it (`weight` is its
+--- kilograms), and with `hinge = true` it swings about the edge it is
+--- placed by, as a door does. Those are properties of the thing in
+--- `lore edit`, or lines under its `[entity.properties]` in map.toml.
 --- Example: local door = game.thing("Cellar door")
 declare extern type Thing with
     --- What the thing was called in `lore edit`. "" if it was given no name.
@@ -416,14 +426,38 @@ declare extern type Thing with
     --- Example: if thing.kind == "chest" then thing.useText = "Open" end
     kind: string
 
-    --- Where the thing stands, in metres, with y up.
+    --- Where the thing is now, in metres, with y up: the point it was
+    --- placed by, wherever it has been pushed or has fallen to.
     --- Example: game.audio.playAt("creak", door.position)
     position: vector
 
     --- How far the thing is turned to the left, in degrees: at 0 it faces
-    --- -Z, as a player who has not turned does.
+    --- -Z, as a player who has not turned does. For one that moves, how
+    --- far it is turned now.
     --- Example: print(door.facing)
     facing: number
+
+    --- How fast the thing is moving, in metres a second, with y up. Zero
+    --- for one that does not move.
+    --- Example: if vector.magnitude(barrel.velocity) > 3 then print("Rolling!") end
+    velocity: vector
+
+    --- True for a thing that falls and can be pushed: one the map gave a
+    --- `model` and `moves = true` (or `hinge = true`).
+    --- Example: for _, thing in game.things() do if thing.moves then print(thing.name) end end
+    moves: boolean
+
+    --- How heavy the thing is, in kilograms: the map's `weight`, or the
+    --- model's own (a crate 20, a barrel 30, a door 25). 0 for one that
+    --- does not move. The player slides along what weighs about 80 or
+    --- less; heavier things stand in their way.
+    --- Example: print(crate.weight)
+    weight: number
+
+    --- True while the thing lies still: it has come to rest, or it does
+    --- not move at all.
+    --- Example: if not crate.resting then print("Still falling") end
+    resting: boolean
 
     --- The word or two shown beside the button while the player can use
     --- the thing: "Use" until the script says otherwise. Up to 60
@@ -468,6 +502,22 @@ declare extern type Thing with
     --- false, or nil if it has none of that name.
     --- Example: if door:property("locked") then door.useText = "Locked" end
     function property(self, name: string): (string | number | boolean)?
+
+    --- Shoves a thing that moves: `impulse` is which way and how hard, in
+    --- kilogram metres a second, so its weight times the speed it should
+    --- leave at (a 20 kg crate given 100 leaves at 5 metres a second). It
+    --- takes effect on the next tick. A thing that does not move is an
+    --- error that says how to make it move. Only in the game's rules, not
+    --- in `game.onDraw`.
+    --- Example: crate:push(vector.create(0, 60, -120))
+    --- Example: barrel:push(game.player.aim * barrel.weight * 8)
+    function push(self, impulse: vector): ()
+
+    --- Puts a thing that moves somewhere else, at rest: `position` is
+    --- where the point it is placed by goes, in metres. It is there on
+    --- the next tick, and does not glide. Only in the game's rules.
+    --- Example: crate:teleport(vector.create(0, 2, 0))
+    function teleport(self, position: vector): ()
 
     --- Calls `handler` with whoever walks into the thing's zone: once
     --- each time they come in, for the player and every other character

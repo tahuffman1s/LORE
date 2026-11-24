@@ -139,6 +139,48 @@ impl ScriptGame {
         game
     }
 
+    /// Tells the script which of the things the map places are solid and
+    /// which of those move, and how heavy each is, as they stand before
+    /// anything has moved: so a script that asks is answered in
+    /// `lore check`, where no world is stepped, as it is in a played game.
+    fn tell_solid_things(&mut self) {
+        let mut told = Vec::new();
+        for entity in self.map.entities() {
+            let Some(crate::map::Value::Text(model)) = entity.properties.get("model") else {
+                continue;
+            };
+            let flag = |name: &str| {
+                matches!(
+                    entity.properties.get(name),
+                    Some(crate::map::Value::Flag(true))
+                )
+            };
+            let moves = flag("moves") || flag("hinge");
+            let weight = match entity.properties.get("weight") {
+                // A weight in kilograms needs no more than an f32 holds.
+                #[allow(clippy::cast_possible_truncation)]
+                Some(crate::map::Value::Number(weight)) if *weight > 0.0 => *weight as f32,
+                _ => crate::props::solid(model)
+                    .or_else(|| self.read_model(model).ok().and_then(crate::props::solid_of))
+                    .map_or(0.0, |solid| solid.weight),
+            };
+            told.push((
+                entity.id.clone(),
+                lore_script::ThingMotion {
+                    position: entity.position,
+                    facing: entity.facing,
+                    velocity: [0.0; 3],
+                    moves,
+                    weight: if moves { weight } else { 0.0 },
+                    resting: true,
+                },
+            ));
+        }
+        for (id, motion) in told {
+            self.host.set_thing_motion(&id, motion);
+        }
+    }
+
     /// Reads a model file of the game's, named as a script names it
     /// (`"models/hero.glb"`): a path inside the game's folder.
     ///
@@ -324,6 +366,7 @@ impl ScriptGame {
             folder: Some(folder.to_owned()),
         };
         game.name_sounds();
+        game.tell_solid_things();
         Ok(game)
     }
 
@@ -402,6 +445,7 @@ impl ScriptGame {
         self.host.set_placed(placed_of(&map));
         self.map = map;
         self.map_error = None;
+        self.tell_solid_things();
         self
     }
 
@@ -434,6 +478,7 @@ impl ScriptGame {
         let mut game = Self::without_files(host, settings);
         game.pictures = crate::hud_images::HudPictures::given(images);
         game.map = map;
+        game.tell_solid_things();
         game
     }
 
@@ -463,6 +508,7 @@ impl ScriptGame {
                 said_of(&map);
                 self.host.set_placed(placed_of(&map));
                 self.map = map;
+                self.tell_solid_things();
                 self.map_error = None;
             }
             Err(error) => {
