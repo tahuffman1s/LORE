@@ -1141,8 +1141,16 @@ impl Playing {
             wanted.third = !wanted.third;
             host.said_view(wanted.third);
         }
-        character.view = if wanted.third { View::Third } else { View::First };
-        character.facing = if wanted.aimed { Facing::Aim } else { Facing::Move };
+        character.view = if wanted.third {
+            View::Third
+        } else {
+            View::First
+        };
+        character.facing = if wanted.aimed {
+            Facing::Aim
+        } else {
+            Facing::Move
+        };
         character.boom = Boom {
             distance: wanted.distance,
             height: wanted.height,
@@ -1178,7 +1186,12 @@ impl Playing {
         character.swing_through(player.position, &around, |blow| blows.push(blow));
         let host = self.world.game.host_mut();
         for blow in blows {
-            host.damage(blow.victim, blow.damage, Some(CharacterId::PLAYER), &blow.clip);
+            host.damage(
+                blow.victim,
+                blow.damage,
+                Some(CharacterId::PLAYER),
+                &blow.clip,
+            );
         }
     }
 
@@ -1190,7 +1203,11 @@ impl Playing {
             return;
         };
         let eye = self.world.player().eye_position();
-        let (dx, dy, dz) = (target[0] - eye[0], target[1] + 1.2 - eye[1], target[2] - eye[2]);
+        let (dx, dy, dz) = (
+            target[0] - eye[0],
+            target[1] + 1.2 - eye[1],
+            target[2] - eye[2],
+        );
         let flat = (dx * dx + dz * dz).sqrt();
         if flat < 0.3 {
             return;
@@ -1207,9 +1224,12 @@ impl Playing {
     /// log, and the body stays as it was.
     fn change_body(&mut self, model: &str) {
         let made = match model {
-            "mannequin" => Character::shared_mannequin().ok_or_else(|| "the engine's mannequin could not be read".to_owned()),
+            "mannequin" => Character::shared_mannequin()
+                .ok_or_else(|| "the engine's mannequin could not be read".to_owned()),
             "mannequin_female" => Character::female_mannequin().map_err(|e| e.to_string()),
-            file => self.world.game.read_model(file).and_then(|scene| Character::with_mannequin_clips(scene).map_err(|e| e.to_string())),
+            file => self.world.game.read_model(file).and_then(|scene| {
+                Character::with_mannequin_clips(scene).map_err(|e| e.to_string())
+            }),
         };
         match made {
             Ok(mut character) => {
@@ -1217,7 +1237,10 @@ impl Playing {
                     character.view = old.view;
                     character.face(old.yaw());
                 }
-                self.world.game.host().set_body_clips(model, character.clip_names());
+                self.world
+                    .game
+                    .host()
+                    .set_body_clips(model, character.clip_names());
                 self.character = Some(character);
             }
             Err(why) => log::error!("game.player:setModel(\"{model}\"): {why}"),
@@ -1405,7 +1428,12 @@ impl Game for Playing {
         // Shots go where the crosshair is, seen from where the camera hung
         // on the last tick.
         let camera = self.character.as_ref().map(|character| {
-            character.camera(1.0, self.eye, (self.yaw, self.pitch), &self.world.ground.level)
+            character.camera(
+                1.0,
+                self.eye,
+                (self.yaw, self.pitch),
+                &self.world.ground.level,
+            )
         });
         self.world.shooting.camera = camera.filter(|camera| *camera != self.eye);
         self.world.tick(input, step);
@@ -1486,6 +1514,8 @@ impl Game for Playing {
 mod heard;
 #[cfg(test)]
 mod rates;
+#[cfg(test)]
+mod third_person;
 #[cfg(test)]
 mod tools;
 #[cfg(test)]

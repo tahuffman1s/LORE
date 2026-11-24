@@ -200,9 +200,27 @@ pub mod names {
     /// The moving-about clips that cycle, which loop even when the file does
     /// not say so.
     pub const LOOPING: [&str; 21] = [
-        IDLE, WALK[0], WALK[1], WALK[2], WALK[3], RUN[0], RUN[1], RUN[2], RUN[3], SPRINT,
-        CROUCH_IDLE, CROUCH_WALK[0], CROUCH_WALK[1], CROUCH_WALK[2], CROUCH_WALK[3], FALL, SWIM,
-        SWIM_IDLE, CLIMB, "idle_look", "talk",
+        IDLE,
+        WALK[0],
+        WALK[1],
+        WALK[2],
+        WALK[3],
+        RUN[0],
+        RUN[1],
+        RUN[2],
+        RUN[3],
+        SPRINT,
+        CROUCH_IDLE,
+        CROUCH_WALK[0],
+        CROUCH_WALK[1],
+        CROUCH_WALK[2],
+        CROUCH_WALK[3],
+        FALL,
+        SWIM,
+        SWIM_IDLE,
+        CLIMB,
+        "idle_look",
+        "talk",
     ];
 }
 
@@ -262,7 +280,9 @@ impl Body {
             strikes: Vec::new(),
         };
         body.facing = body.find_facing();
-        body.strikes = (0..body.clips.len()).map(|clip| body.find_strike(clip)).collect();
+        body.strikes = (0..body.clips.len())
+            .map(|clip| body.find_strike(clip))
+            .collect();
         let gait = |body: &mut Self, set: [&str; 4], usual: f32| -> Option<Gait> {
             let clips = set.map(|n| find(&body.clips, n));
             let forward = clips[0]?;
@@ -349,19 +369,22 @@ impl Body {
         let mut pose = self.skeleton.rest().to_vec();
         let mut placed = vec![IDENTITY; self.skeleton.len()];
         // Speeds of each end, key to key.
-        let mut speeds = vec![vec![0.0f32; frames]; ends.len()];
-        let mut was: Vec<[f32; 3]> = vec![[0.0; 3]; ends.len()];
+        let mut speeds = vec![Vec::with_capacity(frames); ends.len()];
+        let mut was: Vec<Option<[f32; 3]>> = vec![None; ends.len()];
         for frame in 0..frames {
             pose.copy_from_slice(self.skeleton.rest());
             data.sample(&self.bindings[clip], frame as f32 * step, &mut pose);
             self.skeleton.place(&pose, &mut placed);
-            for (e, &(bone, _)) in ends.iter().enumerate() {
+            for ((&(bone, _), was), speeds) in ends.iter().zip(&mut was).zip(&mut speeds) {
                 let now = origin(&placed[bone]);
-                if frame > 0 {
-                    let d: f32 = (0..3).map(|i| (now[i] - was[e][i]).powi(2)).sum::<f32>().sqrt();
-                    speeds[e][frame] = d / step;
-                }
-                was[e] = now;
+                let d: f32 = was.map_or(0.0, |was| {
+                    (0..3)
+                        .map(|i| (now[i] - was[i]).powi(2))
+                        .sum::<f32>()
+                        .sqrt()
+                });
+                speeds.push(d / step);
+                *was = Some(now);
             }
         }
         let (which, top) = speeds
@@ -371,7 +394,12 @@ impl Body {
             .max_by(|a, b| a.1.total_cmp(&b.1))?;
         let (bone, parent) = ends[which];
         if let (Some(start), Some(end)) = (marked("hit_start"), marked("hit_end")) {
-            return Some(Strike { bone, parent, start, end });
+            return Some(Strike {
+                bone,
+                parent,
+                start,
+                end,
+            });
         }
         if top < 4.0 {
             return None;
@@ -855,8 +883,8 @@ impl Animator {
                     .min(0.6);
                 // Landing from the air, or still landing. Moving fast, the
                 // legs run straight on instead.
-                let touching_down = matches!(self.state, State::Jumping | State::Falling)
-                    && body.land.is_some();
+                let touching_down =
+                    matches!(self.state, State::Jumping | State::Falling) && body.land.is_some();
                 let still_landing = self.state == State::Landing
                     && self.state_time < landing_lasts * (0.4 + 0.6 * self.landing);
                 if (touching_down || still_landing) && moving.speed < 2.5 {
@@ -1090,8 +1118,16 @@ fn smooth(t: f32) -> f32 {
 fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let [x, y, z, w] = q;
     // v + 2w(q×v) + 2q×(q×v)
-    let c = [y * v[2] - z * v[1], z * v[0] - x * v[2], x * v[1] - y * v[0]];
-    let cc = [y * c[2] - z * c[1], z * c[0] - x * c[2], x * c[1] - y * c[0]];
+    let c = [
+        y * v[2] - z * v[1],
+        z * v[0] - x * v[2],
+        x * v[1] - y * v[0],
+    ];
+    let cc = [
+        y * c[2] - z * c[1],
+        z * c[0] - x * c[2],
+        x * c[1] - y * c[0],
+    ];
     [
         v[0] + 2.0 * (w * c[0] + cc[0]),
         v[1] + 2.0 * (w * c[1] + cc[1]),

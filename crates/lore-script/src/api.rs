@@ -300,11 +300,9 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
     let events: [(&'static str, &'static str, List); 6] = [
-        (
-            "onDamage",
-            "game.onDamage(function(hurt) ... end)",
-            |h| &mut h.damage,
-        ),
+        ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
+            &mut h.damage
+        }),
         (
             "onDeath",
             "game.onDeath(function(victim, killer) ... end)",

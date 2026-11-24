@@ -1114,4 +1114,3 @@ fn the_same_script_and_inputs_give_the_same_fingerprint() {
     assert_eq!(first, play(0.004));
     assert_ne!(first, 0);
 }
-

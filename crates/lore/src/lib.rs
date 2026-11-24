@@ -24,10 +24,10 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-mod character;
 mod app;
 pub mod bench;
 pub mod blend;
+mod character;
 #[cfg(feature = "cli")]
 #[doc(hidden)]
 pub mod cli;

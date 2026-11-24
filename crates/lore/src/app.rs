@@ -55,6 +55,57 @@ fn camera(view: View, settings: &Settings) -> Camera {
     }
 }
 
+/// Hands the renderer the bodies `frame` asks to draw, uploading each
+/// model the first time it is seen. A model that cannot be uploaded is said
+/// once in the log and not drawn.
+fn show_figures(
+    renderer: &mut Renderer,
+    frame: &Frame,
+    models: &mut Vec<(
+        std::sync::Arc<lore_assets::Scene>,
+        Option<lore_render::ModelId>,
+    )>,
+    drawn: &mut Vec<(Option<lore_render::ModelId>, usize)>,
+) {
+    let (figures, joints) = frame.figures();
+    drawn.clear();
+    for (index, figure) in figures.iter().enumerate() {
+        let known = models
+            .iter()
+            .find(|(model, _)| std::sync::Arc::ptr_eq(model, &figure.model))
+            .map(|(_, id)| *id);
+        let id = match known {
+            Some(id) => id,
+            None => {
+                let id = match renderer.add_model(&figure.model) {
+                    Ok(id) => Some(id),
+                    Err(error) => {
+                        log::error!("A body's model could not be drawn: {error}");
+                        None
+                    }
+                };
+                models.push((std::sync::Arc::clone(&figure.model), id));
+                id
+            }
+        };
+        drawn.push((id, index));
+    }
+    let list: Vec<lore_render::Figure<'_>> = drawn
+        .iter()
+        .filter_map(|&(id, index)| {
+            let figure = &figures[index];
+            Some(lore_render::Figure {
+                model: id?,
+                transform: figure.transform,
+                joints: joints.get(figure.joints.clone())?,
+                seen: figure.seen,
+                shadows: figure.shadows,
+            })
+        })
+        .collect();
+    renderer.set_figures(&list);
+}
+
 /// How long to leave the window alone after a frame could not be drawn.
 ///
 /// A hidden or minimised window cannot be drawn into, and on some systems
@@ -302,6 +353,9 @@ fn start(
         look_given: false,
         lighting_given: false,
         lamps: Vec::new(),
+        figures: (Vec::new(), Vec::new()),
+        models: Vec::new(),
+        drawn: Vec::new(),
         shaders: crate::game_shaders::ShaderList::default(),
         window: None,
         occluded: false,
@@ -383,6 +437,16 @@ struct App<G> {
     lighting_given: bool,
     /// The memory the last frame's lamps were said in, lent to the next.
     lamps: Vec<lore_render::Lamp>,
+    /// The bodies of the last frame, kept for their memory.
+    figures: (Vec<crate::game::Figure>, Vec<lore_assets::Transform>),
+    /// The models uploaded to the renderer, by the model they were made
+    /// from (each kept alive so its address is never reused).
+    models: Vec<(
+        std::sync::Arc<lore_assets::Scene>,
+        Option<lore_render::ModelId>,
+    )>,
+    /// The figures handed to the renderer, made again each frame.
+    drawn: Vec<(Option<lore_render::ModelId>, usize)>,
     /// The game's own shaders, between frames.
     shaders: crate::game_shaders::ShaderList,
     /// Created once the window system is ready for it.
@@ -811,6 +875,7 @@ impl<G: Game> App<G> {
             .with_fluid_buffer(std::mem::take(&mut self.fluid_drops))
             .with_pool_buffer(std::mem::take(&mut self.pools))
             .with_lamp_buffer(std::mem::take(&mut self.lamps))
+            .with_figure_buffers(std::mem::take(&mut self.figures))
             .with_shader_list(std::mem::take(&mut self.shaders))
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
@@ -876,6 +941,10 @@ impl<G: Game> App<G> {
             renderer.set_lamps(lamps);
         }
         self.lamps = frame.lamp_buffer();
+        if let Some(renderer) = &mut self.renderer {
+            show_figures(renderer, &frame, &mut self.models, &mut self.drawn);
+        }
+        self.figures = frame.figure_buffers();
         self.shaders = frame.take_shader_list();
         // Both are cheap when nothing has changed: the renderer builds
         // only a shader whose revision is new.

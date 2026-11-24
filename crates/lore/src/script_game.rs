@@ -118,7 +118,9 @@ impl ScriptGame {
             ));
         };
         let relative = Path::new(file);
-        let inside = relative.components().all(|part| matches!(part, std::path::Component::Normal(_)));
+        let inside = relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)));
         if !inside {
             return Err(format!(
                 "\"{file}\" is not a file inside the game's folder. Name it from the folder, \

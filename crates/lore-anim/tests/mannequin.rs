@@ -5,8 +5,14 @@
 use lore_anim::{Animator, Body, Clip, Footing, Moving, Skeleton, names};
 use lore_assets::{Pose, Scene};
 
-const MANNEQUIN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../lore/data/mannequin/mannequin.glb");
-const FEMALE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../lore/data/mannequin/mannequin_female.glb");
+const MANNEQUIN: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../lore/data/mannequin/mannequin.glb"
+);
+const FEMALE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../lore/data/mannequin/mannequin_female.glb"
+);
 
 fn body() -> Body {
     let scene = Scene::load(MANNEQUIN).unwrap();
@@ -17,13 +23,25 @@ fn body() -> Body {
 #[test]
 fn every_moving_about_clip_is_there() {
     let body = body();
-    for name in [names::IDLE, names::SPRINT, names::CROUCH_IDLE, names::JUMP, names::FALL, names::LAND, names::SWIM, names::CLIMB]
-        .into_iter()
-        .chain(names::WALK)
-        .chain(names::RUN)
-        .chain(names::CROUCH_WALK)
+    for name in [
+        names::IDLE,
+        names::SPRINT,
+        names::CROUCH_IDLE,
+        names::JUMP,
+        names::FALL,
+        names::LAND,
+        names::SWIM,
+        names::CLIMB,
+    ]
+    .into_iter()
+    .chain(names::WALK)
+    .chain(names::RUN)
+    .chain(names::CROUCH_WALK)
     {
-        assert!(body.clip(name).is_some(), "the mannequin has no {name} clip");
+        assert!(
+            body.clip(name).is_some(),
+            "the mannequin has no {name} clip"
+        );
     }
 }
 
@@ -59,8 +77,16 @@ fn the_mannequin_faces_the_way_gltf_asks() {
 fn walking_clips_mark_both_feet() {
     let body = body();
     let walk = &body.clips()[body.clip("walk").unwrap() as usize];
-    let left = walk.markers.iter().filter(|m| m.name == "left_foot_down").count();
-    let right = walk.markers.iter().filter(|m| m.name == "right_foot_down").count();
+    let left = walk
+        .markers
+        .iter()
+        .filter(|m| m.name == "left_foot_down")
+        .count();
+    let right = walk
+        .markers
+        .iter()
+        .filter(|m| m.name == "right_foot_down")
+        .count();
     println!("walk markers: {:?}", walk.markers);
     assert_eq!((left, right), (1, 1));
 }
@@ -72,7 +98,11 @@ fn the_female_body_plays_the_same_clips() {
     let body = Body::new(Skeleton::from_scene(&scene), clips);
     let walk = body.clip("walk").unwrap() as usize;
     let binding = body.clips()[walk].bind(body.skeleton());
-    assert!(binding.found() > 30, "only {} channels found bones", binding.found());
+    assert!(
+        binding.found() > 30,
+        "only {} channels found bones",
+        binding.found()
+    );
     let speeds: Vec<f32> = body.gait_speeds().collect();
     println!("female gait speeds: {speeds:?}");
 }
@@ -110,18 +140,46 @@ fn walking_gives_the_same_bones_every_time() {
 #[test]
 fn blows_strike_for_part_of_their_clip_and_gestures_do_not() {
     let body = body();
-    for name in ["sword_attack", "sword_attack_2", "punch", "kick", "sword_heavy"] {
+    for name in [
+        "sword_attack",
+        "sword_attack_2",
+        "punch",
+        "kick",
+        "sword_heavy",
+    ] {
         let clip = body.clip(name).unwrap();
-        let strike = body.strike(clip).unwrap_or_else(|| panic!("{name} does not strike"));
+        let strike = body
+            .strike(clip)
+            .unwrap_or_else(|| panic!("{name} does not strike"));
         let duration = body.clips()[clip as usize].duration;
-        println!("{name}: {:.2}..{:.2} of {duration:.2} with {:?}", strike.start, strike.end,
-            body.skeleton().names().nth(strike.bone));
-        assert!(strike.start < strike.end && strike.end <= duration, "{name}");
-        assert!(strike.end - strike.start < duration * 0.8, "{name} strikes nearly throughout");
+        println!(
+            "{name}: {:.2}..{:.2} of {duration:.2} with {:?}",
+            strike.start,
+            strike.end,
+            body.skeleton().names().nth(strike.bone)
+        );
+        assert!(
+            strike.start < strike.end && strike.end <= duration,
+            "{name}"
+        );
+        assert!(
+            strike.end - strike.start < duration * 0.8,
+            "{name} strikes nearly throughout"
+        );
     }
     for name in ["idle", "yes", "talk"] {
-        assert!(body.strike(body.clip(name).unwrap()).is_none(), "{name} strikes");
+        assert!(
+            body.strike(body.clip(name).unwrap()).is_none(),
+            "{name} strikes"
+        );
     }
     let kick = body.strike(body.clip("kick").unwrap()).unwrap();
-    assert!(body.skeleton().names().nth(kick.bone).flatten().unwrap().starts_with("foot"));
+    assert!(
+        body.skeleton()
+            .names()
+            .nth(kick.bone)
+            .flatten()
+            .unwrap()
+            .starts_with("foot")
+    );
 }

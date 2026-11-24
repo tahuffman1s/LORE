@@ -25,6 +25,9 @@ mod skeleton;
 #[cfg(test)]
 mod tests;
 
-pub use animator::{Animator, Body, DEFAULT_FADE, Footing, Layer, MOST_PLAYING, Moving, Play, Playing, Strike, names};
+pub use animator::{
+    Animator, Body, DEFAULT_FADE, Footing, Layer, MOST_PLAYING, Moving, Play, Playing, Strike,
+    names,
+};
 pub use clip::{Binding, Channel, Clip, KEYS_PER_SECOND, Marker, Part};
 pub use skeleton::{STANDARD_BONES, Skeleton};

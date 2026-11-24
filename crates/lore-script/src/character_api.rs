@@ -24,9 +24,26 @@ use crate::weapon_api;
 
 /// What can be read from a character.
 pub(crate) const CHARACTER_FIELDS: &[&str] = &[
-    "name", "position", "weapon", "ammo", "reserve", "velocity", "eye", "aim", "grounded",
-    "movement", "flySpeed", "view", "facing", "model", "clips", "health", "maxHealth", "dead",
-    "lockedOn", "blocking",
+    "name",
+    "position",
+    "weapon",
+    "ammo",
+    "reserve",
+    "velocity",
+    "eye",
+    "aim",
+    "grounded",
+    "movement",
+    "flySpeed",
+    "view",
+    "facing",
+    "model",
+    "clips",
+    "health",
+    "maxHealth",
+    "dead",
+    "lockedOn",
+    "blocking",
 ];
 
 /// What a character can be told to do.
@@ -347,15 +364,24 @@ impl UserData for CharacterRef {
         });
         fields.add_field_method_get("health", |lua, this| {
             this.read(lua, "health")?;
-            Ok(shared_of(lua)?.characters.health(this.0).map_or(0.0, |h| h.0))
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .map_or(0.0, |h| h.0))
         });
         fields.add_field_method_get("maxHealth", |lua, this| {
             this.read(lua, "maxHealth")?;
-            Ok(shared_of(lua)?.characters.health(this.0).map_or(0.0, |h| h.1))
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .map_or(0.0, |h| h.1))
         });
         fields.add_field_method_get("dead", |lua, this| {
             this.read(lua, "dead")?;
-            Ok(shared_of(lua)?.characters.health(this.0).is_none_or(|h| h.0 <= 0.0))
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .is_none_or(|h| h.0 <= 0.0))
         });
         fields.add_field_method_get("lockedOn", |lua, this| {
             this.read(lua, "lockedOn")?;
@@ -450,16 +476,22 @@ impl UserData for CharacterRef {
             this.read(lua, "heal")?;
             crate::health_api::heal(lua, &shared_of(lua)?, this.0, &points)
         });
-        methods.add_function("damage", |lua, (this, points, options): (Value, Value, Value)| {
-            let this = receiver(lua, &this, "damage", "(10, { how = \"spikes\" })")?;
-            this.read(lua, "damage")?;
-            crate::health_api::damage(lua, &shared_of(lua)?, this.0, &points, &options)
-        });
-        methods.add_function("swing", |lua, (this, clip, options): (Value, Value, Value)| {
-            let this = receiver(lua, &this, "swing", "(\"sword_attack\", { damage = 25 })")?;
-            only_player(lua, this, "swing", "made to swing")?;
-            crate::body_api::swing(lua, &shared_of(lua)?, &clip, &options)
-        });
+        methods.add_function(
+            "damage",
+            |lua, (this, points, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "damage", "(10, { how = \"spikes\" })")?;
+                this.read(lua, "damage")?;
+                crate::health_api::damage(lua, &shared_of(lua)?, this.0, &points, &options)
+            },
+        );
+        methods.add_function(
+            "swing",
+            |lua, (this, clip, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "swing", "(\"sword_attack\", { damage = 25 })")?;
+                only_player(lua, this, "swing", "made to swing")?;
+                crate::body_api::swing(lua, &shared_of(lua)?, &clip, &options)
+            },
+        );
         methods.add_function("lockOn", |lua, (this, target): (Value, Value)| {
             let this = receiver(lua, &this, "lockOn", "(enemy)")?;
             only_player(lua, this, "lockOn", "locked on")?;
@@ -495,11 +527,14 @@ impl UserData for CharacterRef {
             only_player(lua, this, "setModel", "given a model")?;
             crate::body_api::set_model(lua, &shared_of(lua)?, &model)
         });
-        methods.add_function("play", |lua, (this, clip, options): (Value, Value, Value)| {
-            let this = receiver(lua, &this, "play", "(\"wave\")")?;
-            only_player(lua, this, "play", "animated")?;
-            crate::body_api::play(lua, &shared_of(lua)?, &clip, &options)
-        });
+        methods.add_function(
+            "play",
+            |lua, (this, clip, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "play", "(\"wave\")")?;
+                only_player(lua, this, "play", "animated")?;
+                crate::body_api::play(lua, &shared_of(lua)?, &clip, &options)
+            },
+        );
         methods.add_function("stop", |lua, (this, clip): (Value, Value)| {
             let this = receiver(lua, &this, "stop", "(\"wave\")")?;
             only_player(lua, this, "stop", "animated")?;
@@ -510,11 +545,19 @@ impl UserData for CharacterRef {
             only_player(lua, this, "isPlaying", "animated")?;
             crate::body_api::is_playing(lua, &shared_of(lua)?, &clip)
         });
-        methods.add_function("onMoment", |lua, (this, moment, handler): (Value, Value, Value)| {
-            let this = receiver(lua, &this, "onMoment", "(\"left_foot_down\", function(clip) end)")?;
-            only_player(lua, this, "onMoment", "animated")?;
-            crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
-        });
+        methods.add_function(
+            "onMoment",
+            |lua, (this, moment, handler): (Value, Value, Value)| {
+                let this = receiver(
+                    lua,
+                    &this,
+                    "onMoment",
+                    "(\"left_foot_down\", function(clip) end)",
+                )?;
+                only_player(lua, this, "onMoment", "animated")?;
+                crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
+            },
+        );
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this

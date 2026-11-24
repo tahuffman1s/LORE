@@ -254,7 +254,8 @@ impl Character {
                 list.join(", ")
             );
         }
-        let mannequin = Scene::from_bytes("mannequin.glb", MANNEQUIN, None, LoadOptions::default())?;
+        let mannequin =
+            Scene::from_bytes("mannequin.glb", MANNEQUIN, None, LoadOptions::default())?;
         let mut clips = Clip::all_from(&scene);
         for clip in Clip::all_from(&mannequin) {
             if !clips.iter().any(|own| own.name == clip.name) {
@@ -282,7 +283,12 @@ impl Character {
     /// Does what a script asked: plays or stops a clip, or swings.
     pub(crate) fn ask(&mut self, ask: &lore_script::AnimationAsk) {
         match ask {
-            lore_script::AnimationAsk::Swing { clip, damage, reach, upper_body } => {
+            lore_script::AnimationAsk::Swing {
+                clip,
+                damage,
+                reach,
+                upper_body,
+            } => {
                 let Some(number) = self.body.clip(clip) else {
                     log::warn!("game.player:swing(\"{clip}\"): the body has no clip by that name.");
                     return;
@@ -300,7 +306,11 @@ impl Character {
                     return;
                 }
                 let how = lore_anim::Play {
-                    layer: if *upper_body { lore_anim::Layer::Upper } else { lore_anim::Layer::Body },
+                    layer: if *upper_body {
+                        lore_anim::Layer::Upper
+                    } else {
+                        lore_anim::Layer::Body
+                    },
                     fade: 0.08,
                     speed: 1.0,
                     looping: Some(false),
@@ -325,9 +335,7 @@ impl Character {
                 upper_body,
             } => {
                 let Some(number) = self.body.clip(clip) else {
-                    log::warn!(
-                        "game.player:play(\"{clip}\"): the body has no clip by that name."
-                    );
+                    log::warn!("game.player:play(\"{clip}\"): the body has no clip by that name.");
                     return;
                 };
                 let how = lore_anim::Play {
@@ -408,7 +416,10 @@ impl Character {
     pub(crate) fn guard(&mut self, up: bool) {
         match (up, self.guard) {
             (true, None) => {
-                let clip = self.body.clip("sword_block").or_else(|| self.body.clip("shield_idle"));
+                let clip = self
+                    .body
+                    .clip("sword_block")
+                    .or_else(|| self.body.clip("shield_idle"));
                 if let Some(clip) = clip {
                     let how = lore_anim::Play {
                         layer: lore_anim::Layer::Upper,
@@ -450,9 +461,20 @@ impl Character {
     /// (the striking hand or foot and `reach` past it) from where it was on
     /// the last tick to where it is, and gives each of `around` it passes
     /// through, once, to `hit`.
-    pub(crate) fn swing_through(&mut self, feet: [f32; 3], around: &[Struck], mut hit: impl FnMut(Blow)) {
+    pub(crate) fn swing_through(
+        &mut self,
+        feet: [f32; 3],
+        around: &[Struck],
+        mut hit: impl FnMut(Blow),
+    ) {
         let Some(swing) = &self.swing else { return };
-        let Some(playing) = self.animator.playing().iter().find(|p| p.id_number() == swing.play).copied() else {
+        let Some(playing) = self
+            .animator
+            .playing()
+            .iter()
+            .find(|p| p.id_number() == swing.play)
+            .copied()
+        else {
             self.swing = None;
             return;
         };
@@ -488,7 +510,11 @@ impl Character {
                         }
                         if inside(point, target) {
                             swing.struck.push(target.who);
-                            hit(Blow { victim: target.who, damage: swing.damage, clip: name.clone() });
+                            hit(Blow {
+                                victim: target.who,
+                                damage: swing.damage,
+                                clip: name.clone(),
+                            });
                         }
                     }
                 }
@@ -618,15 +644,28 @@ impl Character {
     /// How much of the boom is clear of walls from the eyes at `eye`
     /// looking along `look`, 0 to 1.
     fn clear_reach(&self, eye: [f32; 3], look: (f32, f32), level: &Level) -> f32 {
+        let (shoulder, end) = self.free_boom(eye, look, level);
+        level.ball_cast(shoulder, end, CAMERA_RADIUS).unwrap_or(1.0)
+    }
+
+    /// The boom as far out to the shoulder as is clear, and its far end
+    /// from there: against a wall on the right, the camera hangs nearer the
+    /// head rather than giving up the view.
+    fn free_boom(&self, eye: [f32; 3], look: (f32, f32), level: &Level) -> ([f32; 3], [f32; 3]) {
         let (pivot, shoulder, end) = self.boom_points(eye, look);
-        // First out to the shoulder, then back along the boom.
+        // Stopped a little short of what it touched, so the boom cast from
+        // there does not start against it.
         let side = level
             .ball_cast(pivot, shoulder, CAMERA_RADIUS)
-            .unwrap_or(1.0);
-        if side < 1.0 {
-            return 0.0;
-        }
-        level.ball_cast(shoulder, end, CAMERA_RADIUS).unwrap_or(1.0)
+            .map_or(1.0, |side| {
+                let length = self.boom.shoulder.abs().max(1e-3);
+                (side - 0.05 / length).max(0.0)
+            });
+        let moved: [f32; 3] = std::array::from_fn(|i| (shoulder[i] - pivot[i]) * (1.0 - side));
+        (
+            std::array::from_fn(|i| shoulder[i] - moved[i]),
+            std::array::from_fn(|i| end[i] - moved[i]),
+        )
     }
 
     /// The boom's pivot above the head, the point beside it over the
@@ -673,18 +712,8 @@ impl Character {
         }
         let reach = self.reach_before + (self.reach - self.reach_before) * alpha;
         let reach = reach.min(self.clear_reach(eye, look, level));
-        let (pivot, shoulder, end) = self.boom_points(eye, look);
-        let hung = [
-            shoulder[0] + (end[0] - shoulder[0]) * reach,
-            shoulder[1] + (end[1] - shoulder[1]) * reach,
-            shoulder[2] + (end[2] - shoulder[2]) * reach,
-        ];
-        // With the shoulder itself blocked, the camera stays over the head.
-        let hung = if reach <= 0.0 && level.ball_cast(pivot, shoulder, CAMERA_RADIUS).is_some() {
-            pivot
-        } else {
-            hung
-        };
+        let (shoulder, end) = self.free_boom(eye, look, level);
+        let hung: [f32; 3] = std::array::from_fn(|i| shoulder[i] + (end[i] - shoulder[i]) * reach);
         [
             eye[0] + (hung[0] - eye[0]) * third,
             eye[1] + (hung[1] - eye[1]) * third,
@@ -762,10 +791,14 @@ fn inside(point: [f32; 3], target: &Struck) -> bool {
     let low = target.feet[1] + target.radius;
     let high = target.feet[1] + target.height - target.radius;
     let y = point[1].clamp(low, high.max(low));
-    let d: f32 = [point[0] - target.feet[0], point[1] - y, point[2] - target.feet[2]]
-        .iter()
-        .map(|v| v * v)
-        .sum();
+    let d: f32 = [
+        point[0] - target.feet[0],
+        point[1] - y,
+        point[2] - target.feet[2],
+    ]
+    .iter()
+    .map(|v| v * v)
+    .sum();
     d <= target.radius * target.radius
 }
 
@@ -874,6 +907,30 @@ mod tests {
         }
         let out = character.camera(1.0, eye, (0.0, 0.0), &open);
         assert!((out[2] - 3.0).abs() < 0.05, "{out:?}");
+    }
+
+    #[test]
+    fn a_wall_at_the_shoulder_moves_the_camera_in_not_up_onto_the_head() {
+        let mut character = Character::mannequin().unwrap();
+        character.view = View::Third;
+        let player = standing();
+        // A wall to the right (+X), 0.4 m from the eyes.
+        let wall = Level::from_triangles(&[
+            [[0.4, 0.0, -5.0], [0.4, 0.0, 5.0], [0.4, 10.0, 5.0]],
+            [[0.4, 0.0, -5.0], [0.4, 10.0, 5.0], [0.4, 10.0, -5.0]],
+        ]);
+        for _ in 0..60 {
+            character.tick(&player, (0.0, 0.0), &wall, 1.0 / 60.0, |_, _| {});
+        }
+        let camera = character.camera(1.0, player.eye_position(), (0.0, 0.0), &wall);
+        assert!(
+            (camera[2] - 3.0).abs() < 0.05,
+            "still the whole way back: {camera:?}"
+        );
+        assert!(
+            camera[0] < 0.4 - CAMERA_RADIUS + 0.01,
+            "out of the wall: {camera:?}"
+        );
     }
 
     #[test]

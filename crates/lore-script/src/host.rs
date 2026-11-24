@@ -750,7 +750,13 @@ impl ScriptHost {
     /// takes. The health changes at once; the script's `game.onDamage` and
     /// (if it died of it) `game.onDeath` functions hear of it on its tick.
     /// Gives back whether it died of it.
-    pub fn damage(&mut self, victim: CharacterId, amount: f32, from: Option<CharacterId>, how: &str) -> bool {
+    pub fn damage(
+        &mut self,
+        victim: CharacterId,
+        amount: f32,
+        from: Option<CharacterId>,
+        how: &str,
+    ) -> bool {
         // A raised guard stops what comes at the player from in front.
         if victim == CharacterId::PLAYER && self.body.blocking() && self.facing_toward(from) {
             return false;
@@ -762,12 +768,18 @@ impl ScriptHost {
     /// where they look: what a raised guard covers.
     fn facing_toward(&self, from: Option<CharacterId>) -> bool {
         let Some(from) = from else { return false };
-        let (Some(at), Some(motion)) = (self.characters.position(from), self.characters.motion_of(CharacterId::PLAYER)) else {
+        let (Some(at), Some(motion)) = (
+            self.characters.position(from),
+            self.characters.motion_of(CharacterId::PLAYER),
+        ) else {
             return false;
         };
         let way = [at[0] - motion.eye[0], at[2] - motion.eye[2]];
         let aim = [motion.aim[0], motion.aim[2]];
-        let (lw, la) = ((way[0] * way[0] + way[1] * way[1]).sqrt(), (aim[0] * aim[0] + aim[1] * aim[1]).sqrt());
+        let (lw, la) = (
+            (way[0] * way[0] + way[1] * way[1]).sqrt(),
+            (aim[0] * aim[0] + aim[1] * aim[1]).sqrt(),
+        );
         lw > 0.0 && la > 0.0 && (way[0] * aim[0] + way[1] * aim[1]) / (lw * la) > 0.5
     }
 
@@ -812,7 +824,10 @@ impl ScriptHost {
             }
             if hurt.died {
                 let victim = shared.handles.character(&vm, hurt.victim);
-                let killer = hurt.from.filter(|f| shared.characters.has(*f)).map(|f| shared.handles.character(&vm, f));
+                let killer = hurt
+                    .from
+                    .filter(|f| shared.characters.has(*f))
+                    .map(|f| shared.handles.character(&vm, f));
                 if let Ok(victim) = victim {
                     let killer = match killer {
                         Some(Ok(k)) => mlua::Value::UserData(k),

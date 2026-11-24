@@ -2672,9 +2672,17 @@ fn a_ball_cast_stops_at_a_wall_and_passes_open_air() {
         [[-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [5.0, 10.0, -5.0]],
         [[-5.0, 0.0, -5.0], [5.0, 10.0, -5.0], [-5.0, 10.0, -5.0]],
     ]);
-    let hit = wall.ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, -10.0], 0.5).unwrap();
+    let hit = wall
+        .ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, -10.0], 0.5)
+        .unwrap();
     // The ball touches with its edge, half a metre before the wall.
     assert!((hit - 0.45).abs() < 0.01, "{hit}");
-    assert!(wall.ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, 4.0], 0.5).is_none());
-    assert!(wall.ball_cast([0.0, 2.0, 0.0], [f32::NAN, 2.0, 4.0], 0.5).is_none());
+    assert!(
+        wall.ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, 4.0], 0.5)
+            .is_none()
+    );
+    assert!(
+        wall.ball_cast([0.0, 2.0, 0.0], [f32::NAN, 2.0, 4.0], 0.5)
+            .is_none()
+    );
 }

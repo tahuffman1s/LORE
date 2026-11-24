@@ -39,6 +39,12 @@ game.onTick(function(step)
     end
 end)
 
+-- How the game is seen: "first" from the player's eyes, or "third" from
+-- over their shoulder. The player can switch with F, or the View button on
+-- a gamepad, because of the second line.
+game.player:setView("first")
+game.player:allowViewSwitch(true)
+
 game.onReload(function()
     print("main.luau was saved and loaded again. Jumps so far: " .. saved.jumps)
 end)

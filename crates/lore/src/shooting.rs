@@ -394,8 +394,16 @@ mod aim_tests {
     /// A wall across the way at z = -10.
     fn wall() -> Level {
         Level::from_triangles(&[
-            [[-20.0, -5.0, -10.0], [20.0, -5.0, -10.0], [20.0, 20.0, -10.0]],
-            [[-20.0, -5.0, -10.0], [20.0, 20.0, -10.0], [-20.0, 20.0, -10.0]],
+            [
+                [-20.0, -5.0, -10.0],
+                [20.0, -5.0, -10.0],
+                [20.0, 20.0, -10.0],
+            ],
+            [
+                [-20.0, -5.0, -10.0],
+                [20.0, 20.0, -10.0],
+                [-20.0, 20.0, -10.0],
+            ],
         ])
     }
 
@@ -413,7 +421,10 @@ mod aim_tests {
         assert!((hit.point[0] - 0.45).abs() < 1e-3, "{:?}", hit.point);
         assert!((hit.point[1] - 1.75).abs() < 1e-3, "{:?}", hit.point);
         // At the eyes, nothing changes.
-        assert_eq!(toward_mark(&wall(), &[], None, eyes, ahead, &settings), ahead);
+        assert_eq!(
+            toward_mark(&wall(), &[], None, eyes, ahead, &settings),
+            ahead
+        );
     }
 
     #[test]

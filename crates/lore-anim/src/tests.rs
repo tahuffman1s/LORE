@@ -11,36 +11,36 @@ fn arm() -> Scene {
     inverse[3][1] = -1.0;
     Scene {
         nodes: vec![
-        Node {
-            name: Some("root".into()),
-            parent: None,
-            rest: Pose::default(),
-            instance: None,
-            skin: None,
-        },
-        Node {
-            name: Some("hand".into()),
-            parent: Some(0),
-            rest: Pose {
-                translation: [0.0, 1.0, 0.0],
-                ..Pose::default()
+            Node {
+                name: Some("root".into()),
+                parent: None,
+                rest: Pose::default(),
+                instance: None,
+                skin: None,
             },
-            instance: None,
-            skin: None,
-        },
-    ],
-        skins: vec![Skin {
-        name: None,
-        joints: vec![
-            Joint {
-                node: 0,
-                inverse_bind: IDENTITY,
-            },
-            Joint {
-                node: 1,
-                inverse_bind: inverse,
+            Node {
+                name: Some("hand".into()),
+                parent: Some(0),
+                rest: Pose {
+                    translation: [0.0, 1.0, 0.0],
+                    ..Pose::default()
+                },
+                instance: None,
+                skin: None,
             },
         ],
+        skins: vec![Skin {
+            name: None,
+            joints: vec![
+                Joint {
+                    node: 0,
+                    inverse_bind: IDENTITY,
+                },
+                Joint {
+                    node: 1,
+                    inverse_bind: inverse,
+                },
+            ],
         }],
         ..Scene::default()
     }
@@ -246,7 +246,12 @@ fn an_upper_body_clip_leaves_the_legs_alone() {
     for _ in 0..120 {
         animator.step(&body, &Moving::default(), 1.0 / 60.0, |_, _| {});
     }
-    assert!(!animator.is_playing(id), "{:?} {:?}", animator.playing(), body.clips()[0]);
+    assert!(
+        !animator.is_playing(id),
+        "{:?} {:?}",
+        animator.playing(),
+        body.clips()[0]
+    );
 }
 
 #[test]

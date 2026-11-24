@@ -416,7 +416,10 @@ pub(crate) fn set_model(lua: &Lua, shared: &Rc<Shared>, model: &Value) -> mlua::
         ));
     };
     let mut name = name.to_string_lossy().trim().to_owned();
-    if let Some(built_in) = BUILT_IN_MODELS.iter().find(|m| m.eq_ignore_ascii_case(&name)) {
+    if let Some(built_in) = BUILT_IN_MODELS
+        .iter()
+        .find(|m| m.eq_ignore_ascii_case(&name))
+    {
         (*built_in).clone_into(&mut name);
     }
     let is_file =
@@ -473,7 +476,10 @@ fn clip_name(
     }
     let shown: Vec<&str> = clips.iter().take(8).map(String::as_str).collect();
     let more = if clips.len() > shown.len() {
-        format!(" and {} more (print game.player.clips for all)", clips.len() - shown.len())
+        format!(
+            " and {} more (print game.player.clips for all)",
+            clips.len() - shown.len()
+        )
     } else {
         String::new()
     };
@@ -681,7 +687,12 @@ pub(crate) fn moment_handlers(shared: &Shared, moment: &str) -> Vec<Function> {
 }
 
 /// `game.player:swing(clip, { damage, reach, keepWalking })`.
-pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Value) -> mlua::Result<()> {
+pub(crate) fn swing(
+    lua: &Lua,
+    shared: &Rc<Shared>,
+    clip: &Value,
+    options: &Value,
+) -> mlua::Result<()> {
     const EXAMPLE: &str = "game.player:swing(\"sword_attack\", { damage = 25, reach = 0.9 })";
     let clip = clip_name(lua, shared, clip, "swing", EXAMPLE)?;
     let (mut damage, mut reach, mut upper_body) = (10.0_f32, 0.0_f32, false);
@@ -689,7 +700,12 @@ pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Valu
         for pair in table.pairs::<Value, Value>() {
             let (key, value) = pair?;
             let Value::String(key) = key else {
-                return Err(fail(lua, format!("game.player:swing takes options by name. Write it like this: {EXAMPLE}")));
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.player:swing takes options by name. Write it like this: {EXAMPLE}"
+                    ),
+                ));
             };
             let key = key.to_string_lossy();
             let number = |least: f32, most: f32| -> mlua::Result<f32> {
@@ -713,7 +729,9 @@ pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Valu
                     let Value::Boolean(b) = value else {
                         return Err(fail(
                             lua,
-                            format!("game.player:swing's keepWalking needs true or false. Write it like this: {EXAMPLE}"),
+                            format!(
+                                "game.player:swing's keepWalking needs true or false. Write it like this: {EXAMPLE}"
+                            ),
                         ));
                     };
                     upper_body = b;
@@ -743,7 +761,12 @@ pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Valu
             ),
         ));
     }
-    shared.body.ask(AnimationAsk::Swing { clip, damage, reach, upper_body });
+    shared.body.ask(AnimationAsk::Swing {
+        clip,
+        damage,
+        reach,
+        upper_body,
+    });
     Ok(())
 }
 
@@ -751,19 +774,24 @@ pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Valu
 pub(crate) fn lock_on(lua: &Lua, shared: &Rc<Shared>, target: &Value) -> mlua::Result<()> {
     let on = match target {
         Value::Nil => None,
-        other => Some(crate::character_api::id_of_value(lua, other).ok_or_else(|| {
-            fail(
-                lua,
-                format!(
-                    "game.player:lockOn needs a character to hold the camera on, or nil to let \
+        other => Some(
+            crate::character_api::id_of_value(lua, other).ok_or_else(|| {
+                fail(
+                    lua,
+                    format!(
+                        "game.player:lockOn needs a character to hold the camera on, or nil to let \
                      go, but it was given {}. Write it like this: game.player:lockOn(enemy)",
-                    describe(other)
-                ),
-            )
-        })?),
+                        describe(other)
+                    ),
+                )
+            })?,
+        ),
     };
     if on == Some(crate::CharacterId::PLAYER) {
-        return Err(fail(lua, "game.player:lockOn cannot hold the camera on the player themself. Give it someone else, or nil to let go."));
+        return Err(fail(
+            lua,
+            "game.player:lockOn cannot hold the camera on the player themself. Give it someone else, or nil to let go.",
+        ));
     }
     shared.body.set_locked(on);
     Ok(())

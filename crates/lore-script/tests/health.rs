@@ -79,7 +79,11 @@ fn hurts_from_the_engine_and_from_scripts_take_one_path_and_death_is_heard() {
     tick(&mut host);
     assert_eq!(
         printed(),
-        ["30 fall false false", "70 spikes true false", "died true nil"]
+        [
+            "30 fall false false",
+            "70 spikes true false",
+            "died true nil"
+        ]
     );
     assert_eq!(host.health(PLAYER), Some((0.0, 100.0)));
     // The dead are hurt no more.
@@ -133,10 +137,14 @@ fn locking_on_holds_someone_and_letting_go_holds_no_one() {
     assert_eq!(host.locked_on(), None);
     let said = {
         let _ = log::set_logger(&Capture);
-        let host = ScriptHost::from_source("game.player:lockOn(game.player)", ActionMap::standard());
+        let host =
+            ScriptHost::from_source("game.player:lockOn(game.player)", ActionMap::standard());
         host.last_error().unwrap().message.clone()
     };
-    assert!(said.contains("cannot hold the camera on the player"), "{said}");
+    assert!(
+        said.contains("cannot hold the camera on the player"),
+        "{said}"
+    );
     let said = {
         let host = ScriptHost::from_source("game.player:lockOn(\"bandit\")", ActionMap::standard());
         host.last_error().unwrap().message.clone()
