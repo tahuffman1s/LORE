@@ -46,11 +46,15 @@ const MOST_NOTCHES_PER_EVENT: f32 = 16.0;
 /// The camera that draws `view`: at the view's own field of view if it has
 /// one (the editor's camera), and otherwise at the player's.
 fn camera(view: View, settings: &Settings) -> Camera {
+    let own = view.fov_degrees.unwrap_or(settings.field_of_view);
     Camera {
         position: view.position,
         yaw: view.yaw,
         pitch: view.pitch,
-        fov_degrees: view.fov_degrees.unwrap_or(settings.field_of_view),
+        // A script's shot may see through a lens of its own.
+        fov_degrees: view
+            .lens
+            .map_or(own, |(degrees, weight)| own + (degrees - own) * weight),
         ..Camera::default()
     }
 }

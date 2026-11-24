@@ -905,6 +905,8 @@ pub struct Playing {
     /// The player's body, and the camera at its eyes or over its shoulder.
     /// `None` only if the engine's own body could not be read.
     character: Option<Character>,
+    /// The camera a script directs with `game.camera`.
+    shot: crate::shot::ShotCamera,
 }
 
 /// How fast a body may hit the ground unhurt, in metres a second: a drop
@@ -1042,6 +1044,7 @@ impl Playing {
                 character.face(yaw);
                 character
             }),
+            shot: crate::shot::ShotCamera::default(),
         }
         .with_body_said()
     }
@@ -1140,6 +1143,10 @@ impl Playing {
         {
             wanted.third = !wanted.third;
             host.said_view(wanted.third);
+        }
+        // Seen from a script's shot, the body is drawn whole.
+        if host.camera().shot != lore_script::ShotSaid::Player {
+            wanted.third = true;
         }
         character.view = if wanted.third {
             View::Third
@@ -1247,19 +1254,24 @@ impl Playing {
         }
     }
 
-    /// Hands the frame the player's body, drawn between the last two ticks.
-    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3], look: (f32, f32)) {
-        let Some(character) = &mut self.character else {
-            return;
-        };
+    /// Where the player's feet are for a frame `alpha` of the way from the
+    /// last tick to this one.
+    fn feet_at(&self, alpha: f32) -> [f32; 3] {
         let player = self.world.player();
-        let feet = match self.before {
+        match self.before {
             Some(before) => {
-                let eye_drop = player.eye_height;
-                let was = [before[0], before[1] - eye_drop, before[2]];
-                blend::position(was, player.position, frame.alpha())
+                let was = [before[0], before[1] - player.eye_height, before[2]];
+                blend::position(was, player.position, alpha)
             }
             None => player.position,
+        }
+    }
+
+    /// Hands the frame the player's body, drawn between the last two ticks.
+    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3], look: (f32, f32)) {
+        let feet = self.feet_at(frame.alpha());
+        let Some(character) = &mut self.character else {
+            return;
         };
         let model = std::sync::Arc::clone(character.model());
         let drawn = character.figures(frame.alpha(), feet, camera, look);
@@ -1501,8 +1513,26 @@ impl Game for Playing {
                 &self.world.ground.level,
             )
         });
-        frame.look_from(camera, seen.yaw, seen.pitch);
-        self.show_body(frame, camera, (seen.yaw, seen.pitch));
+        // A script's shot takes the place of the player's own view.
+        let said = self.world.game.host().camera();
+        let own = crate::shot::Pose {
+            position: camera,
+            yaw: seen.yaw,
+            pitch: seen.pitch,
+            lens: (0.0, 0.0),
+        };
+        let clock = (f64::from(now) + f64::from(frame.alpha())) / f64::from(tick_rate);
+        let feet = self.feet_at(frame.alpha());
+        let host = self.world.game.host();
+        let shot = self.shot.pose(&said, own, clock, |who| {
+            if who == CharacterId::PLAYER {
+                Some(feet)
+            } else {
+                host.character_position(who)
+            }
+        });
+        frame.look_from_through(shot.position, shot.yaw, shot.pitch, shot.lens);
+        self.show_body(frame, shot.position, (seen.yaw, seen.pitch));
         self.show_water(frame, seen.eye);
         for tread in self.treads.drain(..) {
             frame.tread(tread);
@@ -1834,6 +1864,51 @@ mod tests {
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn a_script_puts_the_camera_somewhere_and_gives_it_back() {
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_source(
+            r#"local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 10 then
+                    game.camera.fixed(vector.create(0, 8, 20), vector.create(0, 8, 0), { fov = 40 })
+                elseif ticks == 20 then
+                    game.camera.reset(1)
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        let own = drawn(&mut game, &input, 1.0);
+        assert_eq!(own.lens, None);
+        for _ in 0..10 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        let shot = drawn(&mut game, &input, 1.0);
+        assert_eq!(shot.position, [0.0, 8.0, 20.0]);
+        assert!(near(shot.yaw, 0.0) && near(shot.pitch, 0.0));
+        assert_eq!(shot.lens, Some((40.0, 1.0)));
+
+        // Given back over a second: half a second on it is part of the way.
+        // The travel starts on the frame that first sees it asked for.
+        let mut between = shot;
+        for _ in 0..40 {
+            game.tick(input.tick(), STEP);
+            between = drawn(&mut game, &input, 1.0);
+        }
+        assert!(between.position[2] > 1.0 && between.position[2] < 19.0);
+        for _ in 0..40 {
+            game.tick(input.tick(), STEP);
+            drawn(&mut game, &input, 1.0);
+        }
+        let back = drawn(&mut game, &input, 1.0);
+        assert_eq!(back.lens, None);
+        assert!(back.position[2].abs() < 6.0, "{:?}", back.position);
     }
 
     #[test]

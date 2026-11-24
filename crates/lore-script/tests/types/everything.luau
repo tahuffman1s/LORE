@@ -480,6 +480,13 @@ local look = game.look.get()
 print(look.toneMapping, look.bloom, look.shadows, look.night, look.chromaticAberration)
 game.look.reset()
 game.look.reset(3)
+game.camera.fixed(vector.create(0, 6, 12), game.player)
+game.camera.fixed(vector.create(0, 2, 0), vector.create(10, 1, 0), { seconds = 2, fov = 40 })
+game.camera.follow(game.player, { distance = 8, height = 5, seconds = 1, fov = 60 })
+local shot: "player" | "fixed" | "follow" = game.camera.shot()
+print(shot)
+game.camera.reset()
+game.camera.reset(1)
 
 game.onTick(function()
     if game.input.pressed("fire") then

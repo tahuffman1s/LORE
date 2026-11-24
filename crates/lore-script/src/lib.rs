@@ -46,6 +46,7 @@
 mod api;
 mod audio;
 mod body_api;
+mod camera_api;
 pub use body_api::{AnimationAsk, BUILT_IN_MODELS, CameraView};
 mod character_api;
 mod error;
@@ -69,6 +70,7 @@ mod weapon_api;
 mod weather_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
+pub use camera_api::{CameraSaid, CameraTarget, ShotSaid};
 pub use character_api::CharacterId;
 pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};

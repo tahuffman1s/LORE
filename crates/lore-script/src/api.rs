@@ -173,6 +173,9 @@ pub(crate) struct Shared {
     /// What the script said of how the picture is graded. It outlives this
     /// version of the script.
     pub look: Rc<crate::look_api::LookState>,
+    /// Where the script said the world is seen from. It outlives this
+    /// version of the script.
+    pub camera: Rc<crate::camera_api::CameraState>,
     /// The game shaders the script turned on. It outlives this version of
     /// the script.
     pub shaders: Rc<crate::shader_api::ShaderState>,
@@ -390,6 +393,14 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set("sky", weather_api::sky(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
+    let camera = crate::camera_api::camera(lua, shared)?;
+    strict(
+        lua,
+        &camera,
+        "game.camera",
+        crate::camera_api::CAMERA_FUNCTIONS,
+    )?;
+    game.set("camera", camera)?;
     game.set("weather", weather_api::weather(lua, shared)?)?;
 
     let frames = tools_api::frames(lua, shared)?;
@@ -411,6 +422,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
+    members.push("camera");
     members.push("fluids");
     members.push("frames");
     members.push("hud");
@@ -841,7 +853,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 44] = [
+        let groups: [(&str, &[&str]); 45] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -881,6 +893,7 @@ mod tests {
             ("Pool:", crate::pool_api::POOL_METHODS),
             ("game.lamps.", crate::lamp_api::LAMPS_FUNCTIONS),
             ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
+            ("game.camera.", crate::camera_api::CAMERA_FUNCTIONS),
             ("game.look.", crate::look_api::LOOK_FUNCTIONS),
             ("Lamp.", crate::lamp_api::LAMP_FIELDS),
             ("Lamp:", &["remove"]),
