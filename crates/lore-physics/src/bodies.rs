@@ -171,7 +171,9 @@ impl Bodies {
             Some(_) => RigidBodyBuilder::dynamic()
                 .linear_damping(DRIFT_DAMPING)
                 .angular_damping(SPIN_DAMPING),
-            None => RigidBodyBuilder::fixed(),
+            // Not moved by anything that hits it, but it can be slid and
+            // turned ([`Bodies::slide`]), and then pushes what is in its way.
+            None => RigidBodyBuilder::kinematic_position_based(),
         }
         .pose(pose);
         let mut collider = spec.shape.collider().friction(FRICTION).restitution(BOUNCE);
@@ -348,6 +350,22 @@ impl Bodies {
         }
         body.set_linvel(speed, true);
         body.set_angvel(Vector::ZERO, true);
+    }
+
+    /// Slides the body numbered `body`, one that nothing else moves (a
+    /// door, a lift, a platform), so that its middle is at `position` and
+    /// it is turned `yaw` radians to the left after the next step. On the
+    /// way it pushes whatever can be moved. Does nothing to a body that
+    /// falls and is pushed itself.
+    pub fn slide(&mut self, body: usize, position: [f32; 3], yaw: f32) {
+        let position = wide(position);
+        if let Some(body) = (self.handles.get(body))
+            .and_then(|handle| self.world.bodies.get_mut(*handle))
+            .filter(|body| body.is_kinematic() && position.is_finite() && yaw.is_finite())
+        {
+            let turned = Rotation::from_rotation_y(f64::from(yaw));
+            body.set_next_kinematic_position(Pose::from_parts(position, turned));
+        }
     }
 
     /// Sends the body numbered `body` off at `velocity` metres a second,
@@ -616,6 +634,45 @@ mod tests {
         settle(&mut bodies, 300);
         let landed = bodies.state(held).unwrap();
         assert!(landed.position[2] > 2.0 && landed.resting, "{landed:?}");
+    }
+
+    #[test]
+    fn a_platform_slid_along_carries_and_pushes_what_can_move() {
+        let mut bodies = Bodies::new(&floor(), 60);
+        // A platform two metres square just over the floor, a crate on it
+        // and another in its way.
+        let platform = bodies.add(&BodySpec {
+            shape: BodyShape::Box {
+                half: [1.0, 0.1, 1.0],
+            },
+            position: [0.0, 0.1, 0.0],
+            yaw: 0.0,
+            mass: None,
+            hinge: None,
+        });
+        let rider = bodies.add(&crate_at([0.0, 0.72, 0.0]));
+        let ahead = bodies.add(&crate_at([3.0, 0.5, 0.0]));
+        settle(&mut bodies, 60);
+        assert!(!bodies.moves(platform) && bodies.state(platform).unwrap().resting);
+        // Four metres along +X over two seconds.
+        for tick in 1..=120u16 {
+            let along = 4.0 * f32::from(tick) / 120.0;
+            bodies.slide(platform, [along, 0.1, 0.0], 0.0);
+            bodies.step(20.0);
+        }
+        settle(&mut bodies, 60);
+        let at = |bodies: &Bodies, body: usize| bodies.state(body).unwrap().position;
+        let stopped = at(&bodies, platform);
+        assert!((stopped[0] - 4.0).abs() < 1e-3, "{stopped:?}");
+        // What rode it came along, and what was in the way was shoved on.
+        let rode = at(&bodies, rider);
+        assert!((rode[0] - 4.0).abs() < 0.4, "{rode:?}");
+        let shoved = at(&bodies, ahead);
+        assert!(shoved[0] > 5.4, "{shoved:?}");
+        // Asked to slide a thing that falls, nothing happens.
+        bodies.slide(rider, [0.0, 9.0, 0.0], 0.0);
+        bodies.step(20.0);
+        assert!(at(&bodies, rider)[1] < 1.5);
     }
 
     #[test]

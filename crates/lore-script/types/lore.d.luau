@@ -431,6 +431,15 @@ end
 --- kilograms), and with `hinge = true` it swings about the edge it is
 --- placed by, as a door does. Those are properties of the thing in
 --- `lore edit`, or lines under its `[entity.properties]` in map.toml.
+---
+--- A solid thing that does not move by itself can be moved by the game: a
+--- script slides it (`moveTo`) and turns it (`turnTo`), and whoever stands
+--- on it is carried and turned with it, which is all a lift, a platform or
+--- a turntable is. With `opens = true` in the map it is a door: the player
+--- opens and shuts it by using it, with no script, and it swings 100
+--- degrees about the point it is placed by (`swing = -90` for another
+--- way). What slides pushes whoever is in its way, and waits for someone
+--- it has caught against a wall.
 --- Example: local door = game.thing("Cellar door")
 declare extern type Thing with
     --- What the thing was called in `lore edit`. "" if it was given no name.
@@ -479,6 +488,16 @@ declare extern type Thing with
     --- not move at all.
     --- Example: if not crate.resting then print("Still falling") end
     resting: boolean
+
+    --- True while the thing is sliding or turning somewhere: after
+    --- `moveTo` or `turnTo`, or while a door swings.
+    --- Example: if not lift.sliding then lift:moveTo(top, 4) end
+    sliding: boolean
+
+    --- True for a door that is open, or on its way to being. False for a
+    --- shut door and for anything that is not a door.
+    --- Example: if door.isOpen then door:close() end
+    isOpen: boolean
 
     --- Whether the player may pick the thing up: true for one that moves
     --- and weighs no more than `game.player.carryWeight` (40 kg to start),
@@ -551,6 +570,46 @@ declare extern type Thing with
     --- the next tick, and does not glide. Only in the game's rules.
     --- Example: crate:teleport(vector.create(0, 2, 0))
     function teleport(self, position: vector): ()
+
+    --- Slides the thing so that the point it is placed by is at `place`:
+    --- a vector in metres, or another thing, whose place it goes to (place
+    --- a marker in `lore edit` and name it "Top floor"). It takes `seconds`
+    --- (1 if not given, up to 600; 0 is at once), easing off and to a
+    --- stop. Whoever stands on it rides along; whoever is in its way is
+    --- pushed, and if they are caught against a wall it waits for them.
+    --- Only for a solid thing that does not move by itself; one with
+    --- `moves = true` is an error that says what to use instead. Only in
+    --- the game's rules.
+    --- Example: lift:moveTo(game.thing("Top floor"), 4)
+    --- Example: platform:moveTo(platform.position + vector.create(0, 0, -6), 3)
+    function moveTo(self, place: vector | Thing, seconds: number?): ()
+
+    --- Turns the thing about the point it is placed by until it is turned
+    --- `degrees` to the left (as `facing` counts), over `seconds` (1 if
+    --- not given). Whoever stands on it is turned with it, their view too.
+    --- Example: turntable:turnTo(turntable.facing + 90, 2)
+    function turnTo(self, degrees: number, seconds: number?): ()
+
+    --- Opens a door: a thing the map gave `opens = true`. A door already
+    --- open stays open. Anything else is an error that says how to make
+    --- it a door. Only in the game's rules.
+    --- Example: lever:onUse(function() gate:open() end)
+    function open(self): ()
+
+    --- Shuts a door. See `open`.
+    --- Example: game.after(5, function() gate:close() end)
+    function close(self): ()
+
+    --- Calls `handler` each time the thing gets where it was sliding or
+    --- turning to, a door reaching open or shut included.
+    --- Example: lift:onArrive(function() game.audio.playAt("ding", lift.position) end)
+    function onArrive(self, handler: (thing: Thing) -> ()): ()
+
+    --- Calls `handler` when the thing, sliding, catches someone against
+    --- something and has to wait for them: once, until it has moved
+    --- freely again. `who` is who is in the way.
+    --- Example: door:onBlocked(function(door, who) door:open() end)
+    function onBlocked(self, handler: (thing: Thing, who: Character) -> ()): ()
 
     --- Calls `handler` with whoever walks into the thing's zone: once
     --- each time they come in, for the player and every other character

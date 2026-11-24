@@ -537,6 +537,19 @@ end)
 for _, heavy: Thing in game.things("statue") do
     heavy.carryable = false
 end
+for _, lift: Thing in game.things("lift") do
+    print(lift.sliding, lift.isOpen)
+    lift:onArrive(function(arrived: Thing) print(arrived.name) end)
+    lift:onBlocked(function(blocked: Thing, who: Character) print(blocked.name, who.name) end)
+    game.onTick(function()
+        lift:moveTo(vector.create(0, 6, 0), 4)
+        lift:moveTo(lift)
+        lift:turnTo(90, 2)
+        lift:turnTo(0)
+        lift:open()
+        lift:close()
+    end)
+end
 local chests: { Thing } = game.things("chest")
 print(#chests)
 if false then

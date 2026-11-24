@@ -107,6 +107,11 @@ pub struct World {
     /// Whether the fire button was down on the last tick: a throw is a
     /// press, not a hold.
     fire_was: bool,
+    /// Which solid thing the player stood on after the last tick.
+    standing_on: Option<usize>,
+    /// How far what the player stood on has turned them since the view
+    /// was last told, in radians to the left.
+    carried_turn: f32,
 }
 
 /// How far in front of the eyes a carried thing is held, and how far under
@@ -238,6 +243,8 @@ impl World {
             usable: Vec::new(),
             usable_ids: Vec::new(),
             fire_was: false,
+            standing_on: None,
+            carried_turn: 0.0,
         };
         // The ground's still water is the world's pools, of the kinds its
         // sheets say, and its script is told what they are called. Here,
@@ -276,6 +283,8 @@ impl World {
                     moves: told.moves,
                     weight: told.weight,
                     resting: told.resting,
+                    sliding: told.sliding,
+                    open: told.open,
                 },
             );
         });
@@ -631,6 +640,12 @@ impl World {
     /// Whether the player was put somewhere since this was last asked, by
     /// the script or by a respawn, and the yaw and pitch to face there, if
     /// either said.
+    /// How far what the player stands on has turned them since this was
+    /// last asked, in radians to the left: the view turns with it.
+    pub(crate) fn take_carried_turn(&mut self) -> f32 {
+        std::mem::take(&mut self.carried_turn)
+    }
+
     pub(crate) fn take_teleported(&mut self) -> Option<Option<(f32, f32)>> {
         self.teleported.take()
     }
@@ -685,6 +700,19 @@ impl Game for World {
             match ask {
                 lore_script::ThingAsk::Push { id, impulse } => self.things.push(&id, impulse),
                 lore_script::ThingAsk::Put { id, position } => self.things.put(&id, position),
+                lore_script::ThingAsk::Glide {
+                    id,
+                    position,
+                    facing,
+                    seconds,
+                } => match self.things.glide(&id, position, facing, seconds) {
+                    Ok(()) => true,
+                    Err(why) => {
+                        log::warn!("The thing placed as \"{id}\" was not moved: {why}.");
+                        false
+                    }
+                },
+                lore_script::ThingAsk::Open { id, open } => self.things.open(&id, open),
                 lore_script::ThingAsk::Drop => {
                     if let Some(carried) = self.things.carried().map(str::to_owned) {
                         self.things.let_go(None);
@@ -742,8 +770,20 @@ impl Game for World {
             // thick it is, is the level's to say as they move.
             moving.footing = self.fluids.footing();
         }
-        let before = *player;
         let walking = moving.mode == MoveMode::Walk;
+        // Doors, lifts and platforms slide first, and take whoever stands
+        // on one along and round with it. Then every solid thing moves on
+        // by a tick, so the player walks the level as it now is.
+        let rider = (self.standing_on.filter(|_| walking)).map(|under| (under, player.position));
+        let slid = self.things.slide(*tick, rider);
+        if rider.is_some() {
+            let (along, round) = slid.carried;
+            player.position = std::array::from_fn(|i| player.position[i] + along[i]);
+            moving.yaw += round;
+            self.carried_turn += round;
+        }
+        self.things.step(rules.gravity, level);
+        let before = *player;
         player.step(level, rules, &moving, *tick);
         // What the player walks into is pushed, and every solid thing
         // moves on by a tick.
@@ -759,11 +799,40 @@ impl Game for World {
                 (self.things).pushed_by(player, rules, level, wish, *tick);
             }
         }
-        self.things.step(rules.gravity, level);
+        // What the player now stands on, to ride it on the next tick, and
+        // whether something sliding has them caught against a wall: it
+        // goes back a tick and waits for them.
+        self.standing_on = None;
+        let mut caught = None;
+        if walking && !self.things.is_empty() {
+            let (things, standing_on) = (&self.things, &mut self.standing_on);
+            player.touching(level, rules, 0.08, |body, toward, apart| {
+                if toward[1] < -0.7 {
+                    *standing_on = Some(body);
+                } else if apart < -things::CAUGHT && things.sliding(body) {
+                    caught = Some(body);
+                }
+            });
+        }
+        let mut blocked: Option<String> = None;
+        for body in 0..self.things.len() {
+            if caught == Some(body) {
+                blocked = self.things.caught_in(body, *tick).map(str::to_owned);
+            } else {
+                self.things.clear_of(body);
+            }
+        }
         // The script reads where the player is as of this tick, in what it
         // is told of below and in its own tick, and how they are moving.
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
+        // What slid where it was going, and what found the player in its way.
+        for id in &slid.arrived {
+            host.thing_arrived(id);
+        }
+        if let Some(id) = &blocked {
+            host.thing_blocked(id, CharacterId::PLAYER);
+        }
         // And where every solid thing has got to.
         if !self.things.is_empty() {
             self.things.each(|id, told| {
@@ -777,6 +846,8 @@ impl Game for World {
                         moves: told.moves,
                         weight: told.weight,
                         resting: told.resting,
+                        sliding: told.sliding,
+                        open: told.open,
                     },
                 );
             });
@@ -865,6 +936,10 @@ impl Game for World {
             host.set_use_target(target, progress);
             if let (true, Some(target)) = (used, target) {
                 host.use_thing(target);
+                // Using a door opens it, or shuts it.
+                if let Some(open) = self.things.door(target) {
+                    self.things.open(target, !open);
+                }
                 // Using what can be carried picks it up.
                 if host.carryable(target) && self.things.pick_up(target) {
                     host.set_carrying(Some(target));
@@ -1721,6 +1796,11 @@ impl Game for Playing {
         });
         self.world.shooting.camera = camera.filter(|camera| *camera != self.eye);
         self.world.tick(input, step);
+        // A turning platform under the player's feet turns their view.
+        let round = self.world.take_carried_turn();
+        if round != 0.0 {
+            self.yaw = (self.yaw + round).rem_euclid(std::f32::consts::TAU);
+        }
         // A script or a respawn that put the player somewhere may have
         // turned them too.
         let teleported = self.world.take_teleported();
@@ -2628,6 +2708,241 @@ mod tests {
         let (mut fixed, input) =
             game_with("moves = true\n", "game.thing(\"Box\").carryable = false");
         assert!(words(&mut fixed, &input).is_empty());
+    }
+
+    /// A game on the flat floor with this map and script.
+    fn game_on_map(things: &str, script: &str) -> (Playing, lore_input::Input) {
+        let map = crate::map::Map::parse("map.toml", &format!("version = 1\n{things}")).unwrap();
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_pack_parts(
+            [("main.luau".to_owned(), script.to_owned())],
+            Vec::new(),
+            map,
+            &actions,
+            crate::settings::Settings::default(),
+        );
+        let game = Playing::start(script, None, &actions, 60);
+        (game, lore_input::Input::new(actions))
+    }
+
+    /// A map entry: a solid thing with these properties.
+    fn solid_thing(name: &str, at: [f32; 3], properties: &str) -> String {
+        format!(
+            "[[entity]]\nid = \"{name}\"\ntype = \"prop\"\nname = \"{name}\"\n\
+             position = [{}, {}, {}]\n[entity.properties]\n{properties}\n",
+            at[0], at[1], at[2]
+        )
+    }
+
+    #[test]
+    fn a_lift_carries_whoever_stands_on_it_without_a_jolt() {
+        // A crate whose top is just over the floor, under the player.
+        let (mut game, mut input) = game_on_map(
+            &solid_thing("Lift", [0.0, -0.9, 0.0], "model = \"crate\""),
+            r#"local lift = game.thing("Lift")
+            local ticks, arrived = 0, 0
+            lift:onArrive(function(thing) assert(thing == lift) arrived += 1 end)
+            game.onTick(function()
+                ticks += 1
+                if ticks == 30 then
+                    assert(not lift.sliding)
+                    lift:moveTo(vector.create(0, 3, 0), 2)
+                elseif ticks == 60 then
+                    assert(lift.sliding and arrived == 0)
+                elseif ticks == 170 then
+                    assert(not lift.sliding and arrived == 1)
+                    assert(math.abs(lift.position.y - 3) < 0.001)
+                    -- And along, to another thing's place would do as well.
+                    lift:moveTo(vector.create(5, 3, 0), 2)
+                elseif ticks == 320 then
+                    assert(arrived == 2)
+                end
+            end)"#,
+        );
+        let mut widest: f32 = 0.0;
+        for tick in 0..330u16 {
+            game.tick(input.tick(), STEP);
+            if tick > 20 {
+                // The feet stay on its top the whole way, up and along.
+                let mut top = 0.0;
+                game.world
+                    .things
+                    .each(|_, told| top = told.position[1] + 1.0);
+                let player = game.world.player();
+                widest = widest.max((player.position[1] - top).abs());
+                assert!(player.grounded, "in the air on tick {tick}");
+            }
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        assert!(widest < 0.04, "the feet left the lift by {widest} m");
+        let player = game.world.player().position;
+        assert!(
+            (player[1] - 4.0).abs() < 0.04 && (player[0] - 5.0).abs() < 0.05,
+            "{player:?}"
+        );
+    }
+
+    #[test]
+    fn a_turning_platform_turns_whoever_stands_on_it() {
+        let (mut game, mut input) = game_on_map(
+            &solid_thing("Table", [0.0, -0.9, 0.4], "model = \"crate\""),
+            r#"local table, ticks = game.thing("Table"), 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 20 then table:turnTo(90, 1) end
+            end)"#,
+        );
+        for _ in 0..15 {
+            game.tick(input.tick(), STEP);
+        }
+        let (yaw, was) = (game.yaw(), game.world.player().position);
+        for _ in 0..90 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        // A quarter turn to the left, and so is the view.
+        let turned = (game.yaw() - yaw).rem_euclid(TAU);
+        assert!(
+            (turned - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+            "{turned}"
+        );
+        // They stood 0.4 m in front of its middle (-Z of it): a quarter
+        // turn to the left puts them 0.4 m to its left (-X).
+        let now = game.world.player().position;
+        assert!((was[2] - 0.0).abs() < 0.01, "{was:?}");
+        assert!(
+            (now[0] + 0.4).abs() < 0.03 && (now[2] - 0.4).abs() < 0.03,
+            "{now:?}"
+        );
+    }
+
+    #[test]
+    fn a_door_opens_when_it_is_used_and_shuts_again() {
+        use lore_input::Key;
+        use lore_ui::Draw;
+
+        fn words(game: &mut Playing, input: &lore_input::Input) -> Vec<String> {
+            let mut frame = Frame::between_ticks(input, 1.0, STEP);
+            game.frame(&mut frame);
+            frame
+                .take_ui()
+                .draw()
+                .iter()
+                .filter_map(|draw| match draw {
+                    Draw::Text { text, .. } => Some(text.to_owned()),
+                    Draw::Rect { .. } | Draw::Turned { .. } => None,
+                })
+                .collect()
+        }
+        // A door across the way ahead, hinged half a metre to the left
+        // (-X) of the player and shut along +X, and walls either side.
+        let things = [
+            solid_thing("Door", [-0.5, 0.0, -1.5], "model = \"door\"\nopens = true"),
+            solid_thing("Left", [-1.0, 0.0, -1.5], "model = \"crate\""),
+            solid_thing("Right", [1.0, 0.0, -1.5], "model = \"crate\""),
+        ]
+        .concat();
+        let (mut game, mut input) = game_on_map(
+            &things,
+            r#"local door, opened = game.thing("Door"), 0
+            door:onArrive(function() opened += 1 end)
+            game.onTick(function() assert(door.isOpen == (opened % 2 == 1) or door.sliding) end)"#,
+        );
+        for _ in 0..10 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(words(&mut game, &input), ["E", "Open"]);
+        // Shut, it is in the way.
+        input.press(Key::W);
+        for _ in 0..60 {
+            game.tick(input.tick(), STEP);
+        }
+        input.release(Key::W);
+        let stopped = game.world.player().position[2];
+        assert!(stopped > -1.3, "walked through a shut door to {stopped}");
+        // Used, it swings open in under a second, and the way is clear.
+        input.press(Key::E);
+        game.tick(input.tick(), STEP);
+        input.release(Key::E);
+        for _ in 0..60 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        assert_eq!(game.world.things.door("Door"), Some(true));
+        // It has swung out of the way, so it is no longer what is looked at.
+        assert!(words(&mut game, &input).is_empty());
+        input.press(Key::W);
+        for _ in 0..90 {
+            game.tick(input.tick(), STEP);
+        }
+        input.release(Key::W);
+        let through = game.world.player().position[2];
+        assert!(through < -3.0, "still stopped at {through}");
+        assert_eq!(game.world.game.host().last_error(), None);
+    }
+
+    #[test]
+    fn a_thing_sliding_into_someone_pushes_them_and_waits_when_they_are_caught() {
+        // A crate slides at the player, who has a fixed one behind them.
+        let things = [
+            solid_thing("Ram", [0.0, 0.0, -3.0], "model = \"crate\""),
+            solid_thing("Wall", [0.0, 0.0, 2.0], "model = \"crate\""),
+        ]
+        .concat();
+        let (mut game, mut input) = game_on_map(
+            &things,
+            r#"local ram, ticks, blocks = game.thing("Ram"), 0, 0
+            ram:onBlocked(function(thing, who)
+                assert(thing == ram and who == game.player)
+                blocks += 1
+            end)
+            game.onTick(function()
+                ticks += 1
+                if ticks == 10 then ram:moveTo(vector.create(0, 0, 0.6), 3) end
+                if ticks == 400 then
+                    assert(blocks == 1, "told " .. blocks .. " times")
+                    assert(ram.sliding and ram.position.z < 0.5)
+                end
+            end)"#,
+        );
+        let mut furthest: f32 = 0.0;
+        for _ in 0..400 {
+            game.tick(input.tick(), STEP);
+            furthest = furthest.max(game.world.player().position[2]);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        // Pushed back toward the wall, and never through it.
+        assert!(furthest > 0.6 && furthest < 1.2, "{furthest}");
+    }
+
+    #[test]
+    fn what_cannot_be_slid_or_opened_says_why() {
+        let things = [
+            solid_thing("Loose", [4.0, 0.0, 0.0], "model = \"crate\"\nmoves = true"),
+            solid_thing("Fixed", [8.0, 0.0, 0.0], "model = \"crate\""),
+        ]
+        .concat();
+        let said = |line: &str| {
+            let (mut game, mut input) =
+                game_on_map(&things, &format!("game.onStart(function() {line} end)"));
+            game.tick(input.tick(), STEP);
+            game.world.game.host().last_error().unwrap().message.clone()
+        };
+        let message = said("game.thing(\"Loose\"):moveTo(vector.create(0, 0, 0))");
+        assert!(
+            message.contains("it falls and is pushed about"),
+            "{message}"
+        );
+        let message = said("game.thing(\"Fixed\"):open()");
+        assert!(message.contains("is not a door"), "{message}");
+        assert!(message.contains("opens = true"), "{message}");
+        let message = said("game.thing(\"Fixed\"):moveTo(\"up\")");
+        assert!(
+            message.contains("a place as a vector, or another thing"),
+            "{message}"
+        );
+        let message = said("game.thing(\"Fixed\"):turnTo(90, \"slowly\")");
+        assert!(message.contains("how many seconds it takes"), "{message}");
     }
 
     #[test]
