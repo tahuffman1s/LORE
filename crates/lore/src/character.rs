@@ -97,6 +97,10 @@ const TOO_CLOSE: f32 = 0.55;
 const TURN_SLOW: f32 = 6.0;
 const TURN_FAST: f32 = 12.0;
 
+/// Closer than this to the head, the camera would see into it, so the head
+/// and neck are left out of the picture (their shadow stays).
+const HEAD_CLEAR: f32 = 0.3;
+
 /// How far back the body is put behind the eyes in first person, so that
 /// looking down does not look into the chest.
 const FIRST_PERSON_BACK: f32 = 0.14;
@@ -134,6 +138,9 @@ pub(crate) struct Character {
     headless: Vec<Transform>,
     /// The bone that is the head, left out of the first-person picture.
     head: Option<usize>,
+    /// The neck, left out with it: a sprint leans the body over, and looking
+    /// down would otherwise show its stump below the eyes.
+    neck: Option<usize>,
     /// The swing under way, if any.
     swing: Option<Swing>,
     /// The play that holds the guard up, while blocking.
@@ -383,6 +390,9 @@ impl Character {
         let head = ["Head", "head", "mixamorig:Head"]
             .iter()
             .find_map(|n| body.skeleton().find(n));
+        let neck = ["neck_01", "Neck", "neck", "mixamorig:Neck"]
+            .iter()
+            .find_map(|n| body.skeleton().find(n));
         Self {
             model: Arc::new(scene),
             animator,
@@ -405,6 +415,7 @@ impl Character {
             skinning: vec![lore_anim::math::IDENTITY; joints],
             headless: vec![lore_anim::math::IDENTITY; joints],
             head,
+            neck,
             swing: None,
             guard: None,
             body: Arc::new(body),
@@ -771,11 +782,26 @@ impl Character {
         for skin in 0..skeleton.skins().len() {
             written += skeleton.skinning(skin, &self.placed, &mut self.skinning[written..]);
         }
-        // The picture's copy leaves the head out until the camera is well
-        // clear of it: squeezed to nothing, so nothing of the inside shows.
-        let headless_share = 1.0 - third;
-        if let (Some(head), true) = (self.head, headless_share > 0.5) {
-            self.blended[head].scale = [1e-3; 3];
+        // Where the head really is this frame, leaning or not.
+        let head_place = match self.head.and_then(|head| self.placed.get(head)) {
+            Some(placed) => {
+                let [x, y, z, _] = placed[3];
+                [at[0] + c * x + s * z, at[1] + y, at[2] - s * x + c * z]
+            }
+            None => [feet[0], feet[1] + 1.6, feet[2]],
+        };
+        let near: f32 = (0..3)
+            .map(|i| (camera[i] - head_place[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        // The picture's copy leaves the head and neck out in first person and
+        // while a view switch has the camera close to them: squeezed to
+        // nothing, so nothing of the inside shows. It goes by where the
+        // camera is, not how far the switch has got, so the head is never
+        // seen to vanish and come back however quickly the view is changed.
+        let hide = self.neck.or(self.head);
+        if let (Some(hide), true) = (hide, third <= 0.0 || near < HEAD_CLEAR) {
+            self.blended[hide].scale = [1e-3; 3];
             skeleton.place(&self.blended, &mut self.placed);
             let mut written = 0;
             for skin in 0..skeleton.skins().len() {
@@ -784,11 +810,6 @@ impl Character {
         } else {
             self.headless.copy_from_slice(&self.skinning);
         }
-        let head_place = [feet[0], feet[1] + 1.6, feet[2]];
-        let near: f32 = (0..3)
-            .map(|i| (camera[i] - head_place[i]).powi(2))
-            .sum::<f32>()
-            .sqrt();
         Drawn {
             transform,
             seen_joints: &self.headless,
@@ -1001,7 +1022,14 @@ mod tests {
             let eye = player.eye_position();
             let transform = character.figures(1.0, player.position, eye).transform;
             let [mx, _, mz, at] = transform;
-            let [hx, _, hz, _] = character.placed[head][3];
+            // Where the head is in the pose itself, before the picture's
+            // copy squeezes it away.
+            let mut placed = character.placed.clone();
+            character
+                .body
+                .skeleton()
+                .place(&character.pose, &mut placed);
+            let [hx, _, hz, _] = placed[head][3];
             let world = [
                 at[0] + mx[0] * hx + mz[0] * hz,
                 at[2] + mx[2] * hx + mz[2] * hz,
@@ -1011,6 +1039,29 @@ mod tests {
                 "tick {tick}: the head is at {world:?}, not just behind the eyes"
             );
         }
+    }
+
+    #[test]
+    fn the_head_and_neck_are_left_out_only_while_the_camera_is_near_them() {
+        let mut character = Character::mannequin().unwrap();
+        let player = standing();
+        let level = Level::from_triangles(&[]);
+        let eye = player.eye_position();
+        character.tick(&player, (0.0, -1.2), &level, 1.0 / 60.0, |_, _| {});
+        let first = character.figures(1.0, player.position, eye);
+        assert_ne!(first.seen_joints, first.shadow_joints, "first person");
+        // Halfway through a switch the camera is well clear: the head is drawn.
+        character.view = View::Third;
+        for _ in 0..10 {
+            character.tick(&player, (0.0, 0.0), &level, 1.0 / 60.0, |_, _| {});
+        }
+        let camera = character.camera(1.0, eye, (0.0, 0.0), &level);
+        assert!(character.third > 0.0 && character.third < 1.0);
+        let midway = character.figures(1.0, player.position, camera);
+        assert_eq!(midway.seen_joints, midway.shadow_joints, "midway");
+        // The same frame with the camera at the eyes leaves it out again.
+        let close = character.figures(1.0, player.position, eye);
+        assert_ne!(close.seen_joints, close.shadow_joints, "camera at the eyes");
     }
 
     #[test]
