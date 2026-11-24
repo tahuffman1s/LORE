@@ -131,6 +131,73 @@ impl std::error::Error for NewGameError {
 /// has files in it, or if it cannot be written. A game that could only be
 /// partly written is removed again.
 pub fn new_game(path: &Path) -> Result<NewGame, NewGameError> {
+    new_game_of(path, GameKind::default())
+}
+
+/// What kind of game `lore new` starts: how the player sees it. The kinds
+/// share everything but one line of `main.luau`, so a game started as one
+/// becomes the other by changing a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameKind {
+    /// Seen from the character's eyes.
+    #[default]
+    FirstPerson,
+    /// Seen from over the character's shoulder.
+    ThirdPerson,
+}
+
+impl GameKind {
+    /// Every kind, in the order `lore new` offers them.
+    pub const ALL: [Self; 2] = [Self::FirstPerson, Self::ThirdPerson];
+
+    /// The kind's name, as `lore new --kind` takes it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::FirstPerson => "first-person",
+            Self::ThirdPerson => "third-person",
+        }
+    }
+
+    /// One line about the kind, for the question `lore new` asks.
+    #[must_use]
+    pub fn about(self) -> &'static str {
+        match self {
+            Self::FirstPerson => "seen from your character's eyes",
+            Self::ThirdPerson => "seen from over your character's shoulder",
+        }
+    }
+
+    /// The kind called `name`, or numbered `name` in [`ALL`](Self::ALL)
+    /// counting from 1, as someone answering the question may type it.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        let typed = name.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+        Self::ALL.into_iter().enumerate().find_map(|(nth, kind)| {
+            let short = kind.name().trim_end_matches("-person");
+            (typed == kind.name() || typed == short || typed == (nth + 1).to_string())
+                .then_some(kind)
+        })
+    }
+
+    /// The view the kind's `main.luau` asks for.
+    fn view(self) -> &'static str {
+        match self {
+            Self::FirstPerson => "first",
+            Self::ThirdPerson => "third",
+        }
+    }
+}
+
+/// The line of the template's `main.luau` that says how the game is seen.
+const VIEW_LINE: &str = "game.player:setView(\"first\")";
+
+/// Creates a new game of `kind` in `path`, as [`new_game`] does.
+///
+/// # Errors
+///
+/// Fails as [`new_game`] does.
+pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError> {
     // The name is checked as it was typed where possible: making a reserved
     // Windows name such as `con` absolute turns it into a device path.
     if path.file_name().is_some() {
@@ -172,7 +239,13 @@ pub fn new_game(path: &Path) -> Result<NewGame, NewGameError> {
     let claude_folder = folder.join(".claude");
     let named = |text: &str| text.replace(NAME_PLACEHOLDER, &name).into_bytes();
     let files = [
-        (folder.join(ENTRY_SCRIPT), named(MAIN_SCRIPT)),
+        (
+            folder.join(ENTRY_SCRIPT),
+            named(&MAIN_SCRIPT.replace(
+                VIEW_LINE,
+                &format!("game.player:setView(\"{}\")", kind.view()),
+            )),
+        ),
         (folder.join("pause_menu.luau"), PAUSE_MENU.into()),
         (folder.join("menu.luau"), MENU_KIT.into()),
         (folder.join(LEVEL_FILE), STARTER_LEVEL.to_vec()),
@@ -386,6 +459,46 @@ mod tests {
         assert!(guide.contains("lore check"));
         let allowed = fs::read_to_string(game.folder.join(".claude/settings.json")).unwrap();
         assert!(allowed.contains("Bash(lore check:*)"));
+    }
+
+    #[test]
+    fn every_kind_of_new_game_differs_by_one_line_and_runs() {
+        let scratch = Scratch::new();
+        let mut scripts = Vec::new();
+        for kind in GameKind::ALL {
+            // In folders of one name, so the game's name is the same too.
+            let folder = scratch.path(kind.name()).join("game");
+            let game = new_game_of(&folder, kind).unwrap();
+            let script = fs::read_to_string(game.folder.join(ENTRY_SCRIPT)).unwrap();
+            assert!(
+                script.contains(&format!("game.player:setView(\"{}\")", kind.view())),
+                "{}",
+                kind.name()
+            );
+            let host = lore_script::ScriptHost::open(&game.folder, ActionMap::standard()).unwrap();
+            assert_eq!(host.last_error(), None, "{}", kind.name());
+            assert_eq!(host.camera_view().third, kind == GameKind::ThirdPerson);
+            scripts.push(script);
+        }
+        let differing = (scripts[0].lines().zip(scripts[1].lines()))
+            .filter(|(first, third)| first != third)
+            .count();
+        assert_eq!(differing, 1, "the kinds share everything but the view");
+        assert!(MAIN_SCRIPT.contains(VIEW_LINE), "the template has the line");
+    }
+
+    #[test]
+    fn a_kind_is_named_as_someone_would_type_it() {
+        assert_eq!(GameKind::named("third-person"), Some(GameKind::ThirdPerson));
+        assert_eq!(
+            GameKind::named(" Third Person "),
+            Some(GameKind::ThirdPerson)
+        );
+        assert_eq!(GameKind::named("first"), Some(GameKind::FirstPerson));
+        assert_eq!(GameKind::named("2"), Some(GameKind::ThirdPerson));
+        assert_eq!(GameKind::named("1"), Some(GameKind::FirstPerson));
+        assert_eq!(GameKind::named("top-down"), None);
+        assert_eq!(GameKind::named(""), None);
     }
 
     #[test]

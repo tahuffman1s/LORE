@@ -126,7 +126,7 @@ For the sky there is a planetarium in `examples/planetarium`: the real sky over 
 
 ## Scripting
 
-A game is a folder with a `main.luau` in it, its level beside it as `level.glb`, and what is placed in the level as `map.toml`. `lore new my-game` creates one that already plays, and `lore run` plays the game in the folder you are in (or `lore run my-game` from outside it). The engine runs `main.luau`, and loads it again every time you save it, without restarting:
+A game is a folder with a `main.luau` in it, its level beside it as `level.glb`, and what is placed in the level as `map.toml`. `lore new my-game` creates one that already plays (it asks whether the game is seen from the character's eyes or from over their shoulder; `--kind third-person` answers ahead of time, and either is one line of `main.luau` to change later), and `lore run` plays the game in the folder you are in (or `lore run my-game` from outside it). The engine runs `main.luau`, and loads it again every time you save it, without restarting:
 
 ```lua
 game.onStart(function()
