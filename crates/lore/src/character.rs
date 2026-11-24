@@ -110,6 +110,24 @@ const FIRST_PERSON_BACK: f32 = 0.14;
 /// legs and feet past the chest instead of into where the neck was.
 const LOOK_DOWN_BACK: f32 = 0.35;
 
+/// Standing still, how far the look may turn from the way the body faces
+/// before the body steps round after it, radians (60°). People turn their
+/// head and shoulders first and only move their feet past that.
+const TURN_START: f32 = 1.05;
+
+/// Standing still, the furthest the body is ever left behind the look,
+/// radians (90°): a quick turn drags it round that far behind at once.
+const TURN_MOST: f32 = std::f32::consts::FRAC_PI_2;
+
+/// How fast the body steps round on the spot, radians a second, and how
+/// fast its turning clip plays to keep the feet with it.
+const TURN_IN_PLACE: f32 = 4.0;
+const TURN_CLIP_SPEED: f32 = 1.8;
+
+/// The clips that step a standing body round to its left and right.
+const TURN_LEFT: &str = "turn_left";
+const TURN_RIGHT: &str = "turn_right";
+
 /// The player's body and camera.
 #[derive(Debug, Clone)]
 pub(crate) struct Character {
@@ -150,6 +168,10 @@ pub(crate) struct Character {
     swing: Option<Swing>,
     /// The play that holds the guard up, while blocking.
     guard: Option<u32>,
+    /// Whether a standing body is stepping round to face the look, and the
+    /// play of the turning clip that moves its feet.
+    turning: bool,
+    turn_play: Option<u32>,
 }
 
 /// A swing under way: what it plays, what it does, and what it has hit.
@@ -287,7 +309,7 @@ impl Character {
         self.animator
             .playing()
             .iter()
-            .filter(|p| !p.leaving)
+            .filter(|p| !p.leaving && Some(p.id_number()) != self.turn_play)
             .filter_map(|p| self.body.clips().get(p.clip as usize))
             .map(|clip| clip.name.as_str())
     }
@@ -423,6 +445,8 @@ impl Character {
             neck,
             swing: None,
             guard: None,
+            turning: false,
+            turn_play: None,
             body: Arc::new(body),
         }
     }
@@ -576,11 +600,21 @@ impl Character {
 
         // Which way to face: in first person and when aiming, the camera's
         // way; otherwise the way the body moves, and where it was while it
-        // stands.
+        // stands. Standing on the ground, the body lets the look turn a
+        // little way on its own and then steps round after it.
         let [vx, vy, vz] = player.velocity;
         let speed = (vx * vx + vz * vz).sqrt();
         let aiming = self.view == View::First || self.facing == Facing::Aim;
-        let goal = if aiming {
+        // A swing goes where the camera looks, so it turns the body at once.
+        let standing = speed <= 0.3 && player.grounded && !player.swimming && self.swing.is_none();
+        if aiming && standing {
+            self.turn_in_place(look.0, dt);
+        } else {
+            self.end_turn();
+        }
+        let goal = if aiming && standing {
+            None
+        } else if aiming {
             Some(look.0)
         } else if speed > 0.3 {
             Some(libm::atan2f(-vx, -vz))
@@ -655,6 +689,54 @@ impl Character {
         } else {
             self.reach + (clear - self.reach) * (dt / (dt + BOOM_RETURN))
         };
+    }
+
+    /// Turns a standing body toward `goal` as people do: not at all while
+    /// the look is within [`TURN_START`] of the way it faces, then round on
+    /// the spot with its feet stepping, until it faces the look again.
+    fn turn_in_place(&mut self, goal: f32, dt: f32) {
+        let gap = angle_between(self.yaw, goal);
+        if gap.abs() > TURN_MOST {
+            self.yaw = turn_toward(self.yaw, goal, gap.abs() - TURN_MOST);
+        }
+        let gap = angle_between(self.yaw, goal);
+        if !self.turning && gap.abs() > TURN_START {
+            self.turning = true;
+            // The feet step only when nothing a script or a swing asked
+            // for is playing; the body turns either way.
+            let free = self.swing.is_none()
+                && self
+                    .animator
+                    .playing()
+                    .iter()
+                    .all(|p| p.leaving || Some(p.id_number()) == self.turn_play);
+            // Yaw grows to the left.
+            let name = if gap > 0.0 { TURN_LEFT } else { TURN_RIGHT };
+            if let (true, Some(clip)) = (free, self.body.clip(name)) {
+                let how = lore_anim::Play {
+                    layer: lore_anim::Layer::Body,
+                    fade: 0.15,
+                    speed: TURN_CLIP_SPEED,
+                    looping: Some(false),
+                };
+                self.turn_play = self.animator.play(&self.body, clip, how);
+            }
+        }
+        if self.turning {
+            self.yaw = turn_toward(self.yaw, goal, TURN_IN_PLACE * dt);
+            if angle_between(self.yaw, goal).abs() < 0.02 {
+                self.turning = false;
+            }
+        }
+    }
+
+    /// Stops stepping round on the spot: the body has started to move, or
+    /// left the ground, or stopped following the look.
+    fn end_turn(&mut self) {
+        self.turning = false;
+        if let Some(play) = self.turn_play.take() {
+            self.animator.stop(Some(play), 0.15);
+        }
     }
 
     /// How much of the boom is clear of walls from the eyes at `eye`
@@ -739,14 +821,15 @@ impl Character {
 
     /// The body for a frame `alpha` of the way from the last tick to this
     /// one, with its feet at `feet` and the camera at `camera`, looking
-    /// `pitch` radians up (negative: down).
+    /// along `look`: yaw, and pitch up (negative: down), in radians.
     pub(crate) fn figures(
         &mut self,
         alpha: f32,
         feet: [f32; 3],
         camera: [f32; 3],
-        pitch: f32,
+        look: (f32, f32),
     ) -> Drawn<'_> {
+        let (look_yaw, pitch) = look;
         for ((out, a), b) in self
             .blended
             .iter_mut()
@@ -773,7 +856,9 @@ impl Character {
         let first = 1.0 - third;
         let down = libm::sinf((-pitch).clamp(0.0, std::f32::consts::FRAC_PI_2));
         let back = (FIRST_PERSON_BACK + LOOK_DOWN_BACK * down * down) * first;
-        let (fs, fc) = (libm::sinf(yaw), libm::cosf(yaw));
+        // Back from the look, not the body: standing, the body may face a
+        // little away from it, and its shoulders must still be behind.
+        let (fs, fc) = (libm::sinf(look_yaw), libm::cosf(look_yaw));
         let [hx, _, hz, _] = self
             .head
             .and_then(|head| self.placed.get(head))
@@ -1010,7 +1095,7 @@ mod tests {
         let level = Level::from_triangles(&[]);
         character.tick(&player, (0.0, 0.0), &level, 1.0 / 60.0, |_, _| {});
         let eye = player.eye_position();
-        let drawn = character.figures(1.0, player.position, eye, 0.0);
+        let drawn = character.figures(1.0, player.position, eye, (0.0, 0.0));
         assert!(drawn.seen);
         assert_ne!(
             drawn.seen_joints, drawn.shadow_joints,
@@ -1033,7 +1118,9 @@ mod tests {
                 continue;
             }
             let eye = player.eye_position();
-            let transform = character.figures(1.0, player.position, eye, 0.0).transform;
+            let transform = character
+                .figures(1.0, player.position, eye, (0.0, 0.0))
+                .transform;
             let [mx, _, mz, at] = transform;
             // Where the head is in the pose itself, before the picture's
             // copy squeezes it away.
@@ -1061,7 +1148,7 @@ mod tests {
         let level = Level::from_triangles(&[]);
         let eye = player.eye_position();
         character.tick(&player, (0.0, -1.2), &level, 1.0 / 60.0, |_, _| {});
-        let first = character.figures(1.0, player.position, eye, 0.0);
+        let first = character.figures(1.0, player.position, eye, (0.0, 0.0));
         assert_ne!(first.seen_joints, first.shadow_joints, "first person");
         // Halfway through a switch the camera is well clear: the head is drawn.
         character.view = View::Third;
@@ -1070,10 +1157,10 @@ mod tests {
         }
         let camera = character.camera(1.0, eye, (0.0, 0.0), &level);
         assert!(character.third > 0.0 && character.third < 1.0);
-        let midway = character.figures(1.0, player.position, camera, 0.0);
+        let midway = character.figures(1.0, player.position, camera, (0.0, 0.0));
         assert_eq!(midway.seen_joints, midway.shadow_joints, "midway");
         // The same frame with the camera at the eyes leaves it out again.
-        let close = character.figures(1.0, player.position, eye, 0.0);
+        let close = character.figures(1.0, player.position, eye, (0.0, 0.0));
         assert_ne!(close.seen_joints, close.shadow_joints, "camera at the eyes");
     }
 
@@ -1092,7 +1179,9 @@ mod tests {
                 continue;
             }
             let eye = player.eye_position();
-            let transform = character.figures(1.0, player.position, eye, down).transform;
+            let transform = character
+                .figures(1.0, player.position, eye, (0.0, down))
+                .transform;
             let [mx, _, mz, at] = transform;
             let mut placed = character.placed.clone();
             character
@@ -1107,6 +1196,38 @@ mod tests {
                 "tick {tick}: the neck is only {behind} m behind the camera"
             );
         }
+    }
+
+    #[test]
+    fn standing_the_body_lets_the_look_turn_a_little_before_stepping_round() {
+        let mut character = Character::mannequin().unwrap();
+        let mut player = standing();
+        player.grounded = true;
+        let level = Level::from_triangles(&[]);
+        let step = 1.0 / 60.0;
+        // A small look to the side leaves the feet where they are.
+        for _ in 0..60 {
+            character.tick(&player, (0.6, 0.0), &level, step, |_, _| {});
+        }
+        assert!(character.yaw().abs() < 1e-4, "{}", character.yaw());
+        assert!(character.turn_play.is_none());
+        // A big one: the body is dragged to 90° behind at once, then steps
+        // round with its turning clip until it faces the look.
+        character.tick(&player, (2.2, 0.0), &level, step, |_, _| {});
+        let gap = angle_between(character.yaw(), 2.2);
+        assert!(gap <= TURN_MOST + 1e-3 && gap > 0.0, "{gap}");
+        let play = character.turn_play.expect("the feet step");
+        assert!(character.animator.is_playing(play));
+        assert_eq!(character.playing_names().count(), 0, "scripts never see it");
+        for _ in 0..60 {
+            character.tick(&player, (2.2, 0.0), &level, step, |_, _| {});
+        }
+        assert!(angle_between(character.yaw(), 2.2).abs() < 0.02);
+        assert!(!character.turning);
+        // Walking off stops the stepping.
+        player.velocity = [0.0, 0.0, -1.4];
+        character.tick(&player, (2.2, 0.0), &level, step, |_, _| {});
+        assert!(character.turn_play.is_none());
     }
 
     #[test]
