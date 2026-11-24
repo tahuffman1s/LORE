@@ -468,6 +468,30 @@ declare extern type Thing with
     --- false, or nil if it has none of that name.
     --- Example: if door:property("locked") then door.useText = "Locked" end
     function property(self, name: string): (string | number | boolean)?
+
+    --- Calls `handler` with whoever walks into the thing's zone: once
+    --- each time they come in, for the player and every other character
+    --- alike, in the game's tick, so the same on every computer. Someone
+    --- already inside when the game starts counts as walking in.
+    ---
+    --- A zone is the space round where the thing is placed: a round
+    --- 2 metres across each way and 3 high, unless the map gives the thing
+    --- a `radius`, or a `width` and a `depth` for a box turned as the
+    --- thing is turned, and a `height` (all in metres, set as properties
+    --- in `lore edit`). Feet count: someone is inside when their feet are.
+    --- Anything placed can be a zone; what was placed as type "zone" is
+    --- found with `game.zone`.
+    --- Example: game.zone("Bridge"):onEnter(function(who) if who == game.player then print("On the bridge") end end)
+    function onEnter(self, handler: (who: Character) -> ()): ()
+
+    --- Calls `handler` with whoever walks out of the thing's zone, once
+    --- each time they leave. See `onEnter` for what the zone is.
+    --- Example: game.zone("Bridge"):onLeave(function(who) print(who.name .. " left the bridge") end)
+    function onLeave(self, handler: (who: Character) -> ()): ()
+
+    --- Whether `who` is inside the thing's zone now.
+    --- Example: if game.zone("Bridge"):has(game.player) then print("Still on it") end
+    function has(self, who: Character): boolean
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -1446,6 +1470,12 @@ declare game: {
     --- does have, which `lore check` catches without playing.
     --- Example: local door = game.thing("Cellar door")
     thing: (name: string) -> Thing,
+
+    --- A zone, by name: something placed in the level as type "zone". It
+    --- is a `Thing` like any other; this only reads better and, for a name
+    --- the map lacks, lists the zones there are.
+    --- Example: local bridge = game.zone("Bridge")
+    zone: (name: string) -> Thing,
 
     --- Everything placed in the level, in the order of the map file, or
     --- only what was placed as `kind`. A kind nothing was placed as gives

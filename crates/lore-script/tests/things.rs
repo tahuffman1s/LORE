@@ -5,6 +5,39 @@
 use lore_input::{ActionMap, InputFrame};
 use lore_script::{DEFAULT_REACH, Placed, PlacedValue, ScriptHost, UseSaid};
 
+thread_local! {
+    /// What scripts on this test's thread printed.
+    static PRINTED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Collects `print` output per thread.
+struct Capture;
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if record.target() == "script" {
+            PRINTED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// What the script printed since this was last asked.
+fn printed() -> Vec<String> {
+    PRINTED.with_borrow_mut(std::mem::take)
+}
+
+fn listen() {
+    let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Info);
+    printed();
+}
+
 fn placed() -> Vec<Placed> {
     let thing = |id: &str, kind: &str, name: &str, x: f32| Placed {
         id: id.to_owned(),
@@ -204,4 +237,152 @@ fn mistakes_with_things_say_what_to_write() {
         message.contains("Nothing is placed at all yet"),
         "{message}"
     );
+}
+
+fn zones() -> Vec<Placed> {
+    let zone =
+        |id: &str, kind: &str, name: &str, at: [f32; 3], properties: &[(&str, f64)]| Placed {
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            position: at,
+            facing: 0.0,
+            properties: properties
+                .iter()
+                .map(|(name, number)| ((*name).to_owned(), PlacedValue::Number(*number)))
+                .collect(),
+        };
+    vec![
+        zone("z1", "zone", "Bridge", [10.0, 0.0, 0.0], &[]),
+        zone(
+            "z2",
+            "zone",
+            "Hall",
+            [0.0, 0.0, -20.0],
+            &[("width", 4.0), ("depth", 10.0), ("height", 5.0)],
+        ),
+        zone("d1", "door", "Gate", [30.0, 0.0, 0.0], &[("radius", 1.0)]),
+    ]
+}
+
+#[test]
+fn a_zones_shape_is_a_round_or_a_box_from_the_map() {
+    let all = zones();
+    let (bridge, hall) = (&all[0], &all[1]);
+    // Two metres round, three high, and half a metre under.
+    assert!(bridge.holds([11.9, 0.0, 0.0]) && !bridge.holds([12.1, 0.0, 0.0]));
+    assert!(bridge.holds([10.0, 2.9, 0.0]) && !bridge.holds([10.0, 3.1, 0.0]));
+    assert!(bridge.holds([10.0, -0.4, 0.0]) && !bridge.holds([10.0, -0.6, 0.0]));
+    assert!(!bridge.holds([f32::NAN, 0.0, 0.0]));
+    // Four wide (x) and ten deep (z).
+    assert!(hall.holds([1.9, 0.0, -24.9]) && !hall.holds([2.1, 0.0, -20.0]));
+    assert!(!hall.holds([0.0, 0.0, -25.1]) && hall.holds([0.0, 4.9, -20.0]));
+    // Turned a quarter, it is ten wide and four deep.
+    let turned = Placed {
+        facing: 90.0,
+        ..hall.clone()
+    };
+    assert!(turned.holds([4.9, 0.0, -20.0]) && !turned.holds([0.0, 0.0, -22.1]));
+}
+
+#[test]
+fn a_zone_tells_the_script_who_walked_in_and_who_left_once_each() {
+    listen();
+    let mut host = ScriptHost::from_sources_with_placed(
+        [(
+            "main.luau".to_owned(),
+            r#"local bridge = game.zone("Bridge")
+            assert(bridge == game.thing("Bridge") and game.zone("z1") == bridge)
+            bridge:onEnter(function(who) print("in", who.name, bridge:has(who)) end)
+            bridge:onLeave(function(who) print("out", who.name, bridge:has(who)) end)
+            -- Anything placed can be a zone.
+            game.thing("Gate"):onEnter(function(who) print("at the gate", who.name) end)"#
+                .to_owned(),
+        )],
+        Vec::new(),
+        ActionMap::standard(),
+        Vec::new(),
+        zones(),
+    );
+    assert_eq!(host.last_error(), None);
+    let player = lore_script::CharacterId::PLAYER;
+    let guard = host.add_character("Guard");
+    host.set_position(guard, [10.5, 0.0, 0.5]);
+    let step = |host: &mut ScriptHost| {
+        host.tick(&InputFrame::default(), 1.0 / 60.0);
+        host.step_zones();
+    };
+    // The guard starts on the bridge; the player is at the origin.
+    step(&mut host);
+    assert_eq!(printed(), ["in Guard true"]);
+    // Nothing more while nobody crosses.
+    step(&mut host);
+    step(&mut host);
+    assert_eq!(printed(), Vec::<String>::new());
+    // The player walks on, then both leave: out is said before in.
+    host.set_position(player, [9.0, 0.0, 0.0]);
+    step(&mut host);
+    assert_eq!(printed(), ["in Player true"]);
+    host.set_position(player, [30.0, 0.0, 0.0]);
+    host.set_position(guard, [50.0, 0.0, 0.0]);
+    step(&mut host);
+    assert_eq!(
+        printed(),
+        ["out Player false", "out Guard false", "at the gate Player"]
+    );
+    // Someone taken out of the world while inside is not told of.
+    host.set_position(guard, [10.0, 0.0, 0.0]);
+    step(&mut host);
+    assert_eq!(printed(), ["in Guard true"]);
+    host.remove_character(guard);
+    step(&mut host);
+    assert_eq!(host.last_error(), None);
+    assert_eq!(printed(), Vec::<String>::new());
+
+    // `lore check` says the player crossed each watched zone.
+    assert_eq!(host.pretend_zone_crossings(), 2);
+    assert_eq!(
+        printed(),
+        ["in Player false", "out Player false", "at the gate Player"]
+    );
+}
+
+#[test]
+fn a_zone_the_map_lacks_is_an_error_that_lists_the_zones() {
+    let said = |script: &str| {
+        ScriptHost::from_sources_with_placed(
+            [("main.luau".to_owned(), script.to_owned())],
+            Vec::new(),
+            ActionMap::standard(),
+            Vec::new(),
+            zones(),
+        )
+        .last_error()
+        .unwrap()
+        .message
+        .clone()
+    };
+    let message = said("game.zone(\"Brige\")");
+    assert!(message.contains("No zone called \"Brige\""), "{message}");
+    assert!(message.contains("Did you mean \"Bridge\"?"), "{message}");
+    assert!(
+        message.contains("The zones are \"Bridge\", \"Hall\"."),
+        "{message}"
+    );
+
+    let message = said("game.zone(\"Gate\")");
+    assert!(message.contains("was not placed as a zone"), "{message}");
+
+    let message = said("game.zone(\"Bridge\"):onEnter(3)");
+    assert!(
+        message.contains("needs the function to call with whoever"),
+        "{message}"
+    );
+
+    let message = said("game.zone(\"Bridge\"):has(\"me\")");
+    assert!(message.contains("bridge:has(game.player)"), "{message}");
+
+    let empty = ScriptHost::from_source("game.zone(\"Bridge\")", ActionMap::standard());
+    let message = &empty.last_error().unwrap().message;
+    assert!(message.contains("The map has no zones yet"), "{message}");
 }

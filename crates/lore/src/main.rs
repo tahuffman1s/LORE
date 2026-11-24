@@ -523,6 +523,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut pressed = Pressed::default();
     let mut pairs = 0;
     let mut used = 0;
+    let mut zones = 0;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -643,6 +644,10 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         game.host_mut().set_use_target(None, 0.0);
         used = usable.len();
+        // And the player is said to walk into each zone the script
+        // watches and out again.
+        zones = game.host_mut().pretend_zone_crossings();
+        game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -767,6 +772,17 @@ fn check(folder: &Path) -> Result<(), String> {
             "Each of the {used} things the script made usable (thing:onUse) was used once, \
              with no errors. Nobody walked up to them: whether a player can reach each is \
              for `lore run`."
+        ),
+    }
+    match zones {
+        0 => {}
+        1 => println!(
+            "The player was said to walk into the one zone the script watches (onEnter, \
+             onLeave) and out again, with no errors. Nobody really walked there."
+        ),
+        zones => println!(
+            "The player was said to walk into each of the {zones} zones the script watches \
+             (onEnter, onLeave) and out again, with no errors. Nobody really walked there."
         ),
     }
     match paced {
