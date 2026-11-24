@@ -246,6 +246,22 @@ impl World {
         Self::on(self.game, ground, None)
     }
 
+    /// Puts a newer version of the level under a world that is being
+    /// played, as when its file is exported again: the new shapes are
+    /// solid from the next tick, its still water and lamps take the place
+    /// of the old, and the player stays where they stand. Anything else in
+    /// the world stays too.
+    pub fn change_level(&mut self, level: &Scene) {
+        self.game
+            .host_mut()
+            .set_level_lamps(&crate::lamps::of_level(level));
+        let mut ground = Ground::of(Some(level), self.game.map(), self.ground.tick_rate);
+        // What a script made of how the player moves is not the level's.
+        ground.rules = self.ground.rules;
+        self.ground = ground;
+        (self.fluids).take_level(&self.ground.level, self.game.host_mut());
+    }
+
     /// The game being played.
     #[must_use]
     pub fn game(&self) -> &ScriptGame {
@@ -554,6 +570,10 @@ impl World {
 }
 
 impl Game for World {
+    fn level_saved(&mut self, level: &Scene) {
+        self.change_level(level);
+    }
+
     /// Steps the world by one tick. `input` is what the game's script reads
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
@@ -1426,6 +1446,10 @@ impl Playing {
 }
 
 impl Game for Playing {
+    fn level_saved(&mut self, level: &Scene) {
+        self.world.change_level(level);
+    }
+
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
         let mut asked = self
@@ -1864,6 +1888,45 @@ mod tests {
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn a_level_saved_again_is_walked_from_where_the_player_stands() {
+        use lore_assets::{LoadOptions, Scene};
+
+        let level = Scene::from_bytes(
+            "level.glb",
+            crate::scaffold::STARTER_LEVEL,
+            None,
+            LoadOptions::default(),
+        )
+        .unwrap();
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_source("", &actions);
+        let mut game = Playing::start(script, Some(&level), &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        let stood = game.world.player().position;
+
+        // The same level with its floor four metres higher: the player is
+        // not sent back to a spawn point, and falls to nothing new.
+        let mut raised = level.clone();
+        for instance in &mut raised.instances {
+            instance.transform[3][1] += 4.0;
+        }
+        Game::level_saved(&mut game, &raised);
+        assert_eq!(game.world.player().position, stood);
+        assert_ne!(
+            game.world.ground.level.triangle_count(),
+            0,
+            "the new shapes are the ground"
+        );
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
     }
 
     #[test]

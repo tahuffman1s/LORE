@@ -43,6 +43,9 @@ const PIXELS_PER_NOTCH: f32 = 40.0;
 /// The most wheel notches one scroll event may add up to.
 const MOST_NOTCHES_PER_EVENT: f32 = 16.0;
 
+/// What the log says after a level that could not be loaded again.
+const KEEPS_LEVEL: &str = "The level that was showing is kept. Export it again to try again.";
+
 /// The camera that draws `view`: at the view's own field of view if it has
 /// one (the editor's camera), and otherwise at the player's.
 fn camera(view: View, settings: &Settings) -> Camera {
@@ -157,6 +160,13 @@ pub struct Config {
     /// # Ok::<(), lore::level::LevelError>(())
     /// ```
     pub level: Option<lore_assets::Scene>,
+    /// The game's folder, if its `level.glb` should be watched: exporting
+    /// the level again then shows up in the open window, as saving a script
+    /// does, and [`Game::level_saved`] is told. A level that cannot be read
+    /// (one the 3D tool has not finished writing, say) leaves the one that
+    /// was showing, with the reason on screen and in the log. `None`, the
+    /// default, loads the level once: a packaged game's never changes.
+    pub level_folder: Option<std::path::PathBuf>,
     /// What the player has chosen: how loud, how fast the view turns and
     /// which way up, how big the HUD and menus are, and how the picture is
     /// drawn (upscaling, vsync, the frame rate limit, the field of view and
@@ -221,6 +231,7 @@ impl Default for Config {
             settings: Settings::default(),
             settings_file: None,
             controls_file: None,
+            level_folder: None,
         }
     }
 }
@@ -327,7 +338,13 @@ fn start(
     }
     let mut sound = SoundOutput::new(LazySpeakers::default());
     sound.set_volumes(&config.settings);
+    let level_file = config
+        .level_folder
+        .take()
+        .map(|folder| crate::level::LevelFile::watch(&folder));
     let mut app = App {
+        level_file,
+        level_problem: None,
         clock: TickClock::new(config.tick_rate),
         hitches: Hitches::default(),
         pacer: FramePacer::new(config.settings.frames_per_second(), Instant::now()),
@@ -390,6 +407,11 @@ fn start(
 struct App<G> {
     config: Config,
     game: G,
+    /// The game's level file, watched for the next export.
+    level_file: Option<crate::level::LevelFile>,
+    /// What is wrong with the level as it was last saved, shown until a
+    /// save that can be read.
+    level_problem: Option<Rc<str>>,
     /// Whether this is the editor: see [`run_editor`].
     editing: bool,
     input: Input,
@@ -569,6 +591,45 @@ impl SettingsFile {
 }
 
 impl<G: Game> App<G> {
+    /// Loads the game's level again if it was exported since it was last
+    /// read: the new one is drawn and the game is told. One that cannot be
+    /// read leaves the level that was showing, and says why.
+    fn follow_level(&mut self) {
+        let Some(change) = self
+            .level_file
+            .as_mut()
+            .and_then(crate::level::LevelFile::changed)
+        else {
+            return;
+        };
+        let shown = change.map_err(|error| error.to_string()).and_then(|level| {
+            if let Some(renderer) = &mut self.renderer {
+                renderer
+                    .set_scene(&level)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(level)
+        });
+        match shown {
+            Ok(level) => {
+                for warning in &level.warnings {
+                    log::warn!("{warning}");
+                }
+                self.game.level_saved(&level);
+                self.level_problem = None;
+                log::info!(
+                    "Loaded {} again: {}.",
+                    crate::scaffold::LEVEL_FILE,
+                    crate::level::summary(&level)
+                );
+            }
+            Err(problem) => {
+                log::error!("{problem}\n{KEEPS_LEVEL}");
+                self.level_problem = Some(problem.into());
+            }
+        }
+    }
+
     /// Puts `settings` into effect, all of them: the sound, the gamepad,
     /// how the view turns, how fast pictures are drawn and how. They are
     /// saved a moment later.
@@ -873,6 +934,7 @@ impl<G: Game> App<G> {
         } else {
             (self.pointer, self.pointer_down || tapped, wheel)
         };
+        self.follow_level();
         let mut frame = Frame::new(self.clock.alpha())
             .with_input(std::mem::take(&mut self.unseen), step)
             .for_window(screen, std::mem::take(&mut self.ui))
@@ -881,6 +943,7 @@ impl<G: Game> App<G> {
             .with_lamp_buffer(std::mem::take(&mut self.lamps))
             .with_figure_buffers(std::mem::take(&mut self.figures))
             .with_shader_list(std::mem::take(&mut self.shaders))
+            .with_level_problem(self.level_problem.clone())
             .with_pointer(elapsed.as_secs_f32(), pointer, pointer_down)
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())

@@ -73,6 +73,7 @@ pub(crate) struct ErrorOverlay {
 struct Shown {
     script: Option<ScriptError>,
     shaders: Vec<ShaderError>,
+    level: Option<std::rc::Rc<str>>,
     screen: [u32; 2],
 }
 
@@ -103,22 +104,31 @@ impl ErrorOverlay {
     /// asks for no memory.
     pub(crate) fn show(&mut self, error: Option<&ScriptError>, frame: &mut Frame) {
         let screen = frame.screen_size();
+        let level = frame.level_problem().cloned();
         let shaders = frame.shader_list();
-        if error.is_none() && shaders.problems().next().is_none() {
+        if error.is_none() && level.is_none() && shaders.problems().next().is_none() {
             self.shown = None;
             return;
         }
         let current = self.shown.as_ref().is_some_and(|shown| {
             shown.script.as_ref() == error
+                && shown.level == level
                 && shown.screen == screen
                 && shaders.problems().eq(shown.shaders.iter())
         });
         if !current {
             let shaders: Vec<ShaderError> = shaders.problems().cloned().collect();
-            self.ui = panels(error, &shaders, screen, self.measure.as_ref());
+            self.ui = panels(
+                error,
+                &shaders,
+                level.as_deref(),
+                screen,
+                self.measure.as_ref(),
+            );
             self.shown = Some(Shown {
                 script: error.cloned(),
                 shaders,
+                level,
                 screen,
             });
         }
@@ -298,6 +308,7 @@ fn panel_width(screen: [u32; 2]) -> (f32, f32) {
 fn panels(
     error: Option<&ScriptError>,
     shaders: &[ShaderError],
+    level: Option<&str>,
     screen: [u32; 2],
     measure: &dyn TextMeasure,
 ) -> Ui {
@@ -307,7 +318,8 @@ fn panels(
     let mut top = 0.0;
     let script = error.map(|error| lines(error, width, measure));
     let shader = (!shaders.is_empty()).then(|| shader_lines(shaders, width, measure));
-    for lines in script.into_iter().chain(shader) {
+    let level = level.map(|problem| level_lines(problem, width, measure));
+    for lines in script.into_iter().chain(shader).chain(level) {
         top += panel(&mut ui, top, wide, &lines) + GAP;
     }
     ui
@@ -422,6 +434,26 @@ fn shader_lines(errors: &[ShaderError], width: f32, measure: &dyn TextMeasure) -
     lines
 }
 
+/// The lines of the panel for a level that could not be loaded again,
+/// none wider than `width`.
+fn level_lines(problem: &str, width: f32, measure: &dyn TextMeasure) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut add = |text: &str, size: f32, color: Color| {
+        let mut wrapped = Vec::new();
+        wrap(&clean(text), width, size, measure, &mut wrapped);
+        lines.extend(wrapped.into_iter().map(|text| Line { text, size, color }));
+    };
+    add("The saved level could not be loaded", TITLE_SIZE, TITLE);
+    add(problem, TEXT_SIZE, MESSAGE);
+    add(
+        "The level that was showing is kept. Export it again to try again.",
+        TEXT_SIZE,
+        QUIET,
+    );
+    cut_short(&mut lines);
+    lines
+}
+
 /// Ends a panel of more than [`MOST_LINES`] by pointing at the terminal.
 fn cut_short(lines: &mut Vec<Line>) {
     if lines.len() > MOST_LINES {
@@ -530,6 +562,24 @@ mod tests {
             }
         }
         (words, boxes)
+    }
+
+    #[test]
+    fn a_level_that_could_not_be_loaded_again_has_a_panel_of_its_own() {
+        let mut frame =
+            Frame::new(0.0).with_level_problem(Some("level.glb is not a glTF file.".into()));
+        let mut overlay = ErrorOverlay::default();
+        overlay.show(None, &mut frame);
+        let (words, boxes) = drawn(&frame.take_ui());
+        assert_eq!(words[0], "The saved level could not be loaded");
+        assert!(words.iter().any(|line| line.contains("not a glTF file")));
+        assert!(words.last().unwrap().contains("Export it again"));
+        assert_eq!(boxes.len(), 2, "a panel and its stripe");
+
+        // A level that loads takes the panel away.
+        let mut frame = Frame::new(0.0);
+        overlay.show(None, &mut frame);
+        assert!(drawn(&frame.take_ui()).0.is_empty());
     }
 
     #[test]

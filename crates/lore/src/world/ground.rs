@@ -44,7 +44,7 @@ pub(crate) struct Ground {
     facing: Arc<[f32]>,
     pub(super) rules: MoveSettings,
     /// Ticks in one second.
-    pub(super) tick_rate: u32,
+    pub(crate) tick_rate: u32,
     /// Seconds in one tick.
     pub(super) step: f32,
 }

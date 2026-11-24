@@ -351,6 +351,15 @@ pub(crate) struct LevelPanels {
 
 impl LevelPanels {
     /// Panels for `scene`, which is the engine's stand-in if `stand_in`.
+    /// Lists what is in a newer version of the level, saved while the
+    /// editor is open. What is chosen and typed stays.
+    pub(crate) fn set_level(&mut self, scene: &Scene) {
+        self.entities = entities(scene);
+        self.title = crate::scaffold::LEVEL_FILE;
+        self.hint = None;
+        self.warnings.clone_from(&scene.warnings);
+    }
+
     pub(crate) fn new(scene: &Scene, stand_in: bool) -> Self {
         Self {
             entities: entities(scene),

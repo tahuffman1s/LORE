@@ -39,6 +39,11 @@ pub(super) struct Play {
 }
 
 impl Play {
+    /// Puts a newer version of the level under the game being played.
+    pub(super) fn level_saved(&mut self, level: &lore_assets::Scene) {
+        crate::game::Game::level_saved(&mut self.game, level);
+    }
+
     /// Starts the game in `folder` (or, with no folder, a game with no
     /// script) on `ground`, with `map` placed in it, for a player with the
     /// `settings` in force, and puts the player's eyes at `eye` looking
