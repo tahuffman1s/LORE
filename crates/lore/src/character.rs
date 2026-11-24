@@ -741,18 +741,32 @@ impl Character {
             yaw
         };
         let (s, c) = (libm::sinf(model_yaw), libm::cosf(model_yaw));
-        // In first person the body stands a little behind the eyes.
-        let back = FIRST_PERSON_BACK * (1.0 - third);
+        let skeleton = self.body.skeleton();
+        skeleton.place(&self.blended, &mut self.placed);
+        // In first person the body stands with its head a little behind the
+        // eyes. It is the head that is kept there, not the feet: a sprint or
+        // a swing leans the body forward, and with the feet held still the
+        // shoulders would come up in front of the camera.
+        let first = 1.0 - third;
+        let back = FIRST_PERSON_BACK * first;
         let (fs, fc) = (libm::sinf(yaw), libm::cosf(yaw));
-        let at = [feet[0] + fs * back, feet[1], feet[2] + fc * back];
+        let [hx, _, hz, _] = self
+            .head
+            .and_then(|head| self.placed.get(head))
+            .map_or([0.0; 4], |placed| placed[3]);
+        let head_x = c * hx + s * hz;
+        let head_z = -s * hx + c * hz;
+        let at = [
+            feet[0] + fs * back - head_x * first,
+            feet[1],
+            feet[2] + fc * back - head_z * first,
+        ];
         let transform = [
             [c, 0.0, -s, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [s, 0.0, c, 0.0],
             [at[0], at[1], at[2], 1.0],
         ];
-        let skeleton = self.body.skeleton();
-        skeleton.place(&self.blended, &mut self.placed);
         let mut written = 0;
         for skin in 0..skeleton.skins().len() {
             written += skeleton.skinning(skin, &self.placed, &mut self.skinning[written..]);
@@ -968,6 +982,35 @@ mod tests {
             drawn.seen_joints, drawn.shadow_joints,
             "the head is left out"
         );
+    }
+
+    #[test]
+    fn a_sprint_in_first_person_keeps_the_head_behind_the_eyes() {
+        let mut character = Character::mannequin().unwrap();
+        let mut player = standing();
+        player.grounded = true;
+        // Sprinting the way the camera looks (-Z), which leans the body over.
+        player.velocity = [0.0, 0.0, -7.5];
+        let level = Level::from_triangles(&[]);
+        let head = character.head.unwrap();
+        for tick in 0..120 {
+            character.tick(&player, (0.0, 0.0), &level, 1.0 / 60.0, |_, _| {});
+            if tick < 30 {
+                continue;
+            }
+            let eye = player.eye_position();
+            let transform = character.figures(1.0, player.position, eye).transform;
+            let [mx, _, mz, at] = transform;
+            let [hx, _, hz, _] = character.placed[head][3];
+            let world = [
+                at[0] + mx[0] * hx + mz[0] * hz,
+                at[2] + mx[2] * hx + mz[2] * hz,
+            ];
+            assert!(
+                (world[1] - FIRST_PERSON_BACK).abs() < 1e-3 && world[0].abs() < 1e-3,
+                "tick {tick}: the head is at {world:?}, not just behind the eyes"
+            );
+        }
     }
 
     #[test]
