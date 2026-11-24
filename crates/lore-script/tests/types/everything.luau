@@ -526,6 +526,17 @@ for _, solid: Thing in game.things("prop") do
         solid:teleport(vector.create(0, 2, 0))
     end
 end
+game.onPickUp(function(got: Thing) print(got.name, got.carryable) end)
+game.onDrop(function(let: Thing, thrown: boolean) print(let.name, thrown) end)
+local inHands: Thing? = game.player.carrying
+print(inHands, game.player.carryWeight)
+game.onTick(function()
+    game.player:setCarryWeight(80)
+    game.player:drop()
+end)
+for _, heavy: Thing in game.things("statue") do
+    heavy.carryable = false
+end
 local chests: { Thing } = game.things("chest")
 print(#chests)
 if false then

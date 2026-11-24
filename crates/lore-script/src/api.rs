@@ -44,6 +44,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onWeaponReload",
     "onDamage",
     "onDeath",
+    "onPickUp",
+    "onDrop",
     "setTimeSpeed",
     "timeSpeed",
     "fluid",
@@ -110,6 +112,9 @@ pub(crate) struct Handlers {
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
+    /// `game.onPickUp` and `game.onDrop`.
+    pub picked_up: Vec<Function>,
+    pub dropped: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -317,7 +322,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 6] = [
+    let events: [(&'static str, &'static str, List); 8] = [
         ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
             &mut h.damage
         }),
@@ -343,6 +348,14 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "onWeaponReload",
             "game.onWeaponReload(function(shooter) ... end)",
             |h| &mut h.weapon_reload,
+        ),
+        ("onPickUp", "game.onPickUp(function(thing) ... end)", |h| {
+            &mut h.picked_up
+        }),
+        (
+            "onDrop",
+            "game.onDrop(function(thing, thrown) ... end)",
+            |h| &mut h.dropped,
         ),
     ];
     for (name, example, list) in events {

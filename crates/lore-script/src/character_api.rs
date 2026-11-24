@@ -58,6 +58,8 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "blocking",
     "lookingAt",
     "useProgress",
+    "carrying",
+    "carryWeight",
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
@@ -108,6 +110,8 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setCamera",
     "setModel",
     "hold",
+    "drop",
+    "setCarryWeight",
     "play",
     "stop",
     "isPlaying",
@@ -508,6 +512,17 @@ impl UserData for CharacterRef {
             only_player(lua, *this, "model", "given a model")?;
             Ok(crate::body_api::model_name(&*shared_of(lua)?))
         });
+        fields.add_field_method_get("carrying", |lua, this| {
+            this.read(lua, "carrying")?;
+            if this.0 != CharacterId::PLAYER {
+                return Ok(None);
+            }
+            crate::thing_api::carrying(lua, &*shared_of(lua)?)
+        });
+        fields.add_field_method_get("carryWeight", |lua, this| {
+            this.read(lua, "carryWeight")?;
+            Ok(shared_of(lua)?.things.carry_weight())
+        });
         fields.add_field_method_get("lookingAt", |lua, this| {
             this.read(lua, "lookingAt")?;
             if this.0 != CharacterId::PLAYER {
@@ -652,6 +667,16 @@ impl UserData for CharacterRef {
             let this = receiver(lua, &this, "setModel", "(\"mannequin_female\")")?;
             only_player(lua, this, "setModel", "given a model")?;
             crate::body_api::set_model(lua, &shared_of(lua)?, &model)
+        });
+        methods.add_function("drop", |lua, this: Value| {
+            let this = receiver(lua, &this, "drop", "()")?;
+            only_player(lua, this, "drop", "made to let go")?;
+            crate::thing_api::drop_carried(lua, &shared_of(lua)?)
+        });
+        methods.add_function("setCarryWeight", |lua, (this, weight): (Value, Value)| {
+            let this = receiver(lua, &this, "setCarryWeight", "(80)")?;
+            only_player(lua, this, "setCarryWeight", "given a carrying strength")?;
+            crate::thing_api::set_carry_weight(lua, &shared_of(lua)?, &weight)
         });
         methods.add_function(
             "hold",

@@ -177,6 +177,15 @@ declare extern type Character with
     --- Example: print(game.player.blocking)
     blocking: boolean
 
+    --- What the player is carrying, or nil.
+    --- Example: if game.player.carrying then hint.text = "Fire to throw" end
+    carrying: Thing?
+
+    --- The heaviest thing the player picks up, in kilograms: 40 until
+    --- `game.player:setCarryWeight`.
+    --- Example: print(game.player.carryWeight)
+    carryWeight: number
+
     --- The usable thing the player would use if they pressed "interact"
     --- now: the one under the crosshair and in reach, or nil. It is worked
     --- out once a tick. The engine shows its prompt for it unless
@@ -365,6 +374,18 @@ declare extern type Character with
     --- Example: game.player:hold(nil)
     function hold(self, thing: string?, options: { hand: ("right" | "left")? }?): ()
 
+    --- Makes the player let go of what they carry, where it is. Nothing
+    --- happens with empty hands. Only in the game's rules.
+    --- Example: game.onDamage(function(hurt) if hurt.victim == game.player then game.player:drop() end end)
+    function drop(self): ()
+
+    --- The heaviest thing the player picks up, in kilograms, from 0
+    --- (nothing can be carried) to 1000; a number outside that is taken as
+    --- the nearest end. 40 if never set. It stays through a reload of the
+    --- script. Only in the game's rules.
+    --- Example: game.player:setCarryWeight(80)
+    function setCarryWeight(self, kilograms: number): ()
+
     --- Plays one of the body's clips (see `game.player.clips`) over its
     --- moving about, then goes back to it. Options: `fade` (seconds to fade
     --- in and out, 0 to 10, 0.2 if not given), `speed` (0 to 10, 1 as
@@ -458,6 +479,18 @@ declare extern type Thing with
     --- not move at all.
     --- Example: if not crate.resting then print("Still falling") end
     resting: boolean
+
+    --- Whether the player may pick the thing up: true for one that moves
+    --- and weighs no more than `game.player.carryWeight` (40 kg to start),
+    --- unless the script says. Set it to false for a thing that must stay
+    --- put, or to true for a heavy one the player may carry all the same.
+    --- A thing that can be carried is picked up by using it: the engine
+    --- shows "Pick up" beside the key or button (or `useText`, if the
+    --- script set it), holds it out in front of the player, drops it on
+    --- the same button and throws it at what the crosshair is on with
+    --- "fire". It is said again each time the script loads.
+    --- Example: statue.carryable = false
+    carryable: boolean
 
     --- The word or two shown beside the button while the player can use
     --- the thing: "Use" until the script says otherwise. Up to 60
@@ -2006,6 +2039,17 @@ declare game: {
     --- death: the game says what does.
     --- Example: game.onDeath(function(victim) if victim == game.player then game.player:setHealth(100) end end)
     onDeath: (handler: (victim: Character, killer: Character?) -> ()) -> (),
+
+    --- Calls `handler` when the player picks a thing up, with the thing.
+    --- Example: game.onPickUp(function(thing) print("Got the " .. thing.name) end)
+    onPickUp: (handler: (thing: Thing) -> ()) -> (),
+
+    --- Calls `handler` when the player lets go of what they carried, with
+    --- the thing and whether it was thrown: true for a throw; false when
+    --- it was put down, let go by `game.player:drop`, or caught on
+    --- something and slipped out of their hands.
+    --- Example: game.onDrop(function(thing, thrown) if thrown then game.audio.playAt("whoosh", thing.position) end end)
+    onDrop: (handler: (thing: Thing, thrown: boolean) -> ()) -> (),
 
     --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
     --- inside the game's folder, named without the folder and without `.wav`
