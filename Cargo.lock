@@ -1554,6 +1554,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-anim"
+version = "0.0.0"
+dependencies = [
+ "lore-assets",
+]
+
+[[package]]
 name = "lore-assets"
 version = "0.0.0"
 dependencies = [
