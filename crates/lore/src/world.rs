@@ -1335,6 +1335,12 @@ impl Game for Playing {
             .controls
             .asked(input, step, &mut self.yaw, &mut self.pitch);
         self.world.ask(asked);
+        // Shots go where the crosshair is, seen from where the camera hung
+        // on the last tick.
+        let camera = self.character.as_ref().map(|character| {
+            character.camera(1.0, self.eye, (self.yaw, self.pitch), &self.world.ground.level)
+        });
+        self.world.shooting.camera = camera.filter(|camera| *camera != self.eye);
         self.world.tick(input, step);
         // A script or a respawn that put the player somewhere may have
         // turned them too.

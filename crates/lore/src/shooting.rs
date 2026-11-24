@@ -49,6 +49,48 @@ pub(crate) struct Shooting {
     targets: Vec<Target>,
     in_flight: Vec<InFlight>,
     told: Vec<Told>,
+    /// Where the camera is when it is not at the eyes (third person): shots
+    /// go to what its crosshair is on, fired from the body.
+    pub(crate) camera: Option<[f32; 3]>,
+}
+
+/// How far off the crosshair's mark is taken to be when it is on nothing:
+/// the sky, far out.
+const FAR_MARK: f32 = 1000.0;
+
+/// Where a shot fired along `direction` should go, from `eyes`, when the
+/// picture is seen from `camera`: the point the crosshair is on, found by a
+/// ray from the camera that starts level with the body (so nothing between
+/// the camera and the player is taken for the mark). With the camera at the
+/// eyes, `direction` as it is.
+fn toward_mark(
+    level: &Level,
+    targets: &[Target],
+    camera: Option<[f32; 3]>,
+    eyes: [f32; 3],
+    direction: [f32; 3],
+    settings: &lore_weapons::WeaponSettings,
+) -> [f32; 3] {
+    let Some(camera) = camera else {
+        return direction;
+    };
+    let gap: [f32; 3] = std::array::from_fn(|i| eyes[i] - camera[i]);
+    if gap.iter().map(|g| g * g).sum::<f32>() < 0.05 * 0.05 {
+        return direction;
+    }
+    let skip = (0..3).map(|i| gap[i] * direction[i]).sum::<f32>().max(0.0);
+    let from: [f32; 3] = std::array::from_fn(|i| camera[i] + direction[i] * skip);
+    let mark = hitscan(level, targets, from, direction, settings, Some(PLAYER)).map_or_else(
+        || std::array::from_fn(|i| from[i] + direction[i] * FAR_MARK),
+        |hit| hit.point,
+    );
+    let way: [f32; 3] = std::array::from_fn(|i| mark[i] - eyes[i]);
+    let length = way.iter().map(|w| w * w).sum::<f32>().sqrt();
+    if length > 1e-3 && length.is_finite() {
+        way.map(|w| w / length)
+    } else {
+        direction
+    }
 }
 
 /// The number a weapon knows the player by: who launched a rocket, and
@@ -221,7 +263,14 @@ impl Shooting {
                 self.targets
                     .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
                 for shot in &self.shots {
-                    let direction = shot.direction(yaw, pitch);
+                    let direction = toward_mark(
+                        level,
+                        &self.targets,
+                        self.camera,
+                        eyes,
+                        shot.direction(yaw, pitch),
+                        &held.settings,
+                    );
                     let Some(hit) =
                         hitscan(level, &self.targets, eyes, direction, &held.settings, None)
                     else {
@@ -244,8 +293,18 @@ impl Shooting {
                 }
             }
             Delivery::Projectile(_) => {
+                self.targets.clear();
+                self.targets
+                    .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
                 for shot in &self.shots {
-                    let direction = shot.direction(yaw, pitch);
+                    let direction = toward_mark(
+                        level,
+                        &self.targets,
+                        self.camera,
+                        eyes,
+                        shot.direction(yaw, pitch),
+                        &held.settings,
+                    );
                     let Some(projectile) =
                         Projectile::launch(&held.settings, eyes, direction, Some(PLAYER))
                     else {
@@ -319,5 +378,54 @@ impl Shooting {
             }
             !flight.is_over()
         });
+    }
+}
+
+#[cfg(test)]
+mod aim_tests {
+    use super::*;
+
+    /// A wall across the way at z = -10.
+    fn wall() -> Level {
+        Level::from_triangles(&[
+            [[-20.0, -5.0, -10.0], [20.0, -5.0, -10.0], [20.0, 20.0, -10.0]],
+            [[-20.0, -5.0, -10.0], [20.0, 20.0, -10.0], [-20.0, 20.0, -10.0]],
+        ])
+    }
+
+    #[test]
+    fn a_shot_from_the_body_lands_where_the_crosshair_over_the_shoulder_is() {
+        let settings = lore_weapons::WeaponSettings::default();
+        let eyes = [0.0, 1.6, 0.0];
+        // Behind and over the right shoulder, looking straight ahead (-Z).
+        let camera = [0.45, 1.75, 3.0];
+        let ahead = [0.0, 0.0, -1.0];
+        let way = toward_mark(&wall(), &[], Some(camera), eyes, ahead, &settings);
+        // The crosshair is on the wall at (0.45, 1.75, -10); the shot from the
+        // eyes goes there.
+        let hit = hitscan(&wall(), &[], eyes, way, &settings, None).unwrap();
+        assert!((hit.point[0] - 0.45).abs() < 1e-3, "{:?}", hit.point);
+        assert!((hit.point[1] - 1.75).abs() < 1e-3, "{:?}", hit.point);
+        // At the eyes, nothing changes.
+        assert_eq!(toward_mark(&wall(), &[], None, eyes, ahead, &settings), ahead);
+    }
+
+    #[test]
+    fn what_is_between_the_camera_and_the_body_is_not_the_mark() {
+        let settings = lore_weapons::WeaponSettings::default();
+        // A wall right behind the player, between them and the camera.
+        let behind = Level::from_triangles(&[
+            [[-20.0, -5.0, 1.0], [20.0, -5.0, 1.0], [20.0, 20.0, 1.0]],
+            [[-20.0, -5.0, 1.0], [20.0, 20.0, 1.0], [-20.0, 20.0, 1.0]],
+        ]);
+        let way = toward_mark(
+            &behind,
+            &[],
+            Some([0.0, 1.6, 3.0]),
+            [0.0, 1.6, 0.0],
+            [0.0, 0.0, -1.0],
+            &settings,
+        );
+        assert!(way[2] < -0.99, "still straight ahead: {way:?}");
     }
 }
