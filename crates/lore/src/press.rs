@@ -3,7 +3,10 @@
 //! A script's `if game.input.justPressed("jump")` is only run when jump is
 //! pressed, so a mistake inside it stays hidden while nothing is. This
 //! presses, holds and lets go of everything each action is bound to, one
-//! action at a time, through the same [`Input`] a window feeds.
+//! action at a time, through the same [`Input`] a window feeds. Then it
+//! holds each action while pressing each other one, so that code which
+//! needs two at once (`pressed("aim") and justPressed("fire")`, sprinting
+//! while moving) is run too.
 
 use lore_input::{
     ActionId, ActionMap, Binding, Button, Input, InputFrame, Stick, StickAxis as Axis,
@@ -79,6 +82,125 @@ pub fn every_action(input: &mut Input, mut tick: impl FnMut(ActionId, &InputFram
     }
     input.set_active_set(live);
     pressed
+}
+
+/// One way to turn an action all the way on.
+#[derive(Debug, Clone, Copy)]
+enum On {
+    Button(Button),
+    Stick(Stick, [f32; 2]),
+    /// The mouse, which is on only while it moves.
+    Mouse,
+}
+
+impl On {
+    /// How to turn on what is bound by `binding`.
+    fn of(binding: Binding) -> Self {
+        match binding {
+            Binding::Button(button)
+            | Binding::Axis {
+                positive: button, ..
+            }
+            | Binding::Directions { up: button, .. } => Self::Button(button),
+            Binding::StickAxis(stick, Axis::X) => Self::Stick(stick, [1.0, 0.0]),
+            Binding::StickAxis(stick, Axis::Y) | Binding::Stick(stick) => {
+                Self::Stick(stick, [0.0, 1.0])
+            }
+            Binding::MouseMotion => Self::Mouse,
+        }
+    }
+
+    /// Whether this and `other` need the same key, button, stick or mouse,
+    /// so that the two cannot be told apart when both are on.
+    fn clashes(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Button(a), Self::Button(b)) => a == b,
+            (Self::Stick(a, _), Self::Stick(b, _)) => a == b,
+            (Self::Mouse, Self::Mouse) => true,
+            _ => false,
+        }
+    }
+
+    /// Turns it on or off.
+    fn turn(self, input: &mut Input, on: bool) {
+        match self {
+            Self::Button(button) if on => input.press(button),
+            Self::Button(button) => input.release(button),
+            Self::Stick(stick, way) => push(input, stick, if on { way } else { [0.0, 0.0] }),
+            Self::Mouse => {}
+        }
+    }
+
+    /// What has to be done again before every tick it is on for.
+    fn keep(self, input: &mut Input) {
+        if matches!(self, Self::Mouse) {
+            input.move_mouse(MOUSE[0][0], MOUSE[0][1]);
+        }
+    }
+}
+
+/// Holds every action in `input`'s map while pressing every other one, and
+/// calls `tick` with the action held, the action pressed and the input of
+/// each tick that passes meanwhile. Says how many pairs of actions were
+/// tried.
+///
+/// Each pair is tried both ways round, since `pressed("aim") and
+/// justPressed("fire")` is not `pressed("fire") and justPressed("aim")`:
+/// the first goes down, the second goes down while it is held, both are
+/// held, the second is let go and then the first. Two actions in different
+/// action sets are never live together and are not paired, and neither are
+/// two that can only be worked by the same key, button or stick.
+///
+/// Call it with every device at rest.
+pub fn every_pair(
+    input: &mut Input,
+    mut tick: impl FnMut(ActionId, ActionId, &InputFrame),
+) -> usize {
+    let map: ActionMap = input.map().clone();
+    let live = input.active_set();
+    let actions: Vec<ActionId> = map
+        .actions()
+        .filter(|action| !map.bindings(*action).is_empty())
+        .collect();
+    let mut pairs = 0;
+    for (nth, &held) in actions.iter().enumerate() {
+        for (other, &pressed) in actions.iter().enumerate() {
+            if nth == other || map.set_of(held) != map.set_of(pressed) {
+                continue;
+            }
+            let first = On::of(map.bindings(held)[0]);
+            let Some(second) = (map.bindings(pressed).iter())
+                .map(|binding| On::of(*binding))
+                .find(|on| !first.clashes(*on))
+            else {
+                continue;
+            };
+            if let Some(set) = map.set_of(held) {
+                input.set_active_set(set);
+            }
+            let mut pass = |input: &mut Input, on: &[On]| {
+                for one in on {
+                    one.keep(input);
+                }
+                tick(held, pressed, input.tick());
+            };
+            first.turn(input, true);
+            pass(input, &[first]);
+            second.turn(input, true);
+            pass(input, &[first, second]);
+            pass(input, &[first, second]);
+            second.turn(input, false);
+            pass(input, &[first]);
+            first.turn(input, false);
+            pass(input, &[]);
+            // Counted once, though it is tried both ways round.
+            if nth < other {
+                pairs += 1;
+            }
+        }
+    }
+    input.set_active_set(live);
+    pairs
 }
 
 /// Works one binding through everything it can report and leaves it at rest.
@@ -180,6 +302,47 @@ mod tests {
             }
         });
         states
+    }
+
+    #[test]
+    fn every_two_actions_are_held_together_both_ways_round() {
+        let mut map = ActionMap::new();
+        map.button("aim", ["MouseRight"]).unwrap();
+        map.button("fire", ["MouseLeft"]).unwrap();
+        map.button("jump", ["Space"]).unwrap();
+        let (aim, fire) = (map.action("aim").unwrap(), map.action("fire").unwrap());
+        let mut input = Input::new(map);
+        // What a script's two-button lines would have seen.
+        let (mut aimed_then_fired, mut fired_then_aimed, mut both) = (0, 0, 0);
+        let pairs = every_pair(&mut input, |_, _, frame| {
+            let (aim, fire) = (frame.get(aim), frame.get(fire));
+            aimed_then_fired += usize::from(aim.pressed && fire.just_pressed);
+            fired_then_aimed += usize::from(fire.pressed && aim.just_pressed);
+            both += usize::from(aim.pressed && fire.pressed);
+        });
+        assert_eq!(pairs, 3);
+        assert_eq!((aimed_then_fired, fired_then_aimed), (1, 1));
+        assert_eq!(both, 4);
+        // Everything is at rest afterwards.
+        let frame = input.tick();
+        assert_eq!(frame.get(aim), ActionState::default());
+        assert_eq!(frame.get(fire), ActionState::default());
+    }
+
+    #[test]
+    fn two_actions_on_the_same_key_or_in_different_sets_are_not_paired() {
+        let mut map = ActionMap::new();
+        map.button("use", ["E"]).unwrap();
+        map.button("open", ["E"]).unwrap();
+        let mut input = Input::new(map);
+        assert_eq!(every_pair(&mut input, |_, _, _| {}), 0);
+
+        let mut map = ActionMap::new();
+        map.button("jump", ["Space"]).unwrap();
+        map.add_set("menu", MouseMode::Pointer).unwrap();
+        map.button("accept", ["Enter"]).unwrap();
+        let mut input = Input::new(map);
+        assert_eq!(every_pair(&mut input, |_, _, _| {}), 0);
     }
 
     #[test]
