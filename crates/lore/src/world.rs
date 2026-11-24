@@ -736,6 +736,8 @@ impl Game for World {
         if let (true, Some(target)) = (used, target) {
             host.use_thing(target);
         }
+        // Who walked into a zone the script watches, and who left.
+        host.step_zones();
         // What was heard of the tick just run: when a foot came down, and
         // below, what the weapon did.
         self.noises.clear();

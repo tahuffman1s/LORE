@@ -510,6 +510,14 @@ for _, placed: Thing in game.things() do
     placed.usable = true
     placed:onUse(function(used: Thing) print(used.useText, used.useReach, used.useSeconds, used:property("locked")) end)
 end
+for _, area: Thing in game.things("zone") do
+    area:onEnter(function(who: Character) print(who.name, area:has(who)) end)
+    area:onLeave(function(who: Character) print(who.name) end)
+end
+if false then
+    local bridge: Thing = game.zone("Bridge")
+    print(bridge)
+end
 local chests: { Thing } = game.things("chest")
 print(#chests)
 if false then

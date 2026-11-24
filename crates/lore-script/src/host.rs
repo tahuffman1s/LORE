@@ -1416,6 +1416,62 @@ impl ScriptHost {
         }
     }
 
+    /// Tells the script who walked into a zone it watches and who left
+    /// (`zone:onEnter`, `zone:onLeave`), from where every character stands
+    /// now. Call it once a tick, after the tick's moves. Those who left are
+    /// told first, then those who came in, zone by zone as they are placed.
+    pub fn step_zones(&mut self) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let nobody_watches = {
+            let handlers = shared.handlers.borrow();
+            handlers.entered.is_empty() && handlers.left.is_empty()
+        };
+        if nobody_watches && !self.things.anyone_inside() {
+            return;
+        }
+        let crossings = self.things.cross(
+            &|id| crate::thing_api::watched(&shared, id),
+            &self.characters,
+        );
+        for crossing in crossings {
+            self.tell_crossing(&shared, &crossing.zone, crossing.who, crossing.entered);
+        }
+    }
+
+    /// Calls the functions of one zone for one character walking in or out.
+    fn tell_crossing(&mut self, shared: &Rc<Shared>, zone: &str, who: CharacterId, entered: bool) {
+        let handlers = crate::thing_api::crossing_handlers(shared, zone, entered);
+        if handlers.is_empty() || !self.characters.has(who) {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let Ok(who) = shared.handles.character(&version.vm, who) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(shared, &handler, who.clone()) {
+                break;
+            }
+        }
+    }
+
+    /// Tells the script the player walked into each zone it watches and
+    /// out again, though nobody moved: for `lore check`, so what each
+    /// zone's functions do is run. Says how many zones that was.
+    pub fn pretend_zone_crossings(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let zones = crate::thing_api::watched_ids(&shared);
+        for zone in &zones {
+            self.tell_crossing(&shared, zone, CharacterId::PLAYER, true);
+            self.tell_crossing(&shared, zone, CharacterId::PLAYER, false);
+        }
+        zones.len()
+    }
+
     /// Says where the picture about to be drawn is seen from, so that
     /// `game.hud.onScreen` can say where a place in the world is in it.
     /// Call it before [`draw`](Self::draw).

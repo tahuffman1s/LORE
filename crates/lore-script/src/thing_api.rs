@@ -53,7 +53,7 @@ pub(crate) const THING_FIELDS: &[&str] = &[
 const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable"];
 
 /// What a thing can be asked.
-pub(crate) const THING_METHODS: &[&str] = &["onUse", "property"];
+pub(crate) const THING_METHODS: &[&str] = &["onUse", "property", "onEnter", "onLeave", "has"];
 
 /// How close the player's eyes must be to use a thing, by default, in metres.
 pub const DEFAULT_REACH: f32 = 2.5;
@@ -63,6 +63,14 @@ const REACHES: (f32, f32) = (0.5, 50.0);
 const LONGEST_HOLD: f32 = 30.0;
 /// The most characters of a prompt's words that are shown.
 const LONGEST_TEXT: usize = 60;
+
+/// How far round a thing its zone reaches when the map does not say, in metres.
+pub const DEFAULT_ZONE_RADIUS: f32 = 2.0;
+/// How high a zone is when the map does not say, in metres.
+pub const DEFAULT_ZONE_HEIGHT: f32 = 3.0;
+/// How far under where a zone is placed it still counts: feet on a floor a
+/// little lower than the marker are inside.
+const ZONE_UNDER: f32 = 0.5;
 
 /// What a property of something placed holds.
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +98,50 @@ pub struct Placed {
     pub facing: f32,
     /// What else its maker said of it, by name.
     pub properties: Vec<(String, PlacedValue)>,
+}
+
+impl Placed {
+    /// A number the map gave the thing, if it is one above 0.
+    fn size(&self, name: &str) -> Option<f32> {
+        self.properties
+            .iter()
+            .find_map(|(known, value)| match value {
+                // A size in metres needs no more precision than an f32 holds.
+                #[allow(clippy::cast_possible_truncation)]
+                PlacedValue::Number(number) if known == name && *number > 0.0 => {
+                    Some(*number as f32)
+                }
+                _ => None,
+            })
+    }
+
+    /// Whether feet at `feet` are inside the thing's zone: an upright
+    /// round of `radius` metres about where it is placed, or, when the map
+    /// gives it a `width` and a `depth`, a box that size turned as the
+    /// thing is. Either is `height` metres high from where it is placed.
+    #[must_use]
+    pub fn holds(&self, feet: [f32; 3]) -> bool {
+        let up = feet[1] - self.position[1];
+        let height = self.size("height").unwrap_or(DEFAULT_ZONE_HEIGHT);
+        // Not a number is outside.
+        if up.is_nan() || up < -ZONE_UNDER || up > height {
+            return false;
+        }
+        let (x, z) = (feet[0] - self.position[0], feet[2] - self.position[2]);
+        match (self.size("width"), self.size("depth")) {
+            (Some(width), Some(depth)) => {
+                // Into the thing's own space: it is turned to the left.
+                let (sin, cos) = self.facing.to_radians().sin_cos();
+                let across = x * cos - z * sin;
+                let along = x * sin + z * cos;
+                across.abs() <= width / 2.0 && along.abs() <= depth / 2.0
+            }
+            _ => {
+                let radius = self.size("radius").unwrap_or(DEFAULT_ZONE_RADIUS);
+                x * x + z * z <= radius * radius
+            }
+        }
+    }
 }
 
 /// How a thing is used, as the script said it.
@@ -129,6 +181,64 @@ pub(crate) struct ThingState {
     /// last said, and how far through a held use the player is, 0 to 1.
     target: RefCell<Option<String>>,
     progress: Cell<f32>,
+    /// Who is inside which watched zone: the zone's id and the character,
+    /// as of the last tick.
+    inside: RefCell<Vec<(String, crate::CharacterId)>>,
+}
+
+/// Someone walking into a zone or out of it.
+pub(crate) struct Crossing {
+    /// The zone's id.
+    pub(crate) zone: String,
+    pub(crate) who: crate::CharacterId,
+    /// In, not out.
+    pub(crate) entered: bool,
+}
+
+impl ThingState {
+    /// Works out who is inside each of the zones `watched` now, from where
+    /// `characters` stand, and says who walked in and who left since this
+    /// was last asked: those who left first, then those who came in, each
+    /// in the order the zones are placed and the characters joined.
+    pub(crate) fn cross(
+        &self,
+        watched: &dyn Fn(&str) -> bool,
+        characters: &crate::character_api::Characters,
+    ) -> Vec<Crossing> {
+        let placed = self.placed.borrow();
+        let mut inside = self.inside.borrow_mut();
+        let mut now: Vec<(String, crate::CharacterId)> = Vec::new();
+        for zone in placed.iter().filter(|zone| watched(&zone.id)) {
+            characters.each(|who, feet| {
+                if zone.holds(feet) {
+                    now.push((zone.id.clone(), who));
+                }
+            });
+        }
+        let mut crossings = Vec::new();
+        for (zone, who) in inside.iter().filter(|was| !now.contains(was)) {
+            crossings.push(Crossing {
+                zone: zone.clone(),
+                who: *who,
+                entered: false,
+            });
+        }
+        for (zone, who) in now.iter().filter(|is| !inside.contains(is)) {
+            crossings.push(Crossing {
+                zone: zone.clone(),
+                who: *who,
+                entered: true,
+            });
+        }
+        *inside = now;
+        crossings
+    }
+
+    /// Whether anyone is noted as inside a zone: so a tick with no zones
+    /// watched and nobody to see leave does no work.
+    pub(crate) fn anyone_inside(&self) -> bool {
+        !self.inside.borrow().is_empty()
+    }
 }
 
 /// What one version of the script has said of using things: a saved
@@ -520,6 +630,50 @@ impl UserData for ThingRef {
                 None => Value::Nil,
             })
         });
+        for (method, entered) in [("onEnter", true), ("onLeave", false)] {
+            methods.add_function(method, move |lua, (this, handler): (Value, Value)| {
+                let this = receiver(lua, &this, method, "(function(who) ... end)")?;
+                let Value::Function(handler) = handler else {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{method} needs the function to call with whoever it was, but it \
+                             was given {}. Write it like this: bridge:{method}(function(who) \
+                             print(who.name) end)",
+                            describe(&handler)
+                        ),
+                    ));
+                };
+                this.placed(lua, method)?;
+                let shared = shared_of(lua)?;
+                let mut handlers = shared.handlers.borrow_mut();
+                let list = if entered {
+                    &mut handlers.entered
+                } else {
+                    &mut handlers.left
+                };
+                list.push((Rc::clone(&this.0), handler));
+                Ok(())
+            });
+        }
+        methods.add_function("has", |lua, (this, who): (Value, Value)| {
+            let this = receiver(lua, &this, "has", "(game.player)")?;
+            let Some(who) = crate::character_api::id_of_value(lua, &who) else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "has needs a character to look for, such as game.player, but it was \
+                         given {}. Write it like this: bridge:has(game.player)",
+                        describe(&who)
+                    ),
+                ));
+            };
+            let (shared, placed) = this.placed(lua, "zone")?;
+            Ok(shared
+                .characters
+                .position(who)
+                .is_some_and(|feet| placed.holds(feet)))
+        });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = this.borrow::<Self>()?.clone();
             Ok(this.placed(lua, "name").map_or_else(
@@ -572,6 +726,101 @@ fn receiver(lua: &Lua, this: &Value, method: &str, arguments: &str) -> mlua::Res
              called on. Write it like this: door:{method}{arguments}"
         ),
     ))
+}
+
+/// The functions to call when someone walks into the zone placed as `id`
+/// (`entered`) or out of it.
+pub(crate) fn crossing_handlers(shared: &Shared, id: &str, entered: bool) -> Vec<Function> {
+    let handlers = shared.handlers.borrow();
+    let list = if entered {
+        &handlers.entered
+    } else {
+        &handlers.left
+    };
+    list.iter()
+        .filter(|(known, _)| &**known == id)
+        .map(|(_, handler)| handler.clone())
+        .collect()
+}
+
+/// Whether this version of the script watches the zone placed as `id`.
+pub(crate) fn watched(shared: &Shared, id: &str) -> bool {
+    let handlers = shared.handlers.borrow();
+    (handlers.entered.iter())
+        .chain(&handlers.left)
+        .any(|(known, _)| &**known == id)
+}
+
+/// The ids of every zone this version of the script watches, as placed.
+pub(crate) fn watched_ids(shared: &Shared) -> Vec<String> {
+    let placed = shared.things.placed.borrow();
+    placed
+        .iter()
+        .filter(|zone| watched(shared, &zone.id))
+        .map(|zone| zone.id.clone())
+        .collect()
+}
+
+/// `game.zone(name)`: a thing placed as a zone, by name.
+pub(crate) fn zone(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Result<AnyUserData> {
+    let Value::String(text) = name else {
+        return Err(fail(
+            lua,
+            format!(
+                "game.zone needs the name of a zone placed in the map, in quotes, but it was \
+                 given {}. Write it like this: game.zone(\"Bridge\")",
+                describe(name)
+            ),
+        ));
+    };
+    let wanted = text.to_string_lossy();
+    let wanted = wanted.trim();
+    let found = {
+        let placed = shared.things.placed.borrow();
+        let zones = || placed.iter().filter(|thing| thing.kind == "zone");
+        zones()
+            .find(|zone| zone.name == wanted || zone.id == wanted)
+            .or_else(|| {
+                zones().find(|zone| !zone.name.is_empty() && zone.name.eq_ignore_ascii_case(wanted))
+            })
+            .map(|zone| zone.id.clone())
+            .ok_or_else(|| {
+                let names: Vec<&str> = zones().map(called).collect();
+                let mut message =
+                    format!("No zone called \"{wanted}\" is placed in this game's map.");
+                if names.is_empty() {
+                    message.push_str(
+                        " The map has no zones yet: open the level with `lore edit`, place \
+                         something of type zone and give it a name.",
+                    );
+                } else {
+                    if let Some(near) = closest(wanted, names.iter().copied()) {
+                        let _ = write!(message, " Did you mean \"{near}\"?");
+                    }
+                    let shown: Vec<String> = names
+                        .iter()
+                        .take(12)
+                        .map(|name| format!("\"{name}\""))
+                        .collect();
+                    let _ = write!(message, " The zones are {}.", shown.join(", "));
+                }
+                if placed
+                    .iter()
+                    .any(|thing| thing.kind != "zone" && called(thing) == wanted)
+                {
+                    let _ = write!(
+                        message,
+                        " There is a thing of that name that was not placed as a zone: \
+                         game.thing(\"{wanted}\") finds it, and it can be given onEnter too."
+                    );
+                }
+                message
+            })
+    };
+    match found {
+        Ok(id) => handle(lua, shared, &id),
+        Err(message) => Err(fail(lua, message)),
+    }
 }
 
 /// The functions to call for a use of the thing placed as `id`.

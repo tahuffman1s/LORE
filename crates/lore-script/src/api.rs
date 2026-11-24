@@ -54,6 +54,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "quit",
     "thing",
     "things",
+    "zone",
     "showUsePrompt",
 ];
 
@@ -106,6 +107,9 @@ pub(crate) struct Handlers {
     pub moment: Vec<(String, Function)>,
     /// `thing:onUse`: each with the id of the thing it is for.
     pub used: Vec<(Rc<str>, Function)>,
+    /// `thing:onEnter` and `thing:onLeave`, likewise.
+    pub entered: Vec<(Rc<str>, Function)>,
+    pub left: Vec<(Rc<str>, Function)>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -405,6 +409,11 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set(
         "thing",
         lua.create_function(move |lua, name: Value| crate::thing_api::thing(lua, &state, &name))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "zone",
+        lua.create_function(move |lua, name: Value| crate::thing_api::zone(lua, &state, &name))?,
     )?;
     let state = Rc::clone(shared);
     game.set(
