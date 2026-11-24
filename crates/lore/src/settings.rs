@@ -685,19 +685,84 @@ impl Settings {
         );
         for entry in ALL {
             text.push('\n');
-            let mut said = about(entry);
-            if let Shape::Choice(words) = entry.shape {
-                let _ = write!(said, " One of {}.", listed(words.iter().copied(), "or"));
+            self.write_about(entry, &mut text);
+            text.push_str(&self.line_of(entry));
+            text.push('\n');
+        }
+        text
+    }
+
+    /// The comment a settings file carries above `entry`'s line.
+    fn write_about(&self, entry: &Entry, text: &mut String) {
+        let _ = self;
+        let mut said = about(entry);
+        if let Shape::Choice(words) = entry.shape {
+            let _ = write!(said, " One of {}.", listed(words.iter().copied(), "or"));
+        }
+        for line in wrapped(&said) {
+            // Writing to a `String` cannot fail.
+            let _ = writeln!(text, "# {line}");
+        }
+    }
+
+    /// `entry`'s line of a settings file, with no line end.
+    fn line_of(&self, entry: &Entry) -> String {
+        match (entry.get)(self) {
+            Value::Number(number) => format!("{} = {number}", entry.name),
+            Value::Toggle(on) => format!("{} = {on}", entry.name),
+            Value::Choice(word) => format!("{} = \"{word}\"", entry.name),
+        }
+    }
+
+    /// The text of a settings file holding these settings, written over
+    /// `old`, the file as it is: each setting's line is changed where it
+    /// stands, and everything else the player wrote there stays, comments
+    /// and lines that are not settings included. Settings the file does
+    /// not have yet are added at the end, and a line for a setting there
+    /// no longer is, is dropped. With nothing in `old` this is
+    /// [`to_text`](Self::to_text).
+    #[must_use]
+    pub fn to_text_over(&self, old: &str) -> String {
+        if old.trim().is_empty() {
+            return self.to_text();
+        }
+        let mut written: Vec<&str> = Vec::with_capacity(ALL.len());
+        let mut text = String::with_capacity(old.len() + 256);
+        for line in old.lines() {
+            let name = line
+                .split_once('=')
+                .map(|(name, _)| name.trim())
+                .filter(|name| !name.starts_with('#'));
+            match name {
+                Some(name) if RETIRED.contains(&name) || name == OLD_SENSITIVITY => {}
+                Some(name) => match ALL.iter().find(|entry| entry.name == name) {
+                    // Said twice: the first is the one that is kept.
+                    Some(entry) if written.contains(&entry.name) => {}
+                    Some(entry) => {
+                        written.push(entry.name);
+                        text.push_str(&self.line_of(entry));
+                        // What the player noted after the value stays.
+                        if let Some(note) = line.find(" #") {
+                            text.push_str(&line[note..]);
+                        }
+                        text.push('\n');
+                    }
+                    None => {
+                        text.push_str(line);
+                        text.push('\n');
+                    }
+                },
+                None => {
+                    text.push_str(line);
+                    text.push('\n');
+                }
             }
-            for line in wrapped(&said) {
-                // Writing to a `String` cannot fail.
-                let _ = writeln!(text, "# {line}");
-            }
-            let _ = match (entry.get)(self) {
-                Value::Number(number) => writeln!(text, "{} = {number}", entry.name),
-                Value::Toggle(on) => writeln!(text, "{} = {on}", entry.name),
-                Value::Choice(word) => writeln!(text, "{} = \"{word}\"", entry.name),
-            };
+        }
+        for entry in ALL.iter().filter(|entry| !written.contains(&entry.name)) {
+            text.push('\n');
+            self.write_about(entry, &mut text);
+            text.push_str(&self.line_of(entry));
+            text.push('\n');
         }
         text
     }
@@ -850,7 +915,11 @@ pub fn load(path: &Path) -> (Settings, Vec<String>) {
 ///
 /// Fails if the folder cannot be made or the file cannot be written.
 pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
-    crate::controls::write_whole(path, &settings.to_text())
+    // What the player wrote in the file by hand is kept: only the lines
+    // that are settings are changed. A file that is not there, or cannot
+    // be read as text, is written whole.
+    let old = fs::read_to_string(path).unwrap_or_default();
+    crate::controls::write_whole(path, &settings.to_text_over(&old))
 }
 
 /// The number a line of a settings file holds, if it holds one.
@@ -1052,6 +1121,48 @@ mod tests {
             .collect();
         let all: Vec<&str> = ALL.iter().map(|entry| entry.name).collect();
         assert_eq!(names, all);
+    }
+
+    #[test]
+    fn saving_keeps_what_the_player_wrote_in_the_file_by_hand() {
+        let old = "# My settings. Do not touch the volume, it is for the stream.\n\
+                   volume = 40 # loud enough\n\
+                   \n\
+                   fov = 100\n\
+                   sensitivity = 2\n\
+                   frame_meter = true\n\
+                   vsync = true\n\
+                   vsync = false\n";
+        let settings = Settings {
+            volume: 55.0,
+            vsync: false,
+            ..Settings::default()
+        };
+        let text = settings.to_text_over(old);
+        let lines: Vec<&str> = text.lines().collect();
+        // The comment, the blank line and the line that is no setting stay,
+        // and each setting's line is changed where it stands.
+        assert_eq!(
+            &lines[..5],
+            [
+                "# My settings. Do not touch the volume, it is for the stream.",
+                "volume = 55 # loud enough",
+                "",
+                "fov = 100",
+                "vsync = false",
+            ]
+        );
+        // Settings there no longer are, and one said twice, are dropped.
+        assert!(!text.contains("frame_meter") && !text.contains("\nsensitivity ="));
+        assert_eq!(text.matches("\nvsync = ").count(), 1);
+        // What the file did not have is added, with what it is for.
+        assert!(text.contains("\nmouse_sensitivity = 1\n"), "{text}");
+        assert!(text.contains("# How loud music is"), "{text}");
+        // Reading it back gives the same settings.
+        assert_eq!(Settings::read(&text).0, settings);
+
+        // With no file yet it is written whole.
+        assert_eq!(settings.to_text_over(""), settings.to_text());
     }
 
     #[test]

@@ -626,9 +626,18 @@ fn rumble_setting() -> (String, Vec<String>) {
     let place = file.map_or_else(String::new, |file| {
         format!(", or the line `rumble = 50` in {}", file.display())
     });
+    let swapped = if settings.invert_look {
+        ", with up and down swapped"
+    } else {
+        ""
+    };
     let said = format!(
         "\n{strength}. To change it, from 0 (off) to 100, use the settings in a game's \
-         pause menu (Escape or Start){place}.\n"
+         pause menu (Escape or Start){place}.\n\
+         The mouse turns the view at a sensitivity of {} and the stick at {}{swapped} (1 is \
+         the usual, from 0.05 to 5). Those are settings too, changed in the same two \
+         places: `mouse_sensitivity`, `stick_sensitivity` and `invert_look`.\n",
+        settings.mouse_sensitivity, settings.stick_sensitivity
     );
     (said, problems)
 }
