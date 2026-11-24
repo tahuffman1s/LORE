@@ -334,7 +334,8 @@ fn start(
     let look = config.actions.action("look").ok();
     let mut input = Input::new(config.actions.clone());
     if let Some(look) = look {
-        input.set_sensitivity(look, config.settings.look());
+        let (mouse, stick) = config.settings.look();
+        input.set_sensitivities(look, mouse, stick);
     }
     let mut sound = SoundOutput::new(LazySpeakers::default());
     sound.set_volumes(&config.settings);
@@ -639,7 +640,8 @@ impl<G: Game> App<G> {
         self.sound.set_volumes(&settings);
         self.rumble_share = settings.rumble_share();
         if let Some(look) = self.look {
-            self.input.set_sensitivity(look, settings.look());
+            let (mouse, stick) = settings.look();
+            self.input.set_sensitivities(look, mouse, stick);
         }
         self.pacer
             .set_limit(settings.frames_per_second(), Instant::now());
@@ -864,7 +866,8 @@ impl<G: Game> App<G> {
         }
         // How fast the view turns is the player's setting, not the file's.
         if let Some(look) = self.look {
-            controls.set_sensitivity(look, self.input.map().sensitivity(look));
+            let now = self.input.map();
+            controls.set_sensitivities(look, now.sensitivity(look), now.stick_sensitivity(look));
         }
         self.input.set_bindings(controls.clone());
         self.new_controls = Some(controls);

@@ -255,6 +255,13 @@ impl Input {
         self.map.set_sensitivity(action, sensitivity);
     }
 
+    /// Changes how much an action's mouse movement and its direction are
+    /// multiplied by, each by its own amount, from the next tick on: see
+    /// [`ActionMap::set_sensitivities`].
+    pub fn set_sensitivities(&mut self, action: ActionId, mouse: [f32; 2], stick: [f32; 2]) {
+        self.map.set_sensitivities(action, mouse, stick);
+    }
+
     /// Replaces the action map. Ids from the old map must be looked up again.
     ///
     /// The live action set stays the one in the same position, or becomes
@@ -706,8 +713,9 @@ impl Input {
 
         let pressed = axis != [0.0, 0.0];
         let [across, along] = action.sensitivity;
-        let axis = [axis[0] * across, axis[1] * along];
         let delta = [delta[0] * across, delta[1] * along];
+        let [across, along] = action.stick_sensitivity;
+        let axis = [axis[0] * across, axis[1] * along];
         ActionState {
             pressed,
             just_pressed: pressed && (!last.pressed || pressed_again),
@@ -1018,6 +1026,23 @@ mod tests {
         let frame = input.tick();
         assert!(close(frame.axis2d(movement)[0], 0.5));
         assert!(close(frame.axis2d(look)[0], 0.25));
+    }
+
+    #[test]
+    fn the_mouse_and_the_stick_can_each_have_a_sensitivity() {
+        let mut r = rig();
+        r.input.set_sensitivities(r.look, [0.5, 0.5], [2.0, -2.0]);
+        r.input.move_mouse(10.0, 4.0);
+        r.input.set_stick(Stick::RightStick, StickAxis::X, 1.0);
+        let frame = r.input.tick();
+        assert_eq!(frame.delta(r.look), [5.0, 2.0]);
+        let [across, along] = frame.axis2d(r.look);
+        assert!(across > 1.5 && along == 0.0, "{across}, {along}");
+        // Nothing that is not a number is taken.
+        r.input
+            .set_sensitivities(r.look, [1.0, 1.0], [f32::NAN, 1.0]);
+        assert_eq!(r.input.map().sensitivity(r.look), [0.5, 0.5]);
+        assert_eq!(r.input.map().stick_sensitivity(r.look), [2.0, -2.0]);
     }
 
     #[test]

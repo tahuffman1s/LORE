@@ -258,7 +258,8 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             volume: 95.0,
             music_volume: 95.0,
             effects_volume: 95.0,
-            sensitivity: chosen.sensitivity,
+            mouse_sensitivity: chosen.mouse_sensitivity,
+            stick_sensitivity: chosen.stick_sensitivity,
             invert_look: true,
             rumble: 95.0,
             ui_size: 95.0,
@@ -282,7 +283,9 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
             sharpening: 25.0,
         }
     );
-    assert!((chosen.sensitivity - 0.9).abs() < 1e-6);
+    // Each went down one step of 0.05.
+    assert!((chosen.mouse_sensitivity - 0.95).abs() < 1e-6);
+    assert!((chosen.stick_sensitivity - 0.95).abs() < 1e-6);
     assert_eq!(
         played.changes as usize,
         told.len(),

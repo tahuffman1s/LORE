@@ -18,7 +18,7 @@
 //! assert_eq!(settings.volume, 40.0);
 //! assert!(settings.invert_look);
 //! // What the file leaves out keeps its usual value.
-//! assert_eq!(settings.sensitivity, 1.0);
+//! assert_eq!(settings.mouse_sensitivity, 1.0);
 //! ```
 //!
 //! # Adding a setting
@@ -259,9 +259,15 @@ settings! {
     /// How loud everything that is not music is, from 0 (off) to 100
     /// (full). It is turned down by `volume` as well.
     effects_volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Effects volume";
-    /// How fast the view turns with the mouse and the stick: 1 is the
-    /// game's own speed, 2 is twice as fast. From 0.1 to 3.
-    sensitivity: f32 = 1.0, Shape::Number(Settings::SENSITIVITY), "Controls", "Look sensitivity";
+    /// How fast the mouse turns the view, from 0.05 to 5. At 1 a full turn
+    /// is 3142 counts of the mouse: 10 cm at 800 DPI, 20 cm at 400. To
+    /// bring yours from another game, multiply a Counter-Strike or Apex
+    /// sensitivity by 0.19, a Valorant one by 0.61, or an Overwatch one by
+    /// 0.058.
+    mouse_sensitivity: f32 = 1.0, Shape::Number(Settings::SENSITIVITY), "Controls", "Mouse sensitivity";
+    /// How fast the gamepad's stick turns the view, from 0.05 to 5. At 1 a
+    /// stick held all the way over turns a full circle in 1.8 seconds.
+    stick_sensitivity: f32 = 1.0, Shape::Number(Settings::SENSITIVITY), "Controls", "Stick sensitivity";
     /// true makes pushing the mouse or stick up look down.
     invert_look: bool = false, Shape::Toggle, "Controls", "Invert look";
     /// How hard the gamepad shakes, in percent of what a game asks for,
@@ -359,6 +365,11 @@ settings! {
 /// game's own to draw (`game.frames`, `game.hud.frameGraph`).
 const RETIRED: &[&str] = &["frame_meter"];
 
+/// The one setting that `mouse_sensitivity` and `stick_sensitivity` took
+/// the place of. A file that still has it sets both from it, and loses the
+/// line the next time it is saved.
+const OLD_SENSITIVITY: &str = "sensitivity";
+
 /// The most the brightness setting brightens or darkens the picture, in
 /// camera stops: at its ends the light is nearly tripled, or cut to nearly
 /// a third.
@@ -372,11 +383,13 @@ impl Settings {
         highest: 100.0,
         step: 5.0,
     };
-    /// What [`sensitivity`](Self::sensitivity) can be.
+    /// What [`mouse_sensitivity`](Self::mouse_sensitivity) and
+    /// [`stick_sensitivity`](Self::stick_sensitivity) can be. The step is
+    /// small so that a sensitivity brought from another game fits.
     pub const SENSITIVITY: Range = Range {
-        lowest: 0.1,
-        highest: 3.0,
-        step: 0.1,
+        lowest: 0.05,
+        highest: 5.0,
+        step: 0.05,
     };
     /// What [`rumble`](Self::rumble) can be.
     pub const RUMBLE: Range = Range {
@@ -445,12 +458,16 @@ impl Settings {
         gain(self.effects_volume)
     }
 
-    /// What the `look` action is multiplied by, sideways and then up and
-    /// down, as `ActionMap::set_sensitivity` takes it.
+    /// What the `look` action's mouse movement and then its stick are
+    /// multiplied by, each sideways and then up and down, as
+    /// `ActionMap::set_sensitivities` takes them.
     #[must_use]
-    pub fn look(&self) -> [f32; 2] {
+    pub fn look(&self) -> ([f32; 2], [f32; 2]) {
         let along = if self.invert_look { -1.0 } else { 1.0 };
-        [self.sensitivity, self.sensitivity * along]
+        (
+            [self.mouse_sensitivity, self.mouse_sensitivity * along],
+            [self.stick_sensitivity, self.stick_sensitivity * along],
+        )
     }
 
     /// What the strength of every rumble is multiplied by, from 0 to 1.
@@ -621,6 +638,24 @@ impl Settings {
             let said = match ALL.iter().find(|entry| entry.name == name) {
                 Some(entry) => read_one(entry, value.get_ref(), &mut settings),
                 None if RETIRED.contains(&name) => None,
+                // One sensitivity became two: an older file's line sets both.
+                None if name == OLD_SENSITIVITY => {
+                    let both = ["mouse_sensitivity", "stick_sensitivity"];
+                    let mut said = None;
+                    for entry in ALL.iter().filter(|entry| both.contains(&entry.name)) {
+                        // A newer line of its own for either wins.
+                        if document
+                            .get_ref()
+                            .keys()
+                            .any(|key| key.get_ref() == entry.name)
+                        {
+                            continue;
+                        }
+                        said = read_one(entry, value.get_ref(), &mut settings)
+                            .map(|said| said.replace(entry.name, OLD_SENSITIVITY));
+                    }
+                    said
+                }
                 None => Some(format!(
                     "`{name}` is not a setting, so the line was skipped. The settings are \
                      {}.",
@@ -923,7 +958,7 @@ mod tests {
     fn a_new_player_gets_the_games_own_feel() {
         let settings = Settings::default();
         assert_eq!(settings.gain(), 1.0);
-        assert_eq!(settings.look(), [1.0, 1.0]);
+        assert_eq!(settings.look(), ([1.0, 1.0], [1.0, 1.0]));
         assert_eq!(settings.ui_scale(), 1.0);
         assert_eq!(settings.exposure_stops(), 0.0);
         assert_eq!(settings.frames_per_second(), 400);
@@ -937,7 +972,8 @@ mod tests {
             volume: 35.0,
             music_volume: 0.0,
             effects_volume: 80.0,
-            sensitivity: 1.7,
+            mouse_sensitivity: 1.7,
+            stick_sensitivity: 0.6,
             invert_look: true,
             rumble: 40.0,
             ui_size: 125.0,
@@ -964,7 +1000,8 @@ mod tests {
         let (read, problems) = Settings::read(&text);
         assert_eq!(problems, Vec::<String>::new());
         assert_eq!(read, chosen, "{text}");
-        assert_eq!(read.look()[1], -read.sensitivity);
+        assert_eq!(read.look().0[1], -read.mouse_sensitivity);
+        assert_eq!(read.look().1, [0.6, -0.6]);
         assert_eq!(read.ui_scale(), 1.25);
         assert_eq!(read.rumble_share(), 0.4);
         assert_eq!(read.look_shares().bloom, 0.5);
@@ -994,7 +1031,8 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("\nsensitivity = 1\n"), "{text}");
+        assert!(text.contains("\nmouse_sensitivity = 1\n"), "{text}");
+        assert!(text.contains("\nstick_sensitivity = 1\n"), "{text}");
         assert!(
             text.contains(
                 "softer. One of `off`, `native`, `quality`,\n\
@@ -1017,6 +1055,19 @@ mod tests {
     }
 
     #[test]
+    fn an_older_files_one_sensitivity_sets_both() {
+        let (read, problems) = Settings::read("sensitivity = 1.7\n");
+        assert_eq!(problems, Vec::<String>::new());
+        assert_eq!((read.mouse_sensitivity, read.stick_sensitivity), (1.7, 1.7));
+        // A line for one of the two is newer and wins, wherever it stands.
+        let (read, problems) = Settings::read("stick_sensitivity = 0.5\nsensitivity = 2\n");
+        assert_eq!(problems, Vec::<String>::new());
+        assert_eq!((read.mouse_sensitivity, read.stick_sensitivity), (2.0, 0.5));
+        // The old line is not written again.
+        assert!(!read.to_text().contains("\nsensitivity ="));
+    }
+
+    #[test]
     fn a_line_that_cannot_be_used_is_reported_and_the_rest_still_counts() {
         let (read, problems) = Settings::read(
             "volume = \"loud\"\nsensitivity = 9\nfov = 100\ninvert_look = 1\nui_size = 90\n\
@@ -1025,7 +1076,8 @@ mod tests {
         assert_eq!(
             read,
             Settings {
-                sensitivity: 3.0,
+                mouse_sensitivity: 5.0,
+                stick_sensitivity: 5.0,
                 ui_size: 90.0,
                 field_of_view: 95.5,
                 ..Settings::default()
@@ -1035,9 +1087,10 @@ mod tests {
             problems,
             [
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
-                "line 2: `sensitivity` goes from 0.1 to 3, so 9 was changed to 3.",
+                "line 2: `sensitivity` goes from 0.05 to 5, so 9 was changed to 5.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `volume`, `music_volume`, `effects_volume`, `sensitivity`, `invert_look`, \
+                 `volume`, `music_volume`, `effects_volume`, `mouse_sensitivity`, \
+                 `stick_sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `night_brightness`, \
                  `upscaling`, `vsync`, `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \
                  `ambient_occlusion`, `contact_shadows`, `anisotropic_filtering`, `bloom`, \
@@ -1069,21 +1122,24 @@ mod tests {
     #[test]
     fn a_script_is_told_every_setting_and_what_it_changes_is_taken() {
         let mut settings = Settings {
-            sensitivity: 0.1,
+            mouse_sensitivity: 0.1,
             ..Settings::default()
         };
         let told = settings.described();
         assert_eq!(told.len(), ALL.len());
         let named = |name: &str| told.iter().find(|setting| setting.name == name).unwrap();
         // A tenth is a tenth, not the hair off it that an `f32` keeps.
-        assert_eq!(named("sensitivity").value, SettingValue::Number(0.1));
-        assert_eq!(named("sensitivity").default, SettingValue::Number(1.0));
+        assert_eq!(named("mouse_sensitivity").value, SettingValue::Number(0.1));
         assert_eq!(
-            named("sensitivity").kind,
+            named("mouse_sensitivity").default,
+            SettingValue::Number(1.0)
+        );
+        assert_eq!(
+            named("mouse_sensitivity").kind,
             SettingKind::Number {
-                min: 0.1,
-                max: 3.0,
-                step: 0.1
+                min: 0.05,
+                max: 5.0,
+                step: 0.05
             }
         );
         assert_eq!(named("vsync").kind, SettingKind::Toggle);

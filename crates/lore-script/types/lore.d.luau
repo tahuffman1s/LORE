@@ -2630,8 +2630,9 @@ declare game: {
     --- player's settings file: a script never deals with files.
     ---
     --- The settings today, by name: "volume", "music_volume" and
-    --- "effects_volume" (0 to 100); "sensitivity" (how fast the view turns,
-    --- 0.1 to 3), "invert_look" (true or false) and "rumble" (0 to 100);
+    --- "effects_volume" (0 to 100); "mouse_sensitivity" and
+    --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
+    --- "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"
     --- (50 to 110 degrees), "brightness" (0 to 100, 50 is as made),
     --- "night_brightness" (from 0, as dark as the game says, to 100, half
