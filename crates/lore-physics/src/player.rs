@@ -222,6 +222,8 @@ pub struct Player {
     /// holding forward and jump against a ledge no more than 0.6 m above
     /// the water.
     pub hoist: f32,
+    /// On a ladder during the last tick.
+    pub on_ladder: bool,
 }
 
 impl Player {
@@ -248,6 +250,7 @@ impl Player {
             tread: 0.0,
             breath: 1.0,
             hoist: 0.0,
+            on_ladder: false,
         }
     }
 
@@ -323,7 +326,7 @@ impl Player {
         // The water the player is in, and whether it carries them.
         let water = Water::over(level, feet);
         let floats = Floats::of(settings, water.medium);
-        self.float_or_stand(water.depth(feet.y), &floats);
+        self.float_or_stand(water.depth(feet.y), &floats, settings.swim);
 
         // Stance next: it decides the shape everything else moves. A
         // swimmer does not crouch; for them crouch dives.
@@ -369,6 +372,49 @@ impl Player {
             self.hoist = HOIST_TIME;
             self.grounded = false;
         }
+        // Over a low thing or up onto a ledge on dry land, where the game
+        // lets the player vault or climb: forward and jump held against
+        // it, from the ground or part way through a jump.
+        let reach = positive(settings.vault_height).max(positive(settings.climb_height));
+        let grabbing = reach > 0.0
+            && input.jump
+            && input.forward > 0.0
+            && input.forward >= input.right.abs()
+            && !self.crouched
+            && !self.swimming
+            && !input.ladder;
+        if self.hoist <= 0.0
+            && grabbing
+            && let Some(rise) = body.ledge_within(middle, ahead, reach)
+        {
+            // Long enough to go up the face and over, and no longer.
+            self.hoist = (rise / HOIST_RISE + 0.6).min(HOIST_TIME * 2.0);
+            self.grounded = false;
+        }
+        // On a ladder forward climbs and back goes down, a step to either
+        // side is half as fast, and nothing pulls the player off. Holding
+        // jump lets go of it.
+        if input.ladder && !input.jump && self.hoist <= 0.0 && !self.swimming {
+            let speed = positive(settings.ladder_speed);
+            let side = Vector::new(cos, 0.0, -sin);
+            let wanted = Vector::Y * (input.forward * speed)
+                // Pressed a little into the ladder, so that at its top the
+                // player walks off onto the floor there.
+                + ahead * (input.forward.max(0.0) * speed * 0.5)
+                + side * (input.right * speed * 0.5);
+            let moved = slide(level, &body.shape, middle, wanted, dt, body.steep, false);
+            self.position = (moved.position - to_middle).to_array();
+            self.velocity = moved.velocity.to_array();
+            self.grounded = false;
+            self.sprinting = false;
+            self.swimming = false;
+            self.jump_held = input.jump;
+            self.hoist = 0.0;
+            self.on_ladder = true;
+            self.rest_arms();
+            return;
+        }
+        self.on_ladder = false;
 
         if input.jump && !self.jump_held && self.grounded && !self.crouched && footing.jump() > 0.0
         {
@@ -592,7 +638,9 @@ impl Player {
                 } else {
                     0.0
                 };
-                gravity * (part * floats.lift - 1.0 + afloat)
+                // Someone who does not swim holds no air: nothing lifts them.
+                let lifted = if settings.swim { floats.lift } else { 0.0 };
+                gravity * (part * lifted - 1.0 + afloat)
             };
             // The fluid slows them as heavily and as thickly as it is.
             let posture = posture.within(water.medium);
@@ -671,7 +719,7 @@ impl Player {
         let water = Water::over(level, feet);
         let depth = water.depth(feet.y);
         let floats = Floats::of(settings, water.medium);
-        self.float_or_stand(depth, &floats);
+        self.float_or_stand(depth, &floats, settings.swim);
         if !self.grounded {
             ground = Vector::Y;
         }
@@ -707,7 +755,12 @@ impl Player {
     /// Decides whether the water carries the player, given how deep it is
     /// over their feet: it lifts a wader off the bottom, and a swim lasts
     /// until the feet take the bottom again or come out of the water.
-    fn float_or_stand(&mut self, depth: f32, floats: &Floats) {
+    fn float_or_stand(&mut self, depth: f32, floats: &Floats, swims: bool) {
+        // Someone who does not swim sinks and walks on the bottom.
+        if !swims {
+            self.swimming = false;
+            return;
+        }
         if self.grounded && depth > floats.depth + LIFT_OFF {
             self.grounded = false;
         }
@@ -1066,6 +1119,43 @@ impl Body<'_> {
         (normal + other.normal)
             .try_normalize()
             .filter(|crease| crease.y >= self.steep)
+    }
+
+    /// How far above the feet the top of what is in the way along `ahead`
+    /// is, if it is no more than `reach` above them, there is room to go
+    /// over it and ground to stand on there: a ledge to get up onto.
+    fn ledge_within(&self, middle: Vector, ahead: Vector, reach: f32) -> Option<f32> {
+        /// How finely the heights are tried, in metres.
+        const RUNG: f32 = 0.2;
+        let face = self
+            .level
+            .sweep(&self.shape, middle, ahead * HOIST_PROBE, SKIN)?;
+        if face.normal.y >= self.steep || face.normal.dot(ahead) > -0.5 {
+            return None;
+        }
+        let over = ahead * (2.0 * self.settings.radius() + HOIST_PROBE);
+        let step = positive(self.settings.step_height);
+        let mut rise = step.max(RUNG);
+        // From the lowest thing a step does not take, upward: the first
+        // height the body can be lifted to, moved over at and stood at.
+        while rise <= reach + RUNG {
+            let rise_now = rise.min(reach);
+            let up = Vector::Y * (rise_now + 3.0 * SKIN);
+            if self.level.sweep(&self.shape, middle, up, SKIN).is_some() {
+                // Something overhead: no higher ledge can be reached either.
+                return None;
+            }
+            if self
+                .level
+                .sweep(&self.shape, middle + up, over, SKIN)
+                .is_none()
+                && let Some(found) = self.ground_below(middle + up + over, RUNG + step)
+            {
+                return Some(rise_now - found.drop.min(rise_now));
+            }
+            rise += RUNG;
+        }
+        None
     }
 
     /// Whether there is a ledge ahead to climb out onto: something too

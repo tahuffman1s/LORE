@@ -796,6 +796,8 @@ fn motion(position_y: f32) -> Motion {
         crouched: false,
         sprinting: false,
         swimming: false,
+        on_ladder: false,
+        climbing: false,
         aim_point: [0.0, 1.0, -1000.0],
         aim_blocked: false,
     }
@@ -1159,6 +1161,8 @@ fn a_script_reads_stance_and_changes_how_the_player_moves() {
             crouched: true,
             sprinting: false,
             swimming: true,
+            on_ladder: false,
+            climbing: false,
             aim_point: [0.0, 1.0, -1000.0],
             aim_blocked: false,
         },
@@ -1217,4 +1221,53 @@ fn a_place_in_the_world_is_put_on_the_hud_only_while_drawing() {
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     let message = &host.last_error().unwrap().message;
     assert!(message.contains("Read it in game.onDraw"), "{message}");
+}
+
+#[test]
+fn abilities_are_switches_and_their_numbers_sit_beside_the_others() {
+    let mut host = game(
+        r#"local p = game.player
+        game.onStart(function()
+            assert(p:can("swim") and not p:can("vault") and not p:can("climb"))
+            assert(not p:can("ladders"))
+            p:setAbility("vault", true)
+            p:setAbility("Ladder", true)
+            p:setAbility("swim", false)
+            assert(p:can("vault") and p:can("ladders") and not p:can("swim"))
+            assert(p.vaultHeight == 1.1 and p.climbHeight == 2.2 and p.ladderSpeed == 2.2)
+            p:setVaultHeight(1.4)
+            p:setClimbHeight(99)
+            p:setLadderSpeed(3)
+            assert(not p.onLadder and not p.climbing)
+        end)"#,
+    );
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    let can = host.abilities();
+    assert_eq!(
+        (can.vault, can.climb, can.swim, can.ladders),
+        (true, false, false, true)
+    );
+    let said = host.moves();
+    assert_eq!(
+        (said.vault_height, said.climb_height, said.ladder_speed),
+        (1.4, 6.0, 3.0)
+    );
+    for (call, part) in [
+        ("setAbility(\"clim\", true)", "Did you mean \"climb\"?"),
+        (
+            "setAbility(\"climb\")",
+            "takes true or false after the ability's name",
+        ),
+        ("can(3)", "needs the name of an ability in quotes"),
+        (
+            "setAbility(\"fly\", true)",
+            "The abilities are \"vault\", \"climb\", \"swim\" and \"ladders\"",
+        ),
+    ] {
+        let mut host = game(&format!("game.onStart(function() game.player:{call} end)"));
+        host.tick(&InputFrame::default(), 1.0 / 60.0);
+        let message = &host.last_error().unwrap().message;
+        assert!(message.contains(part), "{call}: {message}");
+    }
 }

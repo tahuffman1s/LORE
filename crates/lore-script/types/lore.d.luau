@@ -99,6 +99,15 @@ declare extern type Character with
     --- Example: if game.player.swimming then print("Swimming") end
     swimming: boolean
 
+    --- True while the character is on a ladder.
+    --- Example: if game.player.onLadder then crosshair.visible = false end
+    onLadder: boolean
+
+    --- True while the character pulls themselves up onto a ledge or over
+    --- something: a vault, a climb, or getting out of the water.
+    --- Example: if game.player.climbing then print("Up we go") end
+    climbing: boolean
+
     --- How the character moves: "walk", "fly" or "noclip". Change the
     --- player's with `game.player:setMovement`.
     --- Example: if game.player.movement == "fly" then print("Flying") end
@@ -138,6 +147,23 @@ declare extern type Character with
     --- second: 20 until `game.player:setGravity` says otherwise.
     --- Example: print(game.player.gravity)
     gravity: number
+
+    --- The highest thing the character vaults, in metres above their
+    --- feet: 1.1 until `game.player:setVaultHeight`. It counts once
+    --- `game.player:setAbility("vault", true)` has been said.
+    --- Example: print(game.player.vaultHeight)
+    vaultHeight: number
+
+    --- The highest ledge the character pulls themselves up onto, in
+    --- metres above their feet: 2.2 until `game.player:setClimbHeight`. It
+    --- counts once `game.player:setAbility("climb", true)` has been said.
+    --- Example: print(game.player.climbHeight)
+    climbHeight: number
+
+    --- How fast the character climbs a ladder, in metres a second: 2.2
+    --- until `game.player:setLadderSpeed`.
+    --- Example: print(game.player.ladderSpeed)
+    ladderSpeed: number
 
     --- Where the camera is: "first" (at the eyes) or "third" (behind and
     --- over a shoulder). Change it with `game.player:setView`; the player
@@ -277,6 +303,45 @@ declare extern type Character with
     --- feels floaty in a game, and 1.6 the Moon's.
     --- Example: game.player:setGravity(1.6)
     function setGravity(self, metresPerSecondSquared: number): ()
+
+    --- Turns one of the player's abilities on or off. Each is off until a
+    --- script turns it on, except "swim", which is on:
+    --- "vault": forward and jump held against a low thing (a fence, a
+    ---   crate, a sill, up to `vaultHeight`) gets the player onto it.
+    --- "climb": forward and jump held against a wall pulls the player up
+    ---   onto a ledge up to `climbHeight` above their feet, from the
+    ---   ground or part way through a jump.
+    --- "swim": the player floats and swims in water too deep to stand in.
+    ---   Off, they sink and walk on the bottom.
+    --- "ladders": holding forward at a ladder climbs it, back goes down,
+    ---   and holding jump lets go. A ladder is something placed in the map
+    ---   as type "ladder" (in `lore edit`), a metre square and 3 metres
+    ---   high unless given `width`, `depth` and `height`.
+    --- Ledges are found from the level's own shape: nothing has to be
+    --- marked. It stays through a reload of the script. Only in the
+    --- game's rules.
+    --- Example: game.onStart(function() game.player:setAbility("climb", true) end)
+    function setAbility(self, ability: "vault" | "climb" | "swim" | "ladders", on: boolean): ()
+
+    --- Whether the player has an ability: see `setAbility`.
+    --- Example: if game.player:can("swim") then print("Dive in") end
+    function can(self, ability: "vault" | "climb" | "swim" | "ladders"): boolean
+
+    --- The highest thing the player vaults, in metres above their feet,
+    --- from 0.3 to 3. 1.1 if never set.
+    --- Example: game.player:setVaultHeight(1.3)
+    function setVaultHeight(self, metres: number): ()
+
+    --- The highest ledge the player pulls themselves up onto, in metres
+    --- above their feet, from 0.3 to 6. 2.2 if never set: a wall a little
+    --- over head height.
+    --- Example: game.player:setClimbHeight(3)
+    function setClimbHeight(self, metres: number): ()
+
+    --- How fast the player climbs a ladder, in metres a second, from 0.1
+    --- to 20. 2.2 if never set.
+    --- Example: game.player:setLadderSpeed(3)
+    function setLadderSpeed(self, metresPerSecond: number): ()
 
     --- Sets the character's health, from 0 to its most. Setting it above
     --- 0 brings back the dead.

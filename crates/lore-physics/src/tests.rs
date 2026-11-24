@@ -2686,3 +2686,175 @@ fn a_ball_cast_stops_at_a_wall_and_passes_open_air() {
             .is_none()
     );
 }
+
+/// A step of this height across the way ahead (-Z), three metres off and
+/// running on behind, with the floor: wide enough on top to stay on.
+fn wall_ahead(height: f32) -> Level {
+    level(&[floor(), block([-3.0, 0.0, -35.0], [3.0, height, -3.0])])
+}
+
+/// Forward and jump, held.
+fn forward_and_jump() -> MoveInput {
+    MoveInput {
+        jump: true,
+        ..forward()
+    }
+}
+
+#[test]
+fn a_ledge_is_climbed_only_where_the_game_lets_the_player_climb() {
+    let wall = wall_ahead(1.8);
+    // By the usual rules a jump of 1.1 m does not get up 1.8 m.
+    let mut player = standing_at(&wall, [0.0, 0.0, 0.0]);
+    for _ in 0..240 {
+        player.step(&wall, &MoveSettings::default(), &forward_and_jump(), DT);
+    }
+    assert!(
+        player.position[1] < 1.3 && player.position[2] > -2.7,
+        "{:?}",
+        player.position
+    );
+
+    // With climbing on they pull themselves up and stand on top.
+    let climbs = MoveSettings {
+        climb_height: 2.2,
+        ..MoveSettings::default()
+    };
+    let mut player = standing_at(&wall, [0.0, 0.0, 0.0]);
+    let mut hoisted = false;
+    for _ in 0..240 {
+        player.step(&wall, &climbs, &forward_and_jump(), DT);
+        hoisted |= player.hoist > 0.0;
+    }
+    assert!(hoisted, "it was a climb, not a jump");
+    assert!(
+        close(player.position[1], 1.8, 0.02),
+        "{:?}",
+        player.position
+    );
+    assert!(
+        player.position[2] < -3.0 && player.grounded,
+        "{:?}",
+        player.position
+    );
+
+    // Not without jump held, and not a ledge beyond their reach.
+    let mut player = standing_at(&wall, [0.0, 0.0, 0.0]);
+    run(&mut player, &wall, forward(), 240);
+    assert!(player.position[1] < 0.1, "{:?}", player.position);
+    let high = wall_ahead(3.4);
+    let mut player = standing_at(&high, [0.0, 0.0, 0.0]);
+    for _ in 0..240 {
+        player.step(&high, &climbs, &forward_and_jump(), DT);
+    }
+    assert!(player.position[1] < 1.3, "{:?}", player.position);
+}
+
+#[test]
+fn a_low_thing_is_vaulted_and_a_ledge_under_a_low_ceiling_is_not() {
+    // Someone who can barely jump gets onto a 0.9 m crate by vaulting.
+    let weak = MoveSettings {
+        jump_height: 0.15,
+        vault_height: 1.1,
+        ..MoveSettings::default()
+    };
+    let crate_ahead = wall_ahead(0.9);
+    let mut player = standing_at(&crate_ahead, [0.0, 0.0, 0.0]);
+    for _ in 0..180 {
+        player.step(&crate_ahead, &weak, &forward_and_jump(), DT);
+    }
+    assert!(
+        close(player.position[1], 0.9, 0.02),
+        "{:?}",
+        player.position
+    );
+    // 1.4 m is more than a vault.
+    let taller = wall_ahead(1.4);
+    let mut player = standing_at(&taller, [0.0, 0.0, 0.0]);
+    for _ in 0..180 {
+        player.step(&taller, &weak, &forward_and_jump(), DT);
+    }
+    assert!(player.position[1] < 0.3, "{:?}", player.position);
+
+    // A ledge with a ceiling too low to stand under on top of it.
+    let squeezed = level(&[
+        floor(),
+        block([-3.0, 0.0, -35.0], [3.0, 0.9, -3.0]),
+        block([-3.0, 1.9, -35.0], [3.0, 2.3, -1.0]),
+    ]);
+    let mut player = standing_at(&squeezed, [0.0, 0.0, 0.0]);
+    for _ in 0..180 {
+        player.step(&squeezed, &weak, &forward_and_jump(), DT);
+    }
+    assert!(player.position[1] < 0.3, "{:?}", player.position);
+}
+
+#[test]
+fn a_ladder_is_climbed_up_and_down_and_jump_lets_go() {
+    let open = level(&[floor()]);
+    let settings = MoveSettings::default();
+    let on_ladder = |forward: f32, jump: bool| MoveInput {
+        forward,
+        jump,
+        ladder: true,
+        ..MoveInput::default()
+    };
+    let mut player = standing_at(&open, [0.0, 0.0, 0.0]);
+    run(&mut player, &open, on_ladder(1.0, false), 60);
+    // A second at 2.2 m/s, with nothing but the ladder under them.
+    assert!(close(player.position[1], 2.2, 0.1), "{:?}", player.position);
+    assert!(player.on_ladder && !player.grounded);
+    // Holding still, they stay where they are.
+    let held = player.position[1];
+    run(&mut player, &open, on_ladder(0.0, false), 60);
+    assert!(
+        close(player.position[1], held, 0.01),
+        "{:?}",
+        player.position
+    );
+    // Back goes down, and stops at the floor.
+    run(&mut player, &open, on_ladder(-1.0, false), 30);
+    assert!(
+        close(player.position[1], held - 1.1, 0.1),
+        "{:?}",
+        player.position
+    );
+    run(&mut player, &open, on_ladder(-1.0, false), 120);
+    assert!(player.position[1] < 0.05, "{:?}", player.position);
+    // Jump lets go: from up the ladder they fall.
+    run(&mut player, &open, on_ladder(1.0, false), 90);
+    let high = player.position[1];
+    run(&mut player, &open, on_ladder(0.0, true), 30);
+    assert!(
+        !player.on_ladder && player.position[1] < high - 0.5,
+        "{:?}",
+        player.position
+    );
+    let _ = settings;
+}
+
+#[test]
+fn someone_who_does_not_swim_walks_on_the_bottom() {
+    let deep = lake(3.0);
+    let sinks = MoveSettings {
+        swim: false,
+        ..MoveSettings::default()
+    };
+    let mut swimmer = Player::at([0.0, 0.0, 0.0], &MoveSettings::default());
+    run(&mut swimmer, &deep, MoveInput::default(), 240);
+    assert!(
+        swimmer.swimming && swimmer.position[1] > -2.0,
+        "{:?}",
+        swimmer.position
+    );
+    let mut walker = Player::at([0.0, 0.0, 0.0], &sinks);
+    for _ in 0..240 {
+        walker.step(&deep, &sinks, &MoveInput::default(), DT);
+    }
+    assert!(!walker.swimming && walker.grounded, "{walker:?}");
+    assert!(
+        close(walker.position[1], -3.0, 0.05),
+        "{:?}",
+        walker.position
+    );
+}

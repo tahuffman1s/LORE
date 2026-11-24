@@ -46,6 +46,11 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "swimSpeed",
     "jumpHeight",
     "gravity",
+    "vaultHeight",
+    "climbHeight",
+    "ladderSpeed",
+    "onLadder",
+    "climbing",
     "view",
     "facing",
     "model",
@@ -63,7 +68,10 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
-const MOVE_NUMBERS: [(&str, MoveNumber); 6] = [
+const MOVE_NUMBERS: [(&str, MoveNumber); 9] = [
+    ("vaultHeight", MoveNumber::Vault),
+    ("climbHeight", MoveNumber::Climb),
+    ("ladderSpeed", MoveNumber::Ladder),
     ("walkSpeed", MoveNumber::Walk),
     ("sprintSpeed", MoveNumber::Sprint),
     ("crouchSpeed", MoveNumber::Crouch),
@@ -74,7 +82,18 @@ const MOVE_NUMBERS: [(&str, MoveNumber); 6] = [
 
 /// The methods that set them, and what each does to someone, for the
 /// message when it is asked of anyone but the player.
-const MOVE_SETTERS: [(&str, MoveNumber, &str); 6] = [
+const MOVE_SETTERS: [(&str, MoveNumber, &str); 9] = [
+    (
+        "setVaultHeight",
+        MoveNumber::Vault,
+        "given a vaulting height",
+    ),
+    (
+        "setClimbHeight",
+        MoveNumber::Climb,
+        "given a climbing height",
+    ),
+    ("setLadderSpeed", MoveNumber::Ladder, "given a ladder speed"),
     ("setWalkSpeed", MoveNumber::Walk, "given a walking speed"),
     (
         "setSprintSpeed",
@@ -104,6 +123,11 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setSwimSpeed",
     "setJumpHeight",
     "setGravity",
+    "setVaultHeight",
+    "setClimbHeight",
+    "setLadderSpeed",
+    "setAbility",
+    "can",
     "setView",
     "allowViewSwitch",
     "setFacing",
@@ -287,6 +311,8 @@ impl Characters {
             crouched: false,
             sprinting: false,
             swimming: false,
+            on_ladder: false,
+            climbing: false,
             aim_point: [
                 entry.position[0],
                 entry.position[1] + EYE_HEIGHT,
@@ -428,6 +454,12 @@ impl UserData for CharacterRef {
         fields.add_field_method_get("sprinting", |lua, this| {
             Ok(this.motion(lua, "sprinting")?.sprinting)
         });
+        fields.add_field_method_get("onLadder", |lua, this| {
+            Ok(this.motion(lua, "onLadder")?.on_ladder)
+        });
+        fields.add_field_method_get("climbing", |lua, this| {
+            Ok(this.motion(lua, "climbing")?.climbing)
+        });
         fields.add_field_method_get("swimming", |lua, this| {
             Ok(this.motion(lua, "swimming")?.swimming)
         });
@@ -437,11 +469,14 @@ impl UserData for CharacterRef {
                 let shared = shared_of(lua)?;
                 // Only the player's can be changed so far, so everyone
                 // else moves by the engine's own numbers.
-                Ok(which.of(&if this.0 == CharacterId::PLAYER {
+                let number = which.of(&if this.0 == CharacterId::PLAYER {
                     shared.tools.moves()
                 } else {
                     crate::MoveSaid::default()
-                }))
+                });
+                // As it was written: 2.2 kept in 32 bits is 2.2000000476,
+                // and a script that asks `== 2.2` should hear yes.
+                Ok((f64::from(number) * 1.0e5).round() / 1.0e5)
             });
         }
         fields.add_field_method_get("movement", |lua, this| {
@@ -602,6 +637,22 @@ impl UserData for CharacterRef {
                 crate::tools_api::set_move(lua, &shared_of(lua)?, which, &number)
             });
         }
+        methods.add_function(
+            "setAbility",
+            |lua, (this, name, on): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "setAbility", "(\"climb\", true)")?;
+                only_player(lua, this, "setAbility", "given an ability")?;
+                crate::tools_api::set_ability(lua, &shared_of(lua)?, &name, &on)
+            },
+        );
+        methods.add_function("can", |lua, (this, name): (Value, Value)| {
+            let this = receiver(lua, &this, "can", "(\"climb\")")?;
+            this.read(lua, "abilities")?;
+            if this.0 != CharacterId::PLAYER {
+                return Ok(false);
+            }
+            crate::tools_api::can(lua, &shared_of(lua)?, &name)
+        });
         methods.add_function("setHealth", |lua, (this, points): (Value, Value)| {
             let this = receiver(lua, &this, "setHealth", "(100)")?;
             this.read(lua, "setHealth")?;

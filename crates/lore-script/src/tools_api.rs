@@ -68,6 +68,10 @@ pub struct Motion {
     pub sprinting: bool,
     /// Whether it is afloat in water too deep to stand in.
     pub swimming: bool,
+    /// Whether it is on a ladder.
+    pub on_ladder: bool,
+    /// Whether it is pulling itself up onto a ledge, or over something.
+    pub climbing: bool,
     /// Where a shot it fired now would land, in metres.
     pub aim_point: [f32; 3],
     /// Whether that is short of what the crosshair is on: cover in front
@@ -104,6 +108,110 @@ pub struct MoveSaid {
     pub jump_height: f32,
     /// How fast falling speeds up, in metres a second each second.
     pub gravity: f32,
+    /// The highest thing vaulted, in metres above the feet.
+    pub vault_height: f32,
+    /// The highest ledge climbed onto, in metres above the feet.
+    pub climb_height: f32,
+    /// How fast a ladder is climbed.
+    pub ladder_speed: f32,
+}
+
+/// What the player can do besides walk, jump and crouch: each is off
+/// until a script turns it on, but swimming, which every game has had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Abilities {
+    /// Getting over low things with forward and jump.
+    pub vault: bool,
+    /// Pulling up onto ledges with forward and jump.
+    pub climb: bool,
+    /// Swimming in water too deep to stand in.
+    pub swim: bool,
+    /// Climbing the level's ladders.
+    pub ladders: bool,
+}
+
+impl Default for Abilities {
+    fn default() -> Self {
+        Self {
+            vault: false,
+            climb: false,
+            swim: true,
+            ladders: false,
+        }
+    }
+}
+
+/// The names of the abilities, as a script gives them.
+pub(crate) const ABILITIES: [&str; 4] = ["vault", "climb", "swim", "ladders"];
+
+/// `game.player:setAbility("climb", true)`.
+pub(crate) fn set_ability(
+    lua: &Lua,
+    shared: &Rc<Shared>,
+    name: &Value,
+    on: &Value,
+) -> mlua::Result<()> {
+    const EXAMPLE: &str = "game.player:setAbility(\"climb\", true)";
+    let which = ability(lua, "game.player:setAbility", name, EXAMPLE)?;
+    let Value::Boolean(on) = on else {
+        return Err(fail(
+            lua,
+            format!(
+                "game.player:setAbility takes true or false after the ability's name, but it \
+                 was given {}. Write it like this: {EXAMPLE}",
+                describe(on)
+            ),
+        ));
+    };
+    rules_only(lua, shared, "game.player:setAbility")?;
+    shared.clock.note(ABILITIES[which]);
+    let mut can = shared.tools.abilities.get();
+    *[
+        &mut can.vault,
+        &mut can.climb,
+        &mut can.swim,
+        &mut can.ladders,
+    ][which] = *on;
+    shared.tools.abilities.set(can);
+    Ok(())
+}
+
+/// `game.player:can("climb")`.
+pub(crate) fn can(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Result<bool> {
+    let which = ability(lua, "game.player:can", name, "game.player:can(\"climb\")")?;
+    let can = shared.tools.abilities.get();
+    Ok([can.vault, can.climb, can.swim, can.ladders][which])
+}
+
+/// Which of [`ABILITIES`] a script named.
+fn ability(lua: &Lua, function: &str, name: &Value, example: &str) -> mlua::Result<usize> {
+    let listed = "\"vault\", \"climb\", \"swim\" and \"ladders\"";
+    let Value::String(name) = name else {
+        return Err(fail(
+            lua,
+            format!(
+                "{function} needs the name of an ability in quotes: {listed}. It was given \
+                 {}. Write it like this: {example}",
+                describe(name)
+            ),
+        ));
+    };
+    let name = name.to_string_lossy().trim().to_ascii_lowercase();
+    // One ladder or many, it is the same ability.
+    let name = if name == "ladder" { "ladders" } else { &name };
+    ABILITIES
+        .iter()
+        .position(|known| *known == name)
+        .ok_or_else(|| {
+            let mut message = format!("{function} was given \"{name}\", which is not an ability.");
+            if let Some(near) = crate::error::closest(name, ABILITIES) {
+                message.push_str(&format!(" Did you mean \"{near}\"?"));
+            }
+            message.push_str(&format!(
+                " The abilities are {listed}. Write it like this: {example}"
+            ));
+            fail(lua, message)
+        })
 }
 
 impl Default for MoveSaid {
@@ -116,6 +224,9 @@ impl Default for MoveSaid {
             swim_speed: 1.0,
             jump_height: 1.1,
             gravity: 20.0,
+            vault_height: 1.1,
+            climb_height: 2.2,
+            ladder_speed: 2.2,
         }
     }
 }
@@ -129,6 +240,9 @@ pub(crate) enum MoveNumber {
     Swim,
     Jump,
     Gravity,
+    Vault,
+    Climb,
+    Ladder,
 }
 
 impl MoveNumber {
@@ -172,6 +286,25 @@ impl MoveNumber {
                 "how fast the player's fall speeds up, in metres a second each second",
                 (0.5, 100.0),
             ),
+            Self::Vault => (
+                "setVaultHeight",
+                "game.player:setVaultHeight(1.3)",
+                "the highest thing the player vaults, in metres above their feet",
+                (0.3, 3.0),
+            ),
+            Self::Climb => (
+                "setClimbHeight",
+                "game.player:setClimbHeight(2.5)",
+                "the highest ledge the player pulls themselves up onto, in metres above \
+                 their feet",
+                (0.3, 6.0),
+            ),
+            Self::Ladder => (
+                "setLadderSpeed",
+                "game.player:setLadderSpeed(3)",
+                "how fast the player climbs a ladder, in metres a second",
+                (0.1, 20.0),
+            ),
         }
     }
 
@@ -184,6 +317,9 @@ impl MoveNumber {
             Self::Swim => said.swim_speed,
             Self::Jump => said.jump_height,
             Self::Gravity => said.gravity,
+            Self::Vault => said.vault_height,
+            Self::Climb => said.climb_height,
+            Self::Ladder => said.ladder_speed,
         }
     }
 }
@@ -211,6 +347,9 @@ pub(crate) fn set_move(
         MoveNumber::Swim => said.swim_speed = number,
         MoveNumber::Jump => said.jump_height = number,
         MoveNumber::Gravity => said.gravity = number,
+        MoveNumber::Vault => said.vault_height = number,
+        MoveNumber::Climb => said.climb_height = number,
+        MoveNumber::Ladder => said.ladder_speed = number,
     }
     shared.tools.moves.set(said);
     Ok(())
@@ -428,6 +567,8 @@ pub(crate) struct Tools {
     fly_speed: Cell<f32>,
     /// How the script wants the player to walk, jump and fall.
     moves: Cell<MoveSaid>,
+    /// What the script lets the player do: vault, climb, swim, ladders.
+    abilities: Cell<Abilities>,
     /// Where this frame's picture is drawn from, for `game.hud.onScreen`.
     view: Cell<Option<ViewTold>>,
     /// Whether the engine has asked for the actions to run the game with.
@@ -447,6 +588,7 @@ impl Default for Tools {
             movement: Cell::new(Movement::Walk),
             fly_speed: Cell::new(DEFAULT_FLY_SPEED),
             moves: Cell::new(MoveSaid::default()),
+            abilities: Cell::new(Abilities::default()),
             view: Cell::new(None),
             handed_out: Cell::new(false),
         }
@@ -499,6 +641,10 @@ impl Tools {
 
     pub fn moves(&self) -> MoveSaid {
         self.moves.get()
+    }
+
+    pub fn abilities(&self) -> Abilities {
+        self.abilities.get()
     }
 
     /// What to show for the action called `name` on the device the player

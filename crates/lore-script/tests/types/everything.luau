@@ -378,6 +378,15 @@ game.onTick(function()
         game.player:setSwimSpeed(2)
         game.player:setJumpHeight(2.5)
         game.player:setGravity(1.6)
+        game.player:setAbility("vault", true)
+        game.player:setAbility("climb", true)
+        game.player:setAbility("swim", false)
+        game.player:setAbility("ladders", true)
+        game.player:setVaultHeight(1.3)
+        game.player:setClimbHeight(3)
+        game.player:setLadderSpeed(3)
+        local climbs: boolean = game.player:can("climb")
+        print(climbs, game.player.vaultHeight, game.player.climbHeight, game.player.ladderSpeed, game.player.onLadder, game.player.climbing)
         local low: boolean = game.player.crouched
         local fast: boolean = game.player.sprinting
         local afloat: boolean = game.player.swimming
