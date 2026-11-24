@@ -19,7 +19,7 @@ use mlua::{AnyUserData, Lua, MetaMethod, UserData, UserDataFields, UserDataMetho
 use crate::api::{Shared, fail, taken_out};
 use crate::error::closest;
 use crate::time_api::rules_only;
-use crate::tools_api::{Motion, Movement};
+use crate::tools_api::{Motion, MoveNumber, Movement};
 use crate::weapon_api;
 
 /// What can be read from a character.
@@ -33,8 +33,17 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "eye",
     "aim",
     "grounded",
+    "crouched",
+    "sprinting",
+    "swimming",
     "movement",
     "flySpeed",
+    "walkSpeed",
+    "sprintSpeed",
+    "crouchSpeed",
+    "swimSpeed",
+    "jumpHeight",
+    "gravity",
     "view",
     "facing",
     "model",
@@ -46,6 +55,35 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "blocking",
 ];
 
+/// The numbers of how a character moves, by the field that reads each.
+const MOVE_NUMBERS: [(&str, MoveNumber); 6] = [
+    ("walkSpeed", MoveNumber::Walk),
+    ("sprintSpeed", MoveNumber::Sprint),
+    ("crouchSpeed", MoveNumber::Crouch),
+    ("swimSpeed", MoveNumber::Swim),
+    ("jumpHeight", MoveNumber::Jump),
+    ("gravity", MoveNumber::Gravity),
+];
+
+/// The methods that set them, and what each does to someone, for the
+/// message when it is asked of anyone but the player.
+const MOVE_SETTERS: [(&str, MoveNumber, &str); 6] = [
+    ("setWalkSpeed", MoveNumber::Walk, "given a walking speed"),
+    (
+        "setSprintSpeed",
+        MoveNumber::Sprint,
+        "given a sprinting speed",
+    ),
+    (
+        "setCrouchSpeed",
+        MoveNumber::Crouch,
+        "given a crouching speed",
+    ),
+    ("setSwimSpeed", MoveNumber::Swim, "given a swimming speed"),
+    ("setJumpHeight", MoveNumber::Jump, "given a jump height"),
+    ("setGravity", MoveNumber::Gravity, "given a gravity"),
+];
+
 /// What a character can be told to do.
 pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "giveWeapon",
@@ -53,6 +91,12 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "teleport",
     "setMovement",
     "setFlySpeed",
+    "setWalkSpeed",
+    "setSprintSpeed",
+    "setCrouchSpeed",
+    "setSwimSpeed",
+    "setJumpHeight",
+    "setGravity",
     "setView",
     "allowViewSwitch",
     "setFacing",
@@ -222,6 +266,9 @@ impl Characters {
             ],
             aim: [0.0, 0.0, -1.0],
             grounded: true,
+            crouched: false,
+            sprinting: false,
+            swimming: false,
         }))
     }
 
@@ -344,6 +391,28 @@ impl UserData for CharacterRef {
         fields.add_field_method_get("grounded", |lua, this| {
             Ok(this.motion(lua, "grounded")?.grounded)
         });
+        fields.add_field_method_get("crouched", |lua, this| {
+            Ok(this.motion(lua, "crouched")?.crouched)
+        });
+        fields.add_field_method_get("sprinting", |lua, this| {
+            Ok(this.motion(lua, "sprinting")?.sprinting)
+        });
+        fields.add_field_method_get("swimming", |lua, this| {
+            Ok(this.motion(lua, "swimming")?.swimming)
+        });
+        for (name, which) in MOVE_NUMBERS {
+            fields.add_field_method_get(name, move |lua, this| {
+                this.read(lua, name)?;
+                let shared = shared_of(lua)?;
+                // Only the player's can be changed so far, so everyone
+                // else moves by the engine's own numbers.
+                Ok(which.of(&if this.0 == CharacterId::PLAYER {
+                    shared.tools.moves()
+                } else {
+                    crate::MoveSaid::default()
+                }))
+            });
+        }
         fields.add_field_method_get("movement", |lua, this| {
             this.read(lua, "movement")?;
             let shared = shared_of(lua)?;
@@ -461,6 +530,13 @@ impl UserData for CharacterRef {
             only_player(lua, this, "setFlySpeed", "given a flying speed")?;
             crate::tools_api::set_fly_speed(lua, &shared_of(lua)?, &speed)
         });
+        for (method, which, done) in MOVE_SETTERS {
+            methods.add_function(method, move |lua, (this, number): (Value, Value)| {
+                let this = receiver(lua, &this, method, "(6)")?;
+                only_player(lua, this, method, done)?;
+                crate::tools_api::set_move(lua, &shared_of(lua)?, which, &number)
+            });
+        }
         methods.add_function("setHealth", |lua, (this, points): (Value, Value)| {
             let this = receiver(lua, &this, "setHealth", "(100)")?;
             this.read(lua, "setHealth")?;

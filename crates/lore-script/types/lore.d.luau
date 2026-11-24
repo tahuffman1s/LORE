@@ -71,6 +71,19 @@ declare extern type Character with
     --- Example: if game.player.grounded then print("Standing") end
     grounded: boolean
 
+    --- True while the character is crouched. It stays true under a low
+    --- ceiling after crouch is let go, until there is room to stand.
+    --- Example: if game.player.crouched then print("Keeping low") end
+    crouched: boolean
+
+    --- True while the character is sprinting, on foot or swimming.
+    --- Example: if game.player.sprinting then stamina -= step end
+    sprinting: boolean
+
+    --- True while the character is afloat in water too deep to stand in.
+    --- Example: if game.player.swimming then print("Swimming") end
+    swimming: boolean
+
     --- How the character moves: "walk", "fly" or "noclip". Change the
     --- player's with `game.player:setMovement`.
     --- Example: if game.player.movement == "fly" then print("Flying") end
@@ -80,6 +93,36 @@ declare extern type Character with
     --- `game.player:setFlySpeed` says otherwise.
     --- Example: print(game.player.flySpeed)
     flySpeed: number
+
+    --- How fast the character walks, in metres a second: 4.5 until
+    --- `game.player:setWalkSpeed` says otherwise.
+    --- Example: print(game.player.walkSpeed)
+    walkSpeed: number
+
+    --- How fast the character sprints, in metres a second: 6.5 until
+    --- `game.player:setSprintSpeed` says otherwise.
+    --- Example: print(game.player.sprintSpeed)
+    sprintSpeed: number
+
+    --- How fast the character moves while crouched, in metres a second: 2
+    --- until `game.player:setCrouchSpeed` says otherwise.
+    --- Example: print(game.player.crouchSpeed)
+    crouchSpeed: number
+
+    --- How fast the character swims unhurried, in metres a second: 1
+    --- until `game.player:setSwimSpeed` says otherwise.
+    --- Example: print(game.player.swimSpeed)
+    swimSpeed: number
+
+    --- How high a jump lifts the character's feet, in metres: 1.1 until
+    --- `game.player:setJumpHeight` says otherwise.
+    --- Example: print(game.player.jumpHeight)
+    jumpHeight: number
+
+    --- How fast the character's fall speeds up, in metres a second each
+    --- second: 20 until `game.player:setGravity` says otherwise.
+    --- Example: print(game.player.gravity)
+    gravity: number
 
     --- Where the camera is: "first" (at the eyes) or "third" (behind and
     --- over a shoulder). Change it with `game.player:setView`; the player
@@ -157,6 +200,41 @@ declare extern type Character with
     --- `game.player` can be changed so far.
     --- Example: game.player:setFlySpeed(30)
     function setFlySpeed(self, metresPerSecond: number): ()
+
+    --- How fast the player walks, in metres a second, from 0 to 50;
+    --- numbers outside that are taken as the nearest end. 4.5 if never
+    --- set. Like the five below it stays through a reload of the script,
+    --- takes effect on the next tick, and only `game.player` can be
+    --- changed so far.
+    --- Example: game.player:setWalkSpeed(6)
+    function setWalkSpeed(self, metresPerSecond: number): ()
+
+    --- How fast the player sprints, in metres a second, from 0 to 50. 6.5
+    --- if never set. Give it the walking speed to take sprinting away.
+    --- Example: game.player:setSprintSpeed(game.player.walkSpeed)
+    function setSprintSpeed(self, metresPerSecond: number): ()
+
+    --- How fast the player moves while crouched, in metres a second, from
+    --- 0 to 50. 2 if never set.
+    --- Example: game.player:setCrouchSpeed(3)
+    function setCrouchSpeed(self, metresPerSecond: number): ()
+
+    --- How fast the player swims unhurried, in metres a second, from 0 to
+    --- 20. 1 if never set. Sprinting in the water is 1.7 times as fast.
+    --- Example: game.player:setSwimSpeed(2)
+    function setSwimSpeed(self, metresPerSecond: number): ()
+
+    --- How high a jump lifts the player's feet, in metres, from 0 (no
+    --- jumping) to 50. 1.1 if never set. It is the height reached whatever
+    --- the gravity.
+    --- Example: game.player:setJumpHeight(2.5)
+    function setJumpHeight(self, metres: number): ()
+
+    --- How fast the player's fall speeds up, in metres a second each
+    --- second, from 0.5 to 100. 20 if never set; 9.8 is the Earth's, which
+    --- feels floaty in a game, and 1.6 the Moon's.
+    --- Example: game.player:setGravity(1.6)
+    function setGravity(self, metresPerSecondSquared: number): ()
 
     --- Sets the character's health, from 0 to its most. Setting it above
     --- 0 brings back the dead.

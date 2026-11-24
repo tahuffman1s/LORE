@@ -1309,6 +1309,14 @@ impl ScriptHost {
         self.tools.fly_speed()
     }
 
+    /// How the player walks, sprints, crouches, swims, jumps and falls, as
+    /// the script set it (`game.player:setWalkSpeed` and the like); the
+    /// engine's own numbers until it does. It stays when the script is saved.
+    #[must_use]
+    pub fn moves(&self) -> crate::MoveSaid {
+        self.tools.moves()
+    }
+
     /// The game's actions with the ones the script made with
     /// `game.input.bind`: a copy of the map the script reads.
     ///

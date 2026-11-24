@@ -127,6 +127,9 @@ fn motion_of(player: &Player, aim: [f32; 3]) -> Motion {
         eye: player.eye_position(),
         aim,
         grounded: player.grounded,
+        crouched: player.crouched,
+        sprinting: player.sprinting,
+        swimming: player.swimming,
     }
 }
 
@@ -628,8 +631,18 @@ impl Game for World {
         // How the script wants the player to move, and how fast it flies.
         let mut moving = asked.movement;
         moving.mode = mode_of(self.game.host().movement());
+        let said = self.game.host().moves();
         let settings = MoveSettings {
             fly_speed: self.game.host().fly_speed(),
+            walk_speed: said.walk_speed,
+            sprint_speed: said.sprint_speed,
+            crouch_speed: said.crouch_speed,
+            swim_speed: said.swim_speed,
+            // A sprinting swimmer is as much faster as the engine's own is.
+            swim_sprint_speed: said.swim_speed * rules.swim_sprint_speed
+                / rules.swim_speed.max(f32::EPSILON),
+            jump_height: said.jump_height,
+            gravity: said.gravity,
             ..*rules
         };
         let rules = &settings;
@@ -1927,6 +1940,57 @@ mod tests {
             game.tick(input.tick(), STEP);
         }
         assert_eq!(game.world.game.host().last_error(), None);
+    }
+
+    #[test]
+    fn a_script_changes_how_fast_the_player_walks_and_how_high_they_jump() {
+        use lore_input::Key;
+
+        /// The top speed and the highest the feet got, over three seconds
+        /// of running forward with a jump one second in.
+        fn played(script: &str) -> (f32, f32, bool) {
+            let actions = ActionMap::standard();
+            let script = ScriptGame::from_source(script, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = lore_input::Input::new(actions);
+            input.press(Key::W);
+            let (mut fastest, mut highest, mut sprinted) = (0.0f32, 0.0f32, false);
+            for tick in 0..180 {
+                if tick == 60 {
+                    input.press(Key::Space);
+                }
+                game.tick(input.tick(), STEP);
+                let player = game.world.player();
+                fastest = fastest.max(player.velocity[0].hypot(player.velocity[2]));
+                highest = highest.max(player.position[1]);
+                sprinted |= player.sprinting;
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            (fastest, highest, sprinted)
+        }
+
+        let (speed, height, _) = played("");
+        assert!((speed - 4.5).abs() < 0.1, "{speed}");
+        assert!((height - 1.1).abs() < 0.1, "{height}");
+
+        let (speed, height, _) = played(
+            "game.onStart(function()\n\
+             game.player:setWalkSpeed(8)\n\
+             game.player:setJumpHeight(3)\n\
+             game.player:setGravity(10)\n\
+             end)",
+        );
+        assert!((speed - 8.0).abs() < 0.15, "{speed}");
+        assert!((height - 3.0).abs() < 0.15, "{height}");
+
+        // A script reads what the player is doing.
+        let (_, _, sprinted) = played(
+            "game.onTick(function()\n\
+             assert(not game.player.crouched and not game.player.swimming)\n\
+             assert(game.player.walkSpeed == 4.5)\n\
+             end)",
+        );
+        assert!(!sprinted);
     }
 
     #[test]

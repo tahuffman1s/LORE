@@ -793,6 +793,9 @@ fn motion(position_y: f32) -> Motion {
         eye: [0.0, position_y + 1.7, 0.0],
         aim: [1.0, 0.0, 0.0],
         grounded: false,
+        crouched: false,
+        sprinting: false,
+        swimming: false,
     }
 }
 
@@ -1113,4 +1116,70 @@ fn the_same_script_and_inputs_give_the_same_fingerprint() {
     assert_eq!(first, play(0.01));
     assert_eq!(first, play(0.004));
     assert_ne!(first, 0);
+}
+
+#[test]
+fn a_script_reads_stance_and_changes_how_the_player_moves() {
+    let mut host = game(
+        r#"local p = game.player
+        game.onStart(function()
+            print(p.walkSpeed, p.sprintSpeed, p.crouchSpeed, p.swimSpeed, p.jumpHeight, p.gravity)
+            p:setWalkSpeed(6)
+            p:setSprintSpeed(9)
+            p:setCrouchSpeed(3)
+            p:setSwimSpeed(2)
+            p:setJumpHeight(2.5)
+            p:setGravity(1000)
+        end)
+        game.onTick(function() print(p.crouched, p.sprinting, p.swimming, p.gravity) end)"#,
+    );
+    assert_eq!(host.moves(), lore_script::MoveSaid::default());
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    let said = host.moves();
+    assert_eq!(
+        (said.walk_speed, said.sprint_speed, said.crouch_speed),
+        (6.0, 9.0, 3.0)
+    );
+    // A number outside the range is taken as the nearest end.
+    assert_eq!(
+        (said.swim_speed, said.jump_height, said.gravity),
+        (2.0, 2.5, 100.0)
+    );
+
+    host.set_motion(
+        lore_script::CharacterId::PLAYER,
+        Motion {
+            velocity: [0.0; 3],
+            eye: [0.0, 1.0, 0.0],
+            aim: [0.0, 0.0, -1.0],
+            grounded: true,
+            crouched: true,
+            sprinting: false,
+            swimming: true,
+        },
+    );
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+
+    // What goes wrong says what to write.
+    for (call, part) in [
+        ("setWalkSpeed(\"fast\")", "how fast the player walks"),
+        ("setJumpHeight(0 / 0)", "how high a jump lifts"),
+        ("setGravity()", "game.player:setGravity(8)"),
+    ] {
+        let mut host = game(&format!("game.onStart(function() game.player:{call} end)"));
+        host.tick(&InputFrame::default(), 1.0 / 60.0);
+        let message = &host.last_error().unwrap().message;
+        assert!(message.contains(part), "{call}: {message}");
+    }
+    // A picture is no place to change the rules.
+    let mut host = game("game.onDraw(function() game.player:setWalkSpeed(1) end)");
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    host.draw(0.5);
+    let message = &host.last_error().unwrap().message;
+    assert!(
+        message.contains("game.player:setWalkSpeed changes the game"),
+        "{message}"
+    );
 }

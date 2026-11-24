@@ -85,7 +85,7 @@ pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,
 };
-pub use tools_api::{FRAME_HISTORY, Motion, Movement, Teleport};
+pub use tools_api::{FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
