@@ -1142,6 +1142,25 @@ impl Frame {
         });
     }
 
+    /// Draws `model` this frame at `transform` with nothing bending it:
+    /// what a character holds. It casts a shadow whether or not it is
+    /// `seen` in the picture.
+    pub(crate) fn show_thing(
+        &mut self,
+        model: &std::sync::Arc<lore_assets::Scene>,
+        transform: lore_assets::Transform,
+        seen: bool,
+    ) {
+        let none = self.figure_joints.len();
+        self.figures.push(Figure {
+            model: std::sync::Arc::clone(model),
+            transform,
+            joints: none..none,
+            seen,
+            shadows: true,
+        });
+    }
+
     /// The bodies drawn this frame and the joints they index into.
     pub(crate) fn figures(&self) -> (&[Figure], &[lore_assets::Transform]) {
         (&self.figures, &self.figure_joints)

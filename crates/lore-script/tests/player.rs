@@ -554,3 +554,58 @@ fn a_script_that_never_loaded_still_has_its_player_put_back() {
     host.player_died();
     assert!(host.take_respawn());
 }
+
+#[test]
+fn the_player_holds_a_thing_and_puts_it_away() {
+    use lore_script::HeldSaid;
+
+    let host = lore_script::ScriptHost::from_source(
+        "assert(game.player.holding == nil)\n\
+         game.player:hold(\"Sword\")\n\
+         assert(game.player.holding == \"sword\")",
+        lore_input::ActionMap::default(),
+    );
+    assert_eq!(host.last_error(), None);
+    let sword = HeldSaid {
+        model: "sword".to_owned(),
+        left: false,
+    };
+    assert_eq!(host.take_held(), Some(Some(sword)));
+    assert_eq!(host.take_held(), None, "said once");
+
+    let host = lore_script::ScriptHost::from_source(
+        "game.player:hold(\"models/axe.glb\", { hand = \"left\" })\n\
+         game.player:hold(nil)\n\
+         game.player:hold(\"models/axe.glb\", { hand = \"left\" })",
+        lore_input::ActionMap::default(),
+    );
+    assert_eq!(host.last_error(), None);
+    let axe = HeldSaid {
+        model: "models/axe.glb".to_owned(),
+        left: true,
+    };
+    assert_eq!(host.take_held(), Some(Some(axe)));
+
+    let host = lore_script::ScriptHost::from_source(
+        "game.player:hold(\"torch\")\ngame.player:hold(nil)",
+        lore_input::ActionMap::default(),
+    );
+    assert_eq!(host.take_held(), Some(None));
+
+    for (script, part) in [
+        ("game.player:hold(\"sord\")", "Did you mean \"sword\"?"),
+        ("game.player:hold(7)", "needs the name of what to hold"),
+        (
+            "game.player:hold(\"sword\", { hand = \"both\" })",
+            "`hand` is \"right\" or \"left\"",
+        ),
+        (
+            "game.player:hold(\"sword\", { side = \"left\" })",
+            "has no setting \"side\"",
+        ),
+    ] {
+        let host = lore_script::ScriptHost::from_source(script, lore_input::ActionMap::default());
+        let message = &host.last_error().unwrap().message;
+        assert!(message.contains(part), "{script}: {message}");
+    }
+}

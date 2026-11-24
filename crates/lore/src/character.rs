@@ -161,6 +161,15 @@ pub(crate) struct Character {
     headless: Vec<Transform>,
     /// The bone that is the head, left out of the first-person picture.
     head: Option<usize>,
+    /// The bones of the right hand and the left, for what is held in them.
+    hands: [Option<usize>; 2],
+    /// Where the body was last drawn, for placing what it holds.
+    drawn_at: Transform,
+    /// Where each hand closes, from its bone: the wrist is the bone, and
+    /// the palm is most of the way to the knuckle of the middle finger.
+    palms: [[f32; 3]; 2],
+    /// How a held thing is turned in each hand: see [`grip`].
+    grips: [Transform; 2],
     /// The neck, left out with it: a sprint leans the body over, and looking
     /// down would otherwise show its stump below the eyes.
     neck: Option<usize>,
@@ -420,6 +429,50 @@ impl Character {
         let neck = ["neck_01", "Neck", "neck", "mixamorig:Neck"]
             .iter()
             .find_map(|n| body.skeleton().find(n));
+        let hands = [
+            ["hand_r", "RightHand", "mixamorig:RightHand", "Hand.R"],
+            ["hand_l", "LeftHand", "mixamorig:LeftHand", "Hand.L"],
+        ]
+        .map(|names| names.iter().find_map(|n| body.skeleton().find(n)));
+        // Where a finger's first bone is from the wrist, by any of its names.
+        let finger = |names: [&str; 3]| {
+            names
+                .iter()
+                .find_map(|n| body.skeleton().find(n))
+                .and_then(|bone| body.skeleton().rest().get(bone))
+                .map(|bone| bone.translation)
+        };
+        let fingers = [
+            [
+                [
+                    "middle_01_r",
+                    "RightHandMiddle1",
+                    "mixamorig:RightHandMiddle1",
+                ],
+                ["thumb_01_r", "RightHandThumb1", "mixamorig:RightHandThumb1"],
+                ["pinky_01_r", "RightHandPinky1", "mixamorig:RightHandPinky1"],
+            ],
+            [
+                [
+                    "middle_01_l",
+                    "LeftHandMiddle1",
+                    "mixamorig:LeftHandMiddle1",
+                ],
+                ["thumb_01_l", "LeftHandThumb1", "mixamorig:LeftHandThumb1"],
+                ["pinky_01_l", "LeftHandPinky1", "mixamorig:LeftHandPinky1"],
+            ],
+        ]
+        .map(|hand| hand.map(finger));
+        let palms = fingers
+            .map(|[middle, ..]| middle.map_or([0.0; 3], |middle| middle.map(|part| part * PALM)));
+        // A hand with no fingers to go by holds a thing as its bone lies.
+        let grips = fingers.map(|[middle, thumb, little]| {
+            middle
+                .zip(thumb)
+                .zip(little)
+                .and_then(|((middle, thumb), little)| grip(middle, thumb, little))
+                .unwrap_or(lore_anim::math::IDENTITY)
+        });
         Self {
             model: Arc::new(scene),
             animator,
@@ -442,6 +495,10 @@ impl Character {
             skinning: vec![lore_anim::math::IDENTITY; joints],
             headless: vec![lore_anim::math::IDENTITY; joints],
             head,
+            hands,
+            palms,
+            grips,
+            drawn_at: lore_anim::math::IDENTITY,
             neck,
             swing: None,
             guard: None,
@@ -919,6 +976,7 @@ impl Character {
         } else {
             self.headless.copy_from_slice(&self.skinning);
         }
+        self.drawn_at = transform;
         Drawn {
             transform,
             seen_joints: &self.headless,
@@ -928,6 +986,70 @@ impl Character {
             seen: third < 0.5 || near > TOO_CLOSE,
         }
     }
+}
+
+impl Character {
+    /// Where a thing held in the right hand (or, with `left`, the left)
+    /// is, as of the body last drawn with [`figures`](Self::figures): what
+    /// takes a model made with its grip at the origin and its length along
+    /// +Y into the world. `None` for a body with no such hand.
+    pub(crate) fn held_place(&self, left: bool) -> Option<Transform> {
+        let hand = self.hands[usize::from(left)]?;
+        let placed = self.placed.get(hand)?;
+        // The bone's own size is left out: a thing is as big as it is made.
+        let mut bone = *placed;
+        for axis in bone.iter_mut().take(3) {
+            let long = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if long > 1e-6 {
+                for part in axis.iter_mut().take(3) {
+                    *part /= long;
+                }
+            }
+        }
+        // In the palm, not at the wrist. The offset is the bone's own, so
+        // it is scaled as the bone is.
+        let palm = lore_anim::math::apply(placed, self.palms[usize::from(left)]);
+        bone[3] = [palm[0], palm[1], palm[2], 1.0];
+        let grip = &self.grips[usize::from(left)];
+        Some(lore_anim::math::combine(
+            &self.drawn_at,
+            &lore_anim::math::combine(&bone, grip),
+        ))
+    }
+}
+
+/// How far from the wrist to the knuckle of the middle finger a hand closes.
+const PALM: f32 = 0.7;
+
+/// How a thing sits in a hand whose knuckle of the middle finger is at
+/// `middle` from the wrist, with the thumb's first bone at `thumb` and the
+/// little finger's at `little`: what takes the thing's space (grip at the
+/// origin, length along +Y, a blade's edge along +X) to the hand bone's.
+///
+/// The thing leaves the fist on the thumb's side, square to the fingers,
+/// with its edge the way the knuckles face: how a sword, a torch or a
+/// hammer is held. Worked out from the rig's own bones, so it is right for
+/// either hand and for a model whose bones are turned another way.
+fn grip(middle: [f32; 3], thumb: [f32; 3], little: [f32; 3]) -> Option<Transform> {
+    let unit = |v: [f32; 3]| {
+        let long = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        (long > 1e-6).then(|| v.map(|part| part / long))
+    };
+    let along = unit(middle)?;
+    let across: [f32; 3] = std::array::from_fn(|i| thumb[i] - little[i]);
+    let lean: f32 = (0..3).map(|i| across[i] * along[i]).sum();
+    let up = unit(std::array::from_fn(|i| across[i] - along[i] * lean))?;
+    let side = [
+        along[1] * up[2] - along[2] * up[1],
+        along[2] * up[0] - along[0] * up[2],
+        along[0] * up[1] - along[1] * up[0],
+    ];
+    Some([
+        [along[0], along[1], along[2], 0.0],
+        [up[0], up[1], up[2], 0.0],
+        [side[0], side[1], side[2], 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
 }
 
 /// Whether `point` is inside `target`'s upright capsule.
