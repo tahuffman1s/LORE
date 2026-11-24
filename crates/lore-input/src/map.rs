@@ -58,6 +58,9 @@ pub(crate) struct Action {
     /// What the action's direction and mouse movement are multiplied by:
     /// sideways, then up and down.
     pub(crate) sensitivity: [f32; 2],
+    /// What the action's direction (a stick, or keys) is multiplied by on
+    /// top of nothing else: mouse movement has `sensitivity`.
+    pub(crate) stick_sensitivity: [f32; 2],
     /// Whether a game added the action for itself: it is live in every set.
     pub(crate) own: bool,
 }
@@ -480,6 +483,7 @@ impl ActionMap {
             bindings: start..self.bindings.len(),
             stick_curve: 1.0,
             sensitivity: [1.0, 1.0],
+            stick_sensitivity: [1.0, 1.0],
             own,
         });
         Ok(ActionId(self.actions.len() - 1))
@@ -704,11 +708,49 @@ impl ActionMap {
             && sensitivity.iter().all(|axis| axis.is_finite())
         {
             action.sensitivity = sensitivity;
+            action.stick_sensitivity = sensitivity;
         }
     }
 
-    /// What the action's direction and mouse movement are multiplied by;
-    /// see [`set_sensitivity`](Self::set_sensitivity). `[1.0, 1.0]` for an
+    /// Multiplies the action's mouse movement by `mouse` and its direction
+    /// (a stick, or keys) by `stick`, each sideways and then up and down:
+    /// for a player who wants a fast mouse and a slow stick, or the other
+    /// way round. [`set_sensitivity`](Self::set_sensitivity) sets both to
+    /// the same. Numbers that are not finite and ids from a different map
+    /// are ignored.
+    ///
+    /// ```
+    /// use lore_input::ActionMap;
+    ///
+    /// let mut map = ActionMap::standard();
+    /// let look = map.action("look")?;
+    /// map.set_sensitivities(look, [0.4, 0.4], [1.5, -1.5]);
+    /// assert_eq!(map.sensitivity(look), [0.4, 0.4]);
+    /// assert_eq!(map.stick_sensitivity(look), [1.5, -1.5]);
+    /// # Ok::<(), lore_input::UnknownName>(())
+    /// ```
+    pub fn set_sensitivities(&mut self, action: ActionId, mouse: [f32; 2], stick: [f32; 2]) {
+        if let Some(action) = self.actions.get_mut(action.0)
+            && mouse.iter().chain(&stick).all(|axis| axis.is_finite())
+        {
+            action.sensitivity = mouse;
+            action.stick_sensitivity = stick;
+        }
+    }
+
+    /// What the action's direction is multiplied by; see
+    /// [`set_sensitivities`](Self::set_sensitivities). `[1.0, 1.0]` for an
+    /// id from a different map.
+    #[must_use]
+    pub fn stick_sensitivity(&self, action: ActionId) -> [f32; 2] {
+        self.actions
+            .get(action.0)
+            .map_or([1.0, 1.0], |action| action.stick_sensitivity)
+    }
+
+    /// What the action's mouse movement is multiplied by (and its
+    /// direction too, unless [`set_sensitivities`](Self::set_sensitivities)
+    /// said otherwise); see [`set_sensitivity`](Self::set_sensitivity). `[1.0, 1.0]` for an
     /// id from a different map.
     #[must_use]
     pub fn sensitivity(&self, action: ActionId) -> [f32; 2] {
