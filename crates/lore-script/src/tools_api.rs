@@ -62,6 +62,140 @@ pub struct Motion {
     pub aim: [f32; 3],
     /// Whether it stands on the ground.
     pub grounded: bool,
+    /// Whether it is crouched.
+    pub crouched: bool,
+    /// Whether it is sprinting, on foot or swimming.
+    pub sprinting: bool,
+    /// Whether it is afloat in water too deep to stand in.
+    pub swimming: bool,
+}
+
+/// The numbers of how the player moves that a script can change, in metres
+/// and metres a second.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoveSaid {
+    /// Top speed on foot.
+    pub walk_speed: f32,
+    /// Top speed while sprinting.
+    pub sprint_speed: f32,
+    /// Top speed while crouched.
+    pub crouch_speed: f32,
+    /// How fast an unhurried swimmer goes.
+    pub swim_speed: f32,
+    /// How high a jump lifts the feet.
+    pub jump_height: f32,
+    /// How fast falling speeds up, in metres a second each second.
+    pub gravity: f32,
+}
+
+impl Default for MoveSaid {
+    /// The engine's own, the same numbers as `lore_physics::MoveSettings`.
+    fn default() -> Self {
+        Self {
+            walk_speed: 4.5,
+            sprint_speed: 6.5,
+            crouch_speed: 2.0,
+            swim_speed: 1.0,
+            jump_height: 1.1,
+            gravity: 20.0,
+        }
+    }
+}
+
+/// One of the numbers in [`MoveSaid`], as a script names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MoveNumber {
+    Walk,
+    Sprint,
+    Crouch,
+    Swim,
+    Jump,
+    Gravity,
+}
+
+impl MoveNumber {
+    /// The method that sets it, an example of calling it, what it takes and
+    /// the range it is kept in.
+    fn about(self) -> (&'static str, &'static str, &'static str, (f32, f32)) {
+        match self {
+            Self::Walk => (
+                "setWalkSpeed",
+                "game.player:setWalkSpeed(6)",
+                "how fast the player walks, in metres a second",
+                (0.0, 50.0),
+            ),
+            Self::Sprint => (
+                "setSprintSpeed",
+                "game.player:setSprintSpeed(9)",
+                "how fast the player sprints, in metres a second",
+                (0.0, 50.0),
+            ),
+            Self::Crouch => (
+                "setCrouchSpeed",
+                "game.player:setCrouchSpeed(3)",
+                "how fast the player moves while crouched, in metres a second",
+                (0.0, 50.0),
+            ),
+            Self::Swim => (
+                "setSwimSpeed",
+                "game.player:setSwimSpeed(2)",
+                "how fast the player swims unhurried, in metres a second",
+                (0.0, 20.0),
+            ),
+            Self::Jump => (
+                "setJumpHeight",
+                "game.player:setJumpHeight(2)",
+                "how high a jump lifts the player's feet, in metres",
+                (0.0, 50.0),
+            ),
+            Self::Gravity => (
+                "setGravity",
+                "game.player:setGravity(8)",
+                "how fast the player's fall speeds up, in metres a second each second",
+                (0.5, 100.0),
+            ),
+        }
+    }
+
+    /// The number in `said`.
+    pub(crate) fn of(self, said: &MoveSaid) -> f32 {
+        match self {
+            Self::Walk => said.walk_speed,
+            Self::Sprint => said.sprint_speed,
+            Self::Crouch => said.crouch_speed,
+            Self::Swim => said.swim_speed,
+            Self::Jump => said.jump_height,
+            Self::Gravity => said.gravity,
+        }
+    }
+}
+
+/// `game.player:setWalkSpeed(6)` and the other five like it.
+pub(crate) fn set_move(
+    lua: &Lua,
+    shared: &Rc<Shared>,
+    which: MoveNumber,
+    value: &Value,
+) -> mlua::Result<()> {
+    let (method, example, what, (least, most)) = which.about();
+    let function = format!("game.player:{method}");
+    let takes = format!(
+        "{what}, from {least} to {most} (a number outside that is taken as the nearest end)"
+    );
+    let number = number(lua, &function, value, &takes, example)?.clamp(least, most);
+    rules_only(lua, shared, &function)?;
+    shared.clock.note(&number.to_string());
+    let mut said = shared.tools.moves.get();
+    match which {
+        MoveNumber::Walk => said.walk_speed = number,
+        MoveNumber::Sprint => said.sprint_speed = number,
+        MoveNumber::Crouch => said.crouch_speed = number,
+        MoveNumber::Swim => said.swim_speed = number,
+        MoveNumber::Jump => said.jump_height = number,
+        MoveNumber::Gravity => said.gravity = number,
+    }
+    shared.tools.moves.set(said);
+    Ok(())
 }
 
 /// A move the script asked for with `game.player:teleport`.
@@ -274,6 +408,8 @@ pub(crate) struct Tools {
     teleport: Cell<Option<Teleport>>,
     movement: Cell<Movement>,
     fly_speed: Cell<f32>,
+    /// How the script wants the player to walk, jump and fall.
+    moves: Cell<MoveSaid>,
     /// Whether the engine has asked for the actions to run the game with.
     handed_out: Cell<bool>,
 }
@@ -290,6 +426,7 @@ impl Default for Tools {
             teleport: Cell::new(None),
             movement: Cell::new(Movement::Walk),
             fly_speed: Cell::new(DEFAULT_FLY_SPEED),
+            moves: Cell::new(MoveSaid::default()),
             handed_out: Cell::new(false),
         }
     }
@@ -337,6 +474,10 @@ impl Tools {
 
     pub fn fly_speed(&self) -> f32 {
         self.fly_speed.get()
+    }
+
+    pub fn moves(&self) -> MoveSaid {
+        self.moves.get()
     }
 
     /// Notes that the engine has the actions, and that a later one is not

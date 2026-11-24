@@ -310,6 +310,9 @@ fn the_debug_menu_shows_where_the_player_is_how_fast_and_which_way() {
             eye: [3.0, 2.6, 4.0],
             aim: [0.0, 0.0, -1.0],
             grounded: false,
+            crouched: false,
+            sprinting: false,
+            swimming: false,
         },
     );
     game.tick();
@@ -383,6 +386,9 @@ fn a_spray_starts_at_the_eyes_and_goes_where_the_player_looks_while_fire_is_held
             eye: [1.0, 1.6, 2.0],
             aim: [0.0, 0.0, -1.0],
             grounded: true,
+            crouched: false,
+            sprinting: false,
+            swimming: false,
         },
     );
     game.ticks(2);

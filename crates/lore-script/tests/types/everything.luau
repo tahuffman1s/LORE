@@ -372,6 +372,16 @@ game.onTick(function()
         game.player:setMovement("noclip")
         game.player:setMovement("walk")
         game.player:setFlySpeed(30)
+        game.player:setWalkSpeed(6)
+        game.player:setSprintSpeed(9)
+        game.player:setCrouchSpeed(3)
+        game.player:setSwimSpeed(2)
+        game.player:setJumpHeight(2.5)
+        game.player:setGravity(1.6)
+        local low: boolean = game.player.crouched
+        local fast: boolean = game.player.sprinting
+        local afloat: boolean = game.player.swimming
+        print(low, fast, afloat, game.player.walkSpeed, game.player.sprintSpeed, game.player.crouchSpeed, game.player.swimSpeed, game.player.jumpHeight, game.player.gravity)
     end
 end)
 
