@@ -162,6 +162,11 @@ declare extern type Character with
     --- Example: print(game.player.blocking)
     blocking: boolean
 
+    --- What is in the character's hand (`game.player:hold`), as it was
+    --- named, or nil for empty hands.
+    --- Example: if game.player.holding == "torch" then print("Lit") end
+    holding: string?
+
     --- The names of the clips the body can play, for `game.player:play`.
     --- Example: for _, clip in game.player.clips do print(clip) end
     clips: { string }
@@ -315,6 +320,22 @@ declare extern type Character with
     --- as well as its own.
     --- Example: game.player:setModel("models/hero.glb")
     function setModel(self, model: string): ()
+
+    --- Puts a thing in the player's hand, where it is seen in both views
+    --- and casts a shadow: "sword", "staff" or "torch" (the engine's own,
+    --- plain stand-ins), or a .glb file in the game's folder such as
+    --- "models/axe.glb". `hand` is "right" (if not given) or "left". nil
+    --- empties the hands. Make a model of your own with its grip at the
+    --- origin, its length pointing up (+Y) and a blade's edge along +X:
+    --- it leaves the fist on the thumb's side.
+    ---
+    --- It is only what is seen. What the hands can do is the game's to
+    --- say: `game.player:swing` for a blow, `game.player:giveWeapon` for
+    --- something that fires. One thing is held at a time.
+    --- Example: game.player:hold("sword")
+    --- Example: game.player:hold("torch", { hand = "left" })
+    --- Example: game.player:hold(nil)
+    function hold(self, thing: string?, options: { hand: ("right" | "left")? }?): ()
 
     --- Plays one of the body's clips (see `game.player.clips`) over its
     --- moving about, then goes back to it. Options: `fade` (seconds to fade

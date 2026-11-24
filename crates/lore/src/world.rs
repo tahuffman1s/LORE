@@ -940,6 +940,9 @@ pub struct Playing {
     character: Option<Character>,
     /// The camera a script directs with `game.camera`.
     shot: crate::shot::ShotCamera,
+    /// What the player holds (`game.player:hold`): its model, and whether
+    /// it is in the left hand.
+    held: Option<(std::sync::Arc<lore_assets::Scene>, bool)>,
 }
 
 /// How fast a body may hit the ground unhurt, in metres a second: a drop
@@ -1078,6 +1081,7 @@ impl Playing {
                 character
             }),
             shot: crate::shot::ShotCamera::default(),
+            held: None,
         }
         .with_body_said()
     }
@@ -1162,6 +1166,9 @@ impl Playing {
     fn step_character(&mut self, input: &InputFrame, step: f32) {
         if let Some(model) = self.world.game.host().take_body_model() {
             self.change_body(&model);
+        }
+        if let Some(held) = self.world.game.host().take_held() {
+            self.change_held(held);
         }
         let Some(character) = &mut self.character else {
             return;
@@ -1287,6 +1294,26 @@ impl Playing {
         }
     }
 
+    /// Puts `held` in the player's hand, or empties it: a built-in thing
+    /// by name, or a model file of the game's.
+    fn change_held(&mut self, held: Option<lore_script::HeldSaid>) {
+        self.held = held.and_then(|held| {
+            let model = match crate::props::built_in(&held.model) {
+                Some(model) => Ok(model),
+                None => (self.world.game)
+                    .read_model(&held.model)
+                    .map(std::sync::Arc::new),
+            };
+            match model {
+                Ok(model) => Some((model, held.left)),
+                Err(why) => {
+                    log::error!("game.player:hold(\"{}\"): {why}", held.model);
+                    None
+                }
+            }
+        });
+    }
+
     /// Where the player's feet are for a frame `alpha` of the way from the
     /// last tick to this one.
     fn feet_at(&self, alpha: f32) -> [f32; 3] {
@@ -1308,7 +1335,15 @@ impl Playing {
         };
         let model = std::sync::Arc::clone(character.model());
         let drawn = character.figures(frame.alpha(), feet, camera, look);
+        let seen = drawn.seen;
         frame.show_figure(&model, &drawn);
+        // What is in the hand is one object in both views: where the hand
+        // is drawn, there it is.
+        if let Some((thing, left)) = &self.held
+            && let Some(place) = character.held_place(*left)
+        {
+            frame.show_thing(thing, place, seen);
+        }
     }
 
     /// Shows and sounds what the player is doing to the water: the marks

@@ -861,6 +861,13 @@ impl ScriptHost {
         self.body.take_model()
     }
 
+    /// What the script put in the player's hand (`game.player:hold`), if
+    /// that changed since this was last asked: `Some(None)` for hands
+    /// just emptied.
+    pub fn take_held(&self) -> Option<Option<crate::HeldSaid>> {
+        self.body.take_held()
+    }
+
     /// What the script asked the body to play or stop since the last call.
     pub fn take_animation_asks(&self) -> Vec<crate::AnimationAsk> {
         self.body.take_asks()

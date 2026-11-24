@@ -51,6 +51,7 @@ pub mod package;
 mod playback;
 pub mod player;
 pub mod press;
+mod props;
 pub mod scaffold;
 mod script_game;
 mod script_hud;

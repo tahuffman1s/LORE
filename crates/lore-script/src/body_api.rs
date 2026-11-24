@@ -41,6 +41,19 @@ const OFFSETS: (f32, f32) = (-2.0, 2.0);
 /// The bodies built into the engine, by the name a script gives.
 pub const BUILT_IN_MODELS: [&str; 2] = ["mannequin", "mannequin_female"];
 
+/// The things the engine can put in a hand with no model file.
+pub const BUILT_IN_HELD: [&str; 3] = ["sword", "staff", "torch"];
+
+/// What the script put in the player's hand (`game.player:hold`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldSaid {
+    /// A built-in thing's name (`"sword"`) or a model file in the game's
+    /// folder (`"models/axe.glb"`).
+    pub model: String,
+    /// In the left hand, not the right.
+    pub left: bool,
+}
+
 /// How the camera and body are set up, as the engine reads it each tick.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CameraView {
@@ -121,6 +134,10 @@ pub(crate) struct BodyState {
     model: RefCell<Option<String>>,
     /// The model the body is now.
     model_now: RefCell<String>,
+    /// What is in the player's hand.
+    held: RefCell<Option<HeldSaid>>,
+    /// Whether that changed since the engine last asked.
+    held_changed: Cell<bool>,
     asks: RefCell<Vec<AnimationAsk>>,
     /// The clips the body has, as the engine said: for spotting a misspelt name.
     clips: RefCell<Vec<String>>,
@@ -162,6 +179,12 @@ impl BodyState {
 
     pub(crate) fn take_model(&self) -> Option<String> {
         self.model.borrow_mut().take()
+    }
+
+    /// What is in the player's hand now, if that changed since this was
+    /// last asked: `Some(None)` for hands just emptied.
+    pub(crate) fn take_held(&self) -> Option<Option<HeldSaid>> {
+        self.held_changed.take().then(|| self.held.borrow().clone())
     }
 
     pub(crate) fn take_asks(&self) -> Vec<AnimationAsk> {
@@ -439,6 +462,125 @@ pub(crate) fn set_model(lua: &Lua, shared: &Rc<Shared>, model: &Value) -> mlua::
         return Err(fail(lua, message));
     }
     *shared.body.model.borrow_mut() = Some(name);
+    Ok(())
+}
+
+/// `game.player.holding`: what is in the player's hand, or nil.
+pub(crate) fn holding(shared: &Shared) -> Option<String> {
+    shared
+        .body
+        .held
+        .borrow()
+        .as_ref()
+        .map(|held| held.model.clone())
+}
+
+/// `game.player:hold("sword")`, `game.player:hold("models/axe.glb", { hand = "left" })`
+/// and `game.player:hold(nil)`.
+pub(crate) fn hold(
+    lua: &Lua,
+    shared: &Rc<Shared>,
+    thing: &Value,
+    options: &Value,
+) -> mlua::Result<()> {
+    const EXAMPLE: &str = "game.player:hold(\"sword\")";
+    let said = |held: Option<HeldSaid>| {
+        if *shared.body.held.borrow() != held {
+            *shared.body.held.borrow_mut() = held;
+            shared.body.held_changed.set(true);
+        }
+    };
+    let name = match thing {
+        Value::Nil => {
+            said(None);
+            return Ok(());
+        }
+        Value::String(name) => name.to_string_lossy().trim().to_owned(),
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.player:hold needs the name of what to hold, in quotes: \"sword\", \
+                     \"staff\", \"torch\", or a .glb file in the game's folder such as \
+                     \"models/axe.glb\"; or nil for empty hands. It was given {}. Write it \
+                     like this: {EXAMPLE}",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    let built_in = BUILT_IN_HELD
+        .iter()
+        .find(|known| known.eq_ignore_ascii_case(&name));
+    let lower = name.to_ascii_lowercase();
+    let model = match built_in {
+        Some(built_in) => (*built_in).to_owned(),
+        None if lower.ends_with(".glb") || lower.ends_with(".gltf") => name,
+        None => {
+            let mut message =
+                format!("game.player:hold was given \"{name}\", which is not a thing LORE has.");
+            if let Some(near) = closest(&name, BUILT_IN_HELD) {
+                let _ = write!(message, " Did you mean \"{near}\"?");
+            }
+            let _ = write!(
+                message,
+                " The built-in things are \"sword\", \"staff\" and \"torch\"; a model of your \
+                 own is a .glb file in the game's folder, such as \"models/axe.glb\", made \
+                 with its grip at the origin and its length pointing up. Write it like \
+                 this: {EXAMPLE}"
+            );
+            return Err(fail(lua, message));
+        }
+    };
+    let mut left = false;
+    match options {
+        Value::Nil => {}
+        Value::Table(options) => {
+            for pair in options.pairs::<Value, Value>() {
+                let (key, value) = pair?;
+                let key = match &key {
+                    Value::String(key) => key.to_string_lossy(),
+                    _ => String::new(),
+                };
+                let hand = match &value {
+                    Value::String(hand) => hand.to_string_lossy().to_ascii_lowercase(),
+                    _ => String::new(),
+                };
+                match (key.as_str(), hand.as_str()) {
+                    ("hand", "left") => left = true,
+                    ("hand", "right") => left = false,
+                    ("hand", _) => {
+                        return Err(fail(
+                            lua,
+                            "game.player:hold's `hand` is \"right\" or \"left\". Write it like \
+                             this: game.player:hold(\"torch\", { hand = \"left\" })",
+                        ));
+                    }
+                    (other, _) => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.player:hold has no setting \"{other}\". It takes `hand`. \
+                                 Write it like this: game.player:hold(\"torch\", {{ hand = \
+                                 \"left\" }})"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.player:hold takes its settings second, in a table, but it was given \
+                     {}. Write it like this: game.player:hold(\"torch\", {{ hand = \"left\" }})",
+                    describe(other)
+                ),
+            ));
+        }
+    }
+    said(Some(HeldSaid { model, left }));
     Ok(())
 }
 

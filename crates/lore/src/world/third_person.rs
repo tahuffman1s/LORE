@@ -55,15 +55,27 @@ fn drawn(script: &str, ticks: u32, headless: &mut Headless) -> (Vec<u8>, Vec<u8>
         ..Camera::default()
     };
     let (figures, joints) = frame.figures();
-    let model = headless.add_model(&figures[0].model).unwrap();
+    // Each model is uploaded once: the body, and what it holds.
+    let mut models: Vec<(*const Scene, lore_render::ModelId)> = Vec::new();
     let list: Vec<Figure<'_>> = figures
         .iter()
-        .map(|figure| Figure {
-            model,
-            transform: figure.transform,
-            joints: &joints[figure.joints.clone()],
-            seen: figure.seen,
-            shadows: figure.shadows,
+        .map(|figure| {
+            let which = std::sync::Arc::as_ptr(&figure.model);
+            let model = match models.iter().find(|(known, _)| *known == which) {
+                Some((_, model)) => *model,
+                None => {
+                    let model = headless.add_model(&figure.model).unwrap();
+                    models.push((which, model));
+                    model
+                }
+            };
+            Figure {
+                model,
+                transform: figure.transform,
+                joints: &joints[figure.joints.clone()],
+                seen: figure.seen,
+                shadows: figure.shadows,
+            }
         })
         .collect();
     headless.set_figures(&[]);
@@ -115,4 +127,21 @@ fn in_first_person_the_body_is_seen_looking_down_and_not_looking_ahead() {
     // on the floor.
     let seen = changed(&ahead, &without, 0..SCREEN[1] / 2);
     assert!(seen < 2_000, "{seen} pixels of body in front of the eyes");
+}
+
+#[test]
+fn what_the_player_holds_is_in_their_hand_in_third_person() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    let script = |held: &str| format!("game.player:setView(\"third\")\n{held}");
+    let (empty, _) = drawn(&script(""), 90, &mut headless);
+    let (sword, _) = drawn(&script("game.player:hold(\"sword\")"), 90, &mut headless);
+    save("third-person-sword", &sword);
+    // The sword is some hundreds of pixels the empty-handed picture lacks,
+    // near the body in the lower two thirds: its blade and its shadow.
+    let more = changed(&sword, &empty, SCREEN[1] / 3..SCREEN[1]);
+    assert!(more > 150, "only {more} pixels show a sword");
+    assert!(more < 20_000, "{more} pixels changed: more than a sword");
+    assert_eq!(lore_render::validation_errors(), 0);
 }

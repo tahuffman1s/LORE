@@ -495,6 +495,11 @@ game.camera.fixed(vector.create(0, 2, 0), vector.create(10, 1, 0), { seconds = 2
 game.camera.follow(game.player, { distance = 8, height = 5, seconds = 1, fov = 60 })
 local shot: "player" | "fixed" | "follow" = game.camera.shot()
 print(shot)
+game.player:hold("sword")
+game.player:hold("torch", { hand = "left" })
+local inHand: string? = game.player.holding
+print(inHand)
+game.player:hold(nil)
 game.camera.reset()
 game.camera.reset(1)
 

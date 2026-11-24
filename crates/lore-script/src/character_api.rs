@@ -47,6 +47,7 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "view",
     "facing",
     "model",
+    "holding",
     "clips",
     "health",
     "maxHealth",
@@ -102,6 +103,7 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setFacing",
     "setCamera",
     "setModel",
+    "hold",
     "play",
     "stop",
     "isPlaying",
@@ -481,6 +483,14 @@ impl UserData for CharacterRef {
             only_player(lua, *this, "model", "given a model")?;
             Ok(crate::body_api::model_name(&*shared_of(lua)?))
         });
+        fields.add_field_method_get("holding", |lua, this| {
+            this.read(lua, "holding")?;
+            Ok(if this.0 == CharacterId::PLAYER {
+                crate::body_api::holding(&*shared_of(lua)?)
+            } else {
+                None
+            })
+        });
         fields.add_field_method_get("clips", |lua, this| {
             this.read(lua, "clips")?;
             only_player(lua, *this, "clips", "animated")?;
@@ -603,6 +613,14 @@ impl UserData for CharacterRef {
             only_player(lua, this, "setModel", "given a model")?;
             crate::body_api::set_model(lua, &shared_of(lua)?, &model)
         });
+        methods.add_function(
+            "hold",
+            |lua, (this, thing, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "hold", "(\"sword\")")?;
+                only_player(lua, this, "hold", "handed something to hold")?;
+                crate::body_api::hold(lua, &shared_of(lua)?, &thing, &options)
+            },
+        );
         methods.add_function(
             "play",
             |lua, (this, clip, options): (Value, Value, Value)| {
