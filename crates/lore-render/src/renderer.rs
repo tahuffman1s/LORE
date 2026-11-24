@@ -16,6 +16,7 @@ use crate::camera::Camera;
 use crate::effects::{Effects, Splash, Standing};
 use crate::error::RenderError;
 use crate::eye::{Eye, EyeAdaptation};
+use crate::figures::Figures;
 use crate::fluid::{FluidDrop, FluidLook, PoolDrawn};
 use crate::font::Font;
 use crate::game_shaders::{GameShader, GameShaders, ShaderReport};
@@ -176,6 +177,8 @@ pub struct Renderer {
     mesh: Option<MeshPipeline>,
     /// The level's meshes on the graphics card; `None` until a scene is set.
     meshes: Option<Meshes>,
+    /// The models a game has added, and the figures of the frame.
+    figures: Figures,
     /// What a splash threw up, and what is stirring the water.
     effects: Effects,
     /// Whether the editor's ground grid is drawn.
@@ -286,6 +289,7 @@ impl Renderer {
             tonemap: None,
             mesh: None,
             meshes: None,
+            figures: Figures::default(),
             effects: Effects::new(),
             grid: false,
             camera: Camera::default(),
@@ -389,6 +393,46 @@ impl Renderer {
             view.cut();
         }
         Ok(())
+    }
+
+    /// Uploads a model (its meshes, materials, textures and skins) to be
+    /// drawn as a [`Figure`](crate::Figure) anywhere, any number of times a
+    /// frame, from now on. Instances of the model's file are drawn at their
+    /// place within the model; a rigged mesh is bent by its skin's joints.
+    /// A level change ([`set_scene`](Self::set_scene)) keeps it.
+    ///
+    /// The model is copied to the graphics card here, so add it when a game
+    /// loads, not every frame.
+    ///
+    /// ```no_run
+    /// # fn show(renderer: &mut lore_render::Renderer) -> Result<(), Box<dyn std::error::Error>> {
+    /// let mannequin = lore_assets::Scene::load("mannequin.glb")?;
+    /// let model = renderer.add_model(&mannequin)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails if the graphics card runs out of memory or its driver reports a
+    /// failure. The models added before are kept.
+    pub fn add_model(&mut self, scene: &Scene) -> Result<crate::ModelId, RenderError> {
+        self.figures.add(&self.gpu, scene, self.filtering)
+    }
+
+    /// The models to draw this frame besides the level; replaces last
+    /// frame's list, and is drawn until the next. A figure whose model was
+    /// not added is skipped.
+    ///
+    /// Each figure is placed by its `transform` and bent by its `joints`,
+    /// and it moves as it is drawn from one frame to the next by the same
+    /// figure in the same place of the list (of the same model): keep
+    /// each figure at its place in the list while it is on screen. At most
+    /// 64 figures, with 64 times 256 joints together, are drawn in a
+    /// frame; the rest are left out, and the log says so once. Nothing is
+    /// allocated once the first frames have been drawn.
+    pub fn set_figures(&mut self, figures: &[crate::Figure<'_>]) {
+        self.figures.set(figures);
     }
 
     /// Draws these lamps from now on, in place of the level's own (which
@@ -1106,6 +1150,18 @@ impl Renderer {
     /// Has the scene read its textures as the player's setting now says,
     /// if that changed since the scene was last drawn.
     fn follow_filtering(&mut self) -> Result<(), RenderError> {
+        if self.figures.filtering_differs(self.filtering) {
+            // SAFETY: the device is alive for as long as `self.gpu` is.
+            unsafe { self.gpu.device().device_wait_idle() }
+                .map_err(RenderError::driver("waiting for the graphics card"))?;
+            // SAFETY: the graphics card has just gone idle, and nothing is
+            // drawn until this returns.
+            if let Err(error) = unsafe { self.figures.set_filtering(self.filtering) } {
+                // As for the level below: drawn as before, and said once.
+                log::warn!("Models' textures keep their filtering: {error}");
+                self.figures.keep_filtering();
+            }
+        }
         let Some(meshes) = &mut self.meshes else {
             return Ok(());
         };
@@ -1261,6 +1317,7 @@ impl Renderer {
             } else {
                 Mirroring::Off
             };
+            self.figures.ready();
             view.record(
                 slot.commands,
                 self.next,
@@ -1279,6 +1336,7 @@ impl Renderer {
                     lamps: &self.lamps,
                     surfaces: self.shaders.surface_draws(),
                     fluids: self.shaders.fluid_draws(),
+                    figures: Some(&self.figures),
                 },
                 &self.camera,
                 seconds,

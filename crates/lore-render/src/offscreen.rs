@@ -273,6 +273,7 @@ pub(crate) fn frames_shaded(
                         lamps: &lamps,
                         surfaces: None,
                         fluids: None,
+                        figures: None,
                     },
                     camera,
                     1.0 / 60.0,

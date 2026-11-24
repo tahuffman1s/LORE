@@ -620,10 +620,13 @@ fn fixed_name(name: &str) -> String {
     }
 }
 
+/// The engine's action for switching between first and third person.
+pub(crate) const SWITCH_VIEW: &str = "switch_view";
+
 /// A gamepad button not yet used by any action, to suggest for one that
 /// has none.
 fn free_gamepad_button(map: &ActionMap) -> &'static str {
-    const CANDIDATES: [&str; 2] = ["GamepadSelect", "LeftBumper"];
+    const CANDIDATES: [&str; 2] = ["LeftBumper", "GamepadSelect"];
     let used = |name: &str| {
         let Ok(wanted) = name.parse::<Binding>() else {
             return false;
@@ -658,7 +661,7 @@ fn check_bindings(name: &str, bindings: &[String]) -> Result<(), MapError> {
 
 /// `game.input.bind(name, bindings)`.
 fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
-    const EXAMPLE: &str = "game.input.bind(\"open_map\", { \"F1\", \"GamepadSelect\" })";
+    const EXAMPLE: &str = "game.input.bind(\"open_map\", { \"F1\", \"LeftBumper\" })";
     let shared = Rc::clone(shared);
     lua.create_function(move |lua, (name, list): (Value, Value)| {
         if !shared.loading.get() {
@@ -689,7 +692,7 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 format!(
                     "game.input.bind was given the name \"{name}\", but {problem}, like the \
                      engine's own \"menu_click\". Write it like this: \
-                     game.input.bind(\"{fixed}\", {{ \"F1\", \"GamepadSelect\" }})"
+                     game.input.bind(\"{fixed}\", {{ \"F1\", \"LeftBumper\" }})"
                 ),
             ));
         }
@@ -705,7 +708,7 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 lua,
                 format!(
                     "game.input.bind was given \"{name}\" twice. Put all of its buttons in one \
-                     list: game.input.bind(\"{name}\", {{ \"F1\", \"GamepadSelect\" }})"
+                     list: game.input.bind(\"{name}\", {{ \"F1\", \"LeftBumper\" }})"
                 ),
             ));
         }
@@ -756,11 +759,13 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                         free_gamepad_button(&map)
                     );
                 }
-                for clash in map
-                    .conflicts()
-                    .iter()
-                    .filter(|clash| clash.first == name || clash.second == name)
-                {
+                // `switch_view` only does anything in a game that lets the
+                // player switch views; that game is warned when it does.
+                for clash in map.conflicts().iter().filter(|clash| {
+                    (clash.first == name || clash.second == name)
+                        && clash.first != SWITCH_VIEW
+                        && clash.second != SWITCH_VIEW
+                }) {
                     log::warn!("{clash}");
                 }
             }

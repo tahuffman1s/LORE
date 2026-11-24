@@ -42,6 +42,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onWeaponFire",
     "onWeaponHit",
     "onWeaponReload",
+    "onDamage",
+    "onDeath",
     "setTimeSpeed",
     "timeSpeed",
     "fluid",
@@ -94,6 +96,11 @@ pub(crate) struct Handlers {
     pub pool_overflow: Vec<Function>,
     pub pool_overflow_end: Vec<Function>,
     pub pool_formed: Vec<Function>,
+    /// `game.onDamage` and `game.onDeath`.
+    pub damage: Vec<Function>,
+    pub death: Vec<Function>,
+    /// `game.player:onMoment`: each with the moment it listens for.
+    pub moment: Vec<(String, Function)>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -189,6 +196,10 @@ pub(crate) struct Shared {
     pub settings: Rc<SettingsState>,
     /// The game's time. It outlives this version of the script.
     pub clock: Rc<Clock>,
+    /// The player's body and camera. It outlives this version of the script.
+    pub body: Rc<crate::body_api::BodyState>,
+    /// The hurts the script has not yet heard of. They outlive this version.
+    pub health: Rc<crate::health_api::HealthState>,
     /// The functions this version is waiting to call, from `game.after` and
     /// `game.every`, oldest first.
     pub timers: RefCell<Vec<Timer>>,
@@ -288,7 +299,15 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 4] = [
+    let events: [(&'static str, &'static str, List); 6] = [
+        ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
+            &mut h.damage
+        }),
+        (
+            "onDeath",
+            "game.onDeath(function(victim, killer) ... end)",
+            |h| &mut h.death,
+        ),
         ("onSpawn", "game.onSpawn(function() ... end)", |h| {
             &mut h.spawn
         }),
@@ -822,8 +841,9 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 43] = [
+        let groups: [(&str, &[&str]); 44] = [
             ("game.", GAME_FUNCTIONS),
+            ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
             ("game.audio.", AUDIO_FUNCTIONS),
             ("Sound:", crate::audio::SOUND_METHODS),

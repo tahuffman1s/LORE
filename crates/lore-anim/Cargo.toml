@@ -1,0 +1,13 @@
+[package]
+name = "lore-anim"
+description = "Plays animation clips on LORE skeletons: the same bones on every computer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lore-assets = { path = "../lore-assets" }
+
+[lints]
+workspace = true

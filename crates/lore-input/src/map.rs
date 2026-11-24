@@ -221,13 +221,16 @@ impl ActionMap {
     /// | `previous_item` | wheel up | d-pad left |
     /// | `map` | M | d-pad up |
     /// | `inventory` | Tab | d-pad down |
+    /// | `switch_view` | F | Select (Xbox View) |
     /// | `pause` | Escape | start |
     ///
     /// The engine itself acts on `move`, `look`, `jump`, `crouch`, `sprint`,
-    /// `fire`, `aim`, `reload` and `pause`. `interact`, `melee`, `use_item`, `next_item`, `previous_item`,
+    /// `fire`, `aim`, `reload` and `pause`, and on `switch_view` when the
+    /// game lets the player choose between first and third person.
+    /// `interact`, `melee`, `use_item`, `next_item`, `previous_item`,
     /// `map` and `inventory` are there for a game's script to read, so that
     /// every game calls them the same and a player binds them once. The
-    /// left bumper and Select are left for a game's own actions.
+    /// left bumper is left for a game's own action.
     ///
     /// A second set, `"menu"`, holds the actions menus are worked with. The
     /// mouse points in it. `menu_click` is a click on a script's menu, and a
@@ -277,6 +280,7 @@ impl ActionMap {
             ("previous_item", ["MouseWheelUp", "DpadLeft"]),
             ("map", ["M", "DpadUp"]),
             ("inventory", ["Tab", "DpadDown"]),
+            ("switch_view", ["F", "GamepadSelect"]),
             ("pause", ["Escape", "GamepadStart"]),
         ];
         const MENU_BUTTONS: &[(&str, [&str; 2])] = &[
@@ -997,9 +1001,9 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::standard();
-        assert_eq!(map.len(), 23);
-        // No scores are kept, so nothing shows them; Select is free for a
-        // game to use.
+        assert_eq!(map.len(), 24);
+        // No scores are kept, so nothing shows them; Select (the Xbox View
+        // button) switches the view.
         assert!(map.action("scoreboard").is_err());
         assert_eq!(map.parity_gaps(), Vec::new());
         // Nothing in the standard controls shares a key or a button.
@@ -1015,6 +1019,7 @@ mod tests {
             "previous_item",
             "map",
             "inventory",
+            "switch_view",
         ] {
             let action = map
                 .action(name)

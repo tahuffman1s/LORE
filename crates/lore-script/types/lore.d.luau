@@ -81,6 +81,48 @@ declare extern type Character with
     --- Example: print(game.player.flySpeed)
     flySpeed: number
 
+    --- Where the camera is: "first" (at the eyes) or "third" (behind and
+    --- over a shoulder). Change it with `game.player:setView`; the player
+    --- changes it with their switch_view button where the game allows.
+    --- Example: if game.player.view == "third" then print("Seen from behind") end
+    view: ("first" | "third")
+
+    --- Which way the body turns: "move" (the way it walks) or "aim" (the
+    --- way the camera looks). Change it with `game.player:setFacing`.
+    --- Example: print(game.player.facing)
+    facing: ("move" | "aim")
+
+    --- The body's model: "mannequin" (the engine's own), "mannequin_female",
+    --- or the file a script gave `game.player:setModel`.
+    --- Example: print(game.player.model)
+    model: string
+
+    --- How much health the character has, from 0 to `maxHealth`. Every
+    --- character starts with 100. Weapons, hard landings and `damage` take
+    --- it; `heal` and `setHealth` give it back.
+    --- Example: if game.player.health < 25 then print("Low health") end
+    health: number
+
+    --- The most health the character can have: 100 until `setMaxHealth`.
+    --- Example: print(game.player.maxHealth)
+    maxHealth: number
+
+    --- True once the character's health has reached 0.
+    --- Example: if game.player.dead then print("Game over") end
+    dead: boolean
+
+    --- Who the camera and body are held on (`game.player:lockOn`), or nil.
+    --- Example: if game.player.lockedOn then print("Fighting " .. game.player.lockedOn.name) end
+    lockedOn: Character?
+
+    --- True while the player's guard is up (`game.player:block`).
+    --- Example: print(game.player.blocking)
+    blocking: boolean
+
+    --- The names of the clips the body can play, for `game.player:play`.
+    --- Example: for _, clip in game.player.clips do print(clip) end
+    clips: { string }
+
     --- Puts a new, full weapon in the character's hands, in place of what
     --- they held. The name is one of the engine's weapons ("rifle",
     --- "pistol", "shotgun", "rocket launcher", "grenade") or one made with
@@ -115,6 +157,128 @@ declare extern type Character with
     --- `game.player` can be changed so far.
     --- Example: game.player:setFlySpeed(30)
     function setFlySpeed(self, metresPerSecond: number): ()
+
+    --- Sets the character's health, from 0 to its most. Setting it above
+    --- 0 brings back the dead.
+    --- Example: game.onDeath(function(victim) victim:setHealth(victim.maxHealth) end)
+    function setHealth(self, points: number): ()
+
+    --- Sets the most health the character can have. One at full health
+    --- stays full.
+    --- Example: game.player:setMaxHealth(150)
+    function setMaxHealth(self, points: number): ()
+
+    --- Gives back health, up to its most. The dead stay dead.
+    --- Example: game.player:heal(25)
+    function heal(self, points: number): ()
+
+    --- Takes health away through the one path every hurt takes, so
+    --- `game.onDamage` and `game.onDeath` hear of it. `from` is who did it
+    --- and `how` a word for what did it ("script" if not given).
+    --- Example: game.player:damage(10, { how = "spikes" })
+    function damage(self, points: number, options: { from: Character?, how: string? }?): ()
+
+    --- Swings at what is in reach: plays a clip that strikes (a blow such as
+    --- "sword_attack", "sword_heavy", "punch" or "kick") and hurts each
+    --- thing the striking hand or foot passes through, once, while the blow
+    --- carries its weight. `damage` is health points (10 if not given),
+    --- `reach` how far past the hand or foot it hits in metres (a sword's
+    --- length; 0 for a fist), `keepWalking` true to swing from the waist up.
+    --- A swing under way finishes before another starts. Hits reach
+    --- `game.onDamage` with `how` set to the clip's name.
+    --- Example: if game.input.justPressed("fire") then game.player:swing("sword_attack", { damage = 25, reach = 0.9 }) end
+    function swing(self, clip: string, options: { damage: number?, reach: number?, keepWalking: boolean? }?): ()
+
+    --- Holds the camera and the player's body on `target`, turning to keep
+    --- them in view whatever the look action does, until `lockOn(nil)` or
+    --- they leave the world.
+    --- Example: game.player:lockOn(if game.player.lockedOn then nil else bandit)
+    function lockOn(self, target: Character?): ()
+
+    --- Raises (true) or lowers (false) the player's guard: the block clip
+    --- on the upper body, and blows from someone in front of them (within
+    --- 60 degrees of where they look) do no harm. Falls and blows from
+    --- behind still hurt.
+    --- Example: game.onTick(function() game.player:block(game.input.pressed("aim")) end)
+    function block(self, raised: boolean): ()
+
+    --- Sees the world from the eyes ("first") or from behind and over a
+    --- shoulder ("third"). The camera travels between the two rather than
+    --- cutting. Everything else follows: the body is drawn whole in third
+    --- person and without its head in first, and turns as `setFacing` says.
+    --- Example: game.player:setView("third")
+    function setView(self, view: "first" | "third"): ()
+
+    --- Lets the player switch between first and third person with their
+    --- switch_view button (F, or the View/Select button on a gamepad), or
+    --- stops them. Off until a game turns it on.
+    --- Example: game.player:allowViewSwitch(true)
+    function allowViewSwitch(self, allowed: boolean): ()
+
+    --- Turns the body the way it walks ("move", as an adventure does: the
+    --- character runs where the stick points) or the way the camera looks
+    --- ("aim", strafing, as over-the-shoulder aiming does). It turns at a
+    --- speed, never snapping round. In first person the body always faces
+    --- the way the camera looks.
+    --- Example: game.onTick(function() game.player:setFacing(if game.input.pressed("aim") then "aim" else "move") end)
+    function setFacing(self, facing: "move" | "aim"): ()
+
+    --- How the third-person camera hangs: `distance` behind (metres, 0.5 to
+    --- 20, 3 if never set), `height` above the eyes (0.15) and `shoulder`
+    --- to the right (0.45; negative for the left shoulder). Give any of
+    --- them. The camera pulls in when something is in the way and eases out.
+    --- Example: game.player:setCamera({ distance = 4, shoulder = -0.45 })
+    function setCamera(self, camera: { distance: number?, height: number?, shoulder: number? }): ()
+
+    --- Makes the body "mannequin", "mannequin_female", or a .glb model in
+    --- the game's folder. A model with bones named as the mannequin's
+    --- (Unreal's names: pelvis, spine_01, thigh_l...) plays all of its clips,
+    --- as well as its own.
+    --- Example: game.player:setModel("models/hero.glb")
+    function setModel(self, model: string): ()
+
+    --- Plays one of the body's clips (see `game.player.clips`) over its
+    --- moving about, then goes back to it. Options: `fade` (seconds to fade
+    --- in and out, 0 to 10, 0.2 if not given), `speed` (0 to 10, 1 as
+    --- made), `loop` (true to keep playing until stopped) and `keepWalking`
+    --- (true to move only from the waist up, so the legs keep walking or
+    --- standing). Playing another clip on the same part of the body fades
+    --- this one out. Only `game.player` plays clips so far. It gives nothing
+    --- back: stop it with `game.player:stop(clip)`.
+    --- Example: if game.input.justPressed("melee") then game.player:play("sword_attack", { keepWalking = true }) end
+    function play(self, clip: string, options: { fade: number?, speed: number?, loop: boolean?, keepWalking: boolean? }?): ()
+
+    --- Fades out a clip a script played, over 0.2 seconds, or every one
+    --- with no name.
+    --- Example: game.player:stop("dance")
+    function stop(self, clip: string?): ()
+
+    --- True while a clip a script played is still showing.
+    --- Example: if not game.player:isPlaying("drink") then game.player:play("drink") end
+    function isPlaying(self, clip: string): boolean
+
+    --- Calls `handler` with the clip's name whenever one of the player's
+    --- clips passes the moment `name` (a marker in the animation):
+    --- "left_foot_down" and "right_foot_down" for every step of walking and
+    --- running, or a moment a clip marks itself. Never missed or heard
+    --- twice, at any frame rate. Only `game.player` has moments so far.
+    --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
+    function onMoment(self, name: string, handler: (clip: string) -> ()): ()
+end
+
+--- A hurt: what a `game.onDamage` function is handed.
+--- Example: game.onDamage(function(hurt) if hurt.how == "fall" then print("Ouch") end end)
+declare extern type Hurt with
+    --- Who was hurt.
+    victim: Character
+    --- How many health points were taken.
+    amount: number
+    --- Who did it, if anyone did.
+    from: Character?
+    --- What did it: "fall", a weapon's name, or the word a script gave.
+    how: string
+    --- True if it took the last of their health.
+    died: boolean
 end
 
 --- Where a shot landed: what a `game.onWeaponHit` function is handed.
@@ -1481,6 +1645,20 @@ declare game: {
     --- is not `game.onReload`, which is about the script file being saved.
     --- Example: game.onWeaponReload(function(shooter) print(shooter.reserve .. " spare") end)
     onWeaponReload: (handler: (shooter: Character) -> ()) -> (),
+
+    --- Calls `handler` for every hurt, whoever or whatever did it: a
+    --- weapon, a fall, or a script's `damage`. It is handed what happened:
+    --- `victim`, `amount` (health points taken), `from` (who did it, if
+    --- anyone), `how` ("fall", a weapon's name, or the script's word) and
+    --- `died`. Heard on the tick it happened.
+    --- Example: game.onDamage(function(hurt) print(hurt.victim.name .. " lost " .. hurt.amount) end)
+    onDamage: (handler: (hurt: Hurt) -> ()) -> (),
+
+    --- Calls `handler` when a character's health reaches 0, with who died
+    --- and who killed them (nil if no one did). Nothing else happens on
+    --- death: the game says what does.
+    --- Example: game.onDeath(function(victim) if victim == game.player then game.player:setHealth(100) end end)
+    onDeath: (handler: (victim: Character, killer: Character?) -> ()) -> (),
 
     --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
     --- inside the game's folder, named without the folder and without `.wav`

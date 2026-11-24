@@ -24,8 +24,26 @@ use crate::weapon_api;
 
 /// What can be read from a character.
 pub(crate) const CHARACTER_FIELDS: &[&str] = &[
-    "name", "position", "weapon", "ammo", "reserve", "velocity", "eye", "aim", "grounded",
-    "movement", "flySpeed",
+    "name",
+    "position",
+    "weapon",
+    "ammo",
+    "reserve",
+    "velocity",
+    "eye",
+    "aim",
+    "grounded",
+    "movement",
+    "flySpeed",
+    "view",
+    "facing",
+    "model",
+    "clips",
+    "health",
+    "maxHealth",
+    "dead",
+    "lockedOn",
+    "blocking",
 ];
 
 /// What a character can be told to do.
@@ -35,6 +53,22 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "teleport",
     "setMovement",
     "setFlySpeed",
+    "setView",
+    "allowViewSwitch",
+    "setFacing",
+    "setCamera",
+    "setModel",
+    "play",
+    "stop",
+    "isPlaying",
+    "onMoment",
+    "setHealth",
+    "setMaxHealth",
+    "heal",
+    "damage",
+    "swing",
+    "lockOn",
+    "block",
 ];
 
 /// How high the eyes are above the feet of a character the engine has said
@@ -63,7 +97,13 @@ struct Entry {
     position: [f32; 3],
     /// How it is moving, as the engine last said.
     motion: Option<Motion>,
+    /// How much health it has, and the most it can have.
+    health: f32,
+    max_health: f32,
 }
+
+/// The health every character starts with.
+pub const DEFAULT_HEALTH: f32 = 100.0;
 
 /// Who is in the world, shared by the host and every version of the
 /// script. The player is always the first.
@@ -79,6 +119,8 @@ impl Default for Characters {
             name: PLAYER_NAME.to_owned(),
             position: [0.0; 3],
             motion: None,
+            health: DEFAULT_HEALTH,
+            max_health: DEFAULT_HEALTH,
         };
         Self {
             here: RefCell::new(vec![player]),
@@ -97,8 +139,30 @@ impl Characters {
             name: name.to_owned(),
             position: [0.0; 3],
             motion: None,
+            health: DEFAULT_HEALTH,
+            max_health: DEFAULT_HEALTH,
         });
         id
+    }
+
+    /// A character's health and the most it can have.
+    pub fn health(&self, id: CharacterId) -> Option<(f32, f32)> {
+        let here = self.here.borrow();
+        let entry = here.iter().find(|entry| entry.id == id)?;
+        Some((entry.health, entry.max_health))
+    }
+
+    /// Sets a character's health (kept from 0 to its most) and, if given,
+    /// the most it can have. Gives the health before and after.
+    pub fn set_health(&self, id: CharacterId, health: f32, max: Option<f32>) -> Option<(f32, f32)> {
+        let mut here = self.here.borrow_mut();
+        let entry = here.iter_mut().find(|entry| entry.id == id)?;
+        if let Some(max) = max {
+            entry.max_health = max.max(0.0);
+        }
+        let before = entry.health;
+        entry.health = health.clamp(0.0, entry.max_health);
+        Some((before, entry.health))
     }
 
     /// Takes a character out. False if it was not here, and for the
@@ -159,6 +223,16 @@ impl Characters {
             aim: [0.0, 0.0, -1.0],
             grounded: true,
         }))
+    }
+
+    /// Where a character's feet are.
+    pub fn position(&self, id: CharacterId) -> Option<[f32; 3]> {
+        self.read(id).map(|(_, at)| at)
+    }
+
+    /// How a character is moving.
+    pub fn motion_of(&self, id: CharacterId) -> Option<Motion> {
+        self.motion(id)
     }
 
     /// What a character is called and where it is.
@@ -288,6 +362,61 @@ impl UserData for CharacterRef {
                 crate::tools_api::DEFAULT_FLY_SPEED
             })
         });
+        fields.add_field_method_get("health", |lua, this| {
+            this.read(lua, "health")?;
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .map_or(0.0, |h| h.0))
+        });
+        fields.add_field_method_get("maxHealth", |lua, this| {
+            this.read(lua, "maxHealth")?;
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .map_or(0.0, |h| h.1))
+        });
+        fields.add_field_method_get("dead", |lua, this| {
+            this.read(lua, "dead")?;
+            Ok(shared_of(lua)?
+                .characters
+                .health(this.0)
+                .is_none_or(|h| h.0 <= 0.0))
+        });
+        fields.add_field_method_get("lockedOn", |lua, this| {
+            this.read(lua, "lockedOn")?;
+            only_player(lua, *this, "lockedOn", "locked on")?;
+            let shared = shared_of(lua)?;
+            match shared.body.locked().filter(|id| shared.characters.has(*id)) {
+                Some(id) => Ok(Value::UserData(shared.handles.character(lua, id)?)),
+                None => Ok(Value::Nil),
+            }
+        });
+        fields.add_field_method_get("blocking", |lua, this| {
+            this.read(lua, "blocking")?;
+            only_player(lua, *this, "blocking", "blocking")?;
+            Ok(shared_of(lua)?.body.blocking())
+        });
+        fields.add_field_method_get("view", |lua, this| {
+            this.read(lua, "view")?;
+            only_player(lua, *this, "view", "seen in first or third person")?;
+            Ok(crate::body_api::view_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("facing", |lua, this| {
+            this.read(lua, "facing")?;
+            only_player(lua, *this, "facing", "turned by the script")?;
+            Ok(crate::body_api::facing_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("model", |lua, this| {
+            this.read(lua, "model")?;
+            only_player(lua, *this, "model", "given a model")?;
+            Ok(crate::body_api::model_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("clips", |lua, this| {
+            this.read(lua, "clips")?;
+            only_player(lua, *this, "clips", "animated")?;
+            crate::body_api::clip_list(lua, &*shared_of(lua)?)
+        });
         fields.add_field_method_get("weapon", |lua, this| {
             this.read(lua, "weapon")?;
             Ok(weapon_api::weapon_name(&*shared_of(lua)?, this.0))
@@ -332,6 +461,103 @@ impl UserData for CharacterRef {
             only_player(lua, this, "setFlySpeed", "given a flying speed")?;
             crate::tools_api::set_fly_speed(lua, &shared_of(lua)?, &speed)
         });
+        methods.add_function("setHealth", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "setHealth", "(100)")?;
+            this.read(lua, "setHealth")?;
+            crate::health_api::set_health(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function("setMaxHealth", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "setMaxHealth", "(150)")?;
+            this.read(lua, "setMaxHealth")?;
+            crate::health_api::set_max_health(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function("heal", |lua, (this, points): (Value, Value)| {
+            let this = receiver(lua, &this, "heal", "(25)")?;
+            this.read(lua, "heal")?;
+            crate::health_api::heal(lua, &shared_of(lua)?, this.0, &points)
+        });
+        methods.add_function(
+            "damage",
+            |lua, (this, points, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "damage", "(10, { how = \"spikes\" })")?;
+                this.read(lua, "damage")?;
+                crate::health_api::damage(lua, &shared_of(lua)?, this.0, &points, &options)
+            },
+        );
+        methods.add_function(
+            "swing",
+            |lua, (this, clip, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "swing", "(\"sword_attack\", { damage = 25 })")?;
+                only_player(lua, this, "swing", "made to swing")?;
+                crate::body_api::swing(lua, &shared_of(lua)?, &clip, &options)
+            },
+        );
+        methods.add_function("lockOn", |lua, (this, target): (Value, Value)| {
+            let this = receiver(lua, &this, "lockOn", "(enemy)")?;
+            only_player(lua, this, "lockOn", "locked on")?;
+            crate::body_api::lock_on(lua, &shared_of(lua)?, &target)
+        });
+        methods.add_function("block", |lua, (this, on): (Value, Value)| {
+            let this = receiver(lua, &this, "block", "(true)")?;
+            only_player(lua, this, "block", "made to block")?;
+            crate::body_api::block(lua, &shared_of(lua)?, &on)
+        });
+        methods.add_function("setView", |lua, (this, view): (Value, Value)| {
+            let this = receiver(lua, &this, "setView", "(\"third\")")?;
+            only_player(lua, this, "setView", "seen in first or third person")?;
+            crate::body_api::set_view(lua, &shared_of(lua)?, &view)
+        });
+        methods.add_function("allowViewSwitch", |lua, (this, allowed): (Value, Value)| {
+            let this = receiver(lua, &this, "allowViewSwitch", "(true)")?;
+            only_player(lua, this, "allowViewSwitch", "switched between views")?;
+            crate::body_api::allow_view_switch(lua, &shared_of(lua)?, &allowed)
+        });
+        methods.add_function("setFacing", |lua, (this, facing): (Value, Value)| {
+            let this = receiver(lua, &this, "setFacing", "(\"aim\")")?;
+            only_player(lua, this, "setFacing", "turned by the script")?;
+            crate::body_api::set_facing(lua, &shared_of(lua)?, &facing)
+        });
+        methods.add_function("setCamera", |lua, (this, options): (Value, Value)| {
+            let this = receiver(lua, &this, "setCamera", "({ distance = 4 })")?;
+            only_player(lua, this, "setCamera", "given a camera")?;
+            crate::body_api::set_camera(lua, &shared_of(lua)?, &options)
+        });
+        methods.add_function("setModel", |lua, (this, model): (Value, Value)| {
+            let this = receiver(lua, &this, "setModel", "(\"mannequin_female\")")?;
+            only_player(lua, this, "setModel", "given a model")?;
+            crate::body_api::set_model(lua, &shared_of(lua)?, &model)
+        });
+        methods.add_function(
+            "play",
+            |lua, (this, clip, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "play", "(\"wave\")")?;
+                only_player(lua, this, "play", "animated")?;
+                crate::body_api::play(lua, &shared_of(lua)?, &clip, &options)
+            },
+        );
+        methods.add_function("stop", |lua, (this, clip): (Value, Value)| {
+            let this = receiver(lua, &this, "stop", "(\"wave\")")?;
+            only_player(lua, this, "stop", "animated")?;
+            crate::body_api::stop(lua, &shared_of(lua)?, &clip)
+        });
+        methods.add_function("isPlaying", |lua, (this, clip): (Value, Value)| {
+            let this = receiver(lua, &this, "isPlaying", "(\"wave\")")?;
+            only_player(lua, this, "isPlaying", "animated")?;
+            crate::body_api::is_playing(lua, &shared_of(lua)?, &clip)
+        });
+        methods.add_function(
+            "onMoment",
+            |lua, (this, moment, handler): (Value, Value, Value)| {
+                let this = receiver(
+                    lua,
+                    &this,
+                    "onMoment",
+                    "(\"left_foot_down\", function(clip) end)",
+                )?;
+                only_player(lua, this, "onMoment", "animated")?;
+                crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
+            },
+        );
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this
@@ -357,6 +583,14 @@ impl UserData for CharacterRef {
 }
 
 /// The character `value` stands for; the player when it is not one.
+/// The character a script value is, if it is one.
+pub(crate) fn id_of_value(_lua: &Lua, value: &Value) -> Option<CharacterId> {
+    match value {
+        Value::UserData(value) => character_id(value),
+        _ => None,
+    }
+}
+
 fn id_of(value: &Value) -> CharacterId {
     match value {
         Value::UserData(value) => character_id(value).unwrap_or(CharacterId::PLAYER),

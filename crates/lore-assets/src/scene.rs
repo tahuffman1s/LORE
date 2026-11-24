@@ -666,6 +666,9 @@ pub struct Animation {
     /// What it moves. A node's translation, rotation and scale each have at
     /// most one track; whatever has no track stays at the node's rest pose.
     pub tracks: Vec<Track>,
+    /// Custom properties set on the clip, as JSON text, such as
+    /// `{"loop":true}` for a clip that starts again when it ends.
+    pub extras: Option<String>,
 }
 
 /// How one node's translation, rotation or scale changes during an [`Animation`].

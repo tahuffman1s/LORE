@@ -503,6 +503,7 @@ fn make_surface(
                 SURFACE_VERTEX,
                 fragment,
                 surface,
+                false,
             )
         };
         match made {
@@ -523,6 +524,7 @@ fn make_surface(
                 module,
                 SURFACE_VERTEX,
                 Some(c"lore_fragment_depth_cutout"),
+                false,
             )
         };
         match made {

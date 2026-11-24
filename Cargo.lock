@@ -1536,6 +1536,7 @@ dependencies = [
  "gilrs",
  "libm",
  "log",
+ "lore-anim",
  "lore-assets",
  "lore-audio",
  "lore-fluid",
@@ -1551,6 +1552,13 @@ dependencies = [
  "tar",
  "toml",
  "winit",
+]
+
+[[package]]
+name = "lore-anim"
+version = "0.0.0"
+dependencies = [
+ "lore-assets",
 ]
 
 [[package]]
@@ -1623,6 +1631,7 @@ dependencies = [
  "egui-ash-renderer",
  "fontdue",
  "log",
+ "lore-anim",
  "lore-assets",
  "lore-fsr",
  "lore-shader",

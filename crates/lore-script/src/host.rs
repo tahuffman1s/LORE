@@ -157,6 +157,10 @@ pub struct ScriptHost {
     lamps: Rc<crate::lamp_api::LampState>,
     /// The game shaders the script turned on; they outlive a reload too.
     shaders: Rc<ShaderState>,
+    /// The player's body and camera; they outlive a reload too.
+    body: Rc<crate::body_api::BodyState>,
+    /// Hurts the script has not yet heard of; they outlive a reload too.
+    health: Rc<crate::health_api::HealthState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
     /// How many versions of the script have run: each has its own HUD.
@@ -348,6 +352,8 @@ impl ScriptHost {
             weather: Rc::default(),
             fluids: Rc::default(),
             lamps: Rc::default(),
+            body: Rc::default(),
+            health: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
             versions: 0,
@@ -415,6 +421,7 @@ impl ScriptHost {
             self.weather.step(step);
         }
         self.meteors_due();
+        self.moments_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
             self.call_all(|handlers| &handlers.spawn, ());
@@ -422,7 +429,9 @@ impl ScriptHost {
         if !stopped {
             self.run_timers();
         }
+        self.hurts_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
+        self.hurts_due();
         if !stopped {
             self.clock.end_tick();
         }
@@ -715,6 +724,160 @@ impl ScriptHost {
                 ),
             );
         });
+    }
+
+    /// Tells the script of the moments the body's clips passed since the
+    /// last tick: its `game.player:onMoment` functions for each, with the
+    /// clip's name.
+    fn moments_due(&mut self) {
+        let moments = self.body.take_moments();
+        if moments.is_empty() || self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        for (clip, moment) in moments {
+            for handler in crate::body_api::moment_handlers(&shared, &moment) {
+                if !self.call(&shared, &handler, clip.clone()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Hurts `victim` by `amount` health points, as `how` says ("fall", a
+    /// weapon's name), by `from` if someone did it: the one path every hurt
+    /// takes. The health changes at once; the script's `game.onDamage` and
+    /// (if it died of it) `game.onDeath` functions hear of it on its tick.
+    /// Gives back whether it died of it.
+    pub fn damage(
+        &mut self,
+        victim: CharacterId,
+        amount: f32,
+        from: Option<CharacterId>,
+        how: &str,
+    ) -> bool {
+        // A raised guard stops what comes at the player from in front.
+        if victim == CharacterId::PLAYER && self.body.blocking() && self.facing_toward(from) {
+            return false;
+        }
+        crate::health_api::hurt(&self.characters, &self.health, victim, amount, from, how)
+    }
+
+    /// Whether `from` is in front of the player, within 60 degrees of
+    /// where they look: what a raised guard covers.
+    fn facing_toward(&self, from: Option<CharacterId>) -> bool {
+        let Some(from) = from else { return false };
+        let (Some(at), Some(motion)) = (
+            self.characters.position(from),
+            self.characters.motion_of(CharacterId::PLAYER),
+        ) else {
+            return false;
+        };
+        let way = [at[0] - motion.eye[0], at[2] - motion.eye[2]];
+        let aim = [motion.aim[0], motion.aim[2]];
+        let (lw, la) = (
+            (way[0] * way[0] + way[1] * way[1]).sqrt(),
+            (aim[0] * aim[0] + aim[1] * aim[1]).sqrt(),
+        );
+        lw > 0.0 && la > 0.0 && (way[0] * aim[0] + way[1] * aim[1]) / (lw * la) > 0.5
+    }
+
+    /// Who the script holds the camera and the player's body on
+    /// (`game.player:lockOn`), if they are still in the world.
+    #[must_use]
+    pub fn locked_on(&self) -> Option<CharacterId> {
+        self.body.locked().filter(|id| self.characters.has(*id))
+    }
+
+    /// Whether the player's guard is up (`game.player:block`).
+    #[must_use]
+    pub fn blocking(&self) -> bool {
+        self.body.blocking()
+    }
+
+    /// Where a character's feet are, or `None` for one not in the world.
+    #[must_use]
+    pub fn character_position(&self, id: CharacterId) -> Option<[f32; 3]> {
+        self.characters.position(id)
+    }
+
+    /// A character's health and the most it can have, or `None` for one
+    /// that is not in the world.
+    #[must_use]
+    pub fn health(&self, id: CharacterId) -> Option<(f32, f32)> {
+        self.characters.health(id)
+    }
+
+    /// Tells the script of the hurts since it last heard: `game.onDamage`
+    /// for each, then `game.onDeath` for each that died of it.
+    fn hurts_due(&mut self) {
+        let hurts = self.health.take();
+        if hurts.is_empty() || self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let (vm, shared) = (version.vm.clone(), Rc::clone(&version.shared));
+        for hurt in &hurts {
+            if let Ok(table) = crate::health_api::hurt_table(&vm, &shared, hurt) {
+                self.call_all(|handlers| &handlers.damage, table);
+            }
+            if hurt.died {
+                let victim = shared.handles.character(&vm, hurt.victim);
+                let killer = hurt
+                    .from
+                    .filter(|f| shared.characters.has(*f))
+                    .map(|f| shared.handles.character(&vm, f));
+                if let Ok(victim) = victim {
+                    let killer = match killer {
+                        Some(Ok(k)) => mlua::Value::UserData(k),
+                        _ => mlua::Value::Nil,
+                    };
+                    self.call_all(|handlers| &handlers.death, (victim, killer));
+                }
+            }
+        }
+    }
+
+    /// How the script wants the camera and body set up: first or third
+    /// person, which way the body faces, and how the camera hangs.
+    #[must_use]
+    pub fn camera_view(&self) -> crate::CameraView {
+        self.body.camera_view()
+    }
+
+    /// Notes that the player switched the view with their own button, so
+    /// `game.player.view` says so.
+    pub fn said_view(&self, third: bool) {
+        self.body.said_view(third);
+    }
+
+    /// The model the script asked the body to be, once: a built-in name
+    /// (`"mannequin"`, `"mannequin_female"`) or a file in the game's folder.
+    pub fn take_body_model(&self) -> Option<String> {
+        self.body.take_model()
+    }
+
+    /// What the script asked the body to play or stop since the last call.
+    pub fn take_animation_asks(&self) -> Vec<crate::AnimationAsk> {
+        self.body.take_asks()
+    }
+
+    /// Tells the script which model the body is and the clips it has, so a
+    /// misspelt clip name is caught where it is written.
+    pub fn set_body_clips(&self, model: &str, clips: impl IntoIterator<Item = String>) {
+        self.body.set_clips(model, clips);
+    }
+
+    /// Tells the script which of the clips it asked for are still playing.
+    pub fn set_playing<'a>(&self, clips: impl IntoIterator<Item = &'a str>) {
+        self.body.set_playing(clips);
+    }
+
+    /// Notes that a clip passed a moment (`"left_foot_down"`, `"hit"`), for
+    /// `game.player:onMoment` on the next tick.
+    pub fn heard_moment(&self, clip: &str, moment: &str) {
+        self.body.heard_moment(clip, moment);
     }
 
     /// How stormy the aurora is, the Kp index from 0 to 9, if the script
@@ -1490,6 +1653,8 @@ impl ScriptHost {
             fluids: Rc::clone(&self.fluids),
             lamps: Rc::clone(&self.lamps),
             shaders: Rc::clone(&self.shaders),
+            body: Rc::clone(&self.body),
+            health: Rc::clone(&self.health),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             audio: Rc::clone(&self.audio),

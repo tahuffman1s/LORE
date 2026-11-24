@@ -27,6 +27,7 @@
 mod app;
 pub mod bench;
 pub mod blend;
+mod character;
 #[cfg(feature = "cli")]
 #[doc(hidden)]
 pub mod cli;

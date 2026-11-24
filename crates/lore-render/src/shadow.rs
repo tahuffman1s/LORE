@@ -218,6 +218,9 @@ const SUN_MAY_LAG: f32 = 0.999_39;
 pub(crate) struct Drawn {
     pictures: [Option<(u64, Cascade)>; PICTURES],
     turn: usize,
+    /// Which pictures something moving (a figure) cast into when they
+    /// were last drawn.
+    moving: [bool; PICTURES],
 }
 
 /// What [`Drawn::plan`] says to do this frame.
@@ -238,7 +241,22 @@ impl Drawn {
     /// or the eye has moved its square, or the sun has moved far, or it is
     /// the nearest. A wider one whose square has changed only because the
     /// sun has moved a little waits its turn: one of those is drawn a frame.
+    #[cfg(test)]
     pub(crate) fn plan(&mut self, level: u64, eye: [f32; 3], wanted: &[Cascade; PICTURES]) -> Plan {
+        self.plan_moving(level, eye, wanted, [false; PICTURES])
+    }
+
+    /// As [`plan`](Self::plan), but each picture that `moving` says
+    /// something moving casts into (a figure) is drawn this frame, and so
+    /// is each it cast into when it was last drawn, which would otherwise
+    /// keep its shadow where it was.
+    pub(crate) fn plan_moving(
+        &mut self,
+        level: u64,
+        eye: [f32; 3],
+        wanted: &[Cascade; PICTURES],
+        moving: [bool; PICTURES],
+    ) -> Plan {
         let mut draw = [false; PICTURES];
         let mut waiting = [false; PICTURES];
         for (number, (drawn, cascade)) in self.pictures.iter().zip(wanted).enumerate() {
@@ -262,6 +280,10 @@ impl Drawn {
         if let Some(next) = next {
             draw[next] = true;
             self.turn = (next + 1) % PICTURES;
+        }
+        for ((draw, now), was) in draw.iter_mut().zip(moving).zip(&mut self.moving) {
+            *draw |= now || *was;
+            *was = now;
         }
         for ((drawn, cascade), draw) in self.pictures.iter_mut().zip(wanted).zip(draw) {
             if draw {
@@ -651,10 +673,16 @@ impl ShadowMap {
     }
 
     /// Which pictures to draw this frame, and the squares to read them
-    /// by: see [`Drawn::plan`].
-    pub(crate) fn plan(&self, level: u64, eye: [f32; 3], wanted: &[Cascade; PICTURES]) -> Plan {
+    /// by: see [`Drawn::plan_moving`].
+    pub(crate) fn plan(
+        &self,
+        level: u64,
+        eye: [f32; 3],
+        wanted: &[Cascade; PICTURES],
+        moving: [bool; PICTURES],
+    ) -> Plan {
         let mut drawn = self.drawn.get();
-        let plan = drawn.plan(level, eye, wanted);
+        let plan = drawn.plan_moving(level, eye, wanted, moving);
         self.drawn.set(drawn);
         plan
     }

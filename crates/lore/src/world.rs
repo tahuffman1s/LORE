@@ -14,6 +14,7 @@ use lore_physics::{MoveInput, MoveMode, MoveSettings, Player};
 use lore_script::{CharacterId, Motion, Movement};
 
 use crate::blend;
+use crate::character::{Boom, Character, Facing, View};
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::noise::{self, Noise, Walking};
@@ -635,6 +636,13 @@ impl Game for World {
         // is told of below and in its own tick, and how they are moving.
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
+        // A hard landing hurts, through the same path as a weapon.
+        if walking && player.grounded && !before.grounded {
+            let hurt = fall_damage(-before.velocity[1]);
+            if hurt > 0.0 {
+                host.damage(CharacterId::PLAYER, hurt, None, "fall");
+            }
+        }
         let aim = aim_of(asked.movement.yaw, asked.pitch);
         host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
         // What was heard of the tick just run: when a foot came down, and
@@ -791,6 +799,7 @@ struct Controls {
     fire: Option<ActionId>,
     aim: Option<ActionId>,
     reload: Option<ActionId>,
+    switch_view: Option<ActionId>,
 }
 
 impl Controls {
@@ -805,6 +814,7 @@ impl Controls {
             fire: find("fire"),
             aim: find("aim"),
             reload: find("reload"),
+            switch_view: find("switch_view"),
         }
     }
 
@@ -892,6 +902,25 @@ pub struct Playing {
     weather_heard: [Option<f32>; 3],
     /// Where the roar of the tornado was last said to come from.
     roar_from: [f32; 3],
+    /// The player's body, and the camera at its eyes or over its shoulder.
+    /// `None` only if the engine's own body could not be read.
+    character: Option<Character>,
+}
+
+/// How fast a body may hit the ground unhurt, in metres a second: a drop
+/// of about six metres (v² = 2gh).
+const SAFE_LANDING: f32 = 11.0;
+
+/// The health a landing at `speed` metres a second takes: none up to
+/// [`SAFE_LANDING`], then growing with the square of the excess, as the
+/// energy to soak up does. Ten metres takes about 18 points of 100;
+/// twenty, about 150.
+fn fall_damage(speed: f32) -> f32 {
+    if !speed.is_finite() || speed <= SAFE_LANDING {
+        return 0.0;
+    }
+    let over = speed - SAFE_LANDING;
+    2.0 * over * over
 }
 
 /// The most marks on the water kept for a frame to show.
@@ -1009,7 +1038,23 @@ impl Playing {
             under: false,
             weather_heard: [None; 3],
             roar_from: [0.0; 3],
+            character: Character::shared_mannequin().map(|mut character| {
+                character.face(yaw);
+                character
+            }),
         }
+        .with_body_said()
+    }
+
+    /// Tells the script which clips the body has.
+    fn with_body_said(self) -> Self {
+        if let Some(character) = &self.character {
+            self.world
+                .game
+                .host()
+                .set_body_clips("mannequin", character.clip_names());
+        }
+        self
     }
 
     /// The world being played in.
@@ -1075,6 +1120,152 @@ impl Playing {
 }
 
 impl Playing {
+    /// Moves the player's body on by one tick: which way it faces, what it
+    /// plays, and where the camera hangs. The script says which view and
+    /// facing it wants; the player may switch the view when the game allows.
+    fn step_character(&mut self, input: &InputFrame, step: f32) {
+        if let Some(model) = self.world.game.host().take_body_model() {
+            self.change_body(&model);
+        }
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        let host = self.world.game.host();
+        let mut wanted = host.camera_view();
+        if wanted.switchable
+            && self
+                .controls
+                .switch_view
+                .is_some_and(|action| input.just_pressed(action))
+        {
+            wanted.third = !wanted.third;
+            host.said_view(wanted.third);
+        }
+        character.view = if wanted.third {
+            View::Third
+        } else {
+            View::First
+        };
+        character.facing = if wanted.aimed {
+            Facing::Aim
+        } else {
+            Facing::Move
+        };
+        character.boom = Boom {
+            distance: wanted.distance,
+            height: wanted.height,
+            shoulder: wanted.shoulder,
+        };
+        for ask in host.take_animation_asks() {
+            character.ask(&ask);
+        }
+        character.guard(host.blocking());
+        let player = *self.world.player();
+        character.tick(
+            &player,
+            (self.yaw, self.pitch),
+            &self.world.ground.level,
+            step,
+            |clip, moment| host.heard_moment(clip, &moment.name),
+        );
+        host.set_playing(character.playing_names());
+        // A swing hits what it passes through, once each, through health.
+        let rules = &self.world.ground.rules;
+        let around: Vec<crate::character::Struck> = self
+            .world
+            .dummies
+            .iter()
+            .map(|dummy| crate::character::Struck {
+                who: dummy.name,
+                feet: dummy.feet,
+                height: rules.standing_height,
+                radius: rules.radius,
+            })
+            .collect();
+        let mut blows = Vec::new();
+        character.swing_through(player.position, &around, |blow| blows.push(blow));
+        let host = self.world.game.host_mut();
+        for blow in blows {
+            host.damage(
+                blow.victim,
+                blow.damage,
+                Some(CharacterId::PLAYER),
+                &blow.clip,
+            );
+        }
+    }
+
+    /// Holds the view on whoever the script locked on to: the camera turns
+    /// toward their chest at a steady speed, whatever the look action does.
+    fn hold_lock(&mut self, step: f32) {
+        let host = self.world.game.host();
+        let Some(target) = host.locked_on().and_then(|id| host.character_position(id)) else {
+            return;
+        };
+        let eye = self.world.player().eye_position();
+        let (dx, dy, dz) = (
+            target[0] - eye[0],
+            target[1] + 1.2 - eye[1],
+            target[2] - eye[2],
+        );
+        let flat = (dx * dx + dz * dz).sqrt();
+        if flat < 0.3 {
+            return;
+        }
+        let yaw = libm::atan2f(-dx, -dz).rem_euclid(std::f32::consts::TAU);
+        let pitch = libm::atan2f(dy, flat).clamp(-0.6, 0.4);
+        self.yaw = crate::character::turn_toward(self.yaw, yaw, 8.0 * step);
+        self.pitch += (pitch - self.pitch).clamp(-4.0 * step, 4.0 * step);
+    }
+
+    /// Makes the player's body `model`: one of the engine's own, or a model
+    /// file in the game's folder, which plays the mannequin's clips by bone
+    /// name as well as its own. A model that cannot be read is said in the
+    /// log, and the body stays as it was.
+    fn change_body(&mut self, model: &str) {
+        let made = match model {
+            "mannequin" => Character::shared_mannequin()
+                .ok_or_else(|| "the engine's mannequin could not be read".to_owned()),
+            "mannequin_female" => Character::female_mannequin().map_err(|e| e.to_string()),
+            file => self.world.game.read_model(file).and_then(|scene| {
+                Character::with_mannequin_clips(scene).map_err(|e| e.to_string())
+            }),
+        };
+        match made {
+            Ok(mut character) => {
+                if let Some(old) = &self.character {
+                    character.view = old.view;
+                    character.face(old.yaw());
+                }
+                self.world
+                    .game
+                    .host()
+                    .set_body_clips(model, character.clip_names());
+                self.character = Some(character);
+            }
+            Err(why) => log::error!("game.player:setModel(\"{model}\"): {why}"),
+        }
+    }
+
+    /// Hands the frame the player's body, drawn between the last two ticks.
+    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3]) {
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        let player = self.world.player();
+        let feet = match self.before {
+            Some(before) => {
+                let eye_drop = player.eye_height;
+                let was = [before[0], before[1] - eye_drop, before[2]];
+                blend::position(was, player.position, frame.alpha())
+            }
+            None => player.position,
+        };
+        let model = std::sync::Arc::clone(character.model());
+        let drawn = character.figures(frame.alpha(), feet, camera);
+        frame.show_figure(&model, &drawn);
+    }
+
     /// Shows and sounds what the player is doing to the water: the marks
     /// of the ticks since the last frame, the rings and wake of a body
     /// that is in it now, and the hush of a head that is under it.
@@ -1225,18 +1416,38 @@ impl Playing {
 impl Game for Playing {
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
-        let asked = self
+        let mut asked = self
             .controls
             .asked(input, step, &mut self.yaw, &mut self.pitch);
+        if self.world.game.host().locked_on().is_some() {
+            self.hold_lock(step);
+            asked.movement.yaw = self.yaw;
+            asked.pitch = self.pitch;
+        }
         self.world.ask(asked);
+        // Shots go where the crosshair is, seen from where the camera hung
+        // on the last tick.
+        let camera = self.character.as_ref().map(|character| {
+            character.camera(
+                1.0,
+                self.eye,
+                (self.yaw, self.pitch),
+                &self.world.ground.level,
+            )
+        });
+        self.world.shooting.camera = camera.filter(|camera| *camera != self.eye);
         self.world.tick(input, step);
         // A script or a respawn that put the player somewhere may have
         // turned them too.
         let teleported = self.world.take_teleported();
         if let Some((yaw, pitch)) = teleported.flatten() {
             (self.yaw, self.pitch) = look::turned(yaw, pitch, [0.0; 2]);
+            if let Some(character) = &mut self.character {
+                character.face(self.yaw);
+            }
         }
         self.eye = self.world.player().eye_position();
+        self.step_character(input, step);
         // Being put somewhere is a cut, not a glide.
         self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises
@@ -1282,7 +1493,16 @@ impl Game for Playing {
             look::asked(frame.input(), look, frame.since_tick())
         });
         let seen = self.seen_at(frame.alpha(), turn);
-        frame.look_from(seen.eye, seen.yaw, seen.pitch);
+        let camera = self.character.as_ref().map_or(seen.eye, |character| {
+            character.camera(
+                frame.alpha(),
+                seen.eye,
+                (seen.yaw, seen.pitch),
+                &self.world.ground.level,
+            )
+        });
+        frame.look_from(camera, seen.yaw, seen.pitch);
+        self.show_body(frame, camera);
         self.show_water(frame, seen.eye);
         for tread in self.treads.drain(..) {
             frame.tread(tread);
@@ -1294,6 +1514,8 @@ impl Game for Playing {
 mod heard;
 #[cfg(test)]
 mod rates;
+#[cfg(test)]
+mod third_person;
 #[cfg(test)]
 mod tools;
 #[cfg(test)]
@@ -1540,6 +1762,16 @@ mod tests {
     }
 
     #[test]
+    fn a_hard_landing_hurts_and_a_short_drop_does_not() {
+        let from = |metres: f32| fall_damage((2.0 * 9.81 * metres).sqrt());
+        assert_eq!(from(3.0), 0.0);
+        assert_eq!(from(6.0), 0.0);
+        assert!((10.0..30.0).contains(&from(10.0)), "{}", from(10.0));
+        assert!(from(20.0) > 100.0, "{}", from(20.0));
+        assert_eq!(fall_damage(f32::NAN), 0.0);
+    }
+
+    #[test]
     fn eyes_put_somewhere_new_are_not_glided_there() {
         assert!(!cut([0.0, 1.6, 0.0], [0.0, 1.6, -0.1]));
         // A respawn across the level, and a place that is not a number.
@@ -1556,6 +1788,41 @@ mod tests {
     }
 
     const STEP: f32 = 1.0 / 60.0;
+
+    #[test]
+    fn a_swing_hits_what_is_in_front_once_and_not_what_is_behind() {
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_source(
+            r#"local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 40 then
+                    game.player:swing("sword_attack", { damage = 30, reach = 1.0 })
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        // Let the player settle on their feet first.
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        let feet = game.world.player().position;
+        // Facing -Z: one in reach in front, one behind.
+        let front = game.world.add_dummy([feet[0], feet[1], feet[2] - 1.1]);
+        let back = game.world.add_dummy([feet[0], feet[1], feet[2] + 1.1]);
+        let who = |game: &Playing, id: DummyId| {
+            game.world.dummies.iter().find(|d| d.id == id).unwrap().name
+        };
+        let (front, back) = (who(&game, front), who(&game, back));
+        for _ in 0..90 {
+            game.tick(input.tick(), STEP);
+        }
+        let host = game.world.game.host();
+        assert_eq!(host.health(front), Some((70.0, 100.0)), "hit once");
+        assert_eq!(host.health(back), Some((100.0, 100.0)), "not hit");
+    }
 
     /// The view of a frame drawn `alpha` of the way to the next tick, with
     /// what `input` holds that no tick has seen.

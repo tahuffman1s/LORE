@@ -45,9 +45,12 @@
 
 mod api;
 mod audio;
+mod body_api;
+pub use body_api::{AnimationAsk, BUILT_IN_MODELS, CameraView};
 mod character_api;
 mod error;
 mod fluid_api;
+mod health_api;
 mod host;
 mod hud;
 mod images;

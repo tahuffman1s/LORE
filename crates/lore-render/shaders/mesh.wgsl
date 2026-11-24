@@ -268,11 +268,27 @@ struct Draw {
     // -1 if the mesh is placed mirrored, which turns its normal map's
     // sideways direction around, and 1 if not.
     handedness: f32,
-    // How far the wind moves the mesh: 0 for one that stands still.
+    // How far the wind moves the mesh: 0 for one that stands still. A
+    // figure (`vertex_skinned`) is marked by -3: it moves by itself and
+    // gathers no snow or puddles.
     sway: f32,
+    // For a figure, where its joints start in `joint_rows` (counted in
+    // joints), this frame's and then last frame's.
+    joints: u32,
+    joints_before: u32,
 }
 
 var<immediate> draw: Draw;
+
+// The joints of the figures drawn this frame (`figures.rs`), each as the
+// first three rows of the matrix that takes a point of the figure's mesh
+// to where it stands in the world: three rows to a joint.
+@group(0) @binding(44) var<storage, read> joint_rows: array<vec4<f32>>;
+
+// The same joints where shadows are drawn, whose pipelines have a set of
+// their own in place of the view's (`MeshPipeline::shadow_layout`): the
+// view's set is still being written while the shadows are recorded.
+@group(0) @binding(45) var<storage, read> cast_joint_rows: array<vec4<f32>>;
 
 struct Corner {
     // Worked out the same way whatever else is asked of the point, so that
@@ -444,6 +460,67 @@ fn vertex(
     // The point's colour is kept on the screen's curve, so that dark ones
     // do not band (`srgb8` in `mesh.rs`): back to light. Its alpha is a
     // share, kept as it is.
+    let seen = colour.rgb;
+    let light = select(pow((seen + 0.055) / 1.055, vec3<f32>(2.4)), seen / 12.92, seen <= vec3<f32>(0.04045));
+    corner.colour = vec4<f32>(light, colour.a);
+    corner.uv = vec4<f32>(uv0, uv1);
+    return corner;
+}
+
+// The first three rows of the matrix that bends a point of a figure: the
+// matrices of its four joints from `first` on, each weighed by how much
+// it pulls the point. The weights add up to one.
+fn bent_rows(first: u32, joints: vec4<u32>, weights: vec4<f32>) -> mat3x4<f32> {
+    var rows: mat3x4<f32>;
+    for (var row = 0u; row < 3u; row += 1u) {
+        rows[row] = joint_rows[3u * (first + joints.x) + row] * weights.x
+            + joint_rows[3u * (first + joints.y) + row] * weights.y
+            + joint_rows[3u * (first + joints.z) + row] * weights.z
+            + joint_rows[3u * (first + joints.w) + row] * weights.w;
+    }
+    return rows;
+}
+
+// Where `rows` put a point.
+fn bent_point(rows: mat3x4<f32>, point: vec3<f32>) -> vec4<f32> {
+    let at = vec4<f32>(point, 1.0);
+    return vec4<f32>(dot(rows[0], at), dot(rows[1], at), dot(rows[2], at), 1.0);
+}
+
+// Which way `rows` turn a direction.
+fn bent_way(rows: mat3x4<f32>, way: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(rows[0].xyz, way), dot(rows[1].xyz, way), dot(rows[2].xyz, way));
+}
+
+// A point of a figure: a model drawn by itself, bent by its joints. Its
+// joints place it in the world whole (the figure's own place is in their
+// matrices), and last frame's joints say where it was, so a figure that
+// moves leaves the right trail for the upscaler. A part of a figure that
+// no skeleton bends is drawn by this too, with one joint of its own.
+// Placed the same in the depth drawn first (`occlusion.wgsl`) as here.
+@vertex
+fn vertex_skinned(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec2<f32>,
+    @location(2) tangent: vec4<f32>,
+    @location(3) colour: vec4<f32>,
+    @location(4) uv0: vec2<f32>,
+    @location(5) uv1: vec2<f32>,
+    @location(6) joints: vec4<u32>,
+    @location(7) weights: vec4<f32>,
+) -> Corner {
+    let rows = bent_rows(draw.joints, joints, weights);
+    let world = bent_point(rows, position);
+    let was = bent_point(bent_rows(draw.joints_before, joints, weights), position);
+    var corner: Corner;
+    corner.position = view.clip_from_world * world;
+    corner.steady = view.steady_from_world * world;
+    corner.before = view.before_from_world * was;
+    corner.world = world.xyz;
+    // Stretching a figure unevenly bends its surface directions a little
+    // the wrong way; figures are stretched evenly, if at all.
+    corner.normal = bent_way(rows, unfolded(normal));
+    corner.tangent = vec4<f32>(bent_way(rows, tangent.xyz), tangent.w * draw.handedness);
     let seen = colour.rgb;
     let light = select(pow((seen + 0.055) / 1.055, vec3<f32>(2.4)), seen / 12.92, seen <= vec3<f32>(0.04045));
     corner.colour = vec4<f32>(light, colour.a);
@@ -2840,11 +2917,13 @@ fn fragment_blend(corner: Corner, @builtin(front_facing) front: bool) -> Mixed {
 // What the sun, or a lamp, sees of a mesh: only where it is.
 struct Casting {
     // Takes a corner point of the mesh straight to the shadow picture
-    // being drawn.
+    // being drawn; for a figure, a point of the world.
     picture_from_local: mat4x4<f32>,
     // The first three rows of what takes it to where it stands in the
     // world, which says how a shuffled material's pictures are moved.
     world_rows: array<vec4<f32>, 3>,
+    // For a figure, where its joints start in `joint_rows`.
+    joints: u32,
 }
 
 var<immediate> casting: Casting;
@@ -2872,6 +2951,34 @@ fn vertex_shadow(
     seen.world = vec3<f32>(
         dot(casting.world_rows[0], point), dot(casting.world_rows[1], point), dot(casting.world_rows[2], point),
     );
+    return seen;
+}
+
+// A point of a figure in a shadow picture, bent by its joints as
+// `vertex_skinned` bends it.
+@vertex
+fn vertex_shadow_skinned(
+    @location(0) position: vec3<f32>,
+    @location(3) colour: vec4<f32>,
+    @location(4) uv0: vec2<f32>,
+    @location(5) uv1: vec2<f32>,
+    @location(6) joints: vec4<u32>,
+    @location(7) weights: vec4<f32>,
+) -> Cast {
+    var seen: Cast;
+    var rows: mat3x4<f32>;
+    let first = casting.joints;
+    for (var row = 0u; row < 3u; row += 1u) {
+        rows[row] = cast_joint_rows[3u * (first + joints.x) + row] * weights.x
+            + cast_joint_rows[3u * (first + joints.y) + row] * weights.y
+            + cast_joint_rows[3u * (first + joints.z) + row] * weights.z
+            + cast_joint_rows[3u * (first + joints.w) + row] * weights.w;
+    }
+    let world = bent_point(rows, position);
+    seen.position = casting.picture_from_local * world;
+    seen.uv = vec4<f32>(uv0, uv1);
+    seen.alpha = colour.a;
+    seen.world = world.xyz;
     return seen;
 }
 

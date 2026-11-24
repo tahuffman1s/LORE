@@ -62,6 +62,10 @@ pub struct ScriptGame {
     /// not kept here to be put into effect: whoever runs the game has the
     /// settings in force, and is handed only what the script changes.
     told: Settings,
+    /// The game's folder, where its model files are found
+    /// (`game.player:setModel("models/hero.glb")`). A game with no files
+    /// behind it has none.
+    folder: Option<std::path::PathBuf>,
 }
 
 /// Said after a mistake in a map file, by what the game does about it.
@@ -93,9 +97,37 @@ impl ScriptGame {
             map_error: None,
             shaders: crate::game_shaders::Source::new(),
             told: settings,
+            folder: None,
         };
         game.name_sounds();
         game
+    }
+
+    /// Reads a model file of the game's, named as a script names it
+    /// (`"models/hero.glb"`): a path inside the game's folder.
+    ///
+    /// # Errors
+    ///
+    /// When the game has no folder (a packaged game, for now), the path
+    /// leads outside it, or the file cannot be read; the message says what
+    /// to do.
+    pub(crate) fn read_model(&self, file: &str) -> Result<lore_assets::Scene, String> {
+        let Some(folder) = &self.folder else {
+            return Err(format!(
+                "a packaged game cannot load \"{file}\" yet; use \"mannequin\" or \"mannequin_female\""
+            ));
+        };
+        let relative = Path::new(file);
+        let inside = relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)));
+        if !inside {
+            return Err(format!(
+                "\"{file}\" is not a file inside the game's folder. Name it from the folder, \
+                 like \"models/hero.glb\""
+            ));
+        }
+        lore_assets::Scene::load(folder.join(relative)).map_err(|error| error.to_string())
     }
 
     /// Tells the script which sounds there are.
@@ -236,6 +268,7 @@ impl ScriptGame {
             map_error,
             shaders: crate::game_shaders::Source::new(),
             told: settings,
+            folder: Some(folder.to_owned()),
         };
         game.name_sounds();
         Ok(game)

@@ -265,6 +265,7 @@ impl Rig<'_> {
                 name: source.name().map(str::to_owned),
                 duration,
                 tracks,
+                extras: crate::material::extras(source.extras()),
             });
         }
         if shape_keys {

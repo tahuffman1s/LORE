@@ -321,10 +321,10 @@ impl Input {
     /// let jump = input.map().action("jump")?;
     ///
     /// input.start_rebind(jump, Key::Space.into())?;
-    /// input.press(Key::F); // the player presses the key they want
+    /// input.press(Key::H); // the player presses the key they want
     ///
     /// let rebound = input.take_rebound().ok_or("still listening")?;
-    /// assert_eq!(rebound.to, Key::F.into());
+    /// assert_eq!(rebound.to, Key::H.into());
     /// assert!(rebound.conflicts.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

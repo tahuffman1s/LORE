@@ -17,6 +17,7 @@ use crate::clouds::CloudVolume;
 use crate::effects::{Air, BIT_BYTES, MOST_BITS, Standing, WEATHER_ROWS};
 use crate::error::RenderError;
 use crate::eye::EyePass;
+use crate::figures::{FIGURE_SWAY, Figures, JOINT_BUFFER_BYTES};
 use crate::fluid::{FluidLook, FluidScene, PoolDrawn};
 use crate::fluid_pass::FluidWorks;
 use crate::game_shaders::{FluidDraws, SurfaceDraws};
@@ -418,6 +419,10 @@ pub(crate) struct Contents<'a> {
     /// The game's fluid shaders, and which kind of fluid each draws:
     /// `None` when none is live, which draws exactly as before.
     pub(crate) fluids: Option<&'a FluidDraws>,
+    /// The models drawn besides the level, as
+    /// [`Figures::ready`](crate::figures::Figures::ready) left them for
+    /// this frame.
+    pub(crate) figures: Option<&'a Figures>,
 }
 
 /// How a surface covers what is behind it. Drawn in this order.
@@ -438,7 +443,7 @@ impl Surface {
     /// In the order of the pipelines that draw them.
     const ALL: [Self; 4] = [Self::Solid, Self::CutOut, Self::SeeThrough, Self::Water];
 
-    fn of(material: &Material) -> Self {
+    pub(crate) fn of(material: &Material) -> Self {
         match material.alpha_mode {
             AlphaMode::Opaque => Self::Solid,
             AlphaMode::Mask { .. } => Self::CutOut,
@@ -513,7 +518,7 @@ impl Draw {
 /// axes, that is the longest of the three axes. One that is also leant over
 /// (sheared, as a child of a parent stretched unevenly can be) may reach
 /// farther along a diagonal, but never farther than the three taken together.
-fn most_stretch(transform: &Mat4) -> f32 {
+pub(crate) fn most_stretch(transform: &Mat4) -> f32 {
     let axes = [0, 1, 2].map(|column| {
         let [x, y, z, _] = transform[column];
         [x, y, z]
@@ -532,7 +537,7 @@ fn most_stretch(transform: &Mat4) -> f32 {
 }
 
 /// Where one mesh part's data sits in the buffers, or `None` if it was left out.
-type Placed = Option<(u32, u32, i32)>;
+pub(crate) type Placed = Option<(u32, u32, i32)>;
 
 /// A scene's meshes and materials, copied to the graphics card and ready to draw.
 pub(crate) struct Meshes {
@@ -836,7 +841,7 @@ impl Meshes {
 }
 
 /// Where `transform` puts `point`.
-fn moved(transform: &Mat4, point: [f32; 3]) -> [f32; 3] {
+pub(crate) fn moved(transform: &Mat4, point: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|row| {
         transform[0][row] * point[0]
             + transform[1][row] * point[1]
@@ -906,7 +911,7 @@ fn folded([x, y, z]: [f32; 3]) -> [i16; 2] {
 /// Adds one part's points and triangles to the ends of `vertices` and
 /// `indices`, and says where they went. Adds nothing and returns `None` if
 /// the part is empty or does not hold together.
-fn append(part: &MeshPart, vertices: &mut Vec<u8>, indices: &mut Vec<u8>) -> Placed {
+pub(crate) fn append(part: &MeshPart, vertices: &mut Vec<u8>, indices: &mut Vec<u8>) -> Placed {
     fn fits<T>(list: Option<&Vec<T>>, points: usize) -> bool {
         list.is_none_or(|list| list.len() == points)
     }
@@ -991,6 +996,24 @@ pub(crate) struct MeshPipeline {
     bits: Vec<Buffer>,
     /// Draw what the sun sees of solid parts and of cut-out ones.
     shadow_pipelines: [vk::Pipeline; 2],
+    /// Draw figures' solid, cut-out and see-through parts, bent by their
+    /// joints (`vertex_skinned`).
+    figure_pipelines: [vk::Pipeline; 3],
+    /// Draw what the sun and the lamps see of figures' solid parts and of
+    /// their cut-out ones.
+    figure_shadow_pipelines: [vk::Pipeline; 2],
+    /// The figures' joints, for each frame that can be in progress at
+    /// once: this frame's and the frame before's
+    /// ([`Figures::ready`](crate::figures::Figures::ready)).
+    joints: Vec<Buffer>,
+    /// What the figures' shadows are drawn with: a set holding only those
+    /// joints, then a material's. The view's set cannot be bound while the
+    /// shadows are recorded, as it is still being pointed at this frame's
+    /// pictures, and a set bound must not change.
+    joint_layout: vk::DescriptorSetLayout,
+    shadow_layout: vk::PipelineLayout,
+    /// That set, for each frame that can be in progress at once.
+    joint_sets: Vec<vk::DescriptorSet>,
     /// What the sun sees: `None` only while the pipeline is being built.
     shadows: Option<ShadowMap>,
     /// Every star, sorted into a grid among the stars.
@@ -1092,6 +1115,12 @@ impl MeshPipeline {
             bit_pipeline: vk::Pipeline::null(),
             bits: Vec::with_capacity(frames.max(1)),
             shadow_pipelines: [vk::Pipeline::null(); 2],
+            figure_pipelines: [vk::Pipeline::null(); 3],
+            figure_shadow_pipelines: [vk::Pipeline::null(); 2],
+            joints: Vec::with_capacity(frames.max(1)),
+            joint_layout: vk::DescriptorSetLayout::null(),
+            shadow_layout: vk::PipelineLayout::null(),
+            joint_sets: Vec::with_capacity(frames.max(1)),
             shadows: None,
             stars: None,
             moon: None,
@@ -1348,6 +1377,12 @@ impl MeshPipeline {
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // The figures' joints, read where their points are placed.
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(44)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
         let sizes = [
             vk::DescriptorType::UNIFORM_BUFFER,
@@ -1358,12 +1393,13 @@ impl MeshPipeline {
         ]
         .map(|kind| {
             // Each frame's set has one view, the lamps, their grid, bounce
-            // light's list and the stars' grid and list, thirty pictures
+            // light's list, the stars' grid and list and the figures'
+            // joints (twice: the shadows' set has them too), thirty pictures
             // (the moon's two and the Milky Way among them), two written, and six
             // readers (the moon's among them).
             let each = match kind {
                 vk::DescriptorType::UNIFORM_BUFFER => 1,
-                vk::DescriptorType::STORAGE_BUFFER => 5,
+                vk::DescriptorType::STORAGE_BUFFER => 7,
                 vk::DescriptorType::SAMPLED_IMAGE => 30,
                 vk::DescriptorType::STORAGE_IMAGE => 2,
                 _ => 6,
@@ -1387,6 +1423,26 @@ impl MeshPipeline {
                 .map_err(RenderError::driver(doing))?;
             mesh.material_layout = material::set_layout(gpu)?;
             mesh.body_layout = body_layout(gpu)?;
+            let joint_binding = [vk::DescriptorSetLayoutBinding::default()
+                .binding(45)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX)];
+            mesh.joint_layout = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&joint_binding),
+                    None,
+                )
+                .map_err(RenderError::driver(doing))?;
+            let casting = [mesh.joint_layout, mesh.material_layout];
+            mesh.shadow_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&casting)
+                        .push_constant_ranges(&ranges),
+                    None,
+                )
+                .map_err(RenderError::driver(doing))?;
             let set_layouts = [mesh.set_layout];
             let both = [mesh.set_layout, mesh.material_layout, mesh.body_layout];
             mesh.layout = device
@@ -1400,7 +1456,7 @@ impl MeshPipeline {
             mesh.pool = device
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(count)
+                        .max_sets(count * 2)
                         .pool_sizes(&sizes),
                     None,
                 )
@@ -1443,6 +1499,15 @@ impl MeshPipeline {
                 let cell_info = [vk::DescriptorBufferInfo::default()
                     .buffer(cell_buffer.handle)
                     .range(lamps::CELL_BUFFER_BYTES as u64)];
+                let joint_buffer = Buffer::writable(
+                    gpu,
+                    JOINT_BUFFER_BYTES as u64,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    doing,
+                )?;
+                let joint_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(joint_buffer.handle)
+                    .range(vk::WHOLE_SIZE)];
                 let star_cell_info = [vk::DescriptorBufferInfo::default()
                     .buffer(star_cells)
                     .range(vk::WHOLE_SIZE)];
@@ -1561,6 +1626,11 @@ impl MeshPipeline {
                         .dst_binding(43)
                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                         .image_info(&milky_way_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(44)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&joint_info),
                 ];
                 device.update_descriptor_sets(&writes, &[]);
                 if let Some(bounce) = &mesh.bounce {
@@ -1573,6 +1643,27 @@ impl MeshPipeline {
                 }
                 mesh.views.push((buffer, set));
                 mesh.lamp_buffers.push((lamp_buffer, cell_buffer));
+                let joint_layouts = [mesh.joint_layout];
+                let joint_set = device
+                    .allocate_descriptor_sets(
+                        &vk::DescriptorSetAllocateInfo::default()
+                            .descriptor_pool(mesh.pool)
+                            .set_layouts(&joint_layouts),
+                    )
+                    .map_err(RenderError::driver(doing))?
+                    .first()
+                    .copied()
+                    .unwrap_or_default();
+                device.update_descriptor_sets(
+                    &[vk::WriteDescriptorSet::default()
+                        .dst_set(joint_set)
+                        .dst_binding(45)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&joint_info)],
+                    &[],
+                );
+                mesh.joint_sets.push(joint_set);
+                mesh.joints.push(joint_buffer);
             }
         }
         let layout = mesh.layout;
@@ -1583,10 +1674,14 @@ impl MeshPipeline {
         }
         .map_err(RenderError::driver(doing))?;
 
-        let (bindings, attributes) = vertex_layout();
+        let points = vertex_layout(false);
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&bindings)
-            .vertex_attribute_descriptions(&attributes);
+            .vertex_binding_descriptions(points.bindings())
+            .vertex_attribute_descriptions(points.attributes());
+        let figure_points = vertex_layout(true);
+        let figure_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(figure_points.bindings())
+            .vertex_attribute_descriptions(figure_points.attributes());
         let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
         // The viewport and scissor are set while drawing, so a resized window
@@ -1628,6 +1723,7 @@ impl MeshPipeline {
                     c"vertex",
                     fragment,
                     surface,
+                    false,
                 )
             };
             match created {
@@ -1636,6 +1732,36 @@ impl MeshPipeline {
                     failed = Some(code);
                     break;
                 }
+            }
+        }
+        // Figures: the same surfaces, with points their joints bend. None
+        // is water.
+        for (surface, pipeline) in Surface::ALL.into_iter().zip(&mut mesh.figure_pipelines) {
+            if failed.is_some() {
+                break;
+            }
+            let fragment = match surface {
+                Surface::Solid => c"fragment",
+                Surface::CutOut => c"fragment_cutout",
+                Surface::SeeThrough | Surface::Water => c"fragment_blend",
+            };
+            // SAFETY: as for the pipelines above; the module holds
+            // `vertex_skinned`.
+            let created = unsafe {
+                make_surface_pipeline(
+                    device,
+                    vk::PipelineCache::null(),
+                    layout,
+                    module,
+                    c"vertex_skinned",
+                    fragment,
+                    surface,
+                    true,
+                )
+            };
+            match created {
+                Ok(made) => *pipeline = made,
+                Err(code) => failed = Some(code),
             }
         }
         // Still water that filled its hollow: a grid of points laid round
@@ -1739,7 +1865,16 @@ impl MeshPipeline {
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
         let no_colour = vk::PipelineColorBlendStateCreateInfo::default();
-        for (cut_out, pipeline) in [false, true].into_iter().zip(&mut mesh.shadow_pipelines) {
+        let figure_shadows = [false, true].map(|cut_out| (cut_out, true));
+        let shadow_kinds = [false, true]
+            .map(|cut_out| (cut_out, false))
+            .into_iter()
+            .chain(figure_shadows);
+        let shadow_slots = mesh
+            .shadow_pipelines
+            .iter_mut()
+            .chain(&mut mesh.figure_shadow_pipelines);
+        for ((cut_out, figure), pipeline) in shadow_kinds.zip(shadow_slots) {
             if failed.is_some() {
                 break;
             }
@@ -1747,7 +1882,11 @@ impl MeshPipeline {
                 vk::PipelineShaderStageCreateInfo::default()
                     .stage(vk::ShaderStageFlags::VERTEX)
                     .module(module)
-                    .name(c"vertex_shadow"),
+                    .name(if figure {
+                        c"vertex_shadow_skinned"
+                    } else {
+                        c"vertex_shadow"
+                    }),
                 vk::PipelineShaderStageCreateInfo::default()
                     .stage(vk::ShaderStageFlags::FRAGMENT)
                     .module(module)
@@ -1758,7 +1897,7 @@ impl MeshPipeline {
                 vk::PipelineRenderingCreateInfo::default().depth_attachment_format(shadow::FORMAT);
             let info = vk::GraphicsPipelineCreateInfo::default()
                 .stages(stages)
-                .vertex_input_state(&vertex_input)
+                .vertex_input_state(if figure { &figure_input } else { &vertex_input })
                 .input_assembly_state(&assembly)
                 .viewport_state(&viewport)
                 .rasterization_state(&shadow_raster)
@@ -1766,7 +1905,7 @@ impl MeshPipeline {
                 .depth_stencil_state(&shadow_depth)
                 .color_blend_state(&no_colour)
                 .dynamic_state(&dynamic)
-                .layout(layout)
+                .layout(if figure { mesh.shadow_layout } else { layout })
                 .push_next(&mut rendering);
             // SAFETY: as for the pipelines above; the module holds both
             // entry points named in `stages`.
@@ -2051,7 +2190,10 @@ impl MeshPipeline {
             lamps,
             surfaces,
             fluids: fluid_shaders,
+            figures,
         } = contents;
+        // Figures are only drawn when there are any.
+        let figures = figures.filter(|figures| !figures.shown().is_empty());
         // How wet rain has made the ground, or how full its puddles, from
         // 0 to 1.
         let wet_ground = weather.rows[0][2].max(weather.rows[6][1]);
@@ -2092,6 +2234,16 @@ impl MeshPipeline {
             // every bit there can be, and the caller guarantees the
             // commands that read it last have finished.
             unsafe { buffer.write(bits) }?;
+        }
+        // So are the figures' joints.
+        if let (Some(figures), Some(buffer)) =
+            (figures, self.joints.get(frame % self.joints.len().max(1)))
+        {
+            let bytes = figures.bytes();
+            // SAFETY: the buffer was made writable and as long as the most
+            // joints a frame has, which `Figures::set` keeps to, and the
+            // caller guarantees the commands that read it last have finished.
+            unsafe { buffer.write(&bytes[..bytes.len().min(JOINT_BUFFER_BYTES)]) }?;
         }
         // The grid is laid out round the eye.
         let grid = grid.then_some(view.eye);
@@ -2173,7 +2325,7 @@ impl MeshPipeline {
                 let wanted = shadow::cascades(view.eye, lighting.towards_sun, meshes.bounds);
                 // SAFETY: the caller's guarantees cover the shadow pictures,
                 // which are this pipeline's own.
-                unsafe { self.record_shadows(commands, meshes, view.eye, &wanted) }
+                unsafe { self.record_shadows(commands, frame, meshes, figures, view.eye, &wanted) }
             });
         let sky = sky.then(|| {
             day.map_or_else(
@@ -2336,6 +2488,14 @@ impl MeshPipeline {
                 lamp_buffer.write(packed.lamps)?;
                 cell_buffer.write(packed.cells)?;
             }
+            // A picture a figure stands in, or stood in when it was last
+            // drawn, is drawn again: figures move.
+            // With no figures left, those they stood in are drawn once more.
+            frame_lamps.redraw_moving(|face| {
+                figures.is_some_and(|figures| {
+                    figures.casting_in(|middle, radius| face.holds(middle, radius))
+                })
+            });
             // The shadows' pictures that are not drawn yet are drawn before
             // the picture that reads them.
             if let (Some(meshes), Ok(atlas)) = (meshes, self.lamp_atlas.try_borrow())
@@ -2343,7 +2503,16 @@ impl MeshPipeline {
             {
                 // SAFETY: the caller's guarantees cover the atlas, which is
                 // this pipeline's own, and no pass has been begun yet.
-                unsafe { self.record_lamp_shadows(commands, meshes, atlas, frame_lamps.faces()) };
+                unsafe {
+                    self.record_lamp_shadows(
+                        commands,
+                        frame,
+                        meshes,
+                        figures,
+                        atlas,
+                        frame_lamps.faces(),
+                    );
+                };
             }
         }
         // The light of the sky, before the probes and the picture that
@@ -2530,6 +2699,9 @@ impl MeshPipeline {
                 device.cmd_bind_vertex_buffers(commands, 0, &[vertices.handle], &[0]);
                 device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
                 self.draw_depths(commands, meshes, surfaces, &seen);
+                if let Some(figures) = figures {
+                    self.draw_figures(commands, figures, Pass::Depth, &seen);
+                }
                 device.cmd_end_rendering(commands);
                 self.shade.record(
                     device,
@@ -2565,6 +2737,16 @@ impl MeshPipeline {
                     self.draw(commands, meshes, draw, last, surfaces, depth_first);
                     last = Some(draw);
                 }
+            }
+            // Figures' solid parts: only where their depth was drawn, if it
+            // was.
+            if let Some(figures) = figures {
+                let pass = if depth_first {
+                    Pass::Known
+                } else {
+                    Pass::Solid
+                };
+                self.draw_figures(commands, figures, pass, &seen);
             }
             // The sky fills what the solid parts left open, before anything
             // see-through is mixed over it.
@@ -2710,6 +2892,10 @@ impl MeshPipeline {
                         last = Some(draw);
                     }
                 }
+            }
+            // Figures' see-through parts, over the level's.
+            if let Some(figures) = figures {
+                self.draw_figures(commands, figures, Pass::SeeThrough, &seen);
             }
             // What a splash threw up, over the water it came out of.
             if let (Some(buffer), false) = (bit_buffer, bits.is_empty()) {
@@ -2953,14 +3139,22 @@ impl MeshPipeline {
     unsafe fn record_shadows(
         &self,
         commands: vk::CommandBuffer,
+        frame: usize,
         meshes: &Meshes,
+        figures: Option<&Figures>,
         eye: [f32; 3],
         wanted: &[Cascade; PICTURES],
     ) -> [Cascade; PICTURES] {
         let (Some(shadows), true) = (&self.shadows, meshes.buffers.is_some()) else {
             return *wanted;
         };
-        let plan = shadows.plan(meshes.id, eye, wanted);
+        // A picture a figure casts into is drawn again each frame.
+        let moving = wanted.map(|cascade| {
+            figures.is_some_and(|figures| {
+                figures.casting_in(|middle, radius| cascade.holds(middle, radius))
+            })
+        });
+        let plan = shadows.plan(meshes.id, eye, wanted, moving);
         for (layer, cascade) in wanted.iter().enumerate() {
             if !plan.draw[layer] {
                 continue;
@@ -2971,6 +3165,15 @@ impl MeshPipeline {
                 self.draw_casters(commands, meshes, &cascade.clip, |draw| {
                     cascade.holds(draw.middle, draw.radius)
                 });
+                if let Some(figures) = figures {
+                    self.draw_figure_casters(
+                        commands,
+                        frame,
+                        figures,
+                        &cascade.clip,
+                        |middle, radius| cascade.holds(middle, radius),
+                    );
+                }
                 shadows.pictures.end(commands, layer);
             }
         }
@@ -2986,7 +3189,9 @@ impl MeshPipeline {
     unsafe fn record_lamp_shadows(
         &self,
         commands: vk::CommandBuffer,
+        frame: usize,
         meshes: &Meshes,
+        figures: Option<&Figures>,
         atlas: &LampAtlas,
         faces: &[Face],
     ) {
@@ -3000,6 +3205,15 @@ impl MeshPipeline {
                 self.draw_casters(commands, meshes, &face.clip, |draw| {
                     face.holds(draw.middle, draw.radius)
                 });
+                if let Some(figures) = figures {
+                    self.draw_figure_casters(
+                        commands,
+                        frame,
+                        figures,
+                        &face.clip,
+                        |middle, radius| face.holds(middle, radius),
+                    );
+                }
                 atlas.pictures.end(commands, face.layer);
             }
         }
@@ -3073,6 +3287,241 @@ impl MeshPipeline {
                     0,
                 );
                 last = Some(draw);
+            }
+        }
+    }
+
+    /// Records drawing how far away from a light each solid part of the
+    /// figures that cast shadows is, for those whose ball `holds` lets
+    /// through, placed in its picture by `clip`, into the depth picture
+    /// being drawn.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), between the `begin` and `end` of a
+    /// depth picture, with this frame's joints handed over.
+    unsafe fn draw_figure_casters(
+        &self,
+        commands: vk::CommandBuffer,
+        frame: usize,
+        figures: &Figures,
+        clip: &Mat4,
+        holds: impl Fn([f32; 3], f32) -> bool,
+    ) {
+        let device = self.gpu.device();
+        let Some(&joints) = self.joint_sets.get(frame % self.joint_sets.len().max(1)) else {
+            return;
+        };
+        let mut bound = None;
+        for shown in figures
+            .shown()
+            .iter()
+            .filter(|shown| shown.shadows && holds(shown.middle, shown.radius))
+        {
+            let Some(model) = figures.model(shown.model) else {
+                continue;
+            };
+            let Some((vertices, skin, indices)) = &model.buffers else {
+                continue;
+            };
+            // SAFETY: the caller guarantees the command buffer is recording
+            // a depth picture; the model's buffers and sets are live and of
+            // this device, and its parts only name what `Model::new` made.
+            unsafe {
+                device.cmd_bind_vertex_buffers(
+                    commands,
+                    0,
+                    &[vertices.handle, skin.handle],
+                    &[0, 0],
+                );
+                device.cmd_bind_index_buffer(commands, indices.handle, 0, vk::IndexType::UINT32);
+                // Rebound for each figure: the level's casters drawn
+                // between may have bound another layout's sets.
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.shadow_layout,
+                    0,
+                    &[joints],
+                    &[],
+                );
+                // Both sides cast, as the level's do.
+                device.cmd_set_cull_mode(commands, vk::CullModeFlags::NONE);
+                device.cmd_set_front_face(commands, vk::FrontFace::COUNTER_CLOCKWISE);
+                for part in model
+                    .parts
+                    .iter()
+                    .filter(|part| part.surface <= Surface::CutOut)
+                {
+                    let cut_out = part.surface == Surface::CutOut;
+                    let pipeline = self.figure_shadow_pipelines[usize::from(cut_out)];
+                    if bound != Some(pipeline) {
+                        device.cmd_bind_pipeline(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline,
+                        );
+                        bound = Some(pipeline);
+                    }
+                    // Only a cut-out part reads its material, for its holes.
+                    if cut_out {
+                        device.cmd_bind_descriptor_sets(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow_layout,
+                            1,
+                            &[model.materials.set(part.material)],
+                            &[],
+                        );
+                    }
+                    device.cmd_push_constants(
+                        commands,
+                        self.shadow_layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        &figure_casting_bytes(clip, shown.first + part.joints),
+                    );
+                    device.cmd_draw_indexed(
+                        commands,
+                        part.index_count,
+                        1,
+                        part.first_index,
+                        part.first_vertex,
+                        0,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Records drawing the parts of this frame's figures that `pass` asks
+    /// for, of those the picture `seen` can hold and that are drawn in the
+    /// picture at all.
+    ///
+    /// # Safety
+    ///
+    /// As for [`record`](Self::record), inside the depth pass for
+    /// [`Pass::Depth`] and inside the mesh pass for the others, with this
+    /// frame's set bound and its joints handed over.
+    unsafe fn draw_figures(
+        &self,
+        commands: vk::CommandBuffer,
+        figures: &Figures,
+        pass: Pass,
+        seen: &Seen,
+    ) {
+        let device = self.gpu.device();
+        let before = figures.before();
+        let mut bound = None;
+        for shown in figures
+            .shown()
+            .iter()
+            .filter(|shown| shown.seen && seen.holds(shown.middle, shown.radius))
+        {
+            let Some(model) = figures.model(shown.model) else {
+                continue;
+            };
+            let Some((vertices, skin, indices)) = &model.buffers else {
+                continue;
+            };
+            let mut buffers_bound = false;
+            let mut material = None;
+            for part in model.parts.iter().filter(|part| pass.draws(part.surface)) {
+                let cut_out = part.surface == Surface::CutOut;
+                let pipeline = match pass {
+                    Pass::Depth => self.shade.figure_depth[usize::from(cut_out)],
+                    _ => self.figure_pipelines[(part.surface as usize).min(2)],
+                };
+                // SAFETY: the caller guarantees the command buffer is
+                // recording inside the pass `pass` names; the model's
+                // buffers and sets are live and of this device, and its
+                // parts only name what `Model::new` made.
+                unsafe {
+                    if !buffers_bound {
+                        device.cmd_bind_vertex_buffers(
+                            commands,
+                            0,
+                            &[vertices.handle, skin.handle],
+                            &[0, 0],
+                        );
+                        device.cmd_bind_index_buffer(
+                            commands,
+                            indices.handle,
+                            0,
+                            vk::IndexType::UINT32,
+                        );
+                        buffers_bound = true;
+                    }
+                    if bound != Some(pipeline) {
+                        device.cmd_bind_pipeline(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline,
+                        );
+                        bound = Some(pipeline);
+                        if pass != Pass::Depth {
+                            // What was drawn for its depth first is drawn
+                            // only where it is exactly that far away, and
+                            // has no depth left to write; what is
+                            // see-through writes none either.
+                            let known = pass == Pass::Known;
+                            device.cmd_set_depth_compare_op(
+                                commands,
+                                if known {
+                                    vk::CompareOp::EQUAL
+                                } else {
+                                    vk::CompareOp::GREATER
+                                },
+                            );
+                            device.cmd_set_depth_write_enable(commands, pass == Pass::Solid);
+                        }
+                    }
+                    // A depth alone reads the material only for holes.
+                    if (pass != Pass::Depth || cut_out) && material != Some(part.material) {
+                        device.cmd_bind_descriptor_sets(
+                            commands,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.layout,
+                            1,
+                            &[model.materials.set(part.material)],
+                            &[],
+                        );
+                        material = Some(part.material);
+                    }
+                    let mirrored = part.mirrored != shown.mirrored;
+                    device.cmd_set_front_face(
+                        commands,
+                        if mirrored {
+                            vk::FrontFace::CLOCKWISE
+                        } else {
+                            vk::FrontFace::COUNTER_CLOCKWISE
+                        },
+                    );
+                    device.cmd_set_cull_mode(
+                        commands,
+                        if part.double_sided {
+                            vk::CullModeFlags::NONE
+                        } else {
+                            vk::CullModeFlags::BACK
+                        },
+                    );
+                    let joints = shown.first + part.joints;
+                    device.cmd_push_constants(
+                        commands,
+                        self.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        &figure_draw_bytes(mirrored, joints, before + joints),
+                    );
+                    device.cmd_draw_indexed(
+                        commands,
+                        part.index_count,
+                        1,
+                        part.first_index,
+                        part.first_vertex,
+                        0,
+                    );
+                }
             }
         }
     }
@@ -3891,33 +4340,124 @@ fn draw_bytes(draw: &Draw) -> [u8; DRAW_BYTES] {
     bytes
 }
 
+/// The shader's `Draw` for one part of a figure: no place of its own (its
+/// joints place it), -1 if it is drawn mirrored, the sway that marks a
+/// figure, and where its joints start this frame and the frame before.
+fn figure_draw_bytes(mirrored: bool, joints: u32, before: u32) -> [u8; DRAW_BYTES] {
+    let mut bytes = [0_u8; DRAW_BYTES];
+    let handedness: f32 = if mirrored { -1.0 } else { 1.0 };
+    bytes[112..116].copy_from_slice(&handedness.to_ne_bytes());
+    bytes[116..120].copy_from_slice(&FIGURE_SWAY.to_ne_bytes());
+    bytes[120..124].copy_from_slice(&joints.to_ne_bytes());
+    bytes[124..128].copy_from_slice(&before.to_ne_bytes());
+    bytes
+}
+
+/// The shader's `Casting` for one part of a figure drawn into a shadow
+/// picture: `picture` takes a point of the world to the picture, the
+/// world is where its joints put it, and its joints start at `joints`.
+fn figure_casting_bytes(picture: &Mat4, joints: u32) -> [u8; DRAW_BYTES] {
+    let mut bytes = [0_u8; DRAW_BYTES];
+    let world = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    bytes[..CASTING_BYTES].copy_from_slice(&casting_bytes(picture, &world));
+    bytes[CASTING_BYTES..CASTING_BYTES + 4].copy_from_slice(&joints.to_ne_bytes());
+    bytes
+}
+
+/// Which parts of the figures [`MeshPipeline::draw_figures`] draws, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// What is solid and what has holes, for its depth alone.
+    Depth,
+    /// The same in the picture, where that depth was drawn first.
+    Known,
+    /// The same in the picture, with no depth drawn first.
+    Solid,
+    /// What is see-through, mixed over the picture.
+    SeeThrough,
+}
+
+impl Pass {
+    /// Whether a part of the kind `surface` is drawn in this pass.
+    fn draws(self, surface: Surface) -> bool {
+        match self {
+            Self::Depth | Self::Known | Self::Solid => surface <= Surface::CutOut,
+            Self::SeeThrough => surface >= Surface::SeeThrough,
+        }
+    }
+}
+
 /// The colour images the mesh pass draws into: the picture, then how far
 /// each pixel moved.
 const SCENE_FORMATS: [vk::Format; 2] = [SceneTarget::FORMAT, SceneTarget::MOTION_FORMAT];
 
 /// How a mesh's points are laid out in the vertex buffer: one binding, and
-/// the position, folded normal, tangent, colour and the two UV maps.
-pub(crate) fn vertex_layout() -> (
-    [vk::VertexInputBindingDescription; 1],
-    [vk::VertexInputAttributeDescription; 6],
-) {
-    let bindings = [vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(VERTEX_BYTES as u32)
-        .input_rate(vk::VertexInputRate::VERTEX)];
-    let formats = [
-        (vk::Format::R32G32B32_SFLOAT, 0),
-        (vk::Format::R16G16_SNORM, 12),
-        (vk::Format::R8G8B8A8_SNORM, 16),
-        (vk::Format::R8G8B8A8_UNORM, 20),
-        (vk::Format::R32G32_SFLOAT, 24),
-        (vk::Format::R32G32_SFLOAT, 32),
-    ];
-    let mut attributes = [vk::VertexInputAttributeDescription::default(); 6];
-    for ((location, attribute), (format, offset)) in (0_u32..).zip(&mut attributes).zip(formats) {
-        *attribute = attribute.location(location).format(format).offset(offset);
+/// the position, folded normal, tangent, colour and the two UV maps. A
+/// figure's points ([`crate::figures`]) have a second binding beside the
+/// first: which four joints bend each point and how much each pulls it,
+/// four bytes each, so a mesh with no skeleton carries none of it.
+pub(crate) struct VertexLayout {
+    bindings: [vk::VertexInputBindingDescription; 2],
+    attributes: [vk::VertexInputAttributeDescription; 8],
+    skinned: bool,
+}
+
+impl VertexLayout {
+    /// The bindings: the points, and for a figure its joints.
+    pub(crate) fn bindings(&self) -> &[vk::VertexInputBindingDescription] {
+        &self.bindings[..if self.skinned { 2 } else { 1 }]
     }
-    (bindings, attributes)
+
+    /// What is read from them, and where.
+    pub(crate) fn attributes(&self) -> &[vk::VertexInputAttributeDescription] {
+        &self.attributes[..if self.skinned { 8 } else { 6 }]
+    }
+}
+
+/// The layout of a mesh's points; with `skinned`, a figure's, whose joints
+/// come in a second binding (the shader's `vertex_skinned`).
+pub(crate) fn vertex_layout(skinned: bool) -> VertexLayout {
+    let bindings = [
+        vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(VERTEX_BYTES as u32)
+            .input_rate(vk::VertexInputRate::VERTEX),
+        vk::VertexInputBindingDescription::default()
+            .binding(1)
+            .stride(crate::figures::SKIN_BYTES as u32)
+            .input_rate(vk::VertexInputRate::VERTEX),
+    ];
+    let formats = [
+        (vk::Format::R32G32B32_SFLOAT, 0, 0),
+        (vk::Format::R16G16_SNORM, 0, 12),
+        (vk::Format::R8G8B8A8_SNORM, 0, 16),
+        (vk::Format::R8G8B8A8_UNORM, 0, 20),
+        (vk::Format::R32G32_SFLOAT, 0, 24),
+        (vk::Format::R32G32_SFLOAT, 0, 32),
+        // The four joints, each a byte, and how much each pulls.
+        (vk::Format::R8G8B8A8_UINT, 1, 0),
+        (vk::Format::R8G8B8A8_UNORM, 1, 4),
+    ];
+    let mut attributes = [vk::VertexInputAttributeDescription::default(); 8];
+    for ((location, attribute), (format, binding, offset)) in
+        (0_u32..).zip(&mut attributes).zip(formats)
+    {
+        *attribute = attribute
+            .location(location)
+            .binding(binding)
+            .format(format)
+            .offset(offset);
+    }
+    VertexLayout {
+        bindings,
+        attributes,
+        skinned,
+    }
 }
 
 /// Makes the pipeline a body of still fluid is drawn with (`vertex_body`
@@ -4026,6 +4566,7 @@ pub(crate) unsafe fn make_body_pipeline(
 /// the vertex function `vertex` and the fragment function `fragment` of
 /// `module`: the states the built-in pipelines have, and the rendering
 /// formats of the mesh pass. A game's surface shader makes its own with this.
+/// `skinned` reads a figure's points, joints and all ([`vertex_layout`]).
 ///
 /// # Safety
 ///
@@ -4033,6 +4574,8 @@ pub(crate) unsafe fn make_body_pipeline(
 /// which must be (or be compatible with) the mesh pipeline's layout in sets
 /// 0 to 2 and its push constants. `cache` is a pipeline cache of this device
 /// that no other thread is using, or null.
+// The handles a pipeline is made from and what it draws, each said once.
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn make_surface_pipeline(
     device: &ash::Device,
     cache: vk::PipelineCache,
@@ -4041,11 +4584,12 @@ pub(crate) unsafe fn make_surface_pipeline(
     vertex: &std::ffi::CStr,
     fragment: &std::ffi::CStr,
     surface: Surface,
+    skinned: bool,
 ) -> Result<vk::Pipeline, vk::Result> {
-    let (bindings, attributes) = vertex_layout();
+    let points = vertex_layout(skinned);
     let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attributes);
+        .vertex_binding_descriptions(points.bindings())
+        .vertex_attribute_descriptions(points.attributes());
     let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     // The viewport and scissor are set while drawing, so a resized window
@@ -4142,7 +4686,16 @@ impl Drop for MeshPipeline {
         // frees its sets.
         unsafe {
             let device = self.gpu.device();
-            for pipeline in self.pipelines.into_iter().chain(self.shadow_pipelines) {
+            let figures = self
+                .figure_pipelines
+                .into_iter()
+                .chain(self.figure_shadow_pipelines);
+            for pipeline in self
+                .pipelines
+                .into_iter()
+                .chain(self.shadow_pipelines)
+                .chain(figures)
+            {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.body_pipeline, None);
@@ -4153,6 +4706,8 @@ impl Drop for MeshPipeline {
             device.destroy_pipeline(self.grid, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
+            device.destroy_pipeline_layout(self.shadow_layout, None);
+            device.destroy_descriptor_set_layout(self.joint_layout, None);
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_set_layout(self.material_layout, None);
             device.destroy_descriptor_set_layout(self.body_layout, None);
