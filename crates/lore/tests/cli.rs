@@ -674,8 +674,36 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
         said.contains("Each of the 24 actions was also pressed, held and let go"),
         "{said}"
     );
+    // Then every two together, without printing the script's lines again.
+    assert!(said.contains("pairs both ways round"), "{said}");
     assert!(!said.contains("Nothing was pressed"), "{said}");
     assert!(!said.contains("Not pressed"), "{said}");
+}
+
+#[test]
+fn check_holds_two_actions_together_and_names_them_under_a_mistake() {
+    let folder = scratch("check-pair");
+    assert!(lore(&folder, &["new", "game"]).status.success());
+    fs::write(
+        folder.join("game/main.luau"),
+        "game.onTick(function()\n\
+         \tif game.input.pressed(\"aim\") and game.input.justPressed(\"fire\") then\n\
+         \t\tlocal nothing = nil\n\
+         \t\tnothing.here = 1\n\
+         \tend\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let output = lore(&folder, &["check", "game"]);
+
+    assert!(!output.status.success());
+    let said = stderr(&output);
+    assert!(said.contains("Script error in main.luau, line 4"), "{said}");
+    assert!(
+        said.contains("while the check was holding \"aim\" and pressing \"fire\""),
+        "{said}"
+    );
 }
 
 /// A script with an action of its own that prints when it is pressed.

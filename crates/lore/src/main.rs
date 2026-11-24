@@ -452,6 +452,7 @@ fn check(folder: &Path) -> Result<(), String> {
     press::point_in_middle(&mut input);
     let step = 1.0 / TICKS as f32;
     let mut pressed = Pressed::default();
+    let mut pairs = 0;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -478,6 +479,24 @@ fn check(folder: &Path) -> Result<(), String> {
                 );
             }
         });
+        // Then every two together, so code that needs both runs too. What
+        // the script prints was seen once already, for each action alone:
+        // only its mistakes are said this time.
+        let loud = log::max_level();
+        log::set_max_level(loud.min(log::LevelFilter::Warn));
+        pairs = press::every_pair(&mut input, |held, pressed, frame| {
+            game.tick(frame, step);
+            if game.host().mistakes_logged() > seen {
+                seen = game.host().mistakes_logged();
+                // The error itself was printed just above this.
+                eprintln!(
+                    "That happened while the check was holding \"{}\" and pressing \"{}\".",
+                    config.actions.name(held),
+                    config.actions.name(pressed)
+                );
+            }
+        });
+        log::set_max_level(loud);
         // Pretend shots, so the functions that wait for one run too, with
         // what the script handed the player, or else a rifle: one that hits
         // a training dummy and one that hits a wall, since a script has to
@@ -677,9 +696,12 @@ fn check(folder: &Path) -> Result<(), String> {
          was moved. The pointer stood in the middle of a 1920 by 1080 screen throughout, \
          so code that runs only while something is hovered was run too. Code that only \
          runs on input was run, with no errors. \
-         Two actions held together were not tried, and neither was code that needs more \
-         than a press, such as a shot that has to hit someone: read that code carefully, \
-         and try it by playing with `lore run`.",
+         Then each action was held while each other one was pressed, {pairs} pairs both \
+         ways round, so code that needs two at once (aiming while firing, sprinting \
+         while moving) was run too; what the script printed then is not shown, only \
+         its mistakes. Three held together were not tried, and neither was \
+         code that needs more than a press, such as a shot that has to hit someone: read \
+         that code carefully, and try it by playing with `lore run`.",
         pressed.actions
     );
     if !pressed.unbound.is_empty() {

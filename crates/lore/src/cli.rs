@@ -178,6 +178,7 @@ fn rules_by_tick(game: &mut ScriptGame, actions: &ActionMap, pictures: &[u32]) -
         tick(game, input.tick());
     }
     press::every_action(&mut input, |_, frame| tick(game, frame));
+    press::every_pair(&mut input, |_, _, frame| tick(game, frame));
     done
 }
 
