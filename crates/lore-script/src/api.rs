@@ -52,6 +52,9 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "resume",
     "paused",
     "quit",
+    "thing",
+    "things",
+    "showUsePrompt",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -101,6 +104,8 @@ pub(crate) struct Handlers {
     pub death: Vec<Function>,
     /// `game.player:onMoment`: each with the moment it listens for.
     pub moment: Vec<(String, Function)>,
+    /// `thing:onUse`: each with the id of the thing it is for.
+    pub used: Vec<(Rc<str>, Function)>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -176,6 +181,12 @@ pub(crate) struct Shared {
     /// Where the script said the world is seen from. It outlives this
     /// version of the script.
     pub camera: Rc<crate::camera_api::CameraState>,
+    /// What is placed in the level. It outlives this version of the script.
+    pub things: Rc<crate::thing_api::ThingState>,
+    /// What this version has said of using things.
+    pub thing_uses: crate::thing_api::ThingUses,
+    /// The values this version holds for things, by id.
+    pub thing_handles: RefCell<std::collections::HashMap<String, mlua::AnyUserData>>,
     /// The game shaders the script turned on. It outlives this version of
     /// the script.
     pub shaders: Rc<crate::shader_api::ShaderState>,
@@ -389,6 +400,24 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     tools_api::install_input(lua, shared, &input)?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
+
+    let state = Rc::clone(shared);
+    game.set(
+        "thing",
+        lua.create_function(move |lua, name: Value| crate::thing_api::thing(lua, &state, &name))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "things",
+        lua.create_function(move |lua, kind: Value| crate::thing_api::things(lua, &state, &kind))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "showUsePrompt",
+        lua.create_function(move |lua, shown: Value| {
+            crate::thing_api::use_prompt(lua, &state, &shown)
+        })?,
+    )?;
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
@@ -853,7 +882,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 45] = [
+        let groups: [(&str, &[&str]); 47] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -894,6 +923,8 @@ mod tests {
             ("game.lamps.", crate::lamp_api::LAMPS_FUNCTIONS),
             ("game.lighting.", crate::lighting_api::LIGHTING_FUNCTIONS),
             ("game.camera.", crate::camera_api::CAMERA_FUNCTIONS),
+            ("Thing.", crate::thing_api::THING_FIELDS),
+            ("Thing:", crate::thing_api::THING_METHODS),
             ("game.look.", crate::look_api::LOOK_FUNCTIONS),
             ("Lamp.", crate::lamp_api::LAMP_FIELDS),
             ("Lamp:", &["remove"]),

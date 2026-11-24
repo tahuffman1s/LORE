@@ -522,6 +522,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let step = 1.0 / TICKS as f32;
     let mut pressed = Pressed::default();
     let mut pairs = 0;
+    let mut used = 0;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -630,6 +631,18 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         game.host_mut().stand_in_fluid(player, None, step);
         game.tick(input.tick(), step);
+        // Every thing the script made usable is used once, so what each
+        // does is run too, wherever in the level it stands.
+        let mut usable = Vec::new();
+        game.host()
+            .each_usable(|id, _, _| usable.push(id.to_owned()));
+        for id in &usable {
+            game.host_mut().set_use_target(Some(id), 0.0);
+            game.host_mut().use_thing(id);
+            game.tick(input.tick(), step);
+        }
+        game.host_mut().set_use_target(None, 0.0);
+        used = usable.len();
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -744,6 +757,18 @@ fn check(folder: &Path) -> Result<(), String> {
             ""
         }
     );
+    match used {
+        0 => {}
+        1 => println!(
+            "The one thing the script made usable (thing:onUse) was used once, with no \
+             errors. Nobody walked up to it: whether a player can reach it is for `lore run`."
+        ),
+        used => println!(
+            "Each of the {used} things the script made usable (thing:onUse) was used once, \
+             with no errors. Nobody walked up to them: whether a player can reach each is \
+             for `lore run`."
+        ),
+    }
     match paced {
         Some(Paced::Same) => println!(
             "The game was then played four more times from the start: three times with one \

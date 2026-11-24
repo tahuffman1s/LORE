@@ -501,6 +501,18 @@ impl Tools {
         self.moves.get()
     }
 
+    /// What to show for the action called `name` on the device the player
+    /// last used, from their own bindings if the engine has said them and
+    /// else from `own`. Empty for an action there is not.
+    pub fn label(&self, own: &ActionMap, name: &str) -> String {
+        let controls = self.controls.borrow();
+        let map = controls.as_ref().unwrap_or(own);
+        map.action(name).map_or_else(
+            |_| String::new(),
+            |action| label_of(map, action, self.device.get(), self.style.get()),
+        )
+    }
+
     pub fn view(&self) -> Option<ViewTold> {
         self.view.get()
     }

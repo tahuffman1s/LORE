@@ -351,7 +351,7 @@ fn mistakes_with_the_player_say_what_to_write() {
         "{said}"
     );
     assert!(
-        said.contains("blocking, and the functions game.player:giveWeapon,"),
+        said.contains(", and the functions game.player:giveWeapon,"),
         "{said}"
     );
     assert!(said.ends_with("game.player:block."), "{said}");

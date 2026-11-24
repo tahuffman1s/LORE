@@ -56,6 +56,8 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "dead",
     "lockedOn",
     "blocking",
+    "lookingAt",
+    "useProgress",
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
@@ -497,6 +499,21 @@ impl UserData for CharacterRef {
             this.read(lua, "model")?;
             only_player(lua, *this, "model", "given a model")?;
             Ok(crate::body_api::model_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("lookingAt", |lua, this| {
+            this.read(lua, "lookingAt")?;
+            if this.0 != CharacterId::PLAYER {
+                return Ok(None);
+            }
+            crate::thing_api::looking_at(lua, &*shared_of(lua)?)
+        });
+        fields.add_field_method_get("useProgress", |lua, this| {
+            this.read(lua, "useProgress")?;
+            Ok(if this.0 == CharacterId::PLAYER {
+                crate::thing_api::use_progress(&*shared_of(lua)?)
+            } else {
+                0.0
+            })
         });
         fields.add_field_method_get("holding", |lua, this| {
             this.read(lua, "holding")?;

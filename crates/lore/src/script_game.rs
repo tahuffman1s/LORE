@@ -48,6 +48,8 @@ pub struct ScriptGame {
     notice: Option<ProblemNotice>,
     /// The HUD the script made with `game.hud`.
     hud: ScriptHud,
+    /// The prompt for a thing the player can use.
+    use_prompt: crate::use_prompt::UsePrompt,
     /// The sounds the script can play by name.
     sounds: Sounds,
     /// The pictures the script can show on its HUD.
@@ -77,6 +79,35 @@ const NOTHING_PLACED: &str = "The game runs with nothing placed in its level. Fi
 const KEEPS_MAP: &str = "The game keeps the map it had. Fix this and save the file: the \
                          game picks it up by itself.";
 
+/// What is placed in `map`, as the script is told it (`game.thing`).
+fn placed_of(map: &Map) -> Vec<lore_script::Placed> {
+    use crate::map::Value;
+    use lore_script::PlacedValue;
+
+    map.entities()
+        .iter()
+        .map(|entity| lore_script::Placed {
+            id: entity.id.clone(),
+            kind: entity.kind.clone(),
+            name: entity.name.clone(),
+            position: entity.position,
+            facing: entity.facing,
+            properties: entity
+                .properties
+                .iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        Value::Text(text) => PlacedValue::Text(text.clone()),
+                        Value::Number(number) => PlacedValue::Number(*number),
+                        Value::Flag(flag) => PlacedValue::Flag(*flag),
+                    };
+                    (name.clone(), value)
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Logs what `map`, just read from its file, says that LORE does not act on.
 fn said_of(map: &Map) {
     for note in map.notes() {
@@ -94,6 +125,7 @@ impl ScriptGame {
             errors: None,
             notice: None,
             hud: ScriptHud::default(),
+            use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
             map: Map::default(),
@@ -257,25 +289,31 @@ impl ScriptGame {
         settings: Settings,
     ) -> Result<Self, OpenError> {
         let folder = folder.as_ref();
-        let mut host =
-            ScriptHost::open_with_settings(folder, actions.clone(), settings.described())?;
-        host.set_text_measure(crate::error_overlay::measure());
+        // The map is read first: what is placed is the script's to find
+        // from its first line.
         let (map_file, read) = MapFile::open(folder);
         let (map, map_error) = match read {
-            Ok(map) => {
-                said_of(&map);
-                (map, None)
-            }
-            Err(error) => {
-                log::error!("{error}\n{NOTHING_PLACED}");
-                (Map::default(), Some(error))
-            }
+            Ok(map) => (map, None),
+            Err(error) => (Map::default(), Some(error)),
         };
+        let mut host = ScriptHost::open_with_placed(
+            folder,
+            actions.clone(),
+            settings.described(),
+            placed_of(&map),
+        )?;
+        host.set_text_measure(crate::error_overlay::measure());
+        // Said once the game is known to be there to open.
+        match &map_error {
+            None => said_of(&map),
+            Some(error) => log::error!("{error}\n{NOTHING_PLACED}"),
+        }
         let mut game = Self {
             host,
             errors: Some(ErrorOverlay::default()),
             notice: None,
             hud: ScriptHud::default(),
+            use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
             map,
@@ -361,9 +399,42 @@ impl ScriptGame {
     /// map it was packed with. It takes the place of any map the game had.
     #[must_use]
     pub fn with_map(mut self, map: Map) -> Self {
+        self.host.set_placed(placed_of(&map));
         self.map = map;
         self.map_error = None;
         self
+    }
+
+    /// Runs a packaged game: its scripts as text, its HUD images already
+    /// read, and the `map` it was packed with, which the scripts can read
+    /// from their first line (`game.thing`).
+    #[must_use]
+    pub fn from_pack_parts(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<(String, lore_render::HudImage)>,
+        map: Map,
+        actions: &ActionMap,
+        settings: Settings,
+    ) -> Self {
+        let mut infos: Vec<lore_script::HudImageInfo> = images
+            .iter()
+            .map(|(name, image)| lore_script::HudImageInfo {
+                name: name.clone(),
+                size: image.size,
+            })
+            .collect();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        let host = ScriptHost::from_sources_with_placed(
+            scripts,
+            infos,
+            actions.clone(),
+            settings.described(),
+            placed_of(&map),
+        );
+        let mut game = Self::without_files(host, settings);
+        game.pictures = crate::hud_images::HudPictures::given(images);
+        game.map = map;
+        game
     }
 
     /// What is placed in the game's level: its spawn points, zones and
@@ -390,6 +461,7 @@ impl ScriptGame {
             Ok(map) => {
                 log::info!("Loaded {} again: {}.", crate::map::MAP_FILE, map.summary());
                 said_of(&map);
+                self.host.set_placed(placed_of(&map));
                 self.map = map;
                 self.map_error = None;
             }
@@ -545,6 +617,8 @@ impl Game for ScriptGame {
         }
         // After the script has drawn, so what it changed is in this frame.
         self.hud.show(&mut self.host, frame);
+        // Over the game's own HUD, under any error.
+        self.use_prompt.show(&self.host, frame);
         // Last, so it is on top of anything the game draws.
         if let Some(errors) = &mut self.errors {
             errors.show(self.host.last_error(), frame);

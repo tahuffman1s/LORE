@@ -65,6 +65,7 @@ mod standin;
 mod starter_level;
 mod tick;
 mod translate;
+mod use_prompt;
 pub mod world;
 
 pub use lore_assets as assets;

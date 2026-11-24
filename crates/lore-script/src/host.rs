@@ -165,6 +165,8 @@ pub struct ScriptHost {
     look: Rc<crate::look_api::LookState>,
     /// Where the script said the world is seen from; it outlives a reload too.
     camera: Rc<crate::camera_api::CameraState>,
+    /// What is placed in the level; it outlives a reload too.
+    things: Rc<crate::thing_api::ThingState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -220,6 +222,26 @@ impl ScriptHost {
         actions: ActionMap,
         settings: Vec<Setting>,
     ) -> Result<Self, OpenError> {
+        Self::open_with_placed(folder, actions, settings, Vec::new())
+    }
+
+    /// Opens the game in `folder` as
+    /// [`open_with_settings`](Self::open_with_settings) does, with what is
+    /// `placed` in its level for `game.thing` to find.
+    ///
+    /// It is handed over here, before the first line of the script runs,
+    /// so that a script can find a thing at the top of its file.
+    /// [`set_placed`](Self::set_placed) says it again when the map changes.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `folder` has no `main.luau` or the file cannot be read.
+    pub fn open_with_placed(
+        folder: impl AsRef<Path>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        placed: Vec<crate::Placed>,
+    ) -> Result<Self, OpenError> {
         let folder = folder.as_ref();
         let path = folder.join(ENTRY_SCRIPT);
         if let Err(source) = std::fs::File::open(&path) {
@@ -234,6 +256,7 @@ impl ScriptHost {
             actions,
             settings,
             Vec::new(),
+            placed,
         ))
     }
 
@@ -293,7 +316,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, Vec::new())
+        Self::with_files(files, actions, settings, Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -308,7 +331,23 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images)
+        Self::with_files(files, actions, settings, images, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_images`](Self::from_sources_with_images) does,
+    /// with what is `placed` in its level for `game.thing` to find: a
+    /// packaged game's, read from the map in its pack.
+    #[must_use]
+    pub fn from_sources_with_placed(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<crate::images::HudImageInfo>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        placed: Vec<crate::Placed>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings, images, placed)
     }
 
     /// The game's HUD images, by name, sorted, as the running script knows
@@ -326,8 +365,11 @@ impl ScriptHost {
         actions: ActionMap,
         settings: Vec<Setting>,
         images: Vec<crate::images::HudImageInfo>,
+        placed: Vec<crate::Placed>,
     ) -> Self {
         let files = Rc::new(files);
+        let things = Rc::<crate::thing_api::ThingState>::default();
+        things.set_placed(placed);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
             files,
@@ -359,6 +401,7 @@ impl ScriptHost {
             lighting: Rc::default(),
             look: Rc::default(),
             camera: Rc::default(),
+            things,
             versions: 0,
             tools: Rc::default(),
             settings: Rc::new(SettingsState::new(settings)),
@@ -1316,6 +1359,63 @@ impl ScriptHost {
         self.tools.fly_speed()
     }
 
+    /// Says what is placed in the game's level, as when its map is saved
+    /// again while the game runs. A thing a script still holds that is no
+    /// longer placed says so when it is next read.
+    pub fn set_placed(&mut self, placed: Vec<crate::Placed>) {
+        self.things.set_placed(placed);
+    }
+
+    /// Calls `see` with every thing the player can use now: its id, where
+    /// it is and how it is used (`thing:onUse`, `thing.useText`).
+    pub fn each_usable(&self, see: impl FnMut(&str, [f32; 3], &crate::UseSaid)) {
+        if let Some(version) = &self.running {
+            self.things.each_usable(&version.shared.thing_uses, see);
+        }
+    }
+
+    /// Says which thing the use button would act on now, by its id, and how
+    /// far through holding the button the player is (0 to 1): what
+    /// `game.player.lookingAt` and `game.player.useProgress` read.
+    pub fn set_use_target(&mut self, target: Option<&str>, progress: f32) {
+        self.things.set_target(target, progress);
+    }
+
+    /// The words to show for the thing the player can use now, and how far
+    /// through holding the button they are: `None` when there is nothing
+    /// to use, or the script draws its own prompt (`game.showUsePrompt(false)`).
+    #[must_use]
+    pub fn use_prompt(&self) -> Option<(String, f32)> {
+        let version = self.running.as_ref()?;
+        self.things.prompt(&version.shared.thing_uses)
+    }
+
+    /// What to show for the key or button that uses things, on the device
+    /// the player last touched: "E", or a gamepad button's own name.
+    #[must_use]
+    pub fn use_label(&self) -> String {
+        self.tools.label(&self.actions.borrow(), "interact")
+    }
+
+    /// Tells the script the player used the thing placed as `id`: its
+    /// `onUse` functions are called with the thing.
+    pub fn use_thing(&mut self, id: &str) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::thing_api::handlers_for(&shared, id);
+        if handlers.is_empty() {
+            return;
+        }
+        let Ok(thing) = crate::thing_api::handle(&version.vm, &shared, id) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, thing.clone()) {
+                break;
+            }
+        }
+    }
+
     /// Says where the picture about to be drawn is seen from, so that
     /// `game.hud.onScreen` can say where a place in the world is in it.
     /// Call it before [`draw`](Self::draw).
@@ -1691,6 +1791,9 @@ impl ScriptHost {
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             camera: Rc::clone(&self.camera),
+            things: Rc::clone(&self.things),
+            thing_uses: crate::thing_api::ThingUses::default(),
+            thing_handles: RefCell::default(),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             images: Rc::clone(&self.images),
