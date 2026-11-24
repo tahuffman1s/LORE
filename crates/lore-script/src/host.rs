@@ -157,6 +157,8 @@ pub struct ScriptHost {
     lamps: Rc<crate::lamp_api::LampState>,
     /// The game shaders the script turned on; they outlive a reload too.
     shaders: Rc<ShaderState>,
+    /// The player's body and camera; they outlive a reload too.
+    body: Rc<crate::body_api::BodyState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
     /// How many versions of the script have run: each has its own HUD.
@@ -348,6 +350,7 @@ impl ScriptHost {
             weather: Rc::default(),
             fluids: Rc::default(),
             lamps: Rc::default(),
+            body: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
             versions: 0,
@@ -415,6 +418,7 @@ impl ScriptHost {
             self.weather.step(step);
         }
         self.meteors_due();
+        self.moments_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
             self.call_all(|handlers| &handlers.spawn, ());
@@ -715,6 +719,66 @@ impl ScriptHost {
                 ),
             );
         });
+    }
+
+    /// Tells the script of the moments the body's clips passed since the
+    /// last tick: its `game.player:onMoment` functions for each, with the
+    /// clip's name.
+    fn moments_due(&mut self) {
+        let moments = self.body.take_moments();
+        if moments.is_empty() || self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        for (clip, moment) in moments {
+            for handler in crate::body_api::moment_handlers(&shared, &moment) {
+                if !self.call(&shared, &handler, clip.clone()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// How the script wants the camera and body set up: first or third
+    /// person, which way the body faces, and how the camera hangs.
+    #[must_use]
+    pub fn camera_view(&self) -> crate::CameraView {
+        self.body.camera_view()
+    }
+
+    /// Notes that the player switched the view with their own button, so
+    /// `game.player.view` says so.
+    pub fn said_view(&self, third: bool) {
+        self.body.said_view(third);
+    }
+
+    /// The model the script asked the body to be, once: a built-in name
+    /// (`"mannequin"`, `"mannequin_female"`) or a file in the game's folder.
+    pub fn take_body_model(&self) -> Option<String> {
+        self.body.take_model()
+    }
+
+    /// What the script asked the body to play or stop since the last call.
+    pub fn take_animation_asks(&self) -> Vec<crate::AnimationAsk> {
+        self.body.take_asks()
+    }
+
+    /// Tells the script which model the body is and the clips it has, so a
+    /// misspelt clip name is caught where it is written.
+    pub fn set_body_clips(&self, model: &str, clips: impl IntoIterator<Item = String>) {
+        self.body.set_clips(model, clips);
+    }
+
+    /// Tells the script which of the clips it asked for are still playing.
+    pub fn set_playing<'a>(&self, clips: impl IntoIterator<Item = &'a str>) {
+        self.body.set_playing(clips);
+    }
+
+    /// Notes that a clip passed a moment (`"left_foot_down"`, `"hit"`), for
+    /// `game.player:onMoment` on the next tick.
+    pub fn heard_moment(&self, clip: &str, moment: &str) {
+        self.body.heard_moment(clip, moment);
     }
 
     /// How stormy the aurora is, the Kp index from 0 to 9, if the script
@@ -1490,6 +1554,7 @@ impl ScriptHost {
             fluids: Rc::clone(&self.fluids),
             lamps: Rc::clone(&self.lamps),
             shaders: Rc::clone(&self.shaders),
+            body: Rc::clone(&self.body),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             audio: Rc::clone(&self.audio),

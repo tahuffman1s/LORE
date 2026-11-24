@@ -44,6 +44,7 @@ libm = "0.2"
 # Reads a game's `level.glb`: the player collides with its shapes, and the
 # pictures its materials use are decoded to be drawn.
 lore-assets = { path = "../lore-assets" }
+lore-anim = { path = "../lore-anim" }
 log = "0.4"
 # Reads a game's `map.toml`. The same reader the bindings file uses.
 toml = { version = "1.2", default-features = false, features = ["parse", "std"] }

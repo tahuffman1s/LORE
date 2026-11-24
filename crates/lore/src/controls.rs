@@ -264,7 +264,7 @@ mod tests {
         let defaults = ActionMap::standard();
         let mut changed = defaults.clone();
         changed
-            .read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")
+            .read_bindings("[bindings]\njump = [\"J\", \"GamepadSouth\"]")
             .unwrap();
 
         save(&path, &changed, &defaults).unwrap();
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn a_file_that_is_not_toml_leaves_the_games_own_controls() {
         let path = scratch("broken").join("bindings.toml");
-        fs::write(&path, "[bindings\njump = [\"F\"]\n").unwrap();
+        fs::write(&path, "[bindings\njump = [\"J\"]\n").unwrap();
         let mut actions = ActionMap::standard();
 
         let said = load(&path, &mut actions);
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn a_saved_file_is_read_again_and_a_line_taken_out_goes_back() {
         let path = scratch("live").join("bindings.toml");
-        fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
+        fs::write(&path, "[bindings]\njump = [\"J\", \"GamepadSouth\"]\n").unwrap();
         let mut actions = ActionMap::standard();
         let (mut live, said) = Live::start(path.clone(), &mut actions);
         assert_eq!(said, Vec::<String>::new());
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(said, Vec::<String>::new());
         assert!(live.look().is_none(), "no file yet");
 
-        fs::write(&path, "[bindings\njump = [\"F\"]\n").unwrap();
+        fs::write(&path, "[bindings\njump = [\"J\"]\n").unwrap();
         assert!(live.look().is_none());
         let reread = live.look().unwrap();
         assert!(reread.controls.is_none());
@@ -382,7 +382,7 @@ mod tests {
         assert!(live.look().is_none(), "a file that is gone is not a change");
 
         // Made after the game started, as `lore controls` does.
-        fs::write(&path, "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n").unwrap();
+        fs::write(&path, "[bindings]\njump = [\"J\", \"GamepadSouth\"]\n").unwrap();
         assert!(live.look().is_none());
         let controls = live.look().unwrap().controls.unwrap();
         assert_ne!(controls, ActionMap::standard());

@@ -1536,6 +1536,7 @@ dependencies = [
  "gilrs",
  "libm",
  "log",
+ "lore-anim",
  "lore-assets",
  "lore-audio",
  "lore-fluid",

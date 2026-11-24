@@ -6,7 +6,7 @@ use crate::medium::Medium;
 use parry3d::glamx::Vec3;
 use parry3d::math::{Pose, Vector as Wide};
 use parry3d::query::{self, Ray, RayCast, ShapeCastOptions};
-use parry3d::shape::{Capsule, TriMesh};
+use parry3d::shape::{Ball, Capsule, TriMesh};
 
 /// A triangle thinner than this (twice its area, in square metres) is left
 /// out: it has no direction to push the player in.
@@ -619,6 +619,40 @@ impl Level {
             point: (from + heading * distance).to_array(),
             normal: normal.to_array(),
         })
+    }
+
+    /// Moves a ball `radius` metres across from `from` towards `to` and says
+    /// how far along it got before touching anything, from 0 (stuck at the
+    /// start) to 1 (all the way): what a third-person camera uses to stay
+    /// out of walls. `None` when nothing is in the way, or a number is not a
+    /// number.
+    #[must_use]
+    pub fn ball_cast(&self, from: [f32; 3], to: [f32; 3], radius: f32) -> Option<f32> {
+        let mesh = self.mesh.as_ref()?;
+        let (from, to) = (Vector::from_array(from), Vector::from_array(to));
+        if !(from.is_finite() && to.is_finite() && radius.is_finite() && radius > 0.0) {
+            return None;
+        }
+        let travel = (to - from).as_dvec3();
+        let options = ShapeCastOptions {
+            max_time_of_impact: 1.0,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: false,
+        };
+        let hit = query::cast_shapes(
+            &Pose::IDENTITY,
+            Wide::ZERO,
+            mesh,
+            &Pose::from_translation(from.as_dvec3()),
+            travel,
+            &Ball::new(f64::from(radius)),
+            options,
+        )
+        .ok()
+        .flatten()?;
+        let fraction = hit.time_of_impact as f32;
+        fraction.is_finite().then(|| fraction.clamp(0.0, 1.0))
     }
 
     /// Whether the first surface a ray from `from` along `direction` meets,

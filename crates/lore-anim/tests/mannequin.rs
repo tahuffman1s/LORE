@@ -44,6 +44,11 @@ fn gaits_are_as_fast_as_people_walk_and_run() {
 }
 
 #[test]
+fn the_mannequin_faces_the_way_gltf_asks() {
+    assert_eq!(body().facing(), 1.0);
+}
+
+#[test]
 fn walking_clips_mark_both_feet() {
     let body = body();
     let walk = &body.clips()[body.clip("walk").unwrap() as usize];

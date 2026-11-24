@@ -81,6 +81,26 @@ declare extern type Character with
     --- Example: print(game.player.flySpeed)
     flySpeed: number
 
+    --- Where the camera is: "first" (at the eyes) or "third" (behind and
+    --- over a shoulder). Change it with `game.player:setView`; the player
+    --- changes it with their switch_view button where the game allows.
+    --- Example: if game.player.view == "third" then print("Seen from behind") end
+    view: ("first" | "third")
+
+    --- Which way the body turns: "move" (the way it walks) or "aim" (the
+    --- way the camera looks). Change it with `game.player:setFacing`.
+    --- Example: print(game.player.facing)
+    facing: ("move" | "aim")
+
+    --- The body's model: "mannequin" (the engine's own), "mannequin_female",
+    --- or the file a script gave `game.player:setModel`.
+    --- Example: print(game.player.model)
+    model: string
+
+    --- The names of the clips the body can play, for `game.player:play`.
+    --- Example: for _, clip in game.player.clips do print(clip) end
+    clips: { string }
+
     --- Puts a new, full weapon in the character's hands, in place of what
     --- they held. The name is one of the engine's weapons ("rifle",
     --- "pistol", "shotgun", "rocket launcher", "grenade") or one made with
@@ -115,6 +135,65 @@ declare extern type Character with
     --- `game.player` can be changed so far.
     --- Example: game.player:setFlySpeed(30)
     function setFlySpeed(self, metresPerSecond: number): ()
+
+    --- Sees the world from the eyes ("first") or from behind and over a
+    --- shoulder ("third"). The camera travels between the two rather than
+    --- cutting. Everything else follows: the body is drawn whole in third
+    --- person and without its head in first, and turns as `setFacing` says.
+    --- Example: game.player:setView("third")
+    function setView(self, view: "first" | "third"): ()
+
+    --- Lets the player switch between first and third person with their
+    --- switch_view button (F, or the View/Select button on a gamepad), or
+    --- stops them. Off until a game turns it on.
+    --- Example: game.player:allowViewSwitch(true)
+    function allowViewSwitch(self, allowed: boolean): ()
+
+    --- Turns the body the way it walks ("move", as an adventure does: the
+    --- character runs where the stick points) or the way the camera looks
+    --- ("aim", strafing, as over-the-shoulder aiming does). It turns at a
+    --- speed, never snapping round. In first person the body always faces
+    --- the way the camera looks.
+    --- Example: game.onTick(function() game.player:setFacing(if game.input.pressed("aim") then "aim" else "move") end)
+    function setFacing(self, facing: "move" | "aim"): ()
+
+    --- How the third-person camera hangs: `distance` behind (metres, 0.5 to
+    --- 20, 3 if never set), `height` above the eyes (0.15) and `shoulder`
+    --- to the right (0.45; negative for the left shoulder). Give any of
+    --- them. The camera pulls in when something is in the way and eases out.
+    --- Example: game.player:setCamera({ distance = 4, shoulder = -0.45 })
+    function setCamera(self, camera: { distance: number?, height: number?, shoulder: number? }): ()
+
+    --- Makes the body "mannequin", "mannequin_female", or a .glb model in
+    --- the game's folder. A model with bones named as the mannequin's
+    --- (Unreal's names: pelvis, spine_01, thigh_l...) plays all of its clips,
+    --- as well as its own.
+    --- Example: game.player:setModel("models/hero.glb")
+    function setModel(self, model: string): ()
+
+    --- Plays one of the body's clips (see `game.player.clips`) over its
+    --- moving about, then goes back to it. Options: `fade` (seconds, 0.2),
+    --- `speed` (1 as made), `loop` (true to keep playing until stopped) and
+    --- `upperBody` (true to move only from the waist up, so the legs keep
+    --- walking). Playing another clip on the same part of the body fades
+    --- this one out.
+    --- Example: if game.input.justPressed("melee") then game.player:play("sword_attack", { upperBody = true }) end
+    function play(self, clip: string, options: { fade: number?, speed: number?, loop: boolean?, upperBody: boolean? }?): ()
+
+    --- Fades out a clip a script played, or every one with no name.
+    --- Example: game.player:stop("dance")
+    function stop(self, clip: string?): ()
+
+    --- True while a clip a script played is still showing.
+    --- Example: if not game.player:isPlaying("drink") then game.player:play("drink") end
+    function isPlaying(self, clip: string): boolean
+
+    --- Calls `handler` with the clip's name whenever a playing clip passes
+    --- the moment `name`: "left_foot_down" and "right_foot_down" for every
+    --- step of walking and running, or a moment a clip marks itself. Never
+    --- missed or heard twice, at any frame rate.
+    --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
+    function onMoment(self, name: string, handler: (clip: string) -> ()): ()
 end
 
 --- Where a shot landed: what a `game.onWeaponHit` function is handed.

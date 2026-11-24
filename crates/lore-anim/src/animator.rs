@@ -109,6 +109,15 @@ pub struct Playing {
     pub id: u32,
 }
 
+impl Playing {
+    /// The number [`Animator::play`] gave for this play, which
+    /// [`Animator::stop`] and [`Animator::is_playing`] take.
+    #[must_use]
+    pub fn id_number(&self) -> u32 {
+        self.id & !UPPER_BIT
+    }
+}
+
 /// The clips of one way of moving, by direction.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Gait {
@@ -139,6 +148,8 @@ pub struct Body {
     swim: Option<u32>,
     swim_idle: Option<u32>,
     climb: Option<u32>,
+    /// 1 when the body faces +Z (glTF's own way), -1 when it faces -Z.
+    facing: f32,
 }
 
 /// Clip names a body looks for, as LORE's mannequin names them. A model
@@ -230,7 +241,9 @@ impl Body {
             clips,
             bindings,
             upper,
+            facing: 1.0,
         };
+        body.facing = body.find_facing();
         let gait = |body: &mut Self, set: [&str; 4], usual: f32| -> Option<Gait> {
             let clips = set.map(|n| find(&body.clips, n));
             let forward = clips[0]?;
@@ -255,6 +268,31 @@ impl Body {
         body.standing = standing;
         body.crouching = crouch.into_iter().collect();
         body
+    }
+
+    /// Which way the body faces in its own space, along Z: 1 for +Z (as
+    /// glTF asks, and as LORE's mannequins do), -1 for -Z. Found from where
+    /// the toes are against the heels at rest.
+    #[must_use]
+    pub fn facing(&self) -> f32 {
+        self.facing
+    }
+
+    /// Works out [`Body::facing`]: toes in front of the ankle.
+    fn find_facing(&self) -> f32 {
+        let toes = ["ball_l", "LeftToeBase", "toe.L", "mixamorig:LeftToeBase"]
+            .iter()
+            .find_map(|n| self.skeleton.find(n));
+        let (Some(toes), Some((ankle, _))) = (toes, self.feet()) else {
+            return 1.0;
+        };
+        let mut placed = vec![IDENTITY; self.skeleton.len()];
+        self.skeleton.place(self.skeleton.rest(), &mut placed);
+        if placed[toes][3][2] < placed[ankle][3][2] {
+            -1.0
+        } else {
+            1.0
+        }
     }
 
     /// Its skeleton.
@@ -868,8 +906,8 @@ impl Animator {
     }
 
     /// Leans the whole body into a change of speed, pivoting at the feet
-    /// as a person does (an inverted pendulum). A model faces +Z, as glTF
-    /// asks, with +Y up, so its right is -X.
+    /// as a person does (an inverted pendulum). Facing +Z with +Y up, a
+    /// body's right is -X; facing -Z, both turns are the other way.
     fn lean_into(&self, body: &Body, out: &mut [Pose]) {
         let [forward, right] = self.lean;
         if forward.abs() < 1e-4 && right.abs() < 1e-4 {
@@ -877,7 +915,8 @@ impl Animator {
         }
         // For the small angles people lean, half the angle in the vector
         // part, normalised, is the turn: no sine or cosine needed.
-        let turn = unit([forward * 0.5, 0.0, right * 0.5, 1.0]);
+        let f = body.facing * 0.5;
+        let turn = unit([forward * f, 0.0, right * f, 1.0]);
         for (bone, pose) in out.iter_mut().enumerate() {
             if body.skeleton.parent(bone).is_none() {
                 pose.rotation = unit(quat_mul(turn, pose.rotation));

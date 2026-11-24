@@ -14,6 +14,7 @@ use lore_physics::{MoveInput, MoveMode, MoveSettings, Player};
 use lore_script::{CharacterId, Motion, Movement};
 
 use crate::blend;
+use crate::character::{Boom, Character, Facing, View};
 use crate::game::{Frame, Game};
 use crate::look;
 use crate::noise::{self, Noise, Walking};
@@ -791,6 +792,7 @@ struct Controls {
     fire: Option<ActionId>,
     aim: Option<ActionId>,
     reload: Option<ActionId>,
+    switch_view: Option<ActionId>,
 }
 
 impl Controls {
@@ -805,6 +807,7 @@ impl Controls {
             fire: find("fire"),
             aim: find("aim"),
             reload: find("reload"),
+            switch_view: find("switch_view"),
         }
     }
 
@@ -892,6 +895,9 @@ pub struct Playing {
     weather_heard: [Option<f32>; 3],
     /// Where the roar of the tornado was last said to come from.
     roar_from: [f32; 3],
+    /// The player's body, and the camera at its eyes or over its shoulder.
+    /// `None` only if the engine's own body could not be read.
+    character: Option<Character>,
 }
 
 /// The most marks on the water kept for a frame to show.
@@ -1009,7 +1015,23 @@ impl Playing {
             under: false,
             weather_heard: [None; 3],
             roar_from: [0.0; 3],
+            character: Character::shared_mannequin().map(|mut character| {
+                character.face(yaw);
+                character
+            }),
         }
+        .with_body_said()
+    }
+
+    /// Tells the script which clips the body has.
+    fn with_body_said(self) -> Self {
+        if let Some(character) = &self.character {
+            self.world
+                .game
+                .host()
+                .set_body_clips("mannequin", character.clip_names());
+        }
+        self
     }
 
     /// The world being played in.
@@ -1075,6 +1097,90 @@ impl Playing {
 }
 
 impl Playing {
+    /// Moves the player's body on by one tick: which way it faces, what it
+    /// plays, and where the camera hangs. The script says which view and
+    /// facing it wants; the player may switch the view when the game allows.
+    fn step_character(&mut self, input: &InputFrame, step: f32) {
+        if let Some(model) = self.world.game.host().take_body_model() {
+            self.change_body(&model);
+        }
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        let host = self.world.game.host();
+        let mut wanted = host.camera_view();
+        if wanted.switchable
+            && self
+                .controls
+                .switch_view
+                .is_some_and(|action| input.just_pressed(action))
+        {
+            wanted.third = !wanted.third;
+            host.said_view(wanted.third);
+        }
+        character.view = if wanted.third { View::Third } else { View::First };
+        character.facing = if wanted.aimed { Facing::Aim } else { Facing::Move };
+        character.boom = Boom {
+            distance: wanted.distance,
+            height: wanted.height,
+            shoulder: wanted.shoulder,
+        };
+        for ask in host.take_animation_asks() {
+            character.ask(&ask);
+        }
+        let player = *self.world.player();
+        character.tick(
+            &player,
+            (self.yaw, self.pitch),
+            &self.world.ground.level,
+            step,
+            |clip, moment| host.heard_moment(clip, &moment.name),
+        );
+        host.set_playing(character.playing_names());
+    }
+
+    /// Makes the player's body `model`: one of the engine's own, or a model
+    /// file in the game's folder, which plays the mannequin's clips by bone
+    /// name as well as its own. A model that cannot be read is said in the
+    /// log, and the body stays as it was.
+    fn change_body(&mut self, model: &str) {
+        let made = match model {
+            "mannequin" => Character::shared_mannequin().ok_or_else(|| "the engine's mannequin could not be read".to_owned()),
+            "mannequin_female" => Character::female_mannequin().map_err(|e| e.to_string()),
+            file => self.world.game.read_model(file).and_then(|scene| Character::with_mannequin_clips(scene).map_err(|e| e.to_string())),
+        };
+        match made {
+            Ok(mut character) => {
+                if let Some(old) = &self.character {
+                    character.view = old.view;
+                    character.face(old.yaw());
+                }
+                self.world.game.host().set_body_clips(model, character.clip_names());
+                self.character = Some(character);
+            }
+            Err(why) => log::error!("game.player:setModel(\"{model}\"): {why}"),
+        }
+    }
+
+    /// Hands the frame the player's body, drawn between the last two ticks.
+    fn show_body(&mut self, frame: &mut Frame, camera: [f32; 3]) {
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        let player = self.world.player();
+        let feet = match self.before {
+            Some(before) => {
+                let eye_drop = player.eye_height;
+                let was = [before[0], before[1] - eye_drop, before[2]];
+                blend::position(was, player.position, frame.alpha())
+            }
+            None => player.position,
+        };
+        let model = std::sync::Arc::clone(character.model());
+        let drawn = character.figures(frame.alpha(), feet, camera);
+        frame.show_figure(&model, &drawn);
+    }
+
     /// Shows and sounds what the player is doing to the water: the marks
     /// of the ticks since the last frame, the rings and wake of a body
     /// that is in it now, and the hush of a head that is under it.
@@ -1235,8 +1341,12 @@ impl Game for Playing {
         let teleported = self.world.take_teleported();
         if let Some((yaw, pitch)) = teleported.flatten() {
             (self.yaw, self.pitch) = look::turned(yaw, pitch, [0.0; 2]);
+            if let Some(character) = &mut self.character {
+                character.face(self.yaw);
+            }
         }
         self.eye = self.world.player().eye_position();
+        self.step_character(input, step);
         // Being put somewhere is a cut, not a glide.
         self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises
@@ -1282,7 +1392,16 @@ impl Game for Playing {
             look::asked(frame.input(), look, frame.since_tick())
         });
         let seen = self.seen_at(frame.alpha(), turn);
-        frame.look_from(seen.eye, seen.yaw, seen.pitch);
+        let camera = self.character.as_ref().map_or(seen.eye, |character| {
+            character.camera(
+                frame.alpha(),
+                seen.eye,
+                (seen.yaw, seen.pitch),
+                &self.world.ground.level,
+            )
+        });
+        frame.look_from(camera, seen.yaw, seen.pitch);
+        self.show_body(frame, camera);
         self.show_water(frame, seen.eye);
         for tread in self.treads.drain(..) {
             frame.tread(tread);

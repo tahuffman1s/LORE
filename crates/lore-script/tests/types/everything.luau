@@ -375,6 +375,31 @@ game.onTick(function()
     end
 end)
 
+-- The player's body and camera.
+game.player:setView("third")
+game.player:allowViewSwitch(true)
+game.player:setCamera({ distance = 4, height = 0.2, shoulder = -0.45 })
+game.player:setModel("mannequin_female")
+game.player:onMoment("left_foot_down", function(clip: string)
+    print("step in", clip)
+end)
+game.onTick(function()
+    local view: string = game.player.view
+    local facing: string = game.player.facing
+    local model: string = game.player.model
+    local clips: { string } = game.player.clips
+    print(view, facing, model, #clips)
+    game.player:setFacing(if game.input.pressed("aim") then "aim" else "move")
+    if game.input.justPressed("melee") and not game.player:isPlaying("sword_attack") then
+        game.player:play("sword_attack", { upperBody = true, speed = 1.2, fade = 0.1, loop = false })
+    end
+    if game.input.justPressed("interact") then
+        game.player:play("wave")
+        game.player:stop("dance")
+        game.player:stop()
+    end
+end)
+
 -- The speed of time.
 game.onTick(function(step)
     if game.input.justPressed("open_map") and game.timeSpeed() > 0 then

@@ -347,9 +347,12 @@ fn mistakes_with_the_player_say_what_to_write() {
     assert_eq!(
         spawn_error("print(game.player.health)"),
         "game.player.health does not exist. It has: name, position, weapon, ammo, reserve, \
-         velocity, eye, aim, grounded, movement, flySpeed, and the functions \
-         game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
-         game.player:setMovement, game.player:setFlySpeed."
+         velocity, eye, aim, grounded, movement, flySpeed, view, facing, model, clips, and \
+         the functions game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
+         game.player:setMovement, game.player:setFlySpeed, game.player:setView, \
+         game.player:allowViewSwitch, game.player:setFacing, game.player:setCamera, \
+         game.player:setModel, game.player:play, game.player:stop, game.player:isPlaying, \
+         game.player:onMoment."
     );
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),

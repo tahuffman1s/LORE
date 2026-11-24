@@ -2664,3 +2664,17 @@ fn a_pool_stands_where_it_is_said_to_between_empty_and_its_brim() {
     assert_eq!(level.pool(0).map(|stand| stand.medium), Some(Medium::WATER));
     assert_eq!(level.pool(3), None);
 }
+
+#[test]
+fn a_ball_cast_stops_at_a_wall_and_passes_open_air() {
+    // A wall across the way at z = -5, 10 m wide and tall.
+    let wall = Level::from_triangles(&[
+        [[-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [5.0, 10.0, -5.0]],
+        [[-5.0, 0.0, -5.0], [5.0, 10.0, -5.0], [-5.0, 10.0, -5.0]],
+    ]);
+    let hit = wall.ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, -10.0], 0.5).unwrap();
+    // The ball touches with its edge, half a metre before the wall.
+    assert!((hit - 0.45).abs() < 0.01, "{hit}");
+    assert!(wall.ball_cast([0.0, 2.0, 0.0], [0.0, 2.0, 4.0], 0.5).is_none());
+    assert!(wall.ball_cast([0.0, 2.0, 0.0], [f32::NAN, 2.0, 4.0], 0.5).is_none());
+}

@@ -24,6 +24,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod character;
 mod app;
 pub mod bench;
 pub mod blend;

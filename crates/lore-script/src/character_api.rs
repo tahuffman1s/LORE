@@ -25,7 +25,7 @@ use crate::weapon_api;
 /// What can be read from a character.
 pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "name", "position", "weapon", "ammo", "reserve", "velocity", "eye", "aim", "grounded",
-    "movement", "flySpeed",
+    "movement", "flySpeed", "view", "facing", "model", "clips",
 ];
 
 /// What a character can be told to do.
@@ -35,6 +35,15 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "teleport",
     "setMovement",
     "setFlySpeed",
+    "setView",
+    "allowViewSwitch",
+    "setFacing",
+    "setCamera",
+    "setModel",
+    "play",
+    "stop",
+    "isPlaying",
+    "onMoment",
 ];
 
 /// How high the eyes are above the feet of a character the engine has said
@@ -288,6 +297,26 @@ impl UserData for CharacterRef {
                 crate::tools_api::DEFAULT_FLY_SPEED
             })
         });
+        fields.add_field_method_get("view", |lua, this| {
+            this.read(lua, "view")?;
+            only_player(lua, *this, "view", "seen in first or third person")?;
+            Ok(crate::body_api::view_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("facing", |lua, this| {
+            this.read(lua, "facing")?;
+            only_player(lua, *this, "facing", "turned by the script")?;
+            Ok(crate::body_api::facing_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("model", |lua, this| {
+            this.read(lua, "model")?;
+            only_player(lua, *this, "model", "given a model")?;
+            Ok(crate::body_api::model_name(&*shared_of(lua)?))
+        });
+        fields.add_field_method_get("clips", |lua, this| {
+            this.read(lua, "clips")?;
+            only_player(lua, *this, "clips", "animated")?;
+            crate::body_api::clip_list(lua, &*shared_of(lua)?)
+        });
         fields.add_field_method_get("weapon", |lua, this| {
             this.read(lua, "weapon")?;
             Ok(weapon_api::weapon_name(&*shared_of(lua)?, this.0))
@@ -331,6 +360,51 @@ impl UserData for CharacterRef {
             let this = receiver(lua, &this, "setFlySpeed", "(20)")?;
             only_player(lua, this, "setFlySpeed", "given a flying speed")?;
             crate::tools_api::set_fly_speed(lua, &shared_of(lua)?, &speed)
+        });
+        methods.add_function("setView", |lua, (this, view): (Value, Value)| {
+            let this = receiver(lua, &this, "setView", "(\"third\")")?;
+            only_player(lua, this, "setView", "seen in first or third person")?;
+            crate::body_api::set_view(lua, &shared_of(lua)?, &view)
+        });
+        methods.add_function("allowViewSwitch", |lua, (this, allowed): (Value, Value)| {
+            let this = receiver(lua, &this, "allowViewSwitch", "(true)")?;
+            only_player(lua, this, "allowViewSwitch", "switched between views")?;
+            crate::body_api::allow_view_switch(lua, &shared_of(lua)?, &allowed)
+        });
+        methods.add_function("setFacing", |lua, (this, facing): (Value, Value)| {
+            let this = receiver(lua, &this, "setFacing", "(\"aim\")")?;
+            only_player(lua, this, "setFacing", "turned by the script")?;
+            crate::body_api::set_facing(lua, &shared_of(lua)?, &facing)
+        });
+        methods.add_function("setCamera", |lua, (this, options): (Value, Value)| {
+            let this = receiver(lua, &this, "setCamera", "({ distance = 4 })")?;
+            only_player(lua, this, "setCamera", "given a camera")?;
+            crate::body_api::set_camera(lua, &shared_of(lua)?, &options)
+        });
+        methods.add_function("setModel", |lua, (this, model): (Value, Value)| {
+            let this = receiver(lua, &this, "setModel", "(\"mannequin_female\")")?;
+            only_player(lua, this, "setModel", "given a model")?;
+            crate::body_api::set_model(lua, &shared_of(lua)?, &model)
+        });
+        methods.add_function("play", |lua, (this, clip, options): (Value, Value, Value)| {
+            let this = receiver(lua, &this, "play", "(\"wave\")")?;
+            only_player(lua, this, "play", "animated")?;
+            crate::body_api::play(lua, &shared_of(lua)?, &clip, &options)
+        });
+        methods.add_function("stop", |lua, (this, clip): (Value, Value)| {
+            let this = receiver(lua, &this, "stop", "(\"wave\")")?;
+            only_player(lua, this, "stop", "animated")?;
+            crate::body_api::stop(lua, &shared_of(lua)?, &clip)
+        });
+        methods.add_function("isPlaying", |lua, (this, clip): (Value, Value)| {
+            let this = receiver(lua, &this, "isPlaying", "(\"wave\")")?;
+            only_player(lua, this, "isPlaying", "animated")?;
+            crate::body_api::is_playing(lua, &shared_of(lua)?, &clip)
+        });
+        methods.add_function("onMoment", |lua, (this, moment, handler): (Value, Value, Value)| {
+            let this = receiver(lua, &this, "onMoment", "(\"left_foot_down\", function(clip) end)")?;
+            only_player(lua, this, "onMoment", "animated")?;
+            crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
         });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;

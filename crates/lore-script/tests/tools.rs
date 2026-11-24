@@ -147,7 +147,7 @@ impl Drop for GameFolder {
 }
 
 const OPEN_MAP: &str = r#"
-game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.bind("open_map", { "F1", "LeftBumper" })
 game.onTick(function()
     if game.input.justPressed("open_map") then print("opened") end
 end)
@@ -162,15 +162,21 @@ fn a_button_of_the_games_own_is_heard_through_the_map_the_host_gives() {
     input.press(Key::F1);
     host.tick(input.tick(), STEP);
     assert_eq!(printed(), ["opened"]);
-    assert!(warnings().is_empty(), "{:?}", warnings());
+    // The left bumper also turns to the previous tab in a menu, and the
+    // game's own actions are heard in menus too: said once, as a warning.
+    let said = warnings();
+    assert!(
+        said.len() == 1 && said[0].contains("menu_previous_tab"),
+        "{said:?}"
+    );
 
     // The gamepad button works too, and in the menu set as well.
     input.release(Key::F1);
     host.tick(input.tick(), STEP);
-    input.press(GamepadButton::GamepadSelect);
+    input.press(GamepadButton::LeftBumper);
     host.tick(input.tick(), STEP);
     assert_eq!(printed(), ["opened"]);
-    input.release(GamepadButton::GamepadSelect);
+    input.release(GamepadButton::LeftBumper);
     input.set_active_set(host.actions().set("menu").unwrap());
     host.tick(input.tick(), STEP);
     input.press(Key::F1);
@@ -230,7 +236,7 @@ fn a_name_with_a_space_or_a_capital_is_fixed_for_the_script_writer() {
         "{message}"
     );
     // Lower case letters, digits and underscores are fine.
-    let _host = game(r#"game.input.bind("map_2", { "F1", "GamepadSelect" })"#);
+    let _host = game(r#"game.input.bind("map_2", { "F1", "LeftBumper" })"#);
 }
 
 #[test]
@@ -255,7 +261,7 @@ fn binding_one_name_twice_in_a_version_is_a_mistake() {
 fn a_button_with_no_gamepad_button_or_a_clash_is_a_warning_not_a_failure() {
     let _host = game(r#"game.input.bind("open_map", { "F1" })"#);
     let said = warnings();
-    assert!(said.iter().any(|w| w.contains("GamepadSelect")), "{said:?}");
+    assert!(said.iter().any(|w| w.contains("LeftBumper")), "{said:?}");
 
     let _host = game(r#"game.input.bind("heal", { "Space", "GamepadSelect" })"#);
     let said = warnings();
@@ -1108,3 +1114,4 @@ fn the_same_script_and_inputs_give_the_same_fingerprint() {
     assert_eq!(first, play(0.004));
     assert_ne!(first, 0);
 }
+

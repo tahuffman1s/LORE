@@ -118,6 +118,9 @@ pub struct Frame {
     /// Every lamp lit this frame, if the game said them.
     lamps: Vec<lore_render::Lamp>,
     lamps_said: bool,
+    /// The bodies to draw this frame, and the skinning matrices they use.
+    figures: Vec<Figure>,
+    figure_joints: Vec<lore_assets::Transform>,
     /// The game's own shaders, kept between frames.
     shaders: crate::game_shaders::ShaderList,
     /// The game's own exposure in stops and how the eye adapts, if the
@@ -184,6 +187,17 @@ impl std::fmt::Debug for PanelFrame {
     }
 }
 
+/// A model drawn this frame: which, where, bent by which joints of
+/// [`Frame::figures`], and whether it is seen or only casts its shadow.
+#[derive(Debug, Clone)]
+pub(crate) struct Figure {
+    pub(crate) model: std::sync::Arc<lore_assets::Scene>,
+    pub(crate) transform: lore_assets::Transform,
+    pub(crate) joints: std::ops::Range<usize>,
+    pub(crate) seen: bool,
+    pub(crate) shadows: bool,
+}
+
 /// Where the world is seen from: the eye's position, then which way it
 /// faces, as [`Frame::look_from`] takes them.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -247,6 +261,8 @@ impl Frame {
             meteors: None,
             lamps: Vec::new(),
             lamps_said: false,
+            figures: Vec::new(),
+            figure_joints: Vec::new(),
             shaders: crate::game_shaders::ShaderList::default(),
             lighting: None,
             occlusion: None,
@@ -1053,6 +1069,61 @@ impl Frame {
     /// How the picture is graded, if the game said it this frame.
     pub fn take_look(&mut self) -> Option<(lore_render::Look, f32)> {
         self.look.take()
+    }
+
+    /// Draws `model` this frame as `drawn` places and bends it: the
+    /// player's body, as seen and as it throws its shadow.
+    pub(crate) fn show_figure(
+        &mut self,
+        model: &std::sync::Arc<lore_assets::Scene>,
+        drawn: &crate::character::Drawn<'_>,
+    ) {
+        let seen_start = self.figure_joints.len();
+        self.figure_joints.extend_from_slice(drawn.seen_joints);
+        let shadow_start = self.figure_joints.len();
+        self.figure_joints.extend_from_slice(drawn.shadow_joints);
+        let end = self.figure_joints.len();
+        if drawn.seen {
+            self.figures.push(Figure {
+                model: std::sync::Arc::clone(model),
+                transform: drawn.transform,
+                joints: seen_start..shadow_start,
+                seen: true,
+                shadows: false,
+            });
+        }
+        self.figures.push(Figure {
+            model: std::sync::Arc::clone(model),
+            transform: drawn.transform,
+            joints: shadow_start..end,
+            seen: false,
+            shadows: true,
+        });
+    }
+
+    /// The bodies drawn this frame and the joints they index into.
+    pub(crate) fn figures(&self) -> (&[Figure], &[lore_assets::Transform]) {
+        (&self.figures, &self.figure_joints)
+    }
+
+    /// Lends the frame the memory of an earlier frame's bodies.
+    pub(crate) fn with_figure_buffers(
+        mut self,
+        (figures, joints): (Vec<Figure>, Vec<lore_assets::Transform>),
+    ) -> Self {
+        self.figures = figures;
+        self.figures.clear();
+        self.figure_joints = joints;
+        self.figure_joints.clear();
+        self
+    }
+
+    /// The memory the bodies were said in, to lend the next frame.
+    pub(crate) fn figure_buffers(&mut self) -> (Vec<Figure>, Vec<lore_assets::Transform>) {
+        (
+            std::mem::take(&mut self.figures),
+            std::mem::take(&mut self.figure_joints),
+        )
     }
 
     /// Lends the frame the memory of an earlier frame's lamps, so that
