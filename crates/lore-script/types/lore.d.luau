@@ -177,6 +177,17 @@ declare extern type Character with
     --- Example: print(game.player.blocking)
     blocking: boolean
 
+    --- The usable thing the player would use if they pressed "interact"
+    --- now: the one under the crosshair and in reach, or nil. The engine
+    --- shows its prompt for it unless `game.usePrompt(false)`.
+    --- Example: if game.player.lookingAt then hint.text = game.player.lookingAt.useText end
+    lookingAt: Thing?
+
+    --- How far through holding "interact" on a thing with `useSeconds`
+    --- the player is, from 0 to 1. 0 when nothing is being held.
+    --- Example: holdBar.value = game.player.useProgress
+    useProgress: number
+
     --- What is in the character's hand (`game.player:hold`), as it was
     --- named, or nil for empty hands.
     --- Example: if game.player.holding == "torch" then print("Lit") end
@@ -379,6 +390,77 @@ declare extern type Character with
     --- twice, at any frame rate. Only `game.player` has moments so far.
     --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
     function onMoment(self, name: string, handler: (clip: string) -> ()): ()
+end
+
+--- Something placed in the game's level: an entry of its `map.toml`, which
+--- `lore edit` writes. Find one with `game.thing`. Where a thing stands and
+--- what it is called are the map's to say; what it is *for* is the
+--- script's.
+--- Example: local door = game.thing("Cellar door")
+declare extern type Thing with
+    --- What the thing was called in `lore edit`. "" if it was given no name.
+    --- Example: print(door.name)
+    name: string
+
+    --- What the thing is known by for good: it stays the same when the
+    --- thing is renamed or moved. `game.thing` takes it too.
+    --- Example: print(door.id)
+    id: string
+
+    --- What sort of thing it is: the type it was placed as, such as
+    --- "door", "chest" or "zone".
+    --- Example: if thing.kind == "chest" then thing.useText = "Open" end
+    kind: string
+
+    --- Where the thing stands, in metres, with y up.
+    --- Example: game.audio.playAt("creak", door.position)
+    position: vector
+
+    --- How far the thing is turned to the left, in degrees: at 0 it faces
+    --- -Z, as a player who has not turned does.
+    --- Example: print(door.facing)
+    facing: number
+
+    --- The word or two shown beside the button while the player can use
+    --- the thing: "Use" until the script says otherwise. Setting it makes
+    --- the thing usable. Up to 60 characters.
+    --- Example: door.useText = "Open"
+    useText: string
+
+    --- How close the player's eyes must be to use the thing, in metres,
+    --- from 0.5 to 50: 2.5 until the script says otherwise.
+    --- Example: lever.useReach = 1.5
+    useReach: number
+
+    --- How long the use button is held to use the thing, in seconds, from
+    --- 0 (a press, the usual) to 30. The engine's prompt shows a bar
+    --- filling up, and letting go starts it over.
+    --- Example: chest.useSeconds = 1.5
+    useSeconds: number
+
+    --- Whether the player can use the thing now. It becomes true when the
+    --- script gives the thing an `onUse` function or sets one of the three
+    --- above; set it to false to switch the thing off (a lever already
+    --- pulled) and true to switch it on again.
+    --- Example: lever:onUse(function() lever.usable = false end)
+    usable: boolean
+
+    --- Calls `handler` each time the player uses the thing: they look at
+    --- it from within reach (in either view) and press the "interact"
+    --- button (E, or Y on a gamepad), or hold it for `useSeconds`. This
+    --- one line makes the thing usable: the engine finds which thing the
+    --- player means, shows `useText` beside the key or button they have
+    --- bound, and calls the function. `lore check` uses every usable thing
+    --- once.
+    --- Example: door:onUse(function() print("It creaks open.") end)
+    --- Example: for _, chest in game.things("chest") do chest.useText = "Open" chest:onUse(function(used) print(used.name) end) end
+    function onUse(self, handler: (thing: Thing) -> ()): ()
+
+    --- A property the thing was given in the map (`lore edit`, or the
+    --- `[entity.properties]` table of map.toml): text, a number, true or
+    --- false, or nil if it has none of that name.
+    --- Example: if door:get("locked") then door.useText = "Locked" end
+    function get(self, property: string): (string | number | boolean)?
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -1350,6 +1432,25 @@ declare game: {
     --- editor goes back to the editor.
     --- Example: menu.button("Quit", { press = game.quit })
     quit: () -> (),
+
+    --- Something placed in the level, by the name it was given in
+    --- `lore edit` (or its id). It can be found at the top of the script.
+    --- A name the map does not have is an error that lists the names it
+    --- does have, which `lore check` catches without playing.
+    --- Example: local door = game.thing("Cellar door")
+    thing: (name: string) -> Thing,
+
+    --- Everything placed in the level, in the order of the map file, or
+    --- only what was placed as `kind`.
+    --- Example: for _, chest in game.things("chest") do chest:onUse(open) end
+    things: (kind: string?) -> { Thing },
+
+    --- Whether the engine shows its own prompt (the key or button, and
+    --- the thing's `useText`) while the player can use something. It does
+    --- until a script says false: do that to draw your own from
+    --- `game.player.lookingAt` and `game.player.useProgress`.
+    --- Example: game.usePrompt(false)
+    usePrompt: (shown: boolean) -> (),
 
     --- A kind of fluid, by name; it is made the first time it is asked for.
     --- Names are trimmed and in lower case ("Honey" is "honey"). Kind "water"

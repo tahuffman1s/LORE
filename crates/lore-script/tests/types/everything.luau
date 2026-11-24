@@ -502,6 +502,23 @@ game.onDraw(function()
     local right: number?, down: number? = game.hud.onScreen(game.player.aimPoint)
     print(right, down)
 end)
+for _, placed: Thing in game.things() do
+    print(placed.name, placed.id, placed.kind, placed.position, placed.facing, placed.usable)
+    placed.useText = "Open"
+    placed.useReach = 3
+    placed.useSeconds = 1.5
+    placed.usable = true
+    placed:onUse(function(used: Thing) print(used.useText, used.useReach, used.useSeconds, used:get("locked")) end)
+end
+local chests: { Thing } = game.things("chest")
+print(#chests)
+if false then
+    local door: Thing = game.thing("Cellar door")
+    print(door)
+end
+game.usePrompt(true)
+local meant: Thing? = game.player.lookingAt
+print(meant, game.player.useProgress)
 game.player:hold("sword")
 game.player:hold("torch", { hand = "left" })
 local inHand: string? = game.player.holding

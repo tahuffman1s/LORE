@@ -96,6 +96,12 @@ pub struct World {
     teleported: Option<Option<(f32, f32)>>,
     /// Every drop of fluid in the world, and what the script said of them.
     fluids: fluids::WorldFluids,
+    /// What the use button is doing, and which thing the player means.
+    using: using::Using,
+    /// The things that can be used and their ids, kept between ticks so a
+    /// tick sets no memory aside.
+    usable: Vec<using::Usable>,
+    usable_ids: Vec<String>,
 }
 
 /// The unit vector the eyes look along at `yaw` and `pitch`, as the
@@ -216,6 +222,9 @@ impl World {
             thunder: Vec::with_capacity(MOST_THUNDER),
             teleported: None,
             fluids: fluids::WorldFluids::default(),
+            using: using::Using::default(),
+            usable: Vec::new(),
+            usable_ids: Vec::new(),
         };
         // The ground's still water is the world's pools, of the kinds its
         // sheets say, and its script is told what they are called. Here,
@@ -690,6 +699,43 @@ impl Game for World {
             self.shooting
                 .aim(player.eye_position(), &self.dummies, level, rules, aim);
         host.set_motion(CharacterId::PLAYER, motion);
+        // Which usable thing the player means, and whether they use it.
+        let eyes = player.eye_position();
+        self.usable.clear();
+        // The ids are written over the ones kept from the last tick, so a
+        // tick with the same things as the last sets no memory aside.
+        let (usable, ids) = (&mut self.usable, &mut self.usable_ids);
+        host.each_usable(|id, at, said| {
+            match ids.get_mut(usable.len()) {
+                Some(kept) => {
+                    kept.clear();
+                    kept.push_str(id);
+                }
+                None => ids.push(id.to_owned()),
+            }
+            usable.push(using::Usable {
+                at,
+                reach: said.reach,
+                seconds: said.seconds,
+            });
+        });
+        self.usable_ids.truncate(self.usable.len());
+        // The crosshair's line: the camera's, from level with the body on.
+        let from = self.shooting.camera.map_or(eyes, |camera| {
+            let gap: [f32; 3] = std::array::from_fn(|i| eyes[i] - camera[i]);
+            let skip = (0..3).map(|i| gap[i] * aim[i]).sum::<f32>().max(0.0);
+            std::array::from_fn(|i| camera[i] + aim[i] * skip)
+        });
+        let chosen = (self.using.target.as_deref())
+            .and_then(|target| self.usable_ids.iter().position(|id| id == target));
+        let meant = using::pick(&self.usable, eyes, from, aim, level, chosen);
+        let target = meant.map(|nth| self.usable_ids[nth].as_str());
+        let seconds = meant.map_or(0.0, |nth| self.usable[nth].seconds);
+        let (used, progress) = self.using.tick(target, seconds, asked.interact, *tick);
+        host.set_use_target(target, progress);
+        if let (true, Some(target)) = (used, target) {
+            host.use_thing(target);
+        }
         // What was heard of the tick just run: when a foot came down, and
         // below, what the weapon did.
         self.noises.clear();
@@ -845,6 +891,7 @@ struct Controls {
     aim: Option<ActionId>,
     reload: Option<ActionId>,
     switch_view: Option<ActionId>,
+    interact: Option<ActionId>,
 }
 
 impl Controls {
@@ -860,6 +907,7 @@ impl Controls {
             aim: find("aim"),
             reload: find("reload"),
             switch_view: find("switch_view"),
+            interact: find("interact"),
         }
     }
 
@@ -890,6 +938,7 @@ impl Controls {
             fire: held(self.fire),
             aim: held(self.aim),
             reload: held(self.reload),
+            interact: held(self.interact),
         }
     }
 }
@@ -1636,6 +1685,8 @@ impl Game for Playing {
     }
 }
 
+mod using;
+
 #[cfg(test)]
 mod heard;
 #[cfg(test)]
@@ -2050,6 +2101,106 @@ mod tests {
              end)",
         );
         assert!(!sprinted);
+    }
+
+    #[test]
+    fn the_player_uses_the_thing_in_front_of_them_and_sees_its_prompt() {
+        use lore_input::Key;
+        use lore_ui::Draw;
+
+        // A lever two metres ahead of where the player starts (they face
+        // -Z), a chest ten metres off, and a door behind them.
+        let map = crate::map::Map::parse(
+            "map.toml",
+            "version = 1\n\
+             [[entity]]\nid = \"lever\"\ntype = \"lever\"\nname = \"Gate lever\"\n\
+             position = [0, 1.4, -2]\n\
+             [[entity]]\nid = \"chest\"\ntype = \"chest\"\nname = \"Chest\"\n\
+             position = [0, 1.4, -10]\n\
+             [[entity]]\nid = \"door\"\ntype = \"door\"\nname = \"Door\"\n\
+             position = [0, 1.4, 2]\n",
+        )
+        .unwrap();
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_pack_parts(
+            [(
+                "main.luau".to_owned(),
+                r#"local pulls = 0
+                local lever = game.thing("Gate lever")
+                lever.useText = "Pull"
+                lever:onUse(function() pulls += 1 end)
+                for _, other in { game.thing("Chest"), game.thing("Door") } do
+                    other:onUse(function() error("out of reach or behind") end)
+                end
+                game.onTick(function()
+                    local meant = game.player.lookingAt
+                    assert(meant == nil or meant == lever)
+                    if pulls == 1 then lever.useSeconds = 0.5 end
+                    if pulls == 2 then lever.usable = false end
+                end)"#
+                    .to_owned(),
+            )],
+            Vec::new(),
+            map,
+            &actions,
+            crate::settings::Settings::default(),
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        let words = |game: &mut Playing, input: &lore_input::Input| -> Vec<String> {
+            let mut frame = Frame::between_ticks(input, 1.0, STEP);
+            game.frame(&mut frame);
+            frame
+                .take_ui()
+                .draw()
+                .iter()
+                .filter_map(|draw| match draw {
+                    Draw::Text { text, .. } => Some(text.to_owned()),
+                    Draw::Rect { .. } | Draw::Turned { .. } => None,
+                })
+                .collect()
+        };
+        let pulls = |game: &Playing| -> usize {
+            let mut usable = 0;
+            game.world.game.host().each_usable(|_, _, _| usable += 1);
+            usable
+        };
+        for _ in 0..3 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        // The key and the words are on the screen with no HUD code.
+        assert_eq!(words(&mut game, &input), ["E", "Pull"]);
+
+        // A press pulls it once, however long the key stays down.
+        input.press(Key::E);
+        for _ in 0..10 {
+            game.tick(input.tick(), STEP);
+        }
+        input.release(Key::E);
+        game.tick(input.tick(), STEP);
+        assert_eq!(game.world.game.host().last_error(), None);
+        assert_eq!(pulls(&game), 3, "still usable after one pull");
+
+        // Now it wants holding for half a second: a tap does nothing...
+        input.press(Key::E);
+        for _ in 0..10 {
+            game.tick(input.tick(), STEP);
+        }
+        input.release(Key::E);
+        game.tick(input.tick(), STEP);
+        assert_eq!(pulls(&game), 3);
+        // ...and a hold does, after which the script switches it off.
+        input.press(Key::E);
+        for _ in 0..40 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(game.world.game.host().last_error(), None);
+        assert_eq!(pulls(&game), 2, "the lever switched itself off");
+        assert!(
+            words(&mut game, &input).is_empty(),
+            "no prompt for what cannot be used"
+        );
     }
 
     #[test]

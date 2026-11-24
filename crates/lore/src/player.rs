@@ -220,7 +220,19 @@ pub fn open_with_settings(
             Err(problem) => log::warn!("{file} in the pack cannot be shown on the HUD: {problem}."),
         }
     }
-    let game = ScriptGame::from_sources_with_images(scripts, images, actions, settings);
+    // The map is read first: what is placed is the script's to find from
+    // its first line.
+    let map = if opened.contains(MAP_FILE) {
+        let text = opened.read_text(MAP_FILE)?;
+        let name = format!("{MAP_FILE} in {}", pack.display());
+        Map::parse(&name, &text).map_err(|error| PlayError::MapMistake {
+            pack: pack.to_owned(),
+            error,
+        })?
+    } else {
+        Map::default()
+    };
+    let game = ScriptGame::from_pack_parts(scripts, images, map, actions, settings);
     // Nothing is played while a script loads, so the sounds can follow it.
     let sounds = Sounds::in_pack(&mut opened);
     for problem in sounds.problems() {
@@ -233,17 +245,6 @@ pub fn open_with_settings(
             file: error.file.clone(),
         });
     }
-    let game = if opened.contains(MAP_FILE) {
-        let text = opened.read_text(MAP_FILE)?;
-        let name = format!("{MAP_FILE} in {}", pack.display());
-        let map = Map::parse(&name, &text).map_err(|error| PlayError::MapMistake {
-            pack: pack.to_owned(),
-            error,
-        })?;
-        game.with_map(map)
-    } else {
-        game
-    };
     let game = game.with_problem_log(problem_logs(pack));
     let level = if opened.contains(LEVEL_FILE) {
         Some(opened.read(LEVEL_FILE)?)

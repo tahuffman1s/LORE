@@ -64,6 +64,7 @@ mod modules;
 mod pool_api;
 mod settings_api;
 mod shader_api;
+mod thing_api;
 mod time_api;
 mod tools_api;
 mod weapon_api;
@@ -85,6 +86,7 @@ pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,
 };
+pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, UseSaid};
 pub use tools_api::{FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport, ViewTold};
 pub use weapon_api::{HeldWeapon, WeaponHit};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};

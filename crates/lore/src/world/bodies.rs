@@ -20,6 +20,8 @@ pub struct PlayerInput {
     pub aim: bool,
     /// Reload is held.
     pub reload: bool,
+    /// The use button (`interact`) is held.
+    pub interact: bool,
 }
 
 /// The player in a world.
