@@ -1,11 +1,11 @@
 //! A game whose rules are a Luau script.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lore_input::{ActionMap, InputFrame};
 use lore_script::{AudioCommand, OpenError, ScriptHost};
 
-use crate::error_overlay::ErrorOverlay;
+use crate::error_overlay::{ErrorOverlay, ProblemNotice};
 use crate::game::{Frame, Game};
 use crate::map::{Map, MapError, MapFile};
 use crate::script_hud::ScriptHud;
@@ -43,6 +43,9 @@ pub struct ScriptGame {
     /// Shows the latest script error over the game. Only a game whose
     /// scripts are files that can be fixed and saved has one.
     errors: Option<ErrorOverlay>,
+    /// Tells a player that the script has failed and logs the error. Only
+    /// a packaged game has one: its players cannot fix a script.
+    notice: Option<ProblemNotice>,
     /// The HUD the script made with `game.hud`.
     hud: ScriptHud,
     /// The sounds the script can play by name.
@@ -89,6 +92,7 @@ impl ScriptGame {
         let mut game = Self {
             host,
             errors: None,
+            notice: None,
             hud: ScriptHud::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
@@ -133,6 +137,16 @@ impl ScriptGame {
     /// Tells the script which sounds there are.
     fn name_sounds(&mut self) {
         self.host.set_sounds(self.sounds.names());
+    }
+
+    /// Makes the game tell its player when its script fails, as a packaged
+    /// game does: a short notice on screen with none of the script's own
+    /// text, and the error written to the first of `logs` that can be
+    /// written, which the notice names.
+    #[must_use]
+    pub fn with_problem_log(mut self, logs: Vec<PathBuf>) -> Self {
+        self.notice = Some(ProblemNotice::new(logs));
+        self
     }
 
     /// Gives the game the sounds its script can play, in place of the ones
@@ -260,6 +274,7 @@ impl ScriptGame {
         let mut game = Self {
             host,
             errors: Some(ErrorOverlay::default()),
+            notice: None,
             hud: ScriptHud::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
@@ -533,6 +548,9 @@ impl Game for ScriptGame {
         // Last, so it is on top of anything the game draws.
         if let Some(errors) = &mut self.errors {
             errors.show(self.host.last_error(), frame);
+        }
+        if let Some(notice) = &mut self.notice {
+            notice.show(self.host.last_error(), frame);
         }
     }
 }
