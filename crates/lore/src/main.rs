@@ -785,13 +785,14 @@ fn check(folder: &Path) -> Result<(), String> {
     match used {
         0 => {}
         1 => println!(
-            "The one thing the script made usable (thing:onUse) was used once, with no \
-             errors. Nobody walked up to it: whether a player can reach it is for `lore run`."
+            "The one thing a player can use (one with thing:onUse, or one light enough to \
+             pick up) was used once, with no errors. Nobody walked up to it: whether a \
+             player can reach it is for `lore run`."
         ),
         used => println!(
-            "Each of the {used} things the script made usable (thing:onUse) was used once, \
-             with no errors. Nobody walked up to them: whether a player can reach each is \
-             for `lore run`."
+            "Each of the {used} things a player can use (those with thing:onUse, and those \
+             light enough to pick up) was used once, with no errors. Nobody walked up to \
+             them: whether a player can reach each is for `lore run`."
         ),
     }
     if carrying {
