@@ -1630,6 +1630,7 @@ dependencies = [
  "egui-ash-renderer",
  "fontdue",
  "log",
+ "lore-anim",
  "lore-assets",
  "lore-fsr",
  "lore-shader",

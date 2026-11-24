@@ -113,12 +113,10 @@ fn close(a: &Transform, b: &Transform) -> bool {
 #[test]
 fn a_rigged_bar_reads_its_skeleton_and_its_clip() {
     let scene = changed(|_, _| {}).unwrap();
-    assert_eq!(scene.warnings.len(), 2, "{:?}", scene.warnings);
-    assert!(
-        scene.warnings.iter().all(|w| w.contains("rest pose")),
-        "{:?}",
-        scene.warnings
-    );
+    assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+    // The bones are not markers; the armature that holds them is.
+    let markers: Vec<_> = scene.markers.iter().map(|m| m.name.as_deref()).collect();
+    assert_eq!(markers, [Some("Armature")]);
 
     // The tree, parents first.
     let names: Vec<_> = scene.nodes.iter().map(|n| n.name.as_deref()).collect();

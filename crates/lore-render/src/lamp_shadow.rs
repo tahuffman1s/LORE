@@ -231,6 +231,10 @@ struct Slot {
     missing: f32,
     /// The frame its pictures were last drawn in.
     drawn: u64,
+    /// Which of its pictures something moving stood in when they were
+    /// last drawn (a figure): drawn again once it has gone, to take its
+    /// shadow away.
+    moving: [bool; FACES],
 }
 
 impl Slot {
@@ -240,6 +244,7 @@ impl Slot {
         chosen: false,
         missing: 0.0,
         drawn: 0,
+        moving: [false; FACES],
     };
 }
 
@@ -605,6 +610,40 @@ impl ShadowSlots {
     /// The pictures [`choose`](Self::choose) found have to be drawn.
     pub(crate) fn faces(&self) -> &[Face] {
         &self.faces
+    }
+
+    /// Also draws, this frame, each picture of a shadow that is drawn that
+    /// `holds` says something moving stands in (a figure), and each that
+    /// something moving stood in when it was last drawn: a picture kept
+    /// from before would show it where it was. Called after
+    /// [`choose`](Self::choose), and past its limit of pictures a frame,
+    /// so that what moves never leaves its shadow behind.
+    pub(crate) fn redraw_moving(&mut self, holds: impl Fn(&Face) -> bool) {
+        for (number, slot) in self.slots.iter_mut().enumerate() {
+            let Some(held) = slot.held.filter(|_| slot.strength > 0.0 || slot.chosen) else {
+                slot.moving = [false; FACES];
+                continue;
+            };
+            let lamp = Lamp {
+                at: held.at,
+                beam: held.beam,
+                ..Lamp::default()
+            };
+            let numbers = pictured(&lamp, held.far);
+            for (face, shown) in faces_of(&lamp).into_iter().enumerate() {
+                if !shown {
+                    continue;
+                }
+                let picture = numbers.face(number * FACES + face, face, held.far);
+                let now = holds(&picture);
+                if (now || slot.moving[face])
+                    && !self.faces.iter().any(|drawn| drawn.layer == picture.layer)
+                {
+                    self.faces.push(picture);
+                }
+                slot.moving[face] = now;
+            }
+        }
     }
 }
 

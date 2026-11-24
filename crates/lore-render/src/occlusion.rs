@@ -155,7 +155,8 @@ pub(crate) const CONTACT_REACH: f32 = 1.0;
 /// picture's, so each lands exactly where the picture will draw it. A solid
 /// surface needs no fragment shader at all; one with holes cut in it is
 /// given the function `fragment` that cuts them. A game's surface shader
-/// makes its own with this, for the holes it cuts itself.
+/// makes its own with this, for the holes it cuts itself. `skinned` reads a
+/// figure's points, joints and all, for `vertex_skinned`.
 ///
 /// # Safety
 ///
@@ -170,11 +171,12 @@ pub(crate) unsafe fn depth_pipeline(
     module: vk::ShaderModule,
     vertex: &std::ffi::CStr,
     fragment: Option<&std::ffi::CStr>,
+    skinned: bool,
 ) -> Result<vk::Pipeline, vk::Result> {
-    let (bindings, attributes) = vertex_layout();
+    let laid = vertex_layout(skinned);
     let points = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attributes);
+        .vertex_binding_descriptions(laid.bindings())
+        .vertex_attribute_descriptions(laid.attributes());
     let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     let viewport = vk::PipelineViewportStateCreateInfo::default()
@@ -413,6 +415,9 @@ pub(crate) struct Asked {
 /// shadows.
 pub(crate) struct Pipelines {
     pub(crate) depth: [vk::Pipeline; 2],
+    /// The same for figures, whose points their joints bend
+    /// (`vertex_skinned`).
+    pub(crate) figure_depth: [vk::Pipeline; 2],
     smaller: [vk::Pipeline; SMALLER],
     pub(crate) find: vk::Pipeline,
     pub(crate) smooth: vk::Pipeline,
@@ -423,6 +428,7 @@ impl Pipelines {
     pub(crate) const fn null() -> Self {
         Self {
             depth: [vk::Pipeline::null(); 2],
+            figure_depth: [vk::Pipeline::null(); 2],
             smaller: [vk::Pipeline::null(); SMALLER],
             find: vk::Pipeline::null(),
             smooth: vk::Pipeline::null(),
@@ -475,6 +481,24 @@ impl Pipelines {
                     module,
                     c"vertex",
                     fragment,
+                    false,
+                )
+            }?;
+        }
+        for (fragment, pipeline) in [None, Some(c"fragment_depth_cutout")]
+            .into_iter()
+            .zip(&mut self.figure_depth)
+        {
+            // SAFETY: as above; the module holds `vertex_skinned`.
+            *pipeline = unsafe {
+                depth_pipeline(
+                    device,
+                    vk::PipelineCache::null(),
+                    layout,
+                    module,
+                    c"vertex_skinned",
+                    fragment,
+                    true,
                 )
             }?;
         }
@@ -532,7 +556,12 @@ impl Pipelines {
     pub(crate) unsafe fn destroy(&self, device: &ash::Device) {
         // SAFETY: the caller's guarantee; destroying a null handle is allowed.
         unsafe {
-            for pipeline in self.depth.into_iter().chain(self.smaller) {
+            for pipeline in self
+                .depth
+                .into_iter()
+                .chain(self.figure_depth)
+                .chain(self.smaller)
+            {
                 device.destroy_pipeline(pipeline, None);
             }
             device.destroy_pipeline(self.find, None);

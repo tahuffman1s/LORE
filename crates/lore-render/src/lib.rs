@@ -2,7 +2,10 @@
 //!
 //! [`Renderer`] owns the connection to the graphics card and the images shown
 //! in the window. Give it a scene read by `lore_assets` with
-//! [`Renderer::set_scene`] and a [`Camera`] to see it from. The scene is drawn
+//! [`Renderer::set_scene`] and a [`Camera`] to see it from. What a game
+//! moves about (people, creatures, the weapon in the player's hands) is a
+//! model added once with [`Renderer::add_model`] and drawn each frame as a
+//! [`Figure`], bent by its bones. The scene is drawn
 //! in high dynamic range, smaller than the window if [`Upscaling`] says so,
 //! made full size by AMD's FSR 3.1, and tone mapped for the display as the
 //! last step.
@@ -20,6 +23,9 @@ mod clouds;
 mod effects;
 mod error;
 mod eye;
+#[cfg(test)]
+mod figure_tests;
+mod figures;
 mod fluid;
 mod fluid_pass;
 mod font;
@@ -64,6 +70,7 @@ pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use eye::EyeAdaptation;
+pub use figures::{Figure, ModelId};
 pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS, PoolDrawn};
 pub use font::Font;
 pub use game_shaders::{

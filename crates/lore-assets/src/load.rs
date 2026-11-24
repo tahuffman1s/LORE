@@ -146,21 +146,6 @@ impl Scene {
         rig.skins(&skinned, document.skins().len(), &mut scene)?;
         rig.animations(&document, &mut scene)?;
 
-        // The skeletons and clips are read for the engine to use; until it
-        // does (#28 plays clips, #29 draws bent meshes), a model's author
-        // is told why it stands still.
-        if !scene.skins.is_empty() {
-            scene.warnings.push(
-                "The file has skinned (rigged) meshes, which are not animated yet; they are shown in their rest pose."
-                    .to_owned(),
-            );
-        }
-        if !scene.animations.is_empty() {
-            scene.warnings.push(
-                "The file has animations, which are not played yet; everything is shown in its rest pose."
-                    .to_owned(),
-            );
-        }
         for warning in &scene.warnings {
             log::warn!("{name}: {warning}");
         }
@@ -467,6 +452,14 @@ fn place_nodes<'a>(
     let rigged = document.skins().len() > 0 || document.animations().len() > 0;
     let mut node_of = vec![NOT_PLACED; document.nodes().len()];
     let mut skinned = Vec::new();
+    // A skin's bones are the skeleton's, not places a game looks up: they
+    // are not markers. (A game finds a bone by name in the skeleton.)
+    let mut joint = vec![false; document.nodes().len()];
+    for bone in document.skins().flat_map(|skin| skin.joints()) {
+        if let Some(slot) = joint.get_mut(bone.index()) {
+            *slot = true;
+        }
+    }
     // Parents leave the queue before their children, which is the order
     // `Scene::nodes` promises.
     let mut queue: VecDeque<(gltf::Node<'_>, Transform, Option<u32>)> =
@@ -547,7 +540,10 @@ fn place_nodes<'a>(
                 name,
                 extras,
             });
-        } else if node.light().is_none() && (name.is_some() || extras.is_some()) {
+        } else if node.light().is_none()
+            && (name.is_some() || extras.is_some())
+            && !joint.get(node.index()).copied().unwrap_or(false)
+        {
             scene.markers.push(Marker {
                 name,
                 transform,

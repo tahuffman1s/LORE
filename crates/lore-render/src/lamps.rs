@@ -507,6 +507,12 @@ impl LampFrame {
         self.slots.faces()
     }
 
+    /// Has the pictures that something moving stands in drawn again this
+    /// frame: see [`ShadowSlots::redraw_moving`](crate::lamp_shadow::ShadowSlots::redraw_moving).
+    pub(crate) fn redraw_moving(&mut self, holds: impl Fn(&Face) -> bool) {
+        self.slots.redraw_moving(holds);
+    }
+
     /// How many lamps the last frame packed.
     #[cfg(test)]
     fn count(&self) -> usize {
