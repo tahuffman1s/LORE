@@ -1795,7 +1795,8 @@ declare game: {
     --- little at a time as it plays. A WAV file is held in memory whole, so
     --- export long sounds as Ogg Vorbis.
     --- The engine also has starter sounds a new game can use straight away:
-    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", and for
+    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", for
+    --- menus "menu-move" and "menu-choose", and for
     --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
     --- "bubbles", "drip", "sizzle" and "underwater"; and the weather's, which the
     --- engine plays by itself: "rain", "wind", "thunder" and "thunder-far".

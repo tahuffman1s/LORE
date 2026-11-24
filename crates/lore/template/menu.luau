@@ -96,6 +96,26 @@ menu.style = {
     shadow = nil :: string?,
 }
 local style = menu.style
+
+-- What a menu sounds like: a tick as the chosen row moves and a click
+-- when a row is pressed or changed. They are the engine's own starter
+-- sounds; name your own (a file in the game's `sounds` folder), or set
+-- either to nil for none, before the first menu opens:
+--
+--     menu.sounds.move = nil
+--     menu.sounds.choose = "ui/confirm"
+menu.sounds = {
+    move = "menu-move" :: string?,
+    choose = "menu-choose" :: string?,
+    volume = 0.6,
+}
+
+-- Plays one of menu.sounds, if the game has not turned it off.
+local function sound(name: string?)
+    if name then
+        game.audio.play(name, { volume = menu.sounds.volume })
+    end
+end
 -- Behind the rows that are not chosen: clear, but still under the pointer.
 local NOT_CHOSEN = "#00000000"
 
@@ -414,7 +434,11 @@ function Menu.update(self: Menu, pointerMoved: boolean)
     end
     local x, y = game.input.stepped("menu_move")
     if y ~= 0 then
+        local was = self.chosen
         self:move(-y)
+        if self.chosen ~= was then
+            sound(menu.sounds.move)
+        end
     end
     -- The pointer chooses the row it moves onto.
     if pointerMoved then
@@ -425,14 +449,18 @@ function Menu.update(self: Menu, pointerMoved: boolean)
         end
     end
     local row = self.rows[self.chosen]
-    if x ~= 0 then
+    if x ~= 0 and row.kind ~= "button" and row.kind ~= "info" then
         change(row, x)
+        sound(menu.sounds.move)
     end
     local wheel = game.input.wheel()
     if wheel ~= 0 and (row.kind == "slider" or row.kind == "choice") then
         change(row, if wheel > 0 then 1 else -1)
+        sound(menu.sounds.move)
     end
     if game.input.justPressed("menu_confirm") then
+        -- Before the press, which may close the menu.
+        sound(menu.sounds.choose)
         press(row)
     end
     if game.input.justPressed("menu_click") then
@@ -448,7 +476,9 @@ function Menu.update(self: Menu, pointerMoved: boolean)
                     -- The left half of "< word >" goes back, the right on.
                     local across = value:pointerAt()
                     change(clicked, if across < 0.5 then -1 else 1)
+                    sound(menu.sounds.choose)
                 else
+                    sound(menu.sounds.choose)
                     press(clicked)
                 end
             end
@@ -636,6 +666,7 @@ function Panel.update(self: Panel)
         end
     end
     if turn ~= 0 then
+        sound(menu.sounds.move)
         self:open(self.menus[(at - 1 + turn) % count + 1])
         return
     end

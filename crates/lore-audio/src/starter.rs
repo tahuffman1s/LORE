@@ -129,6 +129,20 @@ pub fn dry_fire() -> Sound {
     })
 }
 
+/// A menu's chosen row moving: one soft, short tick.
+#[must_use]
+pub fn menu_move() -> Sound {
+    build(0.04, |time| tick(time, 0.0, 1_900.0) * 0.22)
+}
+
+/// A menu's row being pressed or changed: two ticks, the second higher.
+#[must_use]
+pub fn menu_choose() -> Sound {
+    build(0.09, |time| {
+        (tick(time, 0.0, 1_500.0) + tick(time, 0.035, 2_300.0) * 0.9) * 0.28
+    })
+}
+
 /// A magazine coming out and a new one going in.
 #[must_use]
 pub fn reload() -> Sound {
