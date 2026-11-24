@@ -417,7 +417,7 @@ fn mistakes_in_making_a_piece_say_what_to_write() {
         ),
         (
             "game.hud.label(\"Hi\")",
-            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph, line, image, size.",
+            "game.hud.label does not exist. game.hud has: text, bar, box, frameGraph, line, image, size, onScreen.",
         ),
         (
             "game.hud.txet(\"Hi\")",

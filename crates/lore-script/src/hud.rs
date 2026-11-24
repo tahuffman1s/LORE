@@ -23,8 +23,16 @@ use crate::api::{Shared, describe, fail};
 use crate::error::closest;
 
 /// Every function on `game.hud`.
-pub(crate) const HUD_FUNCTIONS: &[&str] =
-    &["text", "bar", "box", "frameGraph", "line", "image", "size"];
+pub(crate) const HUD_FUNCTIONS: &[&str] = &[
+    "text",
+    "bar",
+    "box",
+    "frameGraph",
+    "line",
+    "image",
+    "size",
+    "onScreen",
+];
 
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
@@ -817,6 +825,13 @@ impl UserData for PieceRef {
 fn hud_size(shared: &Shared) -> [f32; 2] {
     let screen = shared.input.borrow().screen;
     let [x, y, ..] = lore_ui::hud_area(Anchor::TopLeft, [0.0; 2], [0.0; 2], screen);
+    let scale = ui_scale(shared);
+    [(screen[0] - 2.0 * x) / scale, (screen[1] - 2.0 * y) / scale]
+}
+
+/// How much bigger the player's HUD size setting draws every piece: 1 at
+/// 100 percent.
+fn ui_scale(shared: &Shared) -> f32 {
     let percent = shared
         .settings
         .all()
@@ -830,7 +845,39 @@ fn hud_size(shared: &Shared) -> [f32; 2] {
     // A share of a few, far below where an f32 stops being exact.
     #[allow(clippy::cast_possible_truncation)]
     let scale = (percent / 100.0).max(0.1) as f32;
-    [(screen[0] - 2.0 * x) / scale, (screen[1] - 2.0 * y) / scale]
+    scale
+}
+
+/// Where the point `at` of the world is in the picture drawn from `view`,
+/// as how far right and down of the middle of a `screen` it is, in the
+/// screen's own units. `None` for a point behind the camera.
+pub(crate) fn on_screen(
+    view: &crate::tools_api::ViewTold,
+    at: [f32; 3],
+    screen: [f32; 2],
+) -> Option<[f32; 2]> {
+    let (sy, cy) = view.yaw.sin_cos();
+    let (sp, cp) = view.pitch.sin_cos();
+    let forward = [-sy * cp, sp, -cy * cp];
+    let right = [cy, 0.0, -sy];
+    let up = [
+        right[1] * forward[2] - right[2] * forward[1],
+        right[2] * forward[0] - right[0] * forward[2],
+        right[0] * forward[1] - right[1] * forward[0],
+    ];
+    let to: [f32; 3] = std::array::from_fn(|i| at[i] - view.position[i]);
+    let along = |axis: [f32; 3]| -> f32 { (0..3).map(|i| to[i] * axis[i]).sum() };
+    let ahead = along(forward);
+    if ahead.is_nan() || ahead <= 0.01 {
+        return None;
+    }
+    // Half the picture's height at that distance, and so half its width.
+    let half = ahead * (view.fov_degrees.to_radians() / 2.0).tan();
+    if half.is_nan() || half <= 0.0 || screen[1].is_nan() || screen[1] <= 0.0 {
+        return None;
+    }
+    let pixels = screen[1] / 2.0 / half;
+    Some([along(right) * pixels, -along(up) * pixels])
 }
 
 /// Where `entry` is on the screen as the last tick's input saw it, and as
@@ -1415,6 +1462,49 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     hud.set("frameGraph", function(lua, shared, Kind::Graph)?)?;
     hud.set("line", function(lua, shared, Kind::Line)?)?;
     hud.set("image", function(lua, shared, Kind::Image)?)?;
+    let seen = Rc::clone(shared);
+    hud.set(
+        "onScreen",
+        lua.create_function(move |lua, point: Value| {
+            const EXAMPLE: &str = "game.onDraw(function() local right, down = \
+                                   game.hud.onScreen(game.player.aimPoint) end)";
+            let Value::Vector(point) = point else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.hud.onScreen needs a place in the world, as a vector in metres, \
+                         but it was given {}. Write it like this: {EXAMPLE}",
+                        describe(&point)
+                    ),
+                ));
+            };
+            if !seen.clock.is_drawing() {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.hud.onScreen is where something is in the picture, which changes \
+                         with every picture drawn and not with the game's ticks, so the game's \
+                         rules cannot read it. Read it in game.onDraw, where a HUD piece is \
+                         moved: {EXAMPLE}"
+                    ),
+                ));
+            }
+            let Some(view) = seen.tools.view() else {
+                return Ok((None, None));
+            };
+            let screen = seen.input.borrow().screen;
+            let scale = ui_scale(&seen);
+            Ok(
+                match on_screen(&view, [point.x(), point.y(), point.z()], screen) {
+                    Some([right, down]) => (
+                        Some(f64::from(right / scale)),
+                        Some(f64::from(down / scale)),
+                    ),
+                    None => (None, None),
+                },
+            )
+        })?,
+    )?;
     let sized = Rc::clone(shared);
     hud.set(
         "size",
@@ -1575,4 +1665,47 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
         };
         lua.create_userdata(PieceRef { id, kind })
     })
+}
+
+#[cfg(test)]
+mod on_screen_tests {
+    use super::on_screen;
+    use crate::tools_api::ViewTold;
+
+    const SCREEN: [f32; 2] = [1920.0, 1080.0];
+
+    fn view(yaw: f32, pitch: f32) -> ViewTold {
+        ViewTold {
+            position: [0.0, 2.0, 0.0],
+            yaw,
+            pitch,
+            // Half the picture's height is as far off as the thing is.
+            fov_degrees: 90.0,
+        }
+    }
+
+    #[test]
+    fn a_place_in_the_world_is_found_in_the_picture() {
+        let ahead = view(0.0, 0.0);
+        // Straight ahead is the middle.
+        let [right, down] = on_screen(&ahead, [0.0, 2.0, -10.0], SCREEN).unwrap();
+        assert!(right.abs() < 1e-3 && down.abs() < 1e-3);
+        // Ten metres off, ten up is the top edge and five right half way there.
+        let [right, down] = on_screen(&ahead, [5.0, 12.0, -10.0], SCREEN).unwrap();
+        assert!(
+            (right - 270.0).abs() < 0.01 && (down + 540.0).abs() < 0.01,
+            "{right}, {down}"
+        );
+        // Behind the camera there is no place in the picture.
+        assert_eq!(on_screen(&ahead, [0.0, 2.0, 10.0], SCREEN), None);
+        // Turned a quarter left (yaw grows to the left), what was on the
+        // left (-X) is ahead.
+        let left = view(std::f32::consts::FRAC_PI_2, 0.0);
+        let [right, down] = on_screen(&left, [-10.0, 2.0, 0.0], SCREEN).unwrap();
+        assert!(right.abs() < 0.01 && down.abs() < 0.01, "{right}, {down}");
+        // Looking up, what is level with the eyes is below the middle.
+        let up = view(0.0, 0.3);
+        let [_, down] = on_screen(&up, [0.0, 2.0, -10.0], SCREEN).unwrap();
+        assert!(down > 100.0, "{down}");
+    }
 }

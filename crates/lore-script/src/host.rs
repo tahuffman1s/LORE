@@ -1316,6 +1316,13 @@ impl ScriptHost {
         self.tools.fly_speed()
     }
 
+    /// Says where the picture about to be drawn is seen from, so that
+    /// `game.hud.onScreen` can say where a place in the world is in it.
+    /// Call it before [`draw`](Self::draw).
+    pub fn set_view(&self, view: crate::ViewTold) {
+        self.tools.set_view(view);
+    }
+
     /// How the player walks, sprints, crouches, swims, jumps and falls, as
     /// the script set it (`game.player:setWalkSpeed` and the like); the
     /// engine's own numbers until it does. It stays when the script is saved.

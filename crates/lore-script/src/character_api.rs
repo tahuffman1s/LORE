@@ -32,6 +32,8 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "velocity",
     "eye",
     "aim",
+    "aimPoint",
+    "aimBlocked",
     "grounded",
     "crouched",
     "sprinting",
@@ -271,6 +273,12 @@ impl Characters {
             crouched: false,
             sprinting: false,
             swimming: false,
+            aim_point: [
+                entry.position[0],
+                entry.position[1] + EYE_HEIGHT,
+                entry.position[2] - 1000.0,
+            ],
+            aim_blocked: false,
         }))
     }
 
@@ -389,6 +397,13 @@ impl UserData for CharacterRef {
         fields.add_field_method_get("aim", |lua, this| {
             let [x, y, z] = this.motion(lua, "aim")?.aim;
             Ok(mlua::Vector::new(x, y, z))
+        });
+        fields.add_field_method_get("aimPoint", |lua, this| {
+            let [x, y, z] = this.motion(lua, "aimPoint")?.aim_point;
+            Ok(mlua::Vector::new(x, y, z))
+        });
+        fields.add_field_method_get("aimBlocked", |lua, this| {
+            Ok(this.motion(lua, "aimBlocked")?.aim_blocked)
         });
         fields.add_field_method_get("grounded", |lua, this| {
             Ok(this.motion(lua, "grounded")?.grounded)

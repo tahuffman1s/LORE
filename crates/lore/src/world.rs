@@ -130,6 +130,12 @@ fn motion_of(player: &Player, aim: [f32; 3]) -> Motion {
         crouched: player.crouched,
         sprinting: player.sprinting,
         swimming: player.swimming,
+        // Until the tick works out what is in the way: far along the look.
+        aim_point: {
+            let eye = player.eye_position();
+            std::array::from_fn(|i| eye[i] + aim[i] * 1000.0)
+        },
+        aim_blocked: false,
     }
 }
 
@@ -677,7 +683,13 @@ impl Game for World {
             }
         }
         let aim = aim_of(asked.movement.yaw, asked.pitch);
-        host.set_motion(CharacterId::PLAYER, motion_of(player, aim));
+        let mut motion = motion_of(player, aim);
+        // Where a shot would land now, and whether cover stops it short of
+        // the crosshair: for a game's own second mark.
+        (motion.aim_point, motion.aim_blocked) =
+            self.shooting
+                .aim(player.eye_position(), &self.dummies, level, rules, aim);
+        host.set_motion(CharacterId::PLAYER, motion);
         // What was heard of the tick just run: when a foot came down, and
         // below, what the weapon did.
         self.noises.clear();
@@ -1561,18 +1573,9 @@ impl Game for Playing {
     /// very frame: the newest tick's angles and what the mouse and the
     /// stick have done since.
     fn frame(&mut self, frame: &mut Frame) {
-        // First: this reads the game's sound files, if it has not yet.
-        self.world.frame(frame);
         let (now, tick_rate) = (self.world.tick, self.world.ground.tick_rate);
-        for (nth, noise) in (0..).zip(self.heard.drain(..)) {
-            if !fresh(&noise, now, tick_rate) {
-                continue;
-            }
-            let sounds = self.world.game.sounds_mut();
-            if let Some(play) = noise::play(&noise, nth, sounds) {
-                frame.sound(SoundAsk::Once(play));
-            }
-        }
+        // Where this picture is seen from is worked out first, so that the
+        // script's HUD, drawn next, can put a piece on a place in the world.
         let turn = self.controls.look.map_or([0.0; 2], |look| {
             look::asked(frame.input(), look, frame.since_tick())
         });
@@ -1603,6 +1606,27 @@ impl Game for Playing {
                 host.character_position(who)
             }
         });
+        let own_fov = frame.settings().map_or(
+            crate::settings::Settings::default().field_of_view,
+            |settings| settings.field_of_view,
+        );
+        self.world.game.host().set_view(lore_script::ViewTold {
+            position: shot.position,
+            yaw: shot.yaw,
+            pitch: shot.pitch,
+            fov_degrees: own_fov + (shot.lens.0 - own_fov) * shot.lens.1,
+        });
+        // First: this reads the game's sound files, if it has not yet.
+        self.world.frame(frame);
+        for (nth, noise) in (0..).zip(self.heard.drain(..)) {
+            if !fresh(&noise, now, tick_rate) {
+                continue;
+            }
+            let sounds = self.world.game.sounds_mut();
+            if let Some(play) = noise::play(&noise, nth, sounds) {
+                frame.sound(SoundAsk::Once(play));
+            }
+        }
         frame.look_from_through(shot.position, shot.yaw, shot.pitch, shot.lens);
         self.show_body(frame, shot.position, (seen.yaw, seen.pitch));
         self.show_water(frame, seen.eye);

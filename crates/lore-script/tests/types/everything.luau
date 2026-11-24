@@ -495,6 +495,13 @@ game.camera.fixed(vector.create(0, 2, 0), vector.create(10, 1, 0), { seconds = 2
 game.camera.follow(game.player, { distance = 8, height = 5, seconds = 1, fov = 60 })
 local shot: "player" | "fixed" | "follow" = game.camera.shot()
 print(shot)
+local shotLands: vector = game.player.aimPoint
+local covered: boolean = game.player.aimBlocked
+print(shotLands, covered)
+game.onDraw(function()
+    local right: number?, down: number? = game.hud.onScreen(game.player.aimPoint)
+    print(right, down)
+end)
 game.player:hold("sword")
 game.player:hold("torch", { hand = "left" })
 local inHand: string? = game.player.holding
