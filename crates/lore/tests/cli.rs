@@ -1530,3 +1530,36 @@ fn check_reads_the_models_a_script_names() {
     );
     assert!(said.contains("names a model that cannot be used"), "{said}");
 }
+
+#[test]
+fn new_makes_either_kind_of_game_and_each_passes_the_check() {
+    let folder = scratch("new-kinds");
+    for (kind, view) in [("first-person", "first"), ("third-person", "third")] {
+        let output = lore(&folder, &["new", kind, "--kind", kind]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("It is a {kind} game")),
+            "{}",
+            stdout(&output)
+        );
+        let script = fs::read_to_string(folder.join(kind).join("main.luau")).unwrap();
+        assert!(script.contains(&format!("game.player:setView(\"{view}\")")));
+        let output = lore(&folder, &["check", kind]);
+        assert!(output.status.success(), "{kind}: {}", stderr(&output));
+    }
+    // With nobody to ask (a test has no terminal), nothing is asked.
+    let output = lore(&folder, &["new", "asked"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("What kind of game?"));
+    assert!(stdout(&output).contains("It is a first-person game"));
+
+    let output = lore(&folder, &["new", "odd", "--kind", "top-down"]);
+    assert!(!output.status.success());
+    let said = stderr(&output);
+    assert!(
+        said.contains("\"top-down\" is not a kind of game"),
+        "{said}"
+    );
+    assert!(said.contains("first-person and third-person"), "{said}");
+    assert!(!folder.join("odd").exists(), "nothing was made");
+}

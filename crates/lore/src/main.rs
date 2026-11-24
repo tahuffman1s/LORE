@@ -22,7 +22,7 @@ use lore::map::MAP_FILE;
 use lore::package;
 use lore::player;
 use lore::press::{self, Pressed};
-use lore::scaffold::{self, NewGame};
+use lore::scaffold::{self, GameKind, NewGame};
 use lore::script::ENTRY_SCRIPT;
 use lore::script::weapons::Zone;
 use lore::script::{CharacterId, WeaponHit};
@@ -58,11 +58,15 @@ enum Command {
     /// Create a new game that is ready to play
     #[command(
         after_help = "Examples:\n  lore new my-game\n  lore new \"Zombie Night\"    \
-                            A name with a space needs quotes"
+                            A name with a space needs quotes\n  \
+                            lore new my-game --kind third-person    Start seen from behind"
     )]
     New {
         /// The folder to create. Its name becomes the game's name
         folder: PathBuf,
+        /// How the game is seen: first-person or third-person. Leave it out to be asked
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
     },
     /// Play a game
     #[command(
@@ -331,7 +335,7 @@ fn main() -> ExitCode {
 /// Does what the `lore` command was asked to.
 fn command() -> Result<(), String> {
     match Cli::parse().command {
-        Some(Command::New { folder }) => new(&folder),
+        Some(Command::New { folder, kind }) => new(&folder, kind.as_deref()),
         Some(Command::Run { folder }) => run(folder.as_deref().unwrap_or(Path::new("."))),
         #[cfg(feature = "editor")]
         Some(Command::Edit { folder }) => edit(folder.as_deref().unwrap_or(Path::new("."))),
@@ -385,9 +389,20 @@ fn command() -> Result<(), String> {
 }
 
 /// `lore new`: creates the game and says how to play it.
-fn new(folder: &Path) -> Result<(), String> {
+fn new(folder: &Path, kind: Option<&str>) -> Result<(), String> {
+    let kind = match kind {
+        Some(typed) => GameKind::named(typed).ok_or_else(|| {
+            format!(
+                "\"{typed}\" is not a kind of game. The kinds are {}. Write it like this: \
+                 lore new {} --kind third-person",
+                kinds(),
+                quoted(&folder.display().to_string())
+            )
+        })?,
+        None => ask_kind(),
+    };
     let NewGame { name, folder: full } =
-        scaffold::new_game(folder).map_err(|error| error.to_string())?;
+        scaffold::new_game_of(folder, kind).map_err(|error| error.to_string())?;
 
     println!("Created the game \"{name}\" in {}", full.display());
     println!();
@@ -402,7 +417,61 @@ fn new(folder: &Path) -> Result<(), String> {
         "Then open {ENTRY_SCRIPT} in an editor, change something and save: \
          the running game updates by itself."
     );
+    let other = match kind {
+        GameKind::FirstPerson => ("first", "third", "over their shoulder"),
+        GameKind::ThirdPerson => ("third", "first", "their eyes"),
+    };
+    println!(
+        "It is a {} game, {}. To see it from {} instead, change \"{}\" to \"{}\" in \
+         {ENTRY_SCRIPT}.",
+        kind.name(),
+        kind.about(),
+        other.2,
+        other.0,
+        other.1
+    );
     Ok(())
+}
+
+/// The kinds of game `lore new` starts, as a sentence lists them.
+fn kinds() -> String {
+    let names: Vec<&str> = GameKind::ALL.into_iter().map(GameKind::name).collect();
+    names.join(" and ")
+}
+
+/// Asks what kind of game to start, when someone is there to answer: one
+/// question, and Enter takes the first. With nobody at the keyboard (a
+/// script, a test, a pipe) nothing is asked and the first kind is taken, so
+/// `lore new` never waits for an answer that cannot come.
+fn ask_kind() -> GameKind {
+    use std::io::{BufRead as _, IsTerminal as _, Write as _};
+
+    let usual = GameKind::default();
+    let (input, mut output) = (std::io::stdin(), std::io::stdout());
+    if !input.is_terminal() || !output.is_terminal() {
+        return usual;
+    }
+    println!("What kind of game?");
+    for (nth, kind) in GameKind::ALL.into_iter().enumerate() {
+        println!("  {}. {}: {}", nth + 1, kind.name(), kind.about());
+    }
+    println!("It is one line of {ENTRY_SCRIPT}, so you can change your mind later.");
+    for _ in 0..3 {
+        print!("Type 1 or 2, then Enter [1]: ");
+        // Nothing to do if the terminal has gone: the usual kind is taken.
+        let _ = output.flush();
+        let mut typed = String::new();
+        match input.lock().read_line(&mut typed) {
+            Ok(0) | Err(_) => return usual,
+            Ok(_) if typed.trim().is_empty() => return usual,
+            Ok(_) => {}
+        }
+        match GameKind::named(&typed) {
+            Some(kind) => return kind,
+            None => println!("That is not one of them: the kinds are {}.", kinds()),
+        }
+    }
+    usual
 }
 
 /// Opens the game in `folder` for `lore {verb}`, or says how to get one.
