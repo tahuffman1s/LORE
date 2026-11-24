@@ -348,12 +348,13 @@ fn mistakes_with_the_player_say_what_to_write() {
         spawn_error("print(game.player.mana)"),
         "game.player.mana does not exist. It has: name, position, weapon, ammo, reserve, \
          velocity, eye, aim, grounded, movement, flySpeed, view, facing, model, clips, \
-         health, maxHealth, dead, and the functions game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
+         health, maxHealth, dead, lockedOn, blocking, and the functions game.player:giveWeapon, game.player:takeWeapon, game.player:teleport, \
          game.player:setMovement, game.player:setFlySpeed, game.player:setView, \
          game.player:allowViewSwitch, game.player:setFacing, game.player:setCamera, \
          game.player:setModel, game.player:play, game.player:stop, game.player:isPlaying, \
          game.player:onMoment, game.player:setHealth, game.player:setMaxHealth, \
-         game.player:heal, game.player:damage."
+         game.player:heal, game.player:damage, game.player:swing, game.player:lockOn, \
+         game.player:block."
     );
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),

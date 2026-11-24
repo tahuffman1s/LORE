@@ -87,6 +87,18 @@ pub enum AnimationAsk {
         /// From the waist up only, leaving the legs to walk.
         upper_body: bool,
     },
+    /// Swing at what is in reach: play a clip that strikes, hurting what
+    /// the striking hand or foot (and what it holds) passes through.
+    Swing {
+        /// The clip's name.
+        clip: String,
+        /// Health points each thing it hits loses.
+        damage: f32,
+        /// How far past the hand or foot it reaches, in metres: a sword's length.
+        reach: f32,
+        /// From the waist up only, so the legs keep walking.
+        upper_body: bool,
+    },
     /// Fade out a clip, or every clip a script asked for when `None`.
     Stop {
         /// The clip's name.
@@ -101,6 +113,10 @@ pub enum AnimationAsk {
 #[derive(Debug, Default)]
 pub(crate) struct BodyState {
     view: Cell<CameraView>,
+    /// Who the camera and body are held on (`lockOn`).
+    locked: Cell<Option<crate::CharacterId>>,
+    /// Whether the player is blocking.
+    blocking: Cell<bool>,
     /// The model the script asked for, not yet taken by the engine.
     model: RefCell<Option<String>>,
     /// The model the body is now.
@@ -130,6 +146,18 @@ impl BodyState {
         let mut view = self.view.get();
         view.third = third;
         self.view.set(view);
+    }
+
+    pub(crate) fn locked(&self) -> Option<crate::CharacterId> {
+        self.locked.get()
+    }
+
+    pub(crate) fn set_locked(&self, on: Option<crate::CharacterId>) {
+        self.locked.set(on);
+    }
+
+    pub(crate) fn blocking(&self) -> bool {
+        self.blocking.get()
     }
 
     pub(crate) fn take_model(&self) -> Option<String> {
@@ -650,4 +678,109 @@ pub(crate) fn moment_handlers(shared: &Shared, moment: &str) -> Vec<Function> {
         .filter(|(name, _)| name == moment)
         .map(|(_, f)| f.clone())
         .collect()
+}
+
+/// `game.player:swing(clip, { damage, reach, keepWalking })`.
+pub(crate) fn swing(lua: &Lua, shared: &Rc<Shared>, clip: &Value, options: &Value) -> mlua::Result<()> {
+    const EXAMPLE: &str = "game.player:swing(\"sword_attack\", { damage = 25, reach = 0.9 })";
+    let clip = clip_name(lua, shared, clip, "swing", EXAMPLE)?;
+    let (mut damage, mut reach, mut upper_body) = (10.0_f32, 0.0_f32, false);
+    if let Value::Table(table) = options {
+        for pair in table.pairs::<Value, Value>() {
+            let (key, value) = pair?;
+            let Value::String(key) = key else {
+                return Err(fail(lua, format!("game.player:swing takes options by name. Write it like this: {EXAMPLE}")));
+            };
+            let key = key.to_string_lossy();
+            let number = |least: f32, most: f32| -> mlua::Result<f32> {
+                match value {
+                    Value::Number(n) if n.is_finite() => Ok((n as f32).clamp(least, most)),
+                    Value::Integer(n) => Ok((n as f32).clamp(least, most)),
+                    ref other => Err(fail(
+                        lua,
+                        format!(
+                            "game.player:swing's {key} needs a number, but it was given {}. \
+                             Write it like this: {EXAMPLE}",
+                            describe(other)
+                        ),
+                    )),
+                }
+            };
+            match key.as_str() {
+                "damage" => damage = number(0.0, 1.0e6)?,
+                "reach" => reach = number(0.0, 3.0)?,
+                "keepWalking" => {
+                    let Value::Boolean(b) = value else {
+                        return Err(fail(
+                            lua,
+                            format!("game.player:swing's keepWalking needs true or false. Write it like this: {EXAMPLE}"),
+                        ));
+                    };
+                    upper_body = b;
+                }
+                other => {
+                    let mut message = format!("game.player:swing has no option \"{other}\".");
+                    if let Some(near) = closest(other, ["damage", "reach", "keepWalking"]) {
+                        let _ = write!(message, " Did you mean \"{near}\"?");
+                    }
+                    let _ = write!(
+                        message,
+                        " Its options are damage (health points, 10 if not given), reach \
+                         (metres past the hand or foot: a sword's length, 0 for a fist) and \
+                         keepWalking. Write it like this: {EXAMPLE}"
+                    );
+                    return Err(fail(lua, message));
+                }
+            }
+        }
+    } else if !matches!(options, Value::Nil) {
+        return Err(fail(
+            lua,
+            format!(
+                "game.player:swing's second part is a table of options, but it was given {}. \
+                 Write it like this: {EXAMPLE}",
+                describe(options)
+            ),
+        ));
+    }
+    shared.body.ask(AnimationAsk::Swing { clip, damage, reach, upper_body });
+    Ok(())
+}
+
+/// `game.player:lockOn(character)` or `game.player:lockOn(nil)`.
+pub(crate) fn lock_on(lua: &Lua, shared: &Rc<Shared>, target: &Value) -> mlua::Result<()> {
+    let on = match target {
+        Value::Nil => None,
+        other => Some(crate::character_api::id_of_value(lua, other).ok_or_else(|| {
+            fail(
+                lua,
+                format!(
+                    "game.player:lockOn needs a character to hold the camera on, or nil to let \
+                     go, but it was given {}. Write it like this: game.player:lockOn(enemy)",
+                    describe(other)
+                ),
+            )
+        })?),
+    };
+    if on == Some(crate::CharacterId::PLAYER) {
+        return Err(fail(lua, "game.player:lockOn cannot hold the camera on the player themself. Give it someone else, or nil to let go."));
+    }
+    shared.body.set_locked(on);
+    Ok(())
+}
+
+/// `game.player:block(true | false)`.
+pub(crate) fn block(lua: &Lua, shared: &Rc<Shared>, on: &Value) -> mlua::Result<()> {
+    let Value::Boolean(on) = *on else {
+        return Err(fail(
+            lua,
+            format!(
+                "game.player:block needs true (raise the guard) or false (lower it), but it \
+                 was given {}. Write it like this: game.player:block(game.input.pressed(\"aim\"))",
+                describe(on)
+            ),
+        ));
+    };
+    shared.body.blocking.set(on);
+    Ok(())
 }

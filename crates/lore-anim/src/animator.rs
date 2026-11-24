@@ -150,6 +150,23 @@ pub struct Body {
     climb: Option<u32>,
     /// 1 when the body faces +Z (glTF's own way), -1 when it faces -Z.
     facing: f32,
+    /// For each clip, when it can hit and with what, if it strikes at all.
+    strikes: Vec<Option<Strike>>,
+}
+
+/// When a clip can hit, and with which bone: a sword swing's or a punch's
+/// strike.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Strike {
+    /// The bone that strikes (a hand or a foot), and the one it hangs from,
+    /// which together say which way a held weapon points.
+    pub bone: usize,
+    /// The bone the striking one hangs from.
+    pub parent: usize,
+    /// When it can start hitting, and stops, in seconds from the clip's start.
+    pub start: f32,
+    /// When it stops.
+    pub end: f32,
 }
 
 /// Clip names a body looks for, as LORE's mannequin names them. A model
@@ -242,8 +259,10 @@ impl Body {
             bindings,
             upper,
             facing: 1.0,
+            strikes: Vec::new(),
         };
         body.facing = body.find_facing();
+        body.strikes = (0..body.clips.len()).map(|clip| body.find_strike(clip)).collect();
         let gait = |body: &mut Self, set: [&str; 4], usual: f32| -> Option<Gait> {
             let clips = set.map(|n| find(&body.clips, n));
             let forward = clips[0]?;
@@ -293,6 +312,87 @@ impl Body {
         } else {
             1.0
         }
+    }
+
+    /// When clip `clip` can hit, if it strikes at all: see [`Strike`].
+    #[must_use]
+    pub fn strike(&self, clip: u32) -> Option<Strike> {
+        self.strikes.get(clip as usize).copied().flatten()
+    }
+
+    /// Finds when a clip strikes. A clip that marks `hit_start` and
+    /// `hit_end` says so itself; otherwise the strike is the stretch when the
+    /// fastest hand or foot moves faster than half its top speed, with the
+    /// top above 4 m/s (a punch is 6 to 10, a sword's tip faster, a wave
+    /// under 3): the part of a blow that carries its weight.
+    fn find_strike(&self, clip: usize) -> Option<Strike> {
+        let ends = [
+            ("hand_r", "lowerarm_r"),
+            ("hand_l", "lowerarm_l"),
+            ("foot_r", "calf_r"),
+            ("foot_l", "calf_l"),
+        ];
+        let ends: Vec<(usize, usize)> = ends
+            .iter()
+            .filter_map(|(a, b)| Some((self.skeleton.find(a)?, self.skeleton.find(b)?)))
+            .collect();
+        if ends.is_empty() {
+            return None;
+        }
+        let data = &self.clips[clip];
+        let frames = data.frames() as usize;
+        if frames < 3 || data.duration <= 0.0 {
+            return None;
+        }
+        let step = data.duration / (frames - 1) as f32;
+        let marked = |name: &str| data.markers.iter().find(|m| m.name == name).map(|m| m.time);
+        let mut pose = self.skeleton.rest().to_vec();
+        let mut placed = vec![IDENTITY; self.skeleton.len()];
+        // Speeds of each end, key to key.
+        let mut speeds = vec![vec![0.0f32; frames]; ends.len()];
+        let mut was: Vec<[f32; 3]> = vec![[0.0; 3]; ends.len()];
+        for frame in 0..frames {
+            pose.copy_from_slice(self.skeleton.rest());
+            data.sample(&self.bindings[clip], frame as f32 * step, &mut pose);
+            self.skeleton.place(&pose, &mut placed);
+            for (e, &(bone, _)) in ends.iter().enumerate() {
+                let now = origin(&placed[bone]);
+                if frame > 0 {
+                    let d: f32 = (0..3).map(|i| (now[i] - was[e][i]).powi(2)).sum::<f32>().sqrt();
+                    speeds[e][frame] = d / step;
+                }
+                was[e] = now;
+            }
+        }
+        let (which, top) = speeds
+            .iter()
+            .enumerate()
+            .map(|(e, s)| (e, s.iter().copied().fold(0.0f32, f32::max)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))?;
+        let (bone, parent) = ends[which];
+        if let (Some(start), Some(end)) = (marked("hit_start"), marked("hit_end")) {
+            return Some(Strike { bone, parent, start, end });
+        }
+        if top < 4.0 {
+            return None;
+        }
+        let peak = speeds[which].iter().position(|&s| s >= top)?;
+        let fast = |f: usize| speeds[which][f] >= top * 0.5;
+        let mut first = peak;
+        while first > 1 && fast(first - 1) {
+            first -= 1;
+        }
+        let mut last = peak;
+        while last + 1 < frames && fast(last + 1) {
+            last += 1;
+        }
+        // Speeds are measured over the key before, so the stretch starts a key early.
+        Some(Strike {
+            bone,
+            parent,
+            start: (first.saturating_sub(1)) as f32 * step,
+            end: last as f32 * step,
+        })
     }
 
     /// Its skeleton.

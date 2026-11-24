@@ -134,6 +134,44 @@ pub(crate) struct Character {
     headless: Vec<Transform>,
     /// The bone that is the head, left out of the first-person picture.
     head: Option<usize>,
+    /// The swing under way, if any.
+    swing: Option<Swing>,
+    /// The play that holds the guard up, while blocking.
+    guard: Option<u32>,
+}
+
+/// A swing under way: what it plays, what it does, and what it has hit.
+#[derive(Debug, Clone)]
+struct Swing {
+    play: u32,
+    clip: u32,
+    damage: f32,
+    reach: f32,
+    strike: lore_anim::Strike,
+    /// The blade where it was on the last tick, in the world.
+    was: Option<[[f32; 3]; 2]>,
+    /// Who it has hit: each once.
+    struck: Vec<lore_script::CharacterId>,
+}
+
+/// The most things one swing hits.
+const MOST_STRUCK: usize = 8;
+
+/// What a swing hit: who, how hard, and with which clip.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Blow {
+    pub(crate) victim: lore_script::CharacterId,
+    pub(crate) damage: f32,
+    pub(crate) clip: String,
+}
+
+/// Something a swing can hit: who, where its feet are, how tall and how wide.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Struck {
+    pub(crate) who: lore_script::CharacterId,
+    pub(crate) feet: [f32; 3],
+    pub(crate) height: f32,
+    pub(crate) radius: f32,
 }
 
 /// What [`Character::figures`] gives for one frame: the body as seen, and
@@ -241,9 +279,44 @@ impl Character {
             .map(|clip| clip.name.as_str())
     }
 
-    /// Does what a script asked: plays or stops a clip.
+    /// Does what a script asked: plays or stops a clip, or swings.
     pub(crate) fn ask(&mut self, ask: &lore_script::AnimationAsk) {
         match ask {
+            lore_script::AnimationAsk::Swing { clip, damage, reach, upper_body } => {
+                let Some(number) = self.body.clip(clip) else {
+                    log::warn!("game.player:swing(\"{clip}\"): the body has no clip by that name.");
+                    return;
+                };
+                let Some(strike) = self.body.strike(number) else {
+                    log::warn!(
+                        "game.player:swing(\"{clip}\"): that clip never strikes (no hand or foot \
+                         moves fast in it, and it marks no hit_start and hit_end), so it can hit \
+                         nothing. Swing with a blow, such as \"sword_attack\" or \"punch\"."
+                    );
+                    return;
+                };
+                // A swing already under way finishes first.
+                if self.swing.is_some() {
+                    return;
+                }
+                let how = lore_anim::Play {
+                    layer: if *upper_body { lore_anim::Layer::Upper } else { lore_anim::Layer::Body },
+                    fade: 0.08,
+                    speed: 1.0,
+                    looping: Some(false),
+                };
+                if let Some(play) = self.animator.play(&self.body, number, how) {
+                    self.swing = Some(Swing {
+                        play,
+                        clip: number,
+                        damage: *damage,
+                        reach: *reach,
+                        strike,
+                        was: None,
+                        struck: Vec::with_capacity(MOST_STRUCK),
+                    });
+                }
+            }
             lore_script::AnimationAsk::Play {
                 clip,
                 fade,
@@ -324,8 +397,104 @@ impl Character {
             skinning: vec![lore_anim::math::IDENTITY; joints],
             headless: vec![lore_anim::math::IDENTITY; joints],
             head,
+            swing: None,
+            guard: None,
             body: Arc::new(body),
         }
+    }
+
+    /// Raises or lowers the guard: the body's block clip, held on the upper
+    /// body, while `up`.
+    pub(crate) fn guard(&mut self, up: bool) {
+        match (up, self.guard) {
+            (true, None) => {
+                let clip = self.body.clip("sword_block").or_else(|| self.body.clip("shield_idle"));
+                if let Some(clip) = clip {
+                    let how = lore_anim::Play {
+                        layer: lore_anim::Layer::Upper,
+                        fade: 0.1,
+                        speed: 1.0,
+                        looping: Some(false),
+                    };
+                    self.guard = self.animator.play(&self.body, clip, how);
+                }
+            }
+            (false, Some(play)) => {
+                self.animator.stop(Some(play), 0.15);
+                self.guard = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Where every bone is in the world this tick, for a body with its feet
+    /// at `feet`, into the bone buffer. Uses the tick's own pose, not a
+    /// frame's, so what it hits is the same at any frame rate.
+    fn place_in_world(&mut self, feet: [f32; 3]) -> Transform {
+        let model_yaw = if self.body.facing() > 0.0 {
+            self.yaw + std::f32::consts::PI
+        } else {
+            self.yaw
+        };
+        let (s, c) = (libm::sinf(model_yaw), libm::cosf(model_yaw));
+        self.body.skeleton().place(&self.pose, &mut self.placed);
+        [
+            [c, 0.0, -s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [s, 0.0, c, 0.0],
+            [feet[0], feet[1], feet[2], 1.0],
+        ]
+    }
+
+    /// Steps the swing under way: while its clip strikes, sweeps the blade
+    /// (the striking hand or foot and `reach` past it) from where it was on
+    /// the last tick to where it is, and gives each of `around` it passes
+    /// through, once, to `hit`.
+    pub(crate) fn swing_through(&mut self, feet: [f32; 3], around: &[Struck], mut hit: impl FnMut(Blow)) {
+        let Some(swing) = &self.swing else { return };
+        let Some(playing) = self.animator.playing().iter().find(|p| p.id_number() == swing.play).copied() else {
+            self.swing = None;
+            return;
+        };
+        let body = Arc::clone(&self.body);
+        let clip = &body.clips()[swing.clip as usize];
+        let time = clip.wrap(playing.time);
+        let striking = time >= swing.strike.start && time <= swing.strike.end + 1.0 / 30.0;
+        let (bone, parent, reach) = (swing.strike.bone, swing.strike.parent, swing.reach);
+        let world = self.place_in_world(feet);
+        let at = |t: &Transform| lore_anim::math::apply(&world, lore_anim::math::origin(t));
+        let (hand, elbow) = (at(&self.placed[bone]), at(&self.placed[parent]));
+        let along: [f32; 3] = std::array::from_fn(|i| hand[i] - elbow[i]);
+        let length = along.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-4);
+        let tip: [f32; 3] = std::array::from_fn(|i| hand[i] + along[i] / length * reach);
+        let name = clip.name.clone();
+        let Some(swing) = &mut self.swing else { return };
+        let blade = [hand, tip];
+        if striking {
+            let was = swing.was.unwrap_or(blade);
+            // Points along the blade, at the last tick, between, and now.
+            for step in 0..=2 {
+                let t = step as f32 / 2.0;
+                for k in 0..=4 {
+                    let u = k as f32 / 4.0;
+                    let point: [f32; 3] = std::array::from_fn(|i| {
+                        let a = was[0][i] + (was[1][i] - was[0][i]) * u;
+                        let b = blade[0][i] + (blade[1][i] - blade[0][i]) * u;
+                        a + (b - a) * t
+                    });
+                    for target in around {
+                        if swing.struck.contains(&target.who) || swing.struck.len() >= MOST_STRUCK {
+                            continue;
+                        }
+                        if inside(point, target) {
+                            swing.struck.push(target.who);
+                            hit(Blow { victim: target.who, damage: swing.damage, clip: name.clone() });
+                        }
+                    }
+                }
+            }
+        }
+        swing.was = Some(blade);
     }
 
     /// The model, for the renderer to upload once.
@@ -588,6 +757,18 @@ impl Character {
     }
 }
 
+/// Whether `point` is inside `target`'s upright capsule.
+fn inside(point: [f32; 3], target: &Struck) -> bool {
+    let low = target.feet[1] + target.radius;
+    let high = target.feet[1] + target.height - target.radius;
+    let y = point[1].clamp(low, high.max(low));
+    let d: f32 = [point[0] - target.feet[0], point[1] - y, point[2] - target.feet[2]]
+        .iter()
+        .map(|v| v * v)
+        .sum();
+    d <= target.radius * target.radius
+}
+
 /// The signed turn from `from` to `to`, the short way, -π to π.
 fn angle_between(from: f32, to: f32) -> f32 {
     use std::f32::consts::{PI, TAU};
@@ -596,7 +777,7 @@ fn angle_between(from: f32, to: f32) -> f32 {
 }
 
 /// `from` turned toward `to` by at most `most` radians, kept within 0 to 2π.
-fn turn_toward(from: f32, to: f32, most: f32) -> f32 {
+pub(crate) fn turn_toward(from: f32, to: f32, most: f32) -> f32 {
     let d = angle_between(from, to);
     let turned = from + d.clamp(-most, most);
     turned.rem_euclid(std::f32::consts::TAU)

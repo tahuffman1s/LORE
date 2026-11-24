@@ -255,6 +255,7 @@ pub(crate) fn damage(
 }
 
 /// What the table handed to a `game.onDamage` function holds.
+#[cfg(test)]
 pub(crate) const HURT_FIELDS: &[&str] = &["victim", "amount", "from", "how", "died"];
 
 /// The table a `game.onDamage` function is handed.

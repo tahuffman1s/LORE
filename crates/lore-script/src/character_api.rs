@@ -26,6 +26,7 @@ use crate::weapon_api;
 pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "name", "position", "weapon", "ammo", "reserve", "velocity", "eye", "aim", "grounded",
     "movement", "flySpeed", "view", "facing", "model", "clips", "health", "maxHealth", "dead",
+    "lockedOn", "blocking",
 ];
 
 /// What a character can be told to do.
@@ -48,6 +49,9 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setMaxHealth",
     "heal",
     "damage",
+    "swing",
+    "lockOn",
+    "block",
 ];
 
 /// How high the eyes are above the feet of a character the engine has said
@@ -204,6 +208,16 @@ impl Characters {
         }))
     }
 
+    /// Where a character's feet are.
+    pub fn position(&self, id: CharacterId) -> Option<[f32; 3]> {
+        self.read(id).map(|(_, at)| at)
+    }
+
+    /// How a character is moving.
+    pub fn motion_of(&self, id: CharacterId) -> Option<Motion> {
+        self.motion(id)
+    }
+
     /// What a character is called and where it is.
     fn read(&self, id: CharacterId) -> Option<(String, [f32; 3])> {
         let here = self.here.borrow();
@@ -343,6 +357,20 @@ impl UserData for CharacterRef {
             this.read(lua, "dead")?;
             Ok(shared_of(lua)?.characters.health(this.0).is_none_or(|h| h.0 <= 0.0))
         });
+        fields.add_field_method_get("lockedOn", |lua, this| {
+            this.read(lua, "lockedOn")?;
+            only_player(lua, *this, "lockedOn", "locked on")?;
+            let shared = shared_of(lua)?;
+            match shared.body.locked().filter(|id| shared.characters.has(*id)) {
+                Some(id) => Ok(Value::UserData(shared.handles.character(lua, id)?)),
+                None => Ok(Value::Nil),
+            }
+        });
+        fields.add_field_method_get("blocking", |lua, this| {
+            this.read(lua, "blocking")?;
+            only_player(lua, *this, "blocking", "blocking")?;
+            Ok(shared_of(lua)?.body.blocking())
+        });
         fields.add_field_method_get("view", |lua, this| {
             this.read(lua, "view")?;
             only_player(lua, *this, "view", "seen in first or third person")?;
@@ -426,6 +454,21 @@ impl UserData for CharacterRef {
             let this = receiver(lua, &this, "damage", "(10, { how = \"spikes\" })")?;
             this.read(lua, "damage")?;
             crate::health_api::damage(lua, &shared_of(lua)?, this.0, &points, &options)
+        });
+        methods.add_function("swing", |lua, (this, clip, options): (Value, Value, Value)| {
+            let this = receiver(lua, &this, "swing", "(\"sword_attack\", { damage = 25 })")?;
+            only_player(lua, this, "swing", "made to swing")?;
+            crate::body_api::swing(lua, &shared_of(lua)?, &clip, &options)
+        });
+        methods.add_function("lockOn", |lua, (this, target): (Value, Value)| {
+            let this = receiver(lua, &this, "lockOn", "(enemy)")?;
+            only_player(lua, this, "lockOn", "locked on")?;
+            crate::body_api::lock_on(lua, &shared_of(lua)?, &target)
+        });
+        methods.add_function("block", |lua, (this, on): (Value, Value)| {
+            let this = receiver(lua, &this, "block", "(true)")?;
+            only_player(lua, this, "block", "made to block")?;
+            crate::body_api::block(lua, &shared_of(lua)?, &on)
         });
         methods.add_function("setView", |lua, (this, view): (Value, Value)| {
             let this = receiver(lua, &this, "setView", "(\"third\")")?;

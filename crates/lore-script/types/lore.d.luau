@@ -111,6 +111,14 @@ declare extern type Character with
     --- Example: if game.player.dead then print("Game over") end
     dead: boolean
 
+    --- Who the camera and body are held on (`game.player:lockOn`), or nil.
+    --- Example: if game.player.lockedOn then print("Fighting " .. game.player.lockedOn.name) end
+    lockedOn: Character?
+
+    --- True while the player's guard is up (`game.player:block`).
+    --- Example: print(game.player.blocking)
+    blocking: boolean
+
     --- The names of the clips the body can play, for `game.player:play`.
     --- Example: for _, clip in game.player.clips do print(clip) end
     clips: { string }
@@ -169,6 +177,30 @@ declare extern type Character with
     --- and `how` a word for what did it ("script" if not given).
     --- Example: game.player:damage(10, { how = "spikes" })
     function damage(self, points: number, options: { from: Character?, how: string? }?): ()
+
+    --- Swings at what is in reach: plays a clip that strikes (a blow such as
+    --- "sword_attack", "sword_heavy", "punch" or "kick") and hurts each
+    --- thing the striking hand or foot passes through, once, while the blow
+    --- carries its weight. `damage` is health points (10 if not given),
+    --- `reach` how far past the hand or foot it hits in metres (a sword's
+    --- length; 0 for a fist), `keepWalking` true to swing from the waist up.
+    --- A swing under way finishes before another starts. Hits reach
+    --- `game.onDamage` with `how` set to the clip's name.
+    --- Example: if game.input.justPressed("fire") then game.player:swing("sword_attack", { damage = 25, reach = 0.9 }) end
+    function swing(self, clip: string, options: { damage: number?, reach: number?, keepWalking: boolean? }?): ()
+
+    --- Holds the camera and the player's body on `target`, turning to keep
+    --- them in view whatever the look action does, until `lockOn(nil)` or
+    --- they leave the world.
+    --- Example: game.player:lockOn(if game.player.lockedOn then nil else bandit)
+    function lockOn(self, target: Character?): ()
+
+    --- Raises (true) or lowers (false) the player's guard: the block clip
+    --- on the upper body, and blows from someone in front of them (within
+    --- 60 degrees of where they look) do no harm. Falls and blows from
+    --- behind still hurt.
+    --- Example: game.onTick(function() game.player:block(game.input.pressed("aim")) end)
+    function block(self, raised: boolean): ()
 
     --- Sees the world from the eyes ("first") or from behind and over a
     --- shoulder ("third"). The camera travels between the two rather than

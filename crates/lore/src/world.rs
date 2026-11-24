@@ -1151,6 +1151,7 @@ impl Playing {
         for ask in host.take_animation_asks() {
             character.ask(&ask);
         }
+        character.guard(host.blocking());
         let player = *self.world.player();
         character.tick(
             &player,
@@ -1160,6 +1161,44 @@ impl Playing {
             |clip, moment| host.heard_moment(clip, &moment.name),
         );
         host.set_playing(character.playing_names());
+        // A swing hits what it passes through, once each, through health.
+        let rules = &self.world.ground.rules;
+        let around: Vec<crate::character::Struck> = self
+            .world
+            .dummies
+            .iter()
+            .map(|dummy| crate::character::Struck {
+                who: dummy.name,
+                feet: dummy.feet,
+                height: rules.standing_height,
+                radius: rules.radius,
+            })
+            .collect();
+        let mut blows = Vec::new();
+        character.swing_through(player.position, &around, |blow| blows.push(blow));
+        let host = self.world.game.host_mut();
+        for blow in blows {
+            host.damage(blow.victim, blow.damage, Some(CharacterId::PLAYER), &blow.clip);
+        }
+    }
+
+    /// Holds the view on whoever the script locked on to: the camera turns
+    /// toward their chest at a steady speed, whatever the look action does.
+    fn hold_lock(&mut self, step: f32) {
+        let host = self.world.game.host();
+        let Some(target) = host.locked_on().and_then(|id| host.character_position(id)) else {
+            return;
+        };
+        let eye = self.world.player().eye_position();
+        let (dx, dy, dz) = (target[0] - eye[0], target[1] + 1.2 - eye[1], target[2] - eye[2]);
+        let flat = (dx * dx + dz * dz).sqrt();
+        if flat < 0.3 {
+            return;
+        }
+        let yaw = libm::atan2f(-dx, -dz).rem_euclid(std::f32::consts::TAU);
+        let pitch = libm::atan2f(dy, flat).clamp(-0.6, 0.4);
+        self.yaw = crate::character::turn_toward(self.yaw, yaw, 8.0 * step);
+        self.pitch += (pitch - self.pitch).clamp(-4.0 * step, 4.0 * step);
     }
 
     /// Makes the player's body `model`: one of the engine's own, or a model
@@ -1354,9 +1393,14 @@ impl Playing {
 impl Game for Playing {
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
-        let asked = self
+        let mut asked = self
             .controls
             .asked(input, step, &mut self.yaw, &mut self.pitch);
+        if self.world.game.host().locked_on().is_some() {
+            self.hold_lock(step);
+            asked.movement.yaw = self.yaw;
+            asked.pitch = self.pitch;
+        }
         self.world.ask(asked);
         // Shots go where the crosshair is, seen from where the camera hung
         // on the last tick.
@@ -1714,6 +1758,41 @@ mod tests {
     }
 
     const STEP: f32 = 1.0 / 60.0;
+
+    #[test]
+    fn a_swing_hits_what_is_in_front_once_and_not_what_is_behind() {
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_source(
+            r#"local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 40 then
+                    game.player:swing("sword_attack", { damage = 30, reach = 1.0 })
+                end
+            end)"#,
+            &actions,
+        );
+        let mut game = Playing::start(script, None, &actions, 60);
+        let mut input = lore_input::Input::new(actions);
+        // Let the player settle on their feet first.
+        for _ in 0..30 {
+            game.tick(input.tick(), STEP);
+        }
+        let feet = game.world.player().position;
+        // Facing -Z: one in reach in front, one behind.
+        let front = game.world.add_dummy([feet[0], feet[1], feet[2] - 1.1]);
+        let back = game.world.add_dummy([feet[0], feet[1], feet[2] + 1.1]);
+        let who = |game: &Playing, id: DummyId| {
+            game.world.dummies.iter().find(|d| d.id == id).unwrap().name
+        };
+        let (front, back) = (who(&game, front), who(&game, back));
+        for _ in 0..90 {
+            game.tick(input.tick(), STEP);
+        }
+        let host = game.world.game.host();
+        assert_eq!(host.health(front), Some((70.0, 100.0)), "hit once");
+        assert_eq!(host.health(back), Some((100.0, 100.0)), "not hit");
+    }
 
     /// The view of a frame drawn `alpha` of the way to the next tick, with
     /// what `input` holds that no tick has seen.

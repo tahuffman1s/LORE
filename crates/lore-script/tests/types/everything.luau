@@ -596,3 +596,17 @@ game.onTick(function()
         game.player:damage(5, { how = "thorns", from = game.player })
     end
 end)
+
+-- Melee.
+game.onTick(function()
+    game.player:block(game.input.pressed("aim"))
+    local guard: boolean = game.player.blocking
+    local target: Character? = game.player.lockedOn
+    print(guard, target)
+    if game.input.justPressed("fire") then
+        game.player:swing("sword_attack", { damage = 25, reach = 0.9, keepWalking = false })
+    end
+    if game.input.justPressed("use_item") then
+        game.player:lockOn(nil)
+    end
+end)

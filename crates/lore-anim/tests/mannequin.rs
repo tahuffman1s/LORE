@@ -106,3 +106,22 @@ fn walking_gives_the_same_bones_every_time() {
     // Four seconds speeding up to a run: a few steps a second.
     assert!((4..20).contains(&steps), "{steps} steps");
 }
+
+#[test]
+fn blows_strike_for_part_of_their_clip_and_gestures_do_not() {
+    let body = body();
+    for name in ["sword_attack", "sword_attack_2", "punch", "kick", "sword_heavy"] {
+        let clip = body.clip(name).unwrap();
+        let strike = body.strike(clip).unwrap_or_else(|| panic!("{name} does not strike"));
+        let duration = body.clips()[clip as usize].duration;
+        println!("{name}: {:.2}..{:.2} of {duration:.2} with {:?}", strike.start, strike.end,
+            body.skeleton().names().nth(strike.bone));
+        assert!(strike.start < strike.end && strike.end <= duration, "{name}");
+        assert!(strike.end - strike.start < duration * 0.8, "{name} strikes nearly throughout");
+    }
+    for name in ["idle", "yes", "talk"] {
+        assert!(body.strike(body.clip(name).unwrap()).is_none(), "{name} strikes");
+    }
+    let kick = body.strike(body.clip("kick").unwrap()).unwrap();
+    assert!(body.skeleton().names().nth(kick.bone).flatten().unwrap().starts_with("foot"));
+}

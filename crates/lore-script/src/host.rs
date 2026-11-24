@@ -751,7 +751,43 @@ impl ScriptHost {
     /// (if it died of it) `game.onDeath` functions hear of it on its tick.
     /// Gives back whether it died of it.
     pub fn damage(&mut self, victim: CharacterId, amount: f32, from: Option<CharacterId>, how: &str) -> bool {
+        // A raised guard stops what comes at the player from in front.
+        if victim == CharacterId::PLAYER && self.body.blocking() && self.facing_toward(from) {
+            return false;
+        }
         crate::health_api::hurt(&self.characters, &self.health, victim, amount, from, how)
+    }
+
+    /// Whether `from` is in front of the player, within 60 degrees of
+    /// where they look: what a raised guard covers.
+    fn facing_toward(&self, from: Option<CharacterId>) -> bool {
+        let Some(from) = from else { return false };
+        let (Some(at), Some(motion)) = (self.characters.position(from), self.characters.motion_of(CharacterId::PLAYER)) else {
+            return false;
+        };
+        let way = [at[0] - motion.eye[0], at[2] - motion.eye[2]];
+        let aim = [motion.aim[0], motion.aim[2]];
+        let (lw, la) = ((way[0] * way[0] + way[1] * way[1]).sqrt(), (aim[0] * aim[0] + aim[1] * aim[1]).sqrt());
+        lw > 0.0 && la > 0.0 && (way[0] * aim[0] + way[1] * aim[1]) / (lw * la) > 0.5
+    }
+
+    /// Who the script holds the camera and the player's body on
+    /// (`game.player:lockOn`), if they are still in the world.
+    #[must_use]
+    pub fn locked_on(&self) -> Option<CharacterId> {
+        self.body.locked().filter(|id| self.characters.has(*id))
+    }
+
+    /// Whether the player's guard is up (`game.player:block`).
+    #[must_use]
+    pub fn blocking(&self) -> bool {
+        self.body.blocking()
+    }
+
+    /// Where a character's feet are, or `None` for one not in the world.
+    #[must_use]
+    pub fn character_position(&self, id: CharacterId) -> Option<[f32; 3]> {
+        self.characters.position(id)
     }
 
     /// A character's health and the most it can have, or `None` for one

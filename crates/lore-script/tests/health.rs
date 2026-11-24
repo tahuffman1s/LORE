@@ -98,3 +98,49 @@ fn mistakes_with_health_say_what_to_write() {
     let said = host.last_error().unwrap().message.clone();
     assert!(said.contains("from (who did it)"), "{said}");
 }
+
+#[test]
+fn a_raised_guard_stops_blows_from_in_front_but_not_from_behind() {
+    let mut host = game("game.player:block(true) print(game.player.blocking)");
+    assert_eq!(printed(), ["true"]);
+    let front = host.add_character("Bandit");
+    let behind = host.add_character("Thief");
+    // The player stands at the origin looking along -Z (as a player the
+    // engine has said nothing about does).
+    host.set_position(front, [0.0, 0.0, -2.0]);
+    host.set_position(behind, [0.0, 0.0, 2.0]);
+    assert!(!host.damage(PLAYER, 10.0, Some(front), "sword_attack"));
+    assert_eq!(host.health(PLAYER), Some((100.0, 100.0)));
+    host.damage(PLAYER, 10.0, Some(behind), "sword_attack");
+    assert_eq!(host.health(PLAYER), Some((90.0, 100.0)));
+    // A fall is not stopped by a guard.
+    host.damage(PLAYER, 5.0, None, "fall");
+    assert_eq!(host.health(PLAYER), Some((85.0, 100.0)));
+}
+
+#[test]
+fn locking_on_holds_someone_and_letting_go_holds_no_one() {
+    let mut host = game("");
+    let bandit = host.add_character("Bandit");
+    let _ = bandit;
+    let mut host = game(
+        r#"game.onTick(function()
+            if not game.player.lockedOn then
+                game.player:lockOn(nil)
+            end
+        end)"#,
+    );
+    assert_eq!(host.locked_on(), None);
+    let said = {
+        let _ = log::set_logger(&Capture);
+        let host = ScriptHost::from_source("game.player:lockOn(game.player)", ActionMap::standard());
+        host.last_error().unwrap().message.clone()
+    };
+    assert!(said.contains("cannot hold the camera on the player"), "{said}");
+    let said = {
+        let host = ScriptHost::from_source("game.player:lockOn(\"bandit\")", ActionMap::standard());
+        host.last_error().unwrap().message.clone()
+    };
+    assert!(said.contains("needs a character"), "{said}");
+    tick(&mut host);
+}
