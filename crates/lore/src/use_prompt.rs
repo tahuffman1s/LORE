@@ -4,7 +4,7 @@
 //! It sits under the crosshair while a usable thing is under it and in
 //! reach, with no script code; a thing that is used by holding the button
 //! shows a bar filling up. A game that draws its own says
-//! `game.usePrompt(false)`.
+//! `game.showUsePrompt(false)`.
 
 use lore_script::ScriptHost;
 use lore_ui::{Anchor, Color, TextMeasure, Ui, UiInput};

@@ -53,7 +53,7 @@ pub(crate) const THING_FIELDS: &[&str] = &[
 const THING_SETTINGS: &[&str] = &["useText", "useReach", "useSeconds", "usable"];
 
 /// What a thing can be asked.
-pub(crate) const THING_METHODS: &[&str] = &["onUse", "get"];
+pub(crate) const THING_METHODS: &[&str] = &["onUse", "property"];
 
 /// How close the player's eyes must be to use a thing, by default, in metres.
 pub const DEFAULT_REACH: f32 = 2.5;
@@ -103,6 +103,9 @@ pub struct UseSaid {
     pub seconds: f32,
     /// False while the script has switched the thing off.
     pub usable: bool,
+    /// Whether the script gave it a function to call (`thing:onUse`):
+    /// only then can it be used.
+    pub handled: bool,
 }
 
 impl Default for UseSaid {
@@ -112,6 +115,7 @@ impl Default for UseSaid {
             reach: DEFAULT_REACH,
             seconds: 0.0,
             usable: true,
+            handled: false,
         }
     }
 }
@@ -162,6 +166,7 @@ impl ThingState {
         for thing in self.placed.borrow().iter() {
             if let Some(said) = uses.get(&thing.id)
                 && said.usable
+                && said.handled
             {
                 see(&thing.id, thing.position, said);
             }
@@ -184,7 +189,9 @@ impl ThingState {
         }
         let target = self.target.borrow();
         let uses = said.uses.borrow();
-        let said = uses.get(target.as_deref()?).filter(|said| said.usable)?;
+        let said = uses
+            .get(target.as_deref()?)
+            .filter(|said| said.usable && said.handled)?;
         Some((said.text.clone(), self.progress.get()))
     }
 
@@ -317,15 +324,15 @@ pub(crate) fn things(lua: &Lua, shared: &Rc<Shared>, kind: &Value) -> mlua::Resu
     Ok(list)
 }
 
-/// `game.usePrompt(shown)`.
+/// `game.showUsePrompt(shown)`.
 pub(crate) fn use_prompt(lua: &Lua, shared: &Rc<Shared>, shown: &Value) -> mlua::Result<()> {
     let Value::Boolean(shown) = shown else {
         return Err(fail(
             lua,
             format!(
-                "game.usePrompt takes true or false: whether the engine shows its own prompt \
+                "game.showUsePrompt takes true or false: whether the engine shows its own prompt \
                  for the thing the player can use. It was given {}. Write it like this: \
-                 game.usePrompt(false)",
+                 game.showUsePrompt(false)",
                 describe(shown)
             ),
         ));
@@ -394,7 +401,9 @@ impl UserData for ThingRef {
             Ok(this.placed(lua, "facing")?.1.facing)
         });
         fields.add_field_method_get("usable", |lua, this| {
-            Ok(this.said(lua, "usable")?.is_some_and(|said| said.usable))
+            Ok(this
+                .said(lua, "usable")?
+                .is_some_and(|said| said.usable && said.handled))
         });
         fields.add_field_method_set("usable", |lua, this, value: Value| {
             let Value::Boolean(usable) = value else {
@@ -476,7 +485,7 @@ impl UserData for ThingRef {
                     ),
                 ));
             };
-            this.change(lua, "onUse", |_| {})?;
+            this.change(lua, "onUse", |said| said.handled = true)?;
             let shared = shared_of(lua)?;
             shared
                 .handlers
@@ -485,14 +494,14 @@ impl UserData for ThingRef {
                 .push((Rc::clone(&this.0), handler));
             Ok(())
         });
-        methods.add_function("get", |lua, (this, name): (Value, Value)| {
-            let this = receiver(lua, &this, "get", "(\"locked\")")?;
+        methods.add_function("property", |lua, (this, name): (Value, Value)| {
+            let this = receiver(lua, &this, "property", "(\"locked\")")?;
             let Value::String(name) = &name else {
                 return Err(fail(
                     lua,
                     format!(
-                        "get needs the name of a property, in quotes, but it was given {}. \
-                         Write it like this: door:get(\"locked\")",
+                        "property needs the name of a property, in quotes, but it was given {}. \
+                         Write it like this: door:property(\"locked\")",
                         describe(&name)
                     ),
                 ));
@@ -534,10 +543,15 @@ impl UserData for ThingRef {
                 }
                 let _ = write!(
                     message,
-                    " What can be set is {}. Where a thing stands is in map.toml: move it with \
-                     `lore edit`.",
+                    " What can be set is {}.",
                     THING_SETTINGS.join(", ")
                 );
+                if ["position", "facing", "name", "id", "kind"].contains(&key.as_str()) {
+                    message.push_str(
+                        " Where a thing stands and what it is called are in map.toml: change \
+                         them with `lore edit`.",
+                    );
+                }
                 Err::<(), _>(fail(lua, message))
             },
         );

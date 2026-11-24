@@ -47,8 +47,8 @@ fn a_thing_is_found_by_name_at_the_top_of_the_script_and_read() {
         r#"local door = game.thing("Cellar door")
         assert(door.name == "Cellar door" and door.id == "a1" and door.kind == "door")
         assert(door.position == vector.create(0, 0, -2) and door.facing == 90)
-        assert(door:get("locked") == true and door:get("gold") == 12)
-        assert(door:get("owner") == "Mira" and door:get("colour") == nil)
+        assert(door:property("locked") == true and door:property("gold") == 12)
+        assert(door:property("owner") == "Mira" and door:property("colour") == nil)
         -- By id, and whatever the capitals; the same thing is the same value.
         assert(game.thing("a1") == door and game.thing("cellar DOOR") == door)
         assert(tostring(door) == "Cellar door")
@@ -74,6 +74,11 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
         local chest = game.thing("Old chest")
         chest.useSeconds = 1.5
         chest.useReach = 4
+        chest:onUse(function() end)
+        -- Words alone do not make a thing usable: it needs a function.
+        local other = game.things("chest")[2]
+        other.useText = "Open"
+        assert(not other.usable)
         game.onTick(function()
             local meant = game.player.lookingAt
             print(opened, meant and meant.name or "nothing", game.player.useProgress)
@@ -91,6 +96,7 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
                 reach: DEFAULT_REACH,
                 seconds: 0.0,
                 usable: true,
+                handled: true,
             }
         )
     );
@@ -110,7 +116,7 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
     // Switched off by its own function: no longer usable, no prompt.
     assert_eq!(usable(&host).len(), 1);
     assert_eq!(host.use_prompt(), None);
-    // A thing with no function is used without a word.
+    // A thing with no function is not usable, and using it is no mistake.
     host.use_thing("c3");
     host.use_thing("nothing");
     assert_eq!(host.last_error(), None);
@@ -118,7 +124,8 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
 
 #[test]
 fn a_game_can_draw_its_own_prompt() {
-    let mut host = game("game.usePrompt(false)\ngame.thing(\"Old chest\"):onUse(function() end)");
+    let mut host =
+        game("game.showUsePrompt(false)\ngame.thing(\"Old chest\"):onUse(function() end)");
     host.set_use_target(Some("b2"), 0.0);
     assert_eq!(host.use_prompt(), None);
     assert_eq!(usable(&host).len(), 1);
@@ -173,7 +180,10 @@ fn mistakes_with_things_say_what_to_write() {
     assert!(message.contains("Did you mean useText?"), "{message}");
 
     let message = said("game.thing(\"a1\").position = vector.create(0, 0, 0)");
-    assert!(message.contains("move it with `lore edit`"), "{message}");
+    assert!(
+        message.contains("change them with `lore edit`"),
+        "{message}"
+    );
 
     let message = said("print(game.thing(\"a1\").colour)");
     assert!(
@@ -184,8 +194,8 @@ fn mistakes_with_things_say_what_to_write() {
     let message = said("game.thing(\"a1\").useSeconds = \"long\"");
     assert!(message.contains("`useSeconds` needs a number"), "{message}");
 
-    let message = said("game.usePrompt(0)");
-    assert!(message.contains("game.usePrompt(false)"), "{message}");
+    let message = said("game.showUsePrompt(0)");
+    assert!(message.contains("game.showUsePrompt(false)"), "{message}");
 
     // With nothing placed, the way to place something is said.
     let empty = ScriptHost::from_source("game.thing(\"Door\")", ActionMap::standard());

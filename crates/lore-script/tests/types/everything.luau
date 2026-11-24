@@ -508,7 +508,7 @@ for _, placed: Thing in game.things() do
     placed.useReach = 3
     placed.useSeconds = 1.5
     placed.usable = true
-    placed:onUse(function(used: Thing) print(used.useText, used.useReach, used.useSeconds, used:get("locked")) end)
+    placed:onUse(function(used: Thing) print(used.useText, used.useReach, used.useSeconds, used:property("locked")) end)
 end
 local chests: { Thing } = game.things("chest")
 print(#chests)
@@ -516,7 +516,7 @@ if false then
     local door: Thing = game.thing("Cellar door")
     print(door)
 end
-game.usePrompt(true)
+game.showUsePrompt(true)
 local meant: Thing? = game.player.lookingAt
 print(meant, game.player.useProgress)
 game.player:hold("sword")

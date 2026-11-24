@@ -178,13 +178,15 @@ declare extern type Character with
     blocking: boolean
 
     --- The usable thing the player would use if they pressed "interact"
-    --- now: the one under the crosshair and in reach, or nil. The engine
-    --- shows its prompt for it unless `game.usePrompt(false)`.
+    --- now: the one under the crosshair and in reach, or nil. It is worked
+    --- out once a tick. The engine shows its prompt for it unless
+    --- `game.showUsePrompt(false)`.
     --- Example: if game.player.lookingAt then hint.text = game.player.lookingAt.useText end
     lookingAt: Thing?
 
     --- How far through holding "interact" on a thing with `useSeconds`
-    --- the player is, from 0 to 1. 0 when nothing is being held.
+    --- the player is, from 0 to 1, as of the last tick. 0 when nothing is
+    --- being held.
     --- Example: holdBar.value = game.player.useProgress
     useProgress: number
 
@@ -395,7 +397,9 @@ end
 --- Something placed in the game's level: an entry of its `map.toml`, which
 --- `lore edit` writes. Find one with `game.thing`. Where a thing stands and
 --- what it is called are the map's to say; what it is *for* is the
---- script's.
+--- script's. `onUse`, `useText`, `useReach`, `useSeconds` and `usable` are
+--- said again each time the script loads, so write them at the top of the
+--- file, not inside a function that runs once.
 --- Example: local door = game.thing("Cellar door")
 declare extern type Thing with
     --- What the thing was called in `lore edit`. "" if it was given no name.
@@ -422,45 +426,48 @@ declare extern type Thing with
     facing: number
 
     --- The word or two shown beside the button while the player can use
-    --- the thing: "Use" until the script says otherwise. Setting it makes
-    --- the thing usable. Up to 60 characters.
+    --- the thing: "Use" until the script says otherwise. Up to 60
+    --- characters. It does nothing until the thing has an `onUse` function.
     --- Example: door.useText = "Open"
     useText: string
 
-    --- How close the player's eyes must be to use the thing, in metres,
-    --- from 0.5 to 50: 2.5 until the script says otherwise.
+    --- How close the player's eyes must be to use the thing, in metres:
+    --- 2.5 until the script says otherwise. From 0.5 to 50; a number
+    --- outside that is taken as the nearest end.
     --- Example: lever.useReach = 1.5
     useReach: number
 
-    --- How long the use button is held to use the thing, in seconds, from
-    --- 0 (a press, the usual) to 30. The engine's prompt shows a bar
-    --- filling up, and letting go starts it over.
+    --- How long the use button is held to use the thing, in seconds: 0 (a
+    --- press) until the script says otherwise. From 0 to 30; a number
+    --- outside that is taken as the nearest end. The engine's prompt shows
+    --- a bar filling up, and letting go starts it over.
     --- Example: chest.useSeconds = 1.5
     useSeconds: number
 
-    --- Whether the player can use the thing now. It becomes true when the
-    --- script gives the thing an `onUse` function or sets one of the three
-    --- above; set it to false to switch the thing off (a lever already
-    --- pulled) and true to switch it on again.
+    --- Whether the player can use the thing now: true once it has an
+    --- `onUse` function. Set it to false to switch the thing off (a lever
+    --- already pulled) and to true to switch it on again. A thing with no
+    --- `onUse` function is never usable.
     --- Example: lever:onUse(function() lever.usable = false end)
     usable: boolean
 
     --- Calls `handler` each time the player uses the thing: they look at
-    --- it from within reach (in either view) and press the "interact"
-    --- button (E, or Y on a gamepad), or hold it for `useSeconds`. This
-    --- one line makes the thing usable: the engine finds which thing the
-    --- player means, shows `useText` beside the key or button they have
-    --- bound, and calls the function. `lore check` uses every usable thing
-    --- once.
+    --- it from within reach (in either view) and press the button bound to
+    --- "interact" (E, or Y on a gamepad, unless the player changed it), or
+    --- hold it for `useSeconds`. This one line makes the thing usable: the
+    --- engine finds which thing the player means, shows `useText` beside
+    --- the key or button, and calls the function, in the game's tick like
+    --- every other rule. Each call adds another function; all are called.
+    --- `lore check` uses every usable thing once.
     --- Example: door:onUse(function() print("It creaks open.") end)
     --- Example: for _, chest in game.things("chest") do chest.useText = "Open" chest:onUse(function(used) print(used.name) end) end
     function onUse(self, handler: (thing: Thing) -> ()): ()
 
-    --- A property the thing was given in the map (`lore edit`, or the
-    --- `[entity.properties]` table of map.toml): text, a number, true or
+    --- A property the thing was given in the map (in `lore edit`, or under
+    --- the thing's `properties` in map.toml): text, a number, true or
     --- false, or nil if it has none of that name.
-    --- Example: if door:get("locked") then door.useText = "Locked" end
-    function get(self, property: string): (string | number | boolean)?
+    --- Example: if door:property("locked") then door.useText = "Locked" end
+    function property(self, name: string): (string | number | boolean)?
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -1441,16 +1448,17 @@ declare game: {
     thing: (name: string) -> Thing,
 
     --- Everything placed in the level, in the order of the map file, or
-    --- only what was placed as `kind`.
+    --- only what was placed as `kind`. A kind nothing was placed as gives
+    --- an empty list, not an error.
     --- Example: for _, chest in game.things("chest") do chest:onUse(open) end
     things: (kind: string?) -> { Thing },
 
-    --- Whether the engine shows its own prompt (the key or button, and
-    --- the thing's `useText`) while the player can use something. It does
+    --- Shows or hides the engine's own prompt (the key or button, and the
+    --- thing's `useText`) while the player can use something. It is shown
     --- until a script says false: do that to draw your own from
     --- `game.player.lookingAt` and `game.player.useProgress`.
-    --- Example: game.usePrompt(false)
-    usePrompt: (shown: boolean) -> (),
+    --- Example: game.showUsePrompt(false)
+    showUsePrompt: (shown: boolean) -> (),
 
     --- A kind of fluid, by name; it is made the first time it is asked for.
     --- Names are trimmed and in lower case ("Honey" is "honey"). Kind "water"

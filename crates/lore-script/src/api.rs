@@ -54,7 +54,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "quit",
     "thing",
     "things",
-    "usePrompt",
+    "showUsePrompt",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -413,7 +413,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
     let state = Rc::clone(shared);
     game.set(
-        "usePrompt",
+        "showUsePrompt",
         lua.create_function(move |lua, shown: Value| {
             crate::thing_api::use_prompt(lua, &state, &shown)
         })?,

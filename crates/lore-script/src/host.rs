@@ -1383,7 +1383,7 @@ impl ScriptHost {
 
     /// The words to show for the thing the player can use now, and how far
     /// through holding the button they are: `None` when there is nothing
-    /// to use, or the script draws its own prompt (`game.usePrompt(false)`).
+    /// to use, or the script draws its own prompt (`game.showUsePrompt(false)`).
     #[must_use]
     pub fn use_prompt(&self) -> Option<(String, f32)> {
         let version = self.running.as_ref()?;
