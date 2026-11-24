@@ -54,6 +54,19 @@ pub fn is_pack(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case(EXTENSION))
 }
 
+/// Where a packaged game writes what went wrong in its scripts, best first:
+/// beside the pack, as `Game-problems.log` for `Game.lpk`, and, for a game
+/// installed where its player may not write, in the player's own `lore`
+/// folder.
+#[must_use]
+pub fn problem_logs(pack: &Path) -> Vec<PathBuf> {
+    let mut name = pack.file_stem().unwrap_or_default().to_owned();
+    name.push("-problems.log");
+    let mut logs = vec![pack.with_file_name(&name)];
+    logs.extend(crate::controls::player_file("", &name.to_string_lossy()));
+    logs
+}
+
 /// A game opened from a pack.
 #[derive(Debug)]
 pub struct PackedGame {
@@ -231,6 +244,7 @@ pub fn open_with_settings(
     } else {
         game
     };
+    let game = game.with_problem_log(problem_logs(pack));
     let level = if opened.contains(LEVEL_FILE) {
         Some(opened.read(LEVEL_FILE)?)
     } else {
@@ -334,6 +348,68 @@ mod tests {
         assert!(is_pack(Path::new("GAME.LPK")));
         assert!(!is_pack(Path::new("my-game")));
         assert!(!is_pack(Path::new("main.luau")));
+    }
+
+    #[test]
+    fn a_script_that_fails_while_played_is_logged_and_the_player_is_told() {
+        use lore_input::InputFrame;
+        use lore_ui::Draw;
+
+        let folder = scratch("problem");
+        let made = pack(
+            &folder,
+            &[(
+                "main.luau",
+                "game.onTick(function() local secret = nil; secret.plan = 1 end)",
+            )],
+        );
+        let mut packed = open(&made, &ActionMap::default()).unwrap();
+        let words = |game: &mut ScriptGame| -> Vec<String> {
+            let mut frame = crate::game::Frame::new(0.0);
+            game.frame(&mut frame);
+            frame
+                .take_ui()
+                .draw()
+                .iter()
+                .filter_map(|draw| match draw {
+                    Draw::Text { text, .. } => Some(text.to_owned()),
+                    Draw::Rect { .. } | Draw::Turned { .. } => None,
+                })
+                .collect()
+        };
+        assert!(words(&mut packed.game).is_empty(), "nothing is wrong yet");
+        let log = folder.join("Game-problems.log");
+        assert!(!log.exists());
+
+        packed.game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let shown = words(&mut packed.game).join(" ");
+        assert!(shown.contains("This game has hit a problem"), "{shown}");
+        assert!(shown.contains("Game-problems.log"), "{shown}");
+        // None of the script is shown to someone who cannot fix it.
+        assert!(!shown.contains("secret"), "{shown}");
+
+        let written = fs::read_to_string(&log).unwrap();
+        assert!(
+            written.contains("Script error in main.luau, line 1"),
+            "{written}"
+        );
+        assert!(written.contains("secret"), "{written}");
+
+        // The same mistake on the next tick is not written again.
+        packed.game.tick(&InputFrame::default(), 1.0 / 60.0);
+        let _ = words(&mut packed.game);
+        assert_eq!(fs::read_to_string(&log).unwrap(), written);
+    }
+
+    #[test]
+    fn the_problem_log_is_beside_the_pack_first() {
+        let logs = problem_logs(Path::new("dist/Zombie Night.lpk"));
+        assert_eq!(logs[0], Path::new("dist/Zombie Night-problems.log"));
+        assert!(
+            logs.iter()
+                .skip(1)
+                .all(|log| log.ends_with("lore/Zombie Night-problems.log"))
+        );
     }
 
     #[test]

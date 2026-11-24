@@ -127,6 +127,172 @@ impl ErrorOverlay {
     }
 }
 
+/// How long the notice of a problem stays up after the problem is new.
+const NOTICE_SECONDS: f32 = 12.0;
+/// The most problems written to one run's log: a game that breaks every
+/// tick in a new way must not fill a player's disk.
+const MOST_LOGGED: usize = 100;
+/// What a player is told. The script's own words stay in the log.
+const NOTICE: &str = "This game has hit a problem and may not work as it should.";
+
+/// Tells the player of a packaged game that its script has failed, and
+/// writes the error where the game's maker can be sent it.
+///
+/// A player cannot fix a script, so none of the error is put on the screen:
+/// one short notice names the log file, stays up for
+/// [`NOTICE_SECONDS`] and comes back only when a different problem happens.
+pub(crate) struct ProblemNotice {
+    /// Where the log goes: the first of these that can be written.
+    places: Vec<std::path::PathBuf>,
+    /// The log, once the first problem has been written to it.
+    log: Option<std::path::PathBuf>,
+    /// The problems written so far this run.
+    seen: Vec<ScriptError>,
+    /// When the newest problem was first seen.
+    since: Option<std::time::Instant>,
+    /// The window size the notice was laid out for.
+    screen: [u32; 2],
+    ui: Ui,
+    measure: Box<dyn TextMeasure>,
+}
+
+impl fmt::Debug for ProblemNotice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProblemNotice")
+            .field("places", &self.places)
+            .field("log", &self.log)
+            .field("seen", &self.seen.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProblemNotice {
+    /// A notice whose log is the first of `places` that can be written.
+    pub(crate) fn new(places: Vec<std::path::PathBuf>) -> Self {
+        Self {
+            places,
+            log: None,
+            seen: Vec::new(),
+            since: None,
+            screen: [0, 0],
+            ui: Ui::default(),
+            measure: measure(),
+        }
+    }
+
+    /// Takes note of `error`, the script's latest: one not seen before this
+    /// run is written to the log and puts the notice up. Says whether it
+    /// was new.
+    pub(crate) fn note(&mut self, error: Option<&ScriptError>) -> bool {
+        let Some(error) = error else {
+            return false;
+        };
+        if self.seen.contains(error) || self.seen.len() >= MOST_LOGGED {
+            return false;
+        }
+        self.write(error);
+        self.seen.push(error.clone());
+        self.since = Some(std::time::Instant::now());
+        // Laid out again, since the log may only now have a place.
+        self.screen = [0, 0];
+        true
+    }
+
+    /// Adds `error` to the log. The first problem of a run starts the file
+    /// again, so the log a player sends is about the run that went wrong.
+    fn write(&mut self, error: &ScriptError) {
+        use std::io::Write as _;
+
+        let text = format!("{error}\n\n");
+        if let Some(log) = &self.log {
+            let added = std::fs::OpenOptions::new()
+                .append(true)
+                .open(log)
+                .and_then(|mut file| file.write_all(text.as_bytes()));
+            if let Err(problem) = added {
+                log::warn!("{} could not be added to: {problem}.", log.display());
+            }
+            return;
+        }
+        let heading = format!(
+            "What went wrong in this game's scripts the last time it was played. Send \
+             this file to the game's maker.\nLORE {}\n\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        for place in &self.places {
+            if let Some(folder) = place.parent() {
+                // A folder that is already there is no problem; one that
+                // cannot be made fails the write below.
+                let _ = std::fs::create_dir_all(folder);
+            }
+            if std::fs::write(place, format!("{heading}{text}")).is_ok() {
+                self.log = Some(place.clone());
+                return;
+            }
+        }
+        log::warn!("The game's problems could not be written to a log file; they are only here.");
+    }
+
+    /// The lines of the notice, none wider than `width`.
+    fn lines(&self, width: f32) -> Vec<Line> {
+        let mut lines = Vec::new();
+        let mut add = |text: &str, size: f32, color: Color| {
+            let mut wrapped = Vec::new();
+            wrap(text, width, size, self.measure.as_ref(), &mut wrapped);
+            lines.extend(wrapped.into_iter().map(|text| Line { text, size, color }));
+        };
+        add(NOTICE, TEXT_SIZE, MESSAGE);
+        match &self.log {
+            Some(log) => add(
+                &format!("Its maker can find the details in {}", log.display()),
+                TEXT_SIZE,
+                QUIET,
+            ),
+            None => add(
+                "Its maker can find the details by starting it from a terminal.",
+                TEXT_SIZE,
+                QUIET,
+            ),
+        }
+        lines
+    }
+
+    /// Notes `error` and draws the notice over this frame while it is new.
+    pub(crate) fn show(&mut self, error: Option<&ScriptError>, frame: &mut Frame) {
+        self.note(error);
+        let Some(since) = self.since else {
+            return;
+        };
+        if since.elapsed().as_secs_f32() > NOTICE_SECONDS {
+            self.since = None;
+            return;
+        }
+        let screen = frame.screen_size();
+        if screen != self.screen {
+            let (wide, width) = panel_width(screen);
+            let lines = self.lines(width);
+            self.ui = Ui::default();
+            panel(&mut self.ui, 0.0, wide, &lines);
+            self.screen = screen;
+        }
+        self.ui.update(&UiInput::default(), 0.0, screen);
+        frame.draw_ui(&self.ui);
+    }
+}
+
+/// How wide a panel is on a `screen` of that many pixels, and how wide its
+/// text may be.
+fn panel_width(screen: [u32; 2]) -> (f32, f32) {
+    // The UI lays out on a screen 1080 high and keeps its middle 90%.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screens are far smaller than 2^24 pixels"
+    )]
+    let across = screen[0] as f32 * 1080.0 / screen[1].max(1) as f32;
+    let wide = (across * 0.9).min(WIDEST);
+    (wide, (wide - 2.0 * PADDING) * SLACK)
+}
+
 /// A UI that shows `error` and the first of `shaders` in the top-left
 /// corner of a `screen` of that many pixels, one under the other.
 fn panels(
@@ -136,14 +302,7 @@ fn panels(
     measure: &dyn TextMeasure,
 ) -> Ui {
     let mut ui = Ui::default();
-    // The UI lays out on a screen 1080 high and keeps its middle 90%.
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "screens are far smaller than 2^24 pixels"
-    )]
-    let across = screen[0] as f32 * 1080.0 / screen[1].max(1) as f32;
-    let wide = (across * 0.9).min(WIDEST);
-    let width = (wide - 2.0 * PADDING) * SLACK;
+    let (wide, width) = panel_width(screen);
 
     let mut top = 0.0;
     let script = error.map(|error| lines(error, width, measure));
