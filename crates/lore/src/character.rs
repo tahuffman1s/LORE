@@ -105,6 +105,11 @@ const HEAD_CLEAR: f32 = 0.3;
 /// looking down does not look into the chest.
 const FIRST_PERSON_BACK: f32 = 0.14;
 
+/// How much further back it goes when looking straight down, eased in as
+/// the look tips down, so the camera is never over the collar and sees the
+/// legs and feet past the chest instead of into where the neck was.
+const LOOK_DOWN_BACK: f32 = 0.35;
+
 /// The player's body and camera.
 #[derive(Debug, Clone)]
 pub(crate) struct Character {
@@ -733,8 +738,15 @@ impl Character {
     }
 
     /// The body for a frame `alpha` of the way from the last tick to this
-    /// one, with its feet at `feet` and the camera at `camera`.
-    pub(crate) fn figures(&mut self, alpha: f32, feet: [f32; 3], camera: [f32; 3]) -> Drawn<'_> {
+    /// one, with its feet at `feet` and the camera at `camera`, looking
+    /// `pitch` radians up (negative: down).
+    pub(crate) fn figures(
+        &mut self,
+        alpha: f32,
+        feet: [f32; 3],
+        camera: [f32; 3],
+        pitch: f32,
+    ) -> Drawn<'_> {
         for ((out, a), b) in self
             .blended
             .iter_mut()
@@ -759,7 +771,8 @@ impl Character {
         // a swing leans the body forward, and with the feet held still the
         // shoulders would come up in front of the camera.
         let first = 1.0 - third;
-        let back = FIRST_PERSON_BACK * first;
+        let down = libm::sinf((-pitch).clamp(0.0, std::f32::consts::FRAC_PI_2));
+        let back = (FIRST_PERSON_BACK + LOOK_DOWN_BACK * down * down) * first;
         let (fs, fc) = (libm::sinf(yaw), libm::cosf(yaw));
         let [hx, _, hz, _] = self
             .head
@@ -997,7 +1010,7 @@ mod tests {
         let level = Level::from_triangles(&[]);
         character.tick(&player, (0.0, 0.0), &level, 1.0 / 60.0, |_, _| {});
         let eye = player.eye_position();
-        let drawn = character.figures(1.0, player.position, eye);
+        let drawn = character.figures(1.0, player.position, eye, 0.0);
         assert!(drawn.seen);
         assert_ne!(
             drawn.seen_joints, drawn.shadow_joints,
@@ -1020,7 +1033,7 @@ mod tests {
                 continue;
             }
             let eye = player.eye_position();
-            let transform = character.figures(1.0, player.position, eye).transform;
+            let transform = character.figures(1.0, player.position, eye, 0.0).transform;
             let [mx, _, mz, at] = transform;
             // Where the head is in the pose itself, before the picture's
             // copy squeezes it away.
@@ -1048,7 +1061,7 @@ mod tests {
         let level = Level::from_triangles(&[]);
         let eye = player.eye_position();
         character.tick(&player, (0.0, -1.2), &level, 1.0 / 60.0, |_, _| {});
-        let first = character.figures(1.0, player.position, eye);
+        let first = character.figures(1.0, player.position, eye, 0.0);
         assert_ne!(first.seen_joints, first.shadow_joints, "first person");
         // Halfway through a switch the camera is well clear: the head is drawn.
         character.view = View::Third;
@@ -1057,11 +1070,43 @@ mod tests {
         }
         let camera = character.camera(1.0, eye, (0.0, 0.0), &level);
         assert!(character.third > 0.0 && character.third < 1.0);
-        let midway = character.figures(1.0, player.position, camera);
+        let midway = character.figures(1.0, player.position, camera, 0.0);
         assert_eq!(midway.seen_joints, midway.shadow_joints, "midway");
         // The same frame with the camera at the eyes leaves it out again.
-        let close = character.figures(1.0, player.position, eye);
+        let close = character.figures(1.0, player.position, eye, 0.0);
         assert_ne!(close.seen_joints, close.shadow_joints, "camera at the eyes");
+    }
+
+    #[test]
+    fn looking_straight_down_in_a_sprint_keeps_the_collar_behind_the_camera() {
+        let mut character = Character::mannequin().unwrap();
+        let mut player = standing();
+        player.grounded = true;
+        player.velocity = [0.0, 0.0, -7.5];
+        let level = Level::from_triangles(&[]);
+        let neck = character.neck.unwrap();
+        let down = -std::f32::consts::FRAC_PI_2;
+        for tick in 0..120 {
+            character.tick(&player, (0.0, down), &level, 1.0 / 60.0, |_, _| {});
+            if tick < 30 {
+                continue;
+            }
+            let eye = player.eye_position();
+            let transform = character.figures(1.0, player.position, eye, down).transform;
+            let [mx, _, mz, at] = transform;
+            let mut placed = character.placed.clone();
+            character
+                .body
+                .skeleton()
+                .place(&character.pose, &mut placed);
+            let [nx, _, nz, _] = placed[neck][3];
+            // Behind is +Z: the camera looks along -Z.
+            let behind = at[2] + mx[2] * nx + mz[2] * nz - eye[2];
+            assert!(
+                behind > 0.3,
+                "tick {tick}: the neck is only {behind} m behind the camera"
+            );
+        }
     }
 
     #[test]
