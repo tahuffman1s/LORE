@@ -209,6 +209,9 @@ pub(crate) struct View {
     /// degrees, when the view has its own: the editor's camera does. With
     /// `None` it is the player's setting.
     pub(crate) fov_degrees: Option<f32>,
+    /// A script's lens: a field of view in degrees, and how far from the
+    /// view's own toward it the picture is, from 0 to 1.
+    pub(crate) lens: Option<(f32, f32)>,
 }
 
 impl Default for Frame {
@@ -722,6 +725,26 @@ impl Frame {
             yaw,
             pitch,
             fov_degrees: None,
+            lens: None,
+        });
+    }
+
+    /// Draws the world as [`look_from`](Self::look_from) does, through a
+    /// lens: `weight` of the way (0 to 1) from the player's field of view
+    /// to `degrees`, as a script's shot asks while the view travels to it.
+    pub(crate) fn look_from_through(
+        &mut self,
+        position: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        (degrees, weight): (f32, f32),
+    ) {
+        self.view = Some(View {
+            position,
+            yaw,
+            pitch,
+            fov_degrees: None,
+            lens: (weight > 0.0).then_some((degrees, weight.min(1.0))),
         });
     }
 
@@ -742,6 +765,7 @@ impl Frame {
             yaw,
             pitch,
             fov_degrees: Some(fov_degrees),
+            lens: None,
         });
     }
 

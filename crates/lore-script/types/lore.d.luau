@@ -1416,6 +1416,49 @@ declare game: {
         reset: (seconds: number?) -> (),
     },
 
+    --- Where the world is seen from. It is the player's own view (their
+    --- eyes, or over their shoulder: `game.player:setView`) until a script
+    --- says a shot, and again after `game.camera.reset`.
+    ---
+    --- A shot changes only the picture. The player still walks and looks
+    --- about as before, and their whole body is drawn while the camera is
+    --- away from them. The shot is kept when the script is changed and
+    --- reloaded.
+    camera: {
+        --- Puts the camera at `from`, in metres, where it stays, looking at
+        --- `at`: a place, or a character it turns to keep in view.
+        --- `seconds` is how long the view takes to travel there (it cuts if
+        --- not given, up to 600). `fov` is how many degrees are seen from
+        --- the bottom of the picture to the top, from 10 to 120 (the
+        --- player's own setting if not given): a small number is a long lens.
+        --- Saying the same shot again, as a script may every tick, does
+        --- not start its travel over.
+        --- Example: game.camera.fixed(vector.create(0, 6, 12), game.player)
+        --- Example: game.camera.fixed(vector.create(0, 2, 0), vector.create(10, 1, 0), { seconds = 2, fov = 40 })
+        fixed: (from: vector, at: vector | Character, options: { seconds: number?, fov: number? }?) -> (),
+
+        --- Trails `who` wherever they go, looking at them: `distance`
+        --- metres away (4 if not given, from 0.5 to 100) and `height`
+        --- metres above their feet (2.2 if not given, from -50 to 100).
+        --- `seconds` is how long the view takes to travel there (it cuts
+        --- if not given, up to 600), and `fov` how many degrees are seen
+        --- from the bottom of the picture to the top, from 10 to 120 (the
+        --- player's own setting if not given). It does not yet keep out
+        --- of walls.
+        --- Example: game.onStart(function() game.camera.follow(game.player, { distance = 8, height = 5 }) end)
+        --- Example: game.camera.follow(game.player, { seconds = 1 })
+        follow: (who: Character, options: { distance: number?, height: number?, seconds: number?, fov: number? }?) -> (),
+
+        --- Gives the view back to the player, with their own field of
+        --- view, travelling there over `seconds` (it cuts if not given).
+        --- Example: game.camera.reset(1)
+        reset: (seconds: number?) -> (),
+
+        --- The shot the script last said: "player", "fixed" or "follow".
+        --- Example: if game.camera.shot() ~= "player" then game.camera.reset() end
+        shot: () -> ("player" | "fixed" | "follow"),
+    },
+
     --- Lamps the game has.
     lamps: {
         --- The names of every lamp the game has: the level's and the

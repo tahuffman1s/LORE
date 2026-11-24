@@ -56,6 +56,7 @@ mod script_game;
 mod script_hud;
 pub mod settings;
 mod shooting;
+mod shot;
 mod sound_output;
 pub mod sounds;
 mod standin;

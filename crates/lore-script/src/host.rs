@@ -163,6 +163,8 @@ pub struct ScriptHost {
     health: Rc<crate::health_api::HealthState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
+    /// Where the script said the world is seen from; it outlives a reload too.
+    camera: Rc<crate::camera_api::CameraState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -356,6 +358,7 @@ impl ScriptHost {
             health: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
+            camera: Rc::default(),
             versions: 0,
             tools: Rc::default(),
             settings: Rc::new(SettingsState::new(settings)),
@@ -1044,6 +1047,14 @@ impl ScriptHost {
         self.lighting.take()
     }
 
+    /// Where the script wants the world seen from (`game.camera.fixed`,
+    /// `game.camera.follow`, `game.camera.reset`): the player's own view
+    /// until it says a shot.
+    #[must_use]
+    pub fn camera(&self) -> crate::CameraSaid {
+        self.camera.get()
+    }
+
     /// How the picture is graded, and over how many seconds to fade to it,
     /// if the script said it since this was last asked (`game.look.set`,
     /// `game.look.reset`).
@@ -1657,6 +1668,7 @@ impl ScriptHost {
             health: Rc::clone(&self.health),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
+            camera: Rc::clone(&self.camera),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             images: Rc::clone(&self.images),
