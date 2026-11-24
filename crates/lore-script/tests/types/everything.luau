@@ -391,7 +391,7 @@ game.onTick(function()
     print(view, facing, model, #clips)
     game.player:setFacing(if game.input.pressed("aim") then "aim" else "move")
     if game.input.justPressed("melee") and not game.player:isPlaying("sword_attack") then
-        game.player:play("sword_attack", { upperBody = true, speed = 1.2, fade = 0.1, loop = false })
+        game.player:play("sword_attack", { keepWalking = true, speed = 1.2, fade = 0.1, loop = false })
     end
     if game.input.justPressed("interact") then
         game.player:play("wave")

@@ -44,6 +44,13 @@ fn gaits_are_as_fast_as_people_walk_and_run() {
 }
 
 #[test]
+fn both_mannequins_have_every_standard_bone() {
+    assert!(body().skeleton().missing_standard_bones().is_empty());
+    let female = Skeleton::from_scene(&Scene::load(FEMALE).unwrap());
+    assert!(female.missing_standard_bones().is_empty());
+}
+
+#[test]
 fn the_mannequin_faces_the_way_gltf_asks() {
     assert_eq!(body().facing(), 1.0);
 }

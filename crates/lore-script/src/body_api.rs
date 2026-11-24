@@ -9,7 +9,7 @@
 //! game.player:setCamera({ distance = 4 }) -- any of distance, height, shoulder
 //! game.player:setModel("mannequin_female")
 //! game.player:play("wave")                -- once, then back to moving about
-//! game.player:play("sword_attack", { upperBody = true })
+//! game.player:play("sword_attack", { keepWalking = true })
 //! game.player:onMoment("left_foot_down", function(clip) ... end)
 //! ```
 //!
@@ -387,7 +387,10 @@ pub(crate) fn set_model(lua: &Lua, shared: &Rc<Shared>, model: &Value) -> mlua::
             ),
         ));
     };
-    let name = name.to_string_lossy().trim().to_owned();
+    let mut name = name.to_string_lossy().trim().to_owned();
+    if let Some(built_in) = BUILT_IN_MODELS.iter().find(|m| m.eq_ignore_ascii_case(&name)) {
+        (*built_in).clone_into(&mut name);
+    }
     let is_file =
         name.to_ascii_lowercase().ends_with(".glb") || name.to_ascii_lowercase().ends_with(".gltf");
     if !is_file && !BUILT_IN_MODELS.contains(&name.as_str()) {
@@ -440,9 +443,16 @@ fn clip_name(
     if let Some(near) = closest(&name, clips.iter().map(String::as_str)) {
         let _ = write!(message, " Did you mean \"{near}\"?");
     }
+    let shown: Vec<&str> = clips.iter().take(8).map(String::as_str).collect();
+    let more = if clips.len() > shown.len() {
+        format!(" and {} more (print game.player.clips for all)", clips.len() - shown.len())
+    } else {
+        String::new()
+    };
     let _ = write!(
         message,
-        " Its clips are listed in the docs (or print game.player.clips). Write it like this: {example}"
+        " It has {}{more}. Write it like this: {example}",
+        shown.join(", ")
     );
     Err(fail(lua, message))
 }
@@ -452,15 +462,15 @@ pub(crate) fn clip_list(lua: &Lua, shared: &Shared) -> mlua::Result<mlua::Table>
     lua.create_sequence_from(shared.body.clips.borrow().iter().cloned())
 }
 
-/// `game.player:play(clip, { fade, speed, loop, upperBody })`.
+/// `game.player:play(clip, { fade, speed, loop, keepWalking })`.
 pub(crate) fn play(
     lua: &Lua,
     shared: &Rc<Shared>,
     clip: &Value,
     options: &Value,
 ) -> mlua::Result<()> {
-    const EXAMPLE: &str = "game.player:play(\"wave\", { upperBody = true })";
-    const OPTIONS: [&str; 4] = ["fade", "speed", "loop", "upperBody"];
+    const EXAMPLE: &str = "game.player:play(\"wave\", { keepWalking = true })";
+    const OPTIONS: [&str; 4] = ["fade", "speed", "loop", "keepWalking"];
     let clip = clip_name(lua, shared, clip, "play", EXAMPLE)?;
     let (mut fade, mut speed, mut looping, mut upper_body) = (0.2_f32, 1.0_f32, None, false);
     match options {
@@ -517,7 +527,7 @@ pub(crate) fn play(
                     "fade" => fade = number("a number of seconds (0 for at once)", 0.0, 10.0)?,
                     "speed" => speed = number("a number: 1 as made, 2 twice as fast", 0.0, 10.0)?,
                     "loop" => looping = Some(flag("loop")?),
-                    "upperBody" => upper_body = flag("upperBody")?,
+                    "keepWalking" => upper_body = flag("keepWalking")?,
                     other => {
                         let mut message = format!("game.player:play has no option \"{other}\".");
                         if let Some(near) = closest(other, OPTIONS) {
@@ -525,9 +535,10 @@ pub(crate) fn play(
                         }
                         let _ = write!(
                             message,
-                            " Its options are fade (seconds), speed (1 as made), loop (true to \
-                             keep playing) and upperBody (true to leave the legs walking). \
-                             Write it like this: {EXAMPLE}"
+                            " Its options are fade (seconds, 0.2 if not given), speed (1 as \
+                             made), loop (true to keep playing) and keepWalking (true to move \
+                             only from the waist up, so the legs keep walking). Write it like \
+                             this: {EXAMPLE}"
                         );
                         return Err(fail(lua, message));
                     }

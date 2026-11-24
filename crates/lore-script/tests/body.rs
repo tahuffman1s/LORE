@@ -89,8 +89,8 @@ fn mistakes_say_what_to_write() {
     assert!(said.contains("true or false"), "{said}");
     let said = mistake(r#"game.player:setModel("manequin")"#);
     assert!(said.contains("Did you mean \"mannequin\"?"), "{said}");
-    let said = mistake(r#"game.player:play("wave", { upperbody = true })"#);
-    assert!(said.contains("Did you mean \"upperBody\"?"), "{said}");
+    let said = mistake(r#"game.player:play("wave", { keepwalking = true })"#);
+    assert!(said.contains("Did you mean \"keepWalking\"?"), "{said}");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn plays_and_stops_reach_the_engine_and_moments_reach_the_script() {
         r#"game.player:onMoment("hit", function(clip) print("hit by " .. clip) end)
         game.onTick(function()
             if not game.player:isPlaying("sword_attack") then
-                game.player:play("sword_attack", { upperBody = true, speed = 1.5 })
+                game.player:play("sword_attack", { keepWalking = true, speed = 1.5 })
             end
         end)"#,
     );

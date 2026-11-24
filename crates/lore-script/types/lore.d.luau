@@ -172,15 +172,18 @@ declare extern type Character with
     function setModel(self, model: string): ()
 
     --- Plays one of the body's clips (see `game.player.clips`) over its
-    --- moving about, then goes back to it. Options: `fade` (seconds, 0.2),
-    --- `speed` (1 as made), `loop` (true to keep playing until stopped) and
-    --- `upperBody` (true to move only from the waist up, so the legs keep
-    --- walking). Playing another clip on the same part of the body fades
-    --- this one out.
-    --- Example: if game.input.justPressed("melee") then game.player:play("sword_attack", { upperBody = true }) end
-    function play(self, clip: string, options: { fade: number?, speed: number?, loop: boolean?, upperBody: boolean? }?): ()
+    --- moving about, then goes back to it. Options: `fade` (seconds to fade
+    --- in and out, 0 to 10, 0.2 if not given), `speed` (0 to 10, 1 as
+    --- made), `loop` (true to keep playing until stopped) and `keepWalking`
+    --- (true to move only from the waist up, so the legs keep walking or
+    --- standing). Playing another clip on the same part of the body fades
+    --- this one out. Only `game.player` plays clips so far. It gives nothing
+    --- back: stop it with `game.player:stop(clip)`.
+    --- Example: if game.input.justPressed("melee") then game.player:play("sword_attack", { keepWalking = true }) end
+    function play(self, clip: string, options: { fade: number?, speed: number?, loop: boolean?, keepWalking: boolean? }?): ()
 
-    --- Fades out a clip a script played, or every one with no name.
+    --- Fades out a clip a script played, over 0.2 seconds, or every one
+    --- with no name.
     --- Example: game.player:stop("dance")
     function stop(self, clip: string?): ()
 
@@ -188,10 +191,11 @@ declare extern type Character with
     --- Example: if not game.player:isPlaying("drink") then game.player:play("drink") end
     function isPlaying(self, clip: string): boolean
 
-    --- Calls `handler` with the clip's name whenever a playing clip passes
-    --- the moment `name`: "left_foot_down" and "right_foot_down" for every
-    --- step of walking and running, or a moment a clip marks itself. Never
-    --- missed or heard twice, at any frame rate.
+    --- Calls `handler` with the clip's name whenever one of the player's
+    --- clips passes the moment `name` (a marker in the animation):
+    --- "left_foot_down" and "right_foot_down" for every step of walking and
+    --- running, or a moment a clip marks itself. Never missed or heard
+    --- twice, at any frame rate. Only `game.player` has moments so far.
     --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
     function onMoment(self, name: string, handler: (clip: string) -> ()): ()
 end

@@ -200,6 +200,22 @@ impl Character {
     ///
     /// Only if a file built into the engine is damaged.
     pub(crate) fn with_mannequin_clips(scene: Scene) -> Result<Self, AssetError> {
+        let missing = Skeleton::from_scene(&scene).missing_standard_bones();
+        if !missing.is_empty() {
+            let list: Vec<String> = missing
+                .iter()
+                .map(|(bone, near)| match near {
+                    Some(own) => format!("{bone} (it has \"{own}\": rename it to {bone})"),
+                    None => (*bone).to_owned(),
+                })
+                .collect();
+            log::warn!(
+                "This model has no bones called {}, so the mannequin's clips do not move \
+                 them. Name its bones as LORE's mannequin does (Unreal's names) for every \
+                 clip to play on it.",
+                list.join(", ")
+            );
+        }
         let mannequin = Scene::from_bytes("mannequin.glb", MANNEQUIN, None, LoadOptions::default())?;
         let mut clips = Clip::all_from(&scene);
         for clip in Clip::all_from(&mannequin) {

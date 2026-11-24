@@ -110,3 +110,44 @@ impl Skeleton {
         written
     }
 }
+
+/// The bones of LORE's standard skeleton (Unreal's mannequin names, which
+/// LORE's own bodies use), leaving out the fingers. A model with these
+/// plays every clip made for the mannequin.
+pub const STANDARD_BONES: [&str; 23] = [
+    "root", "pelvis", "spine_01", "spine_02", "spine_03", "neck_01", "Head", "clavicle_l",
+    "upperarm_l", "lowerarm_l", "hand_l", "clavicle_r", "upperarm_r", "lowerarm_r", "hand_r",
+    "thigh_l", "calf_l", "foot_l", "ball_l", "thigh_r", "calf_r", "foot_r", "ball_r",
+];
+
+impl Skeleton {
+    /// The bones of [`STANDARD_BONES`] this skeleton does not have, each
+    /// with the name of one of its own that looks like it, if any: what to
+    /// rename so the mannequin's clips play on it.
+    #[must_use]
+    pub fn missing_standard_bones(&self) -> Vec<(&'static str, Option<String>)> {
+        STANDARD_BONES
+            .iter()
+            .filter(|bone| self.find(bone).is_none())
+            .map(|&bone| {
+                let wanted = simplified(bone);
+                let near = self
+                    .names()
+                    .flatten()
+                    .find(|own| simplified(own) == wanted)
+                    .map(str::to_owned);
+                (bone, near)
+            })
+            .collect()
+    }
+}
+
+/// A bone name with case, separators and common prefixes taken away, so
+/// `Thigh_L`, `thigh.l` and `mixamorig:thigh_l` all read `thighl`.
+fn simplified(name: &str) -> String {
+    let name = name.rsplit(':').next().unwrap_or(name);
+    name.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
