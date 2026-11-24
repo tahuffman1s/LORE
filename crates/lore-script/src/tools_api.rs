@@ -68,6 +68,24 @@ pub struct Motion {
     pub sprinting: bool,
     /// Whether it is afloat in water too deep to stand in.
     pub swimming: bool,
+    /// Where a shot it fired now would land, in metres.
+    pub aim_point: [f32; 3],
+    /// Whether that is short of what the crosshair is on: cover in front
+    /// of the body that the camera over its shoulder sees past.
+    pub aim_blocked: bool,
+}
+
+/// Where the picture is drawn from, as the engine says before each one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewTold {
+    /// Where the camera is, in metres.
+    pub position: [f32; 3],
+    /// Which way it faces, in radians: 0 looks along -Z, growing to the left.
+    pub yaw: f32,
+    /// How far it looks up, in radians.
+    pub pitch: f32,
+    /// How many degrees it sees from the bottom of the picture to the top.
+    pub fov_degrees: f32,
 }
 
 /// The numbers of how the player moves that a script can change, in metres
@@ -410,6 +428,8 @@ pub(crate) struct Tools {
     fly_speed: Cell<f32>,
     /// How the script wants the player to walk, jump and fall.
     moves: Cell<MoveSaid>,
+    /// Where this frame's picture is drawn from, for `game.hud.onScreen`.
+    view: Cell<Option<ViewTold>>,
     /// Whether the engine has asked for the actions to run the game with.
     handed_out: Cell<bool>,
 }
@@ -427,6 +447,7 @@ impl Default for Tools {
             movement: Cell::new(Movement::Walk),
             fly_speed: Cell::new(DEFAULT_FLY_SPEED),
             moves: Cell::new(MoveSaid::default()),
+            view: Cell::new(None),
             handed_out: Cell::new(false),
         }
     }
@@ -478,6 +499,14 @@ impl Tools {
 
     pub fn moves(&self) -> MoveSaid {
         self.moves.get()
+    }
+
+    pub fn view(&self) -> Option<ViewTold> {
+        self.view.get()
+    }
+
+    pub fn set_view(&self, view: ViewTold) {
+        self.view.set(Some(view));
     }
 
     /// Notes that the engine has the actions, and that a later one is not

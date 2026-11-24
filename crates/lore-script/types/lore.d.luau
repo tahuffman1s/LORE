@@ -66,6 +66,21 @@ declare extern type Character with
     --- Example: game.weather.strike(game.player.position + game.player.aim * 40)
     aim: vector
 
+    --- Where a shot or a throw from the character would land now, in
+    --- metres: what the crosshair is on, or, when `aimBlocked` is true,
+    --- what stops the shot before it gets there. A thousand metres off
+    --- when the crosshair is on the sky.
+    --- Example: game.audio.playAt("ping", game.player.aimPoint)
+    aimPoint: vector
+
+    --- True while something close in front of the character would stop a
+    --- shot short of what the crosshair is on: in third person the camera
+    --- over the shoulder sees past cover the body is behind. Show the
+    --- player a second mark at `aimPoint` then, with `game.hud.onScreen`.
+    --- Always false in first person, where the eyes are the camera.
+    --- Example: blocked.visible = game.player.aimBlocked
+    aimBlocked: boolean
+
     --- True while the character stands on the ground, false in the air or
     --- while flying.
     --- Example: if game.player.grounded then print("Standing") end
@@ -2474,6 +2489,17 @@ declare game: {
         --- one). Ask each picture, as the window can be resized.
         --- Example: local width, height = game.hud.size()
         size: () -> (number, number),
+
+        --- Where a place in the world is in the picture being drawn: how
+        --- far right and down of the middle of the screen, in pixels on a
+        --- screen 1080 high, which is what a piece made with `at =
+        --- "center"` takes as `right` and `down`. Nothing (nil, nil) for a
+        --- place behind the camera. Only inside `game.onDraw`: it changes
+        --- with every picture, so the game's rules cannot read it. A place
+        --- off the edge of the screen gives numbers beyond it.
+        --- Example: local mark = game.hud.box({ at = "center", width = 6, height = 6, color = "red" })
+        --- Example: game.onDraw(function() local right, down = game.hud.onScreen(game.player.aimPoint) mark.visible = game.player.aimBlocked and right ~= nil if right and down then mark.right, mark.down = right - 3, down - 3 end end)
+        onScreen: (place: vector) -> (number?, number?),
 
         --- Puts a straight line on the HUD. Its own options:
         ---   right, down: where it starts, from the point `at` pins to.

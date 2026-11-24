@@ -93,6 +93,68 @@ fn toward_mark(
     }
 }
 
+/// Closer than this to the crosshair's mark, a shot is taken to have got
+/// there: only cover that stops it well short is worth telling the player.
+const BLOCKED_SHORT: f32 = 0.3;
+
+impl Shooting {
+    /// Where a shot fired now along `direction` would land, and whether
+    /// something stops it short of what the crosshair is on: cover that
+    /// is in front of the body but not of the camera over its shoulder.
+    /// With the camera at the eyes nothing can be in between.
+    pub(crate) fn aim(
+        &mut self,
+        eyes: [f32; 3],
+        dummies: &[Dummy],
+        level: &Level,
+        rules: &MoveSettings,
+        direction: [f32; 3],
+    ) -> ([f32; 3], bool) {
+        let settings = lore_weapons::WeaponSettings::default();
+        self.targets.clear();
+        self.targets
+            .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+        let way = toward_mark(
+            level,
+            &self.targets,
+            self.camera,
+            eyes,
+            direction,
+            &settings,
+        );
+        let landed = hitscan(level, &self.targets, eyes, way, &settings, None).map(|hit| hit.point);
+        let far = |from: [f32; 3], way: [f32; 3]| -> [f32; 3] {
+            std::array::from_fn(|i| from[i] + way[i] * FAR_MARK)
+        };
+        let Some(camera) = self.camera else {
+            return (landed.unwrap_or_else(|| far(eyes, way)), false);
+        };
+        // The mark again, as the shot was aimed at it.
+        let gap: [f32; 3] = std::array::from_fn(|i| eyes[i] - camera[i]);
+        let skip = (0..3).map(|i| gap[i] * direction[i]).sum::<f32>().max(0.0);
+        let from: [f32; 3] = std::array::from_fn(|i| camera[i] + direction[i] * skip);
+        let mark = hitscan(
+            level,
+            &self.targets,
+            from,
+            direction,
+            &settings,
+            Some(PLAYER),
+        )
+        .map_or_else(|| far(from, direction), |hit| hit.point);
+        let reach = |point: [f32; 3]| -> f32 {
+            (0..3)
+                .map(|i| (point[i] - eyes[i]).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        };
+        match landed {
+            Some(landed) if reach(landed) < reach(mark) - BLOCKED_SHORT => (landed, true),
+            _ => (mark, false),
+        }
+    }
+}
+
 /// The number a weapon knows the player by: who launched a rocket, and
 /// whose body a shot landed on. Dummies are numbered from 1.
 const PLAYER: u32 = 0;
@@ -405,6 +467,58 @@ mod aim_tests {
                 [-20.0, 20.0, -10.0],
             ],
         ])
+    }
+
+    #[test]
+    fn cover_the_camera_sees_past_is_said_to_block_the_shot() {
+        let rules = MoveSettings::default();
+        let eyes = [0.0, 1.6, 0.0];
+        let ahead = [0.0, 0.0, -1.0];
+        let mut shooting = Shooting {
+            // Behind and over the right shoulder.
+            camera: Some([0.6, 1.75, 3.0]),
+            ..Shooting::default()
+        };
+        // In the open the shot lands on the far wall, where the crosshair is.
+        let (point, blocked) = shooting.aim(eyes, &[], &wall(), &rules, ahead);
+        assert!(!blocked);
+        assert!(
+            (point[2] + 10.0).abs() < 1e-3 && (point[0] - 0.6).abs() < 1e-3,
+            "{point:?}"
+        );
+
+        // A pillar a metre in front of the body, left of where the camera
+        // looks: the crosshair is still on the far wall, the shot is not.
+        let mut cover = vec![
+            [[-0.3, 0.0, -1.0], [0.3, 0.0, -1.0], [0.3, 3.0, -1.0]],
+            [[-0.3, 0.0, -1.0], [0.3, 3.0, -1.0], [-0.3, 3.0, -1.0]],
+        ];
+        // With the far wall behind it.
+        cover.extend([
+            [
+                [-20.0, -5.0, -10.0],
+                [20.0, -5.0, -10.0],
+                [20.0, 20.0, -10.0],
+            ],
+            [
+                [-20.0, -5.0, -10.0],
+                [20.0, 20.0, -10.0],
+                [-20.0, 20.0, -10.0],
+            ],
+        ]);
+        let level = Level::from_triangles(&cover);
+        let (point, blocked) = shooting.aim(eyes, &[], &level, &rules, ahead);
+        assert!(blocked, "{point:?}");
+        assert!((point[2] + 1.0).abs() < 1e-3, "on the pillar: {point:?}");
+
+        // From the eyes there is nothing to see past.
+        shooting.camera = None;
+        let (point, blocked) = shooting.aim(eyes, &[], &level, &rules, ahead);
+        assert!(!blocked);
+        assert!((point[2] + 1.0).abs() < 1e-3, "{point:?}");
+        // And the sky is a long way off.
+        let (point, blocked) = shooting.aim(eyes, &[], &Level::from_triangles(&[]), &rules, ahead);
+        assert!(!blocked && point[2] < -900.0, "{point:?}");
     }
 
     #[test]

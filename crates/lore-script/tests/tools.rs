@@ -796,6 +796,8 @@ fn motion(position_y: f32) -> Motion {
         crouched: false,
         sprinting: false,
         swimming: false,
+        aim_point: [0.0, 1.0, -1000.0],
+        aim_blocked: false,
     }
 }
 
@@ -1157,6 +1159,8 @@ fn a_script_reads_stance_and_changes_how_the_player_moves() {
             crouched: true,
             sprinting: false,
             swimming: true,
+            aim_point: [0.0, 1.0, -1000.0],
+            aim_blocked: false,
         },
     );
     host.tick(&InputFrame::default(), 1.0 / 60.0);
@@ -1182,4 +1186,35 @@ fn a_script_reads_stance_and_changes_how_the_player_moves() {
         message.contains("game.player:setWalkSpeed changes the game"),
         "{message}"
     );
+}
+
+#[test]
+fn a_place_in_the_world_is_put_on_the_hud_only_while_drawing() {
+    let mut host = game(
+        r#"local seen = "nothing"
+        game.onDraw(function()
+            local right, down = game.hud.onScreen(vector.create(0, 2, -10))
+            seen = if right then string.format("%d %d", right, down) else "behind"
+        end)
+        game.onTick(function() print(seen, game.player.aimBlocked, game.player.aimPoint.z) end)"#,
+    );
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    // Before the engine has said where the picture is seen from: nothing.
+    host.draw(0.5);
+    host.set_view(lore_script::ViewTold {
+        position: [0.0, 2.0, 0.0],
+        yaw: 0.0,
+        pitch: 0.0,
+        fov_degrees: 90.0,
+    });
+    host.draw(0.5);
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    let lines = printed();
+    assert!(lines.last().unwrap().starts_with("0 0 false"), "{lines:?}");
+
+    let mut host = game("game.onTick(function() game.hud.onScreen(vector.create(0, 0, 0)) end)");
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    let message = &host.last_error().unwrap().message;
+    assert!(message.contains("Read it in game.onDraw"), "{message}");
 }
