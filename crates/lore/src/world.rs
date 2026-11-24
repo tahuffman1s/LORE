@@ -1994,6 +1994,54 @@ mod tests {
     }
 
     #[test]
+    fn the_player_switches_view_with_one_button_where_the_game_allows() {
+        use lore_input::Key;
+
+        /// Which view the script sees after F is pressed once.
+        fn after_f(script: &str) -> &'static str {
+            let actions = ActionMap::standard();
+            let script = ScriptGame::from_source(script, &actions);
+            let mut game = Playing::start(script, None, &actions, 60);
+            let mut input = lore_input::Input::new(actions);
+            for _ in 0..5 {
+                game.tick(input.tick(), STEP);
+            }
+            input.press(Key::F);
+            game.tick(input.tick(), STEP);
+            input.release(Key::F);
+            for _ in 0..5 {
+                game.tick(input.tick(), STEP);
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            if game.world.game.host().camera_view().third {
+                "third"
+            } else {
+                "first"
+            }
+        }
+
+        // One line chooses the view; nothing else is needed.
+        assert_eq!(after_f(""), "first");
+        assert_eq!(after_f("game.player:setView(\"third\")"), "third");
+        // One more gives the player the button, and the script hears of it.
+        assert_eq!(
+            after_f(
+                "game.player:setView(\"third\")\n\
+                 game.player:allowViewSwitch(true)\n\
+                 local since = nil\n\
+                 game.onTick(function()\n\
+                 if since then since += 1 end\n\
+                 if game.input.justPressed(\"switch_view\") then since = 0 end\n\
+                 -- The tick after the press, the script reads the new view.\n\
+                 if since and since >= 1 then assert(game.player.view == \"first\") end\n\
+                 end)"
+            ),
+            "first"
+        );
+        assert_eq!(after_f("game.player:allowViewSwitch(true)"), "third");
+    }
+
+    #[test]
     fn a_script_puts_the_camera_somewhere_and_gives_it_back() {
         let actions = ActionMap::standard();
         let script = ScriptGame::from_source(
