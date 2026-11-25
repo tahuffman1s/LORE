@@ -1360,7 +1360,12 @@ pub struct Playing {
     /// weapon gave: read once each. `None` for one that could not be read,
     /// which was said in the log.
     weapon_models:
-        std::collections::HashMap<std::rc::Rc<str>, Option<std::sync::Arc<lore_assets::Scene>>>,
+        std::collections::HashMap<std::rc::Rc<str>, Option<crate::weapon_motion::Pieces>>,
+    /// How the weapon in the player's hands is seen to move, and the spent
+    /// cases it has thrown out.
+    weapon_motion: crate::weapon_motion::WeaponMotion,
+    /// Where the weapon was last drawn, for where its cases come out.
+    weapon_at: Option<lore_assets::Transform>,
     /// How far ahead of its grip each weapon model reaches, worked out once
     /// from its shape: what says where the left hand goes.
     weapon_lengths: std::collections::HashMap<std::rc::Rc<str>, f32>,
@@ -1384,6 +1389,7 @@ fn hold_of(ahead: f32, thrown: bool, said: lore_script::HoldSaid) -> crate::char
         return crate::character::Hold {
             support: None,
             cupped: false,
+            moved: lore_anim::math::IDENTITY,
         };
     }
     let long = ahead > LONG_GUN;
@@ -1395,6 +1401,7 @@ fn hold_of(ahead: f32, thrown: bool, said: lore_script::HoldSaid) -> crate::char
     crate::character::Hold {
         support: Some(said.support.unwrap_or(usual)),
         cupped: !long,
+        moved: lore_anim::math::IDENTITY,
     }
 }
 
@@ -1554,6 +1561,8 @@ impl Playing {
             shot: crate::shot::ShotCamera::default(),
             held: None,
             weapon_models: std::collections::HashMap::new(),
+            weapon_motion: crate::weapon_motion::WeaponMotion::default(),
+            weapon_at: None,
             weapon_lengths: std::collections::HashMap::new(),
         }
         .with_body_said()
@@ -1848,17 +1857,26 @@ impl Playing {
     /// read the first time it is held.
     fn weapon_model(
         &mut self,
-    ) -> Option<(std::sync::Arc<lore_assets::Scene>, crate::character::Hold)> {
+    ) -> Option<(
+        crate::weapon_motion::Pieces,
+        crate::character::Hold,
+        crate::weapon_motion::Pose,
+    )> {
         let held = self.world.game.host().held_weapon(CharacterId::PLAYER)?;
-        let name = held.model?;
+        let name = held.model.clone()?;
         let thrown = held.settings.thrown;
-        let model = self.read_weapon_model(&name, &held.name)?;
-        let ahead = *self
-            .weapon_lengths
-            .entry(name)
-            .or_insert_with(|| reach_ahead(&model));
-        let hold = hold_of(ahead, thrown, held.hold);
-        Some((model, hold))
+        let pieces = self.read_weapon_model(&name, &held.name)?;
+        let ahead = *self.weapon_lengths.entry(name).or_insert_with(|| {
+            let mut ahead = reach_ahead(&pieces.still);
+            for (_, part) in &pieces.parts {
+                ahead = ahead.max(reach_ahead(part));
+            }
+            ahead
+        });
+        let mut hold = hold_of(ahead, thrown, held.hold);
+        let pose = self.weapon_motion.pose(&held);
+        hold.moved = pose.whole;
+        Some((pieces, hold, pose))
     }
 
     /// The model called `name` (one of the engine's, or a file of the
@@ -1867,7 +1885,7 @@ impl Playing {
         &mut self,
         name: &std::rc::Rc<str>,
         weapon: &str,
-    ) -> Option<std::sync::Arc<lore_assets::Scene>> {
+    ) -> Option<crate::weapon_motion::Pieces> {
         if let Some(model) = self.weapon_models.get(name) {
             return model.clone();
         }
@@ -1882,9 +1900,10 @@ impl Playing {
                 }
             }
         });
+        let pieces = model.map(|model| crate::weapon_motion::split(&model));
         self.weapon_models
-            .insert(std::rc::Rc::clone(name), model.clone());
-        model
+            .insert(std::rc::Rc::clone(name), pieces.clone());
+        pieces
     }
 
     /// Hands the frame the player's body, drawn between the last two ticks.
@@ -1901,7 +1920,7 @@ impl Playing {
             return;
         };
         let model = std::sync::Arc::clone(character.model());
-        character.set_hold(weapon.as_ref().map(|(_, hold)| *hold));
+        character.set_hold(weapon.as_ref().map(|(_, hold, _)| *hold));
         let drawn = character.figures(frame.alpha(), feet, camera, look);
         let seen = drawn.seen;
         let weapon_at = drawn.weapon;
@@ -1913,9 +1932,20 @@ impl Playing {
         {
             frame.show_thing(thing, place, seen);
         }
-        // The weapon is where the body holds it, its hands on it.
-        if let (Some((weapon, _)), Some(place)) = (&weapon, weapon_at) {
-            frame.show_thing(weapon, place, seen || eyes);
+        // The weapon is where the body holds it, its hands on it, and each
+        // moving part where it has moved to.
+        self.weapon_at = weapon_at;
+        if let (Some((pieces, _, pose)), Some(place)) = (&weapon, weapon_at) {
+            frame.show_thing(&pieces.still, place, seen || eyes);
+            for (part, model) in &pieces.parts {
+                let at = lore_anim::math::combine(&place, pose.part(*part));
+                frame.show_thing(model, at, seen || eyes);
+            }
+        }
+        // The spent cases it has thrown out.
+        let (case, cases) = self.weapon_motion.cases();
+        for place in cases {
+            frame.show_thing(case, place, true);
         }
     }
 
@@ -2140,6 +2170,21 @@ impl Game for Playing {
         }
         self.eye = self.world.player().eye_position();
         self.step_character(input, step);
+        // The weapon in the hands: the moments of its motion and its cases.
+        let player = *self.world.player();
+        let held = self.world.game.host().held_weapon(CharacterId::PLAYER);
+        let speed = player.velocity[0].hypot(player.velocity[2]);
+        let walk = self.world.ground.rules.walk_speed;
+        self.weapon_motion.tick(
+            held.as_ref(),
+            (self.yaw, self.pitch),
+            speed,
+            walk,
+            player.velocity,
+            self.weapon_at.as_ref(),
+            &self.world.ground.level,
+            step,
+        );
         // Being put somewhere is a cut, not a glide.
         self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises

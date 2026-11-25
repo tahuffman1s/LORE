@@ -14,6 +14,21 @@ pub enum FireMode {
     Burst(u32),
 }
 
+/// How a weapon is worked between shots, which is what is seen moving on
+/// it: nothing the rules count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Action {
+    /// A slide or bolt thrown back by each shot and home again at once.
+    #[default]
+    Automatic,
+    /// A bolt worked by hand between shots: up, back, forward, down.
+    Bolt,
+    /// A fore-end pumped back and forward between shots.
+    Pump,
+    /// Nothing moves: a rocket launcher, a grenade.
+    None,
+}
+
 /// How a shot reaches what it hits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Delivery {
@@ -111,6 +126,13 @@ pub struct WeaponSettings {
     /// Thrown with the throw button while another weapon stays in the
     /// hands, as a grenade is: it is carried but not switched to.
     pub thrown: bool,
+    /// How it is worked between shots, which is what is seen moving.
+    pub action: Action,
+    /// Each shot throws a spent case out of it.
+    pub ejects: bool,
+    /// Where the spent cases come out, in metres from the grip in the
+    /// model's space (muzzle along -Z, top along +Y).
+    pub eject_at: [f32; 3],
     /// How each shot reaches what it hits.
     pub delivery: Delivery,
     /// How many things leave the barrel per shot. A shotgun has several;
@@ -198,6 +220,9 @@ impl Default for WeaponSettings {
             burst_pause: 0.15,
             raise_time: 0.4,
             thrown: false,
+            action: Action::Automatic,
+            ejects: true,
+            eject_at: [0.02, 0.05, -0.08],
             delivery: Delivery::Hitscan { reach: 500.0 },
             pellets: 1,
 
@@ -286,6 +311,7 @@ impl WeaponSettings {
             spread_per_shot: 0.0,
             kick_up: 4.0,
             kick_sideways: 1.0,
+            action: Action::Pump,
             ..Self::default()
         }
     }
@@ -308,6 +334,8 @@ impl WeaponSettings {
             spread_per_shot: 0.0,
             kick_up: 3.0,
             kick_sideways: 0.5,
+            action: Action::None,
+            ejects: false,
             ..Self::default()
         }
     }
@@ -321,6 +349,8 @@ impl WeaponSettings {
             rounds_per_minute: 60.0,
             raise_time: 0.3,
             thrown: true,
+            action: Action::None,
+            ejects: false,
             delivery: Delivery::Projectile(ProjectileSettings {
                 speed: 18.0,
                 gravity: 20.0,

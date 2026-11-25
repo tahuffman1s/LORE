@@ -247,6 +247,9 @@ pub(crate) struct Drawn<'a> {
 pub(crate) struct Hold {
     pub(crate) support: Option<[f32; 3]>,
     pub(crate) cupped: bool,
+    /// How the weapon is moved from where it is held, in its own space:
+    /// recoil, sway, a reload. The hands go with it.
+    pub(crate) moved: Transform,
 }
 
 /// Where a weapon is held in first person, in metres right, up and ahead
@@ -1068,6 +1071,7 @@ impl Character {
             } else {
                 held_from(head_place, (yaw, pitch), HELD_AT_SHOULDER)
             };
+            let weapon = lore_anim::math::combine(&weapon, &hold.moved);
             self.reach_for(&weapon, hold, &transform);
             weapon
         });
@@ -1426,6 +1430,7 @@ mod tests {
             character.set_hold(Some(Hold {
                 support: Some(support),
                 cupped: false,
+                moved: lore_anim::math::IDENTITY,
             }));
             let eye = player.eye_position();
             let camera = character.camera(1.0, eye, (0.0, -0.1), &level);
@@ -1466,6 +1471,7 @@ mod tests {
         character.set_hold(Some(Hold {
             support: None,
             cupped: false,
+            moved: lore_anim::math::IDENTITY,
         }));
         let drawn = character.figures(1.0, player.position, player.eye_position(), (0.0, 0.0));
         assert!(drawn.weapon.is_some());

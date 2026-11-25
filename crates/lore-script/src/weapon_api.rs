@@ -31,10 +31,13 @@ pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "fireMode",
     "burstSize",
     "reach",
+    "action",
+    "ejectAt",
     "roundsPerMinute",
     "burstPause",
     "raiseTime",
     "thrown",
+    "ejects",
     "pellets",
     "magazineSize",
     "reserve",
@@ -962,6 +965,7 @@ const PLAIN: &[(&str, WeaponSlot)] = &[
     ("burstPause", Slot::Number(|s| &mut s.burst_pause)),
     ("raiseTime", Slot::Number(|s| &mut s.raise_time)),
     ("thrown", Slot::Flag(|s| &mut s.thrown)),
+    ("ejects", Slot::Flag(|s| &mut s.ejects)),
     ("pellets", Slot::Count(|s| &mut s.pellets, MOST_PELLETS)),
     (
         "magazineSize",
@@ -1273,6 +1277,37 @@ fn read_settings(
                 )?;
                 burst_size = Some(size);
             }
+            "action" => {
+                let said = match &value {
+                    Value::String(said) => said.to_str()?.trim().to_lowercase(),
+                    _ => String::new(),
+                };
+                settings.action = match said.as_str() {
+                    "auto" | "automatic" => lore_weapons::Action::Automatic,
+                    "bolt" => lore_weapons::Action::Bolt,
+                    "pump" => lore_weapons::Action::Pump,
+                    "none" => lore_weapons::Action::None,
+                    _ => {
+                        return Err(fail(
+                            lua,
+                            "game.weapon: action is how it is worked between shots, which is \
+                             what is seen moving: \"auto\" (a slide or bolt thrown back by each \
+                             shot), \"bolt\" (a bolt worked by hand), \"pump\" or \"none\". \
+                             Write it like this: action = \"bolt\"",
+                        ));
+                    }
+                };
+            }
+            "ejectAt" => {
+                settings.eject_at = crate::fluid_api::vector_of(
+                    lua,
+                    "game.weapon",
+                    "ejectAt (where spent cases come out, in metres from the grip: right, \
+                     up and back)",
+                    &value,
+                    "ejectAt = vector.create(0.02, 0.05, -0.08)",
+                )?;
+            }
             "reach" => {
                 let mut metres = 500.0;
                 set_plain(lua, &mut metres, Slot::Number(|m| m), "reach", &value)?;
@@ -1388,6 +1423,8 @@ mod tests {
             "fireMode",
             "burstSize",
             "reach",
+            "action",
+            "ejectAt",
         ];
         readable.extend(PLAIN.iter().map(|(name, _)| *name));
         assert_eq!(readable, WEAPON_SETTINGS);

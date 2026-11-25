@@ -227,7 +227,8 @@ fn a_weapon_held_is_drawn_before_the_eyes_and_in_the_hand() {
     let corner = SCREEN[1] / 2..SCREEN[1];
     for weapon in ["rifle", "pistol", "shotgun", "rocket launcher", "grenade"] {
         let script = format!("game.onSpawn(function() game.player:giveWeapon(\"{weapon}\") end)");
-        let (with, without) = drawn(&script, 2, &mut headless);
+        // Once it has been brought up: it comes from below the picture.
+        let (with, without) = drawn(&script, 60, &mut headless);
         save(&format!("first-person-{weapon}"), &with);
         let shown = changed(&with, &without, corner.clone());
         assert!(shown > 1_500, "{weapon}: only {shown} pixels show it");
