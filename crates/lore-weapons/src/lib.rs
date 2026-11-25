@@ -58,6 +58,6 @@ mod weapon;
 
 pub use projectile::{Flight, Projectile, blast_damage};
 pub use random::shot_seed;
-pub use settings::{Delivery, FireMode, ProjectileSettings, WeaponSettings};
+pub use settings::{Action, Delivery, FireMode, ProjectileSettings, WeaponSettings};
 pub use target::{Hit, Struck, Target, Zone, hitscan};
 pub use weapon::{Reload, Shot, Weapon, WeaponEvents, WeaponInput};

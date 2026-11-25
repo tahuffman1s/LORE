@@ -121,13 +121,13 @@ const OLIVE: [f32; 4] = [0.23, 0.27, 0.15, 1.0];
 
 /// One box of a weapon: where its middle is across and along and where its
 /// bottom is, its size, colour, metalness and roughness.
-type Box3 = ([f32; 3], [f32; 3], [f32; 4], f32, f32);
+type Box3 = ([f32; 3], [f32; 3], [f32; 4], f32, f32, &'static str);
 
 /// A weapon built of `boxes`, in the way every weapon model is made: its
 /// grip at the origin, its muzzle along -Z and its top along +Y.
 fn built_weapon(name: &str, boxes: &[Box3]) -> Scene {
     let mut scene = Scene::default();
-    for (place, size, color, metallic, roughness) in boxes {
+    for (place, size, color, metallic, roughness, part) in boxes {
         // A handful of boxes, never near `u32::MAX`.
         #[allow(clippy::cast_possible_truncation)]
         let number = scene.meshes.len() as u32;
@@ -149,7 +149,12 @@ fn built_weapon(name: &str, boxes: &[Box3]) -> Scene {
             mesh: number,
             transform: at(*place, *size),
             mirrored: false,
-            name: Some(name.to_owned()),
+            // A moving part by its name, as a weapon model of a game's own.
+            name: Some(if part.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{name}_{part}")
+            }),
             extras: None,
         });
     }
@@ -171,58 +176,168 @@ pub(crate) fn weapon(name: &str) -> Option<Arc<Scene>> {
             Arc::new(built_weapon(
                 "rifle",
                 &[
-                    ([0.0, -0.10, 0.01], [0.03, 0.10, 0.04], POLYMER, 0.0, 0.7),
-                    ([0.0, -0.01, -0.08], [0.05, 0.08, 0.34], GUNMETAL, 0.9, 0.4),
-                    ([0.0, 0.025, -0.50], [0.02, 0.02, 0.50], GUNMETAL, 0.9, 0.35),
-                    ([0.0, -0.04, 0.24], [0.04, 0.10, 0.32], POLYMER, 0.0, 0.7),
-                    ([0.0, -0.15, -0.12], [0.03, 0.14, 0.06], GUNMETAL, 0.8, 0.5),
-                    ([0.0, 0.07, -0.06], [0.015, 0.02, 0.04], GUNMETAL, 0.9, 0.4),
+                    (
+                        [0.0, -0.10, 0.01],
+                        [0.03, 0.10, 0.04],
+                        POLYMER,
+                        0.0,
+                        0.7,
+                        "",
+                    ),
+                    (
+                        [0.0, -0.01, -0.08],
+                        [0.05, 0.08, 0.34],
+                        GUNMETAL,
+                        0.9,
+                        0.4,
+                        "",
+                    ),
+                    (
+                        [0.0, 0.025, -0.50],
+                        [0.02, 0.02, 0.50],
+                        GUNMETAL,
+                        0.9,
+                        0.35,
+                        "",
+                    ),
+                    (
+                        [0.0, -0.04, 0.24],
+                        [0.04, 0.10, 0.32],
+                        POLYMER,
+                        0.0,
+                        0.7,
+                        "",
+                    ),
+                    (
+                        [0.0, -0.15, -0.12],
+                        [0.03, 0.14, 0.06],
+                        GUNMETAL,
+                        0.8,
+                        0.5,
+                        "magazine",
+                    ),
+                    (
+                        [0.0, 0.07, -0.06],
+                        [0.015, 0.02, 0.04],
+                        GUNMETAL,
+                        0.9,
+                        0.4,
+                        "bolt",
+                    ),
                 ],
             )),
             Arc::new(built_weapon(
                 "pistol",
                 &[
-                    ([0.0, -0.10, 0.01], [0.03, 0.11, 0.045], POLYMER, 0.0, 0.7),
-                    ([0.0, 0.01, -0.06], [0.03, 0.035, 0.19], GUNMETAL, 0.9, 0.35),
-                    ([0.0, -0.02, -0.05], [0.026, 0.03, 0.15], POLYMER, 0.0, 0.7),
+                    (
+                        [0.0, -0.10, 0.01],
+                        [0.03, 0.11, 0.045],
+                        POLYMER,
+                        0.0,
+                        0.7,
+                        "",
+                    ),
+                    (
+                        [0.0, 0.01, -0.06],
+                        [0.03, 0.035, 0.19],
+                        GUNMETAL,
+                        0.9,
+                        0.35,
+                        "slide",
+                    ),
+                    (
+                        [0.0, -0.02, -0.05],
+                        [0.026, 0.03, 0.15],
+                        POLYMER,
+                        0.0,
+                        0.7,
+                        "",
+                    ),
                 ],
             )),
             Arc::new(built_weapon(
                 "shotgun",
                 &[
-                    ([0.0, -0.10, 0.01], [0.03, 0.10, 0.04], WOOD, 0.0, 0.6),
-                    ([0.0, -0.01, -0.06], [0.05, 0.07, 0.26], GUNMETAL, 0.9, 0.4),
+                    ([0.0, -0.10, 0.01], [0.03, 0.10, 0.04], WOOD, 0.0, 0.6, ""),
+                    (
+                        [0.0, -0.01, -0.06],
+                        [0.05, 0.07, 0.26],
+                        GUNMETAL,
+                        0.9,
+                        0.4,
+                        "",
+                    ),
                     (
                         [0.0, 0.025, -0.50],
                         [0.026, 0.026, 0.62],
                         GUNMETAL,
                         0.9,
                         0.35,
+                        "",
                     ),
-                    ([0.0, -0.01, -0.42], [0.045, 0.035, 0.18], WOOD, 0.0, 0.6),
-                    ([0.0, -0.05, 0.25], [0.04, 0.10, 0.34], WOOD, 0.0, 0.6),
+                    (
+                        [0.0, -0.01, -0.42],
+                        [0.045, 0.035, 0.18],
+                        WOOD,
+                        0.0,
+                        0.6,
+                        "pump",
+                    ),
+                    ([0.0, -0.05, 0.25], [0.04, 0.10, 0.34], WOOD, 0.0, 0.6, ""),
                 ],
             )),
             Arc::new(built_weapon(
                 "rocket launcher",
                 &[
-                    ([0.0, -0.10, 0.0], [0.03, 0.10, 0.04], POLYMER, 0.0, 0.7),
-                    ([0.0, 0.0, -0.20], [0.10, 0.10, 1.00], OLIVE, 0.1, 0.8),
-                    ([0.06, 0.04, -0.15], [0.03, 0.05, 0.08], GUNMETAL, 0.8, 0.4),
+                    ([0.0, -0.10, 0.0], [0.03, 0.10, 0.04], POLYMER, 0.0, 0.7, ""),
+                    ([0.0, 0.0, -0.20], [0.10, 0.10, 1.00], OLIVE, 0.1, 0.8, ""),
+                    (
+                        [0.06, 0.04, -0.15],
+                        [0.03, 0.05, 0.08],
+                        GUNMETAL,
+                        0.8,
+                        0.4,
+                        "",
+                    ),
                 ],
             )),
             Arc::new(built_weapon(
                 "grenade",
                 &[
-                    ([0.0, -0.045, 0.0], [0.06, 0.08, 0.06], OLIVE, 0.2, 0.7),
-                    ([0.0, 0.035, 0.0], [0.02, 0.02, 0.02], STEEL, 1.0, 0.4),
-                    ([0.012, -0.03, 0.0], [0.006, 0.07, 0.015], STEEL, 1.0, 0.4),
+                    ([0.0, -0.045, 0.0], [0.06, 0.08, 0.06], OLIVE, 0.2, 0.7, ""),
+                    ([0.0, 0.035, 0.0], [0.02, 0.02, 0.02], STEEL, 1.0, 0.4, ""),
+                    (
+                        [0.012, -0.03, 0.0],
+                        [0.006, 0.07, 0.015],
+                        STEEL,
+                        1.0,
+                        0.4,
+                        "",
+                    ),
                 ],
             )),
         ]
     });
     let at = WEAPON_NAMES.iter().position(|known| *known == name)?;
     made.get(at).cloned()
+}
+
+/// A spent case: a short brass tube lying along +Z, made once and shared.
+pub(crate) fn spent_case() -> Arc<Scene> {
+    static MADE: OnceLock<Arc<Scene>> = OnceLock::new();
+    Arc::clone(MADE.get_or_init(|| {
+        Arc::new(built_weapon(
+            "case",
+            &[(
+                [0.0, -0.0045, 0.0],
+                [0.009, 0.009, 0.028],
+                BRASS,
+                1.0,
+                0.3,
+                "",
+            )],
+        ))
+    }))
 }
 
 /// A thing that stands in a level and is solid: its model, the shape it

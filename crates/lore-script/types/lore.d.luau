@@ -2213,6 +2213,19 @@ declare game: {
         --- A hand that cannot reach it slides back along the weapon.
         --- Example: support = vector.create(0, -0.03, -0.25)
         support: vector?,
+        --- How it is worked between shots, which is what is seen moving:
+        --- "auto" (a slide or bolt thrown back by each shot, held back when
+        --- empty), "bolt" (worked by hand between shots), "pump" or "none".
+        --- The moving parts of a model are found by name: an object called
+        --- with "slide", "bolt", "pump", "magazine", "trigger" or "hammer"
+        --- in it moves as that part does, and a magazine comes out and goes
+        --- back in during a reload.
+        action: ("auto" | "bolt" | "pump" | "none")?,
+        --- Where spent cases come out, in metres from the grip in the
+        --- model's space. They tumble out to the right and lie on the
+        --- ground a while.
+        --- Example: ejectAt = vector.create(0.02, 0.05, -0.08)
+        ejectAt: vector?,
         --- What pulling the trigger does: "automatic" fires for as long as
         --- it is held, "single" fires one shot a pull, "burst" a few.
         fireMode: ("automatic" | "single" | "burst")?,
@@ -2231,6 +2244,10 @@ declare game: {
         --- as the "grenade" is: it is carried on the belt, and changing
         --- weapon passes over it.
         thrown: boolean?,
+        --- Each shot throws a spent case out (a bolt or pump weapon when it
+        --- is worked). On for the engine's guns, off for its rocket launcher
+        --- and grenade.
+        ejects: boolean?,
         --- How many things leave the barrel per shot. A shotgun has several;
         --- each does `damage` on its own, and one shot uses one round.
         pellets: number?,

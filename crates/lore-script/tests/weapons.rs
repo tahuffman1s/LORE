@@ -427,7 +427,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
     let said = load_error("game.weapon(\"smg\", { zzz = 1 })");
     assert!(
         said.starts_with(
-            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode,"
+            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode, burstSize, reach, action, ejectAt,"
         ),
         "{said}"
     );
@@ -660,5 +660,28 @@ fn a_weapon_says_how_it_is_held() {
     assert!(load_error("game.weapon(\"x\", { hands = 3 })").contains("hands is \"one\""));
     assert!(
         load_error("game.weapon(\"x\", { support = 1 })").contains("support (where the left hand")
+    );
+}
+
+#[test]
+fn a_weapon_says_how_it_is_worked_and_where_its_cases_come_out() {
+    let (host, _) = with_bo(
+        r#"game.weapon("rifle", { action = "bolt", ejectAt = vector.create(0.03, 0.06, -0.2) })
+        game.onSpawn(function() game.player:giveWeapon("rifle") end)"#,
+    );
+    let held = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(held.settings.action, lore_script::weapons::Action::Bolt);
+    assert_eq!(held.settings.eject_at, [0.03, 0.06, -0.2]);
+    assert!(held.settings.ejects);
+    let (host, _) = with_bo(r#"game.onSpawn(function() game.player:giveWeapon("grenade") end)"#);
+    let held = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(held.settings.action, lore_script::weapons::Action::None);
+    assert!(!held.settings.ejects);
+    assert!(
+        load_error("game.weapon(\"x\", { action = \"lever\" })")
+            .contains("action is how it is worked")
+    );
+    assert!(
+        load_error("game.weapon(\"x\", { ejectAt = 2 })").contains("ejectAt (where spent cases")
     );
 }

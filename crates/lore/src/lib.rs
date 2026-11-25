@@ -66,6 +66,7 @@ mod starter_level;
 mod tick;
 mod translate;
 mod use_prompt;
+mod weapon_motion;
 pub mod world;
 
 pub use lore_assets as assets;

@@ -14,6 +14,7 @@ local weapons = {}
 game.weapon("pistol", { model = "models/pistol/pistol.gltf" })
 game.weapon("rifle", {
     model = "models/rifle/rifle.gltf",
+    action = "bolt",
     fireMode = "single",
     roundsPerMinute = 45,
     magazineSize = 5,
