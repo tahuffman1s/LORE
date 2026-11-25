@@ -688,3 +688,151 @@ fn a_save_keeps_the_time_and_says_which_timers_it_dropped() {
     host.reload().unwrap();
     assert_eq!(warnings(), [] as [&str; 0]);
 }
+
+/// A game with this script and these dice.
+fn seeded(script: &str, seed: u64) -> ScriptHost {
+    lore_script::seed_new_games(Some(seed));
+    let host = game(script);
+    lore_script::seed_new_games(None);
+    host
+}
+
+const ROLLING: &str = r#"
+    game.onTick(function()
+        print(math.random(1, 6), math.random(100), game.chance(0.5),
+            game.pick({ "a", "b", "c" }), table.concat(game.shuffle({ 1, 2, 3, 4 }), ""))
+    end)
+"#;
+
+#[test]
+fn the_same_seed_plays_the_same_dice_and_another_seed_others() {
+    let rolls = |seed| {
+        let mut host = seeded(ROLLING, seed);
+        run(&mut host, 20, 60);
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        printed()
+    };
+    let first = rolls(1234);
+    assert_eq!(first.len(), 20);
+    assert_eq!(rolls(1234), first);
+    assert_ne!(rolls(1235), first);
+}
+
+#[test]
+fn two_new_games_roll_differently() {
+    let rolls = || {
+        let mut host = game("game.onTick(function() print(math.random(1, 1000000)) end)");
+        run(&mut host, 4, 60);
+        printed()
+    };
+    let first = rolls();
+    assert!((0..4).any(|_| rolls() != first));
+}
+
+#[test]
+fn rolls_stay_inside_what_was_asked_for() {
+    let mut host = seeded(
+        r#"
+        game.onTick(function()
+            for _ = 1, 500 do
+                local die, share, low = math.random(6), math.random(), math.random(-3, -1)
+                assert(die >= 1 and die <= 6 and die % 1 == 0, die)
+                assert(share >= 0 and share < 1, share)
+                assert(low >= -3 and low <= -1, low)
+                assert(math.random(7, 7) == 7)
+                assert(math.random(2.9) <= 2)
+            end
+            assert(game.pick({}) == nil)
+            assert(not game.chance(0) and game.chance(1))
+            local list = { "x", "y", "z" }
+            assert(game.shuffle(list) == list and #list == 3)
+            print("fair")
+        end)
+        "#,
+        3,
+    );
+    run(&mut host, 1, 60);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["fair"]);
+}
+
+#[test]
+fn a_save_of_the_script_carries_the_dice_on() {
+    let script = "game.onTick(function() print(math.random(1, 1000000)) end)";
+    let whole = {
+        let mut host = seeded(script, 77);
+        run(&mut host, 6, 60);
+        printed()
+    };
+    let folder = GameFolder::new(script);
+    lore_script::seed_new_games(Some(77));
+    let mut host = ScriptHost::open(&folder.0, ActionMap::standard()).unwrap();
+    lore_script::seed_new_games(None);
+    printed();
+    run(&mut host, 3, 60);
+    host.reload().unwrap();
+    run(&mut host, 3, 60);
+    assert_eq!(printed(), whole);
+    assert_eq!(host.dice().seed(), 77);
+    assert_eq!(host.dice().rolls(), 6);
+}
+
+#[test]
+fn dice_rolled_for_a_picture_do_not_move_the_rules_dice() {
+    let script = r#"
+        game.onTick(function() print(math.random(1, 1000000)) end)
+        game.onDraw(function() local _ = math.random(), game.chance(0.5), game.pick({ 1, 2 }) end)
+    "#;
+    let rolls = |pictures: u32| {
+        let mut host = seeded(script, 5);
+        for _ in 0..10 {
+            run(&mut host, 1, 60);
+            for _ in 0..pictures {
+                host.draw(0.5);
+            }
+        }
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        printed()
+    };
+    assert_eq!(rolls(0), rolls(7));
+}
+
+#[test]
+fn a_seed_said_by_the_script_starts_the_dice_again() {
+    let mut host = seeded(
+        r#"
+        game.onStart(function()
+            game.setSeed(9)
+            local a, b = math.random(1, 1000000), math.random(1, 1000000)
+            math.randomseed(9)
+            print(game.seed(), a == math.random(1, 1000000), b == math.random(1, 1000000))
+        end)
+        "#,
+        1,
+    );
+    run(&mut host, 1, 60);
+    assert_eq!(printed(), ["9 true true"]);
+}
+
+#[test]
+fn dice_mistakes_say_what_to_write() {
+    for (line, said) in [
+        ("math.random(0)", "from 1 to 0, and there is none"),
+        ("math.random(6, 1)", "the lowest comes first"),
+        ("math.random('six')", "needs a whole number"),
+        ("math.random(1, 2, 3)", "at most two numbers"),
+        ("game.chance(25)", "one time in four is 0.25"),
+        ("game.pick('coin')", "game.pick needs a list"),
+        ("game.setSeed(-1)", "a whole number from 0 up"),
+        ("game.shuffle(table.freeze({ 1, 2 }))", "table.clone(list)"),
+    ] {
+        let mut host = game(&format!("game.onTick(function() {line} end)"));
+        run(&mut host, 1, 60);
+        let message = mistake(&host);
+        assert!(message.contains(said), "{line}: {message}");
+    }
+    let mut host = game("game.onDraw(function() game.setSeed(1) end)");
+    run(&mut host, 1, 60);
+    host.draw(0.5);
+    assert!(mistake(&host).contains("game.onDraw is only for showing it"));
+}

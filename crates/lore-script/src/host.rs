@@ -147,6 +147,8 @@ pub struct ScriptHost {
     weapons: Rc<WeaponState>,
     /// The game's time. Kept here so a save does not start it again.
     clock: Rc<Clock>,
+    /// The game's dice: what `math.random` rolls.
+    dice: Rc<crate::dice_api::Dice>,
     /// The action set the script chose, shared with each version of it.
     live_set: Rc<LiveSet>,
     /// What the script said of the weather; it outlives a reload too.
@@ -392,6 +394,7 @@ impl ScriptHost {
             images: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
+            dice: Rc::default(),
             live_set: Rc::default(),
             weather: Rc::default(),
             fluids: Rc::default(),
@@ -409,6 +412,14 @@ impl ScriptHost {
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
         host
+    }
+
+    /// The game's dice: their seed, and how often the rules have rolled.
+    /// A save holds those two numbers and hands them to
+    /// [`Dice::restore`](crate::Dice::restore).
+    #[must_use]
+    pub fn dice(&self) -> &crate::Dice {
+        &self.dice
     }
 
     /// The most recent script error, until a reload succeeds.
@@ -1999,6 +2010,7 @@ impl ScriptHost {
             settings: Rc::clone(&self.settings),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
+            dice: Rc::clone(&self.dice),
             timers: RefCell::new(Vec::new()),
             next_timer: Cell::new(0),
         });

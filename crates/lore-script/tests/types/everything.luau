@@ -719,3 +719,13 @@ game.onTick(function()
         game.player:lockOn(nil)
     end
 end)
+
+-- Dice.
+game.onStart(function()
+    game.setSeed(1234)
+    local seed: number = game.seed()
+    local lucky: boolean = game.chance(0.25)
+    local prize: string? = game.pick({ "coin", "heart" })
+    local order: { number } = game.shuffle({ 1, 2, 3 })
+    print(seed, lucky, prize, order, math.random(1, 6))
+end)

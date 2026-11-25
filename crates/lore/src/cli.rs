@@ -92,6 +92,10 @@ pub enum Paced {
     },
 }
 
+/// The seed of the dice `lore check` plays a game with, every time: a
+/// check that found something finds it again.
+pub const CHECK_SEED: u64 = 1;
+
 /// How many pictures are drawn after each tick in turn when a game is
 /// played at an uneven pace: as a slow computer draws them (none between
 /// two ticks) and as a fast one does (several).
@@ -112,8 +116,8 @@ const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
 /// that looked for mistakes.
 ///
 /// The uneven run is blamed only when the three even ones agree, the one
-/// after it included. Dice (`math.random`) are seeded from the computer's
-/// clock, and two runs started close together can be dealt the same ones.
+/// after it included. The caller gives every run the same dice
+/// ([`CHECK_SEED`]), so a game that rolls them is judged like any other.
 pub fn paced(mut open: impl FnMut() -> Option<ScriptGame>, actions: &ActionMap) -> Option<Paced> {
     /// Makes the log as loud again as it was, however this ends.
     struct Quiet(log::LevelFilter);
@@ -1125,6 +1129,20 @@ mod tests {
             end)
         "#;
         assert!(matches!(paced_with(script), Paced::Differs { .. }));
+    }
+
+    #[test]
+    fn a_game_that_rolls_dice_is_judged_like_any_other() {
+        lore_script::seed_new_games(Some(CHECK_SEED));
+        let fair = "game.onTick(function() print(math.random(1, 1000000), game.chance(0.5)) end)";
+        assert_eq!(paced_with(fair), Paced::Same);
+        // Dice rolled for a picture are another set, so this is fine too.
+        let sparks = r#"
+            game.onTick(function() print(math.random(1, 1000000)) end)
+            game.onDraw(function() local _ = math.random() end)
+        "#;
+        assert_eq!(paced_with(sparks), Paced::Same);
+        lore_script::seed_new_games(None);
     }
 
     #[test]

@@ -1712,6 +1712,34 @@ declare game: {
     --- Example: if game.input.justPressed("menu_back") then game.resume() end
     resume: () -> (),
 
+    --- The seed of the game's dice: the number every roll of `math.random`,
+    --- `game.chance`, `game.pick` and `game.shuffle` comes from. A new game
+    --- gets one by chance; the same seed and the same presses give the same
+    --- game, on any computer. `lore run --seed 1234` starts with one.
+    --- Example: seedLabel.text = "World " .. game.seed()
+    seed: () -> number,
+
+    --- Starts the dice again from `seed`, a whole number from 0 up, so the
+    --- rolls that follow are the same every time. `math.randomseed` is the
+    --- same function. There is no need to call it for the dice to differ
+    --- between games: they already do.
+    --- Example: game.onStart(function() game.setSeed(1234) end) -- the same dungeon for everyone
+    setSeed: (seed: number) -> (),
+
+    --- True `share` of the time: 0 is never, 1 always, 0.25 one time in four.
+    --- Example: if game.chance(0.25) then dropCoin() end
+    chance: (share: number) -> boolean,
+
+    --- One thing from `list`, each as likely as any other. An empty list
+    --- gives nil.
+    --- Example: local prize = game.pick({ "coin", "heart", "arrow" })
+    pick: <T>(list: { T }) -> T?,
+
+    --- Puts `list` in a new order by chance, every order as likely, and
+    --- gives the same list back.
+    --- Example: local order = game.shuffle({ 1, 2, 3, 4 })
+    shuffle: <T>(list: { T }) -> { T },
+
     --- True while the game is paused with `game.pause`.
     --- Example: game.onTick(function() if game.paused() then return end; moveEnemies() end)
     paused: () -> boolean,
