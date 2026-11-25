@@ -73,6 +73,8 @@ pub struct Mixer {
     dulling: f32,
     /// What the whole mix sounds like with the ears under water.
     underwater: Underwater,
+    /// How fast the game's world is running: 1 as usual, 0 stopped.
+    world_speed: f32,
     /// The fade-out of sounds that were cut off to make room, left then
     /// right, waiting to be added to the next mix.
     tail: Box<[f32]>,
@@ -123,6 +125,7 @@ impl Mixer {
             slew: 1.0 / fade_frames,
             dulling: 1.0 - (-TAU * BEHIND_CUTOFF / rate as f32).exp(),
             underwater: Underwater::new(rate),
+            world_speed: 1.0,
             tail: vec![0.0; tail_frames * 2].into_boxed_slice(),
             tail_frames: 0,
             next_id: 1,
@@ -268,6 +271,19 @@ impl Mixer {
         self.underwater.set(amount);
     }
 
+    /// Says how fast the game's world is running: 1 as usual, 0.25 in slow
+    /// motion, 0 while the game is paused. Sounds of the world
+    /// ([`Play::in_world`]) play that much slower and lower, and wait
+    /// where they are while it is 0; every other sound is unchanged. Kept
+    /// between 0 and 4; a number that is not one is taken as 1.
+    pub fn set_world_speed(&mut self, speed: f32) {
+        self.world_speed = if speed.is_finite() {
+            speed.clamp(0.0, 4.0)
+        } else {
+            1.0
+        };
+    }
+
     /// Fills `out` with the next stretch of sound: left sample, right
     /// sample, left, right, each between -1 and 1.
     ///
@@ -293,10 +309,21 @@ impl Mixer {
             if voice.sound.is_none() {
                 continue;
             }
+            // A sound of the world waits while the world is stopped, and
+            // is as slow and as low as the world is slow.
+            let step = voice.step;
+            if voice.in_world {
+                if self.world_speed <= 0.0 {
+                    continue;
+                }
+                voice.step = step * f64::from(self.world_speed);
+            }
             let heard = hear(&self.listener, voice.place, voice.range);
             voice.loudness = heard.loudest() * voice.volume;
             let level = self.groups[voice.group as usize];
-            if voice.render(out, heard, level, self.slew, self.dulling) {
+            let ended = voice.render(out, heard, level, self.slew, self.dulling);
+            voice.step = step;
+            if ended {
                 voice.retire(&mut self.retired, self.keep_retired);
             }
         }
@@ -355,6 +382,7 @@ impl Mixer {
             step,
             wait: (delay * self.rate as f32) as u32,
             place: play.place,
+            in_world: play.in_world,
             range: play.range,
             volume,
             looping: play.looping,
@@ -537,6 +565,8 @@ struct Voice {
     /// Samples of output still to pass before it starts.
     wait: u32,
     place: Place,
+    /// Whether it keeps the world's time: see [`Play::in_world`].
+    in_world: bool,
     range: Range,
     volume: f32,
     looping: bool,
@@ -567,6 +597,7 @@ impl Default for Voice {
             step: 1.0,
             wait: 0,
             place: Place::Everywhere,
+            in_world: false,
             range: Range::default(),
             volume: 1.0,
             looping: false,

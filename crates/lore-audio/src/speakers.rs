@@ -29,6 +29,7 @@ enum Request {
     Volume(f32),
     GroupVolume(Group, f32),
     Underwater(f32),
+    WorldSpeed(f32),
 }
 
 /// The computer's speakers or headphones, with a [`Mixer`] playing
@@ -191,6 +192,12 @@ impl Speakers {
         self.send(Request::Underwater(amount));
     }
 
+    /// Says how fast the game's world is running, for the sounds that keep
+    /// its time. See [`Mixer::set_world_speed`].
+    pub fn set_world_speed(&mut self, speed: f32) {
+        self.send(Request::WorldSpeed(speed));
+    }
+
     fn send(&mut self, request: Request) {
         let Some(link) = &mut self.link else {
             return;
@@ -323,6 +330,7 @@ impl Feed {
                 Request::Volume(volume) => self.mixer.set_volume(volume),
                 Request::GroupVolume(group, volume) => self.mixer.set_group_volume(group, volume),
                 Request::Underwater(amount) => self.mixer.set_underwater(amount),
+                Request::WorldSpeed(speed) => self.mixer.set_world_speed(speed),
             }
         }
 

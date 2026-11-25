@@ -209,5 +209,7 @@ pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play>
     if noise.kind.is_at_a_place() {
         play.place = lore_audio::Place::At(noise.position);
     }
-    Some(play.after(noise.delay))
+    // A noise of the world keeps the world's time: it waits while the
+    // game is paused and is slow in slow motion.
+    Some(play.after(noise.delay).in_world())
 }

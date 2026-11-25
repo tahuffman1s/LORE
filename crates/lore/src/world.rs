@@ -1861,7 +1861,7 @@ impl Playing {
             self.under = player.head_under;
             if self.under {
                 if let Some(rumble) = self.world.game.sounds_mut().take("underwater", 0) {
-                    frame.sound(SoundAsk::Play(UNDER_WATER, rumble.looping()));
+                    frame.sound(SoundAsk::Play(UNDER_WATER, rumble.looping().in_world()));
                 }
             } else {
                 frame.sound(SoundAsk::Stop(UNDER_WATER));
@@ -1920,7 +1920,7 @@ impl Playing {
                     play.range = TORNADO_HEARD;
                     play.pitch = 0.5;
                 }
-                frame.sound(SoundAsk::Play(id, play.volume(loud).looping()));
+                frame.sound(SoundAsk::Play(id, play.volume(loud).looping().in_world()));
                 *said = Some(loud);
                 if let Some(tornado) = tornado {
                     self.roar_from = tornado.place;
@@ -3328,6 +3328,63 @@ mod tests {
         plain.tick(input.tick(), STEP);
         assert!(!plain.world.game.host().blocking());
         assert_eq!(plain.world.game.host().locked_on(), None);
+    }
+
+    #[test]
+    fn a_paused_game_stops_the_world_and_slow_motion_changes_nothing_but_the_pace() {
+        // A crate falling and a lift rising, paused part way.
+        let things = [
+            solid_thing(
+                "Falling",
+                [3.0, 6.0, -3.0],
+                "model = \"crate\"\nmoves = true",
+            ),
+            solid_thing("Lift", [-3.0, 0.0, -3.0], "model = \"crate\""),
+        ]
+        .concat();
+        let script = |extra: &str| {
+            format!(
+                r#"local ticks = 0
+                game.onStart(function() game.thing("Lift"):moveTo(vector.create(-3, 4, -3), 2) end)
+                game.onTick(function()
+                    ticks += 1
+                    {extra}
+                end)"#
+            )
+        };
+        let places = |game: &Playing| {
+            let mut at = Vec::new();
+            game.world.things.each(|_, told| at.push(told.position));
+            at
+        };
+        let (mut game, mut input) =
+            game_on_map(&things, &script("if ticks == 20 then game.pause() end"));
+        for _ in 0..20 {
+            game.tick(input.tick(), STEP);
+        }
+        let stopped = places(&game);
+        assert!(stopped[0][1] < 5.9 && stopped[1][1] > 0.01, "{stopped:?}");
+        // Paused: tick after tick, nothing in the world moves.
+        for _ in 0..60 {
+            game.tick(input.tick(), STEP);
+        }
+        assert_eq!(places(&game), stopped);
+        assert_eq!(game.world.game.host().time_speed(), 0.0);
+
+        // Slow motion is the same ticks at another pace: the world after
+        // 150 of them is the same to the last digit at any speed.
+        let after = |extra: &str| {
+            let (mut game, mut input) = game_on_map(&things, &script(extra));
+            for _ in 0..150 {
+                game.tick(input.tick(), STEP);
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            (places(&game), game.world.player().position)
+        };
+        assert_eq!(
+            after(""),
+            after("if ticks == 5 then game.setTimeSpeed(0.25) end")
+        );
     }
 
     #[test]
