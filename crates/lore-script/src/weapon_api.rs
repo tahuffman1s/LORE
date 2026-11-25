@@ -44,6 +44,7 @@ pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "falloffStart",
     "falloffEnd",
     "farDamage",
+    "penetration",
     "headMultiplier",
     "legMultiplier",
     "spread",
@@ -84,6 +85,7 @@ pub(crate) const HIT_FIELDS: &[&str] = &[
     "part",
     "position",
     "distance",
+    "cover",
     "explosion",
 ];
 
@@ -350,6 +352,8 @@ pub struct WeaponHit {
     pub position: [f32; 3],
     /// How far the shot travelled to get there, in metres.
     pub distance: f32,
+    /// How many metres of the level it went through on the way.
+    pub cover: f32,
     /// It was an explosion: either the explosion itself (no victim) or
     /// someone caught in its blast.
     pub explosion: bool,
@@ -390,6 +394,7 @@ pub(crate) fn hit_table(lua: &Lua, shared: &Shared, hit: &WeaponHit) -> mlua::Re
     let [x, y, z] = hit.position;
     table.raw_set("position", mlua::Vector::new(x, y, z))?;
     table.raw_set("distance", hit.distance)?;
+    table.raw_set("cover", hit.cover)?;
     table.raw_set("explosion", hit.explosion)?;
     // Every function given to game.onWeaponHit is handed the same table.
     table.set_readonly(true);
@@ -530,6 +535,7 @@ const PLAIN: &[(&str, WeaponSlot)] = &[
     ("falloffStart", Slot::Number(|s| &mut s.falloff_start)),
     ("falloffEnd", Slot::Number(|s| &mut s.falloff_end)),
     ("farDamage", Slot::Number(|s| &mut s.far_damage)),
+    ("penetration", Slot::Number(|s| &mut s.penetration)),
     ("headMultiplier", Slot::Number(|s| &mut s.head_multiplier)),
     ("legMultiplier", Slot::Number(|s| &mut s.leg_multiplier)),
     ("spread", Slot::Number(|s| &mut s.spread)),

@@ -117,6 +117,7 @@ game.weapon("smg", {
     falloffStart = 15,
     falloffEnd = 40,
     farDamage = 14,
+    penetration = 0.3,
     headMultiplier = 2,
     legMultiplier = 0.8,
     spread = 1.5,
@@ -166,7 +167,7 @@ game.onWeaponHit(function(hit)
     local headshot = hit.part == "head"
     if hit.victim then
         jumps[hit.victim] = 0
-        print(hit.shooter.name, hit.victim.name, hit.weapon, hit.damage, hit.distance, headshot)
+        print(hit.shooter.name, hit.victim.name, hit.weapon, hit.damage, hit.distance, hit.cover, headshot)
     elseif hit.explosion then
         print("Boom at", where)
     end

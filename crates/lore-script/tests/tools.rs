@@ -905,6 +905,7 @@ fn only_the_player_can_be_moved_or_changed() {
         part: Some(Zone::Body),
         position: [0.0, 1.2, -10.0],
         distance: 10.0,
+        cover: 0.0,
         explosion: false,
     });
     let message = mistake(&host);

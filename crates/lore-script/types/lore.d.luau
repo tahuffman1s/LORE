@@ -785,6 +785,11 @@ declare extern type WeaponHit with
     --- How far the shot travelled to get there, in metres.
     distance: number
 
+    --- How many metres of the level the shot went through on the way: 0
+    --- unless the weapon has `penetration` and there was cover between.
+    --- Example: if hit.cover > 0 then print("Shot through cover") end
+    cover: number
+
     --- True when this is an explosion: first the explosion itself, with no
     --- victim and no damage, then one hit for each character caught in its
     --- blast, with what the blast is worth where they stood.
@@ -2158,6 +2163,11 @@ declare game: {
         falloffEnd: number?,
         --- What one hit to the body is worth at `falloffEnd` and beyond.
         farDamage: number?,
+        --- How many metres of the level a shot goes through: a thin wall,
+        --- a door, a fence. It loses damage evenly on the way, and all of
+        --- it at this much. 0, the usual, stops at the first surface. For
+        --- a weapon that fires straight (not one that launches things).
+        penetration: number?,
         --- What a hit to the head is multiplied by.
         headMultiplier: number?,
         --- What a hit to the legs is multiplied by.

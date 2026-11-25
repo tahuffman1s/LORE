@@ -756,6 +756,43 @@ impl Level {
         fraction.is_finite().then(|| fraction.clamp(0.0, 1.0))
     }
 
+    /// How thick the level is where something going along `direction`
+    /// entered it at `entry`: how far on its other side is, in metres.
+    /// 0 for a sheet with nothing behind it (a fence, a banner: a face
+    /// with no back), and `None` for something more than `most` metres
+    /// through, or solid all the way. Things that move about in the level
+    /// are not counted: this is for the level's own walls.
+    #[must_use]
+    pub fn thickness(&self, entry: [f32; 3], direction: [f32; 3], most: f32) -> Option<f32> {
+        /// How far a shot is looked ahead for the back of what it entered.
+        const FAR: f32 = 200.0;
+        let mesh = self.mesh.as_ref()?;
+        let heading = Vector::from_array(direction).try_normalize()?;
+        let entry = Vector::from_array(entry);
+        if !(entry.is_finite() && most.is_finite() && most >= 0.0) {
+            return None;
+        }
+        // From just inside, so the face that was entered is not met again.
+        let inside = entry + heading * 2.0e-3;
+        let ray = Ray::new(inside.as_dvec3(), heading.as_dvec3());
+        let Some(next) = mesh.cast_local_ray_and_get_normal(&ray, f64::from(FAR), false) else {
+            // Nothing beyond it at all: it had no back.
+            return Some(0.0);
+        };
+        // The next face met from behind is the way out of something solid;
+        // met from in front, it is another thing, and the first was a sheet.
+        let leaving = mesh
+            .triangle(next.subshape)
+            .scaled_normal()
+            .dot(heading.as_dvec3())
+            > 0.0;
+        if !leaving {
+            return Some(0.0);
+        }
+        let through = next.time_of_impact as f32 + 2.0e-3;
+        (through <= most).then_some(through)
+    }
+
     /// The level's own shapes, for a world of bodies to land on.
     pub(crate) fn mesh(&self) -> Option<&TriMesh> {
         self.mesh.as_ref()

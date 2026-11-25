@@ -170,6 +170,11 @@ fn player_target(body: &Body, rules: &MoveSettings) -> Target {
             rules.standing_height
         },
         radius: rules.radius,
+        // The head is where the eyes are, crouched or standing.
+        head: Some({
+            let eye = body.player.eye_position();
+            [eye[0], eye[1] + 0.05, eye[2]]
+        }),
     }
 }
 
@@ -180,6 +185,8 @@ fn dummy_target(dummy: &Dummy, rules: &MoveSettings) -> Target {
         feet: dummy.feet,
         height: rules.standing_height,
         radius: rules.radius,
+        // It has no skeleton: its head is the top of it.
+        head: None,
     }
 }
 
@@ -356,6 +363,7 @@ impl Shooting {
                         part,
                         position: hit.point,
                         distance: hit.distance,
+                        cover: hit.cover,
                         explosion: false,
                     }));
                 }
@@ -421,6 +429,7 @@ impl Shooting {
                     part,
                     position,
                     distance: flying.projectile.travelled,
+                    cover: 0.0,
                     explosion,
                 })
             };

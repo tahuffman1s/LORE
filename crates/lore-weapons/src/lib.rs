@@ -13,7 +13,7 @@
 //! use lore_weapons::{hitscan, shot_seed, Target, Weapon, WeaponInput, WeaponSettings};
 //!
 //! let level = Level::from_triangles(&[]);
-//! let enemy = Target { id: 2, feet: [0.0, 0.0, -20.0], height: 1.8, radius: 0.35 };
+//! let enemy = Target { id: 2, feet: [0.0, 0.0, -20.0], height: 1.8, radius: 0.35, head: None };
 //!
 //! let rifle = WeaponSettings::default();
 //! let mut weapon = Weapon::new(&rifle);

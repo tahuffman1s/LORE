@@ -1153,6 +1153,7 @@ fn characters_are_kept_as_keys_and_values_while_they_are_in_the_world() {
         part: None,
         position: [0.0; 3],
         distance: 1.0,
+        cover: 0.0,
         explosion: false,
     };
     host.weapon_hit(&hit(dummy));
