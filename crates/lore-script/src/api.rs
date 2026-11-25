@@ -58,6 +58,11 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "things",
     "zone",
     "showUsePrompt",
+    "seed",
+    "setSeed",
+    "chance",
+    "pick",
+    "shuffle",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -222,6 +227,8 @@ pub(crate) struct Shared {
     pub settings: Rc<SettingsState>,
     /// The game's time. It outlives this version of the script.
     pub clock: Rc<Clock>,
+    /// The game's dice. They outlive this version of the script.
+    pub dice: Rc<crate::dice_api::Dice>,
     /// The player's body and camera. It outlives this version of the script.
     pub body: Rc<crate::body_api::BodyState>,
     /// The hurts the script has not yet heard of. They outlive this version.
@@ -372,6 +379,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
+    crate::dice_api::install(lua, shared, &game)?;
     fluid_api::install(lua, shared, &game)?;
     crate::lamp_api::install(lua, shared, &game)?;
     settings_api::install(lua, shared, &game)?;

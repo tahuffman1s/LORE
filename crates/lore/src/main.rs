@@ -72,12 +72,17 @@ enum Command {
     #[command(
         after_help = "Examples:\n  lore run            Play the game in this folder\n  \
                             lore run my-game    Play the game in the folder my-game\n  \
-                            lore run dist/my-game.lpk    Play a game pack, as a packaged game does"
+                            lore run dist/my-game.lpk    Play a game pack, as a packaged game does\n  \
+                            lore run --seed 1234    Play with the dice of an earlier game"
     )]
     Run {
         /// The game's folder, or a game pack (.lpk). Leave it out to play the game in the
         /// folder you are in
         folder: Option<PathBuf>,
+        /// The seed of the game's dice, a whole number: the same seed and the same
+        /// presses play the same game. Leave it out for dice by chance
+        #[arg(long, value_name = "NUMBER")]
+        seed: Option<u64>,
     },
     /// Open a game's level in the editor: fly around it and place spawn points
     #[cfg(feature = "editor")]
@@ -336,7 +341,11 @@ fn main() -> ExitCode {
 fn command() -> Result<(), String> {
     match Cli::parse().command {
         Some(Command::New { folder, kind }) => new(&folder, kind.as_deref()),
-        Some(Command::Run { folder }) => run(folder.as_deref().unwrap_or(Path::new("."))),
+        Some(Command::Run { folder, seed }) => {
+            // Said before the game is opened: its first line may roll.
+            lore_script::seed_new_games(seed);
+            run(folder.as_deref().unwrap_or(Path::new(".")))
+        }
         #[cfg(feature = "editor")]
         Some(Command::Edit { folder }) => edit(folder.as_deref().unwrap_or(Path::new("."))),
         Some(Command::Check { folder }) => check(folder.as_deref().unwrap_or(Path::new("."))),
@@ -498,6 +507,8 @@ fn check(folder: &Path) -> Result<(), String> {
     /// Where the pretend training dummy's feet are: ten metres in front
     /// of a player who has not moved from the middle of a flat floor.
     const DUMMY_AT: [f32; 3] = [0.0, 0.0, -10.0];
+    // Every time the check plays the game it is the same game, dice and all.
+    lore_script::seed_new_games(Some(cli::CHECK_SEED));
 
     let mut config = Config::default();
     let mut game = open(folder, &mut config, "check")?;
@@ -837,10 +848,11 @@ fn check(folder: &Path) -> Result<(), String> {
         ),
         Some(Paced::NotRepeatable { tick }) => println!(
             "The check also tried to find out whether the game's rules depend on how often \
-             a picture is drawn, and could not: played twice in exactly the same way, they \
-             already did something else on tick {tick}. Rules that roll dice with \
-             math.random do that, because LORE does not yet give a game the same dice \
-             twice. That alone does not mean anything is wrong with the game."
+             a picture is drawn, and could not: played twice in exactly the same way, with \
+             the same dice, they already did something else on tick {tick}. That should \
+             not be possible. One known way is a loop over a table whose keys are tables \
+             or functions (for key in pairs(t)): their order is not fixed, so keep such \
+             things in a list. If it is not that, please report it."
         ),
         Some(Paced::Differs { .. } | Paced::Mistake(_)) | None => {}
     }
@@ -962,6 +974,11 @@ fn run(folder: &Path) -> Result<(), String> {
     log::info!(
         "Playing {}. Edit it, or a script it requires, and save to see changes right away.",
         folder.join(ENTRY_SCRIPT).display()
+    );
+    let seed = game.host().dice().seed();
+    log::info!(
+        "Its dice (math.random) come from seed {seed}: `lore run --seed {seed}` plays with \
+         the same dice again."
     );
     let name = cli::game_name(folder);
     if !name.is_empty() {
