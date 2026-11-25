@@ -170,6 +170,11 @@ pub(crate) struct Character {
     palms: [[f32; 3]; 2],
     /// How a held thing is turned in each hand: see [`grip`].
     grips: [Transform; 2],
+    /// The arm that ends in each hand, for reaching a weapon held.
+    arms: [Option<lore_anim::ik::Limb>; 2],
+    /// The weapon held ready this frame, if one is: where the hands go on
+    /// it. Set with [`set_hold`](Self::set_hold) before drawing.
+    hold: Option<Hold>,
     /// The neck, left out with it: a sprint leans the body over, and looking
     /// down would otherwise show its stump below the eyes.
     neck: Option<usize>,
@@ -223,12 +228,110 @@ pub(crate) struct Struck {
 pub(crate) struct Drawn<'a> {
     /// Takes the model's space to the world.
     pub(crate) transform: Transform,
+    /// Where the weapon held ready is in the world, if one is: what takes
+    /// its model (grip at the origin, muzzle along -Z) there.
+    pub(crate) weapon: Option<Transform>,
     /// The skinning matrices for the picture (the head left out in first person).
     pub(crate) seen_joints: &'a [Transform],
     /// The skinning matrices for the shadow: the whole body.
     pub(crate) shadow_joints: &'a [Transform],
     /// Whether the body is drawn in the picture at all.
     pub(crate) seen: bool,
+}
+
+/// A weapon held ready, as the body holds it: where the left hand goes on
+/// it, in the weapon's own space (grip at the origin, muzzle along -Z, top
+/// along +Y), or `None` to hold it in the right hand alone; and whether
+/// that hand cups the right one (a pistol) rather than holding a fore-end.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Hold {
+    pub(crate) support: Option<[f32; 3]>,
+    pub(crate) cupped: bool,
+}
+
+/// Where a weapon is held in first person, in metres right, up and ahead
+/// of the eyes: low, a little right of the middle, near enough for both
+/// arms to reach.
+const HELD_AT_EYES: [f32; 3] = [0.08, -0.13, 0.19];
+
+/// Where a weapon is held in third person, from the head: at the right
+/// shoulder, pointing where the body faces.
+const HELD_AT_SHOULDER: [f32; 3] = [0.08, -0.22, 0.22];
+
+/// How far the chest turns to bring the left shoulder forward when both
+/// hands hold a weapon, in radians: a shooter's stance, side-on to it.
+const STANCE_TURN: f32 = 0.75;
+
+/// What turns a weapon model (grip at the origin, muzzle along -Z, top
+/// along +Y) into the space of a held thing (length along +Y leaving the
+/// thumb's side of the fist, square to the fingers along +X): the muzzle
+/// points where the fingers do, and the top is on the thumb's side.
+pub(crate) const WEAPON_IN_HAND: Transform = [
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// A weapon held at `offset` (metres right, up, ahead) from `from`,
+/// looking along `yaw` and `pitch`, turned with the look.
+pub(crate) fn held_from(from: [f32; 3], (yaw, pitch): (f32, f32), offset: [f32; 3]) -> Transform {
+    let (sin, cos) = (libm::sinf(yaw), libm::cosf(yaw));
+    let (sin_pitch, cos_pitch) = (libm::sinf(pitch), libm::cosf(pitch));
+    let ahead = [-sin * cos_pitch, sin_pitch, -cos * cos_pitch];
+    let right = [cos, 0.0, -sin];
+    let up = cross(right, ahead);
+    let [r, u, a] = offset;
+    let at: [f32; 3] = std::array::from_fn(|i| from[i] + right[i] * r + up[i] * u + ahead[i] * a);
+    [
+        [right[0], right[1], right[2], 0.0],
+        [up[0], up[1], up[2], 0.0],
+        [-ahead[0], -ahead[1], -ahead[2], 0.0],
+        [at[0], at[1], at[2], 1.0],
+    ]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit3(v: [f32; 3]) -> [f32; 3] {
+    let long = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if long > 1e-6 {
+        v.map(|part| part / long)
+    } else {
+        [0.0, 1.0, 0.0]
+    }
+}
+
+/// The turn of `transform` undone, its place left out: for a pure turn,
+/// its transpose.
+fn turn_undone(transform: &Transform) -> Transform {
+    let mut out = lore_anim::math::IDENTITY;
+    for (column, out_column) in out.iter_mut().enumerate().take(3) {
+        for (row, cell) in out_column.iter_mut().enumerate().take(3) {
+            *cell = transform[row][column];
+        }
+    }
+    out
+}
+
+/// A frame whose +X is `x` and +Y as near `y` as is square to it, at `at`.
+fn frame_of(x: [f32; 3], y: [f32; 3], at: [f32; 3]) -> Transform {
+    let x = unit3(x);
+    let dot = x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let y = unit3(std::array::from_fn(|i| y[i] - x[i] * dot));
+    let z = cross(x, y);
+    [
+        [x[0], x[1], x[2], 0.0],
+        [y[0], y[1], y[2], 0.0],
+        [z[0], z[1], z[2], 0.0],
+        [at[0], at[1], at[2], 1.0],
+    ]
 }
 
 impl Character {
@@ -473,6 +576,9 @@ impl Character {
                 .and_then(|((middle, thumb), little)| grip(middle, thumb, little))
                 .unwrap_or(lore_anim::math::IDENTITY)
         });
+        let arms = hands.map(|hand| {
+            hand.and_then(|hand| lore_anim::ik::Limb::ending_in(body.skeleton(), hand))
+        });
         Self {
             model: Arc::new(scene),
             animator,
@@ -498,6 +604,8 @@ impl Character {
             hands,
             palms,
             grips,
+            arms,
+            hold: None,
             drawn_at: lore_anim::math::IDENTITY,
             neck,
             swing: None,
@@ -944,10 +1052,6 @@ impl Character {
             [s, 0.0, c, 0.0],
             [at[0], at[1], at[2], 1.0],
         ];
-        let mut written = 0;
-        for skin in 0..skeleton.skins().len() {
-            written += skeleton.skinning(skin, &self.placed, &mut self.skinning[written..]);
-        }
         // Where the head really is this frame, leaning or not.
         let head_place = match self.head.and_then(|head| self.placed.get(head)) {
             Some(placed) => {
@@ -956,6 +1060,22 @@ impl Character {
             }
             None => [feet[0], feet[1] + 1.6, feet[2]],
         };
+        // A weapon held ready: before the eyes in first person, at the
+        // shoulder in third, and the arms reach it.
+        let weapon = self.hold.map(|hold| {
+            let weapon = if third < 0.5 {
+                held_from(camera, look, HELD_AT_EYES)
+            } else {
+                held_from(head_place, (yaw, pitch), HELD_AT_SHOULDER)
+            };
+            self.reach_for(&weapon, hold, &transform);
+            weapon
+        });
+        let skeleton = self.body.skeleton();
+        let mut written = 0;
+        for skin in 0..skeleton.skins().len() {
+            written += skeleton.skinning(skin, &self.placed, &mut self.skinning[written..]);
+        }
         let near: f32 = (0..3)
             .map(|i| (camera[i] - head_place[i]).powi(2))
             .sum::<f32>()
@@ -979,6 +1099,7 @@ impl Character {
         self.drawn_at = transform;
         Drawn {
             transform,
+            weapon,
             seen_joints: &self.headless,
             shadow_joints: &self.skinning,
             // In third person, hidden when the camera is pressed against
@@ -989,6 +1110,155 @@ impl Character {
 }
 
 impl Character {
+    /// Holds a weapon ready from the next frame drawn, or with `None`
+    /// lets the arms hang as the clips have them.
+    pub(crate) fn set_hold(&mut self, hold: Option<Hold>) {
+        self.hold = hold;
+    }
+
+    /// Turns the arms so the hands hold `weapon`, which is in the world;
+    /// `drawn` takes the model's space to the world (a turn about +Y and a
+    /// move, nothing stretched).
+    fn reach_for(&mut self, weapon: &Transform, hold: Hold, drawn: &Transform) {
+        // Into the model's space, where the bones are.
+        let undone = turn_undone(drawn);
+        let back = lore_anim::math::apply(&undone, lore_anim::math::origin(drawn));
+        let mut to_model = undone;
+        to_model[3] = [-back[0], -back[1], -back[2], 1.0];
+        let gun = lore_anim::math::combine(&to_model, weapon);
+        let column = |i: usize| [gun[i][0], gun[i][1], gun[i][2]];
+        let (right, up, behind) = (column(0), column(1), column(2));
+        let down = [0.0, -1.0, 0.0];
+        // Both hands on it: the chest turns, the left shoulder forward.
+        if hold.support.is_some() {
+            self.stand_side_on(behind);
+        }
+        // The right hand on the grip; its elbow down and out to the right.
+        let grip = lore_anim::math::combine(&gun, &turn_undone(&WEAPON_IN_HAND));
+        let elbow_out = |side: f32| {
+            let o = lore_anim::math::origin(&gun);
+            std::array::from_fn(|i| o[i] + down[i] * 0.6 + right[i] * 0.5 * side + behind[i] * 0.3)
+        };
+        let mut reaches = [None, None];
+        reaches[0] = self.hand_reach(0, &grip, elbow_out(1.0));
+        if let Some(support) = hold.support {
+            let mut at = lore_anim::math::apply(&gun, support);
+            let ahead = behind.map(|v| -v);
+            // Out of the arm's reach (in first person the body stands
+            // behind the eyes), the hand slides back along the weapon
+            // towards the grip until it can hold it.
+            if let Some((root, long)) = self.arm_reach(1) {
+                let far =
+                    |p: [f32; 3]| (0..3).map(|i| (p[i] - root[i]).powi(2)).sum::<f32>().sqrt();
+                let mut step = 0;
+                while far(at) > long && step < 40 {
+                    at = std::array::from_fn(|i| at[i] + behind[i] * 0.01);
+                    step += 1;
+                }
+            }
+            // On a fore-end the barrel runs through the fist, thumb towards
+            // the muzzle, knuckles down and to the left; cupping the right
+            // hand, the thumb is up and the knuckles forward and left.
+            let thing = if hold.cupped {
+                frame_of(std::array::from_fn(|i| ahead[i] - right[i]), up, at)
+            } else {
+                frame_of(std::array::from_fn(|i| -right[i] - up[i]), ahead, at)
+            };
+            reaches[1] = self.hand_reach(1, &thing, elbow_out(-1.0));
+        }
+        let skeleton = self.body.skeleton();
+        for (limb, reach) in reaches.into_iter().flatten() {
+            lore_anim::ik::reach(skeleton, &mut self.blended, &mut self.placed, limb, &reach);
+        }
+    }
+
+    /// Turns the chest (what both arms hang from) so the left shoulder comes
+    /// forward, towards the way a weapon points (`behind` is its back).
+    fn stand_side_on(&mut self, behind: [f32; 3]) {
+        let (Some(left), Some(right)) = (self.arms[1], self.arms[0]) else {
+            return;
+        };
+        let skeleton = self.body.skeleton();
+        // The chest is the first bone above both arms.
+        let above = |bone: usize| {
+            let mut chain = [None; 8];
+            let mut at = Some(bone);
+            for slot in &mut chain {
+                *slot = at;
+                at = at.and_then(|b| skeleton.parent(b));
+            }
+            chain
+        };
+        let (lefts, rights) = (above(left.root), above(right.root));
+        let Some(chest) = lefts
+            .iter()
+            .flatten()
+            .find(|b| rights.contains(&Some(**b)))
+            .copied()
+        else {
+            return;
+        };
+        let at = |bone: usize| self.placed.get(bone).map(lore_anim::math::origin);
+        let (Some(middle), Some(shoulder)) = (at(chest), at(left.root)) else {
+            return;
+        };
+        // Which way about the up axis brings the left shoulder ahead.
+        let out = [shoulder[0] - middle[0], 0.0, shoulder[2] - middle[2]];
+        let ahead = [-behind[0], 0.0, -behind[2]];
+        let sign = (out[2] * ahead[0] - out[0] * ahead[2]).signum();
+        let half = STANCE_TURN * 0.5 * sign;
+        let turn = [0.0, libm::sinf(half), 0.0, libm::cosf(half)];
+        lore_anim::ik::turn(skeleton, &mut self.blended, &mut self.placed, chest, turn);
+    }
+
+    /// Where the shoulder of arm `side` is in the model's space and how far
+    /// its hand can reach from there, a little short of straight.
+    fn arm_reach(&self, side: usize) -> Option<([f32; 3], f32)> {
+        let limb = self.arms.get(side).copied().flatten()?;
+        let at = |bone: usize| self.placed.get(bone).map(lore_anim::math::origin);
+        let (root, middle, end) = (at(limb.root)?, at(limb.middle)?, at(limb.end)?);
+        let far =
+            |a: [f32; 3], b: [f32; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt();
+        Some((root, (far(root, middle) + far(middle, end)) * 0.97))
+    }
+
+    /// What the arm of hand `side` (0 right, 1 left) must reach for that
+    /// hand to hold a thing placed at `thing` (in the model's space, made
+    /// with its length along +Y leaving the thumb's side): where its wrist
+    /// goes and how the hand faces, with the elbow towards `pole`.
+    fn hand_reach(
+        &self,
+        side: usize,
+        thing: &Transform,
+        pole: [f32; 3],
+    ) -> Option<(lore_anim::ik::Limb, lore_anim::ik::Reach)> {
+        let limb = self.arms.get(side).copied().flatten()?;
+        let hand = self.hands.get(side).copied().flatten()?;
+        let placed = self.placed.get(hand)?;
+        // The hand bone as it must be: the grip undone from the thing.
+        let bone = lore_anim::math::combine(thing, &turn_undone(&self.grips[side]));
+        let scale: [f32; 3] = std::array::from_fn(|i| {
+            (placed[i][0] * placed[i][0]
+                + placed[i][1] * placed[i][1]
+                + placed[i][2] * placed[i][2])
+                .sqrt()
+        });
+        let palm = self.palms[side];
+        let offset: [f32; 3] = std::array::from_fn(|i| palm[i] * scale[i]);
+        let mut turned = bone;
+        turned[3] = [0.0, 0.0, 0.0, 1.0];
+        let reach = lore_anim::math::apply(&turned, offset);
+        let at = lore_anim::math::origin(&bone);
+        Some((
+            limb,
+            lore_anim::ik::Reach {
+                target: std::array::from_fn(|i| at[i] - reach[i]),
+                pole,
+                facing: Some(lore_anim::ik::turn_of(&bone)),
+            },
+        ))
+    }
+
     /// Where a thing held in the right hand (or, with `left`, the left)
     /// is, as of the body last drawn with [`figures`](Self::figures): what
     /// takes a model made with its grip at the origin and its length along
@@ -1132,6 +1402,73 @@ mod tests {
             character.tick(&player, (0.0, 0.0), &level, 1.0 / 60.0, |_, _| {});
         }
         assert!((angle_between(character.yaw(), -std::f32::consts::FRAC_PI_2)).abs() < 1e-3);
+    }
+
+    /// The inverse of a transform that turns and moves, nothing stretched.
+    fn inverse(t: &Transform) -> Transform {
+        let mut out = turn_undone(t);
+        let back = lore_anim::math::apply(&out, lore_anim::math::origin(t));
+        out[3] = [-back[0], -back[1], -back[2], 1.0];
+        out
+    }
+
+    #[test]
+    fn the_hands_hold_a_weapon_by_its_grip_and_fore_end_in_either_view() {
+        let level = Level::from_triangles(&[]);
+        let player = standing();
+        let support = [0.0, -0.035, -0.25];
+        for view in [View::First, View::Third] {
+            let mut character = Character::mannequin().unwrap();
+            character.view = view;
+            for _ in 0..90 {
+                character.tick(&player, (0.0, -0.1), &level, 1.0 / 60.0, |_, _| {});
+            }
+            character.set_hold(Some(Hold {
+                support: Some(support),
+                cupped: false,
+            }));
+            let eye = player.eye_position();
+            let camera = character.camera(1.0, eye, (0.0, -0.1), &level);
+            let drawn = character.figures(1.0, player.position, camera, (0.0, -0.1));
+            let weapon = drawn.weapon.expect("a weapon is held");
+            let far = |a: [f32; 3], b: [f32; 3]| {
+                (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt()
+            };
+            let grip = lore_anim::math::origin(&weapon);
+            let right = lore_anim::math::origin(&character.held_place(false).unwrap());
+            let left = lore_anim::math::origin(&character.held_place(true).unwrap());
+            assert!(
+                far(right, grip) < 0.03,
+                "{view:?}: the right hand is {} m off",
+                far(right, grip)
+            );
+            // The left hand is under the barrel, between the grip and the
+            // fore-end: on it in third person, nearer the grip in first,
+            // where the body stands behind the eyes.
+            let local = lore_anim::math::apply(&inverse(&weapon), left);
+            let off_line = (local[0].powi(2) + (local[1] - support[1]).powi(2)).sqrt();
+            assert!(
+                off_line < 0.06,
+                "{view:?}: the left hand is {off_line} m off the fore-end"
+            );
+            assert!(
+                (support[2] - 0.02..-0.05).contains(&local[2]),
+                "{view:?}: {local:?}"
+            );
+            if view == View::Third {
+                assert!((local[2] - support[2]).abs() < 0.06, "{local:?}");
+            }
+            // In front of the body, below the eyes.
+            assert!(grip[1] < eye[1] && grip[2] < eye[2], "{view:?}: {grip:?}");
+        }
+        // Held in one hand, the left hangs as the clips have it.
+        let mut character = Character::mannequin().unwrap();
+        character.set_hold(Some(Hold {
+            support: None,
+            cupped: false,
+        }));
+        let drawn = character.figures(1.0, player.position, player.eye_position(), (0.0, 0.0));
+        assert!(drawn.weapon.is_some());
     }
 
     #[test]

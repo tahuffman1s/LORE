@@ -283,3 +283,76 @@ fn the_same_ticks_give_the_same_bones() {
     };
     assert_eq!(run(), run());
 }
+
+/// A shoulder, an upper arm and forearm 0.3 m each, and a hand, hanging
+/// down from the shoulder at the origin, scaled as a rig often is.
+fn hanging_arm() -> Scene {
+    let node = |name: &str, parent: Option<u32>, down: f32| Node {
+        name: Some(name.into()),
+        parent,
+        rest: Pose {
+            translation: [0.0, -down, 0.0],
+            ..Pose::default()
+        },
+        instance: None,
+        skin: None,
+    };
+    Scene {
+        nodes: vec![
+            node("shoulder", None, 0.0),
+            node("upper", Some(0), 0.0),
+            node("lower", Some(1), 0.3),
+            node("hand", Some(2), 0.3),
+        ],
+        ..Scene::default()
+    }
+}
+
+#[test]
+fn an_arm_reaches_a_place_with_its_elbow_towards_the_pole_and_its_hand_turned() {
+    use crate::ik::{Limb, Reach, reach, turn_of};
+    let scene = hanging_arm();
+    let skeleton = Skeleton::from_scene(&scene);
+    let mut local: Vec<Pose> = skeleton.rest().to_vec();
+    let mut placed = vec![IDENTITY; skeleton.len()];
+    skeleton.place(&local, &mut placed);
+    let limb = Limb::ending_in(&skeleton, 3).unwrap();
+    assert_eq!((limb.root, limb.middle, limb.end), (1, 2, 3));
+    let target = [0.2, -0.1, -0.35];
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let facing = nlerp([0.0, 0.0, 0.0, 1.0], [0.0, half, 0.0, half], 1.0);
+    reach(
+        &skeleton,
+        &mut local,
+        &mut placed,
+        limb,
+        &Reach {
+            target,
+            pole: [0.0, -1.0, 0.0],
+            facing: Some(facing),
+        },
+    );
+    let hand = [placed[3][3][0], placed[3][3][1], placed[3][3][2]];
+    assert!(close(hand, target), "the hand is at {hand:?}");
+    // The elbow is below the line from shoulder to hand: towards the pole.
+    assert!(placed[2][3][1] < -0.1, "the elbow is at {:?}", placed[2][3]);
+    let turned = turn_of(&placed[3]);
+    assert!((crate::math::dot4(turned, facing).abs() - 1.0).abs() < 1e-4);
+    // Out of reach, the arm points straight at it.
+    reach(
+        &skeleton,
+        &mut local,
+        &mut placed,
+        limb,
+        &Reach {
+            target: [0.0, 0.0, -5.0],
+            pole: [0.0, -1.0, 0.0],
+            facing: None,
+        },
+    );
+    assert!(
+        placed[3][3][2] < -0.59 && placed[3][3][1].abs() < 0.02,
+        "{:?}",
+        placed[3][3]
+    );
+}

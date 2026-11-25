@@ -90,7 +90,7 @@ pub use shader_api::{
 };
 pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, ThingAsk, ThingMotion, UseSaid};
 pub use tools_api::{Abilities, FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport, ViewTold};
-pub use weapon_api::{HeldWeapon, WeaponHit};
+pub use weapon_api::{HeldWeapon, HoldSaid, WeaponHit};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
 /// Type definitions for the script API, in the format the Luau language

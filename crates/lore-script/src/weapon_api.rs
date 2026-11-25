@@ -26,6 +26,8 @@ pub(crate) const BUILT_IN: &[&str] = &["rifle", "pistol", "shotgun", "rocket lau
 pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "from",
     "model",
+    "hands",
+    "support",
     "fireMode",
     "burstSize",
     "reach",
@@ -109,6 +111,19 @@ const USUAL_BURST: u32 = 3;
 const WEAPON_EXAMPLE: &str =
     "game.weapon(\"smg\", { from = \"rifle\", damage = 22, roundsPerMinute = 900 })";
 
+/// How a script said a weapon is held. What it leaves out the engine works
+/// out from the weapon's model: a thrown weapon in one hand, a long gun
+/// with the left hand on its fore-end, a short one with it cupping the
+/// right.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HoldSaid {
+    /// `Some(true)` for one hand, `Some(false)` for two.
+    pub one_handed: Option<bool>,
+    /// Where the left hand goes, in the model's metres (grip at the
+    /// origin, muzzle along -Z, top along +Y).
+    pub support: Option<[f32; 3]>,
+}
+
 /// One kind of weapon: its name and its numbers.
 #[derive(Debug, Clone)]
 pub(crate) struct Kind {
@@ -119,6 +134,8 @@ pub(crate) struct Kind {
     /// What is drawn in the hands: a built-in model's name (the engine's
     /// own weapons have one each) or a model file in the game's folder.
     pub model: Option<Rc<str>>,
+    /// How it is held: in one hand or two, and where the left hand goes.
+    pub hold: HoldSaid,
     /// The line of `main.luau` or a required script that defined it.
     line: Option<usize>,
 }
@@ -246,6 +263,7 @@ fn built_in() -> Vec<Kind> {
             name: Rc::from(*name),
             settings,
             model: Some(Rc::from(*name)),
+            hold: HoldSaid::default(),
             line: None,
         })
         .collect()
@@ -792,6 +810,8 @@ pub struct HeldWeapon {
     /// weapon models ("rifle", "pistol", "shotgun", "rocket launcher", "grenade") or a model file in the game's folder.
     /// `None` draws nothing.
     pub model: Option<Rc<str>>,
+    /// How the script said it is held, if it said.
+    pub hold: HoldSaid,
     /// Everything this one weapon remembers between ticks.
     pub state: Weapon,
 }
@@ -887,7 +907,7 @@ fn weapon_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 format!("A game can have {MOST_KINDS} kinds of weapon, and this is one more."),
             ));
         }
-        let (settings, model) = match &settings {
+        let (settings, model, hold) = match &settings {
             Value::Table(settings) => read_settings(lua, &shared, name, settings)?,
             // No settings: a copy of the weapon it starts from.
             Value::Nil => read_settings(lua, &shared, name, &lua.create_table()?)?,
@@ -909,6 +929,7 @@ fn weapon_function(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             name: Rc::from(name),
             settings,
             model,
+            hold,
             line,
         });
         Ok(())
@@ -1137,21 +1158,27 @@ fn read_settings(
     shared: &Shared,
     name: &str,
     table: &Table,
-) -> mlua::Result<(WeaponSettings, Option<Rc<str>>)> {
+) -> mlua::Result<(WeaponSettings, Option<Rc<str>>, HoldSaid)> {
     // What it starts from: the weapon `from` names; with no `from`, the
     // weapon that already has this name (so a built-in one can be tuned),
     // or else the rifle.
     let from: Value = table.raw_get("from")?;
     // Its model too comes from what it starts from, unless it says one.
-    let (mut settings, mut model) = match &from {
+    let (mut settings, mut model, mut hold) = match &from {
         Value::Nil => kind_named(shared, name).map_or_else(
-            || (WeaponSettings::default(), Some(Rc::from("rifle"))),
-            |kind| (kind.settings, kind.model),
+            || {
+                (
+                    WeaponSettings::default(),
+                    Some(Rc::from("rifle")),
+                    HoldSaid::default(),
+                )
+            },
+            |kind| (kind.settings, kind.model, kind.hold),
         ),
         Value::String(from) => {
             let from = from.to_str()?;
             match kind_named(shared, &from) {
-                Some(kind) => (kind.settings, kind.model),
+                Some(kind) => (kind.settings, kind.model, kind.hold),
                 None => return Err(no_such_weapon(lua, shared, &from)),
             }
         }
@@ -1191,6 +1218,34 @@ fn read_settings(
                 let file = file.to_str()?;
                 let file = file.trim();
                 model = (!file.is_empty()).then(|| Rc::from(file));
+            }
+            "hands" => {
+                let said = match &value {
+                    Value::String(said) => said.to_str()?.trim().to_lowercase(),
+                    _ => String::new(),
+                };
+                hold.one_handed = match said.as_str() {
+                    "one" | "1" => Some(true),
+                    "two" | "2" => Some(false),
+                    _ => {
+                        return Err(fail(
+                            lua,
+                            "game.weapon: hands is \"one\" (held in the right hand alone, as a \
+                             grenade is) or \"two\" (the left hand on it too). Write it like \
+                             this: hands = \"one\"",
+                        ));
+                    }
+                };
+            }
+            "support" => {
+                hold.support = Some(crate::fluid_api::vector_of(
+                    lua,
+                    "game.weapon",
+                    "support (where the left hand holds it, in metres from the grip: \
+                     right, up and back)",
+                    &value,
+                    "support = vector.create(0, -0.03, -0.3)",
+                )?);
             }
             "fireMode" => {
                 let mode = match &value {
@@ -1316,7 +1371,7 @@ fn read_settings(
              Write it like this: roundsPerMinute = 600",
         ));
     }
-    Ok((settings, model))
+    Ok((settings, model, hold))
 }
 
 #[cfg(test)]
@@ -1325,7 +1380,15 @@ mod tests {
 
     #[test]
     fn every_setting_listed_can_be_read() {
-        let mut readable = vec!["from", "model", "fireMode", "burstSize", "reach"];
+        let mut readable = vec![
+            "from",
+            "model",
+            "hands",
+            "support",
+            "fireMode",
+            "burstSize",
+            "reach",
+        ];
         readable.extend(PLAIN.iter().map(|(name, _)| *name));
         assert_eq!(readable, WEAPON_SETTINGS);
         let flight: Vec<&str> = PROJECTILE.iter().map(|(name, _)| *name).collect();

@@ -20,6 +20,7 @@
 
 mod animator;
 mod clip;
+pub mod ik;
 pub mod math;
 mod skeleton;
 #[cfg(test)]

@@ -1361,42 +1361,59 @@ pub struct Playing {
     /// which was said in the log.
     weapon_models:
         std::collections::HashMap<std::rc::Rc<str>, Option<std::sync::Arc<lore_assets::Scene>>>,
+    /// How far ahead of its grip each weapon model reaches, worked out once
+    /// from its shape: what says where the left hand goes.
+    weapon_lengths: std::collections::HashMap<std::rc::Rc<str>, f32>,
 }
 
-/// Where a weapon is drawn in front of the eyes in first person, as
-/// shares of a metre right, up and ahead of them: low on the right, as a
-/// right-handed player holds one ready.
-const WEAPON_AT_EYES: [f32; 3] = [0.13, -0.14, 0.34];
+/// How far ahead of its grip a weapon must reach to be held in both hands
+/// by a fore-end, in metres: a pistol is shorter, and the left hand cups
+/// the right instead.
+const LONG_GUN: f32 = 0.3;
 
-/// What turns a weapon model (grip at the origin, muzzle along -Z, top
-/// along +Y) into the space of a held thing (length along +Y leaving the
-/// thumb's side of the fist, square to the fingers along +X): the muzzle
-/// points where the fingers do, and the top is on the thumb's side.
-const WEAPON_IN_HAND: lore_assets::Transform = [
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [-1.0, 0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
+/// Where the left hand cups the right on a short weapon, in the weapon's
+/// space: a little left of the grip, below and ahead of it.
+const CUPPED: [f32; 3] = [-0.035, -0.045, -0.015];
 
-/// Where a weapon is drawn in first person: in front of the eyes at
-/// `eye`, looking along `yaw` and `pitch`, turned with the view.
-fn weapon_at_eyes(eye: [f32; 3], (yaw, pitch): (f32, f32)) -> lore_assets::Transform {
-    let ahead = aim_of(yaw, pitch);
-    let right = [libm::cosf(yaw), 0.0, -libm::sinf(yaw)];
-    let up = [
-        right[1] * ahead[2] - right[2] * ahead[1],
-        right[2] * ahead[0] - right[0] * ahead[2],
-        right[0] * ahead[1] - right[1] * ahead[0],
-    ];
-    let [r, u, a] = WEAPON_AT_EYES;
-    let at: [f32; 3] = std::array::from_fn(|i| eye[i] + right[i] * r + up[i] * u + ahead[i] * a);
-    [
-        [right[0], right[1], right[2], 0.0],
-        [up[0], up[1], up[2], 0.0],
-        [-ahead[0], -ahead[1], -ahead[2], 0.0],
-        [at[0], at[1], at[2], 1.0],
-    ]
+/// How a body holds a weapon whose model reaches `ahead` metres ahead of
+/// its grip, as the script said or else: one hand for a thrown one, otherwise the left hand on the fore-end of a long one (a
+/// third of the way along what is ahead of the grip, under the barrel) or
+/// cupping the right on a short one.
+fn hold_of(ahead: f32, thrown: bool, said: lore_script::HoldSaid) -> crate::character::Hold {
+    if said.one_handed.unwrap_or(thrown) {
+        return crate::character::Hold {
+            support: None,
+            cupped: false,
+        };
+    }
+    let long = ahead > LONG_GUN;
+    let usual = if long {
+        [0.0, -0.035, -(ahead * 0.25).min(0.25)]
+    } else {
+        CUPPED
+    };
+    crate::character::Hold {
+        support: Some(said.support.unwrap_or(usual)),
+        cupped: !long,
+    }
+}
+
+/// How far ahead of its grip (along -Z) the weapon model `model` reaches,
+/// in metres.
+fn reach_ahead(model: &lore_assets::Scene) -> f32 {
+    let mut ahead = 0.0_f32;
+    for instance in &model.instances {
+        let Some(mesh) = model.meshes.get(instance.mesh as usize) else {
+            continue;
+        };
+        for part in &mesh.parts {
+            for point in &part.positions {
+                let [_, _, z] = lore_anim::math::apply(&instance.transform, *point);
+                ahead = ahead.max(-z);
+            }
+        }
+    }
+    ahead
 }
 
 /// How fast a body may hit the ground unhurt, in metres a second: a drop
@@ -1537,6 +1554,7 @@ impl Playing {
             shot: crate::shot::ShotCamera::default(),
             held: None,
             weapon_models: std::collections::HashMap::new(),
+            weapon_lengths: std::collections::HashMap::new(),
         }
         .with_body_said()
     }
@@ -1828,27 +1846,44 @@ impl Playing {
     /// The model of the weapon in the player's hands, if they hold one
     /// that has a model: one of the engine's own, or a file of the game's,
     /// read the first time it is held.
-    fn weapon_model(&mut self) -> Option<std::sync::Arc<lore_assets::Scene>> {
+    fn weapon_model(
+        &mut self,
+    ) -> Option<(std::sync::Arc<lore_assets::Scene>, crate::character::Hold)> {
         let held = self.world.game.host().held_weapon(CharacterId::PLAYER)?;
         let name = held.model?;
-        if let Some(model) = self.weapon_models.get(&name) {
+        let thrown = held.settings.thrown;
+        let model = self.read_weapon_model(&name, &held.name)?;
+        let ahead = *self
+            .weapon_lengths
+            .entry(name)
+            .or_insert_with(|| reach_ahead(&model));
+        let hold = hold_of(ahead, thrown, held.hold);
+        Some((model, hold))
+    }
+
+    /// The model called `name` (one of the engine's, or a file of the
+    /// game's) for the weapon `weapon`, read once.
+    fn read_weapon_model(
+        &mut self,
+        name: &std::rc::Rc<str>,
+        weapon: &str,
+    ) -> Option<std::sync::Arc<lore_assets::Scene>> {
+        if let Some(model) = self.weapon_models.get(name) {
             return model.clone();
         }
-        let model = crate::props::weapon(&name).or_else(|| {
-            match self.world.game.read_model(&name) {
+        let model = crate::props::weapon(name).or_else(|| {
+            match self.world.game.read_model(name) {
                 Ok(model) => Some(std::sync::Arc::new(model)),
                 // The engine's own stand-in, if it has one by that name,
                 // rather than empty hands.
                 Err(why) => {
-                    log::error!(
-                        "The weapon \"{}\" has the model \"{name}\": {why}",
-                        held.name
-                    );
-                    crate::props::weapon(&held.name.to_lowercase())
+                    log::error!("The weapon \"{weapon}\" has the model \"{name}\": {why}");
+                    crate::props::weapon(&weapon.to_lowercase())
                 }
             }
         });
-        self.weapon_models.insert(name, model.clone());
+        self.weapon_models
+            .insert(std::rc::Rc::clone(name), model.clone());
         model
     }
 
@@ -1866,8 +1901,10 @@ impl Playing {
             return;
         };
         let model = std::sync::Arc::clone(character.model());
+        character.set_hold(weapon.as_ref().map(|(_, hold)| *hold));
         let drawn = character.figures(frame.alpha(), feet, camera, look);
         let seen = drawn.seen;
+        let weapon_at = drawn.weapon;
         frame.show_figure(&model, &drawn);
         // What is in the hand is one object in both views: where the hand
         // is drawn, there it is.
@@ -1876,15 +1913,9 @@ impl Playing {
         {
             frame.show_thing(thing, place, seen);
         }
-        // A weapon is in the hand too, or in first person in front of the
-        // eyes, where the arms of a body with no aiming pose are not.
-        if let Some(weapon) = &weapon {
-            if eyes {
-                frame.show_thing(weapon, weapon_at_eyes(camera, look), true);
-            } else if let Some(place) = character.held_place(false) {
-                let place = lore_anim::math::combine(&place, &WEAPON_IN_HAND);
-                frame.show_thing(weapon, place, seen);
-            }
+        // The weapon is where the body holds it, its hands on it.
+        if let (Some((weapon, _)), Some(place)) = (&weapon, weapon_at) {
+            frame.show_thing(weapon, place, seen || eyes);
         }
     }
 
