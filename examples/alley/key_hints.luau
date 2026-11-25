@@ -29,21 +29,25 @@ function hints.draw(shown: boolean)
         -- On a gamepad Select opens the menus, at the weather; the
         -- bumpers go across to the debug menu, where the frame meter is.
         line.text = string.format(
-            "%s menus (%s %s tabs)     %s hide hud",
+            "%s menus (%s %s tabs)     %s hide hud     %s/%s weapon",
             label("weather_menu"),
             label("menu_previous_tab"),
             label("menu_next_tab"),
-            label("hide_hud")
+            label("hide_hud"),
+            label("previous_item"),
+            label("next_item")
             -- label("interact"),
             -- label("fire")
         )
     else
         line.text = string.format(
-            "%s weather     %s debug    %s frame meter    %s hide hud",
+            "%s weather     %s debug    %s frame meter    %s hide hud    %s/%s weapon",
             label("weather_menu"),
             label("debug_menu"),
             label("frame_meter"),
-            label("hide_hud")
+            label("hide_hud"),
+            label("previous_item"),
+            label("next_item")
         )
     end
 end

@@ -264,7 +264,7 @@ declare extern type Character with
     --- launcher", "grenade") or one made with `game.weapon`; capital
     --- letters do not matter. One of each kind is carried: handing over
     --- one they have fills it up again. A thrown weapon (a grenade) given
-    --- to someone already holding one stays on their belt, thrown with
+    --- to someone who already has a weapon in their hands stays on their belt, thrown with
     --- "use_item"; `{ draw = false }` keeps any weapon on the belt, and
     --- `{ draw = true }` brings even a grenade up. The player fires with
     --- "fire", aims with "aim", reloads with "reload" and changes weapon
@@ -274,7 +274,9 @@ declare extern type Character with
 
     --- Takes the weapon called `name` from what the character carries, or
     --- with no name every weapon. If it was in their hands, the one handed
-    --- over before it comes up. Does nothing if they do not carry it.
+    --- over before it comes up (never a thrown one: with only those left,
+    --- the hands are empty). Does nothing if they do not carry it; a name
+    --- that is no weapon at all is an error that lists the weapons.
     --- Example: game.player:takeWeapon("rocket launcher")
     function takeWeapon(self, name: string?): ()
 
@@ -292,12 +294,13 @@ declare extern type Character with
     --- The rounds in the magazine and the spare ones of a weapon the
     --- character carries, in their hands or not. 0 and 0 for one they do
     --- not carry.
-    --- Example: local grenades = game.player:ammoOf("grenade")
+    --- Example: local magazine, spare = game.player:ammoOf("pistol")
     function ammoOf(self, name: string): (number, number)
 
     --- The most weapons the character may carry, a whole number from 1 up,
     --- or `math.huge` for no most (as at first). Handed another when full,
-    --- it takes the place of the one in their hands. Carrying more already,
+    --- it takes the place of the one in their hands (or of the last handed
+    --- over, with empty hands). Carrying more already,
     --- the last handed over are dropped, the one in their hands last.
     --- Example: game.onSpawn(function() game.player:setMaxWeapons(2) end)
     function setMaxWeapons(self, most: number): ()
@@ -2331,7 +2334,7 @@ declare game: {
     --- with who, the weapon in their hands now and the one before, either
     --- of which is nil for empty hands. It comes on the tick after the
     --- change.
-    --- Example: game.onWeaponSwitch(function(who, weapon) weaponText.text = weapon or "" end)
+    --- Example: game.onWeaponSwitch(function(who, weapon) print(weapon or "bare hands") end)
     onWeaponSwitch: (handler: (who: Character, weapon: string?, before: string?) -> ()) -> (),
 
     --- Calls `handler` for every hurt, whoever or whatever did it: a

@@ -1,5 +1,5 @@
 -- The alley: a back alley in the city with a half basketball court in its
--- yard, a fluid gun, and the menus a game maker wants while building one.
+-- yard, weapons to try, and the menus a game maker wants while building one.
 --
 -- Play it by running this in the game's folder:
 --     lore run
@@ -12,11 +12,11 @@
 --   F7   the debug menu: walk, fly or noclip, the speed of time, jumps to
 --        places, and what the player is doing
 --   F12  the frame meter: off, one line, or numbers with a graph
---   F8   clear away every fluid (while no menu is open)
---   E    change the fluid the gun shoots (the mouse wheel does too); the
---        fire button shoots it
---   F2   the fluid menu: change what the fluid in hand is, while it lies
---        in the world: its colour, how thick, how slippery, how sticky...
+--   F2   hide the HUD (the left bumper on a gamepad)
+--   The weapons: the left mouse button fires, the right aims, R reloads,
+--        the mouse wheel changes weapon and G throws a grenade. On a
+--        gamepad: the right trigger, the left trigger, X, the d-pad left
+--        and right, and the right bumper.
 --
 -- A gamepad has only two buttons LORE leaves free for a game, Select and
 -- the left bumper, so the three menus are tabs of one panel. Select opens
@@ -46,6 +46,7 @@ local hints = require("./key_hints")
 -- local gun = require("./fluid_gun")
 -- local fluidMenu = require("./fluid_menu")
 local warning = require("./testing_warning")
+local weapons = require("./weapons")
 require("./lamps")
 
 -- The menus are tabs of one panel, so one gamepad button reaches them all.
@@ -99,5 +100,6 @@ game.onDraw(function()
     debugMenu.drawShaders()
     -- gun.draw(playing)
     hints.draw(playing and drawHud)
+    weapons.draw(playing and drawHud)
     warning.draw(playing and drawHud)
 end)

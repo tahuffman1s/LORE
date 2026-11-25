@@ -3307,7 +3307,8 @@ mod tests {
         );
         let held = |game: &Playing| {
             let host = game.world.game.host();
-            host.held_weapon(CharacterId::PLAYER).map(|held| held.name.to_string())
+            host.held_weapon(CharacterId::PLAYER)
+                .map(|held| held.name.to_string())
         };
         let mut tap = |game: &mut Playing, button: lore_input::Button| {
             input.press(button);
@@ -3327,7 +3328,8 @@ mod tests {
         // The item button throws the grenade, and the pistol stays up.
         let grenades = |game: &Playing| {
             let host = game.world.game.host();
-            host.thrown_weapon(CharacterId::PLAYER).map(|it| it.state.magazine)
+            host.thrown_weapon(CharacterId::PLAYER)
+                .map(|it| it.state.magazine)
         };
         assert_eq!(grenades(&game), Some(1));
         tap(&mut game, Key::G.into());

@@ -950,6 +950,13 @@ fn read_only(lua: &Lua, what: &str, key: &Value) -> mlua::Error {
             "To hand over a weapon, write: {what}:giveWeapon(\"rifle\"). To empty their \
              hands, write: {what}:putAwayWeapon()"
         )
+    } else if key == "weapons" {
+        format!(
+            "To change what they carry, write: {what}:giveWeapon(\"pistol\") or \
+             {what}:takeWeapon(\"pistol\")"
+        )
+    } else if key == "maxWeapons" {
+        format!("To say the most they may carry, write: {what}:setMaxWeapons(2)")
     } else if key == "ammo" || key == "reserve" {
         format!(
             "A weapon's rounds are set where it is made: game.weapon(\"smg\", {{ magazineSize \
