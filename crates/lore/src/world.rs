@@ -1961,6 +1961,14 @@ impl Game for Playing {
         if can.lock_on && (self.controls.lock_on).is_some_and(|action| input.just_pressed(action)) {
             self.next_lock();
         }
+        // A shot that steers: forward is away from the camera, whichever
+        // way the player's own view faces.
+        let host = self.world.game.host();
+        if let Some(yaw) =
+            crate::shot::steer_yaw(&host.camera(), |who| host.character_position(who))
+        {
+            asked.movement.yaw = yaw;
+        }
         if self.world.game.host().locked_on().is_some() {
             self.hold_lock(step);
             asked.movement.yaw = self.yaw;
@@ -3433,6 +3441,37 @@ mod tests {
             "first"
         );
         assert_eq!(after_f("game.player:allowViewSwitch(true)"), "third");
+    }
+
+    #[test]
+    fn under_a_shot_that_steers_forward_is_away_from_the_camera() {
+        use lore_input::Key;
+
+        /// Where two seconds of holding forward takes the player.
+        fn walked(script: &str) -> [f32; 3] {
+            let (mut game, mut input) = game_on_map("", script);
+            input.press(Key::W);
+            for _ in 0..120 {
+                game.tick(input.tick(), STEP);
+            }
+            assert_eq!(game.world.game.host().last_error(), None);
+            game.world.player().position
+        }
+        // Their own view faces north (-Z), and so they walk.
+        let north = walked("");
+        assert!(north[2] < -7.0 && north[0].abs() < 0.1, "{north:?}");
+        // Seen side-on by a camera that looks west, forward is west.
+        let west = walked(
+            "game.camera.sideOn(game.player, { angle = 90, steer = true })\n\
+             assert(game.camera.shot() == \"sideOn\")",
+        );
+        assert!(west[0] < -7.0 && west[2].abs() < 0.1, "{west:?}");
+        // The same shot without it leaves the walking alone.
+        let plain = walked("game.camera.sideOn(game.player, { angle = 90 })");
+        assert!(plain[2] < -7.0, "{plain:?}");
+        // From above, forward is up the screen: north.
+        let above = walked("game.camera.topDown(game.player, { height = 12, steer = true })");
+        assert!(above[2] < -7.0 && above[0].abs() < 0.1, "{above:?}");
     }
 
     #[test]

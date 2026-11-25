@@ -27,7 +27,12 @@ use crate::error::closest;
 use crate::weather_api::number;
 
 /// Every function on `game.camera`.
-pub(crate) const CAMERA_FUNCTIONS: &[&str] = &["fixed", "follow", "reset", "shot"];
+pub(crate) const CAMERA_FUNCTIONS: &[&str] = &[
+    "fixed", "follow", "topDown", "sideOn", "orbit", "path", "reset", "shot",
+];
+
+/// The most places a path shot goes through.
+pub const MOST_PATH_POINTS: usize = 16;
 
 /// The longest a shot may take to travel to, in seconds.
 const LONGEST_TRAVEL: f32 = 600.0;
@@ -70,6 +75,49 @@ pub enum ShotSaid {
         /// How far above their feet it rides, in metres.
         height: f32,
     },
+    /// A camera straight above a character, looking down, north (-Z) up.
+    TopDown {
+        /// Who it stays over.
+        who: CharacterId,
+        /// How far above them it is, in metres.
+        height: f32,
+    },
+    /// A camera level with a character and to one side, as a
+    /// side-scroller's is: it looks along `angle` and never turns.
+    SideOn {
+        /// Who it keeps in the middle of the picture.
+        who: CharacterId,
+        /// How far from them it is, in metres.
+        distance: f32,
+        /// How far above their chest it is, in metres.
+        height: f32,
+        /// Which way it looks, in radians turning left from -Z.
+        angle: f32,
+    },
+    /// A camera that circles something, looking at it.
+    Orbit {
+        /// What it circles.
+        about: CameraTarget,
+        /// How far from it, in metres.
+        distance: f32,
+        /// How far above it, in metres.
+        height: f32,
+        /// How fast it goes round to the left, in radians a second.
+        speed: f32,
+    },
+    /// A camera that travels through a list of places.
+    Path {
+        /// The places, in order; only the first `count` are used.
+        points: [[f32; 3]; MOST_PATH_POINTS],
+        /// How many places there are, at least 2.
+        count: u8,
+        /// What it looks at; `None` looks the way it is going.
+        at: Option<CameraTarget>,
+        /// How many seconds the whole path takes.
+        over: f32,
+        /// Whether it starts again at the end.
+        looping: bool,
+    },
 }
 
 impl ShotSaid {
@@ -80,6 +128,10 @@ impl ShotSaid {
             Self::Player => "player",
             Self::Fixed { .. } => "fixed",
             Self::Follow { .. } => "follow",
+            Self::TopDown { .. } => "topDown",
+            Self::SideOn { .. } => "sideOn",
+            Self::Orbit { .. } => "orbit",
+            Self::Path { .. } => "path",
         }
     }
 }
@@ -93,6 +145,9 @@ pub struct CameraSaid {
     pub seconds: f32,
     /// The shot's own field of view in degrees, or `None` for the player's.
     pub fov: Option<f32>,
+    /// Whether the player walks by the shot: forward is away from the
+    /// camera, whichever way they themselves face.
+    pub steer: bool,
     /// Goes up by one each time a script says a shot, so the engine can
     /// tell a shot said again from one that has not changed.
     pub said: u32,
@@ -110,11 +165,14 @@ impl CameraState {
         self.said.get()
     }
 
-    fn say(&self, shot: ShotSaid, seconds: f32, fov: Option<f32>) {
+    fn say(&self, shot: ShotSaid, read: &Options) {
         let now = self.said.get();
+        let (seconds, fov, steer) = (read.seconds, read.fov, read.steer);
         // The same shot said again, as a script may every tick, is not a
         // new one: its travel does not start over.
-        if (now.shot, now.seconds, now.fov) == (shot, seconds, fov) && now.said > 0 {
+        if (now.shot, now.seconds, now.fov, now.steer) == (shot, seconds, fov, steer)
+            && now.said > 0
+        {
             return;
         }
         let said = now.said.wrapping_add(1);
@@ -122,6 +180,7 @@ impl CameraState {
             shot,
             seconds,
             fov,
+            steer,
             said,
         });
     }
@@ -133,6 +192,19 @@ struct Options {
     fov: Option<f32>,
     distance: f32,
     height: f32,
+    /// Whether the script gave a distance or a height, or they are the
+    /// follow shot's own.
+    said_distance: bool,
+    said_height: bool,
+    steer: bool,
+    /// Degrees: which way a side-on shot looks, how fast an orbit turns.
+    angle: f32,
+    speed: f32,
+    /// A path's seconds from end to end, and whether it goes round again.
+    over: f32,
+    looping: bool,
+    /// What a path looks at.
+    at: Option<CameraTarget>,
 }
 
 /// Reads a shot's options table: any of `allowed`, each a number.
@@ -148,6 +220,14 @@ fn options(
         fov: None,
         distance: FOLLOW_DISTANCE,
         height: FOLLOW_HEIGHT,
+        said_distance: false,
+        said_height: false,
+        steer: false,
+        angle: 90.0,
+        speed: 20.0,
+        over: 5.0,
+        looping: false,
+        at: None,
     };
     let settings = match value {
         None | Some(Value::Nil) => return Ok(read),
@@ -212,7 +292,75 @@ fn options(
                     .clamp(FOV_RANGE.0, FOV_RANGE.1),
                 );
             }
+            "steer" | "loop" => {
+                let Value::Boolean(on) = value else {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{label} is true or false, but it was given {}. Write it like \
+                             this: {example}",
+                            describe(&value)
+                        ),
+                    ));
+                };
+                if key == "steer" {
+                    read.steer = on;
+                } else {
+                    read.looping = on;
+                }
+            }
+            "angle" => {
+                read.angle = number(
+                    lua,
+                    &label,
+                    Some(&value),
+                    "which way the camera looks, in degrees to the left of north (-Z): 90 \
+                     looks west, along -X",
+                    example,
+                )?;
+            }
+            "speed" => {
+                read.speed = number(
+                    lua,
+                    &label,
+                    Some(&value),
+                    "how fast the camera goes round, in degrees a second to the left (below \
+                     0, to the right), from -360 to 360",
+                    example,
+                )?
+                .clamp(-360.0, 360.0);
+            }
+            "over" => {
+                read.over = number(
+                    lua,
+                    &label,
+                    Some(&value),
+                    "how many seconds the whole path takes, from 0.1 to 3600",
+                    example,
+                )?
+                .clamp(0.1, 3600.0);
+            }
+            "at" => {
+                read.at = Some(match &value {
+                    Value::Vector(point) => CameraTarget::Point([point.x(), point.y(), point.z()]),
+                    other => match id_of_value(lua, other) {
+                        Some(who) => CameraTarget::Character(who),
+                        None => {
+                            return Err(fail(
+                                lua,
+                                format!(
+                                    "{label} is what the camera looks at: a place as a \
+                                     vector, or a character such as game.player. It was \
+                                     given {}. Write it like this: {example}",
+                                    describe(other)
+                                ),
+                            ));
+                        }
+                    },
+                });
+            }
             "distance" => {
+                read.said_distance = true;
                 read.distance = number(
                     lua,
                     &label,
@@ -223,6 +371,7 @@ fn options(
                 .clamp(0.5, 100.0);
             }
             "height" => {
+                read.said_height = true;
                 read.height = number(
                     lua,
                     &label,
@@ -323,9 +472,7 @@ pub(crate) fn camera(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     &["seconds", "fov"],
                     EXAMPLE,
                 )?;
-                state
-                    .camera
-                    .say(ShotSaid::Fixed { from, at }, read.seconds, read.fov);
+                state.camera.say(ShotSaid::Fixed { from, at }, &read);
                 Ok(())
             },
         )?,
@@ -359,8 +506,225 @@ pub(crate) fn camera(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     distance: read.distance,
                     height: read.height,
                 },
-                read.seconds,
-                read.fov,
+                &read,
+            );
+            Ok(())
+        })?,
+    )?;
+
+    let state = Rc::clone(shared);
+    camera.set(
+        "topDown",
+        lua.create_function(move |lua, (who, settings): (Value, Option<Value>)| {
+            const EXAMPLE: &str = "game.camera.topDown(game.player, { height = 14, steer = true })";
+            let Some(who) = character(lua, &state, "game.camera.topDown", &who, EXAMPLE)? else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.camera.topDown needs the character to stay over, such as \
+                         game.player, but it was given {}. Write it like this: {EXAMPLE}",
+                        describe(&who)
+                    ),
+                ));
+            };
+            let read = options(
+                lua,
+                "game.camera.topDown",
+                settings.as_ref(),
+                &["height", "seconds", "fov", "steer"],
+                EXAMPLE,
+            )?;
+            let height = if read.said_height {
+                read.height.max(1.0)
+            } else {
+                14.0
+            };
+            state.camera.say(ShotSaid::TopDown { who, height }, &read);
+            Ok(())
+        })?,
+    )?;
+
+    let state = Rc::clone(shared);
+    camera.set(
+        "sideOn",
+        lua.create_function(move |lua, (who, settings): (Value, Option<Value>)| {
+            const EXAMPLE: &str =
+                "game.camera.sideOn(game.player, { distance = 10, angle = 90, steer = true })";
+            let Some(who) = character(lua, &state, "game.camera.sideOn", &who, EXAMPLE)? else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.camera.sideOn needs the character to keep in the middle of the \
+                         picture, such as game.player, but it was given {}. Write it like \
+                         this: {EXAMPLE}",
+                        describe(&who)
+                    ),
+                ));
+            };
+            let read = options(
+                lua,
+                "game.camera.sideOn",
+                settings.as_ref(),
+                &["distance", "height", "angle", "seconds", "fov", "steer"],
+                EXAMPLE,
+            )?;
+            state.camera.say(
+                ShotSaid::SideOn {
+                    who,
+                    distance: if read.said_distance {
+                        read.distance
+                    } else {
+                        10.0
+                    },
+                    height: if read.said_height { read.height } else { 0.5 },
+                    angle: read.angle.to_radians(),
+                },
+                &read,
+            );
+            Ok(())
+        })?,
+    )?;
+
+    let state = Rc::clone(shared);
+    camera.set(
+        "orbit",
+        lua.create_function(move |lua, (about, settings): (Value, Option<Value>)| {
+            const EXAMPLE: &str =
+                "game.camera.orbit(game.player, { distance = 6, height = 2, speed = 20 })";
+            let about = match &about {
+                Value::Vector(point) => CameraTarget::Point([point.x(), point.y(), point.z()]),
+                other => match character(lua, &state, "game.camera.orbit", other, EXAMPLE)? {
+                    Some(who) => CameraTarget::Character(who),
+                    None => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.camera.orbit needs what the camera circles: a place as \
+                                 a vector, or a character such as game.player. It was given \
+                                 {}. Write it like this: {EXAMPLE}",
+                                describe(other)
+                            ),
+                        ));
+                    }
+                },
+            };
+            let read = options(
+                lua,
+                "game.camera.orbit",
+                settings.as_ref(),
+                &["distance", "height", "speed", "seconds", "fov"],
+                EXAMPLE,
+            )?;
+            state.camera.say(
+                ShotSaid::Orbit {
+                    about,
+                    distance: if read.said_distance {
+                        read.distance
+                    } else {
+                        6.0
+                    },
+                    height: if read.said_height { read.height } else { 2.0 },
+                    speed: read.speed.to_radians(),
+                },
+                &read,
+            );
+            Ok(())
+        })?,
+    )?;
+
+    let state = Rc::clone(shared);
+    camera.set(
+        "path",
+        lua.create_function(move |lua, (places, settings): (Value, Option<Value>)| {
+            const EXAMPLE: &str = "game.camera.path({ vector.create(0, 3, 10), \
+                                   vector.create(8, 3, 0), vector.create(0, 3, -10) }, { over \
+                                   = 6, at = game.player })";
+            let Value::Table(list) = &places else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.camera.path needs the places the camera goes through, in a \
+                         list: vectors, or things placed in the map. It was given {}. Write \
+                         it like this: {EXAMPLE}",
+                        describe(&places)
+                    ),
+                ));
+            };
+            let mut points = [[0.0; 3]; MOST_PATH_POINTS];
+            let mut count = 0usize;
+            for place in list.sequence_values::<Value>() {
+                let place = place?;
+                let at = match &place {
+                    Value::Vector(at) => [at.x(), at.y(), at.z()],
+                    // A thing placed in the map: a marker put where the
+                    // camera should pass, in `lore edit`.
+                    Value::UserData(thing) => match crate::thing_api::place_of(&state, thing) {
+                        Some(at) => at,
+                        None => {
+                            return Err(fail(
+                                lua,
+                                format!(
+                                    "game.camera.path's places are vectors or things placed \
+                                     in the map. Write it like this: {EXAMPLE}"
+                                ),
+                            ));
+                        }
+                    },
+                    other => {
+                        return Err(fail(
+                            lua,
+                            format!(
+                                "game.camera.path's places are vectors or things placed in \
+                                 the map, but one was {}. Write it like this: {EXAMPLE}",
+                                describe(other)
+                            ),
+                        ));
+                    }
+                };
+                if !at.iter().all(|part| part.is_finite()) {
+                    continue;
+                }
+                if count == MOST_PATH_POINTS {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.camera.path takes up to {MOST_PATH_POINTS} places, and was \
+                             given more. Leave some out: the camera curves smoothly between \
+                             those it has."
+                        ),
+                    ));
+                }
+                points[count] = at;
+                count += 1;
+            }
+            if count < 2 {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.camera.path needs at least two places to travel between, and \
+                         was given {count}. Write it like this: {EXAMPLE}"
+                    ),
+                ));
+            }
+            let read = options(
+                lua,
+                "game.camera.path",
+                settings.as_ref(),
+                &["over", "at", "loop", "seconds", "fov"],
+                EXAMPLE,
+            )?;
+            // No more than sixteen, so it fits.
+            #[allow(clippy::cast_possible_truncation)]
+            let count = count as u8;
+            state.camera.say(
+                ShotSaid::Path {
+                    points,
+                    count,
+                    at: read.at,
+                    over: read.over,
+                    looping: read.looping,
+                },
+                &read,
             );
             Ok(())
         })?,
@@ -382,7 +746,11 @@ pub(crate) fn camera(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 )?
                 .clamp(0.0, LONGEST_TRAVEL),
             };
-            state.camera.say(ShotSaid::Player, seconds, None);
+            let read = Options {
+                seconds,
+                ..options(lua, "game.camera.reset", None, &[], "game.camera.reset(1)")?
+            };
+            state.camera.say(ShotSaid::Player, &read);
             Ok(())
         })?,
     )?;
@@ -472,6 +840,87 @@ mod tests {
         assert_eq!((said.shot, said.seconds), (ShotSaid::Player, 1.5));
         // Each line was a shot of its own.
         assert_eq!(said.said, 2);
+    }
+
+    #[test]
+    fn the_other_shots_are_said_with_their_own_settings() {
+        let host = self::host(
+            "game.camera.topDown(game.player)\nassert(game.camera.shot() == \"topDown\")",
+        );
+        assert_eq!(host.last_error(), None);
+        assert_eq!(
+            host.camera().shot,
+            ShotSaid::TopDown {
+                who: CharacterId::PLAYER,
+                height: 14.0,
+            }
+        );
+        assert!(!host.camera().steer);
+
+        let host = self::host(
+            "game.camera.sideOn(game.player, { distance = 8, angle = 180, steer = true })",
+        );
+        assert_eq!(host.last_error(), None);
+        let said = host.camera();
+        assert!(said.steer);
+        let ShotSaid::SideOn {
+            distance,
+            height,
+            angle,
+            ..
+        } = said.shot
+        else {
+            panic!("{:?}", said.shot);
+        };
+        assert_eq!((distance, height), (8.0, 0.5));
+        assert!((angle - std::f32::consts::PI).abs() < 1e-5);
+
+        let host = self::host("game.camera.orbit(vector.create(1, 2, 3), { speed = 90 })");
+        assert_eq!(host.last_error(), None);
+        let ShotSaid::Orbit {
+            about,
+            distance,
+            speed,
+            ..
+        } = host.camera().shot
+        else {
+            panic!();
+        };
+        assert_eq!(about, CameraTarget::Point([1.0, 2.0, 3.0]));
+        assert_eq!(distance, 6.0);
+        assert!((speed - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+
+        let host = self::host(
+            "game.camera.path({ vector.create(0, 3, 10), vector.create(8, 3, 0) }, \
+             { over = 6, at = game.player, loop = true })\n\
+             assert(game.camera.shot() == \"path\")",
+        );
+        assert_eq!(host.last_error(), None);
+        let ShotSaid::Path {
+            points,
+            count,
+            at,
+            over,
+            looping,
+        } = host.camera().shot
+        else {
+            panic!();
+        };
+        assert_eq!((count, over, looping), (2, 6.0, true));
+        assert_eq!(points[1], [8.0, 3.0, 0.0]);
+        assert_eq!(at, Some(CameraTarget::Character(CharacterId::PLAYER)));
+
+        let message = |script: &str| self::host(script).last_error().unwrap().message.clone();
+        let said = message("game.camera.path({ vector.create(0, 0, 0) })");
+        assert!(said.contains("at least two places"), "{said}");
+        let said = message("game.camera.path(\"round\")");
+        assert!(said.contains("in a list"), "{said}");
+        let said = message("game.camera.topDown(game.player, { steer = 1 })");
+        assert!(said.contains("is true or false"), "{said}");
+        let said = message("game.camera.orbit(7)");
+        assert!(said.contains("what the camera circles"), "{said}");
+        let said = message("game.camera.sideOn(game.player, { hieght = 2 })");
+        assert!(said.contains("Did you mean \"height\"?"), "{said}");
     }
 
     #[test]

@@ -84,6 +84,87 @@ impl Pose {
     }
 }
 
+/// A camera `height` metres straight above `target`, looking down with
+/// north (-Z) at the top of the picture.
+fn top_down(target: [f32; 3], height: f32) -> Pose {
+    Pose {
+        position: [target[0], target[1] + height, target[2]],
+        yaw: 0.0,
+        // A hair short of straight down, where which way is up is not said.
+        pitch: -(std::f32::consts::FRAC_PI_2 - 0.001),
+        lens: (0.0, 0.0),
+    }
+}
+
+/// A camera `distance` metres from `target` and `height` above it, looking
+/// along `angle` (radians to the left of -Z) at it.
+fn side_on(target: [f32; 3], distance: f32, height: f32, angle: f32) -> Pose {
+    let (sin, cos) = angle.sin_cos();
+    // Back from the target along the way the camera looks.
+    let position = [
+        target[0] + sin * distance,
+        target[1] + height,
+        target[2] + cos * distance,
+    ];
+    Pose::looking(position, target, angle)
+}
+
+/// The place `share` of the way (0 to 1) along a smooth curve through
+/// `points`: a Catmull-Rom spline, which passes through every one.
+fn along(points: &[[f32; 3]], share: f32) -> [f32; 3] {
+    let spans = points.len().saturating_sub(1).max(1);
+    // A handful of spans: far below where an f32 stops being exact.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let (span, t) = {
+        let scaled = share.clamp(0.0, 1.0) * spans as f32;
+        let span = (scaled.floor() as usize).min(spans - 1);
+        (span, scaled - span as f32)
+    };
+    let at = |index: isize| {
+        let last = points.len() as isize - 1;
+        points[index.clamp(0, last.max(0)) as usize]
+    };
+    let span = span as isize;
+    let (a, b, c, d) = (at(span - 1), at(span), at(span + 1), at(span + 2));
+    std::array::from_fn(|i| {
+        0.5 * ((2.0 * b[i])
+            + (c[i] - a[i]) * t
+            + (2.0 * a[i] - 5.0 * b[i] + 4.0 * c[i] - d[i]) * t * t
+            + (3.0 * b[i] - a[i] - 3.0 * c[i] + d[i]) * t * t * t)
+    })
+}
+
+/// Which way "forward" is for a player who walks by the shot (`steer`):
+/// the way the camera looks, on the ground. Worked out from the game's own
+/// state, never from a picture, so it is the same on every computer. `None`
+/// for a shot that does not steer or whose heading is not the game's to
+/// know (one that trails, circles or travels by the clock of the picture).
+pub(crate) fn steer_yaw(
+    said: &CameraSaid,
+    feet_of: impl Fn(CharacterId) -> Option<[f32; 3]>,
+) -> Option<f32> {
+    if !said.steer {
+        return None;
+    }
+    match said.shot {
+        ShotSaid::TopDown { .. } => Some(0.0),
+        ShotSaid::SideOn { angle, .. } => Some(angle.rem_euclid(TAU)),
+        ShotSaid::Fixed { from, at } => {
+            let target = match at {
+                CameraTarget::Point(point) => point,
+                CameraTarget::Character(who) => feet_of(who)?,
+            };
+            let (x, z) = (target[0] - from[0], target[2] - from[2]);
+            (x.hypot(z) > 1e-3).then(|| (-x).atan2(-z).rem_euclid(TAU))
+        }
+        _ => None,
+    }
+}
+
 /// The camera a script directs.
 #[derive(Debug)]
 pub(crate) struct ShotCamera {
@@ -135,9 +216,17 @@ impl ShotCamera {
             let from = self.drawn.unwrap_or(player);
             self.from = (said.seconds > 0.0).then_some(from);
             self.started = now;
-            if let ShotSaid::Follow { who, .. } = said.shot {
-                // It trails from the side it is already on.
-                let about = chest(who).unwrap_or(self.target);
+            let circled = match said.shot {
+                ShotSaid::Follow { who, .. } => Some(chest(who).unwrap_or(self.target)),
+                ShotSaid::Orbit { about, .. } => Some(match about {
+                    CameraTarget::Point(point) => point,
+                    CameraTarget::Character(who) => chest(who).unwrap_or(self.target),
+                }),
+                _ => None,
+            };
+            if let Some(about) = circled {
+                // It trails, or starts its circle, from the side it is
+                // already on.
                 let away = [from.position[0] - about[0], from.position[2] - about[2]];
                 let far = away[0].hypot(away[1]);
                 self.trail = if far > 1e-3 {
@@ -182,6 +271,81 @@ impl ShotCamera {
                 ];
                 Pose::looking(position, self.target, player.yaw).through(said.fov)
             }
+            ShotSaid::TopDown { who, height } => {
+                self.target = chest(who).unwrap_or(self.target);
+                top_down(self.target, height).through(said.fov)
+            }
+            ShotSaid::SideOn {
+                who,
+                distance,
+                height,
+                angle,
+            } => {
+                self.target = chest(who).unwrap_or(self.target);
+                side_on(self.target, distance, height, angle).through(said.fov)
+            }
+            ShotSaid::Orbit {
+                about,
+                distance,
+                height,
+                speed,
+            } => {
+                self.target = match about {
+                    CameraTarget::Point(point) => point,
+                    CameraTarget::Character(who) => chest(who).unwrap_or(self.target),
+                };
+                // Round from where it was when the shot was said.
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "an angle, taken round the circle"
+                )]
+                let round =
+                    ((now - self.started) * f64::from(speed)).rem_euclid(f64::from(TAU)) as f32;
+                let (sin, cos) = round.sin_cos();
+                let [x, z] = self.trail;
+                // The start direction turned to the left by `round`.
+                let away = [x * cos + z * sin, z * cos - x * sin];
+                let position = [
+                    self.target[0] + away[0] * distance,
+                    self.target[1] + height,
+                    self.target[2] + away[1] * distance,
+                ];
+                Pose::looking(position, self.target, player.yaw).through(said.fov)
+            }
+            ShotSaid::Path {
+                points,
+                count,
+                at,
+                over,
+                looping,
+            } => {
+                let points = &points[..usize::from(count).clamp(2, points.len())];
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a share of the path, from 0 to 1"
+                )]
+                let gone = ((now - self.started).max(0.0) / f64::from(over.max(0.01))) as f32;
+                let share = if looping {
+                    gone.rem_euclid(1.0)
+                } else {
+                    gone.clamp(0.0, 1.0)
+                };
+                let position = along(points, share);
+                let toward = match at {
+                    Some(CameraTarget::Point(point)) => point,
+                    Some(CameraTarget::Character(who)) => {
+                        self.target = chest(who).unwrap_or(self.target);
+                        self.target
+                    }
+                    // The way it is going: a little further along the path.
+                    None => {
+                        let ahead = along(points, (share + 0.01).min(1.0));
+                        let behind = along(points, (share - 0.01).max(0.0));
+                        std::array::from_fn(|i| position[i] + ahead[i] - behind[i])
+                    }
+                };
+                Pose::looking(position, toward, player.yaw).through(said.fov)
+            }
         };
         let pose = match self.from {
             Some(from) => {
@@ -223,6 +387,7 @@ mod tests {
             shot,
             seconds,
             fov: None,
+            steer: false,
             said,
         }
     }
@@ -321,6 +486,116 @@ mod tests {
         assert!(close(half.position[0], 2.0) && close(half.position[2], 5.0));
         assert!(close(half.lens.1, 0.5));
         assert_eq!(camera.pose(&back, moved, 9.0, nobody), moved);
+    }
+
+    #[test]
+    fn a_top_down_shot_is_overhead_and_a_side_on_shot_looks_one_way() {
+        let mut camera = ShotCamera::default();
+        let who = CharacterId::PLAYER;
+        let feet = |_| Some([5.0, 0.0, -3.0]);
+        let shot = ShotSaid::TopDown { who, height: 14.0 };
+        let pose = camera.pose(&said(shot, 0.0, 1), PLAYER, 0.0, feet);
+        assert!(close(pose.position[0], 5.0) && close(pose.position[2], -3.0));
+        assert!(close(pose.position[1], CHEST + 14.0) && pose.pitch < -1.56);
+        assert!(close(pose.yaw, 0.0));
+
+        // Looking west (a quarter left of north): the camera is to the
+        // east of them, level, and they are in the middle of the picture.
+        let shot = ShotSaid::SideOn {
+            who,
+            distance: 10.0,
+            height: 0.0,
+            angle: FRAC_PI_2,
+        };
+        let pose = camera.pose(&said(shot, 0.0, 2), PLAYER, 0.0, feet);
+        assert!(close(pose.position[0], 15.0) && close(pose.position[2], -3.0));
+        assert!(close(pose.yaw, FRAC_PI_2) && close(pose.pitch, 0.0));
+        // They walk north: it slides with them and does not turn.
+        let pose = camera.pose(&said(shot, 0.0, 2), PLAYER, 1.0, |_| Some([5.0, 0.0, -9.0]));
+        assert!(close(pose.position[2], -9.0) && close(pose.yaw, FRAC_PI_2));
+    }
+
+    #[test]
+    fn an_orbit_goes_round_at_its_speed_and_a_path_passes_through_its_places() {
+        let mut camera = ShotCamera::default();
+        // The view was south of the middle, so the circle starts there.
+        let from = Pose {
+            position: [0.0, 2.0, 5.0],
+            ..PLAYER
+        };
+        camera.pose(&CameraSaid::default(), from, 0.0, nobody);
+        let shot = ShotSaid::Orbit {
+            about: CameraTarget::Point([0.0; 3]),
+            distance: 6.0,
+            height: 2.0,
+            // A quarter turn a second.
+            speed: FRAC_PI_2,
+        };
+        let asked = said(shot, 0.0, 1);
+        let start = camera.pose(&asked, from, 10.0, nobody);
+        assert!(close(start.position[0], 0.0) && close(start.position[2], 6.0));
+        assert!(close(start.position[1], 2.0) && close(start.yaw, 0.0));
+        let later = camera.pose(&asked, from, 11.0, nobody);
+        // A quarter round to the left of south is east.
+        assert!(close(later.position[0], 6.0) && later.position[2].abs() < 1e-3);
+        // Still looking at the middle: west.
+        assert!(close(later.yaw, FRAC_PI_2), "{}", later.yaw);
+
+        let mut points = [[0.0; 3]; lore_script::MOST_PATH_POINTS];
+        points[..3].copy_from_slice(&[[0.0, 3.0, 10.0], [8.0, 3.0, 0.0], [0.0, 3.0, -10.0]]);
+        let shot = ShotSaid::Path {
+            points,
+            count: 3,
+            at: None,
+            over: 4.0,
+            looping: false,
+        };
+        let asked = said(shot, 0.0, 2);
+        let at = |camera: &mut ShotCamera, now: f64| camera.pose(&asked, PLAYER, now, nobody);
+        assert_eq!(at(&mut camera, 20.0).position, [0.0, 3.0, 10.0]);
+        let middle = at(&mut camera, 22.0);
+        assert!(close(middle.position[0], 8.0) && close(middle.position[2], 0.0));
+        // Half way it is heading north, along the path.
+        let north = (middle.yaw + PI).rem_euclid(TAU) - PI;
+        assert!(north.abs() < 1e-3, "{}", middle.yaw);
+        // It stops at the end unless it loops.
+        assert_eq!(at(&mut camera, 24.0).position, [0.0, 3.0, -10.0]);
+        assert_eq!(at(&mut camera, 99.0).position, [0.0, 3.0, -10.0]);
+    }
+
+    #[test]
+    fn forward_is_away_from_a_shot_that_steers() {
+        let steers = |shot: ShotSaid| CameraSaid {
+            steer: true,
+            ..said(shot, 0.0, 1)
+        };
+        let who = CharacterId::PLAYER;
+        let feet = |_| Some([0.0; 3]);
+        // Not unless it was asked for.
+        let top = ShotSaid::TopDown { who, height: 9.0 };
+        assert_eq!(steer_yaw(&said(top, 0.0, 1), feet), None);
+        // Overhead, forward is north; side-on, the way the camera looks.
+        assert_eq!(steer_yaw(&steers(top), feet), Some(0.0));
+        let side = ShotSaid::SideOn {
+            who,
+            distance: 10.0,
+            height: 0.0,
+            angle: FRAC_PI_2,
+        };
+        assert!(close(steer_yaw(&steers(side), feet).unwrap(), FRAC_PI_2));
+        // From a fixed camera to the east, forward is west.
+        let fixed = ShotSaid::Fixed {
+            from: [10.0, 4.0, 0.0],
+            at: CameraTarget::Character(who),
+        };
+        assert!(close(steer_yaw(&steers(fixed), feet).unwrap(), FRAC_PI_2));
+        // A camera that trails is not steered by.
+        let follow = ShotSaid::Follow {
+            who,
+            distance: 4.0,
+            height: 2.0,
+        };
+        assert_eq!(steer_yaw(&steers(follow), feet), None);
     }
 
     #[test]
