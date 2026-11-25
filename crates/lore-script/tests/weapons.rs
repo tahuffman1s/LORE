@@ -427,7 +427,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
     let said = load_error("game.weapon(\"smg\", { zzz = 1 })");
     assert!(
         said.starts_with(
-            "game.weapon has no setting called zzz. The settings are: from, model, fireMode,"
+            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode,"
         ),
         "{said}"
     );
@@ -638,4 +638,27 @@ fn mistakes_with_carried_weapons_say_what_to_write() {
     );
     assert!(spawn_error("game.player:giveWeapon(\"rifle\", true)").contains("in curly brackets"));
     assert!(load_error("game.weapon(\"x\", { thrown = 1 })").contains("thrown"));
+}
+
+#[test]
+fn a_weapon_says_how_it_is_held() {
+    let (host, _) = with_bo(
+        r#"game.weapon("carbine", { from = "rifle", hands = "two", support = vector.create(0, -0.02, -0.2) })
+        game.weapon("one hand", { from = "carbine", hands = "one" })
+        game.onSpawn(function() game.player:giveWeapon("one hand") end)"#,
+    );
+    let held = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(held.hold.one_handed, Some(true));
+    // What it started from is kept: the support and the model.
+    assert_eq!(held.hold.support, Some([0.0, -0.02, -0.2]));
+    assert_eq!(held.model.as_deref(), Some("rifle"));
+    let (host, _) = with_bo(r#"game.onSpawn(function() game.player:giveWeapon("pistol") end)"#);
+    assert_eq!(
+        host.held_weapon(PLAYER).unwrap().hold,
+        lore_script::HoldSaid::default()
+    );
+    assert!(load_error("game.weapon(\"x\", { hands = 3 })").contains("hands is \"one\""));
+    assert!(
+        load_error("game.weapon(\"x\", { support = 1 })").contains("support (where the left hand")
+    );
 }

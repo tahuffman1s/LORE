@@ -1757,6 +1757,7 @@ impl ScriptHost {
             name: kind.name,
             settings: kind.settings,
             model: kind.model,
+            hold: kind.hold,
             state,
         })
     }
@@ -1778,6 +1779,7 @@ impl ScriptHost {
             name: kind.name,
             settings: kind.settings,
             model: kind.model,
+            hold: kind.hold,
             state,
         })
     }

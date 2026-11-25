@@ -2202,6 +2202,17 @@ declare game: {
         --- hand. The engine's weapons have plain stand-ins of their own, and
         --- a weapon made `from` one has its model until it says another.
         model: string?,
+        --- How many hands hold it: "one" (the right alone) or "two". If left
+        --- out, a thrown weapon is held in one and anything else in two: the
+        --- left hand on the fore-end of a long gun, cupping the right on a
+        --- short one. The body's own arms reach it in both views.
+        hands: ("one" | "two")?,
+        --- Where the left hand holds it, in metres from the grip in the
+        --- model's space: right, up, and back (the muzzle is along -Z). If
+        --- left out, under the barrel a quarter of the way along a long gun.
+        --- A hand that cannot reach it slides back along the weapon.
+        --- Example: support = vector.create(0, -0.03, -0.25)
+        support: vector?,
         --- What pulling the trigger does: "automatic" fires for as long as
         --- it is held, "single" fires one shot a pull, "burst" a few.
         fireMode: ("automatic" | "single" | "burst")?,
