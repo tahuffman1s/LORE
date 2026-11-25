@@ -24,7 +24,9 @@ game.weapon("rifle", {
     reloadTime = 3.2,
     emptyReloadTime = 3.2,
 })
-game.weapon("grenade", { model = "models/grenade/grenade.gltf" })
+-- A stick grenade: the cord is pulled when G is pressed, so the fuse
+-- burns while it is held, and it turns end over end as it flies.
+game.weapon("grenade", { model = "models/grenade/grenade.gltf", arming = "pull", spin = "end over end" })
 
 -- Handed over on every spawn, so a player who dies comes back with all of
 -- them, full. The pistol is given last, so it is the one in hand.

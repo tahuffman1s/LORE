@@ -32,6 +32,8 @@ pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "burstSize",
     "reach",
     "action",
+    "arming",
+    "spin",
     "ejectAt",
     "roundsPerMinute",
     "burstPause",
@@ -429,6 +431,19 @@ impl WeaponState {
         });
     }
 
+    /// The model of the kind called `name`.
+    pub fn model_of(&self, name: &str) -> Option<Rc<str>> {
+        find(&self.kinds.borrow(), name).and_then(|kind| kind.model.clone())
+    }
+
+    /// How long `holder` has held a thrown weapon armed, if they are: the
+    /// one in their hands, or the one on their belt.
+    pub fn armed(&self, holder: CharacterId) -> Option<f32> {
+        let held = self.held.borrow();
+        let carried = held.get(&holder)?;
+        carried.weapons.iter().find_map(|held| held.state.armed)
+    }
+
     /// The name of the kind of weapon `holder` holds.
     fn name_held(&self, holder: CharacterId) -> Option<Rc<str>> {
         self.held.borrow().get(&holder)?.name_drawn()
@@ -508,6 +523,12 @@ pub(crate) fn weapon_name(shared: &Shared, holder: CharacterId) -> Option<String
         .weapons
         .name_held(holder)
         .map(|name| name.to_string())
+}
+
+/// `character.armed`: seconds since they armed a thrown weapon (pulled
+/// its pin or cord) and still hold it, or nil.
+pub(crate) fn armed(shared: &Shared, holder: CharacterId) -> Option<f64> {
+    shared.weapons.armed(holder).map(f64::from)
 }
 
 /// `character.ammo` and `character.reserve`: the rounds in the magazine and the
@@ -1298,6 +1319,46 @@ fn read_settings(
                     }
                 };
             }
+            "arming" => {
+                let said = match &value {
+                    Value::String(said) => said.to_str()?.trim().to_lowercase(),
+                    _ => String::new(),
+                };
+                settings.arming = match said.as_str() {
+                    "throw" => lore_weapons::Arming::OnThrow,
+                    "pull" => lore_weapons::Arming::OnPull,
+                    _ => {
+                        return Err(fail(
+                            lua,
+                            "game.weapon: arming is when a thrown weapon's fuse starts: \
+                             \"throw\" (as it leaves the hand, as a round grenade's lever \
+                             flies off) or \"pull\" (when the throw button is pressed, as a \
+                             stick grenade's cord is pulled: holding it cooks it). Write it \
+                             like this: arming = \"pull\"",
+                        ));
+                    }
+                };
+            }
+            "spin" => {
+                let said = match &value {
+                    Value::String(said) => said.to_str()?.trim().to_lowercase(),
+                    _ => String::new(),
+                };
+                settings.spin = match said.as_str() {
+                    "none" => lore_weapons::Spin::None,
+                    "end over end" | "endoverend" | "end" => lore_weapons::Spin::EndOverEnd,
+                    "tumble" => lore_weapons::Spin::Tumble,
+                    _ => {
+                        return Err(fail(
+                            lua,
+                            "game.weapon: spin is how what it fires turns as it flies: \
+                             \"none\" (pointing along its flight, as a rocket), \"end over \
+                             end\" (a stick grenade, a knife) or \"tumble\" (a round grenade). \
+                             Write it like this: spin = \"end over end\"",
+                        ));
+                    }
+                };
+            }
             "ejectAt" => {
                 settings.eject_at = crate::fluid_api::vector_of(
                     lua,
@@ -1424,6 +1485,8 @@ mod tests {
             "burstSize",
             "reach",
             "action",
+            "arming",
+            "spin",
             "ejectAt",
         ];
         readable.extend(PLAIN.iter().map(|(name, _)| *name));

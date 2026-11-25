@@ -28,6 +28,7 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "weapon",
     "weapons",
     "maxWeapons",
+    "armed",
     "ammo",
     "reserve",
     "velocity",
@@ -627,6 +628,10 @@ impl UserData for CharacterRef {
         fields.add_field_method_get("weapons", |lua, this| {
             this.read(lua, "weapons")?;
             Ok(weapon_api::weapons_carried(&*shared_of(lua)?, this.0))
+        });
+        fields.add_field_method_get("armed", |lua, this| {
+            this.read(lua, "armed")?;
+            Ok(weapon_api::armed(&*shared_of(lua)?, this.0))
         });
         fields.add_field_method_get("maxWeapons", |lua, this| {
             this.read(lua, "maxWeapons")?;

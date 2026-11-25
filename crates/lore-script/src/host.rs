@@ -1784,6 +1784,14 @@ impl ScriptHost {
         })
     }
 
+    /// The model drawn for the weapon called `name`: one of the engine's
+    /// own by name, or a file of the game's. `None` if there is no such
+    /// weapon or it has no model.
+    #[must_use]
+    pub fn weapon_model(&self, name: &str) -> Option<Rc<str>> {
+        self.weapons.model_of(name)
+    }
+
     /// Hands back the state of the weapon `character` throws after
     /// stepping it.
     pub fn set_thrown_weapon_state(&mut self, character: CharacterId, state: Weapon) {

@@ -340,6 +340,29 @@ pub(crate) fn spent_case() -> Arc<Scene> {
     }))
 }
 
+/// A stick grenade's pulled cord, hanging from where it is held: a short
+/// white string with a bead at its end, made once and shared.
+pub(crate) fn cord() -> Arc<Scene> {
+    static MADE: OnceLock<Arc<Scene>> = OnceLock::new();
+    Arc::clone(MADE.get_or_init(|| {
+        let white = [0.9, 0.88, 0.82, 1.0];
+        Arc::new(built_weapon(
+            "cord",
+            &[
+                ([0.0, -0.11, 0.0], [0.003, 0.11, 0.003], white, 0.0, 0.9, ""),
+                (
+                    [0.0, -0.125, 0.0],
+                    [0.014, 0.014, 0.014],
+                    white,
+                    0.0,
+                    0.5,
+                    "",
+                ),
+            ],
+        ))
+    }))
+}
+
 /// A thing that stands in a level and is solid: its model, the shape it
 /// collides as, where that shape's middle is from where the thing is
 /// placed, and how heavy it is if it moves, in kilograms.

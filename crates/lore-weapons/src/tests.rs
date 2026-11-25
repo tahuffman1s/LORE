@@ -579,6 +579,8 @@ fn directions_follow_yaw_pitch_and_the_spread() {
         time: 0.0,
         kick: [0.0; 2],
         spread,
+
+        cooked: 0.0,
     };
     let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| close(*a, b, 1.0e-5));
     let quarter = std::f32::consts::FRAC_PI_2;
@@ -604,6 +606,8 @@ fn directions_follow_yaw_pitch_and_the_spread() {
         time: 0.0,
         kick: [0.2, 0.3],
         spread: [0.0; 2],
+
+        cooked: 0.0,
     };
     assert!(near(
         kicked.direction(0.0, 0.0),
@@ -615,6 +619,8 @@ fn directions_follow_yaw_pitch_and_the_spread() {
         time: 0.0,
         kick: [9.0, f32::NAN],
         spread: [f32::INFINITY, 0.3],
+
+        cooked: 0.0,
     };
     let direction = odd.direction(f32::NAN, 2.0);
     let long = direction.iter().map(|part| part * part).sum::<f32>().sqrt();
@@ -1394,4 +1400,59 @@ fn a_head_is_where_the_skeleton_says_and_not_only_the_top_of_the_body() {
     assert_eq!(zone(bowed, 1.2), Zone::Head);
     assert_eq!(zone(bowed, 0.95), Zone::Body);
     assert_eq!(zone(bowed, 0.3), Zone::Legs);
+}
+
+#[test]
+fn a_grenade_is_armed_by_the_press_and_thrown_when_let_go() {
+    let settings = WeaponSettings::grenade();
+    let mut grenade = Weapon::new(&settings);
+    let mut shots = Vec::new();
+    let held = WeaponInput {
+        trigger: true,
+        ..WeaponInput::default()
+    };
+    let free = WeaponInput::default();
+    let dt = 1.0 / 60.0;
+    let events = grenade.step(&settings, &held, 1, dt, &mut shots);
+    assert!(events.armed && events.shots == 0 && grenade.armed.is_some());
+    for _ in 0..30 {
+        grenade.step(&settings, &held, 1, dt, &mut shots);
+    }
+    assert!(shots.is_empty(), "held, it is not thrown");
+    let events = grenade.step(&settings, &free, 1, dt, &mut shots);
+    assert_eq!(events.shots, 1);
+    // A round grenade's fuse starts as it leaves the hand.
+    assert_eq!(shots[0].cooked, 0.0);
+    assert!(grenade.armed.is_none());
+}
+
+#[test]
+fn a_stick_grenade_cooks_while_held_and_goes_off_in_the_hand_if_held_too_long() {
+    let settings = WeaponSettings {
+        arming: crate::Arming::OnPull,
+        reserve: 3,
+        ..WeaponSettings::grenade()
+    };
+    let mut grenade = Weapon::new(&settings);
+    let mut shots = Vec::new();
+    let held = WeaponInput {
+        trigger: true,
+        ..WeaponInput::default()
+    };
+    let free = WeaponInput::default();
+    let dt = 1.0 / 60.0;
+    for _ in 0..60 {
+        grenade.step(&settings, &held, 1, dt, &mut shots);
+    }
+    grenade.step(&settings, &free, 1, dt, &mut shots);
+    assert_eq!(shots.len(), 1);
+    assert!((shots[0].cooked - 1.0).abs() < 0.03, "{}", shots[0].cooked);
+    // Held past its fuse, it leaves the hand by itself, burnt out.
+    let mut shots = Vec::new();
+    let mut grenade = Weapon::new(&settings);
+    for _ in 0..400 {
+        grenade.step(&settings, &held, 1, dt, &mut shots);
+    }
+    assert_eq!(shots.len(), 1);
+    assert!((shots[0].cooked - 3.0).abs() < 1e-4, "{}", shots[0].cooked);
 }

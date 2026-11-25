@@ -220,6 +220,16 @@ fn weapon_input(body: &Body, rules: &MoveSettings) -> WeaponInput {
 }
 
 impl Shooting {
+    /// Everything in flight or lying where it landed: the weapon that
+    /// launched it, how it flies, and where it is.
+    pub(crate) fn in_flight(
+        &self,
+    ) -> impl Iterator<Item = (&Rc<str>, &WeaponSettings, &Projectile)> + '_ {
+        self.in_flight
+            .iter()
+            .map(|flying| (&flying.weapon, &flying.settings, &flying.projectile))
+    }
+
     /// Works the player's weapon for the tick numbered `tick`, which has
     /// just moved them: call it every tick, after the player has moved.
     /// `step` is the length of a tick in seconds.
@@ -419,11 +429,14 @@ impl Shooting {
                         shot.direction(yaw, pitch),
                         &held.settings,
                     );
-                    let Some(projectile) =
+                    let Some(mut projectile) =
                         Projectile::launch(&held.settings, eyes, direction, Some(PLAYER))
                     else {
                         continue;
                     };
+                    // A stick grenade held after its cord was pulled has
+                    // burnt that much of its fuse already.
+                    projectile.cooked = shot.cooked;
                     if self.in_flight.len() >= MOST_IN_FLIGHT {
                         self.in_flight.remove(0);
                     }

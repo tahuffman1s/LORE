@@ -80,6 +80,10 @@ pub struct Projectile {
     /// The `id` of the target that launched it, who is not hit by it in
     /// the first quarter of a second.
     pub owner: Option<u32>,
+    /// Seconds of its fuse burnt before it was launched: a stick grenade
+    /// held after its cord was pulled. Its flight is still counted from
+    /// launch.
+    pub cooked: f32,
 }
 
 impl Projectile {
@@ -106,6 +110,7 @@ impl Projectile {
             age: 0.0,
             travelled: 0.0,
             owner,
+            cooked: 0.0,
         })
     }
 
@@ -135,7 +140,7 @@ impl Projectile {
         }
         let explodes = positive(flight.blast_radius) > 0.0;
         self.age = positive(self.age) + dt;
-        if self.age >= positive(flight.fuse) {
+        if self.age + positive(self.cooked) >= positive(flight.fuse) {
             return if explodes {
                 Flight::Exploded {
                     point: self.position,
