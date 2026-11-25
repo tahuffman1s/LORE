@@ -729,3 +729,21 @@ game.onStart(function()
     local order: { number } = game.shuffle({ 1, 2, 3 })
     print(seed, lucky, prize, order, math.random(1, 6))
 end)
+
+-- Carrying several weapons.
+game.onWeaponSwitch(function(who: Character, weapon: string?, before: string?)
+    print(who.name, weapon, before)
+end)
+game.onSpawn(function()
+    game.player:setMaxWeapons(3)
+    game.player:giveWeapon("pistol")
+    game.player:giveWeapon("grenade", { draw = false })
+    game.player:drawWeapon("pistol")
+    local magazine: number, spare: number = game.player:ammoOf("grenade")
+    local carried: { string } = game.player.weapons
+    local most: number = game.player.maxWeapons
+    print(magazine, spare, carried, most, game.player:can("switchWeapons"))
+    game.player:putAwayWeapon()
+    game.player:takeWeapon("grenade")
+end)
+game.weapon("knife bomb", { from = "grenade", thrown = true })

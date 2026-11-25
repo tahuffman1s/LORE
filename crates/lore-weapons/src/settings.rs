@@ -108,6 +108,9 @@ pub struct WeaponSettings {
     pub burst_pause: f32,
     /// How long after the weapon is brought up before it can fire.
     pub raise_time: f32,
+    /// Thrown with the throw button while another weapon stays in the
+    /// hands, as a grenade is: it is carried but not switched to.
+    pub thrown: bool,
     /// How each shot reaches what it hits.
     pub delivery: Delivery,
     /// How many things leave the barrel per shot. A shotgun has several;
@@ -194,6 +197,7 @@ impl Default for WeaponSettings {
             rounds_per_minute: 750.0,
             burst_pause: 0.15,
             raise_time: 0.4,
+            thrown: false,
             delivery: Delivery::Hitscan { reach: 500.0 },
             pellets: 1,
 
@@ -316,6 +320,7 @@ impl WeaponSettings {
             fire_mode: FireMode::SemiAutomatic,
             rounds_per_minute: 60.0,
             raise_time: 0.3,
+            thrown: true,
             delivery: Delivery::Projectile(ProjectileSettings {
                 speed: 18.0,
                 gravity: 20.0,

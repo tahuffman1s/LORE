@@ -1265,7 +1265,7 @@ fn abilities_are_switches_and_their_numbers_sit_beside_the_others() {
         ("can(3)", "needs the name of an ability in quotes"),
         (
             "setAbility(\"fly\", true)",
-            "The abilities are \"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\" and",
+            "The abilities are \"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\", \"lockOn\" and \"switchWeapons\"",
         ),
     ] {
         let mut host = game(&format!("game.onStart(function() game.player:{call} end)"));

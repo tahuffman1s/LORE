@@ -31,6 +31,7 @@ pub(crate) const WEAPON_SETTINGS: &[&str] = &[
     "roundsPerMinute",
     "burstPause",
     "raiseTime",
+    "thrown",
     "pellets",
     "magazineSize",
     "reserve",
@@ -131,7 +132,98 @@ pub(crate) struct WeaponState {
     /// The built-in kinds, then the script's own. A script's kind with a
     /// built-in's name takes its place.
     kinds: RefCell<Vec<Kind>>,
-    held: RefCell<HashMap<CharacterId, Held>>,
+    held: RefCell<HashMap<CharacterId, Carried>>,
+    /// Who has changed what is in their hands since the script was last
+    /// told: them, what they hold now and what they held.
+    switched: RefCell<Vec<Switch>>,
+}
+
+/// One change of what a character has in their hands: who, the weapon
+/// they hold now and the one they held, either of which may be none.
+pub(crate) type Switch = (CharacterId, Option<Rc<str>>, Option<Rc<str>>);
+
+/// The weapons a character carries, in the order they were handed over.
+#[derive(Debug, Clone, Default)]
+struct Carried {
+    weapons: Vec<Held>,
+    /// Which of them is in their hands.
+    drawn: Option<usize>,
+    /// The most they may carry, if the script said a most.
+    most: Option<usize>,
+}
+
+impl Carried {
+    fn drawn(&self) -> Option<&Held> {
+        self.weapons.get(self.drawn?)
+    }
+
+    fn name_drawn(&self) -> Option<Rc<str>> {
+        self.drawn().map(|held| Rc::clone(&held.kind))
+    }
+
+    fn place(&self, name: &str) -> Option<usize> {
+        self.weapons
+            .iter()
+            .position(|held| same_name(&held.kind, name))
+    }
+
+    /// Puts what is in the hands away, cutting a reload short, and brings
+    /// up the weapon at `place`, which can fire after its raise time.
+    fn draw(&mut self, place: Option<usize>, kinds: &[Kind]) {
+        if place == self.drawn {
+            return;
+        }
+        if let Some(old) = self.drawn.and_then(|old| self.weapons.get_mut(old)) {
+            old.state.interrupt();
+        }
+        // Empty hands raise nothing: a weapon handed to them is ready.
+        let switching = self.drawn.is_some();
+        self.drawn = place.filter(|place| *place < self.weapons.len());
+        if switching
+            && let Some(new) = self.drawn.and_then(|new| self.weapons.get_mut(new))
+            && let Some(kind) = find(kinds, &new.kind)
+        {
+            new.state.raise(&kind.settings);
+        }
+    }
+
+    /// Takes the weapon at `place` away. If it was in the hands, the one
+    /// handed over before it that is not thrown comes up in its place.
+    fn remove(&mut self, place: usize, kinds: &[Kind]) {
+        if place >= self.weapons.len() {
+            return;
+        }
+        let was_drawn = self.drawn == Some(place);
+        self.weapons.remove(place);
+        match self.drawn {
+            Some(drawn) if drawn > place => self.drawn = Some(drawn - 1),
+            Some(_) if was_drawn => {
+                self.drawn = None;
+                // The one handed over before it, or failing that the last.
+                let count = self.weapons.len();
+                let next = (0..place.min(count))
+                    .rev()
+                    .chain((place.min(count)..count).rev())
+                    .find(|at| !self.is_thrown(*at, kinds));
+                self.draw(next, kinds);
+            }
+            _ => {}
+        }
+    }
+
+    fn is_thrown(&self, place: usize, kinds: &[Kind]) -> bool {
+        self.weapons
+            .get(place)
+            .and_then(|held| find(kinds, &held.kind))
+            .is_some_and(|kind| kind.settings.thrown)
+    }
+
+    /// The weapon thrown with the throw button: the first thrown one
+    /// carried that is not in the hands.
+    fn thrown(&self, kinds: &[Kind]) -> Option<usize> {
+        (0..self.weapons.len())
+            .find(|place| self.drawn != Some(*place) && self.is_thrown(*place, kinds))
+    }
 }
 
 /// The kinds every game starts with.
@@ -171,6 +263,7 @@ impl WeaponState {
         Self {
             kinds: RefCell::new(built_in()),
             held: RefCell::default(),
+            switched: RefCell::default(),
         }
     }
 
@@ -189,44 +282,145 @@ impl WeaponState {
             }
         }
         let mut dropped: Vec<Rc<str>> = Vec::new();
-        self.held.borrow_mut().retain(|_, held| {
-            let known = find(&kinds, &held.kind).is_some();
-            if !known && !dropped.contains(&held.kind) {
-                dropped.push(Rc::clone(&held.kind));
+        for (holder, carried) in self.held.borrow_mut().iter_mut() {
+            let before = carried.name_drawn();
+            while let Some(gone) =
+                (carried.weapons.iter()).position(|held| find(&kinds, &held.kind).is_none())
+            {
+                if let Some(held) = carried.weapons.get(gone)
+                    && !dropped.contains(&held.kind)
+                {
+                    dropped.push(Rc::clone(&held.kind));
+                }
+                carried.remove(gone, &kinds);
             }
-            known
-        });
+            Self::note(&self.switched, *holder, before, carried);
+        }
         self.kinds.replace(kinds);
         dropped
+    }
+
+    /// Notes that `holder` has something else in their hands than `before`,
+    /// if they have.
+    fn note(
+        switched: &RefCell<Vec<Switch>>,
+        holder: CharacterId,
+        before: Option<Rc<str>>,
+        carried: &Carried,
+    ) {
+        let now = carried.name_drawn();
+        if now != before {
+            switched.borrow_mut().push((holder, now, before));
+        }
+    }
+
+    /// Changes what `holder` carries with `change`, and notes it if what is
+    /// in their hands is another weapon afterwards.
+    fn change<T>(&self, holder: CharacterId, change: impl FnOnce(&mut Carried, &[Kind]) -> T) -> T {
+        let mut held = self.held.borrow_mut();
+        let carried = held.entry(holder).or_default();
+        let before = carried.name_drawn();
+        let done = change(carried, &self.kinds.borrow());
+        Self::note(&self.switched, holder, before, carried);
+        done
+    }
+
+    /// The changes of hands the script has not been told of yet.
+    pub fn take_switched(&self) -> Vec<Switch> {
+        std::mem::take(&mut self.switched.borrow_mut())
     }
 
     /// The weapon `holder` holds: its kind as it is now defined, and the
     /// state of the one in their hands.
     pub fn held(&self, holder: CharacterId) -> Option<(Kind, Weapon)> {
         let held = self.held.borrow();
-        let held = held.get(&holder)?;
+        let held = held.get(&holder)?.drawn()?;
         let kind = find(&self.kinds.borrow(), &held.kind)?.clone();
         Some((kind, held.state))
     }
 
+    /// The weapon `holder` throws with the throw button without putting
+    /// down what they hold: the first thrown kind they carry.
+    pub fn thrown(&self, holder: CharacterId) -> Option<(Kind, Weapon)> {
+        let held = self.held.borrow();
+        let carried = held.get(&holder)?;
+        let kinds = self.kinds.borrow();
+        let held = carried.weapons.get(carried.thrown(&kinds)?)?;
+        Some((find(&kinds, &held.kind)?.clone(), held.state))
+    }
+
     /// Replaces the state of the weapon `holder` holds, if they hold one.
     pub fn set_state(&self, holder: CharacterId, state: Weapon) {
-        if let Some(held) = self.held.borrow_mut().get_mut(&holder) {
+        if let Some(carried) = self.held.borrow_mut().get_mut(&holder)
+            && let Some(held) = carried.drawn.and_then(|at| carried.weapons.get_mut(at))
+        {
             held.state = state;
         }
     }
 
-    /// Empties `holder`'s hands.
+    /// Replaces the state of the weapon `holder` throws, if they carry one.
+    pub fn set_thrown_state(&self, holder: CharacterId, state: Weapon) {
+        let kinds = self.kinds.borrow();
+        if let Some(carried) = self.held.borrow_mut().get_mut(&holder)
+            && let Some(held) = (carried.thrown(&kinds)).and_then(|at| carried.weapons.get_mut(at))
+        {
+            held.state = state;
+        }
+    }
+
+    /// Takes every weapon `holder` carries.
     pub fn take(&self, holder: CharacterId) {
+        self.change(holder, |carried, _| {
+            carried.weapons.clear();
+            carried.drawn = None;
+        });
+    }
+
+    /// Forgets `holder`, who is gone from the world.
+    pub fn forget(&self, holder: CharacterId) {
         self.held.borrow_mut().remove(&holder);
+    }
+
+    /// Brings up the next weapon `holder` carries (`forward`) or the one
+    /// before, round and round, passing over the thrown ones. With one
+    /// weapon or none, nothing happens.
+    pub fn cycle(&self, holder: CharacterId, forward: bool) {
+        self.change(holder, |carried, kinds| {
+            let count = carried.weapons.len();
+            let from = carried.drawn.unwrap_or(if forward { count } else { 0 });
+            let next = (1..=count)
+                .map(|step| {
+                    if forward {
+                        (from + step) % count
+                    } else {
+                        (from + count * 2 - step) % count
+                    }
+                })
+                .find(|place| !carried.is_thrown(*place, kinds));
+            if next.is_some() {
+                carried.draw(next, kinds);
+            }
+        });
     }
 
     /// The name of the kind of weapon `holder` holds.
     fn name_held(&self, holder: CharacterId) -> Option<Rc<str>> {
+        self.held.borrow().get(&holder)?.name_drawn()
+    }
+
+    /// The names of the weapons `holder` carries, in the order they were
+    /// handed over.
+    fn names_carried(&self, holder: CharacterId) -> Vec<Rc<str>> {
         self.held
             .borrow()
             .get(&holder)
-            .map(|held| Rc::clone(&held.kind))
+            .map_or_else(Vec::new, |carried| {
+                carried
+                    .weapons
+                    .iter()
+                    .map(|held| Rc::clone(&held.kind))
+                    .collect()
+            })
     }
 }
 
@@ -298,38 +492,261 @@ pub(crate) fn rounds(shared: &Shared, holder: CharacterId) -> (u32, u32) {
         .held
         .borrow()
         .get(&holder)
+        .and_then(Carried::drawn)
         .map_or((0, 0), |held| (held.state.magazine, held.state.reserve))
 }
 
-/// `character:giveWeapon("rifle")`: a new, full weapon of that kind in the
-/// character's hands, in place of what they held.
-pub(crate) fn give(lua: &Lua, holder: CharacterId, name: &Value) -> mlua::Result<()> {
-    let shared = crate::character_api::shared_of(lua)?;
-    crate::time_api::rules_only(lua, &shared, "game.player:giveWeapon")?;
+/// The kind a script named for `method`, or the error that says which
+/// there are.
+fn kind_said(lua: &Lua, shared: &Shared, method: &str, name: &Value) -> mlua::Result<Kind> {
     let Value::String(name) = name else {
         return Err(fail(
             lua,
             format!(
-                "giveWeapon needs a weapon's name in quotes, but it was given {}. \
-                 Write it like this: game.player:giveWeapon(\"rifle\")",
+                "{method} needs a weapon's name in quotes, but it was given {}. \
+                 Write it like this: game.player:{method}(\"rifle\")",
                 describe(name)
             ),
         ));
     };
     let name = name.to_str()?;
-    let Some(kind) = kind_named(&shared, &name) else {
-        return Err(no_such_weapon(lua, &shared, &name));
+    kind_named(shared, &name).ok_or_else(|| no_such_weapon(lua, shared, &name))
+}
+
+/// `character:giveWeapon("rifle")`: a new, full weapon of that kind, added
+/// to what the character carries and brought up into their hands. With
+/// `{ draw = false }` it is carried and what they hold stays in their hands.
+pub(crate) fn give(
+    lua: &Lua,
+    holder: CharacterId,
+    name: &Value,
+    options: &Value,
+) -> mlua::Result<()> {
+    const EXAMPLE: &str = "game.player:giveWeapon(\"pistol\", { draw = false })";
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:giveWeapon")?;
+    let kind = kind_said(lua, &shared, "giveWeapon", name)?;
+    let draw = match options {
+        Value::Nil => None,
+        Value::Table(options) => {
+            for pair in options.pairs::<Value, Value>() {
+                let (key, _) = pair?;
+                let known = matches!(&key, Value::String(key) if key.to_str()? == "draw");
+                if !known {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "giveWeapon has one setting, draw, and it was given {}. Write it \
+                             like this: {EXAMPLE}",
+                            key.to_string()?
+                        ),
+                    ));
+                }
+            }
+            match options.raw_get::<Value>("draw")? {
+                Value::Nil => None,
+                Value::Boolean(draw) => Some(draw),
+                other => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "giveWeapon's draw is true or false, but it was given {}. Write \
+                             it like this: {EXAMPLE}",
+                            describe(&other)
+                        ),
+                    ));
+                }
+            }
+        }
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "giveWeapon takes a weapon's name and then, if anything, its settings in \
+                     curly brackets, but it was given {}. Write it like this: {EXAMPLE}",
+                    describe(other)
+                ),
+            ));
+        }
     };
     // Does nothing for a character who is gone.
-    if shared.characters.has(holder) {
-        shared.weapons.held.borrow_mut().insert(
-            holder,
-            Held {
-                kind: kind.name,
-                state: Weapon::new(&kind.settings),
-            },
-        );
+    if !shared.characters.has(holder) {
+        return Ok(());
     }
+    shared.weapons.change(holder, |carried, kinds| {
+        let full = Held {
+            kind: Rc::clone(&kind.name),
+            state: Weapon::new(&kind.settings),
+        };
+        let count = carried.weapons.len();
+        let place = if let Some(place) = carried.place(&kind.name) {
+            // One of each kind: another is the same one, full again.
+            if let Some(held) = carried.weapons.get_mut(place) {
+                *held = full;
+            }
+            place
+        } else if count > 0 && carried.most.is_some_and(|most| count >= most) {
+            // No room: it takes the place of the one in their hands.
+            let place = carried.drawn.unwrap_or(count - 1);
+            if let Some(held) = carried.weapons.get_mut(place) {
+                *held = full;
+            }
+            place
+        } else {
+            carried.weapons.push(full);
+            count
+        };
+        // A grenade handed to someone holding a rifle stays on their belt.
+        let wanted = draw.unwrap_or(!kind.settings.thrown || carried.drawn.is_none());
+        if wanted {
+            carried.draw(Some(place), kinds);
+        }
+    });
+    Ok(())
+}
+
+/// `character:takeWeapon("rifle")` takes that weapon from what they carry;
+/// `character:takeWeapon()` takes every weapon.
+pub(crate) fn take(lua: &Lua, holder: CharacterId, name: &Value) -> mlua::Result<()> {
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:takeWeapon")?;
+    if name.is_nil() {
+        shared.weapons.take(holder);
+        return Ok(());
+    }
+    let kind = kind_said(lua, &shared, "takeWeapon", name)?;
+    shared.weapons.change(holder, |carried, kinds| {
+        if let Some(place) = carried.place(&kind.name) {
+            carried.remove(place, kinds);
+        }
+    });
+    Ok(())
+}
+
+/// `character:drawWeapon("pistol")`: brings up a weapon they carry.
+pub(crate) fn draw(lua: &Lua, holder: CharacterId, name: &Value) -> mlua::Result<()> {
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:drawWeapon")?;
+    let kind = kind_said(lua, &shared, "drawWeapon", name)?;
+    if !shared.characters.has(holder) {
+        return Ok(());
+    }
+    let carried = shared.weapons.names_carried(holder);
+    let found = shared.weapons.change(holder, |carried, kinds| {
+        let place = carried.place(&kind.name);
+        if place.is_some() {
+            carried.draw(place, kinds);
+        }
+        place.is_some()
+    });
+    if found {
+        return Ok(());
+    }
+    let have = if carried.is_empty() {
+        "They carry no weapons".to_owned()
+    } else {
+        let names: Vec<&str> = carried.iter().map(|name| &**name).collect();
+        format!("They carry: {}", names.join(", "))
+    };
+    Err(fail(
+        lua,
+        format!(
+            "drawWeapon was asked for \"{0}\", which this character does not carry. {have}. \
+             Hand it over first: game.player:giveWeapon(\"{0}\"), which also brings it up.",
+            kind.name
+        ),
+    ))
+}
+
+/// `character:putAwayWeapon()`: empties their hands; what they carry stays.
+pub(crate) fn put_away(lua: &Lua, holder: CharacterId) -> mlua::Result<()> {
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:putAwayWeapon")?;
+    shared
+        .weapons
+        .change(holder, |carried, kinds| carried.draw(None, kinds));
+    Ok(())
+}
+
+/// `character.weapons`: the names of what they carry.
+pub(crate) fn weapons_carried(shared: &Shared, holder: CharacterId) -> Vec<String> {
+    let names = shared.weapons.names_carried(holder);
+    names.iter().map(|name| name.to_string()).collect()
+}
+
+/// `character:ammoOf("grenade")`: the rounds in the magazine of a weapon
+/// they carry and its spare ones, in their hands or not. 0 and 0 for one
+/// they do not carry.
+pub(crate) fn ammo_of(lua: &Lua, holder: CharacterId, name: &Value) -> mlua::Result<(u32, u32)> {
+    let shared = crate::character_api::shared_of(lua)?;
+    let kind = kind_said(lua, &shared, "ammoOf", name)?;
+    let held = shared.weapons.held.borrow();
+    Ok(held
+        .get(&holder)
+        .and_then(|carried| carried.weapons.get(carried.place(&kind.name)?))
+        .map_or((0, 0), |held| (held.state.magazine, held.state.reserve)))
+}
+
+/// `character.maxWeapons`: the most weapons they may carry, `math.huge`
+/// when the script has said no most.
+pub(crate) fn most_carried(shared: &Shared, holder: CharacterId) -> f64 {
+    let held = shared.weapons.held.borrow();
+    #[allow(clippy::cast_precision_loss)]
+    held.get(&holder)
+        .and_then(|carried| carried.most)
+        .map_or(f64::INFINITY, |most| most as f64)
+}
+
+/// `character:setMaxWeapons(2)`: the most weapons they may carry. Handed
+/// one more, it takes the place of the one in their hands.
+pub(crate) fn set_most(lua: &Lua, holder: CharacterId, most: &Value) -> mlua::Result<()> {
+    const EXAMPLE: &str = "game.player:setMaxWeapons(2)";
+    let shared = crate::character_api::shared_of(lua)?;
+    crate::time_api::rules_only(lua, &shared, "game.player:setMaxWeapons")?;
+    let number = match most {
+        Value::Integer(most) => {
+            #[allow(clippy::cast_precision_loss)]
+            let most = *most as f64;
+            most
+        }
+        Value::Number(most) if !most.is_nan() => *most,
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "setMaxWeapons needs a whole number from 1 up, or math.huge for no most, \
+                     but it was given {}. Write it like this: {EXAMPLE}",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    if number < 1.0 || (number.is_finite() && number.fract() != 0.0) {
+        return Err(fail(
+            lua,
+            format!(
+                "setMaxWeapons was given {number}, and it takes a whole number from 1 up, or \
+                 math.huge for no most. To take every weapon away, write \
+                 game.player:takeWeapon(). Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    // Anything past what could ever be carried is no most at all.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let most = (number < MOST_KINDS as f64).then_some(number as usize);
+    shared.weapons.change(holder, |carried, kinds| {
+        carried.most = most;
+        // Too many already: the last handed over go, the one in the hands
+        // last of all.
+        while most.is_some_and(|most| carried.weapons.len() > most) {
+            let count = carried.weapons.len();
+            let out = (0..count)
+                .rev()
+                .find(|place| carried.drawn != Some(*place))
+                .unwrap_or(count - 1);
+            carried.remove(out, kinds);
+        }
+    });
     Ok(())
 }
 
@@ -513,6 +930,7 @@ const PLAIN: &[(&str, WeaponSlot)] = &[
     ),
     ("burstPause", Slot::Number(|s| &mut s.burst_pause)),
     ("raiseTime", Slot::Number(|s| &mut s.raise_time)),
+    ("thrown", Slot::Flag(|s| &mut s.thrown)),
     ("pellets", Slot::Count(|s| &mut s.pellets, MOST_PELLETS)),
     (
         "magazineSize",

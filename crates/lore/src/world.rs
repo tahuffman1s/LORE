@@ -1233,6 +1233,9 @@ struct Controls {
     block: Option<ActionId>,
     dodge: Option<ActionId>,
     lock_on: Option<ActionId>,
+    use_item: Option<ActionId>,
+    next_item: Option<ActionId>,
+    previous_item: Option<ActionId>,
 }
 
 impl Controls {
@@ -1252,6 +1255,9 @@ impl Controls {
             block: find("block"),
             dodge: find("dodge"),
             lock_on: find("lock_on"),
+            use_item: find("use_item"),
+            next_item: find("next_item"),
+            previous_item: find("previous_item"),
         }
     }
 
@@ -1284,6 +1290,7 @@ impl Controls {
             reload: held(self.reload),
             interact: held(self.interact),
             dodge: held(self.dodge),
+            use_item: held(self.use_item),
         }
     }
 }
@@ -1960,6 +1967,19 @@ impl Game for Playing {
         self.world.game.host_mut().set_guard_held(guard);
         if can.lock_on && (self.controls.lock_on).is_some_and(|action| input.just_pressed(action)) {
             self.next_lock();
+        }
+        // The item buttons bring up the next weapon carried, or the one
+        // before. With one weapon or none they do nothing.
+        if can.switch_weapons {
+            for (action, forward) in [
+                (self.controls.next_item, true),
+                (self.controls.previous_item, false),
+            ] {
+                if action.is_some_and(|action| input.just_pressed(action)) {
+                    let host = self.world.game.host_mut();
+                    host.cycle_weapon(CharacterId::PLAYER, forward);
+                }
+            }
         }
         // A shot that steers: forward is away from the camera, whichever
         // way the player's own view faces.
@@ -3271,6 +3291,71 @@ mod tests {
         );
         // The dodge's own metre and a half, and a step to stop in.
         assert!(far > 1.4 && far < 2.0, "{far}");
+    }
+
+    #[test]
+    fn the_item_buttons_change_weapon_and_throw_a_grenade_past_the_rifle() {
+        use lore_input::{GamepadButton, Key, MouseWheel};
+
+        let (mut game, mut input) = game_on_map(
+            "",
+            r#"game.onSpawn(function()
+                game.player:giveWeapon("pistol")
+                game.player:giveWeapon("rifle")
+                game.player:giveWeapon("grenade")
+            end)"#,
+        );
+        let held = |game: &Playing| {
+            let host = game.world.game.host();
+            host.held_weapon(CharacterId::PLAYER)
+                .map(|held| held.name.to_string())
+        };
+        let mut tap = |game: &mut Playing, button: lore_input::Button| {
+            input.press(button);
+            game.tick(input.tick(), STEP);
+            input.release(button);
+            game.tick(input.tick(), STEP);
+        };
+        tap(&mut game, Key::Z.into());
+        assert_eq!(held(&game).as_deref(), Some("rifle"));
+        // The wheel and the d-pad go round the two, past the grenade.
+        tap(&mut game, MouseWheel::MouseWheelDown.into());
+        assert_eq!(held(&game).as_deref(), Some("pistol"));
+        tap(&mut game, GamepadButton::DpadRight.into());
+        assert_eq!(held(&game).as_deref(), Some("rifle"));
+        tap(&mut game, GamepadButton::DpadLeft.into());
+        assert_eq!(held(&game).as_deref(), Some("pistol"));
+        // The item button throws the grenade, and the pistol stays up.
+        let grenades = |game: &Playing| {
+            let host = game.world.game.host();
+            host.thrown_weapon(CharacterId::PLAYER)
+                .map(|it| it.state.magazine)
+        };
+        assert_eq!(grenades(&game), Some(1));
+        tap(&mut game, Key::G.into());
+        assert_eq!(held(&game).as_deref(), Some("pistol"));
+        assert_eq!(grenades(&game), Some(0));
+        assert_eq!(game.world.game.host().last_error(), None);
+    }
+
+    #[test]
+    fn a_game_can_turn_weapon_changing_off() {
+        use lore_input::MouseWheel;
+
+        let (mut game, mut input) = game_on_map(
+            "",
+            r#"game.onSpawn(function()
+                game.player:setAbility("switchWeapons", false)
+                game.player:giveWeapon("pistol")
+                game.player:giveWeapon("rifle")
+            end)"#,
+        );
+        game.tick(input.tick(), STEP);
+        input.press(MouseWheel::MouseWheelDown);
+        game.tick(input.tick(), STEP);
+        let host = game.world.game.host();
+        let held = host.held_weapon(CharacterId::PLAYER).map(|held| held.name);
+        assert_eq!(held.as_deref(), Some("rifle"));
     }
 
     #[test]

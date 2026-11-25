@@ -371,7 +371,7 @@ fn mistakes_with_the_player_say_what_to_write() {
         spawn_error("game.player.weapon = \"rifle\""),
         "game.player.weapon cannot be set. To hand over a weapon, write: \
          game.player:giveWeapon(\"rifle\"). To empty their hands, write: \
-         game.player:takeWeapon()"
+         game.player:putAwayWeapon()"
     );
     assert_eq!(
         spawn_error("game.player.position = vector.create(0, 0, 0)"),

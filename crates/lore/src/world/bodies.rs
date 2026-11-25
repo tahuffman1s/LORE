@@ -24,6 +24,8 @@ pub struct PlayerInput {
     pub interact: bool,
     /// The dodge button is held.
     pub dodge: bool,
+    /// The item button (`use_item`) is held: it throws what is thrown.
+    pub use_item: bool,
 }
 
 /// The player in a world.
