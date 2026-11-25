@@ -140,6 +140,9 @@ pub struct Abilities {
     pub dodge: bool,
     /// Holding the view on someone with the `lock_on` button.
     pub lock_on: bool,
+    /// Changing the weapon in the hands with the `next_item` and
+    /// `previous_item` buttons.
+    pub switch_weapons: bool,
 }
 
 impl Default for Abilities {
@@ -152,13 +155,21 @@ impl Default for Abilities {
             block: false,
             dodge: false,
             lock_on: false,
+            switch_weapons: true,
         }
     }
 }
 
 /// The names of the abilities, as a script gives them.
-pub(crate) const ABILITIES: [&str; 7] = [
-    "vault", "climb", "swim", "ladders", "block", "dodge", "lockon",
+pub(crate) const ABILITIES: [&str; 8] = [
+    "vault",
+    "climb",
+    "swim",
+    "ladders",
+    "block",
+    "dodge",
+    "lockon",
+    "switchweapons",
 ];
 
 /// `game.player:setAbility("climb", true)`.
@@ -191,6 +202,7 @@ pub(crate) fn set_ability(
         &mut can.block,
         &mut can.dodge,
         &mut can.lock_on,
+        &mut can.switch_weapons,
     ][which] = *on;
     shared.tools.abilities.set(can);
     Ok(())
@@ -208,13 +220,14 @@ pub(crate) fn can(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Result<
         can.block,
         can.dodge,
         can.lock_on,
+        can.switch_weapons,
     ][which])
 }
 
 /// Which of [`ABILITIES`] a script named.
 fn ability(lua: &Lua, function: &str, name: &Value, example: &str) -> mlua::Result<usize> {
-    let listed = "\"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\" and \
-                  \"lockOn\"";
+    let listed = "\"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\", \
+                  \"lockOn\" and \"switchWeapons\"";
     let Value::String(name) = name else {
         return Err(fail(
             lua,
@@ -231,6 +244,7 @@ fn ability(lua: &Lua, function: &str, name: &Value, example: &str) -> mlua::Resu
     let name = match name.as_str() {
         "ladder" => "ladders",
         "lock_on" | "lock on" | "lock" => "lockon",
+        "switch_weapons" | "switch weapons" | "switchweapon" => "switchweapons",
         other => other,
     };
     ABILITIES

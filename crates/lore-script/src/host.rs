@@ -487,8 +487,10 @@ impl ScriptHost {
             self.run_timers();
         }
         self.hurts_due();
+        self.switches_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
         self.hurts_due();
+        self.switches_due();
         if !stopped {
             self.clock.end_tick();
         }
@@ -1357,7 +1359,7 @@ impl ScriptHost {
         if let Some(version) = &self.running {
             version.shared.handles.forget(character);
         }
-        self.weapons.take(character);
+        self.weapons.forget(character);
     }
 
     /// Says how a character is moving: what the script reads as `velocity`,
@@ -1762,6 +1764,49 @@ impl ScriptHost {
     /// it. Does nothing if they hold none.
     pub fn set_weapon_state(&mut self, character: CharacterId, state: Weapon) {
         self.weapons.set_state(character, state);
+    }
+
+    /// The weapon `character` throws with the throw button while what they
+    /// hold stays in their hands: the first thrown kind they carry. Step
+    /// it as the held one is stepped, and hand its state back with
+    /// [`set_thrown_weapon_state`](Self::set_thrown_weapon_state).
+    #[must_use]
+    pub fn thrown_weapon(&self, character: CharacterId) -> Option<HeldWeapon> {
+        let (kind, state) = self.weapons.thrown(character)?;
+        Some(HeldWeapon {
+            name: kind.name,
+            settings: kind.settings,
+            state,
+        })
+    }
+
+    /// Hands back the state of the weapon `character` throws after
+    /// stepping it.
+    pub fn set_thrown_weapon_state(&mut self, character: CharacterId, state: Weapon) {
+        self.weapons.set_thrown_state(character, state);
+    }
+
+    /// Brings up the next weapon `character` carries (`forward`) or the
+    /// one before, round and round: the `next_weapon` and
+    /// `previous_weapon` buttons. The new one can fire after its raise
+    /// time, a reload of the old one is cut short, and the script's
+    /// `game.onWeaponSwitch` functions are told on the next tick.
+    pub fn cycle_weapon(&mut self, character: CharacterId, forward: bool) {
+        self.weapons.cycle(character, forward);
+    }
+
+    /// Tells the script of every change of hands since it was last told:
+    /// its `game.onWeaponSwitch` functions.
+    fn switches_due(&mut self) {
+        for (who, now, before) in self.weapons.take_switched() {
+            if let Some(who) = self.character(who) {
+                let name = |name: Option<Rc<str>>| name.map(|name| name.to_string());
+                self.call_all(
+                    |handlers| &handlers.weapon_switch,
+                    (who, name(now), name(before)),
+                );
+            }
+        }
     }
 
     /// Tells the script that `shooter` fired a shot: its

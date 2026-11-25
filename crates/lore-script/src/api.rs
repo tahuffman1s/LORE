@@ -42,6 +42,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "onWeaponFire",
     "onWeaponHit",
     "onWeaponReload",
+    "onWeaponSwitch",
     "onDamage",
     "onDeath",
     "onPickUp",
@@ -101,6 +102,7 @@ pub(crate) struct Handlers {
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
     pub weapon_reload: Vec<Function>,
+    pub weapon_switch: Vec<Function>,
     pub lightning: Vec<Function>,
     pub meteor: Vec<Function>,
     pub fluid_touch: Vec<Function>,
@@ -332,7 +334,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 8] = [
+    let events: [(&'static str, &'static str, List); 9] = [
         ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
             &mut h.damage
         }),
@@ -358,6 +360,11 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "onWeaponReload",
             "game.onWeaponReload(function(shooter) ... end)",
             |h| &mut h.weapon_reload,
+        ),
+        (
+            "onWeaponSwitch",
+            "game.onWeaponSwitch(function(who, weapon, before) ... end)",
+            |h| &mut h.weapon_switch,
         ),
         ("onPickUp", "game.onPickUp(function(thing) ... end)", |h| {
             &mut h.picked_up

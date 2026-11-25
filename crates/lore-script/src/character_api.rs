@@ -18,7 +18,6 @@ use mlua::{AnyUserData, Lua, MetaMethod, UserData, UserDataFields, UserDataMetho
 
 use crate::api::{Shared, fail, taken_out};
 use crate::error::closest;
-use crate::time_api::rules_only;
 use crate::tools_api::{Motion, MoveNumber, Movement};
 use crate::weapon_api;
 
@@ -27,6 +26,8 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "name",
     "position",
     "weapon",
+    "weapons",
+    "maxWeapons",
     "ammo",
     "reserve",
     "velocity",
@@ -129,6 +130,10 @@ const MOVE_SETTERS: [(&str, MoveNumber, &str); 11] = [
 pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "giveWeapon",
     "takeWeapon",
+    "drawWeapon",
+    "putAwayWeapon",
+    "ammoOf",
+    "setMaxWeapons",
     "teleport",
     "setMovement",
     "setFlySpeed",
@@ -619,6 +624,14 @@ impl UserData for CharacterRef {
             this.read(lua, "weapon")?;
             Ok(weapon_api::weapon_name(&*shared_of(lua)?, this.0))
         });
+        fields.add_field_method_get("weapons", |lua, this| {
+            this.read(lua, "weapons")?;
+            Ok(weapon_api::weapons_carried(&*shared_of(lua)?, this.0))
+        });
+        fields.add_field_method_get("maxWeapons", |lua, this| {
+            this.read(lua, "maxWeapons")?;
+            Ok(weapon_api::most_carried(&*shared_of(lua)?, this.0))
+        });
         fields.add_field_method_get("ammo", |lua, this| {
             this.read(lua, "ammo")?;
             Ok(weapon_api::rounds(&*shared_of(lua)?, this.0).0)
@@ -630,16 +643,32 @@ impl UserData for CharacterRef {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_function("giveWeapon", |lua, (this, name): (Value, Value)| {
-            let this = receiver(lua, &this, "giveWeapon", "(\"rifle\")")?;
-            weapon_api::give(lua, this.0, &name)
-        });
-        methods.add_function("takeWeapon", |lua, this: Value| {
+        methods.add_function(
+            "giveWeapon",
+            |lua, (this, name, options): (Value, Value, Value)| {
+                let this = receiver(lua, &this, "giveWeapon", "(\"rifle\")")?;
+                weapon_api::give(lua, this.0, &name, &options)
+            },
+        );
+        methods.add_function("takeWeapon", |lua, (this, name): (Value, Value)| {
             let this = receiver(lua, &this, "takeWeapon", "()")?;
-            let shared = shared_of(lua)?;
-            rules_only(lua, &shared, "game.player:takeWeapon")?;
-            shared.weapons.take(this.0);
-            Ok(())
+            weapon_api::take(lua, this.0, &name)
+        });
+        methods.add_function("drawWeapon", |lua, (this, name): (Value, Value)| {
+            let this = receiver(lua, &this, "drawWeapon", "(\"pistol\")")?;
+            weapon_api::draw(lua, this.0, &name)
+        });
+        methods.add_function("putAwayWeapon", |lua, this: Value| {
+            let this = receiver(lua, &this, "putAwayWeapon", "()")?;
+            weapon_api::put_away(lua, this.0)
+        });
+        methods.add_function("ammoOf", |lua, (this, name): (Value, Value)| {
+            let this = receiver(lua, &this, "ammoOf", "(\"grenade\")")?;
+            weapon_api::ammo_of(lua, this.0, &name)
+        });
+        methods.add_function("setMaxWeapons", |lua, (this, most): (Value, Value)| {
+            let this = receiver(lua, &this, "setMaxWeapons", "(2)")?;
+            weapon_api::set_most(lua, this.0, &most)
         });
         methods.add_function(
             "teleport",
@@ -919,7 +948,7 @@ fn read_only(lua: &Lua, what: &str, key: &Value) -> mlua::Error {
     } else if key == "weapon" {
         format!(
             "To hand over a weapon, write: {what}:giveWeapon(\"rifle\"). To empty their \
-             hands, write: {what}:takeWeapon()"
+             hands, write: {what}:putAwayWeapon()"
         )
     } else if key == "ammo" || key == "reserve" {
         format!(

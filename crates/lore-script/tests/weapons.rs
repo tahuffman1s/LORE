@@ -471,7 +471,7 @@ fn mistakes_with_the_players_weapon_say_what_to_write() {
         spawn_error("game.player.weapon = \"rifle\""),
         "game.player.weapon cannot be set. To hand over a weapon, write: \
          game.player:giveWeapon(\"rifle\"). To empty their hands, write: \
-         game.player:takeWeapon()"
+         game.player:putAwayWeapon()"
     );
     assert!(
         spawn_error("game.player.ammo = 30").starts_with(
@@ -483,4 +483,159 @@ fn mistakes_with_the_players_weapon_say_what_to_write() {
         "game.onWeaponHit needs a function, but it was given a number. \
          Write it like this: game.onWeaponHit(function(hit) ... end)"
     );
+}
+
+/// Runs one tick of `host` with nothing pressed.
+fn tick(host: &mut ScriptHost) {
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+#[test]
+fn a_player_carries_several_weapons_and_each_keeps_its_rounds() {
+    let (mut host, _) = with_bo(
+        r#"game.onSpawn(function()
+            local player = game.player
+            player:giveWeapon("rifle")
+            player:giveWeapon("pistol")
+            print(player.weapon, table.concat(player.weapons, ","), player.maxWeapons)
+        end)"#,
+    );
+    assert_eq!(printed(), ["pistol rifle,pistol inf"]);
+    // The pistol is spent a little, then put away for the rifle.
+    let mut state = host.held_weapon(PLAYER).unwrap().state;
+    state.magazine = 3;
+    host.set_weapon_state(PLAYER, state);
+    host.cycle_weapon(PLAYER, true);
+    let rifle = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(&*rifle.name, "rifle");
+    // Switching takes the new weapon's raise time.
+    assert!((rifle.state.cooldown - rifle.settings.raise_time).abs() < 1e-6);
+    host.cycle_weapon(PLAYER, false);
+    assert_eq!(host.held_weapon(PLAYER).unwrap().state.magazine, 3);
+}
+
+#[test]
+fn switching_cuts_a_reload_short_and_tells_the_script() {
+    let (mut host, _) = with_bo(
+        r#"game.onSpawn(function()
+            game.player:giveWeapon("shotgun")
+            game.player:giveWeapon("rifle")
+        end)
+        game.onWeaponSwitch(function(who, weapon, before)
+            print(who.name, weapon, before)
+        end)"#,
+    );
+    // The two hand-overs on spawn were heard after it.
+    tick(&mut host);
+    assert_eq!(printed(), ["Player shotgun nil", "Player rifle shotgun"]);
+    let held = host.held_weapon(PLAYER).unwrap();
+    let mut state = held.state;
+    state.magazine = 0;
+    let mut shots = Vec::new();
+    let input = lore_script::weapons::WeaponInput {
+        reload: true,
+        ..Default::default()
+    };
+    state.step(&held.settings, &input, 1, 1.0 / 60.0, &mut shots);
+    assert!(state.reload_progress(&held.settings).is_some());
+    host.set_weapon_state(PLAYER, state);
+    host.cycle_weapon(PLAYER, true);
+    host.cycle_weapon(PLAYER, true);
+    tick(&mut host);
+    assert_eq!(printed(), ["Player shotgun rifle", "Player rifle shotgun"]);
+    let rifle = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(rifle.state.reload_progress(&rifle.settings), None);
+    assert_eq!(rifle.state.magazine, 0);
+}
+
+#[test]
+fn a_grenade_stays_on_the_belt_and_is_thrown_past_what_is_held() {
+    let (mut host, _) = with_bo(
+        r#"game.onSpawn(function()
+            game.player:giveWeapon("rifle")
+            game.player:giveWeapon("grenade")
+            print(game.player.weapon, game.player:ammoOf("grenade"))
+        end)"#,
+    );
+    assert_eq!(printed(), ["rifle 1 1"]);
+    let thrown = host.thrown_weapon(PLAYER).unwrap();
+    assert_eq!(&*thrown.name, "grenade");
+    // Changing weapon passes over it: there is only the rifle to bring up.
+    host.cycle_weapon(PLAYER, true);
+    assert_eq!(&*host.held_weapon(PLAYER).unwrap().name, "rifle");
+    let mut state = thrown.state;
+    state.reserve = 0;
+    host.set_thrown_weapon_state(PLAYER, state);
+    assert_eq!(host.thrown_weapon(PLAYER).unwrap().state.reserve, 0);
+    // With nothing else, a grenade comes up into the hands.
+    let (host, _) = with_bo(r#"game.onSpawn(function() game.player:giveWeapon("grenade") end)"#);
+    assert_eq!(&*host.held_weapon(PLAYER).unwrap().name, "grenade");
+    assert!(host.thrown_weapon(PLAYER).is_none());
+}
+
+#[test]
+fn draw_put_away_take_and_a_most_say_what_is_in_the_hands() {
+    let (host, _) = with_bo(
+        r#"game.onSpawn(function()
+            local player = game.player
+            player:giveWeapon("rifle")
+            player:giveWeapon("pistol", { draw = false })
+            print(player.weapon)
+            player:drawWeapon("Pistol")
+            player:putAwayWeapon()
+            print(player.weapon, #player.weapons, player.ammo)
+            player:drawWeapon("rifle")
+            player:takeWeapon("rifle")
+            print(player.weapon)
+            player:giveWeapon("shotgun")
+            player:setMaxWeapons(2)
+            player:giveWeapon("rocket launcher")
+            print(player.weapon, table.concat(player.weapons, ","))
+            player:setMaxWeapons(1)
+            print(table.concat(player.weapons, ","), player.maxWeapons)
+            player:takeWeapon("grenade")
+            player:takeWeapon()
+            print(player.weapon, #player.weapons, player:ammoOf("rifle"))
+        end)"#,
+    );
+    assert_eq!(
+        printed(),
+        [
+            "rifle",
+            "nil 2 0",
+            "pistol",
+            "rocket launcher pistol,rocket launcher",
+            "rocket launcher 1",
+            "nil 0 0 0",
+        ]
+    );
+    assert!(host.held_weapon(PLAYER).is_none());
+}
+
+#[test]
+fn a_game_with_no_weapons_ignores_the_switch_buttons() {
+    let (mut host, bo) = with_bo("game.onTick(function() end)");
+    host.cycle_weapon(PLAYER, true);
+    host.cycle_weapon(bo, false);
+    tick(&mut host);
+    assert!(host.held_weapon(PLAYER).is_none());
+    assert!(host.thrown_weapon(PLAYER).is_none());
+}
+
+#[test]
+fn mistakes_with_carried_weapons_say_what_to_write() {
+    assert_eq!(
+        spawn_error("game.player:giveWeapon(\"rifle\")\ngame.player:drawWeapon(\"pistol\")"),
+        "drawWeapon was asked for \"pistol\", which this character does not carry. They \
+         carry: rifle. Hand it over first: game.player:giveWeapon(\"pistol\"), which also \
+         brings it up."
+    );
+    assert!(spawn_error("game.player:setMaxWeapons(0)").contains("from 1 up"));
+    assert!(
+        spawn_error("game.player:giveWeapon(\"rifle\", { drew = true })")
+            .contains("one setting, draw")
+    );
+    assert!(spawn_error("game.player:giveWeapon(\"rifle\", true)").contains("in curly brackets"));
+    assert!(load_error("game.weapon(\"x\", { thrown = 1 })").contains("thrown"));
 }

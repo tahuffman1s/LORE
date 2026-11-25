@@ -275,16 +275,54 @@ impl Shooting {
         host: &mut ScriptHost,
         noises: &mut Vec<Noise>,
     ) {
-        let Some(mut held) = host.held_weapon(CharacterId::PLAYER) else {
+        // What is in the hands by the trigger, and then what is thrown
+        // past it by the item button: a grenade while holding a rifle.
+        for thrown in [false, true] {
+            self.work(
+                body, dummies, tick, level, rules, step, host, noises, thrown,
+            );
+        }
+    }
+
+    /// Steps one of the weapons the player carries: the one in their hands,
+    /// or the one they throw (`thrown`).
+    #[allow(clippy::too_many_arguments)]
+    fn work(
+        &mut self,
+        body: &Body,
+        dummies: &[Dummy],
+        tick: u32,
+        level: &Level,
+        rules: &MoveSettings,
+        step: f32,
+        host: &mut ScriptHost,
+        noises: &mut Vec<Noise>,
+        thrown: bool,
+    ) {
+        let held = if thrown {
+            host.thrown_weapon(CharacterId::PLAYER)
+        } else {
+            host.held_weapon(CharacterId::PLAYER)
+        };
+        let Some(mut held) = held else {
             return;
         };
-        let input = weapon_input(body, rules);
+        let mut input = weapon_input(body, rules);
+        if thrown {
+            input.trigger = body.asked.use_item;
+            input.reload = false;
+            input.aiming = false;
+        }
         self.shots.clear();
         let seed = shot_seed(PLAYER, tick);
         let events = held
             .state
             .step(&held.settings, &input, seed, step, &mut self.shots);
-        host.set_weapon_state(CharacterId::PLAYER, held.state);
+        if thrown {
+            host.set_thrown_weapon_state(CharacterId::PLAYER, held.state);
+        } else {
+            host.set_weapon_state(CharacterId::PLAYER, held.state);
+        }
         let eyes = body.player.eye_position();
         let heard = |kind, delay: f32| Noise {
             kind,

@@ -50,6 +50,16 @@ declare extern type Character with
     --- Example: if game.player.ammo + game.player.reserve == 0 then game.player:giveWeapon("pistol") end
     reserve: number
 
+    --- The names of the weapons the character carries, in the order they
+    --- were handed over, the one in their hands among them.
+    --- Example: for _, name in game.player.weapons do print(name) end
+    weapons: { string }
+
+    --- The most weapons the character may carry, `math.huge` until
+    --- `setMaxWeapons` says.
+    --- Example: if #game.player.weapons < game.player.maxWeapons then game.player:giveWeapon("shotgun") end
+    maxWeapons: number
+
     --- How fast the character is moving, in metres a second, with y up. It
     --- is zero for one the engine has given no motion.
     --- Example: local speed = vector.magnitude(game.player.velocity)
@@ -248,17 +258,49 @@ declare extern type Character with
     --- Example: for _, clip in game.player.clips do print(clip) end
     clips: { string }
 
-    --- Puts a new, full weapon in the character's hands, in place of what
-    --- they held. The name is one of the engine's weapons ("rifle",
-    --- "pistol", "shotgun", "rocket launcher", "grenade") or one made with
-    --- `game.weapon`. The player fires it with the "fire" action, aims with
-    --- "aim" and reloads with "reload". Capital letters do not matter.
+    --- Hands the character a new, full weapon and brings it up into their
+    --- hands; what they held is put away and still carried. The name is
+    --- one of the engine's weapons ("rifle", "pistol", "shotgun", "rocket
+    --- launcher", "grenade") or one made with `game.weapon`; capital
+    --- letters do not matter. One of each kind is carried: handing over
+    --- one they have fills it up again. A thrown weapon (a grenade) given
+    --- to someone already holding one stays on their belt, thrown with
+    --- "use_item"; `{ draw = false }` keeps any weapon on the belt, and
+    --- `{ draw = true }` brings even a grenade up. The player fires with
+    --- "fire", aims with "aim", reloads with "reload" and changes weapon
+    --- with "next_item" and "previous_item".
     --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
-    function giveWeapon(self, name: string): ()
+    function giveWeapon(self, name: string, options: { draw: boolean? }?): ()
 
-    --- Empties the character's hands. Does nothing if they hold no weapon.
-    --- Example: game.player:takeWeapon()
-    function takeWeapon(self): ()
+    --- Takes the weapon called `name` from what the character carries, or
+    --- with no name every weapon. If it was in their hands, the one handed
+    --- over before it comes up. Does nothing if they do not carry it.
+    --- Example: game.player:takeWeapon("rocket launcher")
+    function takeWeapon(self, name: string?): ()
+
+    --- Brings up a weapon the character carries, putting away what they
+    --- held (a reload is cut short) after its `raiseTime`. Naming one they
+    --- do not carry is an error that lists what they do carry.
+    --- Example: if game.input.justPressed("melee") then game.player:drawWeapon("pistol") end
+    function drawWeapon(self, name: string): ()
+
+    --- Empties the character's hands. What they carry stays carried, and
+    --- "next_item" brings it up again.
+    --- Example: game.player:putAwayWeapon()
+    function putAwayWeapon(self): ()
+
+    --- The rounds in the magazine and the spare ones of a weapon the
+    --- character carries, in their hands or not. 0 and 0 for one they do
+    --- not carry.
+    --- Example: local grenades = game.player:ammoOf("grenade")
+    function ammoOf(self, name: string): (number, number)
+
+    --- The most weapons the character may carry, a whole number from 1 up,
+    --- or `math.huge` for no most (as at first). Handed another when full,
+    --- it takes the place of the one in their hands. Carrying more already,
+    --- the last handed over are dropped, the one in their hands last.
+    --- Example: game.onSpawn(function() game.player:setMaxWeapons(2) end)
+    function setMaxWeapons(self, most: number): ()
 
     --- Puts the player's feet at `position`, standing still, so
     --- `game.player.position` reads it at once. With `facing` (any way to
@@ -345,16 +387,20 @@ declare extern type Character with
     ---   the player, within 25 metres; pressing again goes to the next
     ---   nearest, and after the last lets go. `game.player.lockedOn` says
     ---   who, and `game.player:lockOn` still sets it from a script.
+    --- "switchWeapons" (on from the start): the "next_item" and
+    ---   "previous_item" buttons (the mouse wheel, or the d-pad left and
+    ---   right) bring up the next weapon carried or the one before. Turn it
+    ---   off to use those buttons for something else.
     --- Ledges are found from the level's own shape: nothing has to be
     --- marked. It stays through a reload of the script. Only in the
     --- game's rules.
     --- Example: game.onStart(function() game.player:setAbility("climb", true) end)
     --- Example: game.onStart(function() for _, ability in { "block", "dodge", "lockOn" } do game.player:setAbility(ability, true) end end)
-    function setAbility(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn", on: boolean): ()
+    function setAbility(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn" | "switchWeapons", on: boolean): ()
 
     --- Whether the player has an ability: see `setAbility`.
     --- Example: if game.player:can("swim") then print("Dive in") end
-    function can(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn"): boolean
+    function can(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn" | "switchWeapons"): boolean
 
     --- How long a dodge lasts, in seconds, from 0.05 to 3. 0.35 if never
     --- set. Another dodge can begin a quarter of a second after one ends.
@@ -2160,6 +2206,10 @@ declare game: {
         burstPause: number?,
         --- How long after the weapon is handed over before it can fire.
         raiseTime: number?,
+        --- Thrown with "use_item" while another weapon stays in the hands,
+        --- as the "grenade" is: it is carried on the belt, and changing
+        --- weapon passes over it.
+        thrown: boolean?,
         --- How many things leave the barrel per shot. A shotgun has several;
         --- each does `damage` on its own, and one shot uses one round.
         pellets: number?,
@@ -2276,6 +2326,13 @@ declare game: {
     --- is not `game.onReload`, which is about the script file being saved.
     --- Example: game.onWeaponReload(function(shooter) print(shooter.reserve .. " spare") end)
     onWeaponReload: (handler: (shooter: Character) -> ()) -> (),
+
+    --- Calls `handler` when what a character has in their hands changes:
+    --- with who, the weapon in their hands now and the one before, either
+    --- of which is nil for empty hands. It comes on the tick after the
+    --- change.
+    --- Example: game.onWeaponSwitch(function(who, weapon) weaponText.text = weapon or "" end)
+    onWeaponSwitch: (handler: (who: Character, weapon: string?, before: string?) -> ()) -> (),
 
     --- Calls `handler` for every hurt, whoever or whatever did it: a
     --- weapon, a fall, or a script's `damage`. It is handed what happened:
