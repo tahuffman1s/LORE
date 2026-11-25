@@ -192,3 +192,28 @@ fn solid_things_are_drawn_where_they_come_to_rest() {
     );
     assert_eq!(lore_render::validation_errors(), 0);
 }
+
+#[test]
+fn the_named_shots_show_the_player_from_above_and_from_the_side() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    for (name, shot) in [
+        (
+            "shot-top-down",
+            "game.camera.topDown(game.player, { height = 12 })",
+        ),
+        (
+            "shot-side-on",
+            "game.camera.sideOn(game.player, { distance = 8 })",
+        ),
+    ] {
+        let script = format!("game.player:setView(\"third\")\n{shot}");
+        let (with, without) = drawn(&script, 60, &mut headless);
+        save(name, &with);
+        // The body is in the picture, and near its middle.
+        let seen = changed(&with, &without, SCREEN[1] / 4..SCREEN[1] * 3 / 4);
+        assert!(seen > 300, "{name}: only {seen} pixels show the player");
+    }
+    assert_eq!(lore_render::validation_errors(), 0);
+}

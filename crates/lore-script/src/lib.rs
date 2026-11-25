@@ -71,7 +71,7 @@ mod weapon_api;
 mod weather_api;
 
 pub use audio::{AudioCommand, SoundId, SoundRequest};
-pub use camera_api::{CameraSaid, CameraTarget, ShotSaid};
+pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};

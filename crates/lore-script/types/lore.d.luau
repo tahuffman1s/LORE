@@ -1940,10 +1940,11 @@ declare game: {
         --- the bottom of the picture to the top, from 10 to 120 (the
         --- player's own setting if not given): a small number is a long lens.
         --- Saying the same shot again, as a script may every tick, does
-        --- not start its travel over.
+        --- not start its travel over. With `steer = true` the player walks
+        --- by the shot: forward is away from the camera.
         --- Example: game.camera.fixed(vector.create(0, 6, 12), game.player)
         --- Example: game.camera.fixed(vector.create(0, 2, 0), vector.create(10, 1, 0), { seconds = 2, fov = 40 })
-        fixed: (from: vector, at: vector | Character, options: { seconds: number?, fov: number? }?) -> (),
+        fixed: (from: vector, at: vector | Character, options: { seconds: number?, fov: number?, steer: boolean? }?) -> (),
 
         --- Trails `who` wherever they go, looking at them: `distance`
         --- metres away (4 if not given, from 0.5 to 100) and `height`
@@ -1957,14 +1958,52 @@ declare game: {
         --- Example: game.camera.follow(game.player, { seconds = 1 })
         follow: (who: Character, options: { distance: number?, height: number?, seconds: number?, fov: number? }?) -> (),
 
+        --- Puts the camera straight above `who`, looking down, with north
+        --- (-Z) at the top of the picture: `height` metres over them (14
+        --- if not given). With `steer = true` the player walks by the
+        --- picture: forward is up the screen, whichever way they face.
+        --- `seconds` and `fov` are as for `game.camera.fixed`.
+        --- Example: game.camera.topDown(game.player, { height = 18, steer = true })
+        topDown: (who: Character, options: { height: number?, seconds: number?, fov: number?, steer: boolean? }?) -> (),
+
+        --- Puts the camera level with `who` and to one side, as a
+        --- side-scroller's is: `distance` metres off (10 if not given),
+        --- `height` above their chest (0.5), looking along `angle`, which
+        --- is degrees to the left of north (90 if not given: looking west,
+        --- so the player is seen from the east). It slides along with
+        --- them and never turns. With `steer = true` forward is away from
+        --- the camera and left and right run along the picture.
+        --- Example: game.camera.sideOn(game.player, { distance = 12, steer = true })
+        sideOn: (who: Character, options: { distance: number?, height: number?, angle: number?, seconds: number?, fov: number?, steer: boolean? }?) -> (),
+
+        --- Circles `about`, a place or a character, looking at it:
+        --- `distance` metres off (6 if not given), `height` above it (2),
+        --- going round to the left at `speed` degrees a second (20; below
+        --- 0 goes right, 0 stands still). It starts from the side the
+        --- view is on.
+        --- Example: game.camera.orbit(game.player, { distance = 4, speed = 30, seconds = 1 })
+        orbit: (about: vector | Character, options: { distance: number?, height: number?, speed: number?, seconds: number?, fov: number? }?) -> (),
+
+        --- Sends the camera along a smooth path through `places`, from 2
+        --- to 16 of them: vectors, or things placed in the map, so a path
+        --- can be laid out in `lore edit` with markers. It takes `over`
+        --- seconds from end to end (5 if not given) and stops at the end,
+        --- or goes round again with `loop = true`. It looks at `at`, a
+        --- place or a character, or the way it is going if `at` is not
+        --- given.
+        --- Example: game.camera.path(game.things("camera_path"), { over = 8, at = game.player })
+        --- Example: game.camera.path({ vector.create(0, 3, 10), vector.create(8, 3, 0), vector.create(0, 3, -10) }, { over = 6 })
+        path: (places: { vector | Thing }, options: { over: number?, at: (vector | Character)?, loop: boolean?, seconds: number?, fov: number? }?) -> (),
+
         --- Gives the view back to the player, with their own field of
         --- view, travelling there over `seconds` (it cuts if not given).
         --- Example: game.camera.reset(1)
         reset: (seconds: number?) -> (),
 
-        --- The shot the script last said: "player", "fixed" or "follow".
+        --- The shot the script last said: "player", "fixed", "follow",
+        --- "topDown", "sideOn", "orbit" or "path".
         --- Example: if game.camera.shot() ~= "player" then game.camera.reset() end
-        shot: () -> ("player" | "fixed" | "follow"),
+        shot: () -> ("player" | "fixed" | "follow" | "topDown" | "sideOn" | "orbit" | "path"),
     },
 
     --- Lamps the game has.

@@ -778,6 +778,13 @@ pub(crate) fn slide_watched(shared: &Shared, arrived: bool) -> Vec<String> {
     ids
 }
 
+/// Where the thing a script value stands for is placed, if it is a thing
+/// that is still in the map.
+pub(crate) fn place_of(shared: &Shared, value: &AnyUserData) -> Option<[f32; 3]> {
+    let thing = value.borrow::<ThingRef>().ok()?;
+    shared.things.find(&thing.0).map(|placed| placed.position)
+}
+
 /// The thing the player carries, for `game.player.carrying`.
 pub(crate) fn carrying(lua: &Lua, shared: &Shared) -> mlua::Result<Option<AnyUserData>> {
     let carried = shared.things.carrying.borrow().clone();
