@@ -142,6 +142,10 @@ pub struct WeaponSettings {
     /// From this distance on a hit does `far_damage`; in between it eases
     /// from one to the other.
     pub falloff_end: f32,
+    /// How many metres of the level a shot goes through: a thin wall, a
+    /// door, a fence. It loses damage with every bit of it, and all of it
+    /// at this much. 0, the usual, stops at the first surface.
+    pub penetration: f32,
     /// Damage of one hit to the body at `falloff_end` and beyond.
     pub far_damage: f32,
     /// What a hit to the head is multiplied by.
@@ -205,6 +209,7 @@ impl Default for WeaponSettings {
             damage: 30.0,
             falloff_start: 25.0,
             falloff_end: 60.0,
+            penetration: 0.0,
             far_damage: 21.0,
             head_multiplier: 2.0,
             leg_multiplier: 0.8,
@@ -243,6 +248,7 @@ impl WeaponSettings {
             damage: 26.0,
             falloff_start: 12.0,
             falloff_end: 35.0,
+            penetration: 0.0,
             far_damage: 14.0,
             spread: 0.6,
             spread_per_shot: 0.5,
@@ -268,6 +274,7 @@ impl WeaponSettings {
             damage: 14.0,
             falloff_start: 6.0,
             falloff_end: 20.0,
+            penetration: 0.0,
             far_damage: 3.0,
             head_multiplier: 1.5,
             spread: 3.0,

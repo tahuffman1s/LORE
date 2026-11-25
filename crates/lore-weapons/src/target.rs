@@ -12,6 +12,17 @@ const HEAD_FROM: f32 = 0.85;
 /// Hits below this share of a target's height are to the legs.
 const LEGS_BELOW: f32 = 0.45;
 
+/// The most walls one shot goes through.
+const MOST_WALLS: u8 = 3;
+
+/// What a sheet with no thickness counts as, in metres of cover: a fence
+/// or a banner still takes a little out of a shot.
+const SHEET: f32 = 0.02;
+
+/// How near the middle of a head a hit lands to be a hit to the head, in
+/// metres: a head and a little of the neck.
+const HEAD_REACH: f32 = 0.2;
+
 /// Something that can be shot: a player's body, as an upright capsule.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
@@ -24,6 +35,11 @@ pub struct Target {
     pub height: f32,
     /// Half the body's width: 0.35 with the default movement settings.
     pub radius: f32,
+    /// Where the middle of the head is, in metres, for a body whose
+    /// skeleton says: a hit is to the head when it lands within reach of
+    /// it, however the body leans or crouches. `None` goes by height: the
+    /// top 15% of the body is its head.
+    pub head: Option<[f32; 3]>,
 }
 
 /// Where on a body a hit landed.
@@ -68,6 +84,9 @@ pub struct Hit {
     /// The damage done: nothing for the level; for a target, the weapon's
     /// damage at that distance on that part of the body.
     pub damage: f32,
+    /// How many metres of the level the shot went through on the way: 0
+    /// unless the weapon goes through thin cover and there was some.
+    pub cover: f32,
 }
 
 impl Hit {
@@ -98,7 +117,7 @@ impl Hit {
 /// use lore_weapons::{hitscan, Target, WeaponSettings, Zone, Struck};
 ///
 /// let level = Level::from_triangles(&[]);
-/// let enemy = Target { id: 7, feet: [0.0, 0.0, -10.0], height: 1.8, radius: 0.35 };
+/// let enemy = Target { id: 7, feet: [0.0, 0.0, -10.0], height: 1.8, radius: 0.35, head: None };
 /// let rifle = WeaponSettings::default();
 ///
 /// let eyes = [0.0, 1.0, 0.0];
@@ -123,8 +142,37 @@ pub fn hitscan(
         Delivery::Projectile(_) => settings.falloff_end,
     };
     let mut hit = trace(level, targets, from, direction, reach, shooter)?;
+    // Through thin cover, for a weapon that goes through any: on from the
+    // far side of what it met, as far as its reach still goes, losing
+    // damage with every bit of cover.
+    let pierces = positive(settings.penetration);
+    let mut left = pierces;
+    let mut walls = 0;
+    while hit.struck == Struck::Level && left > 0.0 && walls < MOST_WALLS {
+        let Some(thick) = level.thickness(hit.point, direction, left) else {
+            break;
+        };
+        let (heading, _) = unit(direction)?;
+        let out = add(hit.point, scale(heading, thick + 2.0e-3));
+        let gone = hit.distance + thick;
+        let Some(mut beyond) = trace(level, targets, out, direction, reach - gone, shooter) else {
+            // Through, and into the open: it hit only the cover.
+            break;
+        };
+        left -= thick.max(SHEET);
+        walls += 1;
+        beyond.distance += gone;
+        beyond.cover = pierces - left;
+        hit = beyond;
+    }
     if let Struck::Target { zone, .. } = hit.struck {
-        hit.damage = settings.damage_at(hit.distance, zone);
+        // What the cover took: all of the damage at the weapon's limit.
+        let kept = if pierces > 0.0 {
+            (1.0 - hit.cover / pierces).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        hit.damage = settings.damage_at(hit.distance, zone) * kept;
     }
     Some(hit)
 }
@@ -149,6 +197,7 @@ pub(crate) fn trace(
         normal: wall.normal,
         distance: wall.distance,
         damage: 0.0,
+        cover: 0.0,
     });
     if let Some(wall) = &first {
         reach = wall.distance;
@@ -167,7 +216,21 @@ pub(crate) fn trace(
             let point = add(from, scale(heading, distance));
             let height = target_height(target);
             let share = (point[1] - target.feet[1]) / height;
-            let zone = if share >= HEAD_FROM {
+            // By the head's own place where the body's skeleton says it,
+            // and by height where it does not.
+            let on_head = match target.head {
+                // How near the shot's line passes the middle of the head:
+                // the body's shape is wider than a head, so where the
+                // line meets it says less than where the line goes.
+                Some(head) => {
+                    let to: [f32; 3] = std::array::from_fn(|i| head[i] - from[i]);
+                    let along: f32 = (0..3).map(|i| to[i] * heading[i]).sum();
+                    let off: f32 = (0..3).map(|i| (to[i] - heading[i] * along).powi(2)).sum();
+                    off <= HEAD_REACH * HEAD_REACH
+                }
+                None => share >= HEAD_FROM,
+            };
+            let zone = if on_head {
                 Zone::Head
             } else if share < LEGS_BELOW {
                 Zone::Legs
@@ -183,6 +246,7 @@ pub(crate) fn trace(
                 normal,
                 distance,
                 damage: 0.0,
+                cover: 0.0,
             });
         }
     }

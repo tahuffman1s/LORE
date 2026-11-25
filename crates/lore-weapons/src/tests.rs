@@ -44,6 +44,7 @@ fn enemy(id: u32, ahead: f32) -> Target {
         feet: [0.0, 0.0, -ahead],
         height: 1.8,
         radius: 0.35,
+        head: None,
     }
 }
 
@@ -794,6 +795,7 @@ fn the_shooter_is_not_hit_by_their_own_bullet() {
         feet: [0.0, 0.0, 0.0],
         height: 1.8,
         radius: 0.35,
+        head: None,
     };
     let targets = [me, enemy(2, 10.0)];
     let hit = hitscan(&nothing(), &targets, EYES, AHEAD, &rifle, Some(1)).unwrap();
@@ -966,6 +968,7 @@ fn a_rocket_goes_off_against_a_player_but_not_its_owner() {
         feet: [0.0, 0.0, 0.0],
         height: 1.8,
         radius: 0.35,
+        head: None,
     };
     let targets = [me, enemy(2, 12.0)];
     let mut rocket = Projectile::launch(&launcher, EYES, AHEAD, Some(1)).unwrap();
@@ -1250,6 +1253,7 @@ fn odd_targets_and_endless_settings_are_taken_in_stride() {
                 feet: [0.0, y, -10.0],
                 height,
                 radius,
+                head: None,
             };
             let from = [0.0, y + 0.005, 0.0];
             let hit = hitscan(&nothing(), &[odd], from, AHEAD, &rifle, None).unwrap();
@@ -1285,4 +1289,109 @@ fn odd_targets_and_endless_settings_are_taken_in_stride() {
     };
     assert!(bench.run(asked, 3 * SECOND).reload_finished);
     assert_eq!(bench.weapon.magazine, u32::MAX);
+}
+
+/// A slab `thick` metres through, standing across the way ahead with its
+/// near face `ahead` metres off: both of its faces.
+fn slab(ahead: f32, thick: f32) -> Vec<Triangle> {
+    let (near, far) = (-ahead, -ahead - thick);
+    vec![
+        // The near face looks back at the shooter (+Z)...
+        [[-2.0, 0.0, near], [2.0, 0.0, near], [2.0, 3.0, near]],
+        [[-2.0, 0.0, near], [2.0, 3.0, near], [-2.0, 3.0, near]],
+        // ...and the far one away (-Z).
+        [[2.0, 0.0, far], [-2.0, 0.0, far], [-2.0, 3.0, far]],
+        [[2.0, 0.0, far], [-2.0, 3.0, far], [2.0, 3.0, far]],
+    ]
+}
+
+#[test]
+fn a_weapon_that_pierces_goes_through_thin_cover_and_loses_damage_on_the_way() {
+    let eyes = [0.0, 1.2, 0.0];
+    let ahead = [0.0, 0.0, -1.0];
+    let behind_cover = [enemy(7, 10.0)];
+    let plain = WeaponSettings::default();
+    let piercing = WeaponSettings {
+        penetration: 0.5,
+        ..WeaponSettings::default()
+    };
+    let open_damage = hitscan(&nothing(), &behind_cover, eyes, ahead, &plain, None)
+        .unwrap()
+        .damage;
+
+    // A door 10 cm through, five metres off.
+    let door = level(&[slab(5.0, 0.1)]);
+    // The usual rifle stops at it.
+    let stopped = hitscan(&door, &behind_cover, eyes, ahead, &plain, None).unwrap();
+    assert_eq!(stopped.struck, Struck::Level);
+    assert!((stopped.distance - 5.0).abs() < 1e-3 && stopped.cover == 0.0);
+    // One that pierces half a metre goes through and keeps four fifths.
+    let through = hitscan(&door, &behind_cover, eyes, ahead, &piercing, None).unwrap();
+    assert_eq!(through.target(), Some(7));
+    assert!((through.cover - 0.1).abs() < 0.01, "{}", through.cover);
+    assert!(
+        (through.distance - 9.65).abs() < 0.02,
+        "{}",
+        through.distance
+    );
+    assert!(
+        (through.damage - open_damage * 0.8).abs() < open_damage * 0.03,
+        "{} of {open_damage}",
+        through.damage
+    );
+
+    // A wall a metre through is more than it pierces: it stops there.
+    let thick = level(&[slab(5.0, 1.0)]);
+    let stopped = hitscan(&thick, &behind_cover, eyes, ahead, &piercing, None).unwrap();
+    assert_eq!(stopped.struck, Struck::Level);
+    assert!((stopped.distance - 5.0).abs() < 1e-3);
+
+    // Two doors take twice as much; six of them take everything.
+    let two = level(&[slab(4.0, 0.1), slab(6.0, 0.1)]);
+    let through = hitscan(&two, &behind_cover, eyes, ahead, &piercing, None).unwrap();
+    assert_eq!(through.target(), Some(7));
+    assert!((through.cover - 0.2).abs() < 0.02, "{}", through.cover);
+
+    // A sheet with no back (a fence, a banner) is gone through for little.
+    let fence = level(&[wall(-5.0)]);
+    let through = hitscan(&fence, &behind_cover, eyes, ahead, &piercing, None).unwrap();
+    assert_eq!(through.target(), Some(7));
+    assert!(through.damage > open_damage * 0.9);
+
+    // Through cover and into the open, it is the cover that was hit.
+    let nobody = hitscan(&door, &[], eyes, ahead, &piercing, None).unwrap();
+    assert_eq!(nobody.struck, Struck::Level);
+    assert!((nobody.distance - 5.0).abs() < 1e-3);
+}
+
+#[test]
+fn a_head_is_where_the_skeleton_says_and_not_only_the_top_of_the_body() {
+    let rifle = WeaponSettings::default();
+    let ahead = [0.0, 0.0, -1.0];
+    let zone = |target: Target, height: f32| match hitscan(
+        &nothing(),
+        &[target],
+        [0.0, height, 0.0],
+        ahead,
+        &rifle,
+        None,
+    )
+    .unwrap()
+    .struck
+    {
+        Struck::Target { zone, .. } => zone,
+        Struck::Level => panic!("missed"),
+    };
+    // By height, the head is the top 15%: 1.53 m and up of 1.8.
+    assert_eq!(zone(enemy(1, 10.0), 1.6), Zone::Head);
+    assert_eq!(zone(enemy(1, 10.0), 1.4), Zone::Body);
+    // Someone bent low, their head at chest height: a shot there is to the
+    // head, and one at the top of where they would stand is not.
+    let bowed = Target {
+        head: Some([0.0, 1.2, -10.0]),
+        ..enemy(1, 10.0)
+    };
+    assert_eq!(zone(bowed, 1.2), Zone::Head);
+    assert_eq!(zone(bowed, 0.95), Zone::Body);
+    assert_eq!(zone(bowed, 0.3), Zone::Legs);
 }

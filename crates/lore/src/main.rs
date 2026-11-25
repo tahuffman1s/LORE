@@ -594,6 +594,7 @@ fn check(folder: &Path) -> Result<(), String> {
                 part,
                 position: [DUMMY_AT[0], 1.2, DUMMY_AT[2]],
                 distance: 10.0,
+                cover: 0.0,
                 explosion: false,
             });
         }

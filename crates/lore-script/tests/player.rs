@@ -268,6 +268,7 @@ fn hit_on(victim: CharacterId) -> WeaponHit {
         part: Some(Zone::Body),
         position: [0.0, 1.2, -10.0],
         distance: 10.0,
+        cover: 0.0,
         explosion: false,
     }
 }

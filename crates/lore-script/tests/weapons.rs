@@ -273,6 +273,7 @@ fn the_script_hears_shots_hits_and_reloads() {
         part: Some(Zone::Head),
         position: [1.0, 1.5, -10.0],
         distance: 9.5,
+        cover: 0.0,
         explosion: false,
     });
     host.weapon_hit(&WeaponHit {
@@ -283,6 +284,7 @@ fn the_script_hears_shots_hits_and_reloads() {
         part: None,
         position: [0.0, 0.0, -30.0],
         distance: 30.0,
+        cover: 0.0,
         explosion: true,
     });
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
