@@ -2195,6 +2195,13 @@ declare game: {
         --- has this name, so one of the engine's can be changed, and
         --- otherwise "rifle".
         from: string?,
+        --- The model drawn in the hands: a .glb or .gltf file in the game's
+        --- folder, made with its grip at the origin, its muzzle along -Z
+        --- and its top along +Y, in metres. In first person it is drawn low
+        --- on the right in front of the eyes, in third person in the right
+        --- hand. The engine's weapons have plain stand-ins of their own, and
+        --- a weapon made `from` one has its model until it says another.
+        model: string?,
         --- What pulling the trigger does: "automatic" fires for as long as
         --- it is held, "single" fires one shot a pull, "burst" a few.
         fireMode: ("automatic" | "single" | "burst")?,

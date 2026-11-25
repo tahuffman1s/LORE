@@ -427,7 +427,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
     let said = load_error("game.weapon(\"smg\", { zzz = 1 })");
     assert!(
         said.starts_with(
-            "game.weapon has no setting called zzz. The settings are: from, fireMode,"
+            "game.weapon has no setting called zzz. The settings are: from, model, fireMode,"
         ),
         "{said}"
     );

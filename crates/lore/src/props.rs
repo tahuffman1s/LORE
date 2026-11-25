@@ -115,6 +115,116 @@ pub(crate) fn built_in(name: &str) -> Option<Arc<Scene>> {
     made.get(at).cloned()
 }
 
+const GUNMETAL: [f32; 4] = [0.10, 0.10, 0.11, 1.0];
+const POLYMER: [f32; 4] = [0.05, 0.05, 0.05, 1.0];
+const OLIVE: [f32; 4] = [0.23, 0.27, 0.15, 1.0];
+
+/// One box of a weapon: where its middle is across and along and where its
+/// bottom is, its size, colour, metalness and roughness.
+type Box3 = ([f32; 3], [f32; 3], [f32; 4], f32, f32);
+
+/// A weapon built of `boxes`, in the way every weapon model is made: its
+/// grip at the origin, its muzzle along -Z and its top along +Y.
+fn built_weapon(name: &str, boxes: &[Box3]) -> Scene {
+    let mut scene = Scene::default();
+    for (place, size, color, metallic, roughness) in boxes {
+        // A handful of boxes, never near `u32::MAX`.
+        #[allow(clippy::cast_possible_truncation)]
+        let number = scene.meshes.len() as u32;
+        scene.materials.push(Material {
+            name: Some(name.to_owned()),
+            base_color: *color,
+            metallic: *metallic,
+            roughness: *roughness,
+            ..Material::default()
+        });
+        scene.meshes.push(Mesh {
+            name: Some(name.to_owned()),
+            parts: vec![MeshPart {
+                material: number,
+                ..block()
+            }],
+        });
+        scene.instances.push(Instance {
+            mesh: number,
+            transform: at(*place, *size),
+            mirrored: false,
+            name: Some(name.to_owned()),
+            extras: None,
+        });
+    }
+    scene
+}
+
+/// The names of the engine's own weapon models: one for each of its
+/// weapons, as the script names them.
+pub(crate) const WEAPON_NAMES: [&str; 5] =
+    ["rifle", "pistol", "shotgun", "rocket launcher", "grenade"];
+
+/// The engine's own model of the weapon called `name`, if it has one: a
+/// stand-in of a few boxes, made once and shared, until a game gives the
+/// weapon a model of its own.
+pub(crate) fn weapon(name: &str) -> Option<Arc<Scene>> {
+    static MADE: OnceLock<[Arc<Scene>; 5]> = OnceLock::new();
+    let made = MADE.get_or_init(|| {
+        [
+            Arc::new(built_weapon(
+                "rifle",
+                &[
+                    ([0.0, -0.10, 0.01], [0.03, 0.10, 0.04], POLYMER, 0.0, 0.7),
+                    ([0.0, -0.01, -0.08], [0.05, 0.08, 0.34], GUNMETAL, 0.9, 0.4),
+                    ([0.0, 0.025, -0.50], [0.02, 0.02, 0.50], GUNMETAL, 0.9, 0.35),
+                    ([0.0, -0.04, 0.24], [0.04, 0.10, 0.32], POLYMER, 0.0, 0.7),
+                    ([0.0, -0.15, -0.12], [0.03, 0.14, 0.06], GUNMETAL, 0.8, 0.5),
+                    ([0.0, 0.07, -0.06], [0.015, 0.02, 0.04], GUNMETAL, 0.9, 0.4),
+                ],
+            )),
+            Arc::new(built_weapon(
+                "pistol",
+                &[
+                    ([0.0, -0.10, 0.01], [0.03, 0.11, 0.045], POLYMER, 0.0, 0.7),
+                    ([0.0, 0.01, -0.06], [0.03, 0.035, 0.19], GUNMETAL, 0.9, 0.35),
+                    ([0.0, -0.02, -0.05], [0.026, 0.03, 0.15], POLYMER, 0.0, 0.7),
+                ],
+            )),
+            Arc::new(built_weapon(
+                "shotgun",
+                &[
+                    ([0.0, -0.10, 0.01], [0.03, 0.10, 0.04], WOOD, 0.0, 0.6),
+                    ([0.0, -0.01, -0.06], [0.05, 0.07, 0.26], GUNMETAL, 0.9, 0.4),
+                    (
+                        [0.0, 0.025, -0.50],
+                        [0.026, 0.026, 0.62],
+                        GUNMETAL,
+                        0.9,
+                        0.35,
+                    ),
+                    ([0.0, -0.01, -0.42], [0.045, 0.035, 0.18], WOOD, 0.0, 0.6),
+                    ([0.0, -0.05, 0.25], [0.04, 0.10, 0.34], WOOD, 0.0, 0.6),
+                ],
+            )),
+            Arc::new(built_weapon(
+                "rocket launcher",
+                &[
+                    ([0.0, -0.10, 0.0], [0.03, 0.10, 0.04], POLYMER, 0.0, 0.7),
+                    ([0.0, 0.0, -0.20], [0.10, 0.10, 1.00], OLIVE, 0.1, 0.8),
+                    ([0.06, 0.04, -0.15], [0.03, 0.05, 0.08], GUNMETAL, 0.8, 0.4),
+                ],
+            )),
+            Arc::new(built_weapon(
+                "grenade",
+                &[
+                    ([0.0, -0.045, 0.0], [0.06, 0.08, 0.06], OLIVE, 0.2, 0.7),
+                    ([0.0, 0.035, 0.0], [0.02, 0.02, 0.02], STEEL, 1.0, 0.4),
+                    ([0.012, -0.03, 0.0], [0.006, 0.07, 0.015], STEEL, 1.0, 0.4),
+                ],
+            )),
+        ]
+    });
+    let at = WEAPON_NAMES.iter().position(|known| *known == name)?;
+    made.get(at).cloned()
+}
+
 /// A thing that stands in a level and is solid: its model, the shape it
 /// collides as, where that shape's middle is from where the thing is
 /// placed, and how heavy it is if it moves, in kilograms.

@@ -8,16 +8,28 @@
 
 local weapons = {}
 
--- A weapon of the alley's own, made from the engine's rifle: fast and
--- light, with a short magazine.
-game.weapon("smg", { from = "rifle", damage = 18, roundsPerMinute = 900, magazineSize = 25, reserve = 125, spread = 1.5 })
+-- Scanned models from Poly Haven, fetched by weapons.py (run it once:
+-- `python3 weapons.py`). Without them the engine's own stand-ins are drawn.
+-- The rifle is a bolt-action one, so it is given the numbers of one.
+game.weapon("pistol", { model = "models/pistol/pistol.gltf" })
+game.weapon("rifle", {
+    model = "models/rifle/rifle.gltf",
+    fireMode = "single",
+    roundsPerMinute = 45,
+    magazineSize = 5,
+    reserve = 30,
+    damage = 90,
+    spread = 0.2,
+    reloadTime = 3.2,
+    emptyReloadTime = 3.2,
+})
+game.weapon("grenade", { model = "models/grenade/grenade.gltf" })
 
 -- Handed over on every spawn, so a player who dies comes back with all of
 -- them, full. The pistol is given last, so it is the one in hand.
 game.onSpawn(function()
     local player = game.player
-    player:giveWeapon("shotgun")
-    player:giveWeapon("smg")
+    player:giveWeapon("rifle")
     player:giveWeapon("pistol")
     -- Already holding the pistol, so the grenades go on the belt.
     player:giveWeapon("grenade")
