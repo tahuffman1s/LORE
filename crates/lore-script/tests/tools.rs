@@ -798,6 +798,7 @@ fn motion(position_y: f32) -> Motion {
         swimming: false,
         on_ladder: false,
         climbing: false,
+        dodging: false,
         aim_point: [0.0, 1.0, -1000.0],
         aim_blocked: false,
     }
@@ -1163,6 +1164,7 @@ fn a_script_reads_stance_and_changes_how_the_player_moves() {
             swimming: true,
             on_ladder: false,
             climbing: false,
+            dodging: false,
             aim_point: [0.0, 1.0, -1000.0],
             aim_blocked: false,
         },
@@ -1262,7 +1264,7 @@ fn abilities_are_switches_and_their_numbers_sit_beside_the_others() {
         ("can(3)", "needs the name of an ability in quotes"),
         (
             "setAbility(\"fly\", true)",
-            "The abilities are \"vault\", \"climb\", \"swim\" and \"ladders\"",
+            "The abilities are \"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\" and",
         ),
     ] {
         let mut host = game(&format!("game.onStart(function() game.player:{call} end)"));

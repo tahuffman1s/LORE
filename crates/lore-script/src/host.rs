@@ -836,6 +836,24 @@ impl ScriptHost {
         self.body.locked().filter(|id| self.characters.has(*id))
     }
 
+    /// Calls `see` with every character in the world, the player first:
+    /// who they are, where their feet are and how much health they have.
+    pub fn each_character(&self, see: impl FnMut(CharacterId, [f32; 3], f32)) {
+        self.characters.each_with_health(see);
+    }
+
+    /// Holds the camera and the player's body on `target`, or lets go:
+    /// what the `lock_on` button does, and `game.player:lockOn`.
+    pub fn lock_on(&mut self, target: Option<CharacterId>) {
+        self.body.set_locked(target);
+    }
+
+    /// Says whether the player holds the block button, in a game that lets
+    /// them block with it: their guard is up while they do.
+    pub fn set_guard_held(&mut self, held: bool) {
+        self.body.set_guard_held(held);
+    }
+
     /// Whether the player's guard is up (`game.player:block`).
     #[must_use]
     pub fn blocking(&self) -> bool {

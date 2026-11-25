@@ -425,7 +425,17 @@ mod tests {
         let mut input = Input::new(map.clone());
         let mut order: Vec<String> = Vec::new();
         let pressed = every_action(&mut input, |action, frame| {
+            // But for the two pairs the standard controls put on one
+            // button on purpose.
+            let shares = |a: &str, b: &str| {
+                [("aim", "block"), ("crouch", "dodge")]
+                    .iter()
+                    .any(|pair| *pair == (a, b) || *pair == (b, a))
+            };
             for other in map.actions().filter(|other| *other != action) {
+                if shares(map.name(other), map.name(action)) {
+                    continue;
+                }
                 assert!(
                     !frame.pressed(other),
                     "{} while pressing {}",

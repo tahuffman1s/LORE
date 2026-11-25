@@ -130,6 +130,8 @@ pub(crate) struct BodyState {
     locked: Cell<Option<crate::CharacterId>>,
     /// Whether the player is blocking.
     blocking: Cell<bool>,
+    /// Whether the player holds the block button, in a game that lets them.
+    guard_held: Cell<bool>,
     /// The model the script asked for, not yet taken by the engine.
     model: RefCell<Option<String>>,
     /// The model the body is now.
@@ -174,7 +176,11 @@ impl BodyState {
     }
 
     pub(crate) fn blocking(&self) -> bool {
-        self.blocking.get()
+        self.blocking.get() || self.guard_held.get()
+    }
+
+    pub(crate) fn set_guard_held(&self, held: bool) {
+        self.guard_held.set(held);
     }
 
     pub(crate) fn take_model(&self) -> Option<String> {

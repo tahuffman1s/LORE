@@ -72,6 +72,8 @@ pub struct Motion {
     pub on_ladder: bool,
     /// Whether it is pulling itself up onto a ledge, or over something.
     pub climbing: bool,
+    /// Whether it is in the middle of a dodge.
+    pub dodging: bool,
     /// Where a shot it fired now would land, in metres.
     pub aim_point: [f32; 3],
     /// Whether that is short of what the crosshair is on: cover in front
@@ -114,6 +116,10 @@ pub struct MoveSaid {
     pub climb_height: f32,
     /// How fast a ladder is climbed.
     pub ladder_speed: f32,
+    /// How long a dodge lasts, in seconds.
+    pub dodge_seconds: f32,
+    /// How far a dodge carries the player, in metres.
+    pub dodge_distance: f32,
 }
 
 /// What the player can do besides walk, jump and crouch: each is off
@@ -128,6 +134,12 @@ pub struct Abilities {
     pub swim: bool,
     /// Climbing the level's ladders.
     pub ladders: bool,
+    /// Raising a guard with the `block` button.
+    pub block: bool,
+    /// A short dodge with the `dodge` button.
+    pub dodge: bool,
+    /// Holding the view on someone with the `lock_on` button.
+    pub lock_on: bool,
 }
 
 impl Default for Abilities {
@@ -137,12 +149,17 @@ impl Default for Abilities {
             climb: false,
             swim: true,
             ladders: false,
+            block: false,
+            dodge: false,
+            lock_on: false,
         }
     }
 }
 
 /// The names of the abilities, as a script gives them.
-pub(crate) const ABILITIES: [&str; 4] = ["vault", "climb", "swim", "ladders"];
+pub(crate) const ABILITIES: [&str; 7] = [
+    "vault", "climb", "swim", "ladders", "block", "dodge", "lockon",
+];
 
 /// `game.player:setAbility("climb", true)`.
 pub(crate) fn set_ability(
@@ -171,6 +188,9 @@ pub(crate) fn set_ability(
         &mut can.climb,
         &mut can.swim,
         &mut can.ladders,
+        &mut can.block,
+        &mut can.dodge,
+        &mut can.lock_on,
     ][which] = *on;
     shared.tools.abilities.set(can);
     Ok(())
@@ -180,12 +200,21 @@ pub(crate) fn set_ability(
 pub(crate) fn can(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Result<bool> {
     let which = ability(lua, "game.player:can", name, "game.player:can(\"climb\")")?;
     let can = shared.tools.abilities.get();
-    Ok([can.vault, can.climb, can.swim, can.ladders][which])
+    Ok([
+        can.vault,
+        can.climb,
+        can.swim,
+        can.ladders,
+        can.block,
+        can.dodge,
+        can.lock_on,
+    ][which])
 }
 
 /// Which of [`ABILITIES`] a script named.
 fn ability(lua: &Lua, function: &str, name: &Value, example: &str) -> mlua::Result<usize> {
-    let listed = "\"vault\", \"climb\", \"swim\" and \"ladders\"";
+    let listed = "\"vault\", \"climb\", \"swim\", \"ladders\", \"block\", \"dodge\" and \
+                  \"lockOn\"";
     let Value::String(name) = name else {
         return Err(fail(
             lua,
@@ -197,8 +226,13 @@ fn ability(lua: &Lua, function: &str, name: &Value, example: &str) -> mlua::Resu
         ));
     };
     let name = name.to_string_lossy().trim().to_ascii_lowercase();
-    // One ladder or many, it is the same ability.
-    let name = if name == "ladder" { "ladders" } else { &name };
+    // One ladder or many, it is the same ability; and "lock_on" is the
+    // button's name for what the ability is called "lockOn".
+    let name = match name.as_str() {
+        "ladder" => "ladders",
+        "lock_on" | "lock on" | "lock" => "lockon",
+        other => other,
+    };
     ABILITIES
         .iter()
         .position(|known| *known == name)
@@ -227,6 +261,8 @@ impl Default for MoveSaid {
             vault_height: 1.1,
             climb_height: 2.2,
             ladder_speed: 2.2,
+            dodge_seconds: 0.35,
+            dodge_distance: 3.2,
         }
     }
 }
@@ -243,6 +279,8 @@ pub(crate) enum MoveNumber {
     Vault,
     Climb,
     Ladder,
+    DodgeSeconds,
+    DodgeDistance,
 }
 
 impl MoveNumber {
@@ -305,6 +343,18 @@ impl MoveNumber {
                 "how fast the player climbs a ladder, in metres a second",
                 (0.1, 20.0),
             ),
+            Self::DodgeSeconds => (
+                "setDodgeSeconds",
+                "game.player:setDodgeSeconds(0.5)",
+                "how long a dodge lasts, in seconds",
+                (0.05, 3.0),
+            ),
+            Self::DodgeDistance => (
+                "setDodgeDistance",
+                "game.player:setDodgeDistance(4)",
+                "how far a dodge carries the player, in metres",
+                (0.2, 30.0),
+            ),
         }
     }
 
@@ -320,6 +370,8 @@ impl MoveNumber {
             Self::Vault => said.vault_height,
             Self::Climb => said.climb_height,
             Self::Ladder => said.ladder_speed,
+            Self::DodgeSeconds => said.dodge_seconds,
+            Self::DodgeDistance => said.dodge_distance,
         }
     }
 }
@@ -350,6 +402,8 @@ pub(crate) fn set_move(
         MoveNumber::Vault => said.vault_height = number,
         MoveNumber::Climb => said.climb_height = number,
         MoveNumber::Ladder => said.ladder_speed = number,
+        MoveNumber::DodgeSeconds => said.dodge_seconds = number,
+        MoveNumber::DodgeDistance => said.dodge_distance = number,
     }
     shared.tools.moves.set(said);
     Ok(())

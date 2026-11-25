@@ -671,7 +671,7 @@ fn check_presses_every_action_of_a_new_game_and_says_so() {
     assert!(!stderr(&output).contains("Jump number 3"));
     let said = stdout(&output);
     assert!(
-        said.contains("Each of the 24 actions was also pressed, held and let go"),
+        said.contains("Each of the 27 actions was also pressed, held and let go"),
         "{said}"
     );
     // Then every two together, without printing the script's lines again.
@@ -731,7 +731,7 @@ fn check_presses_the_actions_the_script_made_for_itself() {
     );
     let said = stdout(&output);
     assert!(
-        said.contains("Each of the 25 actions was also pressed, held and let go"),
+        said.contains("Each of the 28 actions was also pressed, held and let go"),
         "{said}"
     );
     assert!(
