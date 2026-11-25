@@ -1756,6 +1756,7 @@ impl ScriptHost {
         Some(HeldWeapon {
             name: kind.name,
             settings: kind.settings,
+            model: kind.model,
             state,
         })
     }
@@ -1776,6 +1777,7 @@ impl ScriptHost {
         Some(HeldWeapon {
             name: kind.name,
             settings: kind.settings,
+            model: kind.model,
             state,
         })
     }

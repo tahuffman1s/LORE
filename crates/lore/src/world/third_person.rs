@@ -217,3 +217,26 @@ fn the_named_shots_show_the_player_from_above_and_from_the_side() {
     }
     assert_eq!(lore_render::validation_errors(), 0);
 }
+
+#[test]
+fn a_weapon_held_is_drawn_before_the_eyes_and_in_the_hand() {
+    let Some(mut headless) = headless() else {
+        return;
+    };
+    // The lower right of the picture, where a weapon held ready is.
+    let corner = SCREEN[1] / 2..SCREEN[1];
+    for weapon in ["rifle", "pistol", "shotgun", "rocket launcher", "grenade"] {
+        let script = format!("game.onSpawn(function() game.player:giveWeapon(\"{weapon}\") end)");
+        let (with, without) = drawn(&script, 2, &mut headless);
+        save(&format!("first-person-{weapon}"), &with);
+        let shown = changed(&with, &without, corner.clone());
+        assert!(shown > 1_500, "{weapon}: only {shown} pixels show it");
+        let third = format!("game.player:setView(\"third\")\n{script}");
+        let (with, _) = drawn(&third, 90, &mut headless);
+        save(&format!("third-person-{weapon}"), &with);
+    }
+    // Nothing in the hands, nothing in front of the eyes but the body.
+    let (with, without) = drawn("", 2, &mut headless);
+    assert!(changed(&with, &without, corner) < 1_500);
+    assert_eq!(lore_render::validation_errors(), 0);
+}

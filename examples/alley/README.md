@@ -31,6 +31,7 @@ from what it downloads.
 
 ```sh
 python3 build.py     # once: downloads about 250 MB, takes a few minutes
+python3 weapons.py   # once: the scanned weapons, about 15 MB
 lore run
 ```
 
@@ -182,6 +183,9 @@ Everything downloaded is CC0: free for anyone to use for anything, with
 nothing to credit. Here it is anyway.
 
 **Poly Haven** (https://polyhaven.com, CC0), by its artists:
+
+- Weapons (`weapons.py`): `service_pistol`, `bolt_action_rifle_7_62`,
+  `stick_grenade`. Without them the engine's plain stand-ins are drawn.
 
 - Walls: `brick_wall_10`, `red_brick_plaster_patch_02`, `yellow_bricks`,
   `slumped_mortar_brick`, `brick_wall_006`, `factory_brick`,
