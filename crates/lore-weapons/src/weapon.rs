@@ -62,6 +62,8 @@ pub struct WeaponEvents {
     pub reload_started: bool,
     /// A reload ran to its end.
     pub reload_finished: bool,
+    /// A thrown weapon was armed: its pin or cord pulled.
+    pub armed: bool,
 }
 
 /// One thing leaving the barrel: a bullet, a pellet or a rocket.
@@ -78,6 +80,9 @@ pub struct Shot {
     /// How far off the centre of the view it left: right, then up, in
     /// radians.
     pub spread: [f32; 2],
+    /// Seconds of its fuse already burnt when it left: a stick grenade
+    /// held after its cord was pulled.
+    pub cooked: f32,
 }
 
 impl Shot {
@@ -135,6 +140,9 @@ pub struct Weapon {
     pub kick: [f32; 2],
     /// Seconds since the last shot.
     pub since_shot: f32,
+    /// Seconds since a thrown weapon was armed (its pin or cord pulled),
+    /// while the throw button is still held; `None` when it is not.
+    pub armed: Option<f32>,
 }
 
 impl Weapon {
@@ -152,6 +160,7 @@ impl Weapon {
             added_spread: 0.0,
             kick: [0.0; 2],
             since_shot: 0.0,
+            armed: None,
         }
     }
 
@@ -174,6 +183,7 @@ impl Weapon {
     pub fn interrupt(&mut self) {
         self.reload = None;
         self.burst_left = 0;
+        self.armed = None;
     }
 
     /// How far through its reload the weapon is, from 0 to 1, or `None`
@@ -246,6 +256,12 @@ impl Weapon {
         }
 
         let interval = settings.shot_interval();
+        if settings.thrown {
+            self.throw(settings, input, seed, dt, shots, &mut events);
+            self.cooldown = (self.cooldown - dt).max(0.0);
+            self.trigger_held = input.trigger;
+            return events;
+        }
         while events.shots < MOST_SHOTS_PER_TICK && self.reload.is_none() && self.cooldown < dt {
             let fresh_pull = input.trigger && !self.trigger_spent;
             if self.magazine == 0 {
@@ -291,6 +307,61 @@ impl Weapon {
         self.cooldown = (self.cooldown - dt).max(0.0);
         self.trigger_held = input.trigger;
         events
+    }
+
+    /// A thrown weapon for one tick: pressing the button arms it, letting
+    /// go throws it. One armed by its pull (a stick grenade) burns its fuse
+    /// in the hand meanwhile, and is let go by itself when that runs out.
+    fn throw(
+        &mut self,
+        settings: &WeaponSettings,
+        input: &WeaponInput,
+        seed: u32,
+        dt: f32,
+        shots: &mut Vec<Shot>,
+        events: &mut WeaponEvents,
+    ) {
+        let fuse = match settings.delivery {
+            crate::Delivery::Projectile(flight) => positive(flight.fuse),
+            crate::Delivery::Hitscan { .. } => 0.0,
+        };
+        if let Some(held) = self.armed {
+            let held = positive(held) + dt;
+            let burnt = settings.arming == crate::Arming::OnPull && fuse > 0.0 && held >= fuse;
+            if input.trigger && !burnt {
+                self.armed = Some(held);
+                return;
+            }
+            self.armed = None;
+            let before = shots.len();
+            self.fire(settings, input, seed, 0, shots);
+            let cooked = if settings.arming == crate::Arming::OnPull {
+                held.min(fuse)
+            } else {
+                0.0
+            };
+            for shot in shots.iter_mut().skip(before) {
+                shot.cooked = cooked;
+            }
+            events.shots += 1;
+            self.cooldown += settings.shot_interval();
+            self.trigger_spent = true;
+            return;
+        }
+        let fresh_pull = input.trigger && !self.trigger_spent;
+        if !fresh_pull || self.reload.is_some() || self.cooldown >= dt {
+            return;
+        }
+        self.trigger_spent = true;
+        if self.magazine == 0 {
+            events.dry_fire = true;
+            if settings.auto_reload && self.can_reload(settings) {
+                self.start_reload(events);
+            }
+            return;
+        }
+        self.armed = Some(0.0);
+        events.armed = true;
     }
 
     /// Replaces numbers that are not numbers, which only a corrupted
@@ -413,6 +484,7 @@ impl Weapon {
                 time: self.cooldown,
                 kick: self.kick,
                 spread: [off * libm::cosf(around), off * libm::sinf(around)],
+                cooked: 0.0,
             });
         }
 

@@ -427,7 +427,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
     let said = load_error("game.weapon(\"smg\", { zzz = 1 })");
     assert!(
         said.starts_with(
-            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode, burstSize, reach, action, ejectAt,"
+            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode, burstSize, reach, action, arming, spin, ejectAt,"
         ),
         "{said}"
     );
@@ -684,4 +684,24 @@ fn a_weapon_says_how_it_is_worked_and_where_its_cases_come_out() {
     assert!(
         load_error("game.weapon(\"x\", { ejectAt = 2 })").contains("ejectAt (where spent cases")
     );
+}
+
+#[test]
+fn a_thrown_weapon_says_when_it_is_armed_and_how_it_turns() {
+    let (mut host, _) = with_bo(
+        r#"game.weapon("stick", { from = "grenade", arming = "pull", spin = "end over end" })
+        game.onSpawn(function() game.player:giveWeapon("stick") end)
+        game.onTick(function() print(game.player.armed) end)"#,
+    );
+    printed();
+    let held = host.held_weapon(PLAYER).unwrap();
+    assert_eq!(held.settings.arming, lore_script::weapons::Arming::OnPull);
+    assert_eq!(held.settings.spin, lore_script::weapons::Spin::EndOverEnd);
+    let mut state = held.state;
+    state.armed = Some(0.5);
+    host.set_weapon_state(PLAYER, state);
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(printed(), ["0.5"]);
+    assert!(load_error("game.weapon(\"x\", { arming = \"lever\" })").contains("arming is when"));
+    assert!(load_error("game.weapon(\"x\", { spin = 3 })").contains("spin is how"));
 }

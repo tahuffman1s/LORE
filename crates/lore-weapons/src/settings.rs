@@ -29,6 +29,30 @@ pub enum Action {
     None,
 }
 
+/// When a thrown weapon's fuse starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Arming {
+    /// As it leaves the hand: a round grenade's lever flies off then.
+    #[default]
+    OnThrow,
+    /// When the throw button is pressed: a stick grenade's cord is pulled,
+    /// so holding the button cooks it, and held too long it goes off in
+    /// the hand.
+    OnPull,
+}
+
+/// How a thrown thing turns as it flies, which is only seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Spin {
+    /// Pointing along its flight, as a rocket does.
+    #[default]
+    None,
+    /// Head over handle about its side: a stick grenade, a knife.
+    EndOverEnd,
+    /// Every way at once: a round grenade, a rock.
+    Tumble,
+}
+
 /// How a shot reaches what it hits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Delivery {
@@ -128,6 +152,10 @@ pub struct WeaponSettings {
     pub thrown: bool,
     /// How it is worked between shots, which is what is seen moving.
     pub action: Action,
+    /// When a thrown weapon's fuse starts.
+    pub arming: Arming,
+    /// How what it fires turns as it flies.
+    pub spin: Spin,
     /// Each shot throws a spent case out of it.
     pub ejects: bool,
     /// Where the spent cases come out, in metres from the grip in the
@@ -221,6 +249,8 @@ impl Default for WeaponSettings {
             raise_time: 0.4,
             thrown: false,
             action: Action::Automatic,
+            arming: Arming::OnThrow,
+            spin: Spin::None,
             ejects: true,
             eject_at: [0.02, 0.05, -0.08],
             delivery: Delivery::Hitscan { reach: 500.0 },
@@ -350,6 +380,7 @@ impl WeaponSettings {
             raise_time: 0.3,
             thrown: true,
             action: Action::None,
+            spin: Spin::Tumble,
             ejects: false,
             delivery: Delivery::Projectile(ProjectileSettings {
                 speed: 18.0,

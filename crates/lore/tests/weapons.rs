@@ -271,9 +271,12 @@ fn a_thrown_bomb_goes_off_on_its_fuse_and_catches_whoever_is_near() {
     // A dummy off to the side, out of the bomb's way and inside its blast.
     world.add_dummy([3.0, 0.0, -1.0]);
     play(&mut world, 30);
+    // Pressing arms it; letting go throws it.
     ask(&mut world, |asked| asked.fire = true);
     play(&mut world, 10);
+    assert_eq!(printed(), [] as [&str; 0], "held, it is not thrown");
     ask(&mut world, |asked| asked.fire = false);
+    play(&mut world, 1);
     let said = printed();
     assert_eq!(said.len(), 1, "{said:#?}");
     assert!(said[0].starts_with("fire Player bomb"), "{said:#?}");

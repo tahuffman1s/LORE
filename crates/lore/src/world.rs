@@ -1366,6 +1366,10 @@ pub struct Playing {
     weapon_motion: crate::weapon_motion::WeaponMotion,
     /// Where the weapon was last drawn, for where its cases come out.
     weapon_at: Option<lore_assets::Transform>,
+    /// Whether a stick grenade's pulled cord is drawn with what is held.
+    cord: bool,
+    /// What is in flight this frame, by model: kept to draw with.
+    flying: Vec<(std::rc::Rc<str>, std::rc::Rc<str>, lore_assets::Transform)>,
     /// How far ahead of its grip each weapon model reaches, worked out once
     /// from its shape: what says where the left hand goes.
     weapon_lengths: std::collections::HashMap<std::rc::Rc<str>, f32>,
@@ -1563,6 +1567,8 @@ impl Playing {
             weapon_models: std::collections::HashMap::new(),
             weapon_motion: crate::weapon_motion::WeaponMotion::default(),
             weapon_at: None,
+            cord: false,
+            flying: Vec::new(),
             weapon_lengths: std::collections::HashMap::new(),
         }
         .with_body_said()
@@ -1862,7 +1868,24 @@ impl Playing {
         crate::character::Hold,
         crate::weapon_motion::Pose,
     )> {
-        let held = self.world.game.host().held_weapon(CharacterId::PLAYER)?;
+        if self.weapon_motion.following_through() {
+            return None;
+        }
+        // An armed grenade is held wound back in place of what is held,
+        // the one on the belt or the one in the hands.
+        let host = self.world.game.host();
+        let armed = [
+            host.held_weapon(CharacterId::PLAYER),
+            host.thrown_weapon(CharacterId::PLAYER),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|weapon| weapon.state.armed.is_some());
+        let winding = armed.is_some();
+        let held = match armed {
+            Some(armed) => armed,
+            None => host.held_weapon(CharacterId::PLAYER)?,
+        };
         let name = held.model.clone()?;
         let thrown = held.settings.thrown;
         let pieces = self.read_weapon_model(&name, &held.name)?;
@@ -1874,7 +1897,14 @@ impl Playing {
             ahead
         });
         let mut hold = hold_of(ahead, thrown, held.hold);
-        let pose = self.weapon_motion.pose(&held);
+        let mut pose = self.weapon_motion.pose(&held);
+        if winding {
+            hold.support = None;
+            pose.whole = crate::weapon_motion::wound_back();
+            self.cord = held.settings.arming == lore_weapons::Arming::OnPull;
+        } else {
+            self.cord = false;
+        }
         hold.moved = pose.whole;
         Some((pieces, hold, pose))
     }
@@ -1904,6 +1934,31 @@ impl Playing {
         self.weapon_models
             .insert(std::rc::Rc::clone(name), pieces.clone());
         pieces
+    }
+
+    /// Draws each grenade, rocket and slow bullet in flight with its
+    /// weapon's model, turning as its weapon says, and lying on its side
+    /// once it has come to rest.
+    fn show_in_flight(&mut self, frame: &mut Frame) {
+        // Kept between frames, so drawing them sets no memory aside.
+        let mut shown = std::mem::take(&mut self.flying);
+        shown.clear();
+        let host = self.world.game.host();
+        for (weapon, settings, projectile) in self.world.shooting.in_flight() {
+            if let Some(model) = host.weapon_model(weapon) {
+                let place = crate::weapon_motion::flying(settings.spin, projectile);
+                shown.push((model, std::rc::Rc::clone(weapon), place));
+            }
+        }
+        for (model, weapon, place) in &shown {
+            if let Some(pieces) = self.read_weapon_model(model, weapon) {
+                frame.show_thing(&pieces.still, *place, true);
+                for (_, part) in &pieces.parts {
+                    frame.show_thing(part, *place, true);
+                }
+            }
+        }
+        self.flying = shown;
     }
 
     /// Hands the frame the player's body, drawn between the last two ticks.
@@ -1942,11 +1997,18 @@ impl Playing {
                 frame.show_thing(model, at, seen || eyes);
             }
         }
+        // A stick grenade's cord, pulled, hanging from where it is held.
+        if self.cord
+            && let Some(place) = weapon_at
+        {
+            frame.show_thing(&crate::props::cord(), place, seen || eyes);
+        }
         // The spent cases it has thrown out.
         let (case, cases) = self.weapon_motion.cases();
         for place in cases {
             frame.show_thing(case, place, true);
         }
+        self.show_in_flight(frame);
     }
 
     /// Shows and sounds what the player is doing to the water: the marks
@@ -2173,10 +2235,12 @@ impl Game for Playing {
         // The weapon in the hands: the moments of its motion and its cases.
         let player = *self.world.player();
         let held = self.world.game.host().held_weapon(CharacterId::PLAYER);
+        let thrown = self.world.game.host().thrown_weapon(CharacterId::PLAYER);
         let speed = player.velocity[0].hypot(player.velocity[2]);
         let walk = self.world.ground.rules.walk_speed;
         self.weapon_motion.tick(
             held.as_ref(),
+            thrown.as_ref(),
             (self.yaw, self.pitch),
             speed,
             walk,
@@ -2185,6 +2249,18 @@ impl Game for Playing {
             &self.world.ground.level,
             step,
         );
+        // The throw itself, by the body's clip, the arm following through.
+        if self.weapon_motion.just_thrown()
+            && let Some(character) = &mut self.character
+        {
+            character.ask(&lore_script::AnimationAsk::Play {
+                clip: "throw".to_owned(),
+                fade: 0.05,
+                speed: 1.6,
+                looping: Some(false),
+                upper_body: true,
+            });
+        }
         // Being put somewhere is a cut, not a glide.
         self.before = (teleported.is_none() && !cut(before, self.eye)).then_some(before);
         // What no frame came for in time is let go, so the newest noises

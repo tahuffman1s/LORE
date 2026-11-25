@@ -162,6 +162,51 @@ struct Case {
     resting: bool,
 }
 
+/// How long the hands are empty after a throw, following it through,
+/// before the weapon held comes back up: seconds.
+pub(crate) const THROW_FOLLOW: f32 = 0.5;
+
+/// How an armed grenade is held, wound back over the shoulder: up, back
+/// and tipped back, in its own space.
+pub(crate) fn wound_back() -> Transform {
+    moved([0.05, 0.11, 0.03], 0.75, 0.0, -0.2)
+}
+
+/// Where a thing in flight is drawn, and how it is turned: along its
+/// flight, turning as `spin` says with its age, or lying on its side once
+/// it has stopped.
+pub(crate) fn flying(spin: lore_weapons::Spin, projectile: &lore_weapons::Projectile) -> Transform {
+    let [x, y, z] = projectile.velocity;
+    let speed = (x * x + y * y + z * z).sqrt();
+    let age = projectile.age;
+    let [px, py, pz] = projectile.position;
+    let mut place = if speed < 0.3 {
+        // At rest: on its side, turned by where it lies.
+        moved(
+            [0.0; 3],
+            0.0,
+            (px * 3.1 + pz * 1.7).rem_euclid(2.0 * PI),
+            PI * 0.5,
+        )
+    } else {
+        // Its muzzle (or head) along its flight.
+        let yaw = libm::atan2f(-x, -z);
+        let pitch = libm::asinf((y / speed).clamp(-1.0, 1.0));
+        let along = moved([0.0; 3], pitch, yaw, 0.0);
+        let turning = match spin {
+            lore_weapons::Spin::None => lore_anim::math::IDENTITY,
+            // Head over handle, three turns a second.
+            lore_weapons::Spin::EndOverEnd => moved([0.0; 3], -age * 6.0 * PI, 0.0, 0.0),
+            lore_weapons::Spin::Tumble => {
+                moved([0.0; 3], -age * 4.0 * PI, age * 2.5 * PI, age * 1.3 * PI)
+            }
+        };
+        lore_anim::math::combine(&along, &turning)
+    };
+    place[3] = [px, py, pz, 1.0];
+    place
+}
+
 /// The most spent cases kept: the oldest goes when another comes.
 const MOST_CASES: usize = 32;
 
@@ -189,6 +234,10 @@ pub(crate) struct WeaponMotion {
     /// Whether this shot's case has been thrown (a bolt throws it when it
     /// is worked, not when it fires).
     case_due: bool,
+    /// Whether a thrown weapon was armed at the last tick, and seconds
+    /// since one was last thrown.
+    armed_before: bool,
+    since_throw: f32,
     cases: Vec<Case>,
     case_model: Arc<Scene>,
 }
@@ -206,6 +255,8 @@ impl Default for WeaponMotion {
             stride: 0.0,
             stride_strength: 0.0,
             case_due: false,
+            armed_before: false,
+            since_throw: f32::MAX,
             cases: Vec::with_capacity(MOST_CASES),
             case_model: props::spent_case(),
         }
@@ -283,6 +334,7 @@ impl WeaponMotion {
     pub(crate) fn tick(
         &mut self,
         held: Option<&HeldWeapon>,
+        thrown: Option<&HeldWeapon>,
         look: (f32, f32),
         speed: f32,
         walk: f32,
@@ -304,6 +356,22 @@ impl WeaponMotion {
                 held.map_or((0, 0), |held| (held.state.magazine, held.state.reserve));
             self.held = name;
         }
+        // A throw: armed at the last tick, not now. The hands follow it
+        // through, then the weapon held comes up again.
+        let armed = [held, thrown]
+            .iter()
+            .flatten()
+            .any(|weapon| weapon.state.armed.is_some());
+        if self.armed_before && !armed {
+            self.since_throw = 0.0;
+        } else {
+            let was = self.since_throw;
+            self.since_throw = self.since_throw.saturating_add_seconds(step);
+            if was < THROW_FOLLOW && self.since_throw >= THROW_FOLLOW {
+                self.raising = self.raise_time;
+            }
+        }
+        self.armed_before = armed;
         self.raising = (self.raising - step).max(0.0);
         // The view eases after the look: the weapon trails a turn.
         self.look = look;
@@ -410,6 +478,17 @@ impl WeaponMotion {
             }
         }
         self.cases.retain(|case| case.age < CASE_LIFE);
+    }
+
+    /// Whether a throw was let go on the last tick: when the body's throw
+    /// clip is played.
+    pub(crate) fn just_thrown(&self) -> bool {
+        self.since_throw == 0.0
+    }
+
+    /// Whether the hands are following a throw through, holding nothing.
+    pub(crate) fn following_through(&self) -> bool {
+        self.since_throw < THROW_FOLLOW
     }
 
     /// The model of a spent case, and where each one is: for drawing.
@@ -571,6 +650,7 @@ mod tests {
         let weapon = moved([0.0, 1.4, 0.0], 0.0, 0.0, 0.0);
         motion.tick(
             Some(&gun),
+            None,
             (0.0, 0.0),
             0.0,
             4.5,
@@ -582,6 +662,7 @@ mod tests {
         for _ in 0..60 {
             motion.tick(
                 Some(&gun),
+                None,
                 (0.0, 0.0),
                 0.0,
                 4.5,
@@ -601,6 +682,7 @@ mod tests {
         gun.state.since_shot = 0.0;
         motion.tick(
             Some(&gun),
+            None,
             (0.0, 0.0),
             0.0,
             4.5,
@@ -622,6 +704,7 @@ mod tests {
             gun.state.since_shot += step;
             motion.tick(
                 Some(&gun),
+                None,
                 (0.0, 0.0),
                 0.0,
                 4.5,
@@ -671,6 +754,7 @@ mod tests {
         let weapon = moved([0.0, 1.4, 0.0], 0.0, 0.0, 0.0);
         motion.tick(
             Some(&gun),
+            None,
             (0.0, 0.0),
             0.0,
             4.5,
@@ -683,6 +767,7 @@ mod tests {
         gun.state.since_shot = 0.0;
         motion.tick(
             Some(&gun),
+            None,
             (0.0, 0.0),
             0.0,
             4.5,
@@ -700,6 +785,7 @@ mod tests {
             gun.state.since_shot += step;
             motion.tick(
                 Some(&gun),
+                None,
                 (0.0, 0.0),
                 0.0,
                 4.5,

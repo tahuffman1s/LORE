@@ -60,6 +60,12 @@ declare extern type Character with
     --- Example: if #game.player.weapons < game.player.maxWeapons then game.player:giveWeapon("shotgun") end
     maxWeapons: number
 
+    --- Seconds since the character armed a thrown weapon (pulled its pin or
+    --- cord) and is still holding it, or nil. With `arming = "pull"` the
+    --- fuse is burning meanwhile.
+    --- Example: if (game.player.armed or 0) > 2 then warning.text = "Throw it!" end
+    armed: number?
+
     --- How fast the character is moving, in metres a second, with y up. It
     --- is zero for one the engine has given no motion.
     --- Example: local speed = vector.magnitude(game.player.velocity)
@@ -2221,6 +2227,17 @@ declare game: {
         --- in it moves as that part does, and a magazine comes out and goes
         --- back in during a reload.
         action: ("auto" | "bolt" | "pump" | "none")?,
+        --- For a thrown weapon, when its fuse starts. The throw button arms
+        --- it when pressed and throws it when let go. "throw" (as for the
+        --- engine's grenade): the fuse starts as it leaves the hand, as a
+        --- round grenade's lever flies off. "pull": it starts at the press,
+        --- as a stick grenade's cord is pulled, so holding the button cooks
+        --- it, and held past its fuse it goes off in the hand.
+        arming: ("throw" | "pull")?,
+        --- How what it fires turns as it flies, which is only seen: "none"
+        --- (pointing along its flight, as a rocket), "end over end" (a stick
+        --- grenade, a knife) or "tumble" (as for the engine's grenade).
+        spin: ("none" | "end over end" | "tumble")?,
         --- Where spent cases come out, in metres from the grip in the
         --- model's space. They tumble out to the right and lie on the
         --- ground a while.
