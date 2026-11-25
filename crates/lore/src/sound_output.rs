@@ -65,6 +65,8 @@ mod output {
         fn set_group_volume(&mut self, group: Group, volume: f32);
         /// Says how far under water the ears are, from 0 (in air) to 1.
         fn set_underwater(&mut self, amount: f32);
+        /// Says how fast the game's world is running, from 0 (stopped).
+        fn set_world_speed(&mut self, speed: f32);
     }
 
     impl Voices for Mixer {
@@ -98,6 +100,10 @@ mod output {
 
         fn set_underwater(&mut self, amount: f32) {
             Mixer::set_underwater(self, amount);
+        }
+
+        fn set_world_speed(&mut self, speed: f32) {
+            Mixer::set_world_speed(self, speed);
         }
     }
 
@@ -137,6 +143,13 @@ mod output {
         /// tenth of a second, so a plain 0 or 1 does not click.
         pub(crate) fn set_underwater(&mut self, amount: f32) {
             self.voices.set_underwater(amount);
+        }
+
+        /// Says how fast the game's world is running: 1 as usual, 0 while
+        /// it is paused. The world's own sounds follow it; music and a
+        /// menu's sounds do not.
+        pub(crate) fn set_world_speed(&mut self, speed: f32) {
+            self.voices.set_world_speed(speed);
         }
 
         /// Sets how loud everything, music and effects are: the player's
@@ -246,6 +259,9 @@ pub(crate) struct LazySpeakers {
     /// How far under water the ears are, to tell the speakers once they
     /// are open.
     underwater: f32,
+    /// How fast the game's world is running, likewise, once it has been
+    /// said: as usual until then.
+    world_speed: Option<f32>,
     /// When to next try a device that is not working.
     retry_at: Option<std::time::Instant>,
 }
@@ -260,7 +276,7 @@ impl LazySpeakers {
     fn ready(&mut self) -> &mut lore_audio::Speakers {
         let listener = self.listener;
         let volumes = self.volumes;
-        let underwater = self.underwater;
+        let (underwater, world_speed) = (self.underwater, self.world_speed.unwrap_or(1.0));
         let now = std::time::Instant::now();
         let retry_at = &mut self.retry_at;
         let speakers = self.speakers.get_or_insert_with(|| {
@@ -269,6 +285,7 @@ impl LazySpeakers {
             speakers.set_listener(listener);
             volumes.tell(&mut speakers);
             speakers.set_underwater(underwater);
+            speakers.set_world_speed(world_speed);
             *retry_at = Some(now + Self::RETRY_EVERY);
             speakers
         });
@@ -279,6 +296,7 @@ impl LazySpeakers {
                 speakers.set_listener(listener);
                 volumes.tell(speakers);
                 speakers.set_underwater(underwater);
+                speakers.set_world_speed(world_speed);
             }
         }
         speakers
@@ -336,6 +354,13 @@ impl Voices for LazySpeakers {
         self.underwater = amount;
         if let Some(speakers) = &mut self.speakers {
             speakers.set_underwater(amount);
+        }
+    }
+
+    fn set_world_speed(&mut self, speed: f32) {
+        self.world_speed = Some(speed);
+        if let Some(speakers) = &mut self.speakers {
+            speakers.set_world_speed(speed);
         }
     }
 }

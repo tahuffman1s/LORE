@@ -122,6 +122,11 @@ pub struct Play {
     pub delay: f32,
     /// Which volume setting it follows.
     pub group: Group,
+    /// Whether it is a sound of the game's world (a footstep, rain, a
+    /// door) and so keeps the world's time: it stops while the game is
+    /// paused and is slow and low in slow motion. Music and a menu's
+    /// clicks are not, and play on. True for a sound at a place.
+    pub in_world: bool,
 }
 
 impl Play {
@@ -138,6 +143,7 @@ impl Play {
             importance: Importance::Normal,
             delay: 0.0,
             group: Group::Effects,
+            in_world: false,
         }
     }
 
@@ -146,8 +152,18 @@ impl Play {
     pub fn at(sound: Sound, position: [f32; 3]) -> Self {
         Self {
             place: Place::At(position),
+            in_world: true,
             ..Self::everywhere(sound)
         }
+    }
+
+    /// Makes it a sound of the game's world, though it is heard equally
+    /// in both ears: the player's own footsteps, the rain all round them.
+    /// See [`in_world`](Self::in_world).
+    #[must_use]
+    pub fn in_world(mut self) -> Self {
+        self.in_world = true;
+        self
     }
 
     /// Sets how loud it is: 1 is as recorded.

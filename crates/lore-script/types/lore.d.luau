@@ -1671,6 +1671,12 @@ declare game: {
     --- holds. `game.onTick` functions still run, with a `step` of 0, so the
     --- game can hear the player and start time again. Numbers outside 0 to 8
     --- are taken as the nearest end. It stays through a reload of the script.
+    --- Everything in the world keeps the game's time: people, things that
+    --- fall, lifts, the weather, and the world's own sounds (footsteps,
+    --- rain, `game.audio.playAt`), which play as much slower and lower as
+    --- the game is slow. Music and `game.audio.play` are not slowed, and the
+    --- player's view turns as fast as ever. The game takes the same steps
+    --- at any speed, so slow motion changes nothing but the pace.
     --- To stop the game for a menu, use `game.pause`, which keeps the speed
     --- to go on at.
     --- Example: game.input.bind("slow_motion", { "F2", "GamepadSelect" })
@@ -1684,7 +1690,10 @@ declare game: {
 
     --- Pauses the game: time stands still, as at a time speed of 0, until
     --- `game.resume`. `game.time()` stays still, timers, tweens and the
-    --- weather wait, and nothing in the world moves. `game.onTick`
+    --- weather wait, and nothing in the world moves or sounds: a footstep
+    --- or a clap of thunder waits where it is and goes on when the game
+    --- does. Music and a menu's own sounds (`game.audio.play`) play on.
+    --- `game.onTick`
     --- functions still run, with a `step` of 0, so a menu can hear the
     --- player and let the game go on. Pausing a paused game does nothing.
     --- Saving the script (a reload) ends the pause, because a reloaded

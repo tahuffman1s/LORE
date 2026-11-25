@@ -1155,6 +1155,8 @@ impl<G: Game> App<G> {
         }
         if let Some(speed) = frame.time_speed() {
             self.clock.set_speed(speed);
+            // The world's sounds stop with it and slow with it.
+            self.sound.set_world_speed(speed);
         }
         if let Some(settings) = frame.take_settings()
             && settings != self.config.settings

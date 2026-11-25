@@ -1246,3 +1246,47 @@ fn a_streamed_sound_is_decoded_by_a_thread_of_its_own() {
     mix(&mut mixer, 960);
     assert_eq!(mixer.playing(), 0);
 }
+
+#[test]
+fn a_sound_of_the_world_waits_while_the_world_is_stopped_and_slows_with_it() {
+    /// How many of the first `frames` of a mix are not silent.
+    fn heard(mixer: &mut Mixer, frames: usize) -> usize {
+        let mut out = vec![0.0; frames * 2];
+        mixer.mix(&mut out);
+        out.chunks(2).filter(|frame| frame[0].abs() > 1e-4).count()
+    }
+    // A tenth of a second of tone.
+    let wave: Vec<f32> = (0..4_800u16)
+        .map(|n| (f32::from(n) * 0.05).sin() * 0.5)
+        .collect();
+    let tone = Sound::from_samples(48_000, 1, wave).unwrap();
+
+    // Stopped, a sound of the world is not heard and does not run on...
+    let mut mixer = Mixer::new(48_000);
+    mixer.set_world_speed(0.0);
+    let steps = mixer.play(Play::everywhere(tone.clone()).in_world());
+    assert_eq!(heard(&mut mixer, 9_600), 0, "the world's sound waits");
+    // ...while a menu's click is heard, and ends, all the same.
+    let click = mixer.play(Play::everywhere(tone.clone()));
+    assert!(heard(&mut mixer, 9_600) > 4_000);
+    assert!(mixer.is_playing(steps) && !mixer.is_playing(click));
+    // Started again, it plays from where it was: all of it.
+    mixer.set_world_speed(1.0);
+    assert!(heard(&mut mixer, 9_600) > 4_000);
+    assert!(!mixer.is_playing(steps));
+
+    // At half speed it lasts twice as long.
+    let mut mixer = Mixer::new(48_000);
+    mixer.set_world_speed(0.5);
+    let slow = mixer.play(Play::at(tone, [0.0; 3]));
+    heard(&mut mixer, 7_200);
+    assert!(mixer.is_playing(slow), "still going after 0.15 s");
+    heard(&mut mixer, 4_800);
+    assert!(!mixer.is_playing(slow), "done after 0.25 s");
+    // Nonsense is the usual speed.
+    mixer.set_world_speed(f32::NAN);
+    let short = Sound::from_samples(48_000, 1, vec![0.5; 480]).unwrap();
+    let usual = mixer.play(Play::everywhere(short).in_world());
+    heard(&mut mixer, 2_400);
+    assert!(!mixer.is_playing(usual));
+}
