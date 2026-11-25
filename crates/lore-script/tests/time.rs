@@ -822,6 +822,8 @@ fn dice_mistakes_say_what_to_write() {
         ("math.random('six')", "needs a whole number"),
         ("math.random(1, 2, 3)", "at most two numbers"),
         ("game.chance(25)", "one time in four is 0.25"),
+        ("game.chance(0 / 0)", "a sum with no answer"),
+        ("math.random(0 / 0)", "a sum with no answer"),
         ("game.pick('coin')", "game.pick needs a list"),
         ("game.setSeed(-1)", "a whole number from 0 up"),
         ("game.shuffle(table.freeze({ 1, 2 }))", "table.clone(list)"),

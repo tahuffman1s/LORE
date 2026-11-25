@@ -1722,7 +1722,8 @@ declare game: {
     --- Starts the dice again from `seed`, a whole number from 0 up, so the
     --- rolls that follow are the same every time. `math.randomseed` is the
     --- same function. There is no need to call it for the dice to differ
-    --- between games: they already do.
+    --- between games: they already do. It changes the game, so it is not
+    --- for `game.onDraw`. The largest seed is 9007199254740992.
     --- Example: game.onStart(function() game.setSeed(1234) end) -- the same dungeon for everyone
     setSeed: (seed: number) -> (),
 
@@ -1736,7 +1737,8 @@ declare game: {
     pick: <T>(list: { T }) -> T?,
 
     --- Puts `list` in a new order by chance, every order as likely, and
-    --- gives the same list back.
+    --- gives the same list back. Only what is at 1, 2, 3 and so on is
+    --- moved: a table with names for keys is left as it is.
     --- Example: local order = game.shuffle({ 1, 2, 3, 4 })
     shuffle: <T>(list: { T }) -> { T },
 

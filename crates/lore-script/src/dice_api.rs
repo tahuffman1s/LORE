@@ -172,6 +172,15 @@ fn whole(lua: &Lua, function: &str, value: &Value, example: &str) -> mlua::Resul
             ));
         }
     };
+    if number.is_nan() {
+        return Err(fail(
+            lua,
+            format!(
+                "{function} was given the answer to a sum with no answer, such as 0 / 0. It \
+                 takes whole numbers. Write it like this: {example}"
+            ),
+        ));
+    }
     if !number.is_finite() || number.abs() > LARGEST {
         return Err(fail(
             lua,
@@ -213,7 +222,7 @@ fn random(lua: &Lua, shared: &Shared, args: &[Value]) -> mlua::Result<f64> {
                 lua,
                 format!(
                     "math.random takes at most two numbers, the lowest and the highest it may \
-                     give, and it was given {}. Write it like this: {EXAMPLE}",
+                     give, and it was given {} values. Write it like this: {EXAMPLE}",
                     args.len()
                 ),
             ));
@@ -313,7 +322,17 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
         lua.create_function(move |lua, share: Value| {
             const EXAMPLE: &str = "if game.chance(0.25) then dropCoin() end";
             let share = match share {
-                Value::Number(share) if share.is_finite() => share,
+                Value::Number(share) if !share.is_nan() => share,
+                Value::Number(_) => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "game.chance was given the answer to a sum with no answer, such \
+                             as 0 / 0. It takes a number from 0 (never) to 1 (always). Write \
+                             it like this: {EXAMPLE}"
+                        ),
+                    ));
+                }
                 #[allow(clippy::cast_precision_loss)]
                 Value::Integer(share) => share as f64,
                 other => {
