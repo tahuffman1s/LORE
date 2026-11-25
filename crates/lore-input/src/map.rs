@@ -126,6 +126,14 @@ impl Default for ActionMap {
     }
 }
 
+/// The standard actions the engine acts on only in a game that turns the
+/// ability on (`setAbility`): blocking, dodging and locking on.
+const OPTIONAL: [&str; 3] = ["block", "dodge", "lock_on"];
+
+/// The pairs of standard actions that share a key or button on purpose:
+/// see [`ActionMap::standard`].
+const SHARED_ON_PURPOSE: [(&str, &str); 2] = [("aim", "block"), ("crouch", "dodge")];
+
 impl ActionMap {
     /// The set every map starts with, named `"gameplay"`. The mouse looks
     /// around while it is live.
@@ -225,7 +233,17 @@ impl ActionMap {
     /// | `map` | M | d-pad up |
     /// | `inventory` | Tab | d-pad down |
     /// | `switch_view` | F | Select (Xbox View) |
+    /// | `block` | right mouse button | left trigger |
+    /// | `dodge` | Left Alt | east button |
+    /// | `lock_on` | Q | left bumper |
     /// | `pause` | Escape | start |
+    ///
+    /// A gamepad has no buttons to spare, so two of the fighting actions
+    /// share one with the action a player does in its place: `block` with
+    /// `aim` (a guard is raised, or a bow is aimed) and, on a gamepad,
+    /// `dodge` with `crouch`. The engine acts on `block`, `dodge` and
+    /// `lock_on` only in a game that turns those abilities on, and
+    /// [`conflicts`](Self::conflicts) does not report the two pairs.
     ///
     /// The engine itself acts on `move`, `look`, `jump`, `crouch`, `sprint`,
     /// `fire`, `aim`, `reload` and `pause`, and on `switch_view` when the
@@ -284,6 +302,9 @@ impl ActionMap {
             ("map", ["M", "DpadUp"]),
             ("inventory", ["Tab", "DpadDown"]),
             ("switch_view", ["F", "GamepadSelect"]),
+            ("block", ["MouseRight", "LeftTrigger"]),
+            ("dodge", ["LeftAlt", "GamepadEast"]),
+            ("lock_on", ["Q", "LeftBumper"]),
             ("pause", ["Escape", "GamepadStart"]),
         ];
         const MENU_BUTTONS: &[(&str, [&str; 2])] = &[
@@ -650,6 +671,21 @@ impl ActionMap {
         for (index, first) in self.actions.iter().enumerate() {
             for second in &self.actions[index + 1..] {
                 if second.set != first.set && !first.own && !second.own {
+                    continue;
+                }
+                // An action a game made for itself may take the button of
+                // one the engine only acts on when the game asks for it:
+                // most games never turn those on.
+                let optional = |name: &str| OPTIONAL.contains(&name);
+                if (first.own && optional(&second.name)) || (second.own && optional(&first.name)) {
+                    continue;
+                }
+                // The standard controls share these on purpose.
+                let pair = (&*first.name, &*second.name);
+                if SHARED_ON_PURPOSE
+                    .iter()
+                    .any(|(a, b)| pair == (*a, *b) || pair == (*b, *a))
+                {
                     continue;
                 }
                 for ours in &self.bindings[first.bindings.clone()] {
@@ -1043,7 +1079,7 @@ mod tests {
     #[test]
     fn default_map_is_complete_on_both_devices() {
         let map = ActionMap::standard();
-        assert_eq!(map.len(), 24);
+        assert_eq!(map.len(), 27);
         // No scores are kept, so nothing shows them; Select (the Xbox View
         // button) switches the view.
         assert!(map.action("scoreboard").is_err());
@@ -1062,6 +1098,9 @@ mod tests {
             "map",
             "inventory",
             "switch_view",
+            "block",
+            "dodge",
+            "lock_on",
         ] {
             let action = map
                 .action(name)

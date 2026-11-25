@@ -22,6 +22,8 @@ pub struct PlayerInput {
     pub reload: bool,
     /// The use button (`interact`) is held.
     pub interact: bool,
+    /// The dodge button is held.
+    pub dodge: bool,
 }
 
 /// The player in a world.

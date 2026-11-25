@@ -110,12 +110,36 @@ pub struct World {
     /// The level's ladders: what the map places as type `ladder`, each
     /// the space a climber is on it in.
     ladders: Vec<lore_script::Placed>,
+    /// The dodge the player is in, or last made.
+    dodge: Dodge,
     /// Which solid thing the player stood on after the last tick.
     standing_on: Option<usize>,
     /// How far what the player stood on has turned them since the view
     /// was last told, in radians to the left.
     carried_turn: f32,
 }
+
+/// A dodge, from tick to tick.
+#[derive(Debug, Clone, Copy, Default)]
+struct Dodge {
+    /// How many seconds of it are left.
+    left: f32,
+    /// How many seconds until another can begin.
+    rest: f32,
+    /// The way it goes, on the ground, one unit long.
+    way: [f32; 2],
+    /// Whether its button was down on the last tick.
+    was_down: bool,
+    /// The clip for a dodge that began this tick, until the body is told.
+    began: Option<&'static str>,
+}
+
+/// How long after a dodge ends before another can begin, in seconds.
+const DODGE_REST: f32 = 0.25;
+
+/// How far off the lock-on button looks for someone to hold the view on,
+/// in metres.
+const LOCK_REACH: f32 = 25.0;
 
 /// How far in front of the eyes a carried thing is held, and how far under
 /// them, in metres.
@@ -156,6 +180,8 @@ fn motion_of(player: &Player, aim: [f32; 3]) -> Motion {
         swimming: player.swimming,
         on_ladder: player.on_ladder,
         climbing: player.hoist > 0.0,
+        // The world says so when it steps one.
+        dodging: false,
         // Until the tick works out what is in the way: far along the look.
         aim_point: {
             let eye = player.eye_position();
@@ -250,6 +276,7 @@ impl World {
             usable_ids: Vec::new(),
             fire_was: false,
             ladders,
+            dodge: Dodge::default(),
             standing_on: None,
             carried_turn: 0.0,
         };
@@ -647,6 +674,11 @@ impl World {
     /// Whether the player was put somewhere since this was last asked, by
     /// the script or by a respawn, and the yaw and pitch to face there, if
     /// either said.
+    /// The clip to play for a dodge that began on the last tick, once.
+    pub(crate) fn take_dodge_began(&mut self) -> Option<&'static str> {
+        self.dodge.began.take()
+    }
+
     /// How far what the player stands on has turned them since this was
     /// last asked, in radians to the left: the view turns with it.
     pub(crate) fn take_carried_turn(&mut self) -> f32 {
@@ -748,6 +780,59 @@ impl Game for World {
         moving.mode = mode_of(self.game.host().movement());
         let said = self.game.host().moves();
         let can = self.game.host().abilities();
+        // A dodge: a press of its button, in a game that has them, throws
+        // the player the way they are pushing (or backward, standing
+        // still) for a moment in which nothing else moves them.
+        let pressed = asked.dodge && !self.dodge.was_down;
+        self.dodge.was_down = asked.dodge;
+        self.dodge.rest = (self.dodge.rest - *tick).max(0.0);
+        let (sin, cos) = moving.yaw.sin_cos();
+        let (ahead, aside) = ([-sin, -cos], [cos, -sin]);
+        if can.dodge
+            && pressed
+            && self.dodge.left <= 0.0
+            && self.dodge.rest <= 0.0
+            && player.grounded
+            && !player.swimming
+            && moving.mode == MoveMode::Walk
+        {
+            let pushed = moving.forward.hypot(moving.right);
+            let (forward, right) = if pushed > 0.2 {
+                (moving.forward / pushed, moving.right / pushed)
+            } else {
+                (-1.0, 0.0)
+            };
+            self.dodge.way = [
+                ahead[0] * forward + aside[0] * right,
+                ahead[1] * forward + aside[1] * right,
+            ];
+            self.dodge.left = said.dodge_seconds;
+            self.dodge.rest = said.dodge_seconds + DODGE_REST;
+            self.dodge.began = Some(if right.abs() > forward.abs() {
+                if right > 0.0 {
+                    "dodge_right"
+                } else {
+                    "dodge_left"
+                }
+            } else {
+                "roll"
+            });
+        }
+        let dodging = self.dodge.left > 0.0;
+        if dodging {
+            self.dodge.left -= *tick;
+            let way = self.dodge.way;
+            moving.forward = way[0] * ahead[0] + way[1] * ahead[1];
+            moving.right = way[0] * aside[0] + way[1] * aside[1];
+            moving.jump = false;
+            moving.sprint = false;
+        }
+        // The dodge button never crouches, though on a gamepad it is the
+        // crouch button too.
+        if can.dodge && (asked.dodge || dodging) {
+            moving.crouch = false;
+        }
+        let dodge_pace = said.dodge_distance / said.dodge_seconds.max(0.05);
         let settings = MoveSettings {
             fly_speed: self.game.host().fly_speed(),
             walk_speed: said.walk_speed,
@@ -765,6 +850,18 @@ impl Game for World {
             ladder_speed: said.ladder_speed,
             swim: can.swim,
             ..*rules
+        };
+        let settings = if dodging {
+            // At the dodge's own pace from its first tick to its last.
+            MoveSettings {
+                walk_speed: dodge_pace,
+                sprint_speed: dodge_pace,
+                crouch_speed: dodge_pace,
+                ground_acceleration: 200.0,
+                ..settings
+            }
+        } else {
+            settings
         };
         // At one of the level's ladders, for someone who climbs them.
         moving.ladder =
@@ -801,6 +898,16 @@ impl Game for World {
         self.things.step(rules.gravity, level);
         let before = *player;
         player.step(level, rules, &moving, *tick);
+        // A dodge ends on its feet: what is left of its speed is a walk's,
+        // so it covers the distance asked and does not slide on after.
+        if dodging && self.dodge.left <= 0.0 {
+            let pace = player.velocity[0].hypot(player.velocity[2]);
+            let most = said.walk_speed * 0.5;
+            if pace > most && pace > 0.0 {
+                player.velocity[0] *= most / pace;
+                player.velocity[2] *= most / pace;
+            }
+        }
         // What the player walks into is pushed, and every solid thing
         // moves on by a tick.
         if walking {
@@ -877,6 +984,7 @@ impl Game for World {
         }
         let aim = aim_of(asked.movement.yaw, asked.pitch);
         let mut motion = motion_of(player, aim);
+        motion.dodging = dodging;
         // Where a shot would land now, and whether cover stops it short of
         // the crosshair: for a game's own second mark.
         (motion.aim_point, motion.aim_blocked) =
@@ -1122,6 +1230,9 @@ struct Controls {
     reload: Option<ActionId>,
     switch_view: Option<ActionId>,
     interact: Option<ActionId>,
+    block: Option<ActionId>,
+    dodge: Option<ActionId>,
+    lock_on: Option<ActionId>,
 }
 
 impl Controls {
@@ -1138,6 +1249,9 @@ impl Controls {
             reload: find("reload"),
             switch_view: find("switch_view"),
             interact: find("interact"),
+            block: find("block"),
+            dodge: find("dodge"),
+            lock_on: find("lock_on"),
         }
     }
 
@@ -1169,6 +1283,7 @@ impl Controls {
             aim: held(self.aim),
             reload: held(self.reload),
             interact: held(self.interact),
+            dodge: held(self.dodge),
         }
     }
 }
@@ -1461,6 +1576,7 @@ impl Playing {
         if let Some(held) = self.world.game.host().take_held() {
             self.change_held(held);
         }
+        let dodged = self.world.take_dodge_began();
         let Some(character) = &mut self.character else {
             return;
         };
@@ -1497,6 +1613,17 @@ impl Playing {
         for ask in host.take_animation_asks() {
             character.ask(&ask);
         }
+        // A dodge that began on the last tick is played, if the body has
+        // a clip for it.
+        if let Some(clip) = dodged {
+            character.ask(&lore_script::AnimationAsk::Play {
+                clip: clip.to_owned(),
+                fade: 0.08,
+                speed: 1.0,
+                looping: Some(false),
+                upper_body: false,
+            });
+        }
         character.guard(host.blocking());
         let player = *self.world.player();
         character.tick(
@@ -1531,6 +1658,37 @@ impl Playing {
                 &blow.clip,
             );
         }
+    }
+
+    /// Holds the view on the next character in front of the player: the
+    /// nearest, then the next nearest each time it is asked, and after the
+    /// last, nobody. The dead and those out of reach are passed over.
+    fn next_lock(&mut self) {
+        let eye = self.world.player().eye_position();
+        let (sin, cos) = self.yaw.sin_cos();
+        let host = self.world.game.host();
+        let mut near: Vec<(f32, CharacterId)> = Vec::new();
+        host.each_character(|who, feet, health| {
+            if who == CharacterId::PLAYER || health <= 0.0 {
+                return;
+            }
+            let (x, z) = (feet[0] - eye[0], feet[2] - eye[2]);
+            let far = x.hypot(z);
+            let up = feet[1] - eye[1];
+            // In reach, and in the half of the world they are looking at.
+            if far > 0.2 && far.hypot(up) <= LOCK_REACH && (x * -sin + z * -cos) / far > 0.25 {
+                near.push((far, who));
+            }
+        });
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let next = match host.locked_on() {
+            Some(now) => (near.iter())
+                .position(|(_, who)| *who == now)
+                .and_then(|at| near.get(at + 1))
+                .map(|(_, who)| *who),
+            None => near.first().map(|(_, who)| *who),
+        };
+        self.world.game.host_mut().lock_on(next);
     }
 
     /// Holds the view on whoever the script locked on to: the camera turns
@@ -1794,6 +1952,15 @@ impl Game for Playing {
         let mut asked = self
             .controls
             .asked(input, step, &mut self.yaw, &mut self.pitch);
+        // In a game that has them: the block button raises the guard, and
+        // the lock-on button holds the view on the next one in front.
+        let can = self.world.game.host().abilities();
+        let held = |action: Option<ActionId>| action.is_some_and(|action| input.pressed(action));
+        let guard = can.block && held(self.controls.block);
+        self.world.game.host_mut().set_guard_held(guard);
+        if can.lock_on && (self.controls.lock_on).is_some_and(|action| input.just_pressed(action)) {
+            self.next_lock();
+        }
         if self.world.game.host().locked_on().is_some() {
             self.hold_lock(step);
             asked.movement.yaw = self.yaw;
@@ -3037,6 +3204,130 @@ mod tests {
         );
         // Up the wall and onto its top.
         assert!(highest > 4.9, "climbed only to {highest}");
+    }
+
+    #[test]
+    fn a_dodge_throws_the_player_the_way_they_push_where_the_game_has_dodges() {
+        use lore_input::Key;
+
+        /// Walks forward for a second, taps the dodge key, and says how far
+        /// the next 0.35 s took them and whether the script saw a dodge.
+        fn dodged(script: &str, held: Option<Key>) -> (f32, [f32; 3]) {
+            let (mut game, mut input) = game_on_map("", script);
+            if let Some(key) = held {
+                input.press(key);
+            }
+            for _ in 0..60 {
+                game.tick(input.tick(), STEP);
+            }
+            let from = game.world.player().position;
+            input.press(Key::LeftAlt);
+            game.tick(input.tick(), STEP);
+            input.release(Key::LeftAlt);
+            for _ in 0..20 {
+                game.tick(input.tick(), STEP);
+            }
+            let to = game.world.player().position;
+            assert_eq!(game.world.game.host().last_error(), None);
+            (
+                (to[0] - from[0]).hypot(to[2] - from[2]),
+                [to[0] - from[0], 0.0, to[2] - from[2]],
+            )
+        }
+        let on = r#"local saw = false
+            game.onStart(function()
+                game.player:setAbility("dodge", true)
+                assert(game.player.dodgeSeconds == 0.35 and game.player.dodgeDistance == 3.2)
+            end)
+            game.onTick(function() if game.player.dodging then saw = true end end)"#;
+        // Without the ability the key does nothing: a third of a second's walk.
+        let (walked, _) = dodged("", Some(Key::W));
+        assert!((walked - 1.57).abs() < 0.2, "{walked}");
+        // With it, 3.2 metres in the 0.35 s, the way they were going.
+        let (far, way) = dodged(on, Some(Key::W));
+        assert!((far - 3.2).abs() < 0.35, "{far}");
+        assert!(way[2] < -3.0, "{way:?}");
+        // To the side while strafing, and backward from standing still.
+        let (_, way) = dodged(on, Some(Key::D));
+        assert!(way[0] > 2.8, "{way:?}");
+        let (far, way) = dodged(on, None);
+        assert!(far > 2.5 && way[2] > 2.5, "{way:?}");
+        // A game sets how far and how long.
+        let (far, _) = dodged(
+            "game.onStart(function()\n\
+             game.player:setAbility(\"dodge\", true)\n\
+             game.player:setDodgeDistance(1.5)\n\
+             game.player:setDodgeSeconds(0.2)\n\
+             end)",
+            None,
+        );
+        // The dodge's own metre and a half, and a step to stop in.
+        assert!(far > 1.4 && far < 2.0, "{far}");
+    }
+
+    #[test]
+    fn the_block_button_raises_the_guard_and_the_lock_button_goes_round_who_is_in_front() {
+        use lore_input::{Key, MouseButton};
+
+        let (mut game, mut input) = game_on_map(
+            "",
+            r#"game.onStart(function()
+                game.player:setAbility("block", true)
+                game.player:setAbility("lockOn", true)
+                assert(game.player:can("block") and game.player:can("lock_on"))
+            end)
+            game.onTick(function()
+                local who = game.player.lockedOn
+                print(game.player.blocking, who and who.name or "nobody")
+            end)"#,
+        );
+        // Two dummies ahead (-Z), the nearer on the left, and one behind.
+        game.world.add_dummy([-1.0, 0.0, -4.0]);
+        game.world.add_dummy([2.0, 0.0, -9.0]);
+        game.world.add_dummy([0.0, 0.0, 5.0]);
+        let (near, far) = (game.world.dummies[0].name, game.world.dummies[1].name);
+        game.tick(input.tick(), STEP);
+        assert!(!game.world.game.host().blocking());
+        assert_eq!(game.world.game.host().locked_on(), None);
+
+        // The guard is up for as long as the button is held.
+        input.press(MouseButton::MouseRight);
+        game.tick(input.tick(), STEP);
+        assert!(game.world.game.host().blocking());
+        input.release(MouseButton::MouseRight);
+        game.tick(input.tick(), STEP);
+        assert!(!game.world.game.host().blocking());
+
+        // One press holds the view on the nearest in front, the next on
+        // the one after, and the third lets go. The one behind is never it.
+        let mut press = |game: &mut Playing| {
+            input.press(Key::Q);
+            game.tick(input.tick(), STEP);
+            input.release(Key::Q);
+            game.tick(input.tick(), STEP);
+            game.world.game.host().locked_on()
+        };
+        let before = game.yaw();
+        assert_eq!(press(&mut game), Some(near));
+        // Held on them, the view turns their way: to the left.
+        for _ in 0..30 {
+            game.tick(&lore_input::InputFrame::default(), STEP);
+        }
+        let turned =
+            (game.yaw() - before + std::f32::consts::PI).rem_euclid(TAU) - std::f32::consts::PI;
+        assert!((turned - 0.245).abs() < 0.02, "{turned}");
+        assert_eq!(press(&mut game), Some(far));
+        assert_eq!(press(&mut game), None);
+        assert_eq!(game.world.game.host().last_error(), None);
+
+        // Without the abilities the buttons do nothing.
+        let (mut plain, mut input) = game_on_map("", "");
+        plain.world.add_dummy([0.0, 0.0, -4.0]);
+        input.press(MouseButton::MouseRight);
+        input.press(Key::Q);
+        plain.tick(input.tick(), STEP);
+        assert!(!plain.world.game.host().blocking());
+        assert_eq!(plain.world.game.host().locked_on(), None);
     }
 
     #[test]

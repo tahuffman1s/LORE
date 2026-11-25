@@ -51,6 +51,9 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "ladderSpeed",
     "onLadder",
     "climbing",
+    "dodging",
+    "dodgeSeconds",
+    "dodgeDistance",
     "view",
     "facing",
     "model",
@@ -68,7 +71,9 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
-const MOVE_NUMBERS: [(&str, MoveNumber); 9] = [
+const MOVE_NUMBERS: [(&str, MoveNumber); 11] = [
+    ("dodgeSeconds", MoveNumber::DodgeSeconds),
+    ("dodgeDistance", MoveNumber::DodgeDistance),
     ("vaultHeight", MoveNumber::Vault),
     ("climbHeight", MoveNumber::Climb),
     ("ladderSpeed", MoveNumber::Ladder),
@@ -82,7 +87,17 @@ const MOVE_NUMBERS: [(&str, MoveNumber); 9] = [
 
 /// The methods that set them, and what each does to someone, for the
 /// message when it is asked of anyone but the player.
-const MOVE_SETTERS: [(&str, MoveNumber, &str); 9] = [
+const MOVE_SETTERS: [(&str, MoveNumber, &str); 11] = [
+    (
+        "setDodgeSeconds",
+        MoveNumber::DodgeSeconds,
+        "given a dodge time",
+    ),
+    (
+        "setDodgeDistance",
+        MoveNumber::DodgeDistance,
+        "given a dodge distance",
+    ),
     (
         "setVaultHeight",
         MoveNumber::Vault,
@@ -128,6 +143,8 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setLadderSpeed",
     "setAbility",
     "can",
+    "setDodgeSeconds",
+    "setDodgeDistance",
     "setView",
     "allowViewSwitch",
     "setFacing",
@@ -270,6 +287,14 @@ impl Characters {
         }
     }
 
+    /// Calls `see` with every character in the world, where their feet are
+    /// and how much health they have left.
+    pub fn each_with_health(&self, mut see: impl FnMut(CharacterId, [f32; 3], f32)) {
+        for entry in self.here.borrow().iter() {
+            see(entry.id, entry.position, entry.health);
+        }
+    }
+
     /// Says where a character's feet are. Does nothing for one that is gone.
     pub fn set_position(&self, id: CharacterId, position: [f32; 3]) {
         if let Some(entry) = self.here.borrow_mut().iter_mut().find(|e| e.id == id) {
@@ -313,6 +338,7 @@ impl Characters {
             swimming: false,
             on_ladder: false,
             climbing: false,
+            dodging: false,
             aim_point: [
                 entry.position[0],
                 entry.position[1] + EYE_HEIGHT,
@@ -456,6 +482,9 @@ impl UserData for CharacterRef {
         });
         fields.add_field_method_get("onLadder", |lua, this| {
             Ok(this.motion(lua, "onLadder")?.on_ladder)
+        });
+        fields.add_field_method_get("dodging", |lua, this| {
+            Ok(this.motion(lua, "dodging")?.dodging)
         });
         fields.add_field_method_get("climbing", |lua, this| {
             Ok(this.motion(lua, "climbing")?.climbing)

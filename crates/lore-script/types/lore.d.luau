@@ -99,6 +99,10 @@ declare extern type Character with
     --- Example: if game.player.swimming then print("Swimming") end
     swimming: boolean
 
+    --- True while the character is in the middle of a dodge.
+    --- Example: game.onDamage(function(hurt) if hurt.victim == game.player and game.player.dodging then game.player:heal(hurt.amount) end end)
+    dodging: boolean
+
     --- True while the character is on a ladder.
     --- Example: if game.player.onLadder then crosshair.visible = false end
     onLadder: boolean
@@ -164,6 +168,16 @@ declare extern type Character with
     --- until `game.player:setLadderSpeed`.
     --- Example: print(game.player.ladderSpeed)
     ladderSpeed: number
+
+    --- How long a dodge lasts, in seconds: 0.35 until
+    --- `game.player:setDodgeSeconds`.
+    --- Example: print(game.player.dodgeSeconds)
+    dodgeSeconds: number
+
+    --- How far a dodge carries the character, in metres: 3.2 until
+    --- `game.player:setDodgeDistance`.
+    --- Example: print(game.player.dodgeDistance)
+    dodgeDistance: number
 
     --- Where the camera is: "first" (at the eyes) or "third" (behind and
     --- over a shoulder). Change it with `game.player:setView`; the player
@@ -317,15 +331,40 @@ declare extern type Character with
     ---   and holding jump lets go. A ladder is something placed in the map
     ---   as type "ladder" (in `lore edit`), a metre square and 3 metres
     ---   high unless given `width`, `depth` and `height`.
+    --- "block": holding the "block" button (right mouse button, or the
+    ---   left trigger) raises the player's guard, as `game.player:block`
+    ---   does: `game.player.blocking` is true while it is held.
+    --- "dodge": pressing the "dodge" button (Left Alt, or B) throws the
+    ---   player the way they are pushing, or backward if they stand
+    ---   still, `dodgeDistance` metres in `dodgeSeconds`. Nothing else
+    ---   moves them meanwhile, and `game.player.dodging` is true: what a
+    ---   dodge saves them from is the game's to say. On a gamepad the
+    ---   button is the crouch button, which then no longer crouches.
+    --- "lockOn": pressing the "lock_on" button (Q, or the left bumper)
+    ---   holds the view and the body on the nearest character in front of
+    ---   the player, within 25 metres; pressing again goes to the next
+    ---   nearest, and after the last lets go. `game.player.lockedOn` says
+    ---   who, and `game.player:lockOn` still sets it from a script.
     --- Ledges are found from the level's own shape: nothing has to be
     --- marked. It stays through a reload of the script. Only in the
     --- game's rules.
     --- Example: game.onStart(function() game.player:setAbility("climb", true) end)
-    function setAbility(self, ability: "vault" | "climb" | "swim" | "ladders", on: boolean): ()
+    --- Example: game.onStart(function() for _, ability in { "block", "dodge", "lockOn" } do game.player:setAbility(ability, true) end end)
+    function setAbility(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn", on: boolean): ()
 
     --- Whether the player has an ability: see `setAbility`.
     --- Example: if game.player:can("swim") then print("Dive in") end
-    function can(self, ability: "vault" | "climb" | "swim" | "ladders"): boolean
+    function can(self, ability: "vault" | "climb" | "swim" | "ladders" | "block" | "dodge" | "lockOn"): boolean
+
+    --- How long a dodge lasts, in seconds, from 0.05 to 3. 0.35 if never
+    --- set. Another dodge can begin a quarter of a second after one ends.
+    --- Example: game.player:setDodgeSeconds(0.5)
+    function setDodgeSeconds(self, seconds: number): ()
+
+    --- How far a dodge carries the player, in metres, from 0.2 to 30. 3.2
+    --- if never set.
+    --- Example: game.player:setDodgeDistance(4)
+    function setDodgeDistance(self, metres: number): ()
 
     --- The highest thing the player vaults, in metres above their feet,
     --- from 0.3 to 3. 1.1 if never set.
