@@ -268,6 +268,8 @@ impl Names {
     pub fn intern(&mut self, name: &str) -> Option<NameId> {
         let at = match self.names.iter().position(|known| &**known == name) {
             Some(at) => at,
+            // A full table takes no more names, so it cannot grow for ever.
+            None if self.names.len() >= usize::from(u16::MAX) => return None,
             None => {
                 self.names.push(name.into());
                 self.names.len() - 1
