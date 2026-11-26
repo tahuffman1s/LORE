@@ -806,3 +806,32 @@ fn random_fragments_never_panic_and_roll_back() {
         }
     }
 }
+
+#[test]
+fn nesting_deeper_than_256_is_an_error_with_a_position() {
+    let deep = |n: usize| format!("{}x{}", "<div>".repeat(n), "</div>".repeat(n));
+    assert!(parse("t.html", &deep(200)).is_ok());
+    let e = parse("t.html", &deep(300)).unwrap_err();
+    assert!(e.message.contains("nest more than 256 deep"), "{e}");
+    assert!(!e.help.is_empty());
+}
+
+#[test]
+fn fragment_nesting_counts_the_parents_depth() {
+    let deep = |n: usize| format!("{}x{}", "<div>".repeat(n), "</div>".repeat(n));
+    let mut p = parse(
+        "t.html",
+        &format!("<html><body>{}</body></html>", deep(200)),
+    )
+    .unwrap();
+    let doc = &mut p.document;
+    let mut inner = doc.root();
+    while let Some(c) = doc.first_child(inner) {
+        if doc.get(c).and_then(|n| n.tag()).is_none() {
+            break;
+        }
+        inner = c;
+    }
+    let e = parse_fragment(doc, inner, "frag", &deep(100)).unwrap_err();
+    assert!(e.message.contains("nest more than 256 deep"), "{e}");
+}

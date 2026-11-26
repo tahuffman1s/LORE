@@ -489,7 +489,7 @@ If you know HTML and CSS from web pages, these are different here, on purpose.
   Running text between inline tags (`Hello <span>there</span>`) is one wrapped line of text.
 - **`display` is `flex`, `block` or `none`.** The rest of CSS's layout modes do not exist.
 - **`position: absolute` is placed against its parent box**, not against the nearest
-  positioned ancestor. `position: fixed` is placed against the whole screen.
+  positioned ancestor. `position: fixed` is placed against the whole screen: it ignores the scroll offsets and clips of the containers it sits in.
   `top`, `right`, `bottom`, `left` and `calc()` work for both. `z-index` orders boxes.
 - **The starting text colour is white** (`#ffffff`), not black, and the page has no background,
   so the game shows behind it. Give `body` a colour or gradient if you want one.

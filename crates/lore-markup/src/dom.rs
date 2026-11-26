@@ -493,7 +493,7 @@ impl Document {
         let Some(p) = self.get(parent) else {
             return false;
         };
-        if matches!(p.kind, NodeKind::Text(_)) || child == self.root {
+        if matches!(p.kind, NodeKind::Text(_)) || child == self.root || child == parent {
             return false;
         }
         let Some(c) = self.get(child) else {
@@ -502,12 +502,16 @@ impl Document {
         if c.parent.is_some() {
             return false;
         }
-        let mut up = Some(parent);
-        while let Some(a) = up {
-            if a == child {
-                return false;
+        // A node with no children cannot be an ancestor of anything, so the
+        // walk is only needed when moving a whole subtree.
+        if c.first_child.is_some() {
+            let mut up = Some(parent);
+            while let Some(a) = up {
+                if a == child {
+                    return false;
+                }
+                up = self.parent(a);
             }
-            up = self.parent(a);
         }
         let old_last = p.last_child;
         if let Some(c) = self.get_mut(child) {

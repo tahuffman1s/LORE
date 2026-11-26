@@ -386,7 +386,7 @@ impl Animator {
             if keep {
                 i += 1;
             } else {
-                self.anims.swap_remove(i);
+                self.anims.remove(i);
             }
         }
         std::mem::take(&mut self.paint_dirty)
@@ -566,7 +566,7 @@ impl Animator {
                         }
                     }
                 }
-                self.anims.swap_remove(i);
+                self.anims.remove(i);
             } else {
                 i += 1;
             }

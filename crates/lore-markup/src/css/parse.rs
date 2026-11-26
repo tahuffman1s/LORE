@@ -457,6 +457,11 @@ fn is_var(t: &Token) -> bool {
     matches!(&t.tok, Tok::Function(f) if f.eq_ignore_ascii_case("var"))
 }
 
+/// True when `tokens` hold a `var()` call.
+pub(crate) fn contains_var(tokens: &[Token]) -> bool {
+    tokens.iter().any(is_var)
+}
+
 fn check_vars(file: &str, toks: &[Token]) -> Result<(), MarkupError> {
     for (k, t) in toks.iter().enumerate() {
         if is_var(t) {
@@ -574,10 +579,16 @@ pub fn substitute_vars(
     interner: &mut Interner,
 ) -> Result<Vec<Token>, MarkupError> {
     let mut out = Vec::with_capacity(tokens.len());
-    subst(file, pos, tokens, lookup, interner, 0, &mut out)?;
+    let mut steps = 0u32;
+    subst(file, pos, tokens, lookup, interner, 0, &mut steps, &mut out)?;
     Ok(out)
 }
 
+/// The most tokens (and var() expansions) one substitution may produce, so a
+/// chain of custom properties that each repeat the last cannot blow up.
+const MAX_SUBSTITUTED: usize = 10_000;
+
+#[allow(clippy::too_many_arguments)]
 fn subst(
     file: &str,
     pos: (u32, u32),
@@ -585,6 +596,7 @@ fn subst(
     lookup: &mut dyn FnMut(Atom) -> Option<Tokens>,
     interner: &mut Interner,
     depth: u32,
+    steps: &mut u32,
     out: &mut Vec<Token>,
 ) -> Result<(), MarkupError> {
     let fail = |msg: String, help: String| MarkupError::new(file, pos.0, pos.1, msg, help);
@@ -596,6 +608,13 @@ fn subst(
     }
     let mut i = 0;
     while let Some(t) = tokens.get(i) {
+        if out.len() > MAX_SUBSTITUTED || *steps as usize > MAX_SUBSTITUTED {
+            return Err(fail(
+                "this var() grows too large".into(),
+                "a custom property repeats another one too many times; use each var() fewer times"
+                    .into(),
+            ));
+        }
         if !is_var(t) {
             out.push(t.clone());
             i += 1;
@@ -637,10 +656,11 @@ fn subst(
             _ => None,
         };
         let atom = interner.intern(name);
+        *steps += 1;
         if let Some(v) = lookup(atom) {
-            subst(file, pos, &v, lookup, interner, depth + 1, out)?;
+            subst(file, pos, &v, lookup, interner, depth + 1, steps, out)?;
         } else if let Some(fb) = fallback {
-            subst(file, pos, fb, lookup, interner, depth + 1, out)?;
+            subst(file, pos, fb, lookup, interner, depth + 1, steps, out)?;
         } else {
             return Err(fail(
                 format!("`{name}` is not defined"),

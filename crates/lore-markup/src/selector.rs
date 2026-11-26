@@ -1,6 +1,8 @@
 //! Selectors: what they are, how specific they are, and whether an element
 //! matches one.
 
+use std::cell::RefCell;
+
 use crate::dom::{Document, ElementId, NodeKind, Tag};
 use crate::intern::Atom;
 
@@ -172,10 +174,22 @@ pub fn matches<S: ElementState + ?Sized>(
     element: ElementId,
     state: &S,
 ) -> bool {
-    match selector.compounds.len().checked_sub(1) {
-        Some(last) => match_from(selector, last, doc, element, state),
-        None => false,
+    let Some(last) = selector.compounds.len().checked_sub(1) else {
+        return false;
+    };
+    // Remembers (compound, element) pairs that failed, so a descendant
+    // combinator never retries a pair: matching stays polynomial however
+    // deep the tree. The list is reused between calls to avoid allocating.
+    thread_local! {
+        static FAILED: RefCell<Vec<(usize, ElementId)>> = const { RefCell::new(Vec::new()) };
     }
+    FAILED.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut failed) => {
+            failed.clear();
+            match_from(selector, last, doc, element, state, &mut failed)
+        }
+        Err(_) => match_from(selector, last, doc, element, state, &mut Vec::new()),
+    })
 }
 
 fn is_element(doc: &Document, id: ElementId) -> bool {
@@ -193,6 +207,7 @@ fn match_from<S: ElementState + ?Sized>(
     doc: &Document,
     el: ElementId,
     st: &S,
+    failed: &mut Vec<(usize, ElementId)>,
 ) -> bool {
     let Some(compound) = sel.compounds.get(i) else {
         return false;
@@ -205,13 +220,16 @@ fn match_from<S: ElementState + ?Sized>(
     };
     match sel.combinators.get(prev) {
         Some(Combinator::Child) => {
-            parent_element(doc, el).is_some_and(|p| match_from(sel, prev, doc, p, st))
+            parent_element(doc, el).is_some_and(|p| match_from(sel, prev, doc, p, st, failed))
         }
         Some(Combinator::Descendant) => {
             let mut cur = parent_element(doc, el);
             while let Some(p) = cur {
-                if match_from(sel, prev, doc, p, st) {
-                    return true;
+                if !failed.contains(&(prev, p)) {
+                    if match_from(sel, prev, doc, p, st, failed) {
+                        return true;
+                    }
+                    failed.push((prev, p));
                 }
                 cur = parent_element(doc, p);
             }

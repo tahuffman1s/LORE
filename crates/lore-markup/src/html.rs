@@ -252,6 +252,8 @@ struct Parser<'a> {
     mode: Mode,
     base: Option<Tag>,
     stack: Vec<Open>,
+    /// How deep `parent` already sits in the tree (0 for the root).
+    base_depth: usize,
     text: String,
     text_pos: (u32, u32),
     last_space: bool,
@@ -264,6 +266,21 @@ struct Parser<'a> {
     seen_doctype: bool,
 }
 
+/// Most elements that may nest inside one another. Keeps every walk up or
+/// down the tree (styling, layout, selector matching) cheap and safe.
+const MAX_DEPTH: usize = 256;
+
+/// How many ancestors `id` has, not counting the document root.
+fn depth_of(doc: &Document, id: ElementId) -> usize {
+    let mut n = 0;
+    let mut cur = doc.parent(id);
+    while let Some(p) = cur {
+        n += 1;
+        cur = doc.parent(p);
+    }
+    n
+}
+
 impl<'a> Parser<'a> {
     fn new(
         file: &'a str,
@@ -272,6 +289,7 @@ impl<'a> Parser<'a> {
         parent: ElementId,
         mode: Mode,
     ) -> Self {
+        let base_depth = depth_of(doc, parent);
         Self {
             file,
             chars: source.chars().collect(),
@@ -283,6 +301,7 @@ impl<'a> Parser<'a> {
             mode,
             base: None,
             stack: Vec::new(),
+            base_depth,
             text: String::new(),
             text_pos: (1, 1),
             last_space: false,
@@ -700,6 +719,14 @@ impl<'a> Parser<'a> {
                 at,
                 format!("`<{name}/>` cannot close itself"),
                 format!("write `<{name}></{name}>`"),
+            ));
+        }
+        let nests = !tag.is_void() && !matches!(tag, Tag::Style | Tag::Title);
+        if nests && self.base_depth + self.stack.len() + 1 > MAX_DEPTH {
+            return Err(self.err(
+                at,
+                format!("elements nest more than {MAX_DEPTH} deep"),
+                "flatten the layout: close some elements before opening new ones",
             ));
         }
         let id = self.build_element(tag, &attrs, at)?;

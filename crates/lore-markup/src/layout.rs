@@ -302,7 +302,10 @@ impl Layouter {
     }
 
     /// The node an element owns, if it is displayed as a box.
-    pub fn node_of(&self, id: ElementId) -> Option<usize> {
+    pub fn node_of(&self, doc: &Document, id: ElementId) -> Option<usize> {
+        if !doc.contains(id) {
+            return None;
+        }
         match self.elem.get(id.index as usize) {
             Some(&n) if n != NONE => Some(n as usize),
             _ => None,
@@ -343,7 +346,7 @@ impl Layouter {
             any = true;
         }
         for &id in touched {
-            if let Some(n) = self.node_of(id) {
+            if let Some(n) = self.node_of(env.doc, id) {
                 self.map_node(env, n);
                 if let Some(p) = self.nodes.get(n).map(|x| x.parent).filter(|&p| p != NONE) {
                     self.map_node(env, p as usize);
@@ -591,6 +594,7 @@ impl Layouter {
             env,
             measure,
             lines: &mut lines,
+            spare: LNode::new(None, Kind::Box, NONE),
         };
         t::compute_root_layout(
             &mut ctx,
@@ -1254,6 +1258,8 @@ struct Ctx<'a> {
     env: &'a Env<'a>,
     measure: &'a mut dyn TextMeasure,
     lines: &'a mut LineBuf,
+    /// Stands in for a node id that is out of range, so a bad id never panics.
+    spare: LNode,
 }
 
 struct ChildIter<'a>(std::slice::Iter<'a, u32>);
@@ -1269,16 +1275,17 @@ type Ident = <Style as t::CoreStyle>::CustomIdent;
 
 impl Ctx<'_> {
     // Ids only ever come from this tree, so a bad index is a bug in this
-    // file, not a property of the input; fall back to node 0 rather than panic.
+    // file, not a property of the input; use an empty spare node rather than
+    // panic.
     fn node(&self, id: NodeId) -> &LNode {
-        let i = usize::from(id);
-        self.nodes.get(i).unwrap_or_else(|| &self.nodes[0])
+        self.nodes.get(usize::from(id)).unwrap_or(&self.spare)
     }
 
     fn node_mut(&mut self, id: NodeId) -> &mut LNode {
-        let i = usize::from(id);
-        let i = if i < self.nodes.len() { i } else { 0 };
-        &mut self.nodes[i]
+        match self.nodes.get_mut(usize::from(id)) {
+            Some(n) => n,
+            None => &mut self.spare,
+        }
     }
 }
 
@@ -1359,6 +1366,7 @@ impl Ctx<'_> {
             env,
             measure,
             lines,
+            ..
         } = self;
         let Some(node) = nodes.get_mut(i) else {
             return LayoutOutput::HIDDEN;

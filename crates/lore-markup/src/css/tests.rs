@@ -1586,3 +1586,43 @@ fn the_realistic_sheet_parses_without_its_last_rule() {
     assert_eq!(s.rules.len(), 2);
     assert_eq!(s.keyframes.len(), 1);
 }
+
+#[test]
+fn var_chain_that_repeats_itself_is_capped_quickly() {
+    let mut i = Interner::new();
+    let mut table = std::collections::HashMap::new();
+    table.insert(i.intern("--l0"), tokenize("t", "1px", 1, 1).unwrap().into());
+    for n in 1..=14 {
+        let text = format!("var(--l{p}) var(--l{p}) var(--l{p}) var(--l{p})", p = n - 1);
+        let toks: Tokens = tokenize("t", &text, 1, 1).unwrap().into();
+        table.insert(i.intern(&format!("--l{n}")), toks);
+    }
+    let toks = tokenize("t", "var(--l14)", 1, 1).unwrap();
+    let mut look = |a: Atom| table.get(&a).cloned();
+    let start = std::time::Instant::now();
+    let e = substitute_vars("t", (1, 1), &toks, &mut look, &mut i).unwrap_err();
+    assert!(e.message.contains("grows too large"), "{e}");
+    assert!(start.elapsed().as_secs() < 2);
+}
+
+#[test]
+fn deep_descendant_selectors_do_not_go_exponential() {
+    let depth = 250;
+    let html = format!(
+        "<html><head></head><body>{}<span id=\"s\"></span>{}</body></html>",
+        "<div>".repeat(depth),
+        "</div>".repeat(depth)
+    );
+    let parsed = crate::parse("t.html", &html).unwrap();
+    let doc = parsed.document;
+    let s = doc.find_by_id_str("s").unwrap();
+    let mut i = Interner::new();
+    let sels = selectors(
+        "label div div div div div div div div div div span, div div div div div div div div div div span",
+        &mut i,
+    );
+    let start = std::time::Instant::now();
+    assert!(!selector::matches(&sels[0], &doc, s, &NoState));
+    assert!(selector::matches(&sels[1], &doc, s, &NoState));
+    assert!(start.elapsed().as_secs() < 2);
+}

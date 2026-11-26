@@ -109,8 +109,17 @@ pub fn tokenize(file: &str, text: &str, line: u32, column: u32) -> Result<Vec<To
     };
     let mut out = Vec::new();
     while lx.i < lx.chars.len() {
+        let before = lx.i;
         if let Some(t) = lx.next_token()? {
             out.push(t);
+        }
+        if lx.i == before {
+            return Err(lx.err(
+                lx.line,
+                lx.col,
+                "the CSS could not be read past this point",
+                "remove the odd character here",
+            ));
         }
     }
     Ok(out)
@@ -200,7 +209,9 @@ impl Lexer<'_> {
             if is_name_char(c) {
                 s.push(c);
                 self.bump();
-            } else if c == '\\' && self.peek(1).is_some() {
+            } else if c == '\\' {
+                // A backslash at the very end is read as U+FFFD, so the
+                // lexer always moves forward.
                 self.bump();
                 s.push(self.escape());
             } else {
@@ -518,6 +529,13 @@ mod tests {
         let t = tokenize("p.html", "a\n  b", 10, 5).unwrap();
         let pos: Vec<(u32, u32)> = t.iter().map(|t| (t.line, t.column)).collect();
         assert_eq!(pos, vec![(10, 5), (10, 6), (11, 3)]);
+    }
+
+    #[test]
+    fn a_trailing_backslash_ends_instead_of_looping() {
+        let t = tokenize("t.css", "a\\", 1, 1).unwrap();
+        assert_eq!(t[0].tok, Tok::Ident("a\u{fffd}".into()));
+        assert!(tokenize("t.css", "\\", 1, 1).is_ok());
     }
 
     #[test]

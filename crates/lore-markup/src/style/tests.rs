@@ -634,3 +634,22 @@ fn visibility_and_cursor_inherit() {
     assert_eq!(t.st("c").visibility, Visibility::Hidden);
     assert_eq!(t.st("c").cursor, crate::css::value::Cursor::Pointer);
 }
+
+#[test]
+fn custom_properties_are_computed_where_declared() {
+    let t = setup(
+        r#"<div class="o"><div class="c"><p id="p">x</p></div></div>"#,
+        ".o { --a: var(--b); --b: red } .c { --b: blue } p { color: var(--a) }",
+    );
+    assert_eq!(t.st("p").color, RED);
+}
+
+#[test]
+fn custom_property_cycle_is_invalid_so_fallback_is_used() {
+    let t = setup(
+        r#"<div id="p">x</div>"#,
+        "div { --a: var(--b); --b: var(--a); color: var(--a, blue) }",
+    );
+    assert_eq!(t.st("p").color, BLUE);
+    assert!(t.styles.warnings().is_empty());
+}

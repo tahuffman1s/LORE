@@ -28,7 +28,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::css::value::{Nav, Overflow, Visibility};
+use crate::css::value::{Nav, Overflow, Positioning, Visibility};
 use crate::dom::{Dirty, ElementId, HandlerKind, InputType, Node, NodeKind, Tag};
 use crate::layout::TextMeasure;
 use crate::paint::{Rect, apply, bbox, invert, is_interactive};
@@ -196,7 +196,7 @@ impl Screen {
 
     /// The box of `el` in screen space with its transform applied.
     fn bounds(&self, el: ElementId) -> Option<Rect> {
-        let n = self.layout.node_of(el)?;
+        let n = self.layout.node_of(&self.doc, el)?;
         let node = self.layout.nodes.get(n)?;
         Some(bbox(&node.matrix, &node.rect))
     }
@@ -434,6 +434,17 @@ impl Screen {
             self.set_focus(None);
             changed = true;
         }
+        // Content that moved under a pointer that did not (layout, an
+        // animation, an edit) changes what is hovered.
+        if let Some([x, y]) = self.ix.pointer
+            && self.ix.pressed.is_none()
+        {
+            let hit = self.pick(0, x, y, None);
+            if hit != self.ix.hover {
+                self.set_hover(hit);
+                changed = true;
+            }
+        }
         if !self.ix.autofocus_done {
             self.ix.autofocus_done = true;
             let root = self.doc.root();
@@ -486,7 +497,7 @@ impl Screen {
 
     fn scrolls(&self, el: ElementId) -> [bool; 2] {
         match self.style_of(el) {
-            Some(cs) if self.layout.node_of(el).is_some() => [
+            Some(cs) if self.layout.node_of(&self.doc, el).is_some() => [
                 cs.overflow_x == Overflow::Scroll,
                 cs.overflow_y == Overflow::Scroll,
             ],
@@ -497,7 +508,7 @@ impl Screen {
     fn max_scroll(&self, el: ElementId) -> [f32; 2] {
         let l = self
             .layout
-            .node_of(el)
+            .node_of(&self.doc, el)
             .and_then(|n| self.layout.nodes.get(n))
             .map(|n| (n.layout.scroll_width(), n.layout.scroll_height()));
         match l {
@@ -560,7 +571,7 @@ impl Screen {
     fn reveal(&mut self, el: ElementId) {
         let Some(mut r) = self
             .layout
-            .node_of(el)
+            .node_of(&self.doc, el)
             .and_then(|n| self.layout.nodes.get(n))
             .map(|n| n.rect)
         else {
@@ -571,7 +582,7 @@ impl Screen {
             if self.scrolls(a) != [false, false]
                 && let Some(c) = self
                     .layout
-                    .node_of(a)
+                    .node_of(&self.doc, a)
                     .and_then(|n| self.layout.nodes.get(n))
                     .map(|n| n.rect)
             {
@@ -728,10 +739,15 @@ impl Screen {
 
     fn pick(&self, i: usize, x: f32, y: f32, clip: Option<Rect>) -> Option<ElementId> {
         let n = self.layout.nodes.get(i)?;
+        let el = n.element;
+        // A fixed box is not cut by the containers it sits in.
+        let fixed = el
+            .and_then(|e| self.style_of(e))
+            .is_some_and(|cs| cs.position == Positioning::Fixed);
+        let clip = if fixed { None } else { clip };
         if clip.is_some_and(|c| !c.contains(x, y)) {
             return None;
         }
-        let el = n.element;
         let clips = el.and_then(|e| self.style_of(e)).is_some_and(|cs| {
             cs.overflow_x != Overflow::Visible || cs.overflow_y != Overflow::Visible
         });
@@ -791,6 +807,7 @@ impl Screen {
 
     /// The pointer moved to `(x, y)` in screen pixels.
     pub fn pointer_move(&mut self, x: f32, y: f32) {
+        self.ix.pointer = Some([x, y]);
         let hit = self.pick(0, x, y, None);
         self.set_hover(hit);
     }

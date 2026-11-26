@@ -19,11 +19,11 @@ pub use computed::{
 };
 pub use ua::UA_CSS;
 
-use crate::css::parse::Tokens;
+use crate::css::parse::{Tokens, contains_var};
 use crate::css::value::Global;
 use crate::css::{
     DeclValue, Declaration, Keyframes, PropId, StyleSheet, initial_value, parse_declarations,
-    parse_stylesheet, resolve_declaration,
+    parse_stylesheet, resolve_declaration, substitute_vars,
 };
 use crate::dom::{Dirty, Document, ElementId, Tag};
 use crate::error::MarkupError;
@@ -214,6 +214,41 @@ impl Cascade<'_> {
                 for p in decl.props() {
                     self.set_global(p, Global::Unset);
                 }
+            }
+        }
+    }
+}
+
+/// Computes the custom properties an element declares: each value has its
+/// `var()` filled in from the element's own table (inherited values are
+/// already settled). A value that cannot be filled in, or that is part of a
+/// loop, is dropped, so `var(--x, fallback)` takes its fallback.
+fn settle_custom(
+    map: &mut BTreeMap<Atom, Tokens>,
+    declared: &[(Atom, (u32, u32))],
+    file: &str,
+    interner: &mut Interner,
+) {
+    let mut settled: Vec<(Atom, Option<Tokens>)> = Vec::new();
+    for (name, pos) in declared {
+        let Some(raw) = map.get(name) else { continue };
+        if !contains_var(raw) {
+            continue;
+        }
+        let raw = raw.clone();
+        let mut lookup = |a: Atom| map.get(&a).cloned();
+        let value = substitute_vars(file, *pos, &raw, &mut lookup, interner)
+            .ok()
+            .map(Tokens::from);
+        settled.push((*name, value));
+    }
+    for (name, value) in settled {
+        match value {
+            Some(v) => {
+                map.insert(name, v);
+            }
+            None => {
+                map.remove(&name);
             }
         }
     }
@@ -603,12 +638,17 @@ impl Styles {
             if doc.parent(id).is_none() {
                 inline = self.inline_for(doc, id, cached_inline);
                 if let Some(inl) = &inline {
+                    let mut map = custom.as_deref().cloned().unwrap_or_default();
+                    let mut declared = Vec::new();
                     for d in inl.decls.iter() {
                         if let DeclValue::Custom { name, tokens } = &d.value {
-                            let mut map = custom.as_deref().cloned().unwrap_or_default();
                             map.insert(*name, tokens.clone());
-                            custom = Some(Arc::new(map));
+                            declared.push((*name, (d.line, d.column)));
                         }
+                    }
+                    if !declared.is_empty() {
+                        settle_custom(&mut map, &declared, &self.inline_file, doc.interner_mut());
+                        custom = Some(Arc::new(map));
                     }
                 }
             }
@@ -709,15 +749,20 @@ impl Styles {
         // Custom properties first: they are inherited and feed `var()`.
         let mut custom = parent_custom;
         let mut own: Option<BTreeMap<Atom, Tokens>> = None;
+        let mut declared: Vec<(Atom, (u32, u32))> = Vec::new();
+        let mut custom_file = "";
         for m in &scratch {
-            if let Some((d, _)) = lookup(m)
+            if let Some((d, file)) = lookup(m)
                 && let DeclValue::Custom { name, tokens } = &d.value
             {
                 let map = own.get_or_insert_with(|| custom.as_deref().cloned().unwrap_or_default());
                 map.insert(*name, tokens.clone());
+                declared.push((*name, (d.line, d.column)));
+                custom_file = file;
             }
         }
-        if let Some(map) = own {
+        if let Some(mut map) = own {
+            settle_custom(&mut map, &declared, custom_file, doc.interner_mut());
             custom = Some(Arc::new(map));
         }
 

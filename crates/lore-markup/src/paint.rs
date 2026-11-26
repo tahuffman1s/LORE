@@ -499,11 +499,19 @@ impl Painter<'_, '_> {
             return;
         };
         let cs = env.style(el);
-        let origin = if cs.position == Positioning::Fixed {
-            [0.0, 0.0]
+        // A fixed box is placed against the screen: it ignores the scroll
+        // offsets and the clips of the containers it sits in.
+        let fixed = cs.position == Positioning::Fixed;
+        let pc = if fixed {
+            Pc {
+                origin: [0.0, 0.0],
+                clip: None,
+                ..pc
+            }
         } else {
-            pc.origin
+            pc
         };
+        let origin = pc.origin;
         let brect = Rect {
             x: origin[0] + layout.location.x,
             y: origin[1] + layout.location.y,
@@ -564,8 +572,11 @@ impl Painter<'_, '_> {
 
         // Hit area before the element's own paints and children, so the list
         // reversed puts children in front of their parent.
+        // Hidden and disabled elements cannot be pointed at.
         if let Some(node) = env.doc.get(el)
             && is_interactive(node)
+            && !node.disabled
+            && cs.visibility == Visibility::Visible
         {
             self.frame.hits.push(Hit {
                 element: el,

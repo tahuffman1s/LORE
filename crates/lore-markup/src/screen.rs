@@ -26,6 +26,8 @@ const MAX_WARNINGS: usize = 256;
 #[derive(Default)]
 pub(crate) struct Interaction {
     pub hover: Option<ElementId>,
+    /// Where the pointer last was, to pick again when content moves under it.
+    pub pointer: Option<[f32; 2]>,
     pub focus: Option<ElementId>,
     pub active: Option<ElementId>,
     /// The hovered element and its ancestors: `:hover` applies to all.
@@ -233,7 +235,7 @@ impl Screen {
     /// An element's border box in screen pixels, before its transform, as of
     /// the last [`frame`](Screen::frame). `None` if it is not displayed.
     pub fn element_rect(&self, id: ElementId) -> Option<Rect> {
-        let n = self.layout.node_of(id)?;
+        let n = self.layout.node_of(&self.doc, id)?;
         self.layout.nodes.get(n).map(|n| n.rect)
     }
 
@@ -243,9 +245,15 @@ impl Screen {
     }
 
     /// Scrolls an element's content (clamped to what it holds when drawn).
-    pub fn set_scroll_offset(&mut self, id: ElementId, offset: [f32; 2]) {
+    /// False, and nothing changes, if the element is gone or an offset is
+    /// not a finite number.
+    pub fn set_scroll_offset(&mut self, id: ElementId, offset: [f32; 2]) -> bool {
+        if !self.doc.contains(id) || !offset.iter().all(|v| v.is_finite()) {
+            return false;
+        }
         self.scroll.insert(id, offset);
         self.dirty = true;
+        true
     }
 
     /// Something changed: lay out and paint again at the next
@@ -297,6 +305,11 @@ impl Screen {
     }
 
     fn refresh(&mut self, measure: &mut dyn TextMeasure) {
+        // Offsets of removed elements go, so the map cannot grow for ever.
+        if !self.scroll.is_empty() {
+            let doc = &self.doc;
+            self.scroll.retain(|id, _| doc.contains(*id));
+        }
         // Which checkboxes are ticked, for `:checked`.
         self.ix.checked.clear();
         let root = self.doc.root();

@@ -441,3 +441,20 @@ fn an_animated_width_relays_out() {
     ticks(&mut s, 30);
     assert!(near(width(&mut s, "a"), 300.0));
 }
+
+#[test]
+fn a_later_animation_still_wins_after_an_earlier_one_ends() {
+    let mut s = page(
+        "@keyframes a { from { opacity: .5; } to { opacity: .5; } }
+         @keyframes b { from { opacity: .2; } to { opacity: .2; } }
+         @keyframes c { from { opacity: .8; } to { opacity: .8; } }
+         #x { width: 100px; height: 50px;
+              animation-name: a, b, c; animation-duration: .1s, 1s, 1s;
+              animation-timing-function: linear;
+              animation-fill-mode: none, forwards, forwards; }",
+        r#"<div id="x"></div>"#,
+    );
+    assert!(near(opacity(&s, "x"), 0.8));
+    ticks(&mut s, 30);
+    assert!(near(opacity(&s, "x"), 0.8), "{}", opacity(&s, "x"));
+}

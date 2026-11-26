@@ -403,3 +403,74 @@ fn event_order_is_deterministic() {
     }
     assert_eq!(run(), run());
 }
+
+#[test]
+fn stale_ids_have_no_rect_and_cannot_scroll() {
+    let mut s = page(
+        "div{width:50px;height:50px}",
+        "<div id=box><p id=a>x</p></div>",
+    );
+    let (bx, a) = (id(&s, "box"), id(&s, "a"));
+    assert!(s.remove(a));
+    // A new element takes the freed slot; the old id must not reach it.
+    s.append_html(bx, "<p id=b>y</p>").unwrap();
+    s.frame(&mut M);
+    assert!(s.element_rect(a).is_none());
+    assert!(!s.set_scroll_offset(a, [0.0, 5.0]));
+    assert!(!s.set_scroll_offset(bx, [f32::NAN, 0.0]));
+    assert!(!s.set_scroll_offset(bx, [0.0, f32::INFINITY]));
+    assert!(s.set_scroll_offset(bx, [0.0, 5.0]));
+}
+
+#[test]
+fn scroll_offsets_of_removed_elements_are_dropped() {
+    let mut s = page(
+        "div{width:50px;height:50px}",
+        "<div id=box><p id=a>x</p></div>",
+    );
+    let a = id(&s, "a");
+    assert!(s.set_scroll_offset(a, [0.0, 5.0]));
+    assert!(s.remove(a));
+    s.frame(&mut M);
+    assert!(s.scroll.is_empty());
+}
+
+#[test]
+fn fixed_boxes_ignore_the_clip_of_their_container() {
+    let mut s = page(
+        "body{margin:0} #c{width:100px;height:100px;overflow:hidden}
+         #f{position:fixed;left:300px;top:300px;width:50px;height:50px}",
+        "<div id=c><div id=f></div></div>",
+    );
+    s.frame(&mut M);
+    s.pointer_move(310.0, 310.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "f")));
+}
+
+#[test]
+fn hits_skip_hidden_and_disabled_elements() {
+    let mut s = page(
+        "button{width:50px;height:20px}",
+        "<button id=a>a</button><button id=b disabled>b</button>
+         <button id=c style=\"visibility:hidden\">c</button>",
+    );
+    let a = id(&s, "a");
+    let f = s.frame(&mut M);
+    assert_eq!(f.hits.len(), 1);
+    assert_eq!(f.hits[0].element, a);
+}
+
+#[test]
+fn hover_follows_content_that_moves_under_a_still_pointer() {
+    let mut s = page(
+        "body{margin:0} #gap{height:0} #gap.tall{height:100px} button{display:block;width:100px;height:30px}",
+        "<div id=gap></div><button id=a>A</button>",
+    );
+    let a = id(&s, "a");
+    s.pointer_move(10.0, 10.0);
+    assert_eq!(s.ix.hover, Some(a));
+    let gap = id(&s, "gap");
+    assert!(s.add_class(gap, "tall"));
+    s.frame(&mut M);
+    assert_ne!(s.ix.hover, Some(a));
+}
