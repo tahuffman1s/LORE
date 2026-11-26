@@ -112,7 +112,12 @@ impl Listen {
 
     fn ask(&self, ask: BindingAsk) {
         let mut asks = self.asks.borrow_mut();
-        collapse(&mut asks, &ask);
+        // Every ask is kept in order, so the engine tells each change; only
+        // a script asking over and over fills the list, and then what the
+        // new ask makes pointless goes first, so no reset is lost.
+        if asks.len() >= MOST_ASKS {
+            collapse(&mut asks, &ask);
+        }
         if asks.len() >= MOST_ASKS {
             asks.remove(0);
         }
@@ -313,6 +318,18 @@ pub(crate) fn install(lua: &mlua::Lua, shared: &Rc<Shared>, input: &Table) -> ml
             };
             if let Some(gap) = device_gap("rebind", &name, kind, &buttons) {
                 return Err(fail(lua, gap));
+            }
+            // The buttons it has already, in any order: nothing to change,
+            // save or tell the player.
+            let now: Vec<String> = state.tools.with_controls(|controls| {
+                let map = controls
+                    .filter(|map| map.action(&name).is_ok())
+                    .unwrap_or(&own);
+                let id = map.action(&name).unwrap_or(id);
+                map.bindings(id).iter().map(ToString::to_string).collect()
+            });
+            if now.len() == buttons.len() && buttons.iter().all(|b| now.contains(b)) {
+                return Ok(());
             }
             let bindings = parsed(&buttons);
             state.tools.edit_controls(&own, |map| {
