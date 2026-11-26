@@ -1676,6 +1676,7 @@ dependencies = [
  "log",
  "lore-fluid",
  "lore-input",
+ "lore-markup",
  "lore-shader",
  "lore-sky",
  "lore-ui",

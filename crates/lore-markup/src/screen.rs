@@ -339,7 +339,10 @@ impl Screen {
                 if let Some(slot) = self.used.get_mut(i) {
                     slot.clone_from(style);
                 }
-                if ch.is_new || ch.old.display != style.display {
+                // A `span` that is placed by `position` is a box, so a
+                // change of `position` can change what the tree holds.
+                if ch.is_new || ch.old.display != style.display || ch.old.position != style.position
+                {
                     rebuild = true;
                 }
             }

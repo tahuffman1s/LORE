@@ -10,6 +10,8 @@ publish.workspace = true
 lore-input = { path = "../lore-input" }
 # Where a HUD piece is pinned and its colour, for `game.hud`.
 lore-ui = { path = "../lore-ui" }
+# Screens written in HTML and CSS, for `game.ui`.
+lore-markup = { path = "../lore-markup" }
 # What a weapon is made of, for `game.weapon`, and the state of each one held.
 lore-weapons = { path = "../lore-weapons" }
 # What a kind of fluid is made of, for `game.fluid`.

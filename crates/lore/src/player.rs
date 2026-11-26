@@ -205,6 +205,19 @@ pub fn open_with_settings(
         let source = opened.read_text(&name)?;
         scripts.push((name, source));
     }
+    // And every screen of `game.ui`: its HTML and the stylesheets it links,
+    // read by the same names as from a folder.
+    let screens: Vec<String> = opened
+        .files()
+        .filter(|name| {
+            name.starts_with("ui/") && (name.ends_with(".html") || name.ends_with(".css"))
+        })
+        .map(str::to_owned)
+        .collect();
+    for name in screens {
+        let source = opened.read_text(&name)?;
+        scripts.push((name, source));
+    }
     // And every HUD image, by its name inside `images`.
     let pictures: Vec<String> = opened
         .files()
@@ -313,6 +326,29 @@ mod tests {
             .host()
             .each_shader(|said| seen.push((said.name.clone(), said.problem.is_none())));
         assert_eq!(seen, [("heat".to_owned(), true)]);
+    }
+
+    #[test]
+    fn a_packed_game_has_its_screens() {
+        let folder = scratch("screens");
+        let pack = pack(
+            &folder,
+            &[
+                ("main.luau", "game.ui.load(\"ui/main.html\"):show()"),
+                (
+                    "ui/main.html",
+                    "<link rel=\"stylesheet\" href=\"main.css\"><p>Hello</p>",
+                ),
+                ("ui/main.css", "p { color: red; }"),
+            ],
+        );
+        let game = open(&pack, &ActionMap::standard()).unwrap();
+        assert!(game.game.host().last_error().is_none());
+        let mut out = lore_ui::DrawBuffer::default();
+        game.game
+            .host()
+            .draw_screens(&mut out, [1920.0, 1080.0], 1.0);
+        assert!(!out.draw().is_empty());
     }
 
     #[test]

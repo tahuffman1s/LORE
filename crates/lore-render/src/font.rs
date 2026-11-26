@@ -270,6 +270,20 @@ impl Set {
         (size + (ascent + descent) * px) / 2.0
     }
 
+    /// The ascent and descent, both positive, of the face `want` picks,
+    /// for text drawn `px` high: the room a line of it takes above and below
+    /// its baseline.
+    pub(crate) fn metrics(&self, px: f32, want: FontFace) -> (f32, f32) {
+        let face = self.pick(want).face;
+        let (ascent, descent) = self
+            .faces
+            .get(usize::from(face))
+            .map_or((0.95, -0.25), |face| {
+                (face.loaded.ascent, face.loaded.descent)
+            });
+        (ascent * px, -descent * px)
+    }
+
     /// Calls `each` for every character of `text` drawn `px` high in `want`,
     /// left to right, and returns the width of the whole line.
     ///
@@ -523,6 +537,13 @@ impl Font {
     }
 }
 
+/// How high the letters of a line asked for `size` high are really drawn:
+/// the size the overlay clamps and rounds it to.
+pub(crate) fn drawn_px(size: f32) -> f32 {
+    use crate::overlay::{LARGEST_TEXT, SIZES_PER_PIXEL, SMALLEST_TEXT};
+    (size.clamp(SMALLEST_TEXT, LARGEST_TEXT) * SIZES_PER_PIXEL).round() / SIZES_PER_PIXEL
+}
+
 impl TextMeasure for Font {
     fn width(&self, text: &str, size: f32) -> f32 {
         self.measure(text, size, FontFace::default(), 0.0)
@@ -530,6 +551,21 @@ impl TextMeasure for Font {
 
     fn width_styled(&self, text: &str, size: f32, font: FontFace, letter_spacing: f32) -> f32 {
         self.measure(text, size, font, letter_spacing)
+    }
+
+    fn metrics(&self, size: f32, font: FontFace) -> (f32, f32) {
+        if !(size.is_finite() && size > 0.0) {
+            return (0.0, 0.0);
+        }
+        self.set().metrics(size, font)
+    }
+
+    fn baseline(&self, size: f32, font: FontFace) -> f32 {
+        if !(size.is_finite() && size > 0.0) {
+            return 0.0;
+        }
+        let set = self.set();
+        set.baseline(size, drawn_px(size), set.pick(font).face)
     }
 }
 
@@ -619,6 +655,24 @@ mod tests {
         assert_eq!(starts.len(), 3);
         assert_eq!(starts[0], 0.0);
         assert!(starts[1] > 0.0 && starts[2] > starts[1] && width > starts[2]);
+    }
+
+    #[test]
+    fn metrics_are_the_faces_own_ascent_and_descent() {
+        let font = Font::bundled();
+        let (ascent, descent) = TextMeasure::metrics(&font, 40.0, FontFace::default());
+        let set = font.set();
+        // The baseline of a line exactly as tall as ascent + descent is the ascent.
+        let line = ascent + descent;
+        assert!((set.baseline(line, 40.0, 0) - ascent).abs() < 0.01);
+        assert!(ascent > descent && descent > 0.0);
+        assert_eq!(
+            TextMeasure::metrics(&font, 0.0, FontFace::default()),
+            (0.0, 0.0)
+        );
+        // The baseline of a drawn line is where the renderer puts it.
+        let drawn = TextMeasure::baseline(&font, 40.0, FontFace::default());
+        assert!((drawn - set.baseline(40.0, 40.0, 0)).abs() < 0.01);
     }
 
     #[test]

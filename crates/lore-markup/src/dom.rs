@@ -57,11 +57,13 @@ pub enum Tag {
     Label,
     /// `<progress>`
     Progress,
+    /// `<kbd action="...">`: the name of the key or button for an action.
+    Kbd,
 }
 
 impl Tag {
     /// All tags, in the order they are documented.
-    pub const ALL: [Tag; 20] = [
+    pub const ALL: [Tag; 21] = [
         Tag::Html,
         Tag::Head,
         Tag::Body,
@@ -82,12 +84,13 @@ impl Tag {
         Tag::Option,
         Tag::Label,
         Tag::Progress,
+        Tag::Kbd,
     ];
 
     /// Every tag name, for "did you mean" lists.
-    pub const NAMES: [&'static str; 20] = [
+    pub const NAMES: [&'static str; 21] = [
         "html", "head", "body", "title", "style", "link", "div", "span", "p", "h1", "h2", "h3",
-        "br", "img", "button", "input", "select", "option", "label", "progress",
+        "br", "img", "button", "input", "select", "option", "label", "progress", "kbd",
     ];
 
     /// The tag written as `name`, case-sensitive.

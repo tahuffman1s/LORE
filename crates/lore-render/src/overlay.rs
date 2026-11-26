@@ -70,15 +70,15 @@ pub(crate) const MOST_IMAGE_ATLAS: u32 = 4096;
 /// The largest letters are drawn, in pixels. Larger text is drawn this
 /// size, so that no text can ask for a picture of a letter the size of a
 /// wall.
-const LARGEST_TEXT: f32 = 256.0;
+pub(crate) const LARGEST_TEXT: f32 = 256.0;
 /// The smallest, below which letters are a smudge.
-const SMALLEST_TEXT: f32 = 4.0;
+pub(crate) const SMALLEST_TEXT: f32 = 4.0;
 
 /// How many sizes there are to a pixel: letters are drawn at quarter-pixel
 /// sizes, close enough to what was asked that centred text stays centred,
 /// and few enough that a window being dragged larger does not fill the
 /// atlas with a new alphabet for every pixel of height.
-const SIZES_PER_PIXEL: f32 = 4.0;
+pub(crate) const SIZES_PER_PIXEL: f32 = 4.0;
 
 /// The most pictures of letters remembered before starting again, so
 /// that letters that take no room in the atlas (spaces) are limited too.
@@ -937,6 +937,7 @@ impl Overlay {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let quarters = (size.clamp(SMALLEST_TEXT, LARGEST_TEXT) * SIZES_PER_PIXEL).round() as u16;
         let px = f32::from(quarters) / SIZES_PER_PIXEL;
+        debug_assert!((px - crate::font::drawn_px(size)).abs() < 1e-3);
         // Letters stand on whole pixels, or their flat edges blur.
         // The font is a cheap shared handle; taking its faces lets the
         // letters be added to `self` while they are being read.

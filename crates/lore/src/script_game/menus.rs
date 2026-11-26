@@ -13,7 +13,16 @@ use crate::world::World;
 
 const STEP: f32 = 1.0 / 60.0;
 
-const MAIN: &str = include_str!("../../template/main.luau");
+const TEMPLATE: &str = include_str!("../../template/main.luau");
+
+/// The template's `main.luau` without its title screen: these tests are
+/// about the HUD and the engine's menus, which the title would cover. The
+/// title has its own test below.
+fn main_script() -> String {
+    let from = TEMPLATE.find("-- The title screen").unwrap();
+    let to = TEMPLATE.find("-- The welcome goes away").unwrap();
+    format!("{}{}", &TEMPLATE[..from], &TEMPLATE[to..]).replace("    title:show()\n", "")
+}
 
 /// One text the game drew: its words and where its top-left corner is.
 type Words = (String, [f32; 2]);
@@ -52,7 +61,10 @@ impl Played {
 
     /// The game `lore new` writes.
     fn new() -> Self {
-        Self::with_main(&MAIN.replace("{name}", "test"), Settings::default())
+        Self::with_main(
+            &main_script().replace("{name}", "test"),
+            Settings::default(),
+        )
     }
 
     /// One of the example games. The jungle's sounds are made by its
@@ -176,6 +188,29 @@ impl Played {
             .unwrap_or_else(|| panic!("\"{label}\" is not among {:?}", self.words()));
         self.drawn[at + 1].0.clone()
     }
+}
+
+#[test]
+fn a_new_game_starts_under_its_title_screen_and_start_hides_it() {
+    let folder = std::env::temp_dir().join(format!("lore-title-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    crate::scaffold::new_game(&folder).unwrap();
+    let game = ScriptGame::open(&folder, &ActionMap::standard()).unwrap();
+    let mut played = Played::of(game, Settings::default(), true);
+    played.step();
+    assert!(played.shows("Start"), "{:?}", played.words());
+    assert!(played.shows("A new adventure"), "{:?}", played.words());
+    assert!(played.host().paused(), "the title holds the game still");
+    assert_eq!(played.set(), "menu");
+
+    // Start has focus from the first moment: confirm presses it.
+    played.tap(Key::Enter);
+    played.step();
+    assert!(!played.shows("Start"), "{:?}", played.words());
+    assert!(!played.host().paused());
+    assert_eq!(played.set(), "gameplay");
+    assert!(played.shows("Jumps: 0"), "{:?}", played.words());
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]
@@ -427,7 +462,7 @@ fn a_game_opened_with_other_settings_changes_only_what_its_menu_changes() {
         field_of_view: 110.0,
         ..Settings::default()
     };
-    let main = MAIN.replace("{name}", "test");
+    let main = main_script().replace("{name}", "test");
     let mut played = Played::opened_with(&main, Settings::default(), theirs);
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
@@ -453,7 +488,7 @@ fn a_game_opened_with_other_settings_changes_only_what_its_menu_changes() {
 #[test]
 fn a_frame_rate_limit_of_0_is_shown_as_no_limit() {
     let mut played = Played::with_main(
-        &MAIN.replace("{name}", "test"),
+        &main_script().replace("{name}", "test"),
         Settings {
             frame_rate_limit: 30.0,
             reflections: false,

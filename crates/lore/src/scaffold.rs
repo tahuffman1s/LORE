@@ -22,6 +22,11 @@ const MAX_NAME_LENGTH: usize = 64;
 const NAME_PLACEHOLDER: &str = "{name}";
 
 const MAIN_SCRIPT: &str = include_str!("../template/main.luau");
+const TITLE_HTML: &str = include_str!("../template/ui/title.html");
+const TITLE_CSS: &str = include_str!("../template/ui/title.css");
+/// The starter stylesheet: classes for layout, text, panels, buttons, bars
+/// and motion that a screen of the game's own can link.
+const STARTER_CSS: &str = include_str!("../template/ui/lore.css");
 const README: &str = include_str!("../template/README.md");
 const EDITOR_SETTINGS: &str = include_str!("../template/vscode-settings.json");
 const CLAUDE_GUIDE: &str = include_str!("../template/CLAUDE.md");
@@ -233,7 +238,10 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
 
     let editor_folder = folder.join(".vscode");
     let claude_folder = folder.join(".claude");
+    let ui_folder = folder.join("ui");
     let named = |text: &str| text.replace(NAME_PLACEHOLDER, &name).into_bytes();
+    // The name goes into a page, where `<` and `&` mean something.
+    let in_html = |text: &str| text.replace(NAME_PLACEHOLDER, &escaped(&name)).into_bytes();
     let files = [
         (
             folder.join(ENTRY_SCRIPT),
@@ -243,6 +251,9 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
             )),
         ),
         (folder.join(LEVEL_FILE), STARTER_LEVEL.to_vec()),
+        (ui_folder.join("title.html"), in_html(TITLE_HTML)),
+        (ui_folder.join("title.css"), TITLE_CSS.into()),
+        (ui_folder.join("lore.css"), STARTER_CSS.into()),
         (folder.join("README.md"), named(README)),
         (folder.join(TYPES_FILE), TYPE_DEFINITIONS.into()),
         (editor_folder.join("settings.json"), EDITOR_SETTINGS.into()),
@@ -253,7 +264,7 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
     // Only what this call made is removed again if a later step fails, so a
     // file someone else put there in the meantime is never touched.
     let mut made = 0;
-    let written = [&editor_folder, &claude_folder]
+    let written = [&editor_folder, &claude_folder, &ui_folder]
         .into_iter()
         .try_for_each(|subfolder| {
             fs::create_dir_all(subfolder).map_err(|source| NewGameError::Io {
@@ -281,6 +292,7 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
         }
         let _ = fs::remove_dir(&editor_folder);
         let _ = fs::remove_dir(&claude_folder);
+        let _ = fs::remove_dir(&ui_folder);
         if !existed {
             let _ = fs::remove_dir(&folder);
         }
@@ -313,6 +325,14 @@ pub fn refresh_types(folder: &Path) -> io::Result<bool> {
     }
     fs::write(&path, TYPE_DEFINITIONS)?;
     Ok(true)
+}
+
+/// `text` as it is written in HTML.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Creates an empty file that must not exist yet.
@@ -512,6 +532,112 @@ mod tests {
         ))
         .unwrap();
         assert!(example == STARTER_LEVEL, "copy template/level.glb over it");
+    }
+
+    #[test]
+    fn the_new_game_has_a_title_screen_that_loads_and_checks_clean() {
+        let scratch = Scratch::new();
+        let game = new_game(&scratch.path("Lantern & Co")).unwrap();
+        let html = fs::read_to_string(game.folder.join("ui/title.html")).unwrap();
+        assert!(html.contains("<h1>Lantern &amp; Co</h1>"), "{html}");
+        assert!(!html.contains(NAME_PLACEHOLDER));
+        assert!(game.folder.join("ui/title.css").is_file());
+
+        let host = ScriptHost::open(&game.folder, ActionMap::standard()).unwrap();
+        assert_eq!(host.last_error(), None);
+        let found = host.check_screens();
+        assert_eq!(found.screens, 1);
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_example_has_the_templates_title_screen() {
+        let example = |name: &str| {
+            fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../examples/hello/ui")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            example("title.html"),
+            TITLE_HTML.replace(NAME_PLACEHOLDER, "hello")
+        );
+        assert_eq!(example("title.css"), TITLE_CSS);
+        assert_eq!(example("lore.css"), STARTER_CSS);
+        // The terminal example is built on the same sheet, unchanged.
+        let terminal = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/terminal/ui/lore.css"),
+        )
+        .unwrap();
+        assert!(
+            terminal == STARTER_CSS,
+            "copy template/ui/lore.css over examples/terminal/ui/lore.css"
+        );
+    }
+
+    /// One of everything the starter stylesheet has a component for.
+    const KIT_SAMPLER: &str = r#"<link rel="stylesheet" href="lore.css">
+<body class="green">
+<div class="screen col center gap-4 vignette">
+  <div class="panel w-half col gap-3 anim-rise">
+    <div class="panel-title upper wide glow-text">Sampler</div>
+    <div class="row gap-2">
+      <button class="btn btn-solid grow" autofocus>Solid</button>
+      <button class="btn btn-lg grow">Plain</button>
+      <button class="btn btn-danger btn-sm grow">Danger</button>
+    </div>
+    <div class="row gap-2"><span class="chip on">On</span><span class="chip">Off</span><span class="badge">New</span></div>
+    <div class="bar"><div class="ghost"></div><div class="fill"></div></div>
+    <div class="bar bar-thin"><div class="fill danger"></div></div>
+    <div class="tabs"><button class="tab current">One</button><button class="tab">Two</button></div>
+    <div class="stat-row"><span class="dim">Weight</span><span>3.0</span></div>
+    <div class="divider"></div>
+    <p class="text-sm dim">Press <kbd class="key" action="menu_confirm"></kbd></p>
+    <div class="row gap-2"><div class="slot selected">A</div><div class="slot hover-glow">B</div></div>
+  </div>
+  <div class="toast br anim-slide-in-right delay-2">A toast</div>
+  <button class="list-row w-half hover-grow">Row <span class="badge anim-pulse">4</span></button>
+</div>
+</body>
+"#;
+
+    #[test]
+    fn a_screen_that_links_the_starter_stylesheet_loads_and_checks_clean() {
+        let scratch = Scratch::new();
+        let game = new_game(&scratch.path("kit")).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.folder.join("ui/lore.css")).unwrap(),
+            STARTER_CSS
+        );
+        fs::write(game.folder.join("ui/sampler.html"), KIT_SAMPLER).unwrap();
+        let script = game.folder.join(ENTRY_SCRIPT);
+        let mut text = fs::read_to_string(&script).unwrap();
+        text.push_str("\nlocal sampler = game.ui.load(\"ui/sampler.html\")\nsampler:show()\n");
+        fs::write(&script, text).unwrap();
+
+        let host = ScriptHost::open(&game.folder, ActionMap::standard()).unwrap();
+        assert_eq!(host.last_error(), None);
+        let found = host.check_screens();
+        assert_eq!(found.screens, 2);
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn every_theme_of_the_starter_stylesheet_sets_the_same_colours() {
+        let themes: Vec<&str> = STARTER_CSS
+            .lines()
+            .filter(|line| line.starts_with("body."))
+            .collect();
+        assert_eq!(themes.len(), 6, "{themes:?}");
+        for theme in themes {
+            for colour in ["--ink:", "--ink-dim:", "--ink-faint:", "--glow:"] {
+                assert!(theme.contains(colour), "{theme} lacks {colour}");
+            }
+        }
     }
 
     #[test]

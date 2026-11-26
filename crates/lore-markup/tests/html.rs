@@ -44,6 +44,13 @@ fn kids(doc: &Document, id: ElementId) -> Vec<String> {
         .collect()
 }
 
+/// The `<body>`, written or implied.
+fn body(doc: &Document) -> ElementId {
+    doc.descendants(doc.root())
+        .find(|&i| doc.get(i).and_then(|n| n.tag()) == Some(Tag::Body))
+        .unwrap()
+}
+
 fn by_id(doc: &Document, id: &str) -> ElementId {
     doc.find_by_id_str(id).unwrap()
 }
@@ -62,6 +69,7 @@ const FULL: &str = r#"<!DOCTYPE html>
   <input name="n">
   <select name="s"><option value="1">One</option><option>Two</option></select>
   <progress value="1" max="2"></progress>
+  <kbd action="menu_confirm"></kbd>
   </div>
 </body>
 </html>
@@ -92,7 +100,7 @@ fn nesting_and_text() {
     assert_eq!(
         kids(doc, a),
         [
-            "h1", "h2", "h3", "p", "img", "button", "input", "select", "progress"
+            "h1", "h2", "h3", "p", "img", "button", "input", "select", "progress", "kbd"
         ]
     );
     let para = doc.children(a).nth(3).unwrap();
@@ -140,7 +148,7 @@ fn title_text_is_ignored() {
 fn void_tags_with_and_without_slash() {
     let p = ok(r#"<div><br><br/><br /><img src="a"><img src="b"/><input><input/></div>"#);
     let d = &p.document;
-    let div = d.first_child(d.root()).unwrap();
+    let div = d.first_child(body(d)).unwrap();
     assert_eq!(
         kids(d, div),
         ["br", "br", "br", "img", "img", "input", "input"]
@@ -151,7 +159,7 @@ fn void_tags_with_and_without_slash() {
 fn comments_are_dropped_and_do_not_split_text() {
     let p = ok("<p>a<!-- hidden <b> -->b</p><!-- x -->");
     let d = &p.document;
-    let para = d.first_child(d.root()).unwrap();
+    let para = d.first_child(body(d)).unwrap();
     assert_eq!(kids(d, para), ["#ab"]);
 }
 
@@ -174,14 +182,14 @@ fn entities_in_attribute_values() {
 fn whitespace_collapses() {
     let p = ok("<p>  a \n\t b  </p>");
     let d = &p.document;
-    assert_eq!(kids(d, d.first_child(d.root()).unwrap()), ["# a b "]);
+    assert_eq!(kids(d, d.first_child(body(d)).unwrap()), ["# a b "]);
 }
 
 #[test]
 fn blank_text_between_blocks_is_dropped_but_kept_between_inline() {
     let p = ok("<div>\n  <p>a</p>\n  <p>b</p>\n</div><div><span>a</span> <span>b</span> </div>");
     let d = &p.document;
-    let mut roots = d.children(d.root());
+    let mut roots = d.children(body(d));
     let first = roots.next().unwrap();
     let second = roots.next().unwrap();
     assert_eq!(kids(d, first), ["p", "p"]);
@@ -193,7 +201,7 @@ fn blank_text_next_to_br_and_buttons_is_dropped() {
     let p = ok("<div>a <br> <button>x</button> </div>");
     let d = &p.document;
     assert_eq!(
-        kids(d, d.first_child(d.root()).unwrap()),
+        kids(d, d.first_child(body(d)).unwrap()),
         ["#a ", "br", "button"]
     );
 }
@@ -240,7 +248,7 @@ fn quoting_styles_and_boolean_forms() {
 fn unquoted_value_before_self_close() {
     let p = ok("<img src=logo/>");
     let d = &p.document;
-    let img = d.first_child(d.root()).unwrap();
+    let img = d.first_child(body(d)).unwrap();
     assert_eq!(d.get(img).unwrap().attr(d.interner(), "src"), Some("logo"));
 }
 
@@ -589,7 +597,7 @@ fn structure_rules() {
     err_at("<select><option><b>x</b></option></select>", 1, 18);
     err_at("<html>hello</html>", 1, 7);
     err_at("<select>hi</select>", 1, 9);
-    err_at("<head></head>", 1, 1);
+    err_at("<head></head><head></head>", 1, 14);
     err_at("<html><head></head><head></head></html>", 1, 20);
 }
 
@@ -834,4 +842,52 @@ fn fragment_nesting_counts_the_parents_depth() {
     }
     let e = parse_fragment(doc, inner, "frag", &deep(100)).unwrap_err();
     assert!(e.message.contains("nest more than 256 deep"), "{e}");
+}
+
+#[test]
+fn a_page_without_html_head_body_gets_them() {
+    let p = ok(
+        "<link rel=\"stylesheet\" href=\"a.css\">\n<style>p {}</style>\n<div id=\"a\">x</div>\ntail",
+    );
+    let d = &p.document;
+    let html = d.first_child(d.root()).unwrap();
+    assert_eq!(d.next_sibling(html), None);
+    assert_eq!(kids(d, html), ["head", "body"]);
+    let head = d.first_child(html).unwrap();
+    assert_eq!(kids(d, head), ["link", "style"]);
+    assert_eq!(kids(d, body(d)), ["div", "# tail"]);
+    assert_eq!((p.links[0].line, p.links[0].column), (1, 1));
+    assert_eq!((p.styles[0].line, p.styles[0].column), (2, 8));
+    let a = by_id(d, "a");
+    assert_eq!(d.get(a).unwrap().line, 3);
+    // Only the head, only text, and an explicit body after a bare link.
+    assert_eq!(
+        kids(
+            &ok("<title>t</title>").document,
+            html_of("<title>t</title>")
+        ),
+        ["head"]
+    );
+    ok("hello");
+    ok("<link rel=\"stylesheet\" href=\"a.css\"><body><p></p></body>");
+}
+
+fn html_of(src: &str) -> ElementId {
+    let p = ok(src);
+    let d = &p.document;
+    d.first_child(d.root()).unwrap()
+}
+
+#[test]
+fn implicit_tags_do_not_hide_mistakes() {
+    err_at("<div>\n  <p>x</p>", 1, 1);
+    err_at("<div></div></div>", 1, 12);
+    err_at(
+        "<link rel=\"stylesheet\" href=\"a.css\">\n<div>\n  <b></b>",
+        3,
+        4,
+    );
+    err_at("<div></div><html></html>", 1, 12);
+    err_at("<div></div><head></head>", 1, 12);
+    err_at("<div></div><body></body>", 1, 12);
 }

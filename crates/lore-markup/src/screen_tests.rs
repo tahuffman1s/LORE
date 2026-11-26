@@ -300,6 +300,58 @@ fn inline_span_with_its_own_colour_shares_the_line() {
 }
 
 #[test]
+fn a_span_in_a_flex_row_is_an_item_of_the_row() {
+    // 4 letters of 20px text are 40 wide; padding and border add 12 each side.
+    let mut s = page(
+        "#row{display:flex;width:300px;font-size:20px;justify-content:space-between} span{padding:0 10px;border:2px solid #fff}",
+        "<div id=row><span id=a>left</span><span id=b>right</span></div>",
+    );
+    assert_rect(rect(&mut s, "a"), 0.0, 0.0, 64.0, 24.0);
+    assert_rect(rect(&mut s, "b"), 226.0, 0.0, 74.0, 24.0);
+}
+
+#[test]
+fn a_br_between_the_items_of_a_flex_row_takes_no_room() {
+    let mut s = page(
+        "#row{display:flex;gap:8px;font-size:20px}",
+        "<div id=row><span id=a>ab</span><br><span id=b>cd</span></div>",
+    );
+    assert_rect(rect(&mut s, "a"), 0.0, 0.0, 20.0, 20.0);
+    assert_rect(rect(&mut s, "b"), 28.0, 0.0, 20.0, 20.0);
+}
+
+#[test]
+fn a_span_becomes_an_item_when_a_class_makes_its_parent_a_flex_row() {
+    let mut s = page(
+        "#row{width:300px;font-size:20px} #row.on{display:flex;justify-content:flex-end}",
+        "<div id=row><span id=a>left</span></div>",
+    );
+    s.frame(&mut TestMeasure);
+    assert_eq!(
+        s.element_rect(id(&s, "a")),
+        None,
+        "text in a line has no box"
+    );
+    let row = id(&s, "row");
+    assert!(s.add_class(row, "on"));
+    assert_rect(rect(&mut s, "a"), 260.0, 0.0, 40.0, 20.0);
+}
+
+#[test]
+fn a_span_placed_by_position_is_a_box() {
+    let mut s = page(
+        "#p{width:300px;height:100px;font-size:20px} #n{position:absolute;right:8px;top:4px}",
+        "<div id=p>Health <span id=n>100</span></div>",
+    );
+    assert_rect(rect(&mut s, "n"), 262.0, 4.0, 30.0, 20.0);
+    // Taken off again, it is text in the line once more.
+    let n = id(&s, "n");
+    assert!(s.set_style(n, "position", "static").is_ok());
+    s.frame(&mut TestMeasure);
+    assert_eq!(s.element_rect(n), None);
+}
+
+#[test]
 fn draw_order_shadow_background_children_outline() {
     let mut s = page(
         "#a{width:100px;height:100px;background-color:#f00;box-shadow:4px 4px 8px #000;outline:2px solid #0f0;border:3px solid #00f} #c{width:10px;height:10px;background-color:#00f}",
@@ -609,6 +661,37 @@ fn controls_paint_their_state() {
 }
 
 #[test]
+fn an_accent_colour_on_body_reaches_every_slider_and_tick_box() {
+    let mut s = page(
+        "body{accent-color:#f00}",
+        "<input id=r type=range value=50><input id=c type=checkbox checked>",
+    );
+    let f = s.frame(&mut TestMeasure);
+    let red = rects(f)
+        .into_iter()
+        .filter(|r| r.1 == Fill::Color(RED))
+        .count();
+    assert_eq!(red, 2, "the slider's fill and the tick");
+    // With nothing said, both are the engine's gold.
+    let mut plain = page(
+        "",
+        "<input type=range value=50><input type=checkbox checked>",
+    );
+    let f = plain.frame(&mut TestMeasure);
+    let gold = [
+        1.0,
+        f32::from(0xd7_u8) / 255.0,
+        f32::from(0x5e_u8) / 255.0,
+        1.0,
+    ];
+    let found = rects(f)
+        .into_iter()
+        .filter(|r| matches!(r.1, Fill::Color(c) if (0..4).all(|i| near(c[i], gold[i]))))
+        .count();
+    assert_eq!(found, 2);
+}
+
+#[test]
 fn frame_is_cached_until_something_changes() {
     let mut s = page("#a{height:10px}", "<div id=a>x</div>");
     let first = s.frame(&mut TestMeasure).paints.len();
@@ -713,4 +796,75 @@ fn a_whole_menu_at_two_sizes() {
     assert!(near(settings.x, 880.0), "{settings:?}");
     let f = s.frame(&mut TestMeasure);
     assert_eq!(f.hits.len(), 7);
+}
+
+// ---- a page without html, head and body behaves as if it had them ----------
+
+const BARE_CSS: &str = "body { padding: 20px; } html { --w: 50px; padding: 4px; } \
+#a { width: var(--w); height: 10px; }";
+
+fn bare_and_full(bare: &str) -> (Screen, Screen) {
+    let mut a = Screen::parse("t.html", bare).unwrap();
+    a.add_stylesheet("t.css", BARE_CSS).unwrap();
+    let html = format!(
+        "<html><head><link rel=\"stylesheet\" href=\"t.css\"></head><body>{}</body></html>",
+        bare.replace("<link rel=\"stylesheet\" href=\"t.css\">", "")
+    );
+    let mut b = Screen::parse("t.html", &html).unwrap();
+    b.add_stylesheet("t.css", BARE_CSS).unwrap();
+    (a, b)
+}
+
+#[test]
+fn a_page_without_html_head_body_gets_body_html_and_root_rules() {
+    let (mut a, mut b) =
+        bare_and_full("<link rel=\"stylesheet\" href=\"t.css\">\n<div id=\"a\">hi</div>");
+    let (ra, rb) = (rect(&mut a, "a"), rect(&mut b, "a"));
+    assert_rect(rb, 24.0, 24.0, 50.0, 10.0);
+    assert_rect(ra, rb.x, rb.y, rb.w, rb.h);
+}
+
+#[test]
+fn implicit_structure_has_html_head_and_body_elements() {
+    let s = Screen::parse(
+        "t.html",
+        "<style>p { color: red; }</style>\n<p id=\"a\">x</p>text",
+    )
+    .unwrap();
+    let doc = s.document();
+    let root = doc.root();
+    let html = doc.first_child(root).unwrap();
+    assert_eq!(doc.get(html).unwrap().tag(), Some(crate::dom::Tag::Html));
+    let kids: Vec<_> = doc
+        .children(html)
+        .map(|c| doc.get(c).unwrap().tag().unwrap())
+        .collect();
+    assert_eq!(kids, [crate::dom::Tag::Head, crate::dom::Tag::Body]);
+}
+
+#[test]
+fn implicit_structure_keeps_error_positions_and_unclosed_checks() {
+    let e = Screen::parse(
+        "t.html",
+        "<link rel=\"stylesheet\" href=\"a.css\">\n<div>\n  <b></b>",
+    )
+    .err()
+    .unwrap();
+    assert_eq!((e.line, e.column), (3, 4), "{e}");
+    let e = Screen::parse("t.html", "<div>\n<p>x</p>").err().unwrap();
+    assert_eq!((e.line, e.column), (1, 1), "{e}");
+    assert!(e.message.contains("`<div>` is never closed"), "{e}");
+    let e = Screen::parse("t.html", "<div></div></div>").err().unwrap();
+    assert!(e.message.contains("never opened"), "{e}");
+}
+
+#[test]
+fn explicit_body_after_a_bare_link_still_works() {
+    assert!(
+        Screen::parse(
+            "t.html",
+            "<link rel=\"stylesheet\" href=\"a.css\"><body><div></div></body>"
+        )
+        .is_ok()
+    );
 }

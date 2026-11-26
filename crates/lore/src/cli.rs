@@ -295,6 +295,50 @@ pub fn load_level(folder: &Path) -> Result<Option<lore_assets::Scene>, String> {
 /// the renderer's limit, so `lore run` and `lore check` list the same.
 const MOST_MATERIAL_NAMES: usize = 12;
 
+/// What `lore check` found in the screens (`game.ui.load`) a script loaded:
+/// mistakes in their files (these fail the check), and warnings about
+/// controls a gamepad cannot reach and handler names nobody answers.
+#[must_use]
+pub fn check_ui(host: &lore_script::ScriptHost) -> lore_script::ScreensChecked {
+    host.check_screens()
+}
+
+/// What `lore check` says of screens that have no mistake in them, or
+/// nothing for a game that loads none.
+#[must_use]
+pub fn screens_line(found: &lore_script::ScreensChecked) -> Option<String> {
+    if found.screens == 0 || !found.mistakes.is_empty() {
+        return None;
+    }
+    let one = found.screens == 1;
+    let screens = if one {
+        "screen".to_owned()
+    } else {
+        format!("{} screens", found.screens)
+    };
+    let (its, it_was, it) = if one {
+        ("its", "It was", "it")
+    } else {
+        ("their", "They were", "them")
+    };
+    let said = if found.warnings.is_empty() {
+        format!(
+            "The game's {screens} {} fine: {its} HTML and CSS loaded with no mistakes, a \
+             gamepad reaches every control, and every name in an onclick, onchange, oninput \
+             or onfocus is answered by the script.",
+            if one { "is" } else { "are" },
+        )
+    } else {
+        format!(
+            "The game's {screens} loaded: {its} HTML and CSS have no mistakes, but read the \
+             warnings above.",
+        )
+    };
+    Some(format!(
+        "{said} {it_was} not drawn, so look at {it} with `lore run`."
+    ))
+}
+
 /// What `lore check` found out about a game's shaders.
 #[derive(Debug, Default, PartialEq)]
 pub struct ShadersChecked {
@@ -1280,6 +1324,188 @@ mod tests {
     fn names_with_spaces_are_quoted() {
         assert_eq!(quoted("my-game"), "my-game");
         assert_eq!(quoted("Zombie Night"), "\"Zombie Night\"");
+    }
+
+    /// What `check_ui` says of a game with `main.luau` and these files.
+    fn ui_of(test: &str, script: &str, files: &[(&str, &str)]) -> lore_script::ScreensChecked {
+        let folder =
+            std::env::temp_dir().join(format!("lore-cli-{}-ui-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("ui")).unwrap();
+        std::fs::write(folder.join(ENTRY_SCRIPT), script).unwrap();
+        for (name, text) in files {
+            std::fs::write(folder.join(name), text).unwrap();
+        }
+        let game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
+        let found = check_ui(game.host());
+        let _ = std::fs::remove_dir_all(&folder);
+        found
+    }
+
+    #[test]
+    fn the_terminal_example_loads_its_four_screens_with_nothing_to_warn_of() {
+        let folder =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/terminal");
+        let mut game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
+        assert_eq!(game.host().last_error(), None);
+        let found = check_ui(game.host());
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+        assert_eq!(found.screens, 4);
+        // A second of play: the HUD is filled in every tick.
+        let mut input = Input::new(ActionMap::standard());
+        for _ in 0..60 {
+            game.host_mut().tick(input.tick(), 1.0 / 60.0);
+        }
+        assert_eq!(game.host().last_error(), None);
+    }
+
+    #[test]
+    fn a_check_says_what_it_read_of_the_screens() {
+        let checked = |screens, warnings: &[&str], mistakes: &[&str]| lore_script::ScreensChecked {
+            screens,
+            mistakes: mistakes.iter().map(|&m| m.to_owned()).collect(),
+            warnings: warnings.iter().map(|&w| w.to_owned()).collect(),
+        };
+        assert_eq!(screens_line(&checked(0, &[], &[])), None);
+        assert_eq!(screens_line(&checked(2, &[], &["ui/a.html:1: no"])), None);
+        let one = screens_line(&checked(1, &[], &[])).unwrap();
+        assert!(
+            one.starts_with("The game's screen is fine: its HTML and CSS loaded"),
+            "{one}"
+        );
+        assert!(one.contains("a gamepad reaches every control"), "{one}");
+        assert!(
+            one.ends_with("It was not drawn, so look at it with `lore run`."),
+            "{one}"
+        );
+        let four = screens_line(&checked(4, &["ui/a.html:3: unreachable"], &[])).unwrap();
+        assert_eq!(
+            four,
+            "The game's 4 screens loaded: their HTML and CSS have no mistakes, but read the \
+             warnings above. They were not drawn, so look at them with `lore run`."
+        );
+    }
+
+    const MAIN_HTML: &str = "<link rel=\"stylesheet\" href=\"main.css\">\n\
+        <button onclick=\"start\" autofocus>Start</button>\n";
+    const MAIN_CSS: &str = "body { margin: 0; } button { width: 200px; height: 50px; }";
+    const LOAD: &str = "local main = game.ui.load(\"ui/main.html\")\n";
+
+    #[test]
+    fn a_screen_that_is_answered_and_reachable_is_fine() {
+        let script = format!("{LOAD}main:on(\"start\", function() main:hide() end)");
+        let found = ui_of(
+            "fine",
+            &script,
+            &[("ui/main.html", MAIN_HTML), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+        assert_eq!(found.screens, 1);
+    }
+
+    #[test]
+    fn a_global_function_or_an_element_on_answers_a_name() {
+        let by_global = format!("{LOAD}function start() end");
+        let found = ui_of(
+            "global",
+            &by_global,
+            &[("ui/main.html", MAIN_HTML), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.warnings, Vec::<String>::new());
+        let by_element = format!("{LOAD}main:find(\"button\"):on(\"click\", function() end)");
+        let found = ui_of(
+            "element",
+            &by_element,
+            &[("ui/main.html", MAIN_HTML), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_name_nobody_answers_is_a_warning_with_its_line() {
+        let found = ui_of(
+            "unanswered",
+            LOAD,
+            &[("ui/main.html", MAIN_HTML), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings.len(), 1, "{:?}", found.warnings);
+        assert!(
+            found.warnings[0].starts_with("ui/main.html:2:"),
+            "{:?}",
+            found.warnings
+        );
+        assert!(
+            found.warnings[0].contains("\"start\""),
+            "{:?}",
+            found.warnings
+        );
+    }
+
+    #[test]
+    fn a_control_a_gamepad_cannot_reach_is_a_warning() {
+        let html = "<link rel=\"stylesheet\" href=\"main.css\">\n\
+            <button onclick=\"a\" autofocus>A</button>\n\
+            <button onclick=\"a\" tabindex=\"-1\">B</button>\n";
+        let found = ui_of(
+            "unreachable",
+            &format!("{LOAD}function a() end"),
+            &[("ui/main.html", html), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert!(
+            found
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("ui/main.html:3:") && w.contains("tabindex")),
+            "{:?}",
+            found.warnings
+        );
+    }
+
+    #[test]
+    fn a_mistake_in_html_css_or_a_missing_file_fails_with_its_line() {
+        let bad_html = "<link rel=\"stylesheet\" href=\"main.css\">\n<buton>x</buton>\n";
+        let found = ui_of(
+            "html",
+            LOAD,
+            &[("ui/main.html", bad_html), ("ui/main.css", MAIN_CSS)],
+        );
+        assert_eq!(found.mistakes.len(), 1, "{:?}", found.mistakes);
+        assert!(
+            found.mistakes[0].starts_with("ui/main.html:2:"),
+            "{:?}",
+            found.mistakes
+        );
+        assert!(found.mistakes[0].contains("help:"), "{:?}", found.mistakes);
+        let found = ui_of(
+            "css",
+            LOAD,
+            &[
+                ("ui/main.html", MAIN_HTML),
+                ("ui/main.css", "button { colr: red; }"),
+            ],
+        );
+        assert!(
+            found.mistakes[0].starts_with("ui/main.css:1:"),
+            "{:?}",
+            found.mistakes
+        );
+        let found = ui_of("missing", LOAD, &[]);
+        assert_eq!(found.mistakes.len(), 1, "{:?}", found.mistakes);
+        assert!(
+            found.mistakes[0].contains("ui/main.html"),
+            "{:?}",
+            found.mistakes
+        );
+    }
+
+    #[test]
+    fn a_game_without_screens_has_nothing_to_check() {
+        let found = ui_of("none", "print(\"hi\")", &[]);
+        assert_eq!(found, lore_script::ScreensChecked::default());
     }
 
     /// A game folder with `main.luau` and these `shaders` files.

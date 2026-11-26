@@ -15,11 +15,20 @@ use lore::{Game, ScriptGame, scaffold};
 const TICK_RATE: u32 = 60;
 const STEP: f32 = 1.0 / 60.0;
 
+/// Makes a new game in `folder` that starts without its title screen over
+/// it, which would hold the world still: these tests are about the world.
+fn new_game_in(folder: &std::path::Path) {
+    scaffold::new_game(folder).unwrap();
+    let script = folder.join("main.luau");
+    let text = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(&script, text.replace("    title:show()\n", "")).unwrap();
+}
+
 /// A new game in a folder of its own.
 fn new_game(test: &str) -> ScriptGame {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("world-{test}"));
     let _ = std::fs::remove_dir_all(&folder);
-    scaffold::new_game(&folder).unwrap();
+    new_game_in(&folder);
     ScriptGame::open(&folder, &ActionMap::standard()).unwrap()
 }
 
@@ -176,7 +185,7 @@ fn map_with_spawn(position: [f32; 3]) -> String {
 fn the_player_starts_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("world-map");
     let _ = std::fs::remove_dir_all(&folder);
-    scaffold::new_game(&folder).unwrap();
+    new_game_in(&folder);
     let map_file = folder.join(lore::map::MAP_FILE);
     let first = [10.0, 0.0, -6.0];
     std::fs::write(&map_file, map_with_spawn(first)).unwrap();
@@ -233,7 +242,7 @@ fn the_player_starts_at_the_maps_spawn_point_and_a_saved_map_is_picked_up() {
 fn a_player_faces_the_way_the_maps_spawn_point_does() {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("world-facing");
     let _ = std::fs::remove_dir_all(&folder);
-    scaffold::new_game(&folder).unwrap();
+    new_game_in(&folder);
     let at = [3.0, 0.0, -2.0];
     let map = format!("{}facing = 90.0\n", map_with_spawn(at));
     std::fs::write(folder.join(lore::map::MAP_FILE), map).unwrap();

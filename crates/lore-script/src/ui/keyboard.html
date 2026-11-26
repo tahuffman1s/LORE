@@ -1,0 +1,69 @@
+<!-- The engine's own on-screen keyboard: shown over a screen when a text box
+     is pressed with a gamepad. Its keys type into that text box. -->
+<link rel="stylesheet" href="keyboard.css">
+<div id="shade">
+  <div id="board">
+    <div id="typed-row"><div id="kb-typed"></div></div>
+    <div class="row">
+      <button class="key" onclick="key">1</button>
+      <button class="key" onclick="key">2</button>
+      <button class="key" onclick="key">3</button>
+      <button class="key" onclick="key">4</button>
+      <button class="key" onclick="key">5</button>
+      <button class="key" onclick="key">6</button>
+      <button class="key" onclick="key">7</button>
+      <button class="key" onclick="key">8</button>
+      <button class="key" onclick="key">9</button>
+      <button class="key" onclick="key">0</button>
+    </div>
+    <div class="row">
+      <button class="key" onclick="key">q</button>
+      <button class="key" onclick="key">w</button>
+      <button class="key" onclick="key">e</button>
+      <button class="key" onclick="key">r</button>
+      <button class="key" onclick="key">t</button>
+      <button class="key" onclick="key">y</button>
+      <button class="key" onclick="key">u</button>
+      <button class="key" onclick="key">i</button>
+      <button class="key" onclick="key">o</button>
+      <button class="key" onclick="key">p</button>
+    </div>
+    <div class="row">
+      <button class="key" onclick="key">a</button>
+      <button class="key" onclick="key">s</button>
+      <button class="key" onclick="key">d</button>
+      <button class="key" onclick="key" autofocus>f</button>
+      <button class="key" onclick="key">g</button>
+      <button class="key" onclick="key">h</button>
+      <button class="key" onclick="key">j</button>
+      <button class="key" onclick="key">k</button>
+      <button class="key" onclick="key">l</button>
+      <button class="key" onclick="key">'</button>
+    </div>
+    <div class="row">
+      <button class="key wide" onclick="shift">Shift</button>
+      <button class="key" onclick="key">z</button>
+      <button class="key" onclick="key">x</button>
+      <button class="key" onclick="key">c</button>
+      <button class="key" onclick="key">v</button>
+      <button class="key" onclick="key">b</button>
+      <button class="key" onclick="key">n</button>
+      <button class="key" onclick="key">m</button>
+      <button class="key" onclick="key">,</button>
+      <button class="key" onclick="key">.</button>
+      <button class="key" onclick="key">-</button>
+    </div>
+    <div class="row">
+      <button class="key action" onclick="erase">Erase</button>
+      <button class="key space" onclick="space">Space</button>
+      <button class="key action done" onclick="done">Done</button>
+    </div>
+    <div id="hints">
+      <kbd action="menu_move"></kbd><span> move </span>
+      <kbd action="menu_confirm"></kbd><span> type </span>
+      <kbd action="menu_erase"></kbd><span> erase </span>
+      <kbd action="menu_space"></kbd><span> space </span>
+      <kbd action="menu_back"></kbd><span> done </span>
+    </div>
+  </div>
+</div>

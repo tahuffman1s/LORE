@@ -133,6 +133,22 @@ pub trait TextMeasure {
         let _ = font;
         self.width(text, size) + letter_spacing * text.chars().count() as f32
     }
+
+    /// The room a line of text `size` high in `font` takes above and below
+    /// its baseline, as `(ascent, descent)`, both positive. The default is
+    /// 0.8 and 0.2 of `size`; the renderer answers from the real face.
+    fn metrics(&self, size: f32, font: FontFace) -> (f32, f32) {
+        let _ = font;
+        (size * 0.8, size * 0.2)
+    }
+
+    /// How far below the top of a `Draw::Text` line `size` high in `font`
+    /// its letters stand: where the baseline is. The default is the
+    /// ascent from [`metrics`](Self::metrics); the renderer centres letters
+    /// in the line, so it answers from there.
+    fn baseline(&self, size: f32, font: FontFace) -> f32 {
+        self.metrics(size, font).0
+    }
 }
 
 /// Guesses text width as a little over half the height for every character.

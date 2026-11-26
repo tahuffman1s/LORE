@@ -3517,6 +3517,63 @@ mod tests {
         assert_eq!(validation_errors(), 0);
     }
 
+    #[test]
+    fn a_box_with_one_border_draws_nothing_along_its_other_sides() {
+        use lore_ui::{Color, Draw, DrawBuffer, Fill, Transform};
+        const SIZE: [usize; 2] = [192, 108];
+        let Some(mut headless) = headless(192, 108) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_hour(Some(0.0));
+        let nothing = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        // A black sheet behind, so that no star shows through.
+        let mut buffer = DrawBuffer::default();
+        buffer.push(Draw::Box {
+            position: [0.0, 20.0],
+            size: [192.0, 60.0],
+            radii: [0.0; 4],
+            fill: Fill::Color(Color { a: 1.0, ..nothing }),
+            border_widths: [0.0; 4],
+            border_color: nothing,
+            transform: Transform::IDENTITY,
+            clip: None,
+        });
+        // Half a pixel down, so that its top and bottom edges each cross
+        // the middle of a row of pixels.
+        buffer.push(Draw::Box {
+            position: [10.0, 40.5],
+            size: [120.0, 20.0],
+            radii: [0.0; 4],
+            fill: Fill::Color(nothing),
+            border_widths: [0.0, 0.0, 4.0, 0.0],
+            border_color: Color::WHITE,
+            transform: Transform::IDENTITY,
+            clip: None,
+        });
+        headless.set_ui(buffer.draw());
+        let picture = headless.screenshot(&Camera::default()).unwrap();
+        let [red, green, blue] = pixel(&picture, SIZE[0], 70, 58);
+        assert!(
+            red > 200 && green > 200 && blue > 200,
+            "the bottom border: {red} {green} {blue}"
+        );
+        for (x, y, side) in [(70, 40, "top"), (10, 50, "left"), (129, 50, "right")] {
+            let found = sum(pixel(&picture, SIZE[0], x, y));
+            assert!(
+                found < 12,
+                "a line along the {side}, which has no border: {found}"
+            );
+        }
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
     /// The camera that looks straight at the usual sun.
     fn at_the_sun() -> Camera {
         let towards = [0.399_44_f32, 0.768_92, 0.499_3];

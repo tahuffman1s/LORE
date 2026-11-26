@@ -2023,6 +2023,235 @@ declare extern type Shader with
     function remove(self): ()
 end
 
+--- The CSS properties of one element, as `element.style` gives them. Write
+--- a property by its CSS name or in camelCase: `el.style.color = "gold"`,
+--- `el.style["border-radius"] = "12px"` and `el.style.borderRadius = "12px"`
+--- are the same. Reading gives what was set from the script or in the
+--- element's `style` attribute, or nil; setting nil takes it off again.
+--- Example: el.style.opacity = 0.5
+export type ElementStyle = { [string]: (string | number)? }
+
+--- The inputs of a screen by their `name` in the HTML, as `screen.values`
+--- gives them: a number for a slider, true or false for a tick box, text for a
+--- text box or a drop-down. Setting one does not run the screen's handlers.
+--- Example: main.values.volume = 80
+export type ScreenValues = { [string]: (number | boolean | string)? }
+
+--- One element of a screen's page: a button, a row, a piece of text. Find it
+--- with `screen:find`. An element is only good while it is on the page: after
+--- it was removed, or the screen's HTML was saved with other elements in it,
+--- find it again.
+--- Example: local play = main:find("#play")
+declare extern type Element with
+    --- The text inside the element. Setting it replaces what is inside.
+    --- Example: title.text = "Chapter 2"
+    text: string
+
+    --- What an input holds: a number for a slider, true or false for a tick
+    --- box, text for a text box or a drop-down (one of its options). Nil for
+    --- anything else.
+    --- Example: slider.value = 80
+    value: (number | boolean | string)?
+
+    --- Whether a tick box is ticked; nil for anything else.
+    --- Example: box.checked = true
+    checked: boolean?
+
+    --- Whether the element is taken off the screen.
+    --- Example: hint.hidden = true
+    hidden: boolean
+
+    --- Whether the element cannot be focused or clicked.
+    --- Example: buy.disabled = gold < price
+    disabled: boolean
+
+    --- All the element's classes, separated by spaces.
+    --- Example: row.class = "row selected"
+    class: string
+
+    --- The element's `id` in the HTML, or nil.
+    --- Example: print(el.id)
+    id: string?
+
+    --- The element's tag: "div", "button", "input".
+    --- Example: print(el.tag)
+    tag: string
+
+    --- The element it is inside. What you write at the top of a page is
+    --- inside `body`, and `body` is inside `html`, which has no parent: nil.
+    --- Example: local row = button.parent
+    parent: Element?
+
+    --- The element's CSS properties, one at a time.
+    --- Example: el.style.color = "gold"
+    style: ElementStyle
+
+    --- Gives the element a class.
+    --- Example: row:addClass("selected")
+    function addClass(self, name: string): ()
+
+    --- Takes a class off the element.
+    --- Example: row:removeClass("selected")
+    function removeClass(self, name: string): ()
+
+    --- Adds the class if the element lacks it, and takes it off if it has it.
+    --- Example: row:toggleClass("selected")
+    function toggleClass(self, name: string): ()
+
+    --- Whether the element has the class.
+    --- Example: if row:hasClass("selected") then buy() end
+    function hasClass(self, name: string): boolean
+
+    --- Sets a CSS variable (a name that starts with two dashes) for the
+    --- element and everything inside it. On `screen:find("body")` or any
+    --- outer element it changes a colour for the whole screen.
+    --- Example: panel:setVar("--gold", "#ffd75e")
+    function setVar(self, name: string, value: string): ()
+
+    --- Adds HTML at the end of the element. Escape text a player wrote with
+    --- `game.ui.escape`.
+    --- Example: list:append("<li>" .. game.ui.escape(name) .. "</li>")
+    function append(self, html: string): ()
+
+    --- Takes the element, and everything in it, off the page.
+    --- Example: row:remove()
+    function remove(self): ()
+
+    --- Moves focus to the element, if it can take focus.
+    --- Example: play:focus()
+    function focus(self): ()
+
+    --- The first element inside this one that a CSS selector picks, or nil.
+    --- Example: local label = row:find(".name")
+    function find(self, selector: string): Element?
+
+    --- Every element inside this one that a CSS selector picks, in the order
+    --- they are written.
+    --- Example: for _, button in list:findAll("button") do button.disabled = true end
+    function findAll(self, selector: string): { Element }
+
+    --- What an attribute of the element says, or nil.
+    --- Example: local id = row:attribute("data-id")
+    function attribute(self, name: string): string?
+
+    --- Sets an attribute, checked as the HTML is: a mistake says what to write.
+    --- Example: row:setAttribute("data-id", "7")
+    function setAttribute(self, name: string, value: string | number | boolean): ()
+
+    --- Answers what happens to this element: "click", "change", "input" or
+    --- "focus". It works whether or not the HTML names a function for it,
+    --- and only this element is answered: another element that names the
+    --- same function in its HTML is not.
+    --- Example: play:on("click", function(event) startGame() end)
+    function on(self, kind: string, handler: (event: UiEvent) -> ()): ()
+
+    --- Empties the element and fills it with the HTML your function gives for
+    --- each row. The function is handed the row and its number.
+    --- Example: list:fill(items, function(item, i) return "<button>" .. game.ui.escape(item.name) .. "</button>" end)
+    function fill(self, rows: { any }, html: (row: any, index: number) -> string): ()
+end
+
+--- What a handler is handed when something happens on a screen: the name
+--- from the HTML, what happened, the element, its value and the screen.
+--- `kind` is "click", "change", "input" or "focus" for a control, and "back",
+--- "nextTab" or "previousTab" for B and the bumpers.
+--- Example: main:on("setVolume", function(event) print(event.name, event.kind, event.value) end)
+export type UiEvent = {
+    --- The name written in the HTML, such as "startGame". For B and the
+    --- bumpers: "back", "nextTab" and "previousTab".
+    name: string,
+
+    --- What happened: "click", "change", "input", "focus", "back",
+    --- "nextTab" or "previousTab".
+    kind: string,
+
+    --- The element the handler is written on, or nil for B and the bumpers.
+    element: Element?,
+
+    --- What a control holds: a number for a slider, true or false for a tick
+    --- box, text for a text box or a drop-down; nil for a click.
+    value: (number | boolean | string)?,
+
+    --- The screen it happened on.
+    screen: Screen,
+}
+
+--- A screen written in HTML and CSS: what `game.ui.load` gives. It is
+--- loaded once, so keep it in a local at the top of the file; it keeps what
+--- it shows when the script is saved, and the HTML and CSS files it is made
+--- of load again when they are saved. A screen that is not showing is not
+--- drawn.
+--- Example: local main = game.ui.load("ui/main.html")
+declare extern type Screen with
+    --- Shows the screen on top of the others.
+    --- Example: main:show()
+    function show(self): ()
+
+    --- Stops showing the screen, wherever it is in the stack.
+    --- Example: main:hide()
+    function hide(self): ()
+
+    --- Shows the screen if it is hidden, and hides it if it is showing.
+    --- Example: main:toggle()
+    function toggle(self): ()
+
+    --- Takes the screen away: it is not drawn, and is gone until
+    --- `game.ui.load` asks for it again.
+    --- Example: main:remove()
+    function remove(self): ()
+
+    --- Whether the screen is showing. It can be set: `main.visible = true`
+    --- is `main:show()`.
+    --- Example: if main.visible then main:hide() end
+    visible: boolean
+
+    --- The file the screen was loaded from, such as "ui/main.html". It
+    --- cannot be changed.
+    --- Example: print(main.file)
+    file: string
+
+    --- Whether showing the screen pauses the game. It starts as the
+    --- `pauses` option of `game.ui.load` says, false if there was none.
+    --- Example: main.pauses = true
+    pauses: boolean
+
+    --- Answers what `onclick`, `onchange`, `oninput` or `onfocus` names in the
+    --- HTML. A name nobody answers falls back to a function of that name in
+    --- your script; if there is none, the log warns once with the HTML line.
+    --- "back" (B or Escape): with a handler it runs and nothing else
+    --- happens; without one, B takes this screen away when another screen
+    --- that takes input is under it. "nextTab" and "previousTab" (the
+    --- bumpers, Q and E) run only if answered.
+    --- Example: main:on("startGame", function(event) main:hide() end)
+    function on(self, name: string, handler: (event: UiEvent) -> ()): ()
+
+    --- The first element a CSS selector picks, or nil: "#play", ".row",
+    --- "button.big", ".panel > p".
+    --- Example: local play = main:find("#play")
+    function find(self, selector: string): Element?
+
+    --- Every element a CSS selector picks, in the order they are written.
+    --- Example: for _, row in main:findAll(".row") do row:addClass("old") end
+    function findAll(self, selector: string): { Element }
+
+    --- Makes the input called `inputName` show a `game.settings` value and
+    --- write every change the player makes back to it, saved as
+    --- `game.settings.set` saves. The setting is named like the input unless
+    --- you say another.
+    --- Example: main:bind("volume")
+    --- Example: main:bind("music", "music_volume")
+    function bind(self, inputName: string, settingName: string?): ()
+
+    --- The inputs by their `name` in the HTML: read and write them with
+    --- `main.values.volume`.
+    --- Example: print(main.values.volume)
+    values: ScreenValues
+
+    --- The element that has focus, or nil.
+    --- Example: if main.focused then print(main.focused.tag) end
+    focused: Element?
+end
+
 --- What `game.input.onControlsChanged` is handed when the player's controls
 --- file was read again, or could not be.
 --- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
@@ -4450,5 +4679,59 @@ declare game: {
         --- lists those.
         --- Example: game.fluids.onPoolFormed(function(pool) print("A new pool of " .. pool.fluid.name) end)
         onPoolFormed: (handler: (pool: Pool) -> ()) -> (),
+    },
+
+    --- Screens written in HTML and CSS: a main menu, an inventory, a
+    --- dialogue box. The files sit in the game's folder, usually under
+    --- `ui`; the page says what is on the screen, its stylesheet says how it
+    --- looks, and the script says what happens. See the page on screens.
+    ui: {
+        --- Reads the screen in an .html file of the game's folder, and the
+        --- stylesheets it links, and gives it, hidden. Asking again for the
+        --- same file gives the same screen. With `pauses` the game is
+        --- paused while the screen is showing. A file with a mistake still
+        --- gives a screen, which draws nothing until the file is fixed and
+        --- saved; the mistake, with its file and line, is on the error
+        --- panel.
+        --- Example: local main = game.ui.load("ui/main.html")
+        --- Example: local pause = game.ui.load("ui/pause.html", { pauses = true })
+        load: (path: string, options: { pauses: boolean? }?) -> Screen,
+
+        --- Whether a screen the player can move around in (it has a button
+        --- or another control) is showing.
+        --- Example: if game.ui.anyOpen() then return end
+        anyOpen: () -> boolean,
+
+        --- Whether movement in screens is left out: things that fade or
+        --- slide jump to where they end. For players who ask for it.
+        --- Example: game.ui.reduceMotion = true
+        reduceMotion: boolean,
+
+        --- Text with `&`, `<`, `>` and `"` written as HTML would, so a
+        --- player's name cannot break the page. Use it for anything that is not
+        --- yours when you build HTML with `append` or `fill`.
+        --- Example: list:append("<p>" .. game.ui.escape(playerName) .. "</p>")
+        escape: (text: string) -> string,
+
+        --- The sounds screens play, by the names `game.audio.play` knows. Set a
+        --- name to nil for none.
+        sounds: {
+            --- Played when focus moves or a slider moves. "menu-move" to start.
+            --- Example: game.ui.sounds.move = "tick"
+            move: string?,
+
+            --- Played when a control is pressed. "menu-choose" to start.
+            --- Example: game.ui.sounds.press = nil
+            press: string?,
+
+            --- How loud, from 0 to 1. 0.6 to start.
+            --- Example: game.ui.sounds.volume = 0.4
+            volume: number,
+        },
+
+        --- Whether a text box pressed with A on a gamepad opens the engine's
+        --- on-screen keyboard. True to start.
+        --- Example: game.ui.onScreenKeyboard = false
+        onScreenKeyboard: boolean,
     },
 }

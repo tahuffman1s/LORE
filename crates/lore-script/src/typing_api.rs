@@ -18,10 +18,15 @@ pub(crate) struct Typing {
 }
 
 impl Typing {
-    fn set(&self, on: bool) {
+    pub(crate) fn set(&self, on: bool) {
         if self.on.replace(on) != on {
             self.asked.set(true);
         }
+    }
+
+    /// Whether the script is taking text now.
+    pub(crate) fn is_on(&self) -> bool {
+        self.on.get()
     }
 
     /// Stops typing, as a reloaded script has no text box left.

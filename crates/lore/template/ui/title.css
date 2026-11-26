@@ -1,0 +1,66 @@
+/* Colours live here, in one place: change them and the whole screen follows. */
+body {
+  --gold: #ffd75e;
+  --ink: #f4efe2;
+  --soft: #aeb6cc;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100vw;
+  height: 100vh;
+  /* See-through, so the level shows faintly behind the title. */
+  background: linear-gradient(to bottom, rgba(27, 35, 56, 0.88), rgba(11, 15, 26, 0.96));
+  color: var(--ink);
+  font-size: 24px;
+}
+
+.panel {
+  width: 520px;
+  padding: 48px;
+  text-align: center;
+  background: linear-gradient(to bottom, rgba(40, 52, 84, 0.95), rgba(16, 22, 40, 0.95));
+  border: 2px solid var(--gold);
+  border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  animation: rise 0.8s ease-out both;
+}
+
+h1 {
+  margin: 0;
+  font-size: 64px;
+  color: var(--gold);
+  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+}
+
+.tagline {
+  margin: 8px 0 40px 0;
+  color: var(--soft);
+}
+
+button {
+  width: 100%;
+  padding: 16px 0;
+  font-size: 32px;
+  border-radius: 12px;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+/* The same look for the mouse and for the keyboard or gamepad. */
+button:hover,
+button:focus {
+  background-color: var(--gold);
+  color: #1a1a1a;
+  transform: scale(1.04);
+}
+
+.hint {
+  margin: 32px 0 0 0;
+  font-size: 20px;
+  color: var(--soft);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(32px); }
+  to   { opacity: 1; transform: translateY(0px); }
+}

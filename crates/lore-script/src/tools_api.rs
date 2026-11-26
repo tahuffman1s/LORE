@@ -711,6 +711,23 @@ impl Tools {
         self.steps.borrow_mut().advance(map, input, rate, speed);
     }
 
+    /// The step the menu action `name` takes on this tick: right and up are
+    /// positive. Nothing for an action there is not.
+    pub(crate) fn step_of(&self, map: &ActionMap, name: &str) -> [i8; 2] {
+        let Ok(id) = map.action(name) else {
+            return [0, 0];
+        };
+        let Some(place) = map.actions().position(|other| other == id) else {
+            return [0, 0];
+        };
+        self.steps
+            .borrow()
+            .now
+            .get(place)
+            .copied()
+            .unwrap_or([0, 0])
+    }
+
     /// Reads the player's controls as now in force, if the engine has said.
     pub fn with_controls<R>(&self, read: impl FnOnce(Option<&ActionMap>) -> R) -> R {
         read(self.controls.borrow().as_ref())
@@ -744,6 +761,11 @@ impl Tools {
     pub fn set_device(&self, device: Device, style: GamepadStyle) {
         self.device.set(device);
         self.style.set(style);
+    }
+
+    /// Reads with the engine's text measurer.
+    pub(crate) fn with_measure<R>(&self, read: impl FnOnce(&dyn TextMeasure) -> R) -> R {
+        read(&**self.measure.borrow())
     }
 
     pub fn set_measure(&self, measure: Box<dyn TextMeasure>) {

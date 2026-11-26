@@ -786,6 +786,13 @@ impl Frame {
         self
     }
 
+    /// The commands to draw over the game this frame, for pieces that add
+    /// their own beside [`draw_ui`](Frame::draw_ui): the screens of
+    /// `game.ui`.
+    pub(crate) fn ui_buffer(&mut self) -> &mut DrawBuffer {
+        &mut self.ui
+    }
+
     /// Everything the game asked to be drawn over it this frame.
     pub fn take_ui(&mut self) -> DrawBuffer {
         std::mem::take(&mut self.ui)

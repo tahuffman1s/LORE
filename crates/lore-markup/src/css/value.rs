@@ -925,7 +925,16 @@ impl<'a> Cur<'a> {
         match self.peek() {
             Some(t) => {
                 let found = t.describe();
-                let help = match did_you_mean(&found.to_ascii_lowercase(), names) {
+                let lower = found.to_ascii_lowercase();
+                let layout = self.prop == "display"
+                    && matches!(
+                        lower.as_str(),
+                        "grid" | "inline-block" | "inline-flex" | "inline-grid" | "table"
+                    );
+                let help = match did_you_mean(&lower, names) {
+                    _ if layout => format!(
+                        "use a `display: flex` row (or column) instead; allowed values: {list}"
+                    ),
                     Some(c) => format!("did you mean `{c}`? allowed values: {list}"),
                     None => format!("allowed values: {list}"),
                 };

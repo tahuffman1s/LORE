@@ -199,6 +199,15 @@ pub struct ScriptHost {
     /// The player's settings, as the engine handed them over and as the
     /// script has changed them since. Kept here so a save loses no change.
     settings: Rc<SettingsState>,
+    /// The screens of `game.ui`, which outlive a reload too.
+    ui: Rc<crate::ui::UiState>,
+    /// The mistake in a screen's files that is on `last_error` now.
+    ui_error: Option<ScriptError>,
+    /// The action set the game was in when a screen took the input, to go
+    /// back to when no screen takes it any more.
+    ui_set: Option<ActionSetId>,
+    /// Whether a text box on a screen turned typing on.
+    ui_typing: bool,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -459,6 +468,10 @@ impl ScriptHost {
         things.set_placed(placed);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
+            ui: Rc::new(crate::ui::UiState::new(Rc::clone(&files))),
+            ui_error: None,
+            ui_set: None,
+            ui_typing: false,
             files,
             file: ENTRY_SCRIPT.to_owned(),
             base: actions.clone(),
@@ -596,6 +609,7 @@ impl ScriptHost {
         }
         // Menus open while the game is paused and need to move.
         self.run_animations();
+        self.run_screens(input);
         self.hurts_due();
         self.switches_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
@@ -2131,6 +2145,10 @@ impl ScriptHost {
         self.next_poll = now + POLL_EVERY;
         // The shader files, which a save changes without loading the script.
         self.shaders.poll();
+        // The screens' HTML and CSS, which a save changes the same way.
+        if self.ui.poll() {
+            self.sync_ui_error();
+        }
         // A script required for the first time while the game runs.
         if let Some(version) = &self.running {
             let touched = version.shared.modules.take_touched();
@@ -2258,10 +2276,13 @@ impl ScriptHost {
                 self.paused = false;
                 self.last_error = None;
                 self.reported.clear();
+                self.ui.finish_run(true);
+                self.sync_ui_error();
                 Ok(())
             }
             Err(error) => {
                 self.shaders.restore(before);
+                self.ui.finish_run(false);
                 Err(self.failed_to_load(error))
             }
         }
@@ -2297,6 +2318,7 @@ impl ScriptHost {
     /// Starts a fresh VM and runs the game's `main.luau` in it. Also gives
     /// the files that were looked for, whether or not it worked.
     fn build(&mut self) -> (Touched, Result<Version, ScriptError>) {
+        self.ui.begin_run();
         self.images = match self.files.as_ref() {
             Files::Folder(folder) => Rc::new(crate::images::scan(folder)),
             Files::Memory(_) => Rc::clone(&self.given_images),
@@ -2343,6 +2365,8 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            ui: Rc::clone(&self.ui),
+            ui_handlers: RefCell::default(),
             controls_notice: Rc::clone(&self.controls_notice),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
@@ -2485,6 +2509,259 @@ impl ScriptHost {
                 return;
             }
         }
+    }
+
+    /// One tick of the screens of `game.ui`: the player's input goes to the
+    /// top screen that has a control, every showing screen moves on a tick
+    /// (also while the game is paused, so a menu moves), and the functions
+    /// that answer what the controls said are called.
+    fn run_screens(&mut self, input: &InputFrame) {
+        let stepped = {
+            let actions = self.actions.borrow();
+            let state = |name: &str| {
+                actions
+                    .action(name)
+                    .map(|id| input.get(id))
+                    .unwrap_or_default()
+            };
+            let (confirm, click) = (state("menu_confirm"), state("menu_click"));
+            let controls = crate::ui::Controls {
+                pointer: input.pointer,
+                screen: input.screen,
+                wheel: input.wheel,
+                gamepad: self.tools.gamepad_in_use(),
+                step: self.tools.step_of(&actions, "menu_move"),
+                confirm_down: confirm.just_pressed,
+                confirm_up: confirm.just_released,
+                click_down: click.just_pressed,
+                click_up: click.just_released,
+                back: state("menu_back").just_pressed,
+                previous_tab: state("menu_previous_tab").just_pressed,
+                next_tab: state("menu_next_tab").just_pressed,
+                space: state("menu_space").just_pressed,
+                erase: state("menu_erase").just_pressed,
+                typed: &input.typed,
+                typed_keys: &input.typed_keys,
+            };
+            let env = crate::ui::DrawEnv {
+                tools: &self.tools,
+                fonts: &self.fonts,
+                images: &self.images,
+            };
+            self.ui.step(&controls, &env, self.clock.rate(), &|name| {
+                self.tools.label(&actions, name)
+            })
+        };
+        self.ui.sync_binds(&crate::ui::SettingsSync {
+            settings: &self.settings,
+            clock: &self.clock,
+        });
+        for (name, volume) in &stepped.sounds {
+            self.audio.play_named(name, *volume);
+        }
+        self.screens_take_input(stepped.open);
+        self.screens_type(stepped.typing);
+        self.screens_pause();
+        self.run_screen_events(stepped.fired);
+    }
+
+    /// While a screen takes input the action set is `menu`, as
+    /// `game.input.useSet("menu")` does it; the set the game was in comes
+    /// back when none does. A script's own `game.menu` that is open at the
+    /// same time is not told apart: the set goes back when the last screen
+    /// closes.
+    fn screens_take_input(&mut self, open: bool) {
+        let Ok(menu) = self.actions.borrow().set("menu") else {
+            return;
+        };
+        let live = self.live_set.live.get();
+        let switch_to = if open {
+            (live != menu).then(|| {
+                self.ui_set = Some(live);
+                menu
+            })
+        } else {
+            self.ui_set.take().filter(|_| live == menu)
+        };
+        if let Some(set) = switch_to {
+            self.clock.note("menu");
+            self.live_set.live.set(set);
+            self.live_set.asked.set(true);
+        }
+    }
+
+    /// Typing is on while a text box has focus and the keyboard is the
+    /// player's device, and off again after.
+    fn screens_type(&mut self, typing: bool) {
+        let typing_now = self.tools.typing.is_on();
+        if typing {
+            if !typing_now {
+                self.tools.typing.set(true);
+            }
+            self.ui_typing = true;
+        } else if std::mem::take(&mut self.ui_typing) && typing_now {
+            self.tools.typing.set(false);
+        }
+    }
+
+    /// A showing screen that pauses the game pauses it, unless the script
+    /// did already, and gives it back only if the screens paused it.
+    fn screens_pause(&mut self) {
+        if self.ui.wants_pause() {
+            if !self.clock.is_paused() {
+                self.clock.set_paused(true);
+                self.ui.set_paused_by_ui(true);
+            }
+        } else if self.ui.set_paused_by_ui(false) && self.clock.is_paused() {
+            self.clock.set_paused(false);
+        }
+    }
+
+    /// Calls the functions that answer what the player did on the screens.
+    fn run_screen_events(&mut self, fired: Vec<crate::ui::Fired>) {
+        if fired.is_empty() || self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let (shared, vm) = (Rc::clone(&version.shared), version.vm.clone());
+        for item in fired {
+            let named = {
+                let handlers = shared.ui_handlers.borrow();
+                // What `element:on` gave this very element comes first.
+                let own = item
+                    .element
+                    .zip(item.kind.handler_index())
+                    .and_then(|((id, generation), kind)| {
+                        handlers
+                            .by_element
+                            .get(&(item.screen, id, generation, kind))
+                    })
+                    .cloned();
+                own.or_else(|| {
+                    handlers
+                        .by_screen
+                        .get(&item.screen)
+                        .and_then(|screen| screen.get(&item.name))
+                        .cloned()
+                })
+            };
+            // What the HTML names may also be a function the script wrote at
+            // the top level. The engine's own names are `screen:on`'s alone.
+            let function = named.or_else(|| {
+                if item.kind.is_special() {
+                    return None;
+                }
+                match vm.globals().get::<mlua::Value>(item.name.as_str()) {
+                    Ok(mlua::Value::Function(function)) => Some(function),
+                    _ => None,
+                }
+            });
+            let Some(function) = function else {
+                self.unanswered(&item);
+                continue;
+            };
+            let event = match crate::ui::element::event_table(&vm, &item) {
+                Ok(event) => event,
+                Err(error) => {
+                    log::error!("could not make the event for \"{}\": {error}", item.name);
+                    continue;
+                }
+            };
+            if !self.call(&shared, &function, event) {
+                break;
+            }
+        }
+    }
+
+    /// Reads every screen the script loaded for `lore check`: mistakes in
+    /// their files, controls a gamepad cannot reach, and handler names in
+    /// the HTML that neither `screen:on`, `element:on` nor a function in
+    /// the script answers.
+    pub fn check_screens(&self) -> crate::ScreensChecked {
+        let env = crate::ui::DrawEnv {
+            tools: &self.tools,
+            fonts: &self.fonts,
+            images: &self.images,
+        };
+        let running = self
+            .running
+            .as_ref()
+            .map(|version| (Rc::clone(&version.shared), version.vm.clone()));
+        self.ui
+            .check(&env, &|screen, name, (element, generation, kind)| {
+                let Some((shared, vm)) = &running else {
+                    return true;
+                };
+                let handlers = shared.ui_handlers.borrow();
+                handlers
+                    .by_element
+                    .contains_key(&(screen, element, generation, kind))
+                    || handlers
+                        .by_screen
+                        .get(&screen)
+                        .is_some_and(|names| names.contains_key(name))
+                    || matches!(
+                        vm.globals().get::<mlua::Value>(name),
+                        Ok(mlua::Value::Function(_))
+                    )
+            })
+    }
+
+    /// Nobody answers `item`: back takes the screen away if another is
+    /// under it, the bumpers do nothing, and any other name is said once.
+    fn unanswered(&self, item: &crate::ui::Fired) {
+        use crate::ui::FiredKind;
+        match item.kind {
+            FiredKind::Back => self.ui.default_back(item.screen),
+            FiredKind::NextTab | FiredKind::PreviousTab => {}
+            _ => {
+                if self.ui.first_unanswered(item.screen, &item.name) {
+                    let attribute = match item.kind {
+                        FiredKind::Click => "onclick",
+                        FiredKind::Change => "onchange",
+                        FiredKind::Input => "oninput",
+                        _ => "onfocus",
+                    };
+                    log::warn!(
+                        "{}:{}: {attribute}=\"{name}\" is written here, but nothing answers \
+                         \"{name}\". In your script write screen:on(\"{name}\", function(event) \
+                         ... end), or a function called {name}.",
+                        item.file,
+                        item.line,
+                        name = item.name,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Puts the mistake in a screen's files, if there is one, where script
+    /// errors are shown, and takes it away when it is fixed. A script's own
+    /// mistake is not covered by it.
+    fn sync_ui_error(&mut self) {
+        let now = self.ui.first_error();
+        let was = self.ui_error.take();
+        let ours = match (&self.last_error, &was) {
+            (None, _) => true,
+            (Some(shown), Some(ours)) => shown == ours,
+            (Some(_), None) => false,
+        };
+        if ours {
+            self.last_error.clone_from(&now);
+            self.ui_error = now;
+        }
+    }
+
+    /// Draws the screens of `game.ui` that are showing into `out`, bottom to
+    /// top, for a window `screen_px` pixels across and down, with the
+    /// player's `ui_scale`. Call it after the HUD is drawn.
+    pub fn draw_screens(&self, out: &mut lore_ui::DrawBuffer, screen_px: [f32; 2], ui_scale: f32) {
+        let env = crate::ui::DrawEnv {
+            tools: &self.tools,
+            fonts: &self.fonts,
+            images: &self.images,
+        };
+        self.ui.draw(&env, out, screen_px, ui_scale);
     }
 
     /// Calls one of the script's functions and reports it if it fails.

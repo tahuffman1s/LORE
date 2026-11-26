@@ -240,7 +240,7 @@ fn split_location(message: &str, known: impl Fn(&str) -> bool) -> (Option<(&str,
 }
 
 /// The text of line `line` (counting from 1), unless it is blank.
-fn nth_line(source: &str, line: u32) -> Option<String> {
+pub(crate) fn nth_line(source: &str, line: u32) -> Option<String> {
     let index = usize::try_from(line).ok()?.checked_sub(1)?;
     let text = source.lines().nth(index)?.trim();
     (!text.is_empty()).then(|| text.to_owned())

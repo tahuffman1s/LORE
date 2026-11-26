@@ -350,6 +350,9 @@ fn unknown_keyword_lists_the_allowed_ones() {
     let e = err("display", "grid");
     assert!(e.message.contains("unknown value `grid`"), "{e}");
     assert!(e.help.contains("flex, block, none"), "{e}");
+    assert!(e.help.contains("`display: flex` row (or column)"), "{e}");
+    let e = err("display", "inline-block");
+    assert!(e.help.contains("`display: flex` row (or column)"), "{e}");
     let e = err("text-align", "centre");
     assert!(e.help.contains("did you mean `center`?"), "{e}");
     let e = err("cursor", "");
@@ -1284,10 +1287,7 @@ fn unknown_property_help() {
     let e = err("colr", "red");
     assert!(e.help.contains("did you mean `color`?"), "{e}");
     let e = err("float", "left");
-    assert!(
-        e.help.contains("use one of:") && e.help.contains("margin"),
-        "{e}"
-    );
+    assert!(e.help.contains("`display: flex` row (or column)"), "{e}");
 }
 
 // ---- selectors ----

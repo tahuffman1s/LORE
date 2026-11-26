@@ -72,6 +72,7 @@ mod thing_api;
 mod time_api;
 mod tools_api;
 mod typing_api;
+mod ui;
 mod weapon_api;
 mod weather_api;
 
@@ -99,6 +100,7 @@ pub use tools_api::{
     Abilities, BindingChange, ControlsChange, FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport,
     ViewTold,
 };
+pub use ui::ScreensChecked;
 pub use weapon_api::{HeldWeapon, HoldSaid, NoiseTold, SoundName, WeaponHit, WeaponSounds};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
