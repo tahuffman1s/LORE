@@ -248,3 +248,46 @@ fn the_same_mouse_movement_turns_the_view_by_the_same_angle_at_any_frame_rate() 
         }
     }
 }
+
+/// A script that listens for a button on its fifth tick and writes down
+/// the tick the button came on, as the walking speed.
+const LISTENER: &str = r#"
+local ticks = 0
+game.onTick(function()
+    ticks += 1
+    if ticks == 5 then
+        game.input.listenForButton(function(button)
+            game.player:setWalkSpeed(ticks)
+        end)
+    end
+end)"#;
+
+#[test]
+fn a_listened_for_button_is_heard_on_the_same_tick_at_any_frame_rate() {
+    let mut recording = recording(120);
+    recording[20].push(Did::Press(key(Key::Q)));
+    recording[30].push(Did::Release(key(Key::Q)));
+    let heard_on = |frame_times: Box<dyn Iterator<Item = Duration>>| {
+        let actions = ActionMap::standard();
+        let script = ScriptGame::from_source(LISTENER, &actions);
+        let mut game = Playing::start(script, None, &actions, TICK_RATE);
+        let played = play(&mut game, &recording, frame_times, |game| {
+            game.world.game().host().moves().walk_speed.to_bits()
+        });
+        assert_eq!(played.ticks().1, 0);
+        played.states
+    };
+    let expected = heard_on(Box::new(steady(TICK_RATE)));
+    // It was heard, a tick after the key went down, and once.
+    let changed = (1..expected.len())
+        .filter(|&tick| expected[tick] != expected[tick - 1])
+        .collect::<Vec<_>>();
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert!((20..=22).contains(&changed[0]), "{changed:?}");
+    for (pace, frame_times) in paces() {
+        let found = heard_on(frame_times);
+        if let Some(difference) = first_difference(&expected, &found) {
+            panic!("At {pace}, {difference}");
+        }
+    }
+}
