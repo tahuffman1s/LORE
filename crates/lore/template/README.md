@@ -11,7 +11,7 @@ lore run
 ```
 
 Click the window to capture the mouse; Escape frees it.
-The window shows the game's level: a small walled garden: a tower to walk to, steps to climb and a house to look into. What the game does is printed in the terminal.
+The window shows the game's level: a small walled garden: a tower to walk to, steps to climb and a house to look into. The game says hello and counts your jumps on its own screen with `game.hud`, and prints the same to the terminal.
 
 ## The level
 
