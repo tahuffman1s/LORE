@@ -1159,7 +1159,11 @@ fn gait_pair(gaits: &[Gait], speed: f32) -> Option<(&Gait, &Gait, f32)> {
     for (k, pair) in gaits.windows(2).enumerate() {
         let (a, b) = (&pair[0], &pair[1]);
         if speed <= b.speed {
-            let from = if k == 0 { a.speed.max(WALK_ALONE) } else { a.speed };
+            let from = if k == 0 {
+                a.speed.max(WALK_ALONE)
+            } else {
+                a.speed
+            };
             let span = b.speed - from;
             let share = if span > 0.0 {
                 ((speed - from) / span).clamp(0.0, 1.0)

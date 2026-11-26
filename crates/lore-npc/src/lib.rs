@@ -21,17 +21,17 @@
 mod apart;
 mod gaze;
 mod mind;
-mod walk;
 mod senses;
+mod walk;
 
 pub use apart::{Upright, push_out};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
-pub use walk::{
-    Blocker, Face, Goal, Going, News, Passing, STROLL, Trouble, Walk, pass, turned_toward,
-};
 pub use senses::{
     CLEARLY, HEARD_FROM, Heard, KEEP_LOST, Keenness, LOOK_EVERY, LOST_BELOW, Looker, MOST_HEARD,
     MOST_SIGHTED, NIGHT, SEEN_FROM, Seeable, Sensed, Senses, Sight, Sighting, Sound, THROUGH_WALL,
     arriving, daylight, haze, lamp_lux, light_helps, lit, seen_openly, showing,
+};
+pub use walk::{
+    Blocker, Face, Goal, Going, News, Passing, STROLL, Trouble, Walk, pass, turned_toward,
 };

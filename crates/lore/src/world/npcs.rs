@@ -40,6 +40,13 @@ pub(crate) const WAYS_PER_TICK: usize = 8;
 /// seconds: a door takes 0.7.
 const DOOR_WAIT: f32 = 0.75;
 
+/// How long a sliding thing (a door, a lift) waits for an NPC caught in
+/// its way, in seconds: then the NPC steps aside onto free floor if there
+/// is some, and the thing no longer waits for it, as it does not for the
+/// player once they are clear: it goes on, and pushes them as it pushes
+/// the player.
+const CAUGHT_PATIENCE: f32 = 2.0;
+
 /// One NPC in a world. Not `Copy`: its mind will hold the way it is going.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Npc {
@@ -59,6 +66,9 @@ pub struct Npc {
     pub(crate) chasing: Option<CharacterId>,
     /// When its feet come down, for the noise of its steps.
     steps: Walking,
+    /// How many ticks running a sliding thing (a door, a lift) has had it
+    /// caught: see [`CAUGHT_PATIENCE`].
+    caught_for: u32,
     /// What it sees and has lately heard (see `super::sensing`).
     pub senses: Senses<CharacterId, crate::noise::Which>,
 }
@@ -145,6 +155,49 @@ fn shove(body: &mut Player, [x, z]: [f32; 2], rules: &MoveSettings, level: &Leve
     let to = [px + x, py + lift, pz + z];
     let clear = level.ball_cast(from, to, rules.radius * 0.9).unwrap_or(1.0);
     body.position = [px + x * clear, py, pz + z * clear];
+}
+
+/// Moves `body` across the ground by `[x, z]` metres if the spot it would
+/// land on is one it could stand on: a floor within a step of its feet,
+/// not inside the level's shapes, and not in anyone standing at `others`
+/// (feet, of bodies `rules.radius` round). Says whether it moved; a body
+/// that cannot be moved aside stays where it is.
+fn shove_safely(
+    body: &mut Player,
+    [x, z]: [f32; 2],
+    rules: &MoveSettings,
+    level: &Level,
+    others: &[[f32; 3]],
+) -> bool {
+    let lift = rules.step_height + rules.radius;
+    let [px, py, pz] = body.position;
+    let clear = (level.ball_cast(
+        [px, py + lift, pz],
+        [px + x, py + lift, pz + z],
+        rules.radius * 0.9,
+    ))
+    .unwrap_or(1.0);
+    let to = [px + x * clear, py, pz + z * clear];
+    let floor = level
+        .raycast(
+            [to[0], py + rules.step_height, to[2]],
+            [0.0, -1.0, 0.0],
+            rules.step_height * 2.0,
+        )
+        .is_some();
+    let inside = level.inside([to[0], py + lift, to[2]]);
+    let apart = 2.0 * rules.radius - 0.02;
+    let crowded = others.iter().any(|at| {
+        let near = |p: [f32; 3]| libm::hypotf(at[0] - p[0], at[2] - p[2]);
+        (at[1] - py).abs() < rules.standing_height
+            && near(to) < apart
+            && near(to) < near(body.position)
+    });
+    if !floor || inside || crowded {
+        return false;
+    }
+    body.position = to;
+    true
 }
 
 /// How many ticks of `dt` seconds are `span` seconds, at least one.
@@ -329,6 +382,7 @@ impl Npcs {
                 down: false,
                 chasing: None,
                 steps: Walking::default(),
+                caught_for: 0,
                 senses: Senses::new(Keenness::default(), Some(CharacterId::PLAYER)),
             },
         );
@@ -361,7 +415,10 @@ impl Npcs {
         self.places.clear();
         (self.places).extend(self.list.iter().map(|npc| npc.body.position));
         self.going.clear();
-        (self.going).extend(self.list.iter().map(|npc| npc.mind.walk.going(&npc.body)));
+        (self.going).extend(self.list.iter().map(|npc| lore_npc::Going {
+            down: npc.down,
+            ..npc.mind.walk.going(&npc.body)
+        }));
         // Whoever is walked to or followed is where they are now.
         for at in 0..self.list.len() {
             let Some(who) = self.list[at].chasing else {
@@ -438,6 +495,11 @@ impl Npcs {
             if npc.down {
                 continue;
             }
+            // Sent again where it just could not get: it stops at once.
+            if npc.mind.walk.refused_again(world.tick, dt) {
+                npc.chasing = None;
+                continue;
+            }
             let Some((from, to)) = npc.mind.walk.wants_way(&npc.body) else {
                 continue;
             };
@@ -454,6 +516,12 @@ impl Npcs {
                     self.may_open.set_gate(GateId(gate as u32), true);
                 }
             }
+            // A door that stayed shut when it opened it is one it may not.
+            let stayed = npc.mind.walk.stayed_shut();
+            let was = stayed.map(|gate| self.may_open.gate_open(gate));
+            if let Some(gate) = stayed {
+                self.may_open.set_gate(gate, false);
+            }
             let found = world.ground.walkable().way_into(
                 from,
                 to,
@@ -461,6 +529,9 @@ impl Npcs {
                 &mut self.scratch,
                 npc.mind.walk.way_mut(),
             );
+            if let (Some(gate), Some(was)) = (stayed, was) {
+                self.may_open.set_gate(gate, was);
+            }
             npc.mind.walk.found(found, world.tick, dt);
             answered += 1;
             self.turn = (at + 1) % count;
@@ -477,33 +548,65 @@ impl Npcs {
             radius: rules.radius,
             height: rules.standing_height,
         };
-        for one in 0..self.list.len() {
-            let (done, rest) = self.list.split_at_mut(one + 1);
-            let Some(me) = done.last_mut() else { continue };
-            if me.down {
+        // Everyone where they stand now, the player last: a body is not
+        // pushed into another, and each push is checked against where the
+        // others have been pushed to.
+        self.places.clear();
+        (self.places).extend(self.list.iter().map(|npc| {
+            if npc.down {
+                [f32::INFINITY; 3]
+            } else {
+                npc.body.position
+            }
+        }));
+        self.places.push(player.feet);
+        let count = self.list.len();
+        for one in 0..count {
+            if self.list[one].down {
                 continue;
             }
-            let walking = me.mind.walk.walking();
-            if walking && let Some(away) = lore_npc::push_out(me.upright(rules), player) {
-                shove(&mut me.body, away, rules, level);
+            let walking = self.list[one].mind.walk.walking();
+            if walking && let Some(away) = lore_npc::push_out(self.list[one].upright(rules), player)
+            {
+                // Not off a ledge nor into a wall: one that cannot step
+                // aside stays, and the player is the one stopped.
+                self.shove(one, away, rules, level);
             }
-            for other in rest.iter_mut().filter(|other| !other.down) {
+            for two in one + 1..count {
+                let (me, other) = (&self.list[one], &self.list[two]);
+                if other.down {
+                    continue;
+                }
                 let Some([x, z]) = lore_npc::push_out(me.upright(rules), other.upright(rules))
                 else {
                     continue;
                 };
                 match (walking, other.mind.walk.walking()) {
-                    (true, false) => shove(&mut me.body, [x, z], rules, level),
+                    (true, false) => {
+                        self.shove(one, [x, z], rules, level);
+                    }
                     (false, true) | (true, true) => {
-                        shove(&mut other.body, [-x, -z], rules, level);
+                        self.shove(two, [-x, -z], rules, level);
                     }
                     (false, false) => {
-                        shove(&mut me.body, [x * 0.5, z * 0.5], rules, level);
-                        shove(&mut other.body, [-x * 0.5, -z * 0.5], rules, level);
+                        self.shove(one, [x * 0.5, z * 0.5], rules, level);
+                        self.shove(two, [-x * 0.5, -z * 0.5], rules, level);
                     }
                 }
             }
         }
+    }
+
+    /// Moves the NPC at `at` in the list by `away` if it lands somewhere it
+    /// can stand, clear of everyone in `places`, which says where it went.
+    fn shove(&mut self, at: usize, away: [f32; 2], rules: &MoveSettings, level: &Level) -> bool {
+        let Some(npc) = self.list.get_mut(at) else {
+            return false;
+        };
+        let mine = std::mem::replace(&mut self.places[at], [f32::INFINITY; 3]);
+        let moved = shove_safely(&mut npc.body, away, rules, level, &self.places);
+        self.places[at] = if moved { npc.body.position } else { mine };
+        moved
     }
 
     /// Opens the doors NPCs stand before, through the same use as the
@@ -534,11 +637,11 @@ impl Npcs {
             let walk = &mut self.list[npc].mind.walk;
             if things.door(&id) == Some(true) {
                 // Another opened it this tick.
-                walk.hold(wait);
+                walk.hold(wait, gate);
             } else if host.door_may_open(&id) {
                 host.use_thing_by(&id, who);
                 things.open(&id, true);
-                walk.hold(wait);
+                walk.hold(wait, gate);
             } else {
                 walk.find_again();
             }
@@ -560,6 +663,7 @@ impl Npcs {
             let who = self.list[at].who;
             match news {
                 News::Arrived => host.npc_arrived(who),
+                News::Stopped => host.npc_stopped(who),
                 News::CannotReach { why, to } => {
                     let list = &self.list;
                     let cause = why.cause(
@@ -627,25 +731,69 @@ impl Npcs {
     /// Marks in `caught` (one for each of `things`) each sliding thing that
     /// has an NPC on its feet caught against something, unless the player
     /// was caught first: it waits for them.
+    ///
+    /// One caught for [`CAUGHT_PATIENCE`] steps aside onto free floor
+    /// beside it if there is some, and is no longer waited for.
     pub(crate) fn caught_by(
-        &self,
+        &mut self,
         things: &Things,
         level: &Level,
         rules: &MoveSettings,
-        caught: &mut [Option<CharacterId>],
+        (caught, dt): (&mut [Option<CharacterId>], f32),
     ) {
-        for npc in self.list.iter().filter(|npc| !npc.down) {
+        let patience = ticks(CAUGHT_PATIENCE, dt);
+        for at in 0..self.list.len() {
+            let npc = &self.list[at];
+            if npc.down {
+                continue;
+            }
+            let mut by: Option<([f32; 3], usize)> = None;
             npc.body
                 .touching(level, rules, 0.08, |body, toward, apart| {
-                    if toward[1] >= -0.7
-                        && apart < -super::things::CAUGHT
-                        && things.sliding(body)
-                        && let Some(slot) = caught.get_mut(body)
-                        && slot.is_none()
-                    {
-                        *slot = Some(npc.who);
+                    if toward[1] >= -0.7 && apart < -super::things::CAUGHT && things.sliding(body) {
+                        by = Some((toward, body));
                     }
                 });
+            let Some((toward, body)) = by else {
+                self.list[at].caught_for = 0;
+                continue;
+            };
+            let npc = &mut self.list[at];
+            npc.caught_for = npc.caught_for.saturating_add(1);
+            if npc.caught_for <= patience {
+                if let Some(slot) = caught.get_mut(body)
+                    && slot.is_none()
+                {
+                    *slot = Some(npc.who);
+                }
+                continue;
+            }
+            // Waited long enough: a step aside, either way across what
+            // has it caught, if there is floor there.
+            let across = [-toward[2], toward[0]];
+            let long = libm::hypotf(across[0], across[1]).max(1e-4);
+            let step = 2.0 * rules.radius + 0.1;
+            let side = [across[0] / long * step, across[1] / long * step];
+            self.places.clear();
+            (self.places).extend(self.list.iter().map(|npc| {
+                if npc.down {
+                    [f32::INFINITY; 3]
+                } else {
+                    npc.body.position
+                }
+            }));
+            if !self.shove(at, side, rules, level) {
+                self.shove(at, [-side[0], -side[1]], rules, level);
+            }
+        }
+    }
+
+    /// The level changed: every walk under way finds its way afresh, on
+    /// the new ground with its own doors.
+    pub(crate) fn level_changed(&mut self) {
+        self.doors.clear();
+        for npc in &mut self.list {
+            npc.mind.walk.level_changed();
         }
     }
 

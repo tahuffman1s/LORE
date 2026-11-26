@@ -1326,6 +1326,11 @@ impl NpcState {
     }
 
     fn walk(&self, walking: Walking) {
+        // The same walk as the one under way changes nothing: a script may
+        // say it every tick.
+        if self.walking(walking.id).as_ref() == Some(&walking) {
+            return;
+        }
         let ask = NpcAsk::Walk {
             id: walking.id,
             walk: walking.ask,
@@ -1440,6 +1445,31 @@ fn distance(
     }
 }
 
+/// An error for `function` (`goTo`, `follow`) asked of an NPC that is
+/// down: it cannot walk until it stands.
+fn standing_or_error(
+    lua: &Lua,
+    shared: &Shared,
+    id: CharacterId,
+    function: &str,
+) -> mlua::Result<()> {
+    if shared
+        .characters
+        .health(id)
+        .is_some_and(|(now, _)| now <= 0.0)
+    {
+        let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
+        return Err(fail(
+            lua,
+            format!(
+                "{name} is down (health 0), so it cannot {function}. Stand it up first: \
+                 guard:setHealth(100), then guard:{function}(...)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// `npc:goTo(where, options)`: the NPC walks to a place in the map by its
 /// name, a position, a thing, or someone, and returns at once.
 pub(crate) fn go_to(
@@ -1452,6 +1482,7 @@ pub(crate) fn go_to(
     let shared = shared_of(lua)?;
     only_npc(lua, &shared, id, "goTo")?;
     crate::time_api::rules_only(lua, &shared, "npc:goTo")?;
+    standing_or_error(lua, &shared, id, "goTo")?;
     let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
     let options = options_of(
         lua,
@@ -1583,6 +1614,7 @@ pub(crate) fn follow(lua: &Lua, id: CharacterId, who: &Value, options: &Value) -
     let shared = shared_of(lua)?;
     only_npc(lua, &shared, id, "follow")?;
     crate::time_api::rules_only(lua, &shared, "npc:follow")?;
+    standing_or_error(lua, &shared, id, "follow")?;
     let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
     let Some(leader) = crate::character_api::id_of_value(lua, who) else {
         let also = if matches!(who, Value::String(_) | Value::Vector(_)) {
@@ -1747,14 +1779,24 @@ pub(crate) fn walk_watched(shared: &Shared, arrive: bool) -> Vec<CharacterId> {
 
 /// The NPC `id` got where it was walking: it is forgotten, and what it
 /// was walking to is given, as the script's value, to hand to `onArrive`.
+///
+/// Never nil: when what it walked to is gone, or nothing walked (`lore
+/// check` pretending), it is where the NPC stands.
 pub(crate) fn arrived(lua: &Lua, shared: &Shared, id: CharacterId) -> mlua::Result<Value> {
+    let here = || {
+        let [x, y, z] = shared.characters.position(id).unwrap_or_default();
+        Value::Vector(mlua::Vector::new(x, y, z))
+    };
     let Some(walking) = shared.npcs.walking(id) else {
-        return Ok(Value::Nil);
+        return Ok(here());
     };
     if !walking.follow {
         shared.npcs.stand(id);
     }
-    destination_value(lua, shared, &walking.to)
+    Ok(match destination_value(lua, shared, &walking.to)? {
+        Value::Nil => here(),
+        value => value,
+    })
 }
 
 /// The sentence for the NPC `id`, which cannot get where it was walking
@@ -1779,7 +1821,6 @@ pub(crate) fn cannot_reach(shared: &Shared, id: CharacterId, cause: &str) -> Str
     };
     format!("{name} cannot reach {place}: {cause}")
 }
-
 
 /// The number `value` written for the sense `field` (a field of an NPC and
 /// an option of `game.npc`), kept within what it can be.

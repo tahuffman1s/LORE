@@ -403,6 +403,8 @@ impl World {
         // What a script made of how the player moves is not the level's.
         ground.rules = self.ground.rules;
         self.ground = ground;
+        // Ways found on the old ground, and its door numbers, mean nothing.
+        self.npcs.level_changed();
         // Solid things stand on the new shapes, back where the map has them.
         self.things = Self::things_of(&self.game, &self.ground);
         self.ground.walk_round(&self.things);
@@ -1107,7 +1109,7 @@ impl Game for World {
         // A door or a lift swinging into an NPC waits for them as it
         // waits for the player.
         if self.things.any_sliding() {
-            (self.npcs).caught_by(&self.things, level, &npc_rules, &mut self.caught);
+            (self.npcs).caught_by(&self.things, level, &npc_rules, (&mut self.caught, *tick));
         }
         let mut blocked: Vec<(String, CharacterId)> = Vec::new();
         for body in 0..self.things.len() {

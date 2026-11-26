@@ -917,12 +917,15 @@ declare extern type Npc extends Character with
     --- walls and corners, opens doors on the way as the player does (a door
     --- the script locked with `usable = false` it does not), crouches where
     --- there is no room to stand, and steps round people. It walks with the
-    --- player's own legs, so it goes only where the player could. `run =
-    --- true` runs; `within` is how close is there, in metres (0.5 for a
+    --- player's own legs, so it goes only where the player could. It
+    --- walks at 1.4 m/s; `run = true` runs at 4.5; `within` is how close is there, in metres (0.5 for a
     --- place, 1.5 for someone); `facing` turns it on arriving (degrees left,
     --- as the map writes them; at a marker of type "place" it faces the way
     --- the marker does). A new `goTo` or `follow` takes the place of the
-    --- last. `onArrive` hears it get there, `onCannotReach` why it cannot,
+    --- last; the same `goTo` again (every tick, say) changes nothing, and
+    --- one to a place it just could not reach stops at once for two
+    --- seconds and is not told twice. An NPC that is down (health 0) must
+    --- be stood up (`setHealth`) before it walks. `onArrive` hears it get there, `onCannotReach` why it cannot,
     --- both in the game's tick. A walk under way goes on when the script is
     --- saved and loads again.
     --- Example: guard:goTo("Gate")
@@ -932,7 +935,8 @@ declare extern type Npc extends Character with
 
     --- The NPC keeps near someone (`game.player`, or another NPC) until told
     --- otherwise: it walks after them when they are more than `distance`
-    --- metres off (3 unless said), runs when it falls well behind, and
+    --- metres off (3 unless said), at their pace (walking when they walk,
+    --- running when they run, hurrying only to close a gap), and
     --- stands facing them when near. It goes on following until `stop`,
     --- `goTo` or another `follow`; when it cannot reach them it says so
     --- once (`onCannotReach`) and tries again every two seconds.
@@ -945,12 +949,14 @@ declare extern type Npc extends Character with
     function stop(self): ()
 
     --- Calls `handler` each time the NPC gets where `goTo` sent it, with
-    --- the NPC and what `goTo` was given. `lore check` calls it once.
+    --- the NPC and what `goTo` was given (never nil: if that is gone, where
+    --- the NPC stands). `lore check` calls it once.
     --- Example: guard:onArrive(function(guard, where) print(guard.name .. " is at " .. tostring(where)) end)
     function onArrive(self, handler: (npc: Npc, where: string | vector | Thing | Character) -> ()): ()
 
     --- Calls `handler` when the NPC cannot get where it is walking, with a
-    --- sentence that says who, where to and why: a door is locked, nothing
+    --- sentence that says who, where to and why: a door is locked or the
+    --- script kept it shut after it was opened, nothing
     --- joins the two places, the place is off the ground, or something it
     --- cannot get round was in the way for a while (it tries again twice
     --- first). How far short it got is said too. A walk to a place ends

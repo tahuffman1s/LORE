@@ -506,9 +506,10 @@ fn a_hundred_walking_npcs_take_a_tick_in_a_known_time() {
     let empty = timed("");
     println!("100 NPCs, {walking} walking: {each:?} a tick; standing {standing:?}; none {empty:?}");
     assert!(walking > 50, "{walking}");
-    // Generous: a debug build on a slow machine. `lore bench` will hold
-    // the real number.
-    assert!(each < std::time::Duration::from_millis(40), "{each:?}");
+    // Some 1.2 ms in a debug build: 8 ms leaves room for a machine busy
+    // with other builds and still catches walking grown several times
+    // dearer. `lore bench` will hold the real number.
+    assert!(each < std::time::Duration::from_millis(8), "{each:?}");
 }
 
 #[test]
@@ -550,5 +551,218 @@ fn a_walk_ended_by_the_world_is_forgotten_by_the_script() {
             .npcs()
             .iter()
             .all(|npc| npc.mind.walk.goal().is_none())
+    );
+}
+
+#[test]
+fn going_every_tick_where_it_cannot_reach_is_told_once_and_searched_seldom() {
+    let mut world = world_of(
+        &walled(1.0),
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(0.5, 0, 3) }
+        guard:onCannotReach(function(_, why) print(why) end)
+        game.onTick(function() guard:goTo(vector.create(0, 50, 0)) end)
+        "#,
+        "",
+    );
+    run(&mut world, 60 * 5);
+    assert_eq!(world.game.host().last_error(), None);
+    let said = printed(&world);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("no floor a person can stand on"),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn going_every_tick_where_it_can_reach_simply_walks_there() {
+    let mut world = starter(
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(1.8, 0, 5.5) }
+        game.onTick(function() guard:goTo(vector.create(1.8, 0, -4)) end)
+        "#,
+        "",
+    );
+    run(&mut world, 60 * 12);
+    assert_eq!(world.game.host().last_error(), None);
+    let end = feet_of(&world, "Guard");
+    assert!(across(end, [1.8, 0.0, -4.0]) < 0.6, "{end:?}");
+}
+
+#[test]
+fn a_follower_held_up_in_a_doorway_says_so() {
+    let mut world = world_of(
+        &walled(1.0),
+        r#"
+        local friend = game.npc { name = "Friend", at = vector.create(0.5, 0, 3) }
+        game.npc { name = "Doorman", at = vector.create(0.5, 0, -2) }
+        friend:follow(game.player, { distance = 2 })
+        friend:onCannotReach(function(_, why) print(why) end)
+        "#,
+        "",
+    );
+    world.player.player.position = [0.5, 0.0, -8.0];
+    // The player wanders a little on the far side, so new ways keep coming.
+    for tick in 0..60 * 30 {
+        let x = if (tick / 60) % 2 == 0 { 1.0 } else { -1.0 };
+        world.player.player.position = [0.5 + x, 0.0, -8.0];
+        run(&mut world, 1);
+    }
+    let said = printed(&world);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with("Friend cannot reach the player: Doorman is in the way"),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn a_door_the_script_keeps_shut_is_given_up_on_for_that_reason() {
+    let mut world = world_of(
+        &walled(1.0),
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(0.5, 0, 3) }
+        local door = game.thing("Cellar door")
+        local used = 0
+        door:onUse(function() used += 1; print("used " .. used) end)
+        game.onTick(function() if door.isOpen then door:close() end end)
+        guard:goTo(vector.create(0.5, 0, -6))
+        guard:onCannotReach(function(_, why) print(why) end)
+        "#,
+        CELLAR_DOOR,
+    );
+    until_still(&mut world, 60 * 10);
+    assert_eq!(world.game.host().last_error(), None);
+    let said = printed(&world);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert_eq!(said[0], "used 1");
+    assert!(said[1].contains("stayed shut"), "{said:?}");
+}
+
+/// A floor 20 m on a side whose east edge, at x = 2, is a drop of 3 m to
+/// a floor below, with a wall along z = -3 from x = -10 to 2.
+fn ledge() -> Scene {
+    blocks(&[
+        ([-10.0, -0.2, -10.0], [2.0, 0.0, 10.0]),
+        ([2.0, -3.2, -10.0], [12.0, -3.0, 10.0]),
+        ([-10.0, 0.0, -3.4], [2.0, 3.0, -3.0]),
+    ])
+}
+
+#[test]
+fn the_player_cannot_push_a_walker_off_a_ledge_or_into_a_wall() {
+    let mut world = world_of(
+        &ledge(),
+        r#"
+        local a = game.npc { name = "A", at = vector.create(1.55, 0, 6) }
+        a:goTo(vector.create(1.55, 0, -2))
+        local b = game.npc { name = "B", at = vector.create(-4, 0, -2.5) }
+        b:goTo(vector.create(-8, 0, -2.5))
+        "#,
+        "",
+    );
+    let mut lowest: f32 = 0.0;
+    let mut deepest: f32 = f32::MAX;
+    for _ in 0..60 * 4 {
+        // The player leans on each from the inland or open side.
+        let a = feet_of(&world, "A");
+        let b = feet_of(&world, "B");
+        world.player.player.position = if world.tick % 2 == 0 {
+            [a[0] - 0.4, 0.0, a[2]]
+        } else {
+            [b[0], 0.0, b[2] + 0.4]
+        };
+        run(&mut world, 1);
+        lowest = lowest.min(feet_of(&world, "A")[1]);
+        deepest = deepest.min(feet_of(&world, "B")[2]);
+    }
+    assert!(lowest > -0.5, "A went over the edge: {lowest}");
+    // The wall's face is at z = -3; B's body is 0.35 round.
+    assert!(deepest > -3.0 + 0.3, "B went into the wall: {deepest}");
+}
+
+#[test]
+fn a_walk_under_way_when_the_level_changes_finds_its_way_on_the_new_one() {
+    let open = blocks(&[([-10.0, -0.2, -10.0], [10.0, 0.0, 10.0])]);
+    let mut world = world_of(
+        &open,
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(-3, 0, 3) }
+        guard:goTo(vector.create(-3, 0, -6))
+        guard:onArrive(function() print("arrived") end)
+        guard:onCannotReach(function(_, why) print(why) end)
+        "#,
+        "",
+    );
+    run(&mut world, 20);
+    world.change_level(&walled(1.0));
+    run(&mut world, 3);
+    // The new way goes through the doorway at x 0 to 1, not the wall.
+    let way = world.npcs()[0].mind.walk.way();
+    assert!(
+        way.points
+            .iter()
+            .any(|p| (p.point[2] + 2.0).abs() < 0.6 && (0.0..1.0).contains(&p.point[0])),
+        "{way:?}"
+    );
+    until_still(&mut world, 60 * 20);
+    assert_eq!(printed(&world), ["arrived"]);
+}
+
+#[test]
+fn three_npcs_through_one_doorway_all_get_there_without_standing_in_each_other() {
+    let mut world = world_of(
+        &walled(1.2),
+        r#"
+        for i = 1, 3 do
+            local npc = game.npc { name = "N" .. i, at = vector.create(-1.5 + i, 0, 3) }
+            npc:goTo(vector.create(-1.5 + i, 0, -6))
+            npc:onArrive(function() print(npc.name) end)
+            npc:onCannotReach(function(_, why) print(why) end)
+        end
+        "#,
+        "",
+    );
+    let mut closest = f32::MAX;
+    for _ in 0..60 * 30 {
+        run(&mut world, 1);
+        let at: Vec<_> = world.npcs().iter().map(|npc| npc.body.position).collect();
+        for i in 0..at.len() {
+            for j in i + 1..at.len() {
+                closest = closest.min(across(at[i], at[j]));
+            }
+        }
+        if world
+            .npcs()
+            .iter()
+            .all(|npc| npc.mind.walk.goal().is_none())
+        {
+            break;
+        }
+    }
+    let mut said = printed(&world);
+    said.sort();
+    assert_eq!(said, ["N1", "N2", "N3"]);
+    assert!(closest > 0.65, "{closest}");
+}
+
+#[test]
+fn an_npc_that_is_down_is_told_to_stand_first() {
+    let mut world = starter(
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(1.8, 0, 5.5) }
+        guard:setHealth(0)
+        local ok, why = pcall(function() guard:goTo("Gate") end)
+        print(why)
+        "#,
+        "",
+    );
+    run(&mut world, 1);
+    let said = printed(&world);
+    assert!(
+        said.iter()
+            .any(|line| line.contains("Guard is down") && line.contains("setHealth")),
+        "{said:?}"
     );
 }

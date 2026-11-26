@@ -38,18 +38,42 @@ const DOOR_REACH: f32 = 1.4;
 /// third of a second.
 const TURN_SPEED: f32 = 5.0;
 
+/// The controller's top speeds, walking and sprinting, in metres a second
+/// (`lore_physics::MoveSettings`' own): what a full push of the stick
+/// gives, without and with sprint.
+const TOP_WALK: f32 = 4.5;
+const TOP_SPRINT: f32 = 6.5;
+
+/// How fast an NPC walks, in metres a second: a person's everyday walk.
+pub const WALK_PACE: f32 = 1.4;
+
+/// How fast an NPC runs (`run = true`), in metres a second: a steady run,
+/// the player's own walking speed.
+pub const RUN_PACE: f32 = TOP_WALK;
+
 /// How hard a walk pushes the stick, as a share of the controller's top
-/// walking speed (4.5 m/s): an unhurried walk of some 0.85 m/s, the pace
-/// of the mannequin's own walk, at which its feet stay planted.
-pub const STROLL: f32 = 0.19;
+/// walking speed: [`WALK_PACE`].
+pub const STROLL: f32 = WALK_PACE / TOP_WALK;
 
 /// How far a follower lets its leader get beyond the distance it keeps
 /// before it walks after them again, in metres.
 const REJOIN: f32 = 1.0;
 
-/// A follower further behind than its distance and this many metres
-/// more runs to catch up.
-const CATCH_UP: f32 = 4.0;
+/// How much faster than its leader a follower goes for each metre it is
+/// behind (beyond its distance), in metres a second: a 2 m gap closes at
+/// some 1.2 m/s more than the leader goes, so it hurries only to close a
+/// gap, and never past a sprint.
+const CLOSE_GAP: f32 = 0.6;
+
+/// How quickly a follower's idea of its leader's speed catches up with
+/// what it sees, as a share each tick: about a quarter second.
+const LEADER_SMOOTHING: f32 = 0.07;
+
+/// How long a walk to a place just found unreachable is not looked for
+/// again, in seconds: asked again within this, it ends at once, and is
+/// not told again; asked after it, and still unreachable for the same
+/// reason, it is not told again either.
+const REFUSED_SECONDS: f32 = 2.0;
 
 /// A place that moves (someone being followed) that has gone this far from
 /// where the way was found to, in metres, or this share of the way left,
@@ -148,6 +172,9 @@ pub enum News {
         /// Where it was going, in metres.
         to: [f32; 3],
     },
+    /// It was sent again where it just could not get, for the same reason
+    /// as before, and stopped at once: that was told already.
+    Stopped,
 }
 
 /// Why a walker cannot get where it is going: kept as data, so whatever
@@ -169,6 +196,15 @@ pub enum Trouble {
     },
     /// Whoever it was walking to has left the world.
     Gone,
+    /// A door on its way stayed shut after it opened it and waited: the
+    /// game's script keeps it shut. It looked for a way round that door
+    /// and found none.
+    StayedShut {
+        /// The door.
+        door: GateId,
+        /// The nearest it can get, in metres.
+        nearest: [f32; 3],
+    },
 }
 
 /// Someone in a walker's way.
@@ -194,6 +230,9 @@ pub struct Going {
     /// Whether it is on its way somewhere: someone standing is walked
     /// round, and does not step aside.
     pub walking: bool,
+    /// Whether it lies where it fell: it is stepped over, neither walked
+    /// round nor named as in the way.
+    pub down: bool,
 }
 
 /// What a walk is doing now.
@@ -245,10 +284,27 @@ pub struct Walk {
     stuck_by: Option<Blocker>,
     /// Whether it gave way to someone on its last tick.
     giving_way: bool,
-    /// A follower that cannot reach its leader has said so.
+    /// A follower that cannot reach its leader has said so: it says so
+    /// again only after it has got somewhere since.
     told: bool,
     news: Option<News>,
     trouble: Option<Trouble>,
+    /// How far it had left to walk on its last tick: a new way for a walk
+    /// under way moves the progress record by how much longer it is.
+    last_left: f32,
+    /// A new way came for a walk under way: its next measure moves the
+    /// progress record.
+    rebase: bool,
+    /// Where whoever it follows was on its last tick, and how fast they
+    /// are going, smoothed, in metres a second.
+    leader_was: Option<[f32; 3]>,
+    leader_speed: f32,
+    /// The door it last waited for, and the one that stayed shut after
+    /// that wait: found a way round, as a door it may not open.
+    held_door: Option<GateId>,
+    stayed_shut: Option<GateId>,
+    /// The last walk that ended unreachable, why, and the tick it did.
+    refused: Option<(Goal, Trouble, u32)>,
 }
 
 /// The yaw that faces along `d` across the ground: turning left from -Z.
@@ -297,6 +353,29 @@ fn ticks(span: f32, seconds: f32) -> u32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let ticks = ticks.clamp(1.0, 1.0e6) as u32;
     ticks
+}
+
+/// Whether two walks go to the same place in the same way: a place that
+/// moves counts as the same within [`MOVED`].
+fn same_goal(a: &Goal, b: &Goal) -> bool {
+    let near = if a.moves { MOVED } else { 0.05 };
+    a.within == b.within
+        && a.face == b.face
+        && a.moves == b.moves
+        && a.follow == b.follow
+        && a.run == b.run
+        && across(a.to, b.to) <= near
+        && (a.to[1] - b.to[1]).abs() <= near
+}
+
+/// How fast to go, in metres a second, as a push of the stick (a share of
+/// the top walking speed, or of the top sprint when `sprint`).
+fn push_for(pace: f32) -> (f32, bool) {
+    if pace > TOP_WALK {
+        ((pace / TOP_SPRINT).min(1.0), true)
+    } else {
+        (pace / TOP_WALK, false)
+    }
 }
 
 /// What a walker does about the others near it: which way it goes in
@@ -352,7 +431,8 @@ pub fn pass(
         .map(|(other, at)| (Blocker::Npc(other), *at, around.going.get(other).copied()))
         .chain(std::iter::once((Blocker::Player, around.player, None)));
     for (who, at, going) in others {
-        if (at[1] - feet[1]).abs() > ARRIVE_HEIGHT {
+        // One lying where it fell is stepped over.
+        if going.is_some_and(|going| going.down) || (at[1] - feet[1]).abs() > ARRIVE_HEIGHT {
             continue;
         }
         let rel = [at[0] - feet[0], at[2] - feet[2]];
@@ -440,6 +520,7 @@ impl Walk {
             goal: Some(goal),
             stage: Stage::Asking,
             best: f32::INFINITY,
+            refused: self.refused.take(),
             ..Self::default()
         };
         self.way.points.clear();
@@ -450,9 +531,56 @@ impl Walk {
         let way = std::mem::take(&mut self.way);
         *self = Self {
             way,
+            refused: self.refused.take(),
             ..Self::default()
         };
         self.way.points.clear();
+    }
+
+    /// Whether it was sent, on tick `tick` of `seconds` each, where it
+    /// could not get a moment ago: then it stops at once, without looking
+    /// for a way, and says only that it stopped ([`News::Stopped`]).
+    /// Asked before each search for a way.
+    pub fn refused_again(&mut self, tick: u32, seconds: f32) -> bool {
+        let (Some(goal), Some((refused, _, at))) = (self.goal, &self.refused) else {
+            return false;
+        };
+        if self.stage != Stage::Asking
+            || goal.follow
+            || !same_goal(&goal, refused)
+            || tick.saturating_sub(*at) >= ticks(REFUSED_SECONDS, seconds)
+        {
+            return false;
+        }
+        self.stop();
+        self.news = Some(News::Stopped);
+        true
+    }
+
+    /// The door it waited for that stayed shut, which its way must go
+    /// round: a door it may not open.
+    #[must_use]
+    pub fn stayed_shut(&self) -> Option<GateId> {
+        self.stayed_shut
+    }
+
+    /// The level changed under it: the way, the door numbers on it and any
+    /// door it waited for mean nothing now. A walk under way finds its way
+    /// afresh.
+    pub fn level_changed(&mut self) {
+        self.door = None;
+        self.held_door = None;
+        self.stayed_shut = None;
+        self.hold_until = 0;
+        self.blocker = None;
+        self.stuck_by = None;
+        self.refused = None;
+        self.way.points.clear();
+        if self.goal.is_some() {
+            self.stage = Stage::Asking;
+            self.again = false;
+            self.best = f32::INFINITY;
+        }
     }
 
     /// Says where the one being walked to or followed is now.
@@ -506,43 +634,72 @@ impl Walk {
         self.again = false;
         match result {
             Ok(()) => {
+                // A new way for a walk under way keeps its record of
+                // progress, moved by how much longer the new way is: only
+                // walking nearer forgives a stall.
+                let under_way = self.stage == Stage::Walking && self.best.is_finite();
                 self.stage = Stage::Walking;
                 self.next = 1.min(self.way.points.len().saturating_sub(1));
                 self.planned_to = goal.to;
                 self.planned_at = tick;
-                self.best = f32::INFINITY;
-                self.best_at = tick;
-                self.told = false;
+                if under_way {
+                    self.rebase = true;
+                } else {
+                    self.best = f32::INFINITY;
+                    self.best_at = tick;
+                }
             }
             Err(no) if goal.follow => {
                 self.way.points.clear();
                 self.stage = Stage::Waiting(tick.saturating_add(ticks(RETRY_SECONDS, seconds)));
                 if !self.told {
                     self.told = true;
-                    self.give_up(Trouble::NoWay(no), false);
+                    self.give_up(Trouble::NoWay(no), false, tick);
                 }
             }
-            Err(no) => self.give_up(Trouble::NoWay(no), true),
+            Err(no) => {
+                let why = match (no, self.stayed_shut) {
+                    (NoWay::Shut { gates, nearest, .. }, Some(door)) if gates.contains(&door) => {
+                        Trouble::StayedShut { door, nearest }
+                    }
+                    (no, _) => Trouble::NoWay(no),
+                };
+                self.give_up(why, true, tick);
+            }
         }
     }
 
-    /// Stops for `trouble`, and says so: for good if `ends`, else (a
-    /// follower) to try again.
-    fn give_up(&mut self, trouble: Trouble, ends: bool) {
-        let to = self.goal.map_or([0.0; 3], |goal| goal.to);
+    /// Stops for `trouble` on tick `tick`, and says so: for good if
+    /// `ends`, else (a follower) to try again. A walk that ends for the
+    /// same reason as the last one to the same place says only that it
+    /// stopped: that was told already.
+    fn give_up(&mut self, trouble: Trouble, ends: bool, tick: u32) {
+        let Some(goal) = self.goal else { return };
+        let told = (self.refused.as_ref())
+            .is_some_and(|(before, why, _)| same_goal(&goal, before) && why.same_cause(&trouble));
         self.trouble = Some(trouble.clone());
-        self.news = Some(News::CannotReach { why: trouble, to });
         if ends {
             self.goal = None;
             self.stage = Stage::Idle;
             self.way.points.clear();
+            if !goal.follow && trouble != Trouble::Gone {
+                self.refused = Some((goal, trouble.clone(), tick));
+            }
         }
+        self.news = Some(if ends && told {
+            News::Stopped
+        } else {
+            News::CannotReach {
+                why: trouble,
+                to: goal.to,
+            }
+        });
     }
 
     /// Whoever it walked to has left the world: it stops, and says why.
     pub fn lost_goal(&mut self) {
         if self.goal.is_some() {
-            self.give_up(Trouble::Gone, true);
+            self.give_up(Trouble::Gone, true, 0);
         }
     }
 
@@ -553,9 +710,10 @@ impl Walk {
         self.door
     }
 
-    /// Stands still until tick `until`: a door is opening for it.
-    pub fn hold(&mut self, until: u32) {
+    /// Stands still until tick `until`: the door `door` is opening for it.
+    pub fn hold(&mut self, until: u32, door: GateId) {
         self.hold_until = until;
+        self.held_door = Some(door);
         self.door = None;
     }
 
@@ -604,6 +762,7 @@ impl Walk {
             velocity: [body.velocity[0], body.velocity[2]],
             doorway: self.doorway,
             walking: self.walking(),
+            down: false,
         }
     }
 
@@ -643,6 +802,17 @@ impl Walk {
         let face_goal = toward(feet, goal.to).map(yaw_along);
         let there =
             across(feet, goal.to) <= goal.within && (feet[1] - goal.to[1]).abs() <= ARRIVE_HEIGHT;
+        if goal.moves {
+            // How fast whoever it follows goes, as seen tick by tick.
+            let seen = self
+                .leader_was
+                .map_or(0.0, |was| across(was, goal.to) / seconds.max(1e-4));
+            if seen.is_finite() {
+                self.leader_speed +=
+                    (seen.min(TOP_SPRINT * 2.0) - self.leader_speed) * LEADER_SMOOTHING;
+            }
+            self.leader_was = Some(goal.to);
+        }
         match self.stage {
             Stage::Idle => return None,
             Stage::Asking => return standing(None),
@@ -677,12 +847,18 @@ impl Walk {
                 self.again = true;
             }
         }
-        // The corners already reached are passed.
+        // The corners already reached are passed. Cutting a corner is not
+        // progress: the record moves with the way left.
+        let skipped_from = self.next;
+        let before_skip = self.left(feet);
         while self.next < last
             && let Some(corner) = self.way.points.get(self.next)
             && across(feet, corner.point) < CORNER
         {
             self.next += 1;
+        }
+        if self.next != skipped_from && self.best.is_finite() && !self.rebase {
+            self.best += self.left(feet) - before_skip;
         }
         let Some(corner) = self.way.points.get(self.next).copied() else {
             self.again = true;
@@ -696,11 +872,20 @@ impl Walk {
         self.doorway = matches!(on, Leg::Gate(_));
         // No progress for a while: the way again, then give up.
         let left = self.left(feet);
+        if self.rebase {
+            // A new way under way: the record moves by how much more (or
+            // less) there is to walk on it from here.
+            self.rebase = false;
+            self.best += left - self.last_left;
+        }
+        self.last_left = left;
         if left < self.best - PROGRESS {
             // Real progress, not the first measure of a way just found,
-            // forgives the stalls before it.
+            // forgives the stalls before it, and lets a follower say again
+            // when it next cannot get through.
             if self.best.is_finite() {
                 self.tries = 0;
+                self.told = false;
             }
             self.best = left;
             self.best_at = tick;
@@ -715,10 +900,10 @@ impl Walk {
                     self.best = f32::INFINITY;
                     if !self.told {
                         self.told = true;
-                        self.give_up(Trouble::Stuck { at: feet, by }, false);
+                        self.give_up(Trouble::Stuck { at: feet, by }, false, tick);
                     }
                 } else {
-                    self.give_up(Trouble::Stuck { at: feet, by }, true);
+                    self.give_up(Trouble::Stuck { at: feet, by }, true, tick);
                 }
                 return standing(None);
             }
@@ -730,6 +915,15 @@ impl Walk {
         // Its wait counts toward getting nowhere, so a door that never
         // opens is given up on.
         if tick < self.hold_until {
+            return standing(wanted.map(yaw_along));
+        }
+        // The door it waited for is still shut: the game keeps it so. It
+        // is a door it may not open, and a way round it is found.
+        if let Some(held) = self.held_door.take()
+            && !around.openings.gate_open(held)
+        {
+            self.stayed_shut = Some(held);
+            self.again = true;
             return standing(wanted.map(yaw_along));
         }
         // A shut door on the way, or in it: it stops before it, out of its
@@ -750,17 +944,26 @@ impl Walk {
         self.blocker = passing.blocker;
         self.stuck_by = passing.blocker.or(self.stuck_by);
         self.giving_way = passing.giving_way;
-        // How hard it pushes: a walk or a run; a follower far behind runs.
-        let behind = across(feet, goal.to) - goal.within;
-        let run = goal.run || (goal.follow && behind > CATCH_UP);
-        // A follower more than a step behind walks briskly.
-        let brisk = goal.follow && behind > REJOIN;
-        let mut push = if run || brisk { 1.0 } else { STROLL };
-        if self.next >= last && !goal.follow && !run {
+        // How fast it goes: a walk or a run. A follower keeps its leader's
+        // pace, a little faster the further behind it is, and slows as it
+        // comes up to them; never slower than a slow walk while it walks.
+        let mut pace = if goal.run { RUN_PACE } else { WALK_PACE };
+        if goal.moves {
+            let behind = (across(feet, goal.to) - goal.within).max(0.0);
+            let keeping = self.leader_speed + CLOSE_GAP * behind;
+            let easing = WALK_PACE * (behind / REJOIN).clamp(0.5, 1.0);
+            pace = keeping.max(easing).max(if goal.run && behind > REJOIN {
+                RUN_PACE
+            } else {
+                0.0
+            });
+            pace = pace.min(TOP_SPRINT);
+        } else if self.next >= last {
             // Easing into the end, so it does not walk past it.
-            push *= (to_corner / 1.2).clamp(0.5, 1.0);
+            pace *= (to_corner / 1.2).clamp(0.5, 1.0);
         }
-        push *= passing.pace;
+        pace *= passing.pace;
+        let (mut push, sprint) = push_for(pace);
         // It turns as it goes, and goes the way it wants meanwhile, slower
         // while it faces well away from it.
         let wants = yaw_along(passing.way);
@@ -774,7 +977,7 @@ impl Walk {
             right: dot(passing.way, aside) * push,
             yaw: facing,
             crouch: matches!(on, Leg::Crouch),
-            sprint: run && !passing.giving_way,
+            sprint: sprint && !passing.giving_way,
             jump: matches!(on, Leg::Link(_, lore_nav::LinkKind::Jump)) && body.grounded,
             ..MoveInput::default()
         };
@@ -798,6 +1001,7 @@ impl Walk {
         self.again = false;
         if goal.follow {
             self.stage = Stage::Near;
+            self.told = false;
             return Some((MoveInput::default(), face_goal));
         }
         self.goal = None;
@@ -904,6 +1108,40 @@ impl Trouble {
             Self::Gone => "whoever it was going to has left the world. Give it somewhere else \
                            to go with goTo"
                 .to_owned(),
+            Self::StayedShut {
+                door: gate,
+                nearest,
+            } => {
+                let named = door(*gate).map_or_else(
+                    || "a door on the way".to_owned(),
+                    |name| format!("the door \"{name}\""),
+                );
+                format!(
+                    "{named} stayed shut after it opened it, and there is no other way: the \
+                     game's script keeps it shut (an onUse that shuts it again, or a close \
+                     every tick){}. Let the door open, or send it another way",
+                    short(*nearest)
+                )
+            }
+        }
+    }
+
+    /// Whether `other` is the same reason as this, if not in every
+    /// number: the same kind, the same doors, the same one in the way.
+    #[must_use]
+    pub fn same_cause(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::NoWay(NoWay::Shut { gates: a, .. }),
+                Self::NoWay(NoWay::Shut { gates: b, .. }),
+            ) => a == b,
+            (Self::NoWay(a), Self::NoWay(b)) => {
+                std::mem::discriminant(a) == std::mem::discriminant(b)
+            }
+            (Self::Stuck { by: a, .. }, Self::Stuck { by: b, .. }) => a == b,
+            (Self::StayedShut { door: a, .. }, Self::StayedShut { door: b, .. }) => a == b,
+            (Self::Gone, Self::Gone) => true,
+            _ => false,
         }
     }
 }
@@ -1135,6 +1373,7 @@ mod tests {
             velocity,
             doorway,
             walking: true,
+            down: false,
         };
         // 0 walks -Z, 1 walks +Z: 0 goes first and 1 steps aside.
         let going = [walker([0.0, -1.8], false), walker([0.0, 1.8], false)];
@@ -1169,6 +1408,7 @@ mod tests {
                 velocity: [0.0, -1.0],
                 doorway: false,
                 walking: true,
+                down: false,
             },
         ];
         let passing = pass(
