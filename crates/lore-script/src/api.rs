@@ -62,6 +62,9 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "npc",
     "npcs",
     "showUsePrompt",
+    "sides",
+    "side",
+    "onFeelingChange",
     "seed",
     "setSeed",
     "chance",
@@ -158,6 +161,8 @@ pub(crate) struct Handlers {
     /// `game.clock.onHour`: each with the hour of the day it listens for,
     /// or none for every hour.
     pub hour: Vec<(Option<u8>, Function)>,
+    /// `game.onFeelingChange`.
+    pub feeling: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -284,6 +289,8 @@ pub(crate) struct Shared {
     pub dice: Rc<crate::dice_api::Dice>,
     /// The player's body and camera. It outlives this version of the script.
     pub body: Rc<crate::body_api::BodyState>,
+    /// Who likes whom. It outlives this version of the script.
+    pub sides: Rc<crate::sides_api::SidesState>,
     /// The hurts the script has not yet heard of. They outlive this version.
     pub health: Rc<crate::health_api::HealthState>,
     /// The walkable ground of the level, and which doors are open. It
@@ -531,6 +538,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         })?,
     )?;
 
+    crate::sides_api::install(lua, shared, &game)?;
     game.set("sky", weather_api::sky(lua, shared)?)?;
     game.set(
         "difficulty",
@@ -1019,7 +1027,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 68] = [
+        let groups: [(&str, &[&str]); 70] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1052,6 +1060,8 @@ mod tests {
             ("Character:", CHARACTER_METHODS),
             ("Npc.", crate::npc_api::NPC_FIELDS),
             ("Npc:", crate::npc_api::NPC_METHODS),
+            ("Side.", crate::sides_api::SIDE_FIELDS),
+            ("Side:", crate::sides_api::SIDE_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),

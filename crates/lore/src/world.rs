@@ -31,6 +31,7 @@ mod spawn;
 mod trail;
 mod walk;
 mod wet;
+mod witness;
 
 pub(crate) use bodies::{Body, Dummy, Standing};
 pub use bodies::{DummyId, PlayerInput};
@@ -65,6 +66,8 @@ pub struct World {
     dummies: Vec<Dummy>,
     /// The NPCs, in the order of their ids.
     npcs: npcs::Npcs,
+    /// What the world's people make of what is done in front of them.
+    witnessing: witness::Witnessing,
     /// The number the next dummy or NPC is known by to a weapon. The player
     /// is 0.
     next_target: u32,
@@ -277,6 +280,7 @@ impl World {
             player: Body { player, asked },
             dummies: Vec::new(),
             npcs,
+            witnessing: witness::Witnessing::default(),
             next_target,
             standing: Vec::new(),
             tick: 0,
@@ -1044,6 +1048,15 @@ impl Game for World {
         {
             host.lock_on(None);
         }
+        // Who holds what against whom: what was done since the last tick,
+        // who saw it, and what people near each other told each other.
+        (self.witnessing).step(
+            host,
+            self.npcs.list(),
+            level,
+            player.eye_position(),
+            (self.tick, *tick),
+        );
         if walking {
             self.npcs.keep_out(player, rules, level);
         }
@@ -1907,12 +1920,14 @@ impl Playing {
 
     /// Holds the view on the next character in front of the player: the
     /// nearest, then the next nearest each time it is asked, and after the
-    /// last, nobody. The dead and those out of reach are passed over.
+    /// last, nobody; the player's enemies (`game.sides`) before anyone
+    /// else. The dead and those out of reach are passed over.
     fn next_lock(&mut self) {
         let eye = self.world.player().eye_position();
         let (sin, cos) = self.yaw.sin_cos();
         let host = self.world.game.host();
-        let mut near: Vec<(f32, CharacterId)> = Vec::new();
+        let sides = host.sides();
+        let mut near: Vec<(bool, f32, CharacterId)> = Vec::new();
         host.each_character(|who, feet, health| {
             if who == CharacterId::PLAYER || health <= 0.0 {
                 return;
@@ -1922,16 +1937,20 @@ impl Playing {
             let up = feet[1] - eye[1];
             // In reach, and in the half of the world they are looking at.
             if far > 0.2 && far.hypot(up) <= LOCK_REACH && (x * -sin + z * -cos) / far > 0.25 {
-                near.push((far, who));
+                // Whom the player counts as an enemy, or who counts them one.
+                let (me, them) = (CharacterId::PLAYER.number(), who.number());
+                let friendly = !(sides.is_enemy(me, them) || sides.is_enemy(them, me));
+                near.push((friendly, far, who));
             }
         });
-        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        drop(sides);
+        near.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
         let next = match host.locked_on() {
             Some(now) => (near.iter())
-                .position(|(_, who)| *who == now)
+                .position(|(_, _, who)| *who == now)
                 .and_then(|at| near.get(at + 1))
-                .map(|(_, who)| *who),
-            None => near.first().map(|(_, who)| *who),
+                .map(|(_, _, who)| *who),
+            None => near.first().map(|(_, _, who)| *who),
         };
         self.world.game.host_mut().lock_on(next);
     }

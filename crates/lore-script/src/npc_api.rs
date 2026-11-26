@@ -44,7 +44,7 @@ pub(crate) const NPC_FIELDS: &[&str] = &[
 pub(crate) const NPC_METHODS: &[&str] = &["onUse", "remove"];
 
 /// What `game.npc { ... }` takes.
-const NPC_OPTIONS: &[&str] = &["name", "at", "facing"];
+const NPC_OPTIONS: &[&str] = &["name", "at", "facing", "side"];
 
 /// The kind of map entity that is an NPC.
 pub const NPC_KIND: &str = "npc";
@@ -622,6 +622,21 @@ fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUser
             "game.npc { name = \"Guard\", at = \"Gate\", facing = 90 }",
         )?),
     };
+    // Its side (`game.sides`), named before anyone is made.
+    let side = match options.raw_get::<Value>("side")? {
+        Value::Nil => None,
+        given => Some(crate::sides_api::side_named(
+            lua,
+            shared,
+            "game.npc's side",
+            &given,
+        )?),
+    };
+    let on_side = |id: CharacterId| {
+        if let Some(side) = side {
+            shared.sides.table.borrow_mut().set_side(id.number(), side);
+        }
+    };
     let version = &shared.npc_version;
     if shared.loading.get() {
         // A file that loads again after a save finds the NPCs it made
@@ -644,6 +659,10 @@ fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUser
                 at,
                 facing,
             });
+            // The file says its side again as it loads: none, if it no
+            // longer gives one.
+            (shared.sides.table.borrow_mut())
+                .set_side(id.number(), side.unwrap_or(lore_npc::Side::NONE));
             return shared.handles.character(lua, id);
         }
     }
@@ -704,6 +723,7 @@ fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUser
         feet: at,
         facing,
     });
+    on_side(id);
     shared.handles.character(lua, id)
 }
 
@@ -1016,5 +1036,6 @@ pub(crate) fn remove(lua: &Lua, id: CharacterId) -> mlua::Result<()> {
     shared.characters.remove(id);
     shared.handles.forget(id);
     shared.weapons.forget(id);
+    shared.sides.table.borrow_mut().forget(id.number());
     Ok(())
 }

@@ -13,11 +13,21 @@
 //! - [`Gaze`]: where a head turns to look at someone, within what a person's
 //!   neck allows, and how quickly it gets there.
 //! - [`push_out`]: how far to move one upright body out of another's way.
+//! - [`Sides`]: who likes whom: the game's sides, how each feels about the
+//!   others, and the grudges each person holds. [`Sides::is_enemy`] is what
+//!   a rule's "an enemy" means.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod apart;
 mod gaze;
 mod mind;
+mod sides;
 
 pub use apart::{Upright, push_out};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
+pub use sides::{
+    Act, DEFAULT_FORGIVES, DEFAULT_REMEMBERS, FORGIVING_SECONDS, Feeling, FeelingChange, GRUDGES,
+    LONGEST_NAME, MOST_SIDES, Side, SideSaid, Sides, SidesError, Temper, Toward,
+};

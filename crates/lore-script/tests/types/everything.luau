@@ -710,6 +710,28 @@ if false then
         if npc.dead then npc:remove() end
     end
 end
+if false then
+    game.sides {
+        Town = { friends = { "Guards" }, enemies = { "Outlaws", "Wolves" }, forgives = 0, remembers = 600 },
+        Guards = {},
+        Outlaws = { neutral = "Wolves", remembers = math.huge },
+        Wolves = { enemies = "everyone" },
+    }
+    game.player.side = "Town"
+    local guard: Npc = game.npc { name = "Guard", at = "Gate", side = "Guards" }
+    local sideName: string? = guard.side
+    local feeling: Feeling = guard:feelsAbout(game.player)
+    guard:forgive(game.player)
+    local town: Side = game.side("Town")
+    local townFeels: Feeling = town:feelsAbout("Outlaws")
+    print(sideName, feeling, town.name, townFeels, town:feelsAbout(game.side("Guards")))
+    town:setFeeling("Outlaws", "friend")
+    game.side("Outlaws"):join(town)
+    town:forgive(game.player)
+    game.onFeelingChange(function(side: string, toward: string, now: Feeling, before: Feeling)
+        print(side, toward, now, before)
+    end)
+end
 game.showUsePrompt(true)
 local meant: (Thing | Npc)? = game.player.lookingAt
 print(meant, game.player.useProgress)

@@ -120,3 +120,9 @@ print(game.difficulty.scale("hard")) -- wrong: it scales a number
 -- The clock's time is text, and its day is counted, not set.
 game.clock.onHour("eight", function() end) -- wrong: the hour is a number
 game.clock.time = true -- wrong: the time is text like "8:00"
+
+-- Sides are named in one table, and a side by its name in quotes.
+game.sides("Town") -- wrong: it takes a table of sides
+game.player.side = 5 -- wrong: a side is named in quotes
+guard:feelsAbout("Guard") -- wrong: it asks about a character, not a name
+game.side("Town"):join(5) -- wrong: a side is named in quotes
