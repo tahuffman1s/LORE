@@ -348,6 +348,19 @@ for _, setName in game.input.sets() do
     print(setName, #game.input.actions(setName), #game.input.actions())
 end
 print(table.concat(game.input.bindings("gallop"), ", "))
+game.input.rebind("jump", { "F", "GamepadSouth" })
+game.input.rebind("move", { "ArrowKeys", "LeftStick" })
+game.input.resetBindings("jump")
+game.input.resetBindings()
+game.input.listenForButton(function(button: string?)
+    if button then
+        print(table.concat(game.input.usedBy(button), ", "))
+    end
+end, { device = "keyboard", seconds = 3 })
+game.input.listenForButton(function(_button) end)
+if game.input.isListening() then
+    game.input.stopListening()
+end
 local mapShown = false
 local selected = 1
 local scroll = 0

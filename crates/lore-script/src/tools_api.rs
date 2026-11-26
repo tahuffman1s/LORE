@@ -671,6 +671,8 @@ pub(crate) struct Tools {
     handed_out: Cell<bool>,
     /// Whether the script is taking typed text.
     pub(crate) typing: crate::typing_api::Typing,
+    /// What the script asked of the bindings and of listening for a button.
+    pub(crate) listen: crate::listen_api::Listen,
 }
 
 impl Default for Tools {
@@ -689,6 +691,7 @@ impl Default for Tools {
             abilities: Cell::new(Abilities::default()),
             view: Cell::new(None),
             typing: crate::typing_api::Typing::default(),
+            listen: crate::listen_api::Listen::default(),
             handed_out: Cell::new(false),
         }
     }
@@ -711,6 +714,16 @@ impl Tools {
     /// Reads the player's controls as now in force, if the engine has said.
     pub fn with_controls<R>(&self, read: impl FnOnce(Option<&ActionMap>) -> R) -> R {
         read(self.controls.borrow().as_ref())
+    }
+
+    /// Changes the player's controls as the script reads them, starting from
+    /// `own` when the engine has not said any.
+    pub(crate) fn edit_controls(&self, own: &ActionMap, edit: impl FnOnce(&mut ActionMap)) {
+        edit(
+            self.controls
+                .borrow_mut()
+                .get_or_insert_with(|| own.clone()),
+        );
     }
 
     pub fn set_controls(&self, controls: &ActionMap) {
@@ -1092,7 +1105,7 @@ pub(crate) const SWITCH_VIEW: &str = "switch_view";
 const FREE_GAMEPAD_BUTTON: &str = "LeftBumper";
 
 /// How a binding is told apart in an error: what it does.
-const fn moves(kind: ActionKind) -> &'static str {
+pub(crate) const fn moves(kind: ActionKind) -> &'static str {
     match kind {
         ActionKind::Button => "is a button",
         ActionKind::Axis1D => "moves in one direction",
@@ -1102,12 +1115,17 @@ const fn moves(kind: ActionKind) -> &'static str {
 
 /// Checks what a script gave `game.input.bind` as bindings: spelt right, and
 /// all of one kind. Gives that kind, or the whole error to show.
-fn check_bindings(name: &str, bindings: &[String], example: &str) -> Result<ActionKind, String> {
+pub(crate) fn check_bindings(
+    function: &str,
+    name: &str,
+    bindings: &[String],
+    example: &str,
+) -> Result<ActionKind, String> {
     let mut first: Option<(&str, ActionKind)> = None;
     for text in bindings {
         let binding: Binding = text.parse().map_err(|source| {
             format!(
-                "game.input.bind: {} Write it like this: {example}",
+                "game.input.{function}: {} Write it like this: {example}",
                 MapError::UnknownBinding {
                     action: name.to_owned(),
                     source,
@@ -1118,7 +1136,7 @@ fn check_bindings(name: &str, bindings: &[String], example: &str) -> Result<Acti
             None => first = Some((text, binding.kind())),
             Some((before, kind)) if kind != binding.kind() => {
                 return Err(format!(
-                    "game.input.bind(\"{name}\", ...): \"{before}\" {} but \"{text}\" {}. \
+                    "game.input.{function}(\"{name}\", ...): \"{before}\" {} but \"{text}\" {}. \
                      Give an action buttons only, or directions only: \
                      {{ \"WASD\", \"LeftStick\" }}",
                     moves(kind),
@@ -1348,7 +1366,12 @@ fn bind_set(
 /// Whether a game's buttons cover a keyboard or mouse and a gamepad: every
 /// action must, so that nothing ships for one device only. Gives the mistake
 /// to put right.
-fn device_gap(name: &str, kind: ActionKind, bindings: &[String]) -> Option<String> {
+pub(crate) fn device_gap(
+    function: &str,
+    name: &str,
+    kind: ActionKind,
+    bindings: &[String],
+) -> Option<String> {
     let parsed: Vec<Binding> = bindings.iter().filter_map(|b| b.parse().ok()).collect();
     // What is missing, and one example of it, for each device.
     let (pad, keys) = match kind {
@@ -1368,14 +1391,14 @@ fn device_gap(name: &str, kind: ActionKind, bindings: &[String]) -> Option<Strin
     if !parsed.iter().any(|binding| binding.is_gamepad()) {
         let (what, example) = pad;
         return Some(format!(
-            "game.input.bind(\"{name}\", ...) needs {what} too, so a player with a \
+            "game.input.{function}(\"{name}\", ...) needs {what} too, so a player with a \
              controller can use it. Add one such as \"{example}\"."
         ));
     }
     if !parsed.iter().any(|binding| !binding.is_gamepad()) {
         let (what, example) = keys;
         return Some(format!(
-            "game.input.bind(\"{name}\", ...) needs {what} too, so a player without a \
+            "game.input.{function}(\"{name}\", ...) needs {what} too, so a player without a \
              controller can use it. Add one such as \"{example}\"."
         ));
     }
@@ -1419,8 +1442,8 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 ),
             ));
         }
-        let bindings = bindings_of(lua, &list, EXAMPLE)?;
-        let kind = match check_bindings(&name, &bindings, EXAMPLE) {
+        let bindings = bindings_of(lua, "bind", &list, EXAMPLE)?;
+        let kind = match check_bindings("bind", &name, &bindings, EXAMPLE) {
             Ok(kind) => kind,
             Err(problem) => return Err(fail(lua, problem)),
         };
@@ -1447,7 +1470,7 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             ));
         }
         let set = bind_set(lua, &map, &options)?;
-        if let Some(gap) = device_gap(&name, kind, &bindings) {
+        if let Some(gap) = device_gap("bind", &name, kind, &bindings) {
             return Err(fail(lua, gap));
         }
         if map.action(&name).is_err() {
@@ -1481,12 +1504,17 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
 }
 
 /// The button names of a table a script gave `game.input.bind`.
-fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<String>> {
+pub(crate) fn bindings_of(
+    lua: &Lua,
+    function: &str,
+    list: &Value,
+    example: &str,
+) -> mlua::Result<Vec<String>> {
     let Value::Table(table) = list else {
         return Err(fail(
             lua,
             format!(
-                "game.input.bind needs a list of button names in a table, but it was given \
+                "game.input.{function} needs a list of button names in a table, but it was given \
                  {}. Write it like this: {example}",
                 describe(list)
             ),
@@ -1500,7 +1528,7 @@ fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<Strin
                 return Err(fail(
                     lua,
                     format!(
-                        "game.input.bind needs button names in quotes, but the list holds {}. \
+                        "game.input.{function} needs button names in quotes, but the list holds {}. \
                          Write it like this: {example}",
                         describe(&other)
                     ),
@@ -1512,7 +1540,7 @@ fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<Strin
         return Err(fail(
             lua,
             format!(
-                "game.input.bind was given an empty list, so nothing would press the action. \
+                "game.input.{function} was given an empty list, so nothing would press the action. \
                  Name at least one button. Write it like this: {example}"
             ),
         ));
@@ -1522,7 +1550,7 @@ fn bindings_of(lua: &Lua, list: &Value, example: &str) -> mlua::Result<Vec<Strin
 
 /// The id and place in the map of the action a script named, or the error
 /// that says what the actions are.
-fn find(
+pub(crate) fn find(
     lua: &Lua,
     map: &ActionMap,
     function: &str,

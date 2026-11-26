@@ -203,6 +203,13 @@ impl ControlsNotice {
         self.problem = problem;
     }
 
+    /// Puts up the notice of a change the game made to the controls itself
+    /// (a controls page): what is wrong with the files, if anything, stays
+    /// as it was.
+    pub(crate) fn changed(&mut self, good: String, now: Instant) {
+        self.notice = Some((good, now + NOTICE_FOR));
+    }
+
     /// The notice that is up, if any.
     #[cfg(test)]
     fn notice(&self) -> Option<&str> {

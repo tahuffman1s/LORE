@@ -3644,6 +3644,66 @@ declare game: {
         --- Example: print(table.concat(game.input.bindings("open_map"), ", "))
         bindings: (action: string) -> { string },
 
+        --- Gives an action new buttons, the engine's own ("jump", "move")
+        --- or one of the game's, and keeps them: they are saved in this
+        --- game's own bindings file, so they are still there the next time
+        --- it starts, and `bindings` gives them from the next tick. Call it
+        --- whenever you like, such as from a menu row's `onPress`. The
+        --- buttons are written as `bind` takes them and must be all of the
+        --- kind the action is (buttons, or directions like "WASD"), with
+        --- at least one for keyboard or mouse and one for a gamepad. The
+        --- player is told on screen what changed. See `listenForButton` for
+        --- hearing which button they want.
+        --- Example: game.input.rebind("jump", { "F", "GamepadSouth" })
+        --- Example: game.input.rebind("move", { "ArrowKeys", "LeftStick" })
+        rebind: (action: string, buttons: { string }) -> (),
+
+        --- Puts the buttons of one action back to what the engine and your
+        --- `bind` gave it, or of every action when no name is given, and
+        --- saves that in the game's own bindings file. A change the player
+        --- made in their own bindings file for every game is undone too:
+        --- these are the defaults of the game as it ships. In force from
+        --- the next tick.
+        --- Example: game.input.resetBindings("jump")
+        --- Example: game.input.resetBindings()
+        resetBindings: (action: string?) -> (),
+
+        --- Waits for the player to press a button and calls `handler` once,
+        --- on a tick, with its name as `bind` takes it: "Space",
+        --- "MouseLeft", "MouseWheelUp", "GamepadSouth", "LeftBumper",
+        --- "DpadUp". While it waits every action reads as let go, so the
+        --- press does nothing else, and a button already held is not heard
+        --- until it is let go and pressed again. `handler` gets nil when
+        --- the player cancels (Escape on the keyboard, Start on a gamepad:
+        --- neither is ever heard as a button), when `seconds` pass (5 if
+        --- not given; it must be more than 0), when `stopListening` is
+        --- called, or when another `listenForButton` replaces this one, so
+        --- a page always hears how it ended. `device = "keyboard"` hears
+        --- keys and the mouse only, `"gamepad"` only the gamepad; leave it
+        --- out to hear both. Sticks are not buttons and are not heard.
+        --- Example: game.input.listenForButton(function(button) if button then game.input.rebind("jump", { button, "GamepadSouth" }) end end, { device = "keyboard" })
+        listenForButton: (handler: (button: string?) -> (), options: { device: ("keyboard" | "gamepad")?, seconds: number? }?) -> (),
+
+        --- Stops waiting for a button. The handler of `listenForButton`
+        --- is called with nil on the next tick, so a page is always told it
+        --- is over. Does nothing when nothing is listening.
+        --- Example: game.input.stopListening()
+        stopListening: () -> (),
+
+        --- Whether `listenForButton` is waiting for a button now. It turns
+        --- false on the tick the handler is called.
+        --- Example: if game.input.isListening() then print("Press a button...") end
+        isListening: () -> boolean,
+
+        --- The names of the actions a key or button presses right now, with
+        --- the player's own bindings taken into account, to warn before a
+        --- rebind takes a button that does something else. A button that is
+        --- one of the keys of a direction counts: "W" is used by "move".
+        --- Sticks and directions are named too ("LeftStick", "WASD"). Gives
+        --- an empty list when nothing uses it.
+        --- Example: print(table.concat(game.input.usedBy("Space"), ", "))
+        usedBy: (button: string) -> { string },
+
         --- Where the pointer is, in pixels on a screen 1080 high, from the
         --- top left corner: x right and y down. nil when there is no free
         --- pointer (the mouse is looking around, or a gamepad is in use).

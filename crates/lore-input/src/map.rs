@@ -684,6 +684,23 @@ impl ActionMap {
             .unwrap_or_default()
     }
 
+    /// The actions that `binding` presses, in the order they were added. A
+    /// button counts wherever an action uses it, alone or as one of the keys
+    /// of a direction such as `"WASD"`; any other binding (a stick, mouse
+    /// motion) counts only where an action has exactly it.
+    #[must_use]
+    pub fn actions_bound_to(&self, binding: Binding) -> Vec<ActionId> {
+        self.actions()
+            .filter(|action| {
+                let bound = self.bindings(*action);
+                match binding {
+                    Binding::Button(button) => Binding::buttons_of(bound).any(|b| b == button),
+                    other => bound.contains(&other),
+                }
+            })
+            .collect()
+    }
+
     /// Replaces everything bound to the action.
     ///
     /// An empty list leaves the action with nothing bound, which is how a

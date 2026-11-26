@@ -86,6 +86,12 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "sets",
     "actions",
     "bindings",
+    "rebind",
+    "resetBindings",
+    "listenForButton",
+    "stopListening",
+    "isListening",
+    "usedBy",
     "pointer",
     "wheel",
     "stepped",
@@ -456,6 +462,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
     tools_api::install_input(lua, shared, &input)?;
     crate::typing_api::install(lua, shared, &input)?;
+    crate::listen_api::install(lua, shared, &input)?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 

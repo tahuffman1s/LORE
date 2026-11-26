@@ -592,6 +592,10 @@ impl Game for ScriptGame {
         self.host.typing_ended();
     }
 
+    fn listening_ended(&mut self) {
+        self.host.listening_ended();
+    }
+
     fn frame(&mut self, frame: &mut Frame) {
         // What the script reads while it draws: how long pictures take, who
         // is playing and with which controls, so a label and a graph are
@@ -683,6 +687,12 @@ impl Game for ScriptGame {
         }
         if let Some(on) = self.host.take_typing() {
             frame.set_typing(on);
+        }
+        if let Some(hears) = self.host.take_listening() {
+            frame.set_listening(hears);
+        }
+        for ask in self.host.take_binding_asks() {
+            frame.ask_bindings(ask);
         }
         if self.host.take_quit() {
             frame.close();

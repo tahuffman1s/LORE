@@ -422,6 +422,55 @@ impl ActionMap {
         Some(text)
     }
 
+    /// The text of a game's own bindings file with only what differs from
+    /// `baseline` (the bindings the game would have without the file): the
+    /// standard actions that differ under `[bindings]`, the game's own under
+    /// `[game_bindings]`. Reading it onto `baseline` gives `self`'s bindings
+    /// again, and a file with nothing to change is the header alone.
+    ///
+    /// ```
+    /// use lore_input::ActionMap;
+    ///
+    /// let defaults = ActionMap::standard();
+    /// let mut map = defaults.clone();
+    /// map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")?;
+    ///
+    /// let text = map.write_game_changes(&defaults);
+    /// assert!(text.contains("\njump = [\"F\", \"GamepadSouth\"]\n"));
+    /// assert!(!text.contains("fire"));
+    /// # Ok::<(), lore_input::BindingsError>(())
+    /// ```
+    #[must_use]
+    pub fn write_game_changes(&self, baseline: &Self) -> String {
+        let mut text = format!("{GAME_HEADER}\n");
+        for (table, own) in [(TABLE, false), (GAME_TABLE, true)] {
+            let mut lines = String::new();
+            for action in self.actions().filter(|action| self.is_own(*action) == own) {
+                let name = self.name(action);
+                let bindings = self.bindings(action);
+                let same = baseline
+                    .action(name)
+                    .is_ok_and(|other| baseline.bindings(other) == bindings);
+                if same {
+                    continue;
+                }
+                write_key(&mut lines, name);
+                lines.push_str(" = [");
+                for (index, binding) in bindings.iter().enumerate() {
+                    let comma = if index == 0 { "" } else { ", " };
+                    // Writing to a `String` cannot fail.
+                    let _ = write!(lines, "{comma}\"{binding}\"");
+                }
+                lines.push_str("]\n");
+            }
+            if !lines.is_empty() {
+                // Writing to a `String` cannot fail.
+                let _ = write!(text, "[{table}]\n{lines}\n");
+            }
+        }
+        text
+    }
+
     /// Writes one line for each action that is (`own`) or is not a game's own.
     fn write_table(&self, text: &mut String, defaults: &Self, own: bool) {
         for action in self.actions().filter(|action| self.is_own(*action) == own) {
@@ -925,5 +974,37 @@ mod tests {
         // Forgiving: an own action under [bindings] is still read.
         let menu = map.action("weather menu").unwrap();
         assert_eq!(map.bindings(menu)[0], Binding::Button(Key::F7.into()));
+    }
+
+    #[test]
+    fn a_games_changes_are_only_what_differs_from_the_baseline_and_read_back() {
+        let baseline = game_map();
+        let mut map = baseline.clone();
+        assert_eq!(
+            map.read_bindings(
+                "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n[game_bindings]\nzoom = [\"F6\", \"GamepadSelect\"]\n"
+            ),
+            Ok(Vec::new())
+        );
+        let text = map.write_game_changes(&baseline);
+        assert!(
+            text.contains("\n[bindings]\njump = [\"F\", \"GamepadSouth\"]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n[game_bindings]\nzoom = [\"F6\", \"GamepadSelect\"]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("fire") && !text.contains("move"), "{text}");
+        let mut read = baseline.clone();
+        assert_eq!(read.read_bindings(&text), Ok(Vec::new()));
+        assert_eq!(read, map);
+
+        // Nothing differs: no tables, only the header.
+        let none = baseline.write_game_changes(&baseline);
+        assert!(!none.contains("\n["), "{none}");
+        let mut read = baseline.clone();
+        assert_eq!(read.read_bindings(&none), Ok(Vec::new()));
+        assert_eq!(read, baseline);
     }
 }

@@ -18,7 +18,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use lore_input::ActionMap;
+use lore_input::{ActionMap, Binding};
+use lore_script::BindingAsk;
 
 use crate::map::{Stamp, stamp};
 
@@ -365,6 +366,50 @@ impl Live {
         self.player.clone()
     }
 
+    /// The game's own file, if the game has a place for one.
+    pub(crate) fn game_file(&self) -> Option<&Path> {
+        self.game.as_deref()
+    }
+
+    /// The game's own controls, as they are before any file is read: what
+    /// the engine and the script give.
+    pub(crate) fn own(&self) -> &ActionMap {
+        &self.own
+    }
+
+    /// What the game's controls would be without its own file: the game's
+    /// own with the player-wide file read onto them. The game's file holds
+    /// what differs from this.
+    fn baseline(&self) -> ActionMap {
+        let mut controls = self.own.clone();
+        // A player-wide file that cannot be used changes nothing, and has
+        // already been told to the player.
+        let _ = read_file(&self.player, &mut controls, &mut Vec::new());
+        controls
+    }
+
+    /// Saves `controls` in the game's own file: only what differs from
+    /// [`baseline`](Self::baseline) is written, so the file reads back as
+    /// `controls`. Nothing happens when the game has no place for a file.
+    ///
+    /// The file's new state is taken as already read, so the watching of the
+    /// files does not tell the player about a save the game made itself.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the folder cannot be made or the file cannot be written.
+    pub(crate) fn save_game(&mut self, controls: &ActionMap) -> io::Result<()> {
+        let Some(path) = self.game.clone() else {
+            return Ok(());
+        };
+        write_whole(&path, &controls.write_game_changes(&self.baseline()))?;
+        // Only the game's file: a save of the player-wide one that is still
+        // waiting to be seen must be seen.
+        self.known[1] = stamp(&path);
+        self.pending = None;
+        Ok(())
+    }
+
     /// What was wrong with the files when they were first read. Asking
     /// again gives nothing.
     pub(crate) fn take_start_problems(&mut self) -> Vec<Problem> {
@@ -454,6 +499,52 @@ impl Live {
             problems: read.problems,
         })
     }
+}
+
+/// The controls once the changes a script asked for are made to `current`:
+/// the buttons it gave an action, or what `defaults` (the game's own
+/// controls, before any file) have for one it reset or for all of them. An
+/// ask the controls cannot take is left out with a warning; a script is
+/// told of those when it asks, so this is not expected.
+pub(crate) fn rebound(current: &ActionMap, defaults: &ActionMap, asks: &[BindingAsk]) -> ActionMap {
+    let mut controls = current.clone();
+    let reset = |controls: &mut ActionMap, name: &str| {
+        let (Ok(id), Ok(default)) = (controls.action(name), defaults.action(name)) else {
+            return;
+        };
+        let _ = controls.set_bindings(id, defaults.bindings(default).iter().copied());
+    };
+    for ask in asks {
+        match ask {
+            BindingAsk::Set { action, buttons } => {
+                let set = controls
+                    .action(action)
+                    .map_err(|unknown| unknown.to_string());
+                let parsed: Result<Vec<Binding>, _> = buttons.iter().map(|b| b.parse()).collect();
+                let done = match (set, parsed) {
+                    (Ok(id), Ok(list)) => controls
+                        .set_bindings(id, list)
+                        .map_err(|error| error.to_string()),
+                    (Err(problem), _) => Err(problem),
+                    (_, Err(unknown)) => Err(unknown.to_string()),
+                };
+                if let Err(problem) = done {
+                    log::warn!("The controls for \"{action}\" were not changed: {problem}");
+                }
+            }
+            BindingAsk::Reset(Some(action)) => reset(&mut controls, action),
+            BindingAsk::Reset(None) => {
+                let names: Vec<String> = controls
+                    .actions()
+                    .map(|id| controls.name(id).to_owned())
+                    .collect();
+                for name in names {
+                    reset(&mut controls, &name);
+                }
+            }
+        }
+    }
+    controls
 }
 
 /// Writes the bindings file for `actions` to `path`, making its folder if
@@ -904,5 +995,178 @@ mod tests {
 
         assert_eq!(said, Vec::<String>::new());
         assert_eq!(first(&controls, "gallop"), "Z");
+    }
+
+    fn set(action: &str, buttons: &[&str]) -> BindingAsk {
+        BindingAsk::Set {
+            action: action.to_owned(),
+            buttons: buttons.iter().map(|b| (*b).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_rebind_is_in_force_for_the_next_tick_and_the_new_key_presses_the_action() {
+        let defaults = game_map();
+        let controls = rebound(
+            &defaults,
+            &defaults,
+            &[set("jump", &["F", "GamepadSouth"]), set("gallop", &["G"])],
+        );
+        assert_eq!(first(&controls, "jump"), "F");
+        assert_eq!(first(&controls, "gallop"), "G");
+        assert_eq!(first(&controls, "reload"), "R", "the rest is as it was");
+
+        let mut input = lore_input::Input::new(defaults);
+        let jump = input.map().action("jump").unwrap();
+        input.press(lore_input::Key::Space);
+        assert!(input.tick().pressed(jump));
+        input.release(lore_input::Key::Space);
+        input.tick();
+        input.set_bindings(controls);
+        input.press(lore_input::Key::Space);
+        assert!(!input.tick().pressed(jump), "the old key does nothing now");
+        input.press(lore_input::Key::F);
+        assert!(input.tick().just_pressed(jump));
+    }
+
+    #[test]
+    fn a_reset_puts_back_what_the_game_gives_for_one_action_or_all() {
+        let defaults = game_map();
+        let changed = rebound(
+            &defaults,
+            &defaults,
+            &[
+                set("jump", &["F", "GamepadSouth"]),
+                set("gallop", &["G"]),
+                set("reload", &["N", "GamepadWest"]),
+            ],
+        );
+        let one = rebound(
+            &changed,
+            &defaults,
+            &[BindingAsk::Reset(Some("jump".into()))],
+        );
+        assert_eq!(first(&one, "jump"), "Space");
+        assert_eq!(first(&one, "gallop"), "G");
+        assert_eq!(first(&one, "reload"), "N");
+        let all = rebound(&changed, &defaults, &[BindingAsk::Reset(None)]);
+        assert_eq!(all, defaults);
+    }
+
+    #[test]
+    fn the_games_file_holds_only_what_differs_and_reads_back() {
+        let folder = scratch("save-game");
+        let (player, game) = (
+            folder.join("bindings.toml"),
+            folder.join("games/g/bindings.toml"),
+        );
+        let mut own = game_map();
+        let defaults = own.clone();
+        let (mut live, said) = Live::start(player.clone(), Some(game.clone()), &mut own);
+        assert_eq!(said, Vec::<String>::new());
+
+        let controls = rebound(
+            &own,
+            live.own(),
+            &[
+                set("jump", &["F9", "GamepadSouth"]),
+                set("gallop", &["F10"]),
+            ],
+        );
+        live.save_game(&controls).unwrap();
+
+        let text = fs::read_to_string(&game).unwrap();
+        assert!(
+            text.contains("\n[bindings]\njump = [\"F9\", \"GamepadSouth\"]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n[game_bindings]\ngallop = [\"F10\"]\n"),
+            "{text}"
+        );
+        for unchanged in ["fire", "reload", "melee", "move"] {
+            assert!(
+                !text.contains(unchanged),
+                "{unchanged} is not written:\n{text}"
+            );
+        }
+        let mut read = defaults.clone();
+        assert_eq!(
+            load_both(&player, Some(&game), &mut read),
+            Vec::<String>::new()
+        );
+        assert_eq!(read, controls);
+
+        // Our own save is not a change from outside, but a later one is.
+        assert!(live.look().is_none());
+        assert!(live.look().is_none());
+        fs::write(&player, "[bindings]\nreload = [\"N\", \"GamepadWest\"]\n").unwrap();
+        assert!(live.look().is_none());
+        let reread = live.look().unwrap().controls.unwrap();
+        assert_eq!(first(&reread, "reload"), "N");
+        assert_eq!(
+            first(&reread, "jump"),
+            "F9",
+            "the game's file is still read"
+        );
+
+        // Putting everything back drops those lines. The player-wide file
+        // still has its reload, which the reset beats, so that one is kept.
+        let back = rebound(&controls, live.own(), &[BindingAsk::Reset(None)]);
+        live.save_game(&back).unwrap();
+        let text = fs::read_to_string(&game).unwrap();
+        let lines = text.split("\n[").nth(1).unwrap();
+        assert_eq!(
+            lines, "bindings]\nreload = [\"R\", \"GamepadWest\"]\n\n",
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_reset_beats_the_player_wide_file_and_the_game_file_says_so() {
+        let folder = scratch("reset-over-player");
+        let (player, game) = (folder.join("bindings.toml"), folder.join("game.toml"));
+        fs::write(&player, "[bindings]\nreload = [\"N\", \"GamepadWest\"]\n").unwrap();
+        let mut own = game_map();
+        let (mut live, _) = Live::start(player.clone(), Some(game.clone()), &mut own);
+        assert_eq!(first(&own, "reload"), "N");
+
+        let controls = rebound(
+            &own,
+            live.own(),
+            &[BindingAsk::Reset(Some("reload".into()))],
+        );
+        assert_eq!(first(&controls, "reload"), "R", "the game's own default");
+        live.save_game(&controls).unwrap();
+
+        let mut read = game_map();
+        let said = load_both(&player, Some(&game), &mut read);
+        assert_eq!(said, Vec::<String>::new());
+        assert_eq!(
+            first(&read, "reload"),
+            "R",
+            "so it is still R when read again"
+        );
+    }
+
+    #[test]
+    fn a_game_with_no_file_saves_nothing_and_a_file_that_cannot_be_written_is_an_error() {
+        let folder = scratch("save-nowhere");
+        let mut own = game_map();
+        let (mut live, _) = Live::start(folder.join("bindings.toml"), None, &mut own);
+        let controls = rebound(&own, live.own(), &[set("gallop", &["G"])]);
+        assert!(live.save_game(&controls).is_ok());
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 0);
+
+        // A folder that is a file cannot be made.
+        let blocked = folder.join("blocked");
+        fs::write(&blocked, "").unwrap();
+        let mut own = game_map();
+        let (mut live, _) = Live::start(
+            folder.join("bindings.toml"),
+            Some(blocked.join("bindings.toml")),
+            &mut own,
+        );
+        assert!(live.save_game(&controls).is_err());
     }
 }

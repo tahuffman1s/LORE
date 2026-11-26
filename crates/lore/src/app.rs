@@ -654,6 +654,7 @@ impl<G: Game> App<G> {
                 }
                 self.game.level_saved(&level);
                 self.stop_typing();
+                self.stop_listening();
                 self.level_problem = None;
                 log::info!(
                     "Loaded {} again: {}.",
@@ -791,6 +792,62 @@ impl<G: Game> App<G> {
             }
         }
         self.game.typing_ended();
+    }
+
+    /// Takes the keyboard's and gamepad's next button back from a game that
+    /// was listening for one, and tells the game: the window lost focus or
+    /// the level changed.
+    fn stop_listening(&mut self) {
+        self.input.set_listening(None);
+        self.game.listening_ended();
+    }
+
+    /// Puts into force, from the next tick, the buttons a game gave its
+    /// actions (`game.input.rebind`, `resetBindings`) and saves them in the
+    /// game's own bindings file, which is then not read as a change from
+    /// outside. The player is told on screen what changed, as when they
+    /// edit the file.
+    fn follow_binding_asks(&mut self, asks: &[lore_script::BindingAsk]) {
+        let defaults = match &self.controls {
+            Some(live) => live.own().clone(),
+            None => self.config.actions.clone(),
+        };
+        let controls = controls::rebound(self.input.map(), &defaults, asks);
+        let now = self.input.map();
+        let differs = controls.actions().any(|id| {
+            now.action(controls.name(id))
+                .is_ok_and(|was| now.bindings(was) != controls.bindings(id))
+        });
+        if !differs {
+            return;
+        }
+        let changes = controls_notice::changes(
+            now,
+            &controls,
+            self.input.last_device(),
+            self.gamepads.style(),
+        );
+        let mut file = std::path::PathBuf::new();
+        if let Some(live) = self.controls.as_mut() {
+            file = live
+                .game_file()
+                .map_or_else(|| live.file(), std::path::Path::to_owned);
+            if let Err(error) = live.save_game(&controls) {
+                log::warn!(
+                    "Your controls could not be saved in {}: {error}. They stay as changed \
+                     until the game closes. Check that the folder is yours to write to.",
+                    file.display()
+                );
+            }
+        }
+        self.input
+            .set_bindings(self.keep_settings(controls.clone()));
+        self.new_controls = Some(controls);
+        if !changes.is_empty() {
+            self.controls_notice
+                .changed(controls_notice::good_message(&changes), Instant::now());
+            self.controls_change = Some(controls_notice::change_told(changes, &[], false, &file));
+        }
     }
 
     /// Gives the cursor back to the desktop.
@@ -1295,6 +1352,13 @@ impl<G: Game> App<G> {
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
         }
+        if let Some(hears) = frame.listening() {
+            self.input.set_listening(hears);
+        }
+        let asks = frame.take_binding_asks();
+        if !asks.is_empty() {
+            self.follow_binding_asks(&asks);
+        }
         if let Some(on) = frame.typing() {
             self.input.set_typing(on);
             if let Some(window) = &self.window {
@@ -1427,6 +1491,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                     self.gamepads.resync(&mut self.input);
                 } else {
                     self.stop_typing();
+                    self.stop_listening();
                     self.release_mouse();
                     self.input.release_all();
                     self.pointer_down = false;

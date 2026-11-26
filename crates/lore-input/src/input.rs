@@ -5,6 +5,7 @@ use std::fmt;
 use crate::binding::{ActionKind, Binding, Button};
 use crate::devices::{GamepadButton, Key, Stick, StickAxis};
 use crate::frame::{ActionState, InputFrame};
+use crate::listen::{Heard, Hears};
 use crate::map::{Action, ActionId, ActionMap, ActionSetId, Conflict, Device};
 use crate::shaping::{PRESS_AT, RELEASE_AT, clamp_length, length, sanitize};
 use crate::typing::Typing;
@@ -66,6 +67,10 @@ pub struct Input {
     mouse_travel: f32,
     /// Text typed since the last tick, and whether keys are for typing.
     typing: Typing,
+    /// Which device a script is listening to for the next button, if one is.
+    capture: Option<Hears>,
+    /// What listening heard, until the next tick carries it.
+    heard: Option<Heard>,
 }
 
 /// A finished rebind: what [`Input::start_rebind`] heard and did.
@@ -146,6 +151,8 @@ impl Input {
             device: Device::KeyboardAndMouse,
             mouse_travel: 0.0,
             typing: Typing::default(),
+            capture: None,
+            heard: None,
         }
     }
 
@@ -456,6 +463,12 @@ impl Input {
         } else {
             self.device = Device::KeyboardAndMouse;
         }
+        // While a script listens, nothing presses an action: the first
+        // button of the right device is what it hears.
+        if self.capture.is_some() && !self.swallowed[index] {
+            self.capture_press(button);
+            return;
+        }
         // While a script takes text, keys are letters and not actions.
         if self.typing.on && matches!(button, Button::Key(_)) {
             return;
@@ -502,6 +515,12 @@ impl Input {
         if self.swallowed[index] {
             if amount < RELEASE_AT {
                 self.swallowed[index] = false;
+            }
+            return;
+        }
+        if self.capture.is_some() {
+            if amount >= PRESS_AT {
+                self.capture_press(Button::Gamepad(button));
             }
             return;
         }
@@ -595,6 +614,70 @@ impl Input {
         self.typing.on
     }
 
+    /// Starts (`Some`) or stops (`None`) listening for the next button the
+    /// player presses, for a script's controls page.
+    ///
+    /// While listening every action reads as let go, sticks and mouse
+    /// movement included, and what is held is let go too: a button down when
+    /// listening starts is not heard until it comes up and goes down again.
+    /// The first button of the device `hears` names is kept for the next
+    /// tick's [`InputFrame::heard`]; Escape on the keyboard and the
+    /// gamepad's Start are heard as [`Heard::Cancelled`] instead, never as
+    /// buttons. Everything pressed while listening, the heard button
+    /// included, presses nothing until it comes up. Listening ends by
+    /// itself on the tick that carries what it heard.
+    ///
+    /// Starting again forgets anything heard and not yet carried.
+    pub fn set_listening(&mut self, hears: Option<Hears>) {
+        self.heard = None;
+        self.capture = hears;
+        if hears.is_none() {
+            return;
+        }
+        for index in 0..Button::COUNT {
+            if self.held[index] {
+                self.swallowed[index] = true;
+            }
+            self.held[index] = false;
+            self.latched[index] = false;
+            self.stale[index] = false;
+        }
+        self.amount = [0.0; GamepadButton::COUNT];
+    }
+
+    /// Whether a script is listening for the next button.
+    #[must_use]
+    pub fn is_listening(&self) -> bool {
+        self.capture.is_some()
+    }
+
+    /// Takes a press for the listener: it presses no action, and the first
+    /// one from the right device is kept.
+    fn capture_press(&mut self, button: Button) {
+        let Some(hears) = self.capture else { return };
+        // A wheel notch has no coming up to wait for.
+        if !matches!(button, Button::Wheel(_)) {
+            self.swallowed[button.index()] = true;
+        }
+        if self.heard.is_some() {
+            return;
+        }
+        let wanted = match hears {
+            Hears::Any => true,
+            Hears::Keyboard => !button.is_gamepad(),
+            Hears::Gamepad => button.is_gamepad(),
+        };
+        if !wanted {
+            return;
+        }
+        self.heard = Some(match button {
+            Button::Key(Key::Escape) | Button::Gamepad(GamepadButton::GamepadStart) => {
+                Heard::Cancelled
+            }
+            other => Heard::Button(other),
+        });
+    }
+
     /// Reports where the free pointer is and how big the screen is, both in
     /// whatever units the window layer uses (LORE's engine uses HUD units:
     /// pixels on a screen 1080 high). `at` is measured from the top-left
@@ -672,6 +755,12 @@ impl Input {
             *state = self.state_of(action, *state, &self.reported, &self.repressed, mouse);
         }
         self.frame.actions = states;
+        // Listening ends on the tick that carries what it heard, after
+        // that tick read every action as let go.
+        self.frame.heard = self.heard.take();
+        if self.frame.heard.is_some() {
+            self.capture = None;
+        }
 
         self.frame.tick += 1;
         &self.frame
@@ -723,7 +812,7 @@ impl Input {
         repressed: &[bool; Button::COUNT],
         mouse: [f32; 2],
     ) -> ActionState {
-        if action.set != self.active && !action.everywhere {
+        if self.capture.is_some() || (action.set != self.active && !action.everywhere) {
             return ActionState {
                 just_released: last.pressed,
                 ..ActionState::default()
@@ -1837,5 +1926,134 @@ mod tests {
         assert_eq!(input.tick().wheel, 0.0);
         input.roll_wheel(5000.0);
         assert_eq!(input.tick().wheel, 1000.0);
+    }
+
+    fn heard_after(input: &mut Input) -> Option<Heard> {
+        input.tick().heard
+    }
+
+    #[test]
+    fn listening_hears_a_new_key_and_gamepad_button_and_ends() {
+        let mut r = rig();
+        r.input.set_listening(Some(Hears::Any));
+        assert!(r.input.is_listening());
+        r.input.press(Key::F);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Key(Key::F)))
+        );
+        assert!(!r.input.is_listening(), "it ends on the tick that heard");
+        assert_eq!(heard_after(&mut r.input), None, "and says it once");
+
+        r.input.set_listening(Some(Hears::Any));
+        r.input.press(GamepadButton::LeftBumper);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Gamepad(GamepadButton::LeftBumper)))
+        );
+        r.input.set_listening(Some(Hears::Any));
+        r.input.roll_wheel(0.0);
+        r.input.press(MouseWheel::MouseWheelUp);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Wheel(MouseWheel::MouseWheelUp)))
+        );
+    }
+
+    #[test]
+    fn a_button_held_when_listening_starts_is_not_heard_until_pressed_again() {
+        let mut r = rig();
+        r.input.press(Key::Space);
+        r.input.tick();
+        r.input.set_listening(Some(Hears::Any));
+        // Key repeat of the held key.
+        r.input.press(Key::Space);
+        assert_eq!(heard_after(&mut r.input), None);
+        r.input.release(Key::Space);
+        r.input.press(Key::Space);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Key(Key::Space)))
+        );
+    }
+
+    #[test]
+    fn listening_to_one_device_ignores_the_other() {
+        let mut r = rig();
+        r.input.set_listening(Some(Hears::Keyboard));
+        r.input.press(GamepadButton::GamepadNorth);
+        r.input.press(GamepadButton::GamepadStart);
+        assert_eq!(heard_after(&mut r.input), None);
+        r.input.press(MouseButton::MouseRight);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Mouse(MouseButton::MouseRight)))
+        );
+
+        r.input.release(GamepadButton::GamepadNorth);
+        r.input.set_listening(Some(Hears::Gamepad));
+        r.input.press(Key::G);
+        assert_eq!(heard_after(&mut r.input), None);
+        r.input.press(GamepadButton::GamepadNorth);
+        assert_eq!(
+            heard_after(&mut r.input),
+            Some(Heard::Button(Button::Gamepad(GamepadButton::GamepadNorth)))
+        );
+    }
+
+    #[test]
+    fn escape_and_start_cancel_and_are_never_buttons() {
+        let mut r = rig();
+        r.input.set_listening(Some(Hears::Any));
+        r.input.press(Key::Escape);
+        assert_eq!(heard_after(&mut r.input), Some(Heard::Cancelled));
+        r.input.release(Key::Escape);
+        r.input.set_listening(Some(Hears::Any));
+        r.input.press(GamepadButton::GamepadStart);
+        assert_eq!(heard_after(&mut r.input), Some(Heard::Cancelled));
+        r.input.release(GamepadButton::GamepadStart);
+        // A listener for the gamepad is not cancelled by Escape, and the
+        // keyboard's is not by Start.
+        r.input.set_listening(Some(Hears::Gamepad));
+        r.input.press(Key::Escape);
+        assert_eq!(heard_after(&mut r.input), None);
+        r.input.set_listening(Some(Hears::Keyboard));
+        r.input.press(GamepadButton::GamepadStart);
+        assert_eq!(heard_after(&mut r.input), None);
+    }
+
+    #[test]
+    fn every_action_reads_as_let_go_while_listening_and_the_heard_button_stays_quiet() {
+        let mut r = rig();
+        r.input.press(Key::W);
+        r.input.set_stick(Stick::RightStick, StickAxis::X, 1.0);
+        assert!(r.input.tick().pressed(r.movement));
+        r.input.set_listening(Some(Hears::Any));
+        let frame = r.input.tick();
+        assert!(!frame.pressed(r.movement) && frame.just_released(r.movement));
+        assert!(!frame.pressed(r.look));
+        r.input.press(Key::Space);
+        let frame = r.input.tick();
+        assert_eq!(frame.heard, Some(Heard::Button(Button::Key(Key::Space))));
+        assert!(
+            !frame.pressed(r.jump),
+            "the press that was heard presses nothing"
+        );
+        // Listening is over, and Space still presses nothing until it is let go.
+        let frame = r.input.tick();
+        assert!(!frame.pressed(r.jump));
+        r.input.release(Key::Space);
+        r.input.press(Key::Space);
+        assert!(r.input.tick().just_pressed(r.jump));
+    }
+
+    #[test]
+    fn stopping_listening_forgets_what_was_heard() {
+        let mut r = rig();
+        r.input.set_listening(Some(Hears::Any));
+        r.input.press(Key::F);
+        r.input.set_listening(None);
+        assert_eq!(heard_after(&mut r.input), None);
+        assert!(!r.input.is_listening());
     }
 }
