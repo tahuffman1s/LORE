@@ -909,11 +909,11 @@ declare extern type Npc extends Character with
     --- How far the NPC sees in daylight, in metres: 30 until the script says
     --- otherwise. 0 is blind; a number above 500 is taken as 500. It is what
     --- the NPC notices (`onSee`), unlike `lookDistance`, which only turns its
-    --- head. Sight is a cone from its eyes the
-    --- way its body faces, blocked by walls, by things fixed in the level
-    --- and by people standing in the way; someone is seen more weakly the further off they are, toward
-    --- the edge of the cone, in the dark or in fog, crouched or keeping
-    --- still. Behind a low wall, the part that shows is seen.
+    --- head. Sight is a cone from its eyes the way its body faces, blocked
+    --- by walls, by things fixed in the level and by people standing in the
+    --- way. Someone is seen more weakly the further off they are, toward the
+    --- edge of the cone, in the dark or in fog, crouched or keeping still.
+    --- Behind a low wall, the part that shows is seen.
     --- Example: guard.sightDistance = 0 -- blind
     sightDistance: number
 
@@ -944,19 +944,19 @@ declare extern type Npc extends Character with
     --- after they were lost from view. Called in the game's tick, NPCs in
     --- the order they were made. Each call adds another function; all are
     --- called. `lore check` tells it of the player once. For a crowd, give
-    --- each its function in a loop: the NPC is the loop's own variable. It
-    --- keeps eight in mind at once, the player always among them; in a
-    --- bigger crowd the most clearly seen. Someone in view who falls is not
-    --- told again: `game.onDeath` tells of that, and `npc:canSee(victim)`
-    --- says whether this NPC saw it.
+    --- each its function in a loop: the NPC is the loop's own variable.
+    --- An NPC sees at most eight people at once: the player first, then the
+    --- ones it sees most clearly.
+    --- Someone in view who falls is not told again. `game.onDeath` tells of
+    --- that, and `npc:canSee(victim)` says whether this NPC saw it.
     --- Example: for _, npc in game.npcs() do npc:onSee(function(who) print(npc.name .. " sees " .. who.name) end) end
     --- Example: guard:onSee(function(who) if who == game.player then print("Halt!") end end)
     function onSee(self, handler: (who: Character) -> ()): ()
 
     --- Calls `handler` when someone the NPC saw goes out of its view: behind
-    --- a wall, out of reach or into the dark, or are taken out of the world
-    --- (`npc:remove()`: told just before, while they can still be read), so
-    --- each `onSee` has its `onLoseSight`. `lastSeen` is where their feet
+    --- a wall, out of reach or into the dark. It is also called when they
+    --- are taken out of the world (`npc:remove()`), just before, while they
+    --- can still be read, so each `onSee` has its `onLoseSight`. `lastSeen` is where their feet
     --- were when it last saw them, in metres as `position` is, to go and look.
     --- Example: guard:onLoseSight(function(who, lastSeen) print("Where did they go?") end)
     function onLoseSight(self, handler: (who: Character, lastSeen: vector) -> ()): ()
@@ -977,9 +977,10 @@ declare extern type Npc extends Character with
     --- Example: if guard:canSee(game.player) then print("Halt!") end
     function canSee(self, who: Character): boolean
 
-    --- Everyone the NPC sees now, as of its last look, in the order they
-    --- came into view: the player and other NPCs. Empty once its health is
-    --- gone.
+    --- Everyone the NPC saw at its last look (five times a second): the
+    --- player and other NPCs, in the order they came into view, so someone
+    --- who goes out of view and comes back is last. Empty once its health
+    --- is gone.
     --- Example: for _, who in guard:inSight() do print(guard.name .. " sees " .. who.name) end
     function inSight(self): { Character }
 end
