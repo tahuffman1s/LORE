@@ -123,12 +123,13 @@ struct FlyCamera {
 }
 
 impl Default for FlyCamera {
-    /// Above and behind the middle of the level, looking down at it.
+    /// Above and behind the middle of the level, looking down at it: high
+    /// enough to see into the starter level over the cliff round it.
     fn default() -> Self {
         Self {
-            position: [0.0, 5.0, 22.0],
+            position: [0.0, 16.0, 22.0],
             yaw: 0.0,
-            pitch: -0.2,
+            pitch: -0.58,
             speed: START_SPEED,
         }
     }
@@ -1386,7 +1387,7 @@ mod tests {
             extras: None,
         });
         level.markers.push(Marker {
-            name: Some("Spawn red".to_owned()),
+            name: Some("Spawn gate".to_owned()),
             transform: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
@@ -1477,7 +1478,7 @@ mod tests {
             [
                 ("Crate A", panels::Kind::Object),
                 ("Crate", panels::Kind::Object),
-                ("Spawn red", panels::Kind::Marker),
+                ("Spawn gate", panels::Kind::Marker),
                 ("Sun", panels::Kind::Light),
             ]
         );
@@ -1517,13 +1518,13 @@ mod tests {
             "Stand-in level",
             "2 objects, 1 marker, 1 light",
             "Crate A",
-            "Spawn red",
+            "Spawn gate",
             "Sun",
             "Nothing chosen",
             "Click a name in the list on the left to see it here.",
             "hold the right mouse button",
             "Gamepad: the sticks fly and look",
-            "8.0 m/s at 0.0, 5.0, 22.0",
+            "8.0 m/s at 0.0, 16.0, 22.0",
         ] {
             assert!(shown.contains(expected), "no {expected:?} in:\n{shown}");
         }
@@ -1723,9 +1724,9 @@ mod tests {
         assert_eq!(editor.map.get(&id).unwrap().kind, "spawner");
         // A name, too.
         let _ = click_on(&mut editor, &context, "name", 3.0);
-        let typed = vec![egui::Event::Text("Red base".to_owned())];
+        let typed = vec![egui::Event::Text("Gate house".to_owned())];
         let (_, output) = panel_frame(&mut editor, &context, 3.2, typed);
-        assert_eq!(editor.map.get(&id).unwrap().name, "Red base");
+        assert_eq!(editor.map.get(&id).unwrap().name, "Gate house");
         let (_, output_after) = panel_frame(&mut editor, &context, 3.3, Vec::new());
         assert!(words(&output_after).contains("Place a spawner here"));
         drop(output);
@@ -1765,7 +1766,7 @@ mod tests {
         let read = saved.get(&id).unwrap();
         assert_eq!(
             (read.kind.as_str(), read.name.as_str()),
-            ("spawner", "Red base")
+            ("spawner", "Gate house")
         );
         assert!((read.position[0] - after[0]).abs() < 0.001);
 
@@ -2150,12 +2151,16 @@ mod tests {
         assert_eq!(editor.drag, None, "let go, nothing is dragged");
         assert_eq!(editor.map.get(&first).unwrap().position, [2.0, 0.0, 1.0]);
         // With Ctrl held it leaves the grid.
+        // 5.63, not 5.33: the camera now starts higher (0, 16, 22), so the same drag spans a different distance; it is off the grid either way.
         let from = at(&editor, [5.0, 0.0, -3.0]);
-        let to = at(&editor, [5.33, 0.0, -3.0]);
+        let to = at(&editor, [5.63, 0.0, -3.0]);
         let ctrl = egui::Modifiers::COMMAND;
         drag(&mut editor, &context, [from, to], 6.0, ctrl);
         let [x, y, z] = editor.map.get(&second).unwrap().position;
-        assert!((x - 5.33).abs() < 0.03 && y == 0.0 && (z + 3.0).abs() < 0.03);
+        assert!(
+            (x - 5.63).abs() < 0.03 && y == 0.0 && (z + 3.0).abs() < 0.03,
+            "{x}, {y}, {z}"
+        );
         // With Alt held it goes up and down, and not along the ground.
         let before = editor.map.get(&second).unwrap().position;
         let from = at(&editor, before);
@@ -2307,11 +2312,11 @@ mod tests {
         let map = Map::parse(
             "map.toml",
             "version = 1\n\
-             [[entity]]\nid = \"a\"\ntype = \"spawn\"\nname = \"Red spawn\"\n\
+             [[entity]]\nid = \"a\"\ntype = \"spawn\"\nname = \"Gate spawn\"\n\
              position = [-3, 0, -10]\nfacing = 180\n\
              [[entity]]\nid = \"b\"\ntype = \"spawn\"\nposition = [3, 0, 10]\n\
              [[entity]]\nid = \"c\"\ntype = \"zone\"\nname = \"Middle\"\nposition = [0, 0, 0]\nfacing = 90\n\
-             [[entity]]\nid = \"d\"\ntype = \"spawn\"\nposition = [-12, 0, 10]\n",
+             [[entity]]\nid = \"d\"\ntype = \"spawn\"\nposition = [-17, 0, 10]\n",
         )
         .unwrap();
         let folder = scratch("marks");
@@ -2400,17 +2405,18 @@ mod tests {
         // The tip of one that is not chosen is only the end of a line.
         let ([x, y], _) = editor.camera.pictured([3.0, 0.0, 9.0], size).unwrap();
         assert!(green(pixel(x, y - 1.0)), "{:?}", pixel(x, y - 1.0));
-        // A spawn point that is not chosen has no ring.
+        // A spawn point that is not chosen has no ring. Looked for under
+        // its dot: the line that shows which way it faces goes up from it.
         let place = editor.map.get("b").unwrap().position;
         let ([x, y], _) = editor.camera.pictured(place, size).unwrap();
-        let (ring, outside) = (pixel(x, y - MARK_SIZE - 4.0), pixel(x, y - MARK_SIZE - 9.0));
+        let (ring, outside) = (pixel(x, y + MARK_SIZE + 4.0), pixel(x, y + MARK_SIZE + 9.0));
         assert!(
             (light(ring) - light(outside)).abs() < 30,
             "{ring:?} beside {outside:?}"
         );
         // The spawn off to the left would be drawn over the list: it is
         // not, and nothing green is anywhere near where it would be.
-        let ([x, y], _) = editor.camera.pictured([-12.0, 0.0, 10.0], size).unwrap();
+        let ([x, y], _) = editor.camera.pictured([-17.0, 0.0, 10.0], size).unwrap();
         assert!(
             (20.0..240.0).contains(&x) && (20.0..600.0).contains(&y),
             "{x}, {y}"
@@ -2572,7 +2578,7 @@ mod tests {
         }
     }
 
-    /// One spawn point, at the far end of the starter level.
+    /// One spawn point, in the starter level, near the tower.
     const ONE_SPAWN: &str =
         "version = 1\n[[entity]]\nid = \"a\"\ntype = \"spawn\"\nposition = [-3, 0, -10]\n";
 
