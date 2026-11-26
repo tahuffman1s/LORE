@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your first steps — LORE</title>
-<meta name="description" content="A ten-minute tutorial: make a LORE game, walk around it, change it while it runs, put a counter on the HUD, play a sound and place where you start.">
+<meta name="description" content="A ten-minute tutorial: make a LORE game, walk around it, change it while it runs, put more on the screen, play a sound and place where you start.">
 <meta property="og:title" content="Your first steps — LORE">
-<meta property="og:description" content="Make a game, walk around it, change it while it runs, put a counter on the HUD, play a sound and place where you start. Ten minutes.">
+<meta property="og:description" content="Make a game, walk around it, change it while it runs, put more on the screen, play a sound and place where you start. Ten minutes.">
 <meta name="color-scheme" content="dark light">
 <link rel="stylesheet" href="docs.css">
 </head>
@@ -28,7 +28,7 @@
 <article class="page">
   <p class="crumb"><a href="index.html">Docs</a> / Tutorial</p>
   <h1>Your first steps</h1>
-  <p class="lead">You will make a game and walk around it, change it while it runs, put a counter on the screen, give it a sound, and choose where you start by placing a spawn point in the editor.</p>
+  <p class="lead">You will make a game and walk around it, change it while it runs, put more on the screen, give it a sound, and choose where you start by placing a spawn point in the editor.</p>
 
   <ul class="facts">
     <li><b>About ten minutes</b>after a one-off install that takes about five more</li>
@@ -38,7 +38,7 @@
 
   <div class="note">
     <p>What you get today</p>
-    <p>LORE is early. At the end of this page you stand in a small level of your own game, seen through your own eyes, with solid walls, ramps to climb, a counter on the screen that your script keeps, a sound your script plays, and a starting place you put there yourself. Nobody else is in the world yet, and there is nothing to fight or talk to: people, quests and saving are still being built.</p>
+    <p>LORE is early. At the end of this page you stand in a small level of your own game, seen through your own eyes, with solid walls, ramps to climb, a welcome and counters on the screen that your script keeps, a sound your script plays, and a starting place you put there yourself. Nobody else is in the world yet, and there is nothing to fight or talk to: people, quests and saving are still being built.</p>
   </div>
 
   <nav class="toc" aria-label="Steps">
@@ -48,7 +48,7 @@
       <li><a href="#new">Make a game</a></li>
       <li><a href="#walk">Walk around it</a></li>
       <li><a href="#change">Change it while it runs</a></li>
-      <li><a href="#hud">Put a counter on the screen</a></li>
+      <li><a href="#hud">Put more on the screen</a></li>
       <li><a href="#sound">Play a sound</a></li>
       <li><a href="#edit">Place where you start</a></li>
     </ol>
@@ -122,7 +122,7 @@ Then open main.luau in an editor, change something and save: the running game up
   </div>
   <div class="see">
     <p>You should see</p>
-    <p>A window opens on the game's level: a chequered floor with a wall around it, orange blocks, and a red end and a blue end. You start at one end, looking towards the other. The terminal says, among a few other lines:</p>
+    <p>A window opens on the game's level: a small walled garden with a tower ahead of you, a glowing light on top of it, and a house off to one side. You start at the south end, looking at the tower. Across the top of the window it says <b>Welcome to first-steps!</b>, with a hint under it that goes away after a few seconds, and in the bottom left corner it says <b>Jumps: 0</b>. The terminal greets you too, among a few other lines:</p>
     <div class="code">
       <pre class="out" data-says="run" tabindex="0"><code>[INFO] Playing ./main.luau. Edit it, or a script it requires, and save to see changes right away.
 [INFO] Welcome to first-steps! Click the game window so it can see your mouse.
@@ -130,12 +130,12 @@ Then open main.luau in an editor, change something and save: the running game up
 [INFO] Fire: left mouse button, or the right trigger.</code></pre>
     </div>
   </div>
-  <p>On Windows the first line says <code>.\main.luau</code>. Click the window, then look around with the mouse and walk with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. A gamepad works too: left stick to walk, right stick to look. The walls and blocks are solid, the ramps lead up onto the two platforms, and you can hear your own footsteps. Press <kbd>Space</kbd> a few times and watch the terminal:</p>
+  <p>On Windows the first line says <code>.\main.luau</code>. Click the window, then look around with the mouse and walk with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. A gamepad works too: left stick to walk, right stick to look. The walls and the house are solid, a ramp and some steps lead up to a terrace, and you can hear your own footsteps. Press <kbd>Space</kbd> (or the bottom face button on a gamepad) a few times: the number in the bottom left counts your jumps, and the terminal does as well:</p>
   <div class="code">
     <pre class="out" tabindex="0"><code>[INFO] Jump number 1
 [INFO] Jump number 2</code></pre>
   </div>
-  <p>That text comes from your script. <kbd>Esc</kbd>, or Start on a gamepad, pauses the game, gives the mouse back and opens its menu: Resume, Settings and Quit. The menu is part of your game, in <span class="mono">pause_menu.luau</span> beside your script. Choose Resume, and leave the game running for the next step.</p>
+  <p>All of that text comes from your script. <kbd>Esc</kbd>, or Start on a gamepad, pauses the game, gives the mouse back and opens its menu: Resume, Settings and Quit. The menu is part of your game, in <span class="mono">pause_menu.luau</span> beside your script. Choose Resume, and leave the game running for the next step.</p>
   <details>
     <summary>It says <code>Could not find Vulkan on this computer</code>, or that Vulkan is too old</summary>
     <p>LORE draws with Vulkan 1.3, which comes with the graphics driver. Update the driver for your graphics card and run <code>lore run</code> again. On Linux, also install the Vulkan loader: <code>sudo apt install libvulkan1</code> or <code>sudo dnf install vulkan-loader</code>.</p>
@@ -146,79 +146,75 @@ Then open main.luau in an editor, change something and save: the running game up
   </details>
 
   <h2 id="change"><span class="n mono">4</span>Change it while it runs</h2>
-  <p>Open <code>first-steps/main.luau</code> in any text editor: Notepad and Text Editor are fine. Find this line:</p>
+  <p>Open <code>first-steps/main.luau</code> in any text editor: Notepad and Text Editor are fine. Find this line, the one that writes the jump count on the screen:</p>
   <div class="code">
-    <pre data-finds="main.luau" tabindex="0"><code>        print("Jump number " .. saved.jumps)</code></pre>
+    <pre data-finds="main.luau" tabindex="0"><code>        jumps.text = "Jumps: " .. saved.jumps</code></pre>
   </div>
   <p>Change the words inside the quotes, and save the file:</p>
   <div class="code">
-    <pre tabindex="0"><code>        print("Boing! That is jump " .. saved.jumps)</code></pre>
+    <pre data-adds="main.luau" tabindex="0"><code>        jumps.text = "Boing! " .. saved.jumps</code></pre>
   </div>
   <div class="see">
     <p>You should see</p>
-    <p>The terminal says the game took the new version, without restarting. If you had jumped twice:</p>
+    <p>The terminal says the game took the new version, without restarting, and the welcome comes up on the screen again for a few seconds. If you had jumped twice:</p>
     <div class="code">
       <pre class="out" tabindex="0"><code>[INFO] Reloaded main.luau.
 [INFO] main.luau was saved and loaded again. Jumps so far: 2</code></pre>
     </div>
-    <p>Jump in the game, and the terminal carries on counting: <code>Boing! That is jump 3</code>. The count was not lost because the script keeps it in a <code>game.keep</code> table; everything else in the file starts over on a save.</p>
+    <p>Jump in the game, and the corner now says <b>Boing! 3</b>. The count was not lost because the script keeps it in a <code>game.keep</code> table; everything else in the file starts over on a save.</p>
   </div>
   <p>Now break it on purpose. Change <code>game.onTick</code> to <code>game.onTik</code> and save:</p>
   <div class="code">
-    <pre class="out" data-says="mistake" tabindex="0"><code>[ERROR] Script error in main.luau, line 22:
+    <pre class="out" data-says="mistake" tabindex="0"><code>[ERROR] Script error in main.luau, line 33:
 
-    22 | game.onTik(function(step)
+    33 | game.onTik(function()
 
   game.onTik does not exist. Did you mean game.onTick?
   The game keeps running the last version that worked. Fix this and save the file: it reloads by itself.</code></pre>
   </div>
   <p>The game did not crash, and the message says which line and what to try. The same message is in the top-left corner of the game's window, so you see it without looking away from the game. Put the <code>c</code> back, save, and it reloads: the message in the window goes away. Leave the game running.</p>
 
-  <h2 id="hud"><span class="n mono">5</span>Put a counter on the screen</h2>
-  <p>So far the game only talks in the terminal. Text, bars and boxes drawn over the game are its HUD. Replace everything in <code>main.luau</code> with this, and save:</p>
+  <h2 id="hud"><span class="n mono">5</span>Put more on the screen</h2>
+  <p>Text, bars and boxes drawn over the game are its HUD, and your game already has some: the welcome and the jump count. Add one more piece, a count of your shots in the top right corner. Find the line that makes the jump count:</p>
   <div class="code">
-    <span class="label">main.luau</span>
-    <pre data-file="main.luau" tabindex="0"><code>-- first-steps: a walk with a jump counter.
-
--- What is in this table is kept when the file is saved and loaded again,
--- until the game is closed. Everything else in the file starts over.
-local saved = game.keep("saved", { jumps = 0 })
-
--- A piece of the HUD is made once, here at the top of the file, and changed
--- as the game goes on. This one is a line of text at the top of the screen.
-local counter = game.hud.text("Jumps: " .. saved.jumps, { at = "top", down = 40, size = 48 })
-
--- This runs 60 times a second.
-game.onTick(function()
-    if game.input.justPressed("jump") then
-        saved.jumps += 1
-        counter.text = "Jumps: " .. saved.jumps
-        print("Jump number " .. saved.jumps)
-    end
-end)</code></pre>
+    <pre data-finds="shots-text" tabindex="0"><code>local jumps = game.hud.text("Jumps: " .. saved.jumps, { at = "bottom left" })</code></pre>
+  </div>
+  <p>Add these two lines under it. The first starts a number at 0, the second puts it on the screen, pinned to the top right:</p>
+  <div class="code">
+    <pre data-adds="shots-text" tabindex="0"><code>local shots = 0
+local shotsText = game.hud.text("Shots: 0", { at = "top right" })</code></pre>
+  </div>
+  <p>Then find the line that plays the shot's sound:</p>
+  <div class="code">
+    <pre data-finds="shots-count" tabindex="0"><code>        game.audio.play("gunshot")</code></pre>
+  </div>
+  <p>Add these two under it, and save:</p>
+  <div class="code">
+    <pre data-adds="shots-count" tabindex="0"><code>        shots += 1
+        shotsText.text = "Shots: " .. shots</code></pre>
   </div>
   <div class="see">
     <p>You should see</p>
-    <p>The game is still running, and now <b>Jumps: 2</b> (or however many you had) is written at the top of its window. Jump, and it counts up.</p>
+    <p>The game is still running, and <b>Shots: 0</b> is in the top right of its window. Click the left mouse button, or pull the right trigger, and it counts up. Unlike the jumps it starts from 0 again on every save, because <code>shots</code> is not in the <code>game.keep</code> table.</p>
   </div>
-  <p>Try the options: <code>at</code> is where the text is pinned (<code>"top left"</code>, <code>"bottom right"</code>, <code>"center"</code> and so on), <code>down</code> moves it from there, and <code>color = "yellow"</code> colours it. Save after each change and watch the window. A <code>game.hud.bar</code> is made the same way, for something like health.</p>
+  <p>Try the options: <code>at</code> is where the text is pinned (<code>"top left"</code>, <code>"bottom right"</code>, <code>"center"</code> and so on), <code>down</code> moves it from there, <code>size</code> makes it bigger and <code>color = "yellow"</code> colours it. Save after each change and watch the window. A <code>game.hud.bar</code> is made the same way, for something like health.</p>
   <details>
     <summary>The terminal shows a <code>Script error</code></summary>
-    <p>Something went missing when the script was pasted. The message names the line and what to try. Select everything in <code>main.luau</code>, paste the script again and save.</p>
+    <p>The message names the line and what to try. The two new lines at the top have to sit on their own lines, outside any <code>function</code>; the two under <code>game.audio.play</code> have to sit inside the <code>if</code>, above its <code>end</code>.</p>
   </details>
 
   <h2 id="sound"><span class="n mono">6</span>Play a sound</h2>
-  <p>Find this line in the script you just pasted:</p>
+  <p>The shot already has a sound. Give the jump one too. Find this line:</p>
   <div class="code">
-    <pre data-finds="hud" tabindex="0"><code>        counter.text = "Jumps: " .. saved.jumps</code></pre>
+    <pre data-finds="sound" tabindex="0"><code>        saved.jumps += 1</code></pre>
   </div>
   <p>Add this line under it, and save:</p>
   <div class="code">
-    <pre data-adds="hud" tabindex="0"><code>        game.audio.play("reload")</code></pre>
+    <pre data-adds="sound" tabindex="0"><code>        game.audio.play("reload")</code></pre>
   </div>
   <div class="see">
     <p>You should see</p>
-    <p>Nothing new to see: jump, and you hear a click-clack with every jump. <code>"reload"</code> is one of the sounds the engine comes with, like the footsteps you have been hearing.</p>
+    <p>Nothing new to see: jump, and you hear a click-clack with every jump. <code>"reload"</code> is one of the sounds the engine comes with, like <code>"gunshot"</code> for the shot and the footsteps you have been hearing.</p>
   </div>
   <p>A sound of your own is a WAV or Ogg Vorbis file in a folder called <code>sounds</code> inside the game's folder: <code>sounds/boing.wav</code> is played with <code>game.audio.play("boing")</code>. Now close the game's window, and let the engine try the script out. This command opens no window: it runs the game for a moment, presses every button for you, and tells you if anything in the script went wrong.</p>
   <div class="code">
@@ -229,13 +225,14 @@ end)</code></pre>
     <div class="code">
       <pre class="out" data-says="check" tabindex="0"><code>[INFO] Jump number 1
 [INFO] Jump number 2
+[INFO] Fire! Moving 0, 0
 main.luau is fine: it loaded and ran for 60 ticks (1 second of game time) with its player in it and no errors.</code></pre>
     </div>
     <p>More lines follow, saying what the check tried and what it did not. It jumped twice because two things are bound to jump: a key and a gamepad button.</p>
   </div>
   <details>
     <summary>It says <code>main.luau has a mistake</code></summary>
-    <p>The lines above that message name the line and what to try. The new line has to sit inside the <code>if</code>, above its <code>end</code>, with its quotes and brackets as shown.</p>
+    <p>The lines above that message name the line and what to try. The new line has to sit inside the <code>if</code> that checks for a jump, above its <code>end</code>, with its quotes and brackets as shown.</p>
   </details>
 
   <h2 id="edit"><span class="n mono">7</span>Place where you start</h2>
@@ -265,7 +262,7 @@ facing = 90.0</code></pre>
   </div>
   <div class="see">
     <p>You should see</p>
-    <p>You start on the platform, at your spawn point, facing the way its line pointed, with your counter at the top of the screen. <code>lore check</code> now has a line about the map as well:</p>
+    <p>You start on the platform, at your spawn point, facing the way its line pointed, with your counters on the screen. <code>lore check</code> now has a line about the map as well:</p>
     <div class="code">
       <pre class="out" data-says="map" tabindex="0"><code>map.toml is fine: 1 placed: 1 spawn. The player starts at one of its spawn points.</code></pre>
     </div>
@@ -276,7 +273,7 @@ facing = 90.0</code></pre>
   </details>
 
   <h2 id="next">What next</h2>
-  <p>You made a game, walked around it, changed its script while it ran, put a counter on its HUD, gave it a sound and placed where it starts. From here:</p>
+  <p>You made a game, walked around it, changed its script while it ran, put more on its HUD, gave it a sound and placed where it starts. From here:</p>
   <div class="cards">
     <a class="card" href="index.html#scripting"><b>Everything a script can do</b><span>Timers, the HUD, sounds, weapons and input.</span></a>
     <a class="card" href="index.html#commands"><b>Every command</b><span>Check a game, edit its level, make a download for players.</span></a>
