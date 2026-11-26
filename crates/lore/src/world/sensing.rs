@@ -76,6 +76,10 @@ impl Sensing {
         told.clear();
         for (nth, npc) in npcs.list_mut().iter_mut().enumerate() {
             let who = npc.who;
+            // Taken out by the script this tick: its body goes next tick.
+            if !host.is_npc(who) {
+                continue;
+            }
             if npc.down {
                 // A body sees and hears nothing, and says nothing of it.
                 if npc.senses.sighted().next().is_some() || npc.senses.last_heard().is_some() {
@@ -138,9 +142,12 @@ impl Sensing {
         self.lights.clear();
         self.lights.resize(self.seeable.len(), f32::NAN);
         self.sounds.clear();
+        // One for each noise, in step with the list; one the script
+        // silenced (game.onNoise answered false) is not played, so no NPC
+        // hears it either.
         (self.sounds).extend(world.noises.iter().map(|noise| Sound {
             at: noise.position,
-            loudness: noise.loudness,
+            loudness: if noise.silenced { 0.0 } else { noise.loudness },
             near: noise.range.near,
             far: noise.range.far,
             by: noise.by,

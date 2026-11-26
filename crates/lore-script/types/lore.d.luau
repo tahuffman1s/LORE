@@ -3469,8 +3469,9 @@ declare game: {
     --- to keep the engine from playing it; return nothing to let it play.
     --- Example: game.onNoise(function(noise) if noise.sound == "footstep" then print("a step at", noise.position.x, noise.position.z) end end)
     --- Example: game.onNoise(function(noise) if noise.sound == "thunder" then return false end end)
-    --- The noise is still made when you return false, so anything else that
-    --- listens still hears it. A noise nothing registered for costs nothing.
+    --- The noise is still made when you return false, so another
+    --- game.onNoise function still hears it; NPCs do not, as the player
+    --- does not. A noise nothing registered for costs nothing.
     onNoise: (handler: (noise: Noise) -> boolean?) -> (),
 
     --- Calls `handler` when someone starts to reload, with who it is. This

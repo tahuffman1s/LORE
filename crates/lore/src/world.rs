@@ -2468,9 +2468,11 @@ impl Game for Playing {
         let (now, tick_rate) = (self.world.tick, self.world.ground.tick_rate);
         self.heard.retain(|noise| fresh(noise, now, tick_rate));
         let room = MOST_HEARD.saturating_sub(self.heard.len());
-        let noises = self.world.noises();
-        self.heard
-            .extend_from_slice(&noises[..noises.len().min(room)]);
+        // A script's own sound is played by its request, not from here.
+        let noises = (self.world.noises().iter())
+            .filter(|noise| noise.kind != crate::noise::NoiseKind::Script)
+            .take(room);
+        self.heard.extend(noises);
         let room = MOST_MARKS.saturating_sub(self.marks.len());
         let marks = self.world.water_marks();
         self.marks

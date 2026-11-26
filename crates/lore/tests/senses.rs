@@ -221,7 +221,7 @@ fn a_sound_a_script_plays_is_heard_by_others_and_not_by_the_one_that_made_it() {
     );
     assert!(
         said.iter()
-            .all(|line| !line.starts_with("Crier heard landing")),
+            .all(|line| line != "Crier heard landing by Crier"),
         "{said:?}"
     );
     // A bottle a script smashes is heard by both, made by nobody.

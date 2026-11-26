@@ -1959,6 +1959,10 @@ impl ScriptHost {
     /// view. Its `onSee` functions are called with them, and `canSee` says
     /// so until [`npc_lost_sight`](Self::npc_lost_sight).
     pub fn npc_saw(&mut self, npc: CharacterId, who: CharacterId) {
+        // One taken out this tick is no longer anyone's to see or be seen.
+        if !(self.npcs.has(npc) && self.characters.has(who)) {
+            return;
+        }
         self.npcs.set_in_view(npc, who, true);
         self.tell_npc(npc, who, |handlers| &handlers.npc_saw, |_, _| Ok(None));
     }
