@@ -2151,6 +2151,7 @@ mod tests {
         assert_eq!(editor.drag, None, "let go, nothing is dragged");
         assert_eq!(editor.map.get(&first).unwrap().position, [2.0, 0.0, 1.0]);
         // With Ctrl held it leaves the grid.
+        // 5.63, not 5.33: the camera now starts higher (0, 16, 22), so the same drag spans a different distance; it is off the grid either way.
         let from = at(&editor, [5.0, 0.0, -3.0]);
         let to = at(&editor, [5.63, 0.0, -3.0]);
         let ctrl = egui::Modifiers::COMMAND;

@@ -304,10 +304,10 @@ pub(crate) fn scene() -> Scene {
     put("House Table", wood, [-11.0, 0.0, -7.0], [0.8, 0.8, 0.8]);
     put("House Lamp", flame, [-11.0, 0.8, -7.0], [0.3, 0.4, 0.3]);
     put("House Chest", bronze, [-10.9, 0.0, -3.1], [1.0, 0.6, 0.6]);
-    // Three crates against the house: a way up to its roof.
-    put("Crate Low", wood, [-6.9, 0.0, -1.0], [1.4, 0.7, 1.4]);
-    put("Crate Middle", wood, [-8.4, 0.0, -1.0], [1.4, 1.4, 1.4]);
-    put("Crate High", wood, [-9.9, 0.0, -1.0], [1.4, 2.1, 1.4]);
+    // Three crates with their backs to the house's south wall: a way up to its roof.
+    put("Crate Low", wood, [-6.9, 0.0, -1.3], [1.4, 0.7, 1.4]);
+    put("Crate Middle", wood, [-8.4, 0.0, -1.3], [1.4, 1.4, 1.4]);
+    put("Crate High", wood, [-9.9, 0.0, -1.3], [1.4, 2.1, 1.4]);
 
     // The terrace, against the east cliff, with a ramp up to it from the
     // path and steps from the south, and a brazier burning on it.
@@ -906,6 +906,16 @@ mod tests {
             let gap = apart(0).hypot(apart(2));
             assert!(gap <= 1.2, "{from} to {to}: {gap} m");
         }
+        // The crates stand against the house's south wall, and the high one
+        // reaches out past the roof's edge: room to stand and hop onto it.
+        let (_, wall) = reach_of(&scene, "House Wall South");
+        let (crate_least, crate_most) = reach_of(&scene, "Crate High");
+        let (_, roof_most) = reach_of(&scene, "House Roof");
+        assert!((crate_least[2] - wall[2]).abs() < 0.01, "back to the wall");
+        assert!(
+            crate_most[2] - roof_most[2] >= 0.5,
+            "room to stand on the crate"
+        );
         // The tower's plinth is low enough to walk onto.
         assert!(top("Tower Plinth") < MoveSettings::default().step_height - 0.05);
         // Between the last stone and the lookout there is a real gap.

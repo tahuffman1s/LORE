@@ -10,8 +10,8 @@ In this folder, run:
 lore run
 ```
 
-Click the window to capture the mouse; Escape frees it.
-The window shows the game's level: a small walled garden: a tower to walk to, steps to climb and a house to look into. The game says hello and counts your jumps on its own screen with `game.hud`, and prints the same to the terminal.
+Click the window to capture the mouse; Escape (or Start on a gamepad) pauses the game and frees the mouse.
+The window shows the game's level: a small walled garden with a tower to walk to, steps to climb and a house to look into. The game says hello and counts your jumps on its own screen with `game.hud`, and prints the same to the terminal.
 
 ## The level
 
@@ -29,7 +29,7 @@ The level is drawn in its materials' colours, and every shape in it is solid: th
 
 ## Sounds
 
-Firing plays the engine's starter gunshot. To use a sound of your own, make a folder called `sounds` in this folder and put a WAV file in it: `sounds/gunshot.wav` replaces the starter gunshot, and any other name is a new sound, so `sounds/door.wav` is played with `game.audio.play("door")`. A sound saved while the game runs is picked up. Only WAV files load for now. Only use sounds you made or are allowed to share, and keep their licence beside them.
+Firing plays the engine's starter gunshot. To use a sound of your own, make a folder called `sounds` in this folder and put a WAV or Ogg Vorbis file in it: `sounds/gunshot.wav` replaces the starter gunshot, and any other name is a new sound, so `sounds/door.wav` is played with `game.audio.play("door")`. A sound saved while the game runs is picked up. WAV and Ogg Vorbis files load for now. Only use sounds you made or are allowed to share, and keep their licence beside them.
 
 ## Shaders
 

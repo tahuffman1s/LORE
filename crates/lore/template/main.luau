@@ -29,8 +29,8 @@ game.onStart(function()
     print("Fire: left mouse button, or the right trigger.")
 end)
 
--- This runs 60 times a second. `step` is the length of one tick in seconds.
-game.onTick(function(step)
+-- This runs 60 times a second.
+game.onTick(function()
     if game.input.justPressed("jump") then
         saved.jumps += 1
         jumps.text = "Jumps: " .. saved.jumps
@@ -50,7 +50,7 @@ end)
 
 -- How the game is seen: "first" from the player's eyes, or "third" from
 -- over their shoulder. The player can switch with F, or the View button on
--- a gamepad, because of the second line.
+-- a gamepad, because of game.player:allowViewSwitch(true).
 game.player:setView("first")
 game.player:allowViewSwitch(true)
 
