@@ -71,7 +71,7 @@ mod tools_api;
 mod weapon_api;
 mod weather_api;
 
-pub use audio::{AudioCommand, SoundId, SoundRequest};
+pub use audio::{AudioCommand, SoundId, SoundRequest, SoundTweak};
 pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use dice_api::{Dice, seed_new_games};
@@ -93,7 +93,7 @@ pub use tools_api::{
     Abilities, BindingChange, ControlsChange, FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport,
     ViewTold,
 };
-pub use weapon_api::{HeldWeapon, HoldSaid, WeaponHit};
+pub use weapon_api::{HeldWeapon, HoldSaid, NoiseTold, SoundName, WeaponHit, WeaponSounds};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
 /// Type definitions for the script API, in the format the Luau language

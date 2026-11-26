@@ -610,6 +610,16 @@ fn check(folder: &Path) -> Result<(), String> {
             });
         }
         game.host_mut().weapon_reloading(player);
+        // A footstep and a gunshot heard, so game.onNoise functions run.
+        for (sound, loudness, heard_within) in [("footstep", 0.6, 30.0), ("gunshot", 1.0, 150.0)] {
+            game.host_mut().noise_made(&lore_script::NoiseTold {
+                sound,
+                position: [DUMMY_AT[0], 0.0, DUMMY_AT[2]],
+                loudness,
+                heard_within,
+                by_player: true,
+            });
+        }
         game.tick(input.tick(), step);
         // Dying is being put back at a spawn point: game.onSpawn again.
         game.host_mut().player_died();

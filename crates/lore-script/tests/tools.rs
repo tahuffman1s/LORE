@@ -1331,3 +1331,11 @@ fn the_notice_and_the_event_are_checked_for_what_they_take() {
         "{said}"
     );
 }
+
+#[test]
+fn step_loudness_goes_no_higher_than_four() {
+    let mut host = game("game.onStart(function() game.player:setStepLoudness(99) end)");
+    host.tick(&InputFrame::default(), 1.0 / 60.0);
+    assert_eq!(host.last_error(), None);
+    assert_eq!(host.moves().step_loudness, 4.0);
+}

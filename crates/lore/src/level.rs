@@ -250,7 +250,7 @@ mod tests {
         assert!(file.changed().is_none(), "it changed again");
         file.look_now();
         let level = file.changed().unwrap().unwrap();
-        assert_eq!(summary(&level), "22 shapes placed, 744 triangles");
+        assert_eq!(summary(&level), "49 shapes placed, 928 triangles");
         file.look_now();
         assert!(file.changed().is_none(), "read once");
 
@@ -284,7 +284,7 @@ mod tests {
         fs::write(folder.join(LEVEL_FILE), STARTER_LEVEL).unwrap();
         let level = load(&folder).unwrap().unwrap();
         assert_eq!(level.warnings, Vec::<String>::new());
-        assert_eq!(summary(&level), "22 shapes placed, 744 triangles");
+        assert_eq!(summary(&level), "49 shapes placed, 928 triangles");
         let _ = fs::remove_dir_all(&folder);
     }
 

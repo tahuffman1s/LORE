@@ -61,6 +61,17 @@ game.onSpawn(function()
 end)
 
 game.audio.stopAll()
+game.audio.setVolume("footstep", 0.3)
+print(game.audio.getVolume("footstep"))
+game.audio.replace("footstep", "gunshot")
+game.audio.replace("footstep", nil)
+game.onNoise(function(noise)
+    local loud: number = noise.loudness
+    print(noise.sound, noise.position.x, loud, noise.heardWithin, noise.byPlayer)
+    if noise.sound == "thunder" then
+        return false
+    end
+end)
 game.audio.play("gunshot")
 local music = game.audio.play("music", { volume = 0.4, pitch = 1, loop = true })
 music:stop()
@@ -103,6 +114,10 @@ game.weapon("smg", {
     reach = 300,
     roundsPerMinute = 900,
     burstPause = 0.15,
+    fireSound = "twang",
+    reloadSound = "reload",
+    emptySound = "dry-fire",
+    heardWithin = 20,
     raiseTime = 0.3,
     pellets = 1,
     magazineSize = 25,
@@ -386,6 +401,9 @@ game.onTick(function()
         game.player:setSwimSpeed(2)
         game.player:setJumpHeight(2.5)
         game.player:setGravity(1.6)
+        game.player:setStride(1.5)
+        game.player:setStepLoudness(0.5)
+        print(game.player.stride, game.player.stepLoudness)
         game.player:setAbility("vault", true)
         game.player:setAbility("climb", true)
         game.player:setAbility("swim", false)

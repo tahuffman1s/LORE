@@ -4,7 +4,8 @@
 //! come out the same every time. They are stand-ins: swap in
 //! recorded sounds with [`Sound::load`] when the game has its own.
 //!
-//! Besides feet and guns there is water: [`splashes`], [`small_splashes`],
+//! Besides feet and guns there are the [`explosion`] of a blast and the
+//! [`impact`] of a strike, and water: [`splashes`], [`small_splashes`],
 //! [`wading`], [`swim_strokes`], [`surfacing`], [`bubbles`], [`drips`], the
 //! [`sizzles`] of a liquid that burns and
 //! the [`underwater`] rumble to loop while the head is under; and there is
@@ -126,6 +127,32 @@ pub fn landing() -> Sound {
 pub fn dry_fire() -> Sound {
     build(0.06, |time| {
         (tick(time, 0.0, 2_600.0) + tick(time, 0.012, 1_700.0) * 0.6) * 0.5
+    })
+}
+
+/// A rocket or grenade going off: a crack, then a low roar that rolls away.
+#[must_use]
+pub fn explosion() -> Sound {
+    let mut crack = Hiss(0xE8F1);
+    let mut roar = soft_hiss(0xE8F2, 0.05);
+    build(1.6, move |time| {
+        let snap = crack.next() * (-time * 60.0).exp();
+        let rolling = roar() * (-time * 3.2).exp() * 4.5;
+        // A note that falls through the floor of hearing as it dies.
+        let thump = (TAU * (38.0 * time + 60.0 * (1.0 - (-time * 8.0).exp()) / 8.0)).sin()
+            * (-time * 5.0).exp();
+        (snap * 0.7 + rolling * 0.7 + thump * 0.9).clamp(-1.0, 1.0) * 0.9
+    })
+}
+
+/// A bullet or a rocket striking a surface: a short crack and a thud.
+#[must_use]
+pub fn impact() -> Sound {
+    let mut grit = soft_hiss(0x1A9C, 0.4);
+    build(0.14, move |time| {
+        let crack = grit() * (-time * 70.0).exp() * 1.8;
+        let thud = (TAU * 140.0 * time).sin() * (-time * 45.0).exp();
+        (crack * 0.7 + thud * 0.6) * 0.6
     })
 }
 

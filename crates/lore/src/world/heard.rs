@@ -99,8 +99,14 @@ impl Played {
         self.loudest = [0.0; 2];
     }
 
+    /// What was heard, leaving out where bullets landed: recoil sends some
+    /// into the floor, which is its own noise ([`NoiseKind::Impact`]).
     fn kinds(&self) -> Vec<NoiseKind> {
-        self.noises.iter().map(|noise| noise.kind).collect()
+        self.noises
+            .iter()
+            .map(|noise| noise.kind)
+            .filter(|kind| *kind != NoiseKind::Impact)
+            .collect()
     }
 
     fn feet(&self) -> [f32; 3] {
@@ -203,7 +209,11 @@ fn a_weapon_is_heard_firing_running_dry_and_being_reloaded() {
             Gunshot, Gunshot, Gunshot, DryFire, Reload, Gunshot, Gunshot, Gunshot
         ]
     );
-    for noise in &played.noises {
+    for noise in played
+        .noises
+        .iter()
+        .filter(|noise| noise.kind != NoiseKind::Impact)
+    {
         assert!(noise.loudness == 1.0);
         assert!(distance(noise.position, eyes) < 0.05, "{noise:?}");
         assert!((0.0..=STEP).contains(&noise.delay), "{noise:?}");
@@ -375,4 +385,132 @@ fn rain_and_wind_are_heard_for_as_long_as_they_last_and_a_tornado_from_where_it_
         played.noises.is_empty(),
         "the weather makes no noise of the player's"
     );
+}
+
+/// The footstep noises of `played` and how far apart along the walk the
+/// first and last were, per step.
+fn footsteps(played: &Played) -> Vec<&Noise> {
+    (played.noises.iter())
+        .filter(|noise| noise.kind == NoiseKind::Footstep)
+        .collect()
+}
+
+#[test]
+fn a_script_sets_how_far_apart_steps_fall_and_how_loud_they_are() {
+    let mut usual = Played::script("");
+    usual.input.press(Key::W);
+    usual.run(180);
+    let usual_steps = footsteps(&usual).len();
+
+    let mut short = Played::script("game.player:setStride(1)");
+    short.input.press(Key::W);
+    short.run(180);
+    let short_steps = footsteps(&short).len();
+    // Half the stride is twice the steps, to within one.
+    assert!(
+        short_steps.abs_diff(2 * usual_steps) <= 2,
+        "{short_steps} {usual_steps}"
+    );
+    assert_eq!(short.game.world.game().host().moves().stride, 1.0);
+
+    // Twice as loud, and silent: the noise says so, and nothing is played.
+    let mut loud = Played::script("game.player:setStepLoudness(1.5)");
+    loud.input.press(Key::W);
+    loud.run(180);
+    assert!(!footsteps(&loud).is_empty());
+    for noise in footsteps(&loud) {
+        assert!((noise.loudness - 0.9).abs() < 1e-5, "{noise:?}");
+    }
+    let mut silent = Played::script("game.player:setStepLoudness(0)");
+    silent.input.press(Key::W);
+    silent.run(180);
+    assert!(!footsteps(&silent).is_empty());
+    for noise in footsteps(&silent) {
+        assert_eq!(noise.loudness, 0.0, "{noise:?}");
+    }
+    assert_eq!(silent.loudest, [0.0; 2]);
+}
+
+#[test]
+fn a_script_turns_the_volume_of_an_engine_sound_down_and_the_noise_is_still_made() {
+    let script = format!(
+        "{SMALL_RIFLE}\ngame.audio.setVolume(\"gunshot\", 0)\ngame.audio.setVolume(\"impact\", 0)"
+    );
+    let mut played = Played::script(&script);
+    played.input.press(GamepadButton::RightTrigger);
+    played.run(12);
+    let shots = (played.noises.iter())
+        .filter(|noise| noise.kind == NoiseKind::Gunshot)
+        .count();
+    assert!(shots >= 1, "{:?}", played.noises);
+    assert!(played.noises.iter().all(|noise| !noise.silenced));
+    assert_eq!(played.loudest, [0.0; 2]);
+    // Another gun, with the volume as it was, is heard.
+    let mut played = Played::script(SMALL_RIFLE);
+    played.input.press(GamepadButton::RightTrigger);
+    played.run(12);
+    assert!(played.loudest[0] > 0.05);
+}
+
+#[test]
+fn a_script_plays_another_sound_in_the_place_of_the_engines() {
+    let folder = std::env::temp_dir().join(format!("lore-noise-{}-replace", std::process::id()));
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(folder.join("sounds")).unwrap();
+    fs::write(
+        folder.join("main.luau"),
+        "game.audio.replace(\"footstep\", \"boots\")",
+    )
+    .unwrap();
+    fs::write(
+        folder.join("sounds/boots.wav"),
+        test_wav(&vec![i16::MAX / 2; RATE as usize / 10]),
+    )
+    .unwrap();
+    let script = ScriptGame::open(&folder, &ActionMap::standard()).unwrap();
+    let mut played = Played::of(script);
+    played.input.press(Key::W);
+    played.run(60);
+    assert!(!footsteps(&played).is_empty());
+    // The noise keeps the engine's name; what is heard is the file.
+    assert!(
+        played
+            .noises
+            .iter()
+            .all(|noise| noise.sound_name() == "footstep")
+    );
+    let [left, right] = played.loudest;
+    assert!((left - 0.5 * 0.6).abs() < 0.01, "{left}");
+    assert!((left - right).abs() < 1e-6);
+    let _ = fs::remove_dir_all(folder);
+}
+
+#[test]
+fn a_script_hears_each_noise_and_can_stop_it_being_played() {
+    // The handler checks what it is told, and writes down what it saw in
+    // the player's speeds, which the test can read.
+    let mut played = Played::script(
+        r#"game.onNoise(function(noise)
+            if noise.sound == "footstep" then
+                assert(typeof(noise.position) == "vector")
+                assert(noise.byPlayer == true)
+                game.player:setWalkSpeed(noise.heardWithin)
+                game.player:setSprintSpeed(noise.loudness * 10)
+            end
+        end)"#,
+    );
+    played.input.press(Key::W);
+    played.run(120);
+    assert!(!footsteps(&played).is_empty());
+    let moves = played.game.world.game().host().moves();
+    assert_eq!(moves.walk_speed, 30.0);
+    assert!((moves.sprint_speed - 6.0).abs() < 1e-5, "{moves:?}");
+    assert!(played.loudest[0] > 0.01);
+
+    let mut quiet = Played::script("game.onNoise(function(noise) return false end)");
+    quiet.input.press(Key::W);
+    quiet.run(120);
+    assert!(!footsteps(&quiet).is_empty());
+    assert!(quiet.noises.iter().all(|noise| noise.silenced));
+    assert_eq!(quiet.loudest, [0.0; 2]);
 }

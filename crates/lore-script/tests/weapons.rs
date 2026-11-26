@@ -427,7 +427,7 @@ fn mistakes_in_a_weapons_settings_say_what_to_write() {
     let said = load_error("game.weapon(\"smg\", { zzz = 1 })");
     assert!(
         said.starts_with(
-            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode, burstSize, reach, action, arming, spin, ejectAt,"
+            "game.weapon has no setting called zzz. The settings are: from, model, hands, support, fireMode, burstSize, reach, fireSound, reloadSound, emptySound, heardWithin, action, arming, spin, ejectAt,"
         ),
         "{said}"
     );
@@ -704,4 +704,41 @@ fn a_thrown_weapon_says_when_it_is_armed_and_how_it_turns() {
     assert_eq!(printed(), ["0.5"]);
     assert!(load_error("game.weapon(\"x\", { arming = \"lever\" })").contains("arming is when"));
     assert!(load_error("game.weapon(\"x\", { spin = 3 })").contains("spin is how"));
+}
+
+#[test]
+fn a_weapon_names_its_sounds_and_copies_them_with_from() {
+    let (host, _) = with_bo(
+        r#"game.weapon("bow", { from = "pistol", fireSound = "twang", reloadSound = "nock",
+            emptySound = "creak", heardWithin = 20 })
+        game.weapon("longbow", { from = "bow", heardWithin = 60 })
+        game.weapon("plain")
+        game.onSpawn(function() game.player:giveWeapon("longbow") end)"#,
+    );
+    let held = host.held_weapon(PLAYER).unwrap();
+    let sounds = held.sounds;
+    assert_eq!(sounds.fire.unwrap().as_str(), "twang");
+    assert_eq!(sounds.reload.unwrap().as_str(), "nock");
+    assert_eq!(sounds.empty.unwrap().as_str(), "creak");
+    assert_eq!(sounds.heard_within, Some(60.0));
+    let (host, _) = with_bo(
+        r#"game.weapon("plain")
+        game.onSpawn(function() game.player:giveWeapon("plain") end)"#,
+    );
+    assert_eq!(
+        host.held_weapon(PLAYER).unwrap().sounds,
+        lore_script::WeaponSounds::default()
+    );
+}
+
+#[test]
+fn mistakes_in_a_weapons_sounds_say_what_to_write() {
+    let said = load_error(r#"game.weapon("bow", { heardWithin = 0 })"#);
+    assert!(said.contains("heardWithin = 20"), "{said}");
+    let said = load_error(r#"game.weapon("bow", { fireSound = 3 })"#);
+    assert!(said.contains("fireSound = \"twang\""), "{said}");
+    let said = load_error(
+        r#"game.weapon("bow", { reloadSound = "waytoolongasoundnamethatgoesonandonandonandonandon" })"#,
+    );
+    assert!(said.contains("too long"), "{said}");
 }
