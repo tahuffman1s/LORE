@@ -154,14 +154,26 @@ fn towards(lua: &Lua, side: &str, key: &str, value: &Value) -> mlua::Result<Vec<
             // same every time.
             keys.sort();
             if let Some(given) = keys.first() {
+                let quoted: Vec<String> = keys.iter().map(|k| format!("\"{k}\"")).collect();
+                let alone = if keys.len() == 1 {
+                    format!(", or one name alone: {side} = {{ {key} = \"{given}\" }}")
+                } else {
+                    String::new()
+                };
                 return Err(fail(
                     lua,
                     format!(
                         "game.sides: \"{side}\"'s {key} is a list of side names, but it was \
-                         given `{given}` as a key (with `=`), and a list has no keys, so it \
-                         would be ignored. Write the names in quotes, with no `=`: \
-                         {side} = {{ {key} = {{ \"{given}\" }} }}, or one name alone: \
-                         {side} = {{ {key} = \"{given}\" }}"
+                         given {} as {} (with `=`), and a list has no keys, so {} would be \
+                         ignored. Write the names in quotes, with no `=`: \
+                         {side} = {{ {key} = {{ {} }} }}{alone}",
+                        keys.iter()
+                            .map(|k| format!("`{k}`"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if keys.len() == 1 { "a key" } else { "keys" },
+                        if keys.len() == 1 { "it" } else { "they" },
+                        quoted.join(", "),
                     ),
                 ));
             }

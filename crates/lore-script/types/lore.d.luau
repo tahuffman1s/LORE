@@ -1090,18 +1090,22 @@ type SideNames = string | { string }
 --- One side in `game.sides { ... }`: who it counts as friends, as
 --- enemies, and as neutral (when it would otherwise feel as they feel
 --- about it); `forgives`, how many blows from a friend within half a
---- minute it forgives, a whole number from 0 (none) to 100, or `true`
---- for every blow from a friend (2 unless given; a killing blow never);
+--- minute it forgives, a whole number from 0 (none) to 100 (more is an
+--- error), or `true` (or `math.huge`) for every blow from a friend (2
+--- unless given; a killing blow never);
 --- and `remembers`, how many seconds its people hold a grudge (300 unless
 --- given; `math.huge` keeps it until forgiven). The key `everyone` takes
 --- only `forgives` and `remembers`: what every side has unless it says its
---- own, and people on no side.
+--- own, and people on no side. As a key it is these settings for all, not
+--- a side (no side can be called "everyone"); as a value, `enemies =
+--- "everyone"`, it means every other side.
 --- Example: Town = { friends = { "Guards" }, enemies = { "Outlaws" }, forgives = 0, remembers = 600 }
 --- Example: everyone = { forgives = true } -- friends never hold a stray hit against anyone
 type SideOptions = { friends: SideNames?, enemies: SideNames?, neutral: SideNames?, forgives: (number | boolean)?, remembers: number? }
 
---- What `setFeeling` takes after the feeling. `bothWays = true` sets how
---- both sides feel about each other at once, whatever either said before.
+--- What `setFeeling` takes after the feeling. `bothWays = true` overrules
+--- what the other side said: both sides feel the same about each other at
+--- once, whatever either said before.
 type FeelingOptions = { bothWays: boolean? }
 
 --- One side of the game: what `game.side("Town")` gives. It is looked up
@@ -1122,8 +1126,8 @@ declare extern type Side with
     --- way round too, unless `other` said its own feeling about this side
     --- (in `game.sides` or with `setFeeling`): if the town named the
     --- outlaws its enemies, the outlaws making friends leaves the town an
-    --- enemy. `{ bothWays = true }` sets both sides at once, whatever either
-    --- said: peace, or war, agreed by both. `game.onFeelingChange` hears of
+    --- enemy. `{ bothWays = true }` overrules what the other side said and
+    --- sets both at once: peace, or war, agreed by both. `game.onFeelingChange` hears of
     --- each feeling that changed, before the next `game.onTick`.
     --- Example: game.side("Town"):setFeeling("Outlaws", "friend")
     --- Example: game.side("Town"):setFeeling("Outlaws", "friend", { bothWays = true }) -- peace is made

@@ -713,7 +713,7 @@ end
 if false then
     game.sides {
         Town = { friends = { "Guards" }, enemies = { "Outlaws", "Wolves" }, forgives = 0, remembers = 600 },
-        Guards = {},
+        Guards = { forgives = true },
         Outlaws = { neutral = "Wolves", remembers = math.huge },
         Wolves = { enemies = "everyone" },
         everyone = { forgives = true },
@@ -727,7 +727,9 @@ if false then
     local townFeels: Feeling = town:feelsAbout("Outlaws")
     print(sideName, feeling, town.name, townFeels, town:feelsAbout(game.side("Guards")))
     town:setFeeling("Outlaws", "friend")
-    town:setFeeling("Outlaws", "friend", { bothWays = true })
+    local peace: FeelingOptions = { bothWays = true }
+    town:setFeeling("Outlaws", "friend", peace)
+    game.side("Guards"):setFeeling(town, "friend", { bothWays = false })
     game.side("Outlaws"):join(town)
     town:forgive(game.player)
     game.onFeelingChange(function(side: string, toward: string, now: Feeling, before: Feeling)
