@@ -473,7 +473,7 @@ impl ScriptHost {
         let npcs = Rc::<crate::npc_api::NpcState>::default();
         // The NPCs placed in the map are there before the script's first
         // line, so it can find them at the top of its file.
-        npcs.place(&placed, &characters);
+        let _ = npcs.place(&placed, &characters);
         things.set_placed(placed);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
@@ -1622,8 +1622,11 @@ impl ScriptHost {
     /// again while the game runs. A thing a script still holds that is no
     /// longer placed says so when it is next read.
     pub fn set_placed(&mut self, placed: Vec<crate::Placed>) {
-        // An NPC newly placed comes into the world; one already there stays.
-        self.npcs.place(&placed, &self.characters);
+        // An NPC newly placed comes into the world, one moved or renamed in
+        // the map is moved or renamed, and one no longer placed leaves.
+        for gone in self.npcs.place(&placed, &self.characters) {
+            self.remove_character(gone);
+        }
         self.things.set_placed(placed);
     }
 

@@ -219,3 +219,54 @@ fn an_npc_placed_in_the_map_is_found_by_its_name_and_walks_into_zones() {
     play(&mut world, 5);
     assert_eq!(world.npcs()[0].body.position[0], 6.0);
 }
+
+/// The map with the smith somewhere else, or (with `None`) not placed.
+fn map_with_smith_at(at: Option<[f32; 3]>) -> Map {
+    let text = MAP.split("[[entity]]\nid = \"smith\"").next().unwrap();
+    let text = match at {
+        Some([x, y, z]) => format!(
+            "{text}[[entity]]\nid = \"smith\"\ntype = \"npc\"\nname = \"Smith\"\n\
+             position = [{x:.1}, {y:.1}, {z:.1}]\nfacing = 0.0\n"
+        ),
+        None => text.to_owned(),
+    };
+    Map::parse("map.toml", &text).unwrap()
+}
+
+/// The world of a game opened with the map on disk, then given `map` as
+/// the editor gives the one it holds when play is pressed.
+fn world_with_editor_map(script: &str, map: Map) -> World {
+    let _ = log::set_logger(&Capture);
+    let game = ScriptGame::from_pack_parts(
+        [("main.luau".to_owned(), script.to_owned())],
+        Vec::new(),
+        Map::parse("map.toml", MAP).unwrap(),
+        &ActionMap::standard(),
+        lore::settings::Settings::default(),
+    )
+    .with_map(map);
+    World::new(game, TICK_RATE)
+}
+
+#[test]
+fn play_from_the_editor_has_the_npcs_where_the_editor_moved_them() {
+    let mut world = world_with_editor_map(
+        r#"game.onTick(function() print(game.npc("Smith").position.x) end)"#,
+        map_with_smith_at(Some([-4.0, 0.0, 2.0])),
+    );
+    let smith = world.npcs()[0];
+    assert_eq!(smith.body.position, [-4.0, 0.0, 2.0]);
+    assert_eq!(smith.facing(), 0.0);
+    printed();
+    play(&mut world, 1);
+    assert_eq!(printed(), ["-4"]);
+}
+
+#[test]
+fn play_from_the_editor_has_no_npc_the_editor_deleted() {
+    let world = world_with_editor_map("", map_with_smith_at(None));
+    assert!(world.npcs().is_empty(), "{:?}", world.npcs());
+    let mut names = 0;
+    world.game().host().each_npc(|_| names += 1);
+    assert_eq!(names, 0);
+}

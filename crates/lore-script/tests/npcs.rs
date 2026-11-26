@@ -377,3 +377,63 @@ fn an_npc_placed_while_the_game_runs_comes_into_it() {
         "{asks:?}"
     );
 }
+
+#[test]
+fn a_map_saved_while_the_game_runs_moves_renames_and_takes_out_its_npcs() {
+    let mut host = game(
+        r#"local smith = game.npc("Smith")
+        game.npc { name = "Guard", at = "Gate" }
+        game.onTick(function() print(smith.name, smith.position.x) end)"#,
+    );
+    assert_eq!(host.last_error(), None);
+    let mut ids = Vec::new();
+    host.each_npc(|npc| ids.push(npc.id));
+    let [smith, guard] = ids[..] else {
+        panic!("{ids:?}");
+    };
+    let _ = host.take_npc_asks();
+
+    // The smith is moved, turned and renamed in the map.
+    let mut moved = placed();
+    let entity = moved.iter_mut().find(|entity| entity.id == "s").unwrap();
+    entity.position = [8.0, 0.0, -6.0];
+    entity.facing = 0.0;
+    entity.name = "Old Smith".to_owned();
+    host.set_placed(moved.clone());
+    assert_eq!(
+        host.take_npc_asks(),
+        [NpcAsk::Put {
+            id: smith,
+            feet: [8.0, 0.0, -6.0],
+            facing: 0.0
+        }]
+    );
+    host.tick(&InputFrame::default(), STEP);
+    assert_eq!(
+        printed(),
+        ["Old Smith 8"],
+        "the same handle, moved and renamed"
+    );
+
+    // Saved again unchanged, nobody is moved: one who walked stays.
+    host.set_position(smith, [9.0, 0.0, -6.0]);
+    host.set_placed(moved.clone());
+    assert_eq!(host.take_npc_asks(), []);
+    assert_eq!(host.character_position(smith), Some([9.0, 0.0, -6.0]));
+
+    // Taken out of the map, the smith leaves; the guard the script made
+    // stays.
+    moved.retain(|entity| entity.id != "s");
+    host.set_placed(moved);
+    assert_eq!(host.take_npc_asks(), [NpcAsk::Removed { id: smith }]);
+    assert!(!host.is_npc(smith));
+    assert!(host.is_npc(guard));
+    host.tick(&InputFrame::default(), STEP);
+    let error = host.last_error().map(|error| error.message.clone());
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|said| said.contains("no longer in the world")),
+        "{error:?}"
+    );
+}

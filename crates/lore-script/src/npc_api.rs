@@ -118,8 +118,14 @@ pub struct NpcTold {
 /// Where an NPC came from.
 #[derive(Debug, Clone, PartialEq)]
 enum Origin {
-    /// Placed in the map as the entity with this id.
-    Map(String),
+    /// Placed in the map as the entity with the id `entity`, standing `at`
+    /// facing `facing` (radians) as the map last said: a save of the map
+    /// that changes either puts it there again.
+    Map {
+        entity: String,
+        at: [f32; 3],
+        facing: f32,
+    },
     /// Made by a script's file as it loaded, standing `at` facing `facing`
     /// (radians) as that line said: a save of the file finds it again.
     File { at: [f32; 3], facing: f32 },
@@ -193,28 +199,68 @@ pub(crate) struct NpcVersion {
 }
 
 impl NpcState {
-    /// Gives each NPC placed in `placed` (an entity of type "npc") that
-    /// has none yet a place among `characters`, called by its name (or its
-    /// id, if it has no name). An NPC placed before stays as it is.
-    pub(crate) fn place(&self, placed: &[Placed], characters: &Characters) {
-        for entity in placed.iter().filter(|entity| entity.kind == NPC_KIND) {
+    /// Settles the NPCs placed in the map (entities of type "npc") against
+    /// `placed`, the map as it is now: one newly placed gets a place among
+    /// `characters`, called by its name (or its id, if it has none); one
+    /// whose entity is gone leaves the game; one the map now puts
+    /// elsewhere, turns another way or calls something else is moved,
+    /// turned or renamed, and keeps its id, so what a script holds of it
+    /// still works. NPCs a script made are not touched. Gives the NPCs that
+    /// left; the caller takes them out of the game.
+    pub(crate) fn place(&self, placed: &[Placed], characters: &Characters) -> Vec<CharacterId> {
+        let npcs = || placed.iter().filter(|entity| entity.kind == NPC_KIND);
+        // A map NPC that left the game and is no longer placed may come
+        // back if it is placed again.
+        (self.left.borrow_mut()).retain(|left| npcs().any(|entity| entity.id == *left));
+        let mut gone = Vec::new();
+        let mut moved = Vec::new();
+        self.entries.borrow_mut().retain_mut(|entry| {
+            let Origin::Map { entity, at, facing } = &mut entry.from else {
+                return true;
+            };
+            let Some(now) = npcs().find(|now| now.id == *entity) else {
+                gone.push(entry.id);
+                return false;
+            };
+            let name = map_name(now);
+            if characters
+                .name_and_place(entry.id)
+                .is_some_and(|(was, _)| was != name)
+            {
+                characters.rename(entry.id, name);
+            }
+            let turned = facing_of(now.facing);
+            if now.position != *at || turned != *facing {
+                (*at, *facing) = (now.position, turned);
+                entry.facing = turned;
+                moved.push((entry.id, now.position, turned));
+            }
+            true
+        });
+        for id in &gone {
+            self.ask(NpcAsk::Removed { id: *id });
+        }
+        for (id, feet, facing) in moved {
+            characters.put(id, feet);
+            self.ask(NpcAsk::Put { id, feet, facing });
+        }
+        for entity in npcs() {
             let known = (self.entries.borrow().iter())
-                .any(|entry| entry.from == Origin::Map(entity.id.clone()))
+                .any(|entry| matches!(&entry.from, Origin::Map { entity: known, .. } if *known == entity.id))
                 || self.left.borrow().contains(&entity.id);
             if known || self.entries.borrow().len() >= MOST_NPCS {
                 continue;
             }
-            let name = if entity.name.trim().is_empty() {
-                entity.id.as_str()
-            } else {
-                entity.name.trim()
-            };
             let facing = facing_of(entity.facing);
-            let id = characters.add(name);
+            let id = characters.add(map_name(entity));
             characters.put(id, entity.position);
             self.entries.borrow_mut().push(Entry {
                 id,
-                from: Origin::Map(entity.id.clone()),
+                from: Origin::Map {
+                    entity: entity.id.clone(),
+                    at: entity.position,
+                    facing,
+                },
                 facing,
             });
             self.ask(NpcAsk::Made {
@@ -223,6 +269,7 @@ impl NpcState {
                 facing,
             });
         }
+        gone
     }
 
     /// Whether `id` is an NPC still in the game.
@@ -237,7 +284,7 @@ impl NpcState {
         let Some(index) = entries.iter().position(|entry| entry.id == id) else {
             return false;
         };
-        if let Origin::Map(placed) = entries.remove(index).from {
+        if let Origin::Map { entity: placed, .. } = entries.remove(index).from {
             self.left.borrow_mut().push(placed);
         }
         drop(entries);
@@ -313,6 +360,17 @@ impl NpcState {
             });
         }
         gone
+    }
+}
+
+/// What an NPC placed in the map as `entity` is called: its name, or its
+/// id if it has none.
+fn map_name(entity: &Placed) -> &str {
+    let name = entity.name.trim();
+    if name.is_empty() {
+        entity.id.as_str()
+    } else {
+        name
     }
 }
 

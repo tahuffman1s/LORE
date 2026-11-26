@@ -292,6 +292,13 @@ impl Characters {
         }
     }
 
+    /// Calls a character something else. Does nothing for one that is gone.
+    pub fn rename(&self, id: CharacterId, name: &str) {
+        if let Some(entry) = self.here.borrow_mut().iter_mut().find(|e| e.id == id) {
+            name.clone_into(&mut entry.name);
+        }
+    }
+
     /// Whether the character is in the world.
     pub fn has(&self, id: CharacterId) -> bool {
         self.here.borrow().iter().any(|entry| entry.id == id)
