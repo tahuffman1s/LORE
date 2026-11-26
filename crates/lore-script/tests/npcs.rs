@@ -547,3 +547,43 @@ fn an_npc_is_not_usable_once_it_is_dead_and_is_again_when_stood_up() {
     host.tick(&InputFrame::default(), STEP);
     assert_eq!(printed(), ["true false", "false true", "true false"]);
 }
+
+#[test]
+fn a_reloaded_script_leaves_the_same_npcs_as_a_fresh_start() {
+    let before = r#"game.npc { name = "Guard", at = "Gate" }
+        game.npc { name = "Cook", at = "Gate" }
+        game.npc { name = "Baker", at = "Tower" }"#;
+    // The guard moved, the cook's line gone, one more at the end.
+    let after = r#"game.npc { name = "Guard", at = "Tower", facing = 90 }
+        game.npc { name = "Baker", at = "Tower" }
+        game.npc { name = "Miller", at = "Gate" }"#;
+    let seen = |host: &ScriptHost| {
+        let mut seen = Vec::new();
+        host.each_npc(|npc| {
+            let name = host.character_name(npc.id).unwrap();
+            seen.push((npc.id, name, npc.feet, npc.facing, host.health(npc.id)));
+        });
+        seen
+    };
+    let saved = GameFolder::new(before);
+    let mut host = saved.open();
+    saved.write(after);
+    host.reload().unwrap();
+    let fresh = GameFolder::new(after);
+    let fresh = fresh.open();
+    let (reloaded, fresh) = (seen(&host), seen(&fresh));
+    // The same people, in the same order, in the same places, as well.
+    let without_ids = |seen: &[(CharacterId, String, [f32; 3], f32, Option<(f32, f32)>)]| {
+        seen.iter()
+            .map(|(_, name, feet, facing, health)| (name.clone(), *feet, *facing, *health))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(without_ids(&reloaded), without_ids(&fresh));
+    // Their ids go up in that order in both.
+    for seen in [&reloaded, &fresh] {
+        assert!(
+            seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "{seen:?}"
+        );
+    }
+}

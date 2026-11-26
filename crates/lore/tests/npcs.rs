@@ -241,7 +241,7 @@ fn the_player_uses_an_npc_like_a_thing_and_the_prompt_says_its_name() {
 }
 
 #[test]
-fn an_npc_placed_in_the_map_is_found_by_its_name_and_walks_into_zones() {
+fn an_npc_placed_in_the_map_is_found_by_its_name_and_stays_where_the_map_puts_it() {
     let mut world = world(
         r#"local smith = game.npc("Smith")
         print(smith.name, smith.position.x)
@@ -275,6 +275,7 @@ fn map_with_smith_at(at: Option<[f32; 3]>) -> Map {
 /// the editor gives the one it holds when play is pressed.
 fn world_with_editor_map(script: &str, map: Map) -> World {
     let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Info);
     let game = ScriptGame::from_pack_parts(
         [("main.luau".to_owned(), script.to_owned())],
         Vec::new(),
@@ -328,4 +329,90 @@ fn the_lock_on_lets_go_of_an_npc_that_goes_down() {
     let said = printed();
     assert_eq!(said.len(), 2, "{said:#?}");
     assert_eq!(said[1], "nil");
+}
+
+#[test]
+fn an_npc_standing_in_a_zone_is_in_it_and_one_outside_is_not() {
+    // A zone round the gate, two metres across.
+    let map = format!(
+        "{MAP}\n[[entity]]\nid = \"yard\"\ntype = \"zone\"\nname = \"Yard\"\n\
+         position = [0.0, 0.0, -10.0]\nfacing = 0.0\n[entity.properties]\nradius = 2.0\n"
+    );
+    let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Info);
+    let game = ScriptGame::from_pack_parts(
+        [(
+            "main.luau".to_owned(),
+            r#"local guard = game.npc { name = "Guard", at = vector.create(0, 0, -10) }
+            local yard = game.zone("Yard")
+            yard:onEnter(function(who) print("in", who.name) end)
+            local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 5 then print(yard:has(guard), yard:has(game.npc("Smith"))) end
+            end)"#
+                .to_owned(),
+        )],
+        Vec::new(),
+        Map::parse("map.toml", &map).unwrap(),
+        &ActionMap::standard(),
+        lore::settings::Settings::default(),
+    );
+    let mut world = World::new(game, TICK_RATE);
+    printed();
+    play(&mut world, 10);
+    assert_eq!(printed(), ["in Guard", "true false"]);
+}
+
+#[test]
+fn a_world_given_its_level_has_its_npcs_and_keeps_them_when_the_level_changes() {
+    let level = lore::level::from_bytes("level.glb", lore::scaffold::STARTER_LEVEL).unwrap();
+    let mut world =
+        world(r#"game.npc { name = "Guard", at = vector.create(2, 0, 4) }"#).with_level(&level);
+    let who: Vec<_> = world.npcs().iter().map(|npc| npc.who).collect();
+    assert_eq!(who.len(), 2);
+    play(&mut world, 30);
+    assert!(
+        world.npcs().iter().all(|npc| npc.body.grounded),
+        "{:?}",
+        world.npcs()
+    );
+    let places: Vec<_> = world.npcs().iter().map(|npc| npc.body.position).collect();
+    world.change_level(&level);
+    play(&mut world, 30);
+    let after: Vec<_> = world.npcs().iter().map(|npc| npc.who).collect();
+    assert_eq!(after, who);
+    for (npc, before) in world.npcs().iter().zip(places) {
+        assert!(npc.body.grounded, "{npc:?}");
+        let moved = (npc.body.position[0] - before[0]).hypot(npc.body.position[2] - before[2]);
+        assert!(moved < 0.01, "{npc:?} was at {before:?}");
+    }
+}
+
+#[test]
+fn a_downed_npc_is_no_longer_offered_to_use_or_looked_at() {
+    let mut world = world(
+        r#"local guard = game.npc { name = "Guard", at = vector.create(0, 0, -1.5) }
+        guard:onUse(function() print("used") end)
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 30 then guard:damage(500) end
+            if ticks == 20 or ticks == 40 then
+                local seen = game.player.lookingAt
+                print(seen and seen.name or "nothing")
+            end
+        end)"#,
+    );
+    printed();
+    play(&mut world, 25);
+    assert_eq!(
+        world.game().host().use_prompt(),
+        Some(("Talk to Guard".to_owned(), 0.0))
+    );
+    play(&mut world, 20);
+    assert_eq!(world.game().host().use_prompt(), None);
+    ask(&mut world, |asked| asked.interact = true);
+    play(&mut world, 2);
+    assert_eq!(printed(), ["Guard", "nothing"]);
 }
