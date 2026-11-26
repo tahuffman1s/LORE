@@ -287,7 +287,7 @@ impl NpcState {
                 let (known, _) = characters.name_and_place(entry.id)?;
                 known
                     .eq_ignore_ascii_case(name)
-                    .then(|| matches!(entry.from, Origin::Map { .. }))
+                    .then_some(matches!(entry.from, Origin::Map { .. }))
             })
     }
 
