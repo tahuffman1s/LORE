@@ -1,13 +1,13 @@
 //! What an NPC sees and hears.
 //!
 //! Sight is a cone from the eyes along the way the body faces, with a
-//! reach, blocked by the level and what stands fixed in it. It is aimed at
-//! three points of whoever is looked at (head, chest and knees), so someone
-//! behind a low wall is seen by the part that shows. Distance, fog,
-//! darkness, crouching and keeping still make it weaker. Hearing takes the
-//! very noises the player hears, each with its loudness and reach: one is
-//! heard inside its reach scaled by how well the NPC hears, weaker with
-//! distance and through a wall.
+//! reach, blocked by the level, what stands fixed in it and the bodies of
+//! people standing in the way. It is aimed at three points of whoever is
+//! looked at (head, chest and knees), so someone behind a low wall is seen
+//! by the part that shows. Distance, fog, darkness, crouching and keeping
+//! still make it weaker. Hearing takes the very noises the player hears,
+//! each with its loudness and reach: one is heard inside its reach scaled
+//! by how well the NPC hears, weaker with distance and through a wall.
 //!
 //! Everything here is plain data and pure functions. The world says each
 //! tick who can be seen ([`Seeable`]), what was heard ([`Sound`]) and how
@@ -19,6 +19,15 @@
 //! An NPC looks a few times a second, not every tick: [`Senses::looks_on`]
 //! staggers the looks of a crowd by id, so a town's sight costs about the
 //! same on every tick. It listens every tick, because a noise lasts one.
+//!
+//! Who is kept in mind as seen is decided once a look, after every one in
+//! sight has been weighed: the player always has a place; then those in
+//! view, the stronger first; one already kept stays unless a newcomer is
+//! clearly ([`CLEARLY`]) stronger, so two of nearly the same strength do
+//! not take turns; and one lately lost from view keeps their place till
+//! [`KEEP_LOST`] ticks after they were last seen, against any newcomer but
+//! the player. One look never
+//! tells both that someone came into view and that they went out of it.
 
 use lore_physics::Level;
 
@@ -28,12 +37,11 @@ use lore_physics::Level;
 pub const LOOK_EVERY: u32 = 12;
 
 /// The most people one NPC keeps in mind as seen: those in view now and
-/// the last seen of those who went out of it. One more in view than this
-/// takes the place of the one longest gone, or of the faintest.
+/// the last seen of those who went out of it.
 pub const MOST_SIGHTED: usize = 8;
 
-/// The most noises one NPC keeps as lately heard; a new one takes the
-/// place of the oldest.
+/// The most noises one NPC keeps as lately heard: at most one for each
+/// maker, so the newest of the player's stays through a noisy second.
 pub const MOST_HEARD: usize = 4;
 
 /// How strongly someone must be seen to come into view, from 0 to 1.
@@ -43,6 +51,17 @@ pub const SEEN_FROM: f32 = 0.1;
 /// [`SEEN_FROM`], so someone at the edge of sight does not flicker in and
 /// out of view from one look to the next.
 pub const LOST_BELOW: f32 = 0.05;
+
+/// How much more strongly a newcomer must be seen than someone already kept
+/// in view to take their place when there is no room for both, from 0 to
+/// 1: so two seen nearly as strongly do not take turns from look to look.
+pub const CLEARLY: f32 = 0.1;
+
+/// How many ticks after they were last seen someone lost from view keeps
+/// their place in mind against a newcomer, the player excepted: 180, three
+/// seconds at 60 ticks a second, so "lost sight of them a moment ago" outlives a crowd walking
+/// past.
+pub const KEEP_LOST: u32 = 180;
 
 /// How faintly a noise may arrive and still be heard, from 0 to 1. Far
 /// below what the player notices, so a noise is heard right up to its
@@ -60,11 +79,21 @@ pub const NIGHT: f32 = 0.1;
 const CLOSE_IN_DARK: f32 = 3.0;
 
 /// How far up or down from level the eyes take in, in radians: 70 degrees.
+/// Eyes that see all round (a width of 360) see straight up and down too.
 const LOOKS_UP_AND_DOWN: f32 = 1.221_730_5;
 
 /// How much a noise's place is raised before the ray to the ears is cast,
 /// in metres, so a footstep is not heard through the floor it was made on.
 const NOISE_LIFT: f32 = 0.3;
+
+/// The most standing bodies one look tests as hiding what is behind them:
+/// the nearest in front of the eyes.
+const MOST_HIDERS: usize = 16;
+
+/// How far from the middle of a standing body a line of sight passes and
+/// is still blocked by it, in metres: narrower than the body is wide, since
+/// a person is not a pillar.
+const BODY_HIDES_WITHIN: f32 = 0.22;
 
 /// How a game sets an NPC's senses.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,7 +101,7 @@ pub struct Keenness {
     /// How far it sees in full light, in metres. 0 is blind.
     pub sight: f32,
     /// How wide it sees, in degrees from one edge to the other: 120 is a
-    /// person's, 360 sees all round.
+    /// person's, 360 sees all round, up and down too.
     pub width: f32,
     /// How well it hears: 1 hears a noise as far as the player does, 2
     /// twice as far, 0 not at all.
@@ -150,6 +179,7 @@ pub struct Sight<'a, W> {
     /// The tick it is.
     pub tick: u32,
     /// Everyone who may be seen, the same list for every NPC that tick.
+    /// Those standing in it also hide who is behind them.
     pub seeable: &'a [Seeable<W>],
     /// How much of what is behind each metre of air the weather hides:
     /// [`haze`].
@@ -158,7 +188,7 @@ pub struct Sight<'a, W> {
 
 /// A noise as an NPC may hear it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Sound<W> {
+pub struct Sound<W, N = ()> {
     /// Where it was made, in metres.
     pub at: [f32; 3],
     /// How loud it was made, from 0 up: 1 is a gunshot.
@@ -169,6 +199,14 @@ pub struct Sound<W> {
     pub far: f32,
     /// Who made it, when someone did.
     pub by: Option<W>,
+    /// What it was, as the world names noises: kept with what was heard.
+    pub what: N,
+    /// Whether it is a sound of the world going on (thunder, rain, running
+    /// water) rather than something someone did: kept, but it does not draw
+    /// an NPC's attention ([`Senses::last_heard`]) nor is it told.
+    pub of_world: bool,
+    /// Whether a weapon made it: a shot, a blast, a bullet striking.
+    pub weapon: bool,
 }
 
 /// Someone an NPC sees, or saw last.
@@ -181,8 +219,10 @@ pub struct Sighting<W> {
     pub strength: f32,
     /// Whether they are in view now.
     pub in_view: bool,
-    /// Whether they were a body lying there, health gone, when last seen.
-    pub body: bool,
+    /// When they were last seen lying there, health gone: the tick of the
+    /// look that first saw them down (whether it saw them fall or found
+    /// them so). `None` when they were last seen standing.
+    pub down_since: Option<u32>,
     /// Where their feet were when last seen, in metres.
     pub at: [f32; 3],
     /// The tick they were last seen on.
@@ -191,9 +231,17 @@ pub struct Sighting<W> {
     pub since: u32,
 }
 
+impl<W> Sighting<W> {
+    /// Whether they are out of view but were seen within [`KEEP_LOST`]
+    /// ticks of `tick`, so their place in mind is kept.
+    fn lately_lost(&self, tick: u32) -> bool {
+        !self.in_view && tick.wrapping_sub(self.seen) < KEEP_LOST
+    }
+}
+
 /// A noise an NPC heard.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Heard<W> {
+pub struct Heard<W, N = ()> {
     /// Where it was made, in metres.
     pub at: [f32; 3],
     /// How loud it reached the NPC, from 0 to 1: after distance, how well
@@ -207,6 +255,12 @@ pub struct Heard<W> {
     pub by: Option<W>,
     /// Whether a wall stood between it and the NPC.
     pub walled: bool,
+    /// What it was, as the world names noises.
+    pub what: N,
+    /// Whether it is a sound of the world going on: see [`Sound::of_world`].
+    pub of_world: bool,
+    /// Whether a weapon made it.
+    pub weapon: bool,
 }
 
 /// What an NPC's senses tell of a look or a listen, for the script's
@@ -223,6 +277,7 @@ pub enum Sensed<W> {
         at: [f32; 3],
     },
     /// The noise at this place in the list the listen was given was heard.
+    /// A sound of the world ([`Sound::of_world`]) is kept but not told.
     Heard(usize),
 }
 
@@ -230,40 +285,66 @@ pub enum Sensed<W> {
 /// tick to tick in storage of a fixed size, so sensing sets no memory
 /// aside.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Senses<W> {
+pub struct Senses<W, N = ()> {
     /// How keen its senses are.
     pub keen: Keenness,
     /// How many ticks pass between its looks: [`LOOK_EVERY`] until the
     /// world says otherwise. A world that looks less often for NPCs far
     /// from the player raises it.
     pub every: u32,
+    /// The player, who always has a place in mind and is never the one let
+    /// go to make room.
+    player: Option<W>,
     sighted: [Option<Sighting<W>>; MOST_SIGHTED],
-    heard: [Option<Heard<W>>; MOST_HEARD],
-    /// Where the next noise heard goes in `heard`.
-    next_heard: usize,
+    heard: [Option<Heard<W, N>>; MOST_HEARD],
+    /// In what order each of `heard` came: higher is newer.
+    order: [u32; MOST_HEARD],
+    /// The order the next noise kept gets.
+    next_order: u32,
 }
 
-impl<W: Copy + PartialEq> Senses<W> {
+/// One seen this look, with how strongly, and where in the list given.
+#[derive(Clone, Copy)]
+struct Weighed<W> {
+    target: Seeable<W>,
+    strength: f32,
+    nth: usize,
+}
+
+/// A standing body that may hide who is behind it.
+#[derive(Clone, Copy)]
+struct Hider<W> {
+    who: W,
+    feet: [f32; 3],
+    height: f32,
+    /// How far from the eyes, squared, across the ground.
+    away: f32,
+}
+
+impl<W: Copy + PartialEq, N: Copy> Senses<W, N> {
     /// Senses as keen as `keen`, that have seen and heard nothing yet.
+    /// `player` is the one who always has a place in mind.
     #[must_use]
-    pub fn new(keen: Keenness) -> Self {
+    pub fn new(keen: Keenness, player: Option<W>) -> Self {
         Self {
             keen,
             every: LOOK_EVERY,
+            player,
             sighted: [None; MOST_SIGHTED],
             heard: [None; MOST_HEARD],
-            next_heard: 0,
+            order: [0; MOST_HEARD],
+            next_order: 0,
         }
     }
 
-    /// Whether the NPC numbered `nth` looks on `tick`. The NPCs of a crowd
-    /// take turns: of every [`every`](Self::every) ticks, each looks on
-    /// one, and each on a different one as far as there are ticks to go
-    /// round.
+    /// Whether the NPC known by the number `id` looks on `tick`. The NPCs
+    /// of a crowd take turns: of every [`every`](Self::every) ticks, each
+    /// looks on one, set by its own number, so one leaving the world does
+    /// not move when any other looks.
     #[must_use]
-    pub fn looks_on(&self, tick: u32, nth: u32) -> bool {
+    pub fn looks_on(&self, tick: u32, id: u32) -> bool {
         let every = self.every.max(1);
-        tick.wrapping_add(nth).is_multiple_of(every)
+        tick.wrapping_add(id).is_multiple_of(every)
     }
 
     /// Everyone it keeps in mind as seen: in view now, or last seen a while
@@ -289,18 +370,28 @@ impl<W: Copy + PartialEq> Senses<W> {
         self.sighting(who).is_some_and(|seen| seen.in_view)
     }
 
-    /// The noises it lately heard, newest first.
-    pub fn heard(&self) -> impl Iterator<Item = &Heard<W>> {
-        let next = self.next_heard;
-        (0..MOST_HEARD)
-            .map(move |back| (next + MOST_HEARD - 1 - back) % MOST_HEARD)
-            .filter_map(|at| self.heard[at].as_ref())
+    /// Every noise it lately heard, newest first: at most one of each
+    /// maker's, sounds of the world among them.
+    pub fn heard(&self) -> impl Iterator<Item = &Heard<W, N>> {
+        let mut slots: [usize; MOST_HEARD] = std::array::from_fn(|slot| slot);
+        slots.sort_unstable_by_key(|&slot| std::cmp::Reverse(self.order[slot]));
+        slots
+            .into_iter()
+            .filter_map(|slot| self.heard[slot].as_ref())
     }
 
-    /// The newest noise it heard, if any.
+    /// The newest noise it heard that draws attention: anything but a
+    /// sound of the world ([`Heard::of_world`]). What "heard something"
+    /// means.
     #[must_use]
-    pub fn last_heard(&self) -> Option<&Heard<W>> {
-        self.heard().next()
+    pub fn last_heard(&self) -> Option<&Heard<W, N>> {
+        self.heard().find(|heard| !heard.of_world)
+    }
+
+    /// The newest noise `by` made that it heard, if it still keeps one.
+    #[must_use]
+    pub fn heard_from(&self, by: W) -> Option<&Heard<W, N>> {
+        self.heard().find(|heard| heard.by == Some(by))
     }
 
     /// Forgets everything seen and heard, telling nothing: for an NPC whose
@@ -308,15 +399,19 @@ impl<W: Copy + PartialEq> Senses<W> {
     pub fn forget(&mut self) {
         self.sighted = [None; MOST_SIGHTED];
         self.heard = [None; MOST_HEARD];
-        self.next_heard = 0;
+        self.order = [0; MOST_HEARD];
+        self.next_order = 0;
     }
 
     /// Looks once: how strongly `me` sees each of `sight.seeable` now.
     /// `light` gives how light it is, from 0 to 1, where the one at that
     /// place in the list stands; it is asked only of those within reach and
     /// in the cone. Each ray cast at the level is counted in `rays`. Who
-    /// came into view and who went out of it is told to `tell`, in the
-    /// order of the list, then those no longer in it.
+    /// came into view and who went out of it is told to `tell`.
+    ///
+    /// Who is kept in mind is decided once every strength of the look is
+    /// known (see the module's notes), so one look never tells someone
+    /// both seen and lost.
     pub fn look(
         &mut self,
         me: &Looker<W>,
@@ -325,7 +420,14 @@ impl<W: Copy + PartialEq> Senses<W> {
         rays: &mut u32,
         mut tell: impl FnMut(Sensed<W>),
     ) {
-        let mut looked_at = [false; MOST_SIGHTED];
+        let tick = sight.tick;
+        let hiders = hiders(me, &self.keen, sight.seeable);
+        let hiders = hiders.iter().flatten();
+        // How strongly each one kept is seen now (`None`: gone from the
+        // world), and the strongest of the rest who could come into view.
+        let mut kept: [Option<Weighed<W>>; MOST_SIGHTED] = [None; MOST_SIGHTED];
+        let mut newcomers: [Option<Weighed<W>>; MOST_SIGHTED] = [None; MOST_SIGHTED];
+        let mut player: Option<Weighed<W>> = None;
         for (nth, target) in sight.seeable.iter().enumerate() {
             if target.who == me.who {
                 continue;
@@ -334,40 +436,109 @@ impl<W: Copy + PartialEq> Senses<W> {
             let mut strength = 0.0;
             if open > 0.0 {
                 let away = distance(me.eyes, target.points()[1]);
-                let lit = light_helps(light(nth), self.keen.night_sight, away);
-                let most = open * lit;
+                let most = open * light_helps(light(nth), self.keen.night_sight, away);
                 // Too faint to be seen even with nothing in the way: no ray.
                 if most >= LOST_BELOW {
-                    strength = (most * showing(sight.level, me.eyes, target, rays)).min(1.0);
+                    let shows = showing_past(sight.level, me.eyes, target, hiders.clone(), rays);
+                    strength = (most * shows).min(1.0);
                 }
             }
-            let slot = self
-                .sighted
-                .iter()
-                .position(|kept| matches!(kept, Some(seen) if seen.who == target.who));
-            if let Some(slot) = slot {
-                looked_at[slot] = true;
-            }
-            self.saw(
-                slot,
-                target,
+            let weighed = Weighed {
+                target: *target,
                 strength,
-                sight.tick,
-                &mut looked_at,
-                &mut tell,
-            );
-        }
-        // Those not in the list any more (gone from the world) are out of
-        // view.
-        for (slot, kept) in self.sighted.iter_mut().enumerate() {
-            if looked_at[slot] {
-                continue;
+                nth,
+            };
+            if let Some(slot) = self.slot_of(target.who) {
+                kept[slot] = Some(weighed);
+            } else if strength >= SEEN_FROM {
+                if Some(target.who) == self.player {
+                    player = Some(weighed);
+                } else {
+                    offer(&mut newcomers, weighed);
+                }
             }
-            if let Some(seen) = kept
-                && seen.in_view
+        }
+        // What each one kept is now, before anyone is let go.
+        let mut was_in_view = [false; MOST_SIGHTED];
+        for (slot, now) in kept.iter().enumerate() {
+            let Some(seen) = &mut self.sighted[slot] else {
+                continue;
+            };
+            was_in_view[slot] = seen.in_view;
+            match now {
+                Some(now) => {
+                    let in_view = if seen.in_view {
+                        now.strength >= LOST_BELOW
+                    } else {
+                        now.strength >= SEEN_FROM
+                    };
+                    if in_view {
+                        if !seen.in_view {
+                            seen.since = tick;
+                        }
+                        seen.down_since = if now.target.down {
+                            seen.down_since.or(Some(tick))
+                        } else {
+                            None
+                        };
+                        seen.at = now.target.feet;
+                        seen.seen = tick;
+                    }
+                    seen.in_view = in_view;
+                    seen.strength = if in_view { now.strength } else { 0.0 };
+                }
+                None => {
+                    seen.in_view = false;
+                    seen.strength = 0.0;
+                }
+            }
+        }
+        // Newcomers take the room there is: the player first, then the
+        // strongest first.
+        newcomers.sort_unstable_by(|a, b| match (a, b) {
+            (Some(a), Some(b)) => (b.strength.total_cmp(&a.strength)).then(a.nth.cmp(&b.nth)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        let mut taken = [false; MOST_SIGHTED];
+        let mut let_go: [Option<Sighting<W>>; MOST_SIGHTED] = [None; MOST_SIGHTED];
+        for (is_player, newcomer) in (player.iter().map(|one| (true, one)))
+            .chain(newcomers.iter().flatten().map(|one| (false, one)))
+        {
+            let Some(slot) = self.room_for(is_player, newcomer.strength, tick, &taken) else {
+                continue;
+            };
+            taken[slot] = true;
+            if let_go[slot].is_none() {
+                let_go[slot] = self.sighted[slot];
+            }
+            self.sighted[slot] = Some(Sighting {
+                who: newcomer.target.who,
+                strength: newcomer.strength,
+                in_view: true,
+                down_since: newcomer.target.down.then_some(tick),
+                at: newcomer.target.feet,
+                seen: tick,
+                since: tick,
+            });
+        }
+        // Then what changed is told, place by place.
+        for slot in 0..MOST_SIGHTED {
+            if let Some(gone) = let_go[slot]
+                && was_in_view[slot]
             {
-                seen.in_view = false;
-                seen.strength = 0.0;
+                tell(Sensed::Lost {
+                    who: gone.who,
+                    at: gone.at,
+                });
+            }
+            let Some(seen) = self.sighted[slot] else {
+                continue;
+            };
+            if taken[slot] || (seen.in_view && !was_in_view[slot]) {
+                tell(Sensed::Saw(seen.who));
+            } else if !seen.in_view && was_in_view[slot] {
                 tell(Sensed::Lost {
                     who: seen.who,
                     at: seen.at,
@@ -376,105 +547,62 @@ impl<W: Copy + PartialEq> Senses<W> {
         }
     }
 
-    /// Keeps how strongly `target` was seen (`slot` is where it is kept, if
-    /// it is), and tells whether that took it into view or out of it.
-    fn saw(
-        &mut self,
-        slot: Option<usize>,
-        target: &Seeable<W>,
-        strength: f32,
-        tick: u32,
-        looked_at: &mut [bool; MOST_SIGHTED],
-        tell: &mut impl FnMut(Sensed<W>),
-    ) {
-        let was = slot.and_then(|slot| self.sighted[slot]);
-        let in_view = match was {
-            Some(seen) if seen.in_view => strength >= LOST_BELOW,
-            _ => strength >= SEEN_FROM,
-        };
-        let Some(mut seen) = was else {
-            if !in_view {
-                return;
-            }
-            let Some(slot) = self.room_for(strength, tell) else {
-                return;
-            };
-            looked_at[slot] = true;
-            self.sighted[slot] = Some(Sighting {
-                who: target.who,
-                strength,
-                in_view: true,
-                body: target.down,
-                at: target.feet,
-                seen: tick,
-                since: tick,
-            });
-            tell(Sensed::Saw(target.who));
-            return;
-        };
-        let came = in_view && !seen.in_view;
-        let went = !in_view && seen.in_view;
-        seen.strength = if in_view { strength } else { 0.0 };
-        seen.in_view = in_view;
-        if in_view {
-            seen.body = target.down;
-            seen.at = target.feet;
-            seen.seen = tick;
-        }
-        if came {
-            seen.since = tick;
-        }
-        if let Some(slot) = slot {
-            self.sighted[slot] = Some(seen);
-        }
-        if came {
-            tell(Sensed::Saw(target.who));
-        } else if went {
-            tell(Sensed::Lost {
-                who: target.who,
-                at: seen.at,
-            });
-        }
+    /// Where `who` is kept, if they are.
+    fn slot_of(&self, who: W) -> Option<usize> {
+        (self.sighted.iter()).position(|kept| matches!(kept, Some(seen) if seen.who == who))
     }
 
-    /// A place to keep someone newly seen `strength` strongly: an empty
-    /// one, else that of the one longest out of view, else that of the
-    /// faintest in view if fainter, who is then told as lost.
-    fn room_for(&mut self, strength: f32, tell: &mut impl FnMut(Sensed<W>)) -> Option<usize> {
-        if let Some(free) = self.sighted.iter().position(Option::is_none) {
-            return Some(free);
+    /// The place for a newcomer seen `strength` strongly on `tick`, if
+    /// there is one: an empty one; else that of the one longest lost from
+    /// view more than [`KEEP_LOST`] ago; else, for the player, that of the
+    /// one longest lost and then of the faintest in view; else that of the
+    /// faintest in view, if the newcomer is [`CLEARLY`] stronger. Never the
+    /// player's, nor one `taken` by a newcomer this look.
+    fn room_for(
+        &self,
+        is_player: bool,
+        strength: f32,
+        tick: u32,
+        taken: &[bool; MOST_SIGHTED],
+    ) -> Option<usize> {
+        let free = (0..MOST_SIGHTED).filter(|&slot| !taken[slot]);
+        if let Some(empty) = free.clone().find(|&slot| self.sighted[slot].is_none()) {
+            return Some(empty);
         }
-        let gone = (self.sighted.iter().enumerate())
-            .filter_map(|(slot, kept)| kept.map(|seen| (slot, seen)))
-            .filter(|(_, seen)| !seen.in_view)
-            .min_by_key(|(_, seen)| seen.seen)
-            .map(|(slot, _)| slot);
-        if gone.is_some() {
-            return gone;
-        }
-        let (slot, faintest) = (self.sighted.iter().enumerate())
-            .filter_map(|(slot, kept)| kept.map(|seen| (slot, seen)))
-            .min_by(|(_, a), (_, b)| a.strength.total_cmp(&b.strength))?;
-        if faintest.strength >= strength {
-            return None;
-        }
-        tell(Sensed::Lost {
-            who: faintest.who,
-            at: faintest.at,
+        let held = free.filter_map(|slot| {
+            (self.sighted[slot])
+                .filter(|seen| Some(seen.who) != self.player)
+                .map(|seen| (slot, seen))
         });
-        Some(slot)
+        let longest_lost = |lately: bool| {
+            (held.clone())
+                .filter(|(_, seen)| !seen.in_view && seen.lately_lost(tick) == lately)
+                .max_by_key(|(_, seen)| tick.wrapping_sub(seen.seen))
+                .map(|(slot, _)| slot)
+        };
+        if let Some(slot) = longest_lost(false) {
+            return Some(slot);
+        }
+        if is_player && let Some(slot) = longest_lost(true) {
+            return Some(slot);
+        }
+        let (slot, faintest) = (held.clone())
+            .filter(|(_, seen)| seen.in_view)
+            .min_by(|(_, a), (_, b)| a.strength.total_cmp(&b.strength))?;
+        (is_player || strength > faintest.strength + CLEARLY).then_some(slot)
     }
 
     /// Listens once, on `tick`, to `sounds`: the noises made in the world
-    /// that tick. One heard is kept and told to `tell` by its place in the
-    /// list. A ray at `level` for each noise within reach says whether a
-    /// wall muffles it; each is counted in `rays`.
+    /// that tick. One heard is kept (see [`MOST_HEARD`]) and, unless it is a
+    /// sound of the world, told to `tell` by its place in the list. A ray at
+    /// `level` for each noise within reach says whether a wall muffles it;
+    /// each is counted in `rays`.
     pub fn listen(
         &mut self,
         me: &Looker<W>,
         level: &Level,
         tick: u32,
-        sounds: &[Sound<W>],
+        sounds: &[Sound<W, N>],
         rays: &mut u32,
         mut tell: impl FnMut(Sensed<W>),
     ) {
@@ -494,18 +622,178 @@ impl<W: Copy + PartialEq> Senses<W> {
             if strength < HEARD_FROM {
                 continue;
             }
-            self.heard[self.next_heard] = Some(Heard {
+            self.keep_heard(Heard {
                 at: sound.at,
                 strength: strength.min(1.0),
                 loudness: sound.loudness,
                 tick,
                 by: sound.by,
                 walled,
+                what: sound.what,
+                of_world: sound.of_world,
+                weapon: sound.weapon,
             });
-            self.next_heard = (self.next_heard + 1) % MOST_HEARD;
-            tell(Sensed::Heard(nth));
+            if !sound.of_world {
+                tell(Sensed::Heard(nth));
+            }
         }
     }
+
+    /// Keeps `heard`: in place of the one kept of the same maker (the
+    /// louder of two on one tick), else in an empty place, else in place of
+    /// the oldest of those that matter least (the world's, then nobody's,
+    /// then a person's), never the player's and never one that matters
+    /// more than it. Else it is not kept.
+    fn keep_heard(&mut self, heard: Heard<W, N>) {
+        let same = |kept: &Heard<W, N>| kept.by == heard.by && kept.of_world == heard.of_world;
+        let slot = if let Some(slot) =
+            (self.heard.iter()).position(|kept| kept.as_ref().is_some_and(same))
+        {
+            let louder_kept = (self.heard[slot])
+                .is_some_and(|kept| kept.tick == heard.tick && kept.strength >= heard.strength);
+            if louder_kept {
+                return;
+            }
+            Some(slot)
+        } else if let Some(empty) = self.heard.iter().position(Option::is_none) {
+            Some(empty)
+        } else {
+            let rank = self.rank(&heard);
+            (0..MOST_HEARD)
+                .filter_map(|slot| self.heard[slot].map(|kept| (slot, kept)))
+                .filter(|(_, kept)| {
+                    self.rank(kept) <= rank && kept.by.is_none_or(|by| Some(by) != self.player)
+                })
+                .min_by_key(|&(slot, ref kept)| (self.rank(kept), self.order[slot]))
+                .map(|(slot, _)| slot)
+        };
+        if let Some(slot) = slot {
+            self.heard[slot] = Some(heard);
+            self.order[slot] = self.next_order;
+            self.next_order = self.next_order.wrapping_add(1);
+        }
+    }
+
+    /// How much a noise heard matters for keeping: the world's least, then
+    /// one nobody made, then a person's, then the player's.
+    fn rank(&self, heard: &Heard<W, N>) -> u8 {
+        match heard.by {
+            _ if heard.of_world => 0,
+            None => 1,
+            Some(by) if Some(by) == self.player => 3,
+            Some(_) => 2,
+        }
+    }
+}
+
+/// Puts `one` among `best`, the strongest few weighed this look, if it is
+/// stronger than the faintest of them (the earlier in the list on a tie).
+fn offer<W: Copy>(best: &mut [Option<Weighed<W>>; MOST_SIGHTED], one: Weighed<W>) {
+    if let Some(empty) = best.iter_mut().find(|kept| kept.is_none()) {
+        *empty = Some(one);
+        return;
+    }
+    let faintest = (best.iter_mut().flatten())
+        .min_by(|a, b| (a.strength.total_cmp(&b.strength)).then(b.nth.cmp(&a.nth)));
+    if let Some(faintest) = faintest
+        && one.strength > faintest.strength
+    {
+        *faintest = one;
+    }
+}
+
+/// The standing bodies in front of `me` within its reach that may hide who
+/// is behind them, the nearest [`MOST_HIDERS`]: a list of a fixed size.
+fn hiders<W: Copy + PartialEq>(
+    me: &Looker<W>,
+    keen: &Keenness,
+    seeable: &[Seeable<W>],
+) -> [Option<Hider<W>>; MOST_HIDERS] {
+    let mut found: [Option<Hider<W>>; MOST_HIDERS] = [None; MOST_HIDERS];
+    let reach = keen.sight;
+    if reach.is_nan() || reach <= 0.0 {
+        return found;
+    }
+    let ahead = [-libm::sinf(me.facing), -libm::cosf(me.facing)];
+    for one in seeable {
+        if one.who == me.who || one.down {
+            continue;
+        }
+        let to = [one.feet[0] - me.eyes[0], one.feet[2] - me.eyes[2]];
+        let away = to[0] * to[0] + to[1] * to[1];
+        if away.is_nan() || away > reach * reach {
+            continue;
+        }
+        // Behind the eyes it hides nothing they look at, unless they see
+        // all round.
+        if keen.width < 360.0 && to[0] * ahead[0] + to[1] * ahead[1] < -BODY_HIDES_WITHIN {
+            continue;
+        }
+        let hider = Hider {
+            who: one.who,
+            feet: one.feet,
+            height: one.height,
+            away,
+        };
+        if let Some(empty) = found.iter_mut().find(|kept| kept.is_none()) {
+            *empty = Some(hider);
+        } else if let Some(furthest) =
+            (found.iter_mut().flatten()).max_by(|a, b| a.away.total_cmp(&b.away))
+            && hider.away < furthest.away
+        {
+            *furthest = hider;
+        }
+    }
+    found
+}
+
+/// Whether one of `hiders` other than `target` stands across the line from
+/// `eyes` to `point`.
+fn hidden_by_body<'a, W: Copy + PartialEq + 'a>(
+    eyes: [f32; 3],
+    point: [f32; 3],
+    target: W,
+    hiders: impl Iterator<Item = &'a Hider<W>>,
+) -> bool {
+    let way = [point[0] - eyes[0], point[1] - eyes[1], point[2] - eyes[2]];
+    let flat = way[0] * way[0] + way[2] * way[2];
+    if flat.is_nan() || flat <= 1e-6 {
+        return false;
+    }
+    hiders.filter(|hider| hider.who != target).any(|hider| {
+        // Where along the line it passes nearest the body's middle, across
+        // the ground.
+        let to = [hider.feet[0] - eyes[0], hider.feet[2] - eyes[2]];
+        let along = (to[0] * way[0] + to[1] * way[2]) / flat;
+        if !(0.0..0.98).contains(&along) {
+            return false;
+        }
+        let off = [to[0] - way[0] * along, to[1] - way[2] * along];
+        let height = eyes[1] + way[1] * along - hider.feet[1];
+        off[0] * off[0] + off[1] * off[1] < BODY_HIDES_WITHIN * BODY_HIDES_WITHIN
+            && (0.0..=hider.height).contains(&height)
+    })
+}
+
+/// How much of `target` shows from `eyes` past the level and `hiders`,
+/// from 0 to 1: a point a body hides costs no ray.
+fn showing_past<'a, W: Copy + PartialEq + 'a>(
+    level: &Level,
+    eyes: [f32; 3],
+    target: &Seeable<W>,
+    hiders: impl Iterator<Item = &'a Hider<W>> + Clone,
+    rays: &mut u32,
+) -> f32 {
+    target
+        .points()
+        .iter()
+        .zip(POINT_SHARES)
+        .filter(|(point, _)| {
+            !hidden_by_body(eyes, **point, target.who, hiders.clone())
+                && !blocked(level, eyes, **point, rays)
+        })
+        .map(|(_, share)| share)
+        .sum()
 }
 
 /// How loud `sound` reaches ears at `ears` that hear `hearing` well, from
@@ -514,7 +802,7 @@ impl<W: Copy + PartialEq> Senses<W> {
 /// nothing over the last tenth of its reach, as the player hears it. Good
 /// hearing is the same as the noise being nearer.
 #[must_use]
-pub fn arriving<W>(sound: &Sound<W>, ears: [f32; 3], hearing: f32) -> f32 {
+pub fn arriving<W, N>(sound: &Sound<W, N>, ears: [f32; 3], hearing: f32) -> f32 {
     if !(hearing > 0.0 && sound.loudness > 0.0) {
         return 0.0;
     }
@@ -542,7 +830,8 @@ pub fn arriving<W>(sound: &Sound<W>, ears: [f32; 3], hearing: f32) -> f32 {
 
 /// How strongly eyes as keen as `keen` at `me` would see `target` with
 /// nothing in the way and in full light, from 0 to 1: 0 past the reach,
-/// outside the cone or too far above or below. Weaker toward the edge of
+/// outside the cone or too far above or below (eyes that see all round
+/// see straight up and down too). Weaker toward the edge of
 /// the cone, with distance and with `haze`, and for one who crouches,
 /// keeps still or lies there.
 #[must_use]
@@ -580,7 +869,8 @@ pub fn seen_openly<W>(me: &Looker<W>, keen: &Keenness, target: &Seeable<W>, haze
     } else {
         1.0 - 0.5 * aside / half
     };
-    if libm::fabsf(libm::atan2f(to[1], flat)) > LOOKS_UP_AND_DOWN && away >= 0.3 {
+    if keen.width < 360.0 && libm::fabsf(libm::atan2f(to[1], flat)) > LOOKS_UP_AND_DOWN && away >= 0.3
+    {
         return 0.0;
     }
     // Clear to a quarter of the reach, then fainter, to 0.3 at the reach.

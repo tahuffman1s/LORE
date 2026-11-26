@@ -17,6 +17,15 @@ fn wall(z: f32, high: f32) -> Vec<Tri> {
     ]
 }
 
+/// A screen across the way along -Z from `x` = -1 to 1, at z = `z`, three
+/// metres tall.
+fn screen(z: f32) -> Vec<Tri> {
+    vec![
+        [[-1.0, 0.0, z], [1.0, 0.0, z], [1.0, 3.0, z]],
+        [[-1.0, 0.0, z], [1.0, 3.0, z], [-1.0, 3.0, z]],
+    ]
+}
+
 fn level(parts: &[Vec<Tri>]) -> Level {
     Level::from_triangles(&parts.concat())
 }
@@ -147,7 +156,7 @@ fn a_wall_hides_all_and_a_low_wall_hides_the_legs() {
 fn coming_into_view_and_going_out_of_it_are_told_once_each() {
     let clear = level(&[floor()]);
     let walled = level(&[floor(), wall(-5.0, 3.0)]);
-    let mut senses = Senses::new(Keenness::default());
+    let mut senses = Senses::new(Keenness::default(), Some(0));
     let them = [person(2, 0.0, -10.0)];
     assert_eq!(look(&mut senses, &clear, 1, &them), [Sensed::Saw(2)]);
     assert!(senses.sees(2));
@@ -178,7 +187,7 @@ fn coming_into_view_and_going_out_of_it_are_told_once_each() {
 #[test]
 fn it_does_not_see_itself_and_a_body_is_seen_as_one() {
     let clear = level(&[floor()]);
-    let mut senses = Senses::new(Keenness::default());
+    let mut senses = Senses::new(Keenness::default(), Some(0));
     let myself = Seeable {
         feet: [0.0, 0.0, -1.0],
         ..person(1, 0.0, 0.0)
@@ -193,22 +202,22 @@ fn it_does_not_see_itself_and_a_body_is_seen_as_one() {
         look(&mut senses, &clear, 1, &[myself, body]),
         [Sensed::Saw(3)]
     );
-    assert_eq!(senses.sighting(3).map(|seen| seen.body), Some(true));
+    assert_eq!(senses.sighting(3).map(|seen| seen.down_since), Some(Some(1)));
 }
 
 #[test]
 fn more_in_view_than_it_keeps_lets_the_faintest_go() {
     let clear = level(&[floor()]);
-    let mut senses = Senses::new(Keenness::default());
+    let mut senses = Senses::new(Keenness::default(), Some(0));
     // Near ones first, then one nearer than any: it takes the place of
     // the furthest.
     let crowd: Vec<Seeable<u32>> = (0..MOST_SIGHTED as u32)
-        .map(|n| person(10 + n, 0.0, -10.0 - n as f32))
+        .map(|n| person(10 + n, n as f32 - 3.5, -10.0 - n as f32))
         .collect();
     look(&mut senses, &clear, 1, &crowd);
     assert_eq!(senses.in_view().count(), MOST_SIGHTED);
     let mut more = crowd.clone();
-    more.push(person(99, 0.0, -3.0));
+    more.push(person(99, 2.5, -4.0));
     let told = look(&mut senses, &clear, 13, &more);
     assert!(told.contains(&Sensed::Saw(99)), "{told:?}");
     assert!(
@@ -221,7 +230,7 @@ fn more_in_view_than_it_keeps_lets_the_faintest_go() {
 
 #[test]
 fn a_crowd_takes_turns_to_look() {
-    let senses = Senses::<u32>::new(Keenness::default());
+    let senses = Senses::<u32>::new(Keenness::default(), Some(0));
     // Each of twelve NPCs looks once in twelve ticks, each on its own.
     let mut looked = [0; LOOK_EVERY as usize];
     for tick in 100..100 + LOOK_EVERY {
@@ -270,6 +279,9 @@ fn shot(at: [f32; 3], by: Option<u32>) -> Sound<u32> {
         near: 4.0,
         far: 150.0,
         by,
+        what: (),
+        of_world: false,
+        weapon: true,
     }
 }
 
@@ -291,7 +303,7 @@ fn a_noise_is_heard_as_far_as_its_reach_and_no_further() {
 fn it_does_not_hear_itself_and_a_wall_muffles() {
     let clear = level(&[floor()]);
     let walled = level(&[floor(), wall(-5.0, 3.0)]);
-    let mut senses = Senses::new(Keenness::default());
+    let mut senses = Senses::new(Keenness::default(), Some(0));
     let sounds = [
         shot([0.0, 1.7, -10.0], Some(1)),
         shot([0.0, 1.7, -10.0], Some(0)),
@@ -315,16 +327,271 @@ fn it_does_not_hear_itself_and_a_wall_muffles() {
 }
 
 #[test]
-fn it_keeps_the_newest_noises_it_heard() {
+fn it_keeps_the_newest_noise_of_each_maker() {
     let clear = level(&[floor()]);
-    let mut senses = Senses::new(Keenness::default());
+    let mut senses = Senses::new(Keenness::default(), Some(0));
     let mut rays = 0;
     for tick in 1..=6 {
-        let sound = [shot([0.0, 1.7, -(tick as f32)], None)];
+        let sound = [shot([0.0, 1.7, -(tick as f32)], Some(tick % 2 + 2))];
         senses.listen(&me(), &clear, tick, &sound, &mut rays, |_| {});
     }
-    let ticks: Vec<u32> = senses.heard().map(|heard| heard.tick).collect();
-    assert_eq!(ticks, [6, 5, 4, 3]);
+    let kept: Vec<(u32, Option<u32>)> = senses.heard().map(|heard| (heard.tick, heard.by)).collect();
+    assert_eq!(kept, [(6, Some(2)), (5, Some(3))]);
     senses.forget();
     assert_eq!(senses.heard().count(), 0);
+}
+
+/// One look at `seeable` on `tick`, checking that nobody is told both seen
+/// and lost by it.
+fn look_once(
+    senses: &mut Senses<u32>,
+    level: &Level,
+    tick: u32,
+    seeable: &[Seeable<u32>],
+) -> Vec<Sensed<u32>> {
+    let told = look(senses, level, tick, seeable);
+    for sensed in &told {
+        if let Sensed::Saw(who) = sensed {
+            assert!(
+                !told
+                    .iter()
+                    .any(|other| matches!(other, Sensed::Lost { who: lost, .. } if lost == who)),
+                "tick {tick}: {told:?}"
+            );
+        }
+    }
+    told
+}
+
+/// The player, crouched and still, at `x`, `z`.
+fn crouched_player(x: f32, z: f32) -> Seeable<u32> {
+    Seeable {
+        crouched: true,
+        height: 1.1,
+        speed: 0.0,
+        ..person(0, x, z)
+    }
+}
+
+#[test]
+fn a_crowd_does_not_hide_the_player_nor_churn() {
+    let clear = level(&[floor()]);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    // Nine villagers standing still in a three by three grid, and the
+    // player crouched beyond them, seen more faintly than any of them but
+    // between their lines.
+    let mut seeable = vec![crouched_player(1.5, -12.0)];
+    for row in 0..3 {
+        for column in 0..3 {
+            let still = Seeable {
+                speed: 0.0,
+                ..person(10 + row * 3 + column, column as f32 * 3.0 - 3.0, -6.0 - row as f32 * 2.0)
+            };
+            seeable.push(still);
+        }
+    }
+    let first = look_once(&mut senses, &clear, 1, &seeable);
+    assert!(first.contains(&Sensed::Saw(0)), "{first:?}");
+    assert_eq!(first.len(), MOST_SIGHTED, "{first:?}");
+    assert!(senses.sees(0));
+    // Nobody moves: nothing more is told, look after look.
+    for look in 1..20 {
+        let told = look_once(&mut senses, &clear, 1 + look * LOOK_EVERY, &seeable);
+        assert_eq!(told, [], "look {look}");
+        assert!(senses.sees(0));
+    }
+    // The player creeps sideways along the back: still seen, never lost.
+    for step in 0..20 {
+        seeable[0].feet[0] = 1.5 - step as f32 * 0.05;
+        seeable[0].speed = 1.0;
+        let told = look_once(&mut senses, &clear, 300 + step * LOOK_EVERY, &seeable);
+        assert!(senses.sees(0), "step {step}: {told:?}");
+        assert!(
+            !told.iter().any(|sensed| matches!(sensed, Sensed::Lost { who: 0, .. })),
+            "step {step}: {told:?}"
+        );
+    }
+}
+
+#[test]
+fn twenty_in_view_keep_the_player_and_do_not_take_turns() {
+    let clear = level(&[floor()]);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let at = |n: u32, shift: f32| {
+        let x = (n % 5) as f32 * 2.3 - 4.6 + shift;
+        let z = -5.0 - (n / 5) as f32 * 3.1 - (n % 2) as f32 * 0.7;
+        person(10 + n, x, z)
+    };
+    // The player crouched and still in front of them all, more faintly
+    // seen than any.
+    let mut seeable: Vec<Seeable<u32>> = vec![crouched_player(2.0, -3.5)];
+    seeable.extend((0..19).map(|n| at(n, 0.0)));
+    look_once(&mut senses, &clear, 1, &seeable);
+    assert!(senses.sees(0));
+    assert_eq!(senses.in_view().count(), MOST_SIGHTED);
+    // Standing still: nothing changes.
+    for look in 1..10 {
+        assert_eq!(look_once(&mut senses, &clear, 1 + look * LOOK_EVERY, &seeable), []);
+    }
+    // Everyone drifts sideways, the player too: the player stays in view,
+    // and nobody comes and goes on every look.
+    let mut told = 0;
+    for look in 0..40u32 {
+        let shift = look as f32 * 0.03;
+        for (n, one) in seeable.iter_mut().skip(1).enumerate() {
+            *one = at(n as u32, shift);
+        }
+        seeable[0].feet[0] = 2.0 + shift;
+        seeable[0].speed = 1.0;
+        told += look_once(&mut senses, &clear, 200 + look * LOOK_EVERY, &seeable).len();
+        assert!(senses.sees(0), "look {look}");
+    }
+    assert!(told <= 8, "{told} told in 40 looks");
+}
+
+#[test]
+fn one_lately_lost_keeps_their_place_but_not_from_the_player() {
+    let clear = level(&[floor()]);
+    let walled = level(&[floor(), screen(-6.0)]);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    // Eight running close by fill its mind; one of them is behind where
+    // a screen will stand.
+    let mut seeable: Vec<Seeable<u32>> = (0..7)
+        .map(|n| person(10 + n, n as f32 * 1.1 - 3.85, -4.0))
+        .collect();
+    seeable.push(person(20, 0.0, -8.0));
+    look_once(&mut senses, &clear, 1, &seeable);
+    assert_eq!(senses.in_view().count(), MOST_SIGHTED);
+    // The screen goes up: number 20 is lost. A faint newcomer far off
+    // cannot take their place till KEEP_LOST ticks after they were last
+    // seen.
+    let faint = Seeable {
+        speed: 0.0,
+        ..person(30, 6.0, -24.0)
+    };
+    seeable.push(faint);
+    let told = look_once(&mut senses, &walled, 13, &seeable);
+    assert_eq!(
+        told,
+        [Sensed::Lost {
+            who: 20,
+            at: [0.0, 0.0, -8.0]
+        }]
+    );
+    let told = look_once(&mut senses, &walled, 1 + KEEP_LOST - 1, &seeable);
+    assert_eq!(told, []);
+    assert!(senses.sighting(20).is_some());
+    // Once that time is up, it may.
+    let told = look_once(&mut senses, &walled, 1 + KEEP_LOST, &seeable);
+    assert_eq!(told, [Sensed::Saw(30)]);
+    assert!(senses.sighting(20).is_none());
+    // The player always gets a place, at once: the faintest in view goes.
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    seeable.pop();
+    look_once(&mut senses, &clear, 1, &seeable);
+    look_once(&mut senses, &walled, 13, &seeable);
+    seeable.push(crouched_player(6.0, -24.0));
+    let told = look_once(&mut senses, &walled, 25, &seeable);
+    assert_eq!(told, [Sensed::Saw(0)]);
+    assert!(senses.sees(0));
+    assert!(senses.sighting(20).is_none());
+}
+
+#[test]
+fn going_down_in_view_is_kept_with_its_tick() {
+    let clear = level(&[floor()]);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let mut them = [person(2, 0.0, -6.0)];
+    look_once(&mut senses, &clear, 1, &them);
+    assert_eq!(senses.sighting(2).and_then(|seen| seen.down_since), None);
+    them[0] = Seeable {
+        down: true,
+        height: 0.4,
+        speed: 0.0,
+        ..them[0]
+    };
+    // Still in view, as a body: nothing told, the tick kept.
+    assert_eq!(look_once(&mut senses, &clear, 13, &them), []);
+    assert_eq!(look_once(&mut senses, &clear, 25, &them), []);
+    let seen = senses.sighting(2).map(|seen| (seen.in_view, seen.down_since));
+    assert_eq!(seen, Some((true, Some(13))));
+}
+
+#[test]
+fn a_body_standing_in_the_way_hides_who_is_behind() {
+    let clear = level(&[floor()]);
+    let behind = person(3, 0.0, -12.0);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let told = look_once(&mut senses, &clear, 1, &[person(2, 0.0, -4.0), behind]);
+    assert_eq!(told, [Sensed::Saw(2)]);
+    // A step aside and they show.
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let told = look_once(&mut senses, &clear, 1, &[person(2, 1.0, -4.0), behind]);
+    assert_eq!(told.len(), 2, "{told:?}");
+    // A body lying there hides nothing.
+    let lying = Seeable {
+        down: true,
+        height: 0.4,
+        ..person(2, 0.0, -4.0)
+    };
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let told = look_once(&mut senses, &clear, 1, &[lying, behind]);
+    assert!(told.contains(&Sensed::Saw(3)), "{told:?}");
+}
+
+#[test]
+fn eyes_that_see_all_round_see_straight_up() {
+    let above = Seeable {
+        feet: [0.0, 8.0, -0.5],
+        ..person(2, 0.0, 0.0)
+    };
+    assert_eq!(open(&above), 0.0);
+    let all_round = Keenness {
+        width: 360.0,
+        ..Keenness::default()
+    };
+    assert!(seen_openly(&me(), &all_round, &above, 0.0) > 0.0);
+}
+
+#[test]
+fn the_world_s_own_sounds_are_kept_untold_and_never_push_out_a_person_s() {
+    let clear = level(&[floor()]);
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    let mut rays = 0;
+    let thunder = Sound {
+        by: None,
+        of_world: true,
+        weapon: false,
+        ..shot([0.0, 1.7, -40.0], None)
+    };
+    // The player, two others and a blast nobody made fill the four places.
+    let sounds = [
+        shot([0.0, 1.7, -5.0], Some(0)),
+        shot([0.0, 1.7, -6.0], Some(2)),
+        shot([0.0, 1.7, -7.0], Some(3)),
+        shot([0.0, 1.7, -8.0], None),
+    ];
+    let mut told = Vec::new();
+    senses.listen(&me(), &clear, 1, &sounds, &mut rays, |s| told.push(s));
+    assert_eq!(told.len(), 4);
+    // A whole second of thunder: none of it told, none of it kept.
+    for tick in 2..62 {
+        told.clear();
+        senses.listen(&me(), &clear, tick, &[thunder], &mut rays, |s| told.push(s));
+        assert_eq!(told, []);
+    }
+    assert_eq!(senses.heard().count(), MOST_HEARD);
+    assert!(senses.heard().all(|heard| !heard.of_world));
+    // Nor do others crowding in push out the player's.
+    for (tick, by) in (62..72).zip(4..) {
+        senses.listen(&me(), &clear, tick, &[shot([0.0, 1.7, -9.0], Some(by))], &mut rays, |_| {});
+    }
+    assert_eq!(senses.heard_from(0).map(|heard| heard.tick), Some(1));
+    assert_eq!(senses.last_heard().map(|heard| heard.by), Some(Some(13)));
+    // With room, the world's is kept, but it is not what was last heard.
+    let mut senses = Senses::new(Keenness::default(), Some(0));
+    senses.listen(&me(), &clear, 1, &sounds[..1], &mut rays, |_| {});
+    senses.listen(&me(), &clear, 2, &[thunder], &mut rays, |_| {});
+    assert_eq!(senses.heard().next().map(|heard| heard.of_world), Some(true));
+    assert_eq!(senses.last_heard().map(|heard| heard.by), Some(Some(0)));
 }
