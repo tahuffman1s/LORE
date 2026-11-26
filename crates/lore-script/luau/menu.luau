@@ -21,7 +21,8 @@
 -- finish or Escape to put back what was there:
 -- `menu.textBox("Name", { placeholder = "Your name", onFinish = function(text) print(text) end })`
 -- A gamepad pressing a text box gets an on-screen keyboard instead (d-pad walks,
--- A types, X erases, Y spaces, a bumper is Shift, Start is done, B cancels).
+-- A types, X erases, Y spaces, a bumper is Shift, Start is done, B cancels);
+-- `menu.onScreenKeyboard = false` leaves that to the game's own keyboard.
 -- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
 -- Change them before making menus: they apply to menus made afterwards.
 -- The player: arrows, d-pad or pointer choose; Enter, A or a click press;
@@ -78,6 +79,12 @@ menu.sounds = {
     volume = 0.6,
 }
 
+-- Whether a gamepad pressing a text box gets the engine's on-screen keyboard.
+-- A game that shows its own sets this to false: the press then starts typing
+-- (`row.typing` is true, `onTyping` hears it) and the kit draws no keyboard;
+-- Start still finishes and B cancels. Read when typing starts.
+menu.onScreenKeyboard = true
+
 -- Plays one of menu.sounds, if the game has not turned it off.
 local function sound(name: string?)
     if name then
@@ -116,6 +123,8 @@ type RowState = {
     placeholder: string,
     maxLength: number?,
     finished: { (string) -> () },
+    cancelled: { () -> () },
+    typingHeard: { (boolean) -> () },
     typing: boolean,
     before: string,
     blink: number,
@@ -139,7 +148,7 @@ local ALLOWED: { [string]: { string } } = {
     toggle = { "value", "onChange", "get", "set" },
     slider = { "min", "max", "step", "value", "wraps", "format", "color", "onChange", "get", "set" },
     choice = { "options", "value", "wraps", "format", "onChange", "get", "set" },
-    textBox = { "value", "placeholder", "maxLength", "onChange", "onFinish" },
+    textBox = { "value", "placeholder", "maxLength", "onChange", "onFinish", "onCancel", "onTyping" },
     info = { "text" },
 }
 
@@ -153,6 +162,10 @@ local INSTEAD: { [string]: string } = {
     onfinish = "onFinish",
     finish = "onFinish",
     done = "onFinish",
+    cancel = "onCancel",
+    escape = "onCancel",
+    oncancel = "onCancel",
+    ontyping = "onTyping",
     hint = "placeholder",
     maxlength = "maxLength",
     max = "maxLength",
@@ -201,7 +214,7 @@ local function optionProblem(fname: string, key: string, value: any): string?
         end
         return string.format("%s: %s must be a %s, not %s", fname, key, table.concat({ ... }, " or a "), kind)
     end
-    if key == "onPress" or key == "onChange" or key == "onFinish" or key == "get" or key == "set" or key == "format" then
+    if key == "onPress" or key == "onChange" or key == "onFinish" or key == "onCancel" or key == "onTyping" or key == "get" or key == "set" or key == "format" then
         return must("function")
     elseif key == "text" then
         return must("string", "function")
@@ -221,6 +234,15 @@ local function optionProblem(fname: string, key: string, value: any): string?
         return must("string")
     end
     return nil
+end
+
+-- `text` cut to the most characters the text box `s` takes, if it has a limit.
+local function fit(s: RowState, text: string): string
+    local limit = s.maxLength
+    if limit and (utf8.len(text) or #text) > limit then
+        return string.sub(text, 1, (utf8.offset(text, limit + 1) or #text + 1) - 1)
+    end
+    return text
 end
 
 -- Makes the state of a row of `kind`, from the options given. `fname` names
@@ -274,6 +296,8 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
         placeholder = options.placeholder or "",
         maxLength = options.maxLength,
         finished = {},
+        cancelled = {},
+        typingHeard = {},
         typing = false,
         before = "",
         blink = 0,
@@ -318,6 +342,9 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
             error(fname .. ": " .. problem, 4)
         end
         s.value = options.value
+        if kind == "textBox" then
+            s.value = fit(s, s.value)
+        end
     end
     local press, change = options.onPress, options.onChange
     if press then
@@ -329,16 +356,28 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
     if options.onFinish then
         table.insert(s.finished, options.onFinish)
     end
+    if options.onCancel then
+        table.insert(s.cancelled, options.onCancel)
+    end
+    if options.onTyping then
+        table.insert(s.typingHeard, options.onTyping)
+    end
     return s
 end
 
 -- The text box being typed into, if one is (only one at a time), and what
 -- starts and ends it. They are made below, where a row's value can change.
 local typingRow: RowState? = nil
-local beginTyping: (RowState, boolean?) -> ()
+local beginTyping: (RowState) -> ()
+local cancelTyping: (RowState) -> ()
 local endTyping: (RowState, boolean) -> ()
 -- True while the on-screen keyboard is the way the typing row is typed into.
 local keyboardOn = false
+-- True while the game's own keyboard is the way the typing row is typed into
+-- (`menu.onScreenKeyboard = false`), and while the engine is taking typed text
+-- for it (`game.input.startTyping`).
+local ownKeyboardOn = false
+local engineTyping = false
 -- Ticks heard so far, for the caret to blink by: the same on every run.
 local ticks = 0
 
@@ -379,6 +418,9 @@ RowMeta.__newindex = function(self: any, key: any, value: any)
         if problem then
             error(problem, 2)
         end
+        if s.kind == "textBox" then
+            value = fit(s, value)
+        end
         if s.set then
             s.set(value)
         elseif s.get then
@@ -406,6 +448,7 @@ RowMeta.__newindex = function(self: any, key: any, value: any)
             s.placeholder = value
         else
             s.maxLength = value
+            s.value = fit(s, s.value)
         end
     elseif key == "typing" then
         error(string.format('"%s".typing is only read. Use row:startTyping() and row:stopTyping()', s.label), 2)
@@ -459,9 +502,41 @@ function RowMethods.onFinish(self: any, handler: (string) -> ()): any
     return self
 end
 
--- Starts typing into a text box, as pressing it does. Its menu must be open
--- and in front. The keyboard is for the box until Enter, Escape or
--- `stopTyping`.
+-- Adds a handler for the player cancelling a text box (Escape, or B on a
+-- gamepad); the old text is already back. Leaving the menu does not call it.
+-- Example: name:onCancel(function() print("Never mind") end)
+function RowMethods.onCancel(self: any, handler: () -> ()): any
+    local s = states[self]
+    if s.kind ~= "textBox" then
+        error(string.format('"%s" is a %s, so it is not cancelled: onCancel is for a text box', s.label, s.kind), 2)
+    end
+    if type(handler) ~= "function" then
+        error("row:onCancel needs a function: row:onCancel(function() ... end)", 2)
+    end
+    table.insert(s.cancelled, handler)
+    return self
+end
+
+-- Adds a handler called, on a tick, whenever typing into a text box starts
+-- (true) or stops (false), however it came about: a press, Enter, Escape,
+-- leaving the menu, the window losing focus. Use it to show a hint.
+-- Example: name:onTyping(function(isTyping) hint.visible = isTyping end)
+function RowMethods.onTyping(self: any, handler: (boolean) -> ()): any
+    local s = states[self]
+    if s.kind ~= "textBox" then
+        error(string.format('"%s" is a %s, so it is not typed into: onTyping is for a text box', s.label, s.kind), 2)
+    end
+    if type(handler) ~= "function" then
+        error("row:onTyping needs a function: row:onTyping(function(isTyping) ... end)", 2)
+    end
+    table.insert(s.typingHeard, handler)
+    return self
+end
+
+-- Starts typing into a text box, as pressing it does (a gamepad gets the
+-- on-screen keyboard). Its menu must be open and in front. The keyboard is
+-- for the box, so its keys press no actions, until Enter, Escape or
+-- `stopTyping`; the mouse and gamepad still work.
 -- Example: name:startTyping()
 function RowMethods.startTyping(self: any)
     local s = states[self]
@@ -513,12 +588,13 @@ end
 -- type, and Enter finishes or Escape puts back the old text. `value` is the
 -- text ("" to start), `placeholder` shows dimmed while it is empty,
 -- `maxLength` is the most characters it takes. `onChange` hears each change
--- and `onFinish` the finished text. A gamepad opens an on-screen keyboard
+-- and `onFinish` the finished text, `onCancel` hears Escape, `onTyping`
+-- hears typing start and stop. A gamepad opens an on-screen keyboard
 -- instead.
 -- Example: menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
 function menu.textBox(
     label: string,
-    options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())? }?
+    options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())?, onCancel: (() -> ())?, onTyping: ((boolean) -> ())? }?
 ): any
     local row = make("menu.textBox", "textBox", label, options)
     return row
@@ -1331,7 +1407,7 @@ end
 -- Takes one more letter into a text box, if it has room, and tells onChange.
 local function addLetter(s: RowState, char: string)
     local text: string = s.value
-    if s.maxLength and (utf8.len(text) :: number) >= s.maxLength then
+    if s.maxLength and (utf8.len(text) or #text) >= s.maxLength then
         return
     end
     s.value = text .. char
@@ -1362,18 +1438,10 @@ local function finishTyping(s: RowState)
     end
 end
 
-local function openKeyboard(row: RowState)
-    beginTyping(row, true)
-end
-
 -- What Enter or a click does to a row.
 local function press(row: RowState)
     if row.kind == "textBox" then
-        if game.input.usingGamepad() then
-            openKeyboard(row)
-        else
-            beginTyping(row)
-        end
+        beginTyping(row)
     elseif row.kind == "button" then
         for _, handler in row.pressed do
             handler()
@@ -1415,7 +1483,7 @@ local function words(row: RowState): string
 end
 
 -- Starts typing into a text box. The menu it is in must be open and in front.
-beginTyping = function(s: RowState, onScreen: boolean?)
+beginTyping = function(s: RowState)
     local owner = s.owner
     local ts = if owner then owner.tabs else nil
     if not ts or stack[#stack] ~= ts or ts.current ~= owner then
@@ -1432,11 +1500,20 @@ beginTyping = function(s: RowState, onScreen: boolean?)
     s.before = s.value
     s.blink = ticks
     typingRow = s
-    if onScreen then
-        -- A gamepad types by the keyboard on the screen, not a real one.
-        showKeyboard()
+    if game.input.usingGamepad() then
+        -- A gamepad has no keys: the engine's keyboard on the screen, or the
+        -- game's own.
+        if menu.onScreenKeyboard == false then
+            ownKeyboardOn = true
+        else
+            showKeyboard()
+        end
     else
+        engineTyping = true
         game.input.startTyping()
+    end
+    for _, handler in s.typingHeard do
+        handler(true)
     end
 end
 
@@ -1448,7 +1525,11 @@ endTyping = function(s: RowState, cancel: boolean)
     end
     typingRow = nil
     s.typing = false
-    game.input.stopTyping()
+    if engineTyping then
+        engineTyping = false
+        game.input.stopTyping()
+    end
+    ownKeyboardOn = false
     hideKeyboard()
     if cancel and s.value ~= s.before then
         s.value = s.before
@@ -1456,23 +1537,46 @@ endTyping = function(s: RowState, cancel: boolean)
             handler(s.value)
         end
     end
+    for _, handler in s.typingHeard do
+        handler(false)
+    end
 end
 
--- Takes typed text into the box: letters in at the end, "\8" takes one
--- off, "\n" finishes and "\27" puts the old text back. True once it has
--- ended the typing.
+-- The player cancelling: the old text back, and whoever hears it told.
+cancelTyping = function(s: RowState)
+    if typingRow ~= s then
+        return
+    end
+    endTyping(s, true)
+    for _, handler in s.cancelled do
+        handler()
+    end
+end
+
+-- Takes typed text into the box: letters in at the end, then the keys
+-- pressed (Backspace takes one off, Enter finishes, Escape puts the old
+-- text back). True once it has ended the typing.
 local function hearTyped(ts: TabsState, s: RowState): boolean
-    for _, code in utf8.codes(game.input.typed()) do
-        if code == 10 then
+    local text = game.input.typed()
+    if text ~= "" then
+        for _, code in utf8.codes(text) do
+            if code >= 32 and code ~= 127 then
+                addLetter(s, utf8.char(code))
+            end
+            if typingRow ~= s or stack[#stack] ~= ts then
+                return true
+            end
+        end
+    end
+    for _, key in game.input.typedKeys() do
+        if key == "Enter" then
             finishTyping(s)
             return true
-        elseif code == 27 then
-            endTyping(s, true)
+        elseif key == "Escape" then
+            cancelTyping(s)
             return true
-        elseif code == 8 then
+        elseif key == "Backspace" then
             eraseLetter(s)
-        elseif code >= 32 and code ~= 127 then
-            addLetter(s, utf8.char(code))
         end
         if typingRow ~= s or stack[#stack] ~= ts then
             return true
@@ -1486,13 +1590,36 @@ local function hearTyping(ts: TabsState, s: RowState)
         return
     end
     -- A gamepad button, or the pointer, can still end it.
-    if game.input.justPressed("menu_confirm") then
+    if game.input.justPressed("menu_confirm") or game.input.justPressed("menu_close") then
         finishTyping(s)
     elseif game.input.justPressed("menu_back") then
-        endTyping(s, true)
+        cancelTyping(s)
     elseif game.input.justPressed("menu_click") and not hovered(s) then
         finishTyping(s)
     end
+end
+
+-- With the game's own keyboard, the kit hears only Start (done) and B
+-- (cancel); the game's keyboard sets `row.value` and may call `stopTyping`.
+local function hearOwnKeyboard(s: RowState)
+    if game.input.justPressed("menu_close") then
+        finishTyping(s)
+    elseif game.input.justPressed("menu_back") then
+        cancelTyping(s)
+    end
+end
+
+-- Whether the game has this action. Asked once: a game's actions are all
+-- made when its script is first read, and a game with a bindings file of its
+-- own may leave out the keyboard's.
+local known: { [string]: boolean } = {}
+local function hasAction(name: string): boolean
+    local has = known[name]
+    if has == nil then
+        has = (pcall(game.input.justPressed, name))
+        known[name] = has
+    end
+    return has
 end
 
 -- What pressing a key of the on-screen keyboard does.
@@ -1532,7 +1659,7 @@ local function hearKeyboard(ts: TabsState, s: RowState)
         finishTyping(s)
         return
     elseif game.input.justPressed("menu_back") then
-        endTyping(s, true)
+        cancelTyping(s)
         return
     end
     local rows = board.rows
@@ -1570,10 +1697,10 @@ local function hearKeyboard(ts: TabsState, s: RowState)
     if board.row * 100 + board.column ~= was then
         sound(menu.sounds.move)
     end
-    if game.input.justPressed("menu_erase") then
+    if hasAction("menu_erase") and game.input.justPressed("menu_erase") then
         sound(menu.sounds.choose)
         eraseLetter(s)
-    elseif game.input.justPressed("menu_space") then
+    elseif hasAction("menu_space") and game.input.justPressed("menu_space") then
         sound(menu.sounds.choose)
         addLetter(s, " ")
     elseif game.input.justPressed("menu_previous_tab") or game.input.justPressed("menu_next_tab") then
@@ -1602,7 +1729,7 @@ local function drawKeyboard(s: RowState)
     local board = buildKeyboard()
     local style = menu.style
     local shown = words(s)
-    local count = utf8.len(shown) or 0
+    local count = utf8.len(shown) or #shown
     if count > 40 then
         shown = "…" .. string.sub(shown, utf8.offset(shown, count - 38) or 1)
     end
@@ -1618,10 +1745,10 @@ local function drawKeyboard(s: RowState)
     end
     local label = game.input.label
     board.hints.text = string.format(
-        "%s type   %s erase   %s space   %s %s caps   %s done   %s cancel",
+        "%s type   %s%s   %s %s caps   %s done   %s cancel",
         label("menu_confirm"),
-        label("menu_erase"),
-        label("menu_space"),
+        if hasAction("menu_erase") then label("menu_erase") .. " erase   " else "",
+        if hasAction("menu_space") then label("menu_space") .. " space" else "",
         label("menu_previous_tab"),
         label("menu_next_tab"),
         label("menu_close"),
@@ -1726,6 +1853,8 @@ local function hear(ts: TabsState)
     if typing and typing.owner.tabs == ts then
         if keyboardOn then
             hearKeyboard(ts, typing)
+        elseif ownKeyboardOn then
+            hearOwnKeyboard(typing)
         else
             hearTyping(ts, typing)
         end
@@ -1819,6 +1948,8 @@ local function draw(ts: TabsState)
         if keyboardOn then
             ts.keys.text = ""
             drawKeyboard(typing)
+        elseif ownKeyboardOn then
+            ts.keys.text = ""
         else
             ts.keys.text = "type   Enter done   Escape put the old words back"
         end
@@ -1838,6 +1969,13 @@ end
 -- open: a script has nothing to call.
 game.onTick(function()
     ticks += 1
+    -- The engine took the keyboard back (the window lost focus, the level
+    -- changed, a script failed, or a script of the game stopped typing): the
+    -- box is not being typed into any more.
+    local typing = typingRow
+    if typing and engineTyping and not game.input.isTyping() then
+        endTyping(typing, true)
+    end
     local ts = stack[#stack]
     if ts then
         hear(ts)

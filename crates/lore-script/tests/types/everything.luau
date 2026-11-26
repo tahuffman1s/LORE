@@ -335,6 +335,11 @@ game.onTick(function()
     end
     scroll += game.input.wheel()
     local typed: string = game.input.typed()
+    for _, key in game.input.typedKeys() do
+        if key == "Enter" then
+            game.input.stopTyping()
+        end
+    end
     local typingNow: boolean = game.input.isTyping()
     local onPad: boolean = game.input.usingGamepad()
     if typed == "" and typingNow and onPad then
@@ -774,10 +779,14 @@ local linkedRow: MenuRow = game.menu.toggle("Lamp", { get = function() return la
 local sizeRow: MenuRow = game.menu.choice("Size", { options = { "small", "large" }, value = "large", wraps = true, format = string.upper })
 local fogRow: MenuRow = game.menu.slider("Fog", { get = function() return 0.5 end, set = function(v: number) print(v) end })
 local quietRow: MenuRow = game.menu.button("Quiet", { onPress = function() loudRow.value = 0 end, text = "now" })
-local nameRow: MenuRow = game.menu.textBox("Name", { value = "", placeholder = "Your name", maxLength = 20, onChange = function(text: string) print(text) end, onFinish = function(text: string) print(text) end })
+local nameRow: MenuRow = game.menu.textBox("Name", { value = "", placeholder = "Your name", maxLength = 20, onChange = function(text: string) print(text) end, onFinish = function(text: string) print(text) end, onCancel = function() print("no") end, onTyping = function(isTyping: boolean) print(isTyping) end })
 nameRow.placeholder = "Who?"
 nameRow.maxLength = 12
 nameRow:onFinish(function(text: string) print(text) end)
+nameRow:onCancel(function() print("cancelled") end)
+nameRow:onTyping(function(isTyping: boolean) print(isTyping) end)
+game.menu.onScreenKeyboard = false
+print(game.menu.onScreenKeyboard)
 nameRow:startTyping()
 nameRow:stopTyping()
 print(nameRow.typing, nameRow.placeholder, nameRow.maxLength)

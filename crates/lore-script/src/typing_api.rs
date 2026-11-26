@@ -1,9 +1,10 @@
-//! `game.input.typed`, `startTyping`, `stopTyping`, `isTyping` and
+//! `game.input.typed`, `typedKeys`, `startTyping`, `stopTyping`, `isTyping` and
 //! `usingGamepad`: what a text box needs from the keyboard.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
+use lore_input::TypedKey;
 use mlua::Table;
 
 use crate::api::Shared;
@@ -28,6 +29,14 @@ impl Typing {
         self.set(false);
     }
 
+    /// Typing ended from outside (the window lost focus, the level changed,
+    /// the script stopped): `isTyping` reads false, and nothing is asked of
+    /// the engine, which already knows.
+    pub(crate) fn ended_by_engine(&self) {
+        self.on.set(false);
+        self.asked.set(false);
+    }
+
     /// The new state, if the script changed it since this was last called.
     pub(crate) fn take(&self) -> Option<bool> {
         self.asked.take().then(|| self.on.get())
@@ -38,7 +47,28 @@ pub(crate) fn install(lua: &mlua::Lua, shared: &Rc<Shared>, input: &Table) -> ml
     let state = Rc::clone(shared);
     input.set(
         "typed",
-        lua.create_function(move |lua, ()| lua.create_string(&state.input.borrow().typed))?,
+        lua.create_function(move |lua, ()| {
+            let frame = state.input.borrow();
+            lua.create_string(&frame.typed)
+        })?,
+    )?;
+    // The common answer, nothing pressed, is one table made once and frozen.
+    let none = lua.create_table()?;
+    none.set_readonly(true);
+    let state = Rc::clone(shared);
+    input.set(
+        "typedKeys",
+        lua.create_function(move |lua, ()| {
+            let frame = state.input.borrow();
+            if frame.typed_keys.is_empty() {
+                return Ok(none.clone());
+            }
+            lua.create_sequence_from(frame.typed_keys.iter().map(|key| match key {
+                TypedKey::Backspace => "Backspace",
+                TypedKey::Enter => "Enter",
+                TypedKey::Escape => "Escape",
+            }))
+        })?,
     )?;
     let state = Rc::clone(shared);
     input.set(

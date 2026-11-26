@@ -30,6 +30,11 @@ pub trait Game {
     fn level_saved(&mut self, level: &lore_assets::Scene) {
         let _ = level;
     }
+
+    /// Called when the engine took the keyboard back from a game that was
+    /// typing (the window lost focus, or a new level came in), so the game
+    /// does not think it is still taking text. The default does nothing.
+    fn typing_ended(&mut self) {}
 }
 
 /// A borrowed game is a game, so one can be run and looked at afterwards.
@@ -44,6 +49,10 @@ impl<G: Game + ?Sized> Game for &mut G {
 
     fn level_saved(&mut self, level: &lore_assets::Scene) {
         (**self).level_saved(level);
+    }
+
+    fn typing_ended(&mut self) {
+        (**self).typing_ended();
     }
 }
 

@@ -450,6 +450,9 @@ impl ScriptHost {
     /// `step` must be the same on every tick: it is what the script's
     /// seconds are counted in.
     pub fn tick(&mut self, input: &InputFrame, step: f32) {
+        // The device is part of the tick, so `usingGamepad` is right in the
+        // very tick that hears the press.
+        self.tools.set_device_kind(input.device);
         if let Some(version) = &self.running {
             version.shared.input.borrow_mut().clone_from(input);
             // Which piece is held down, from this tick's pointer and click.
@@ -1302,6 +1305,13 @@ impl ScriptHost {
     /// ([`Input::set_typing`](lore_input::Input::set_typing)).
     pub fn take_typing(&mut self) -> Option<bool> {
         self.tools.typing.take()
+    }
+
+    /// Typing ended from outside (focus lost, a new level, the window
+    /// closing): scripts read `isTyping` as false from now on, and the
+    /// text box in the kit notices on its next tick.
+    pub fn typing_ended(&mut self) {
+        self.tools.typing.ended_by_engine();
     }
 
     /// The action set the script's game is in: `gameplay` until the script
@@ -2217,6 +2227,9 @@ impl ScriptHost {
             log::error!("{text}");
         }
         self.last_error = Some(error);
+        // A failing script may never reach its Enter: the keyboard goes back
+        // to the player, and the kit's text box finds out on its next tick.
+        self.tools.typing.reset();
         // Calling it again would freeze the game for the whole time limit
         // on every tick.
         self.paused = too_long;

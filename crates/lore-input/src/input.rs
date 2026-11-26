@@ -640,7 +640,9 @@ impl Input {
         self.frame.pointer = self.pointer;
         self.frame.screen = self.screen;
         self.frame.wheel = std::mem::take(&mut self.wheel);
-        self.typing.take_into(&mut self.frame.typed);
+        self.typing
+            .take_into(&mut self.frame.typed, &mut self.frame.typed_keys);
+        self.frame.device = self.device;
 
         // Taken out while it is filled, so the rest of `self` can be read.
         let mut states = std::mem::take(&mut self.frame.actions);
@@ -676,6 +678,7 @@ impl Input {
         frame.pointer = self.pointer;
         frame.screen = self.screen;
         frame.wheel = self.wheel;
+        frame.device = self.device;
         frame.actions.clear();
         frame.actions.extend(
             actions
@@ -792,6 +795,7 @@ mod tests {
     use super::*;
     use crate::devices::{MouseButton, MouseWheel};
     use crate::map::MouseMode;
+    use crate::typing::TypedKey;
 
     struct Rig {
         input: Input,
@@ -1598,8 +1602,13 @@ mod tests {
         input.type_text("ignored");
         input.set_typing(true);
         input.type_text("Ada");
-        assert_eq!(input.tick().typed, "Ada");
-        assert_eq!(input.tick().typed, "", "it is taken once");
+        input.type_text("\u{8}\n");
+        let frame = input.tick();
+        assert_eq!(frame.typed, "Ada");
+        assert_eq!(frame.typed_keys, [TypedKey::Backspace, TypedKey::Enter]);
+        let frame = input.tick();
+        assert_eq!(frame.typed, "", "it is taken once");
+        assert!(frame.typed_keys.is_empty());
         input.set_typing(false);
         input.type_text("nobody listens");
         assert_eq!(input.tick().typed, "");

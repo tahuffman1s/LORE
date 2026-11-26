@@ -41,8 +41,19 @@ pub(crate) const GAME_TABLES: [&str; 2] = ["menu", "pauseMenu"];
 /// has to go on.
 #[cfg(test)]
 pub(crate) const MENU_FUNCTIONS: &[&str] = &[
-    "button", "toggle", "slider", "choice", "info", "textBox", "percent", "new", "tabs", "top",
-    "anyOpen", "style",
+    "button",
+    "toggle",
+    "slider",
+    "choice",
+    "info",
+    "textBox",
+    "percent",
+    "new",
+    "tabs",
+    "top",
+    "onScreenKeyboard",
+    "anyOpen",
+    "style",
 ];
 #[cfg(test)]
 pub(crate) const MENU_ROW_FIELDS: &[&str] = &[
@@ -55,6 +66,8 @@ pub(crate) const MENU_ROW_FIELDS: &[&str] = &[
     "maxLength",
     "typing",
     "onFinish",
+    "onCancel",
+    "onTyping",
     "startTyping",
     "stopTyping",
 ];

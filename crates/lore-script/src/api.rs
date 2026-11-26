@@ -86,6 +86,7 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "stepped",
     "label",
     "typed",
+    "typedKeys",
     "startTyping",
     "stopTyping",
     "isTyping",

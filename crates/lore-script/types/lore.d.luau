@@ -1754,13 +1754,27 @@ export type MenuRow = {
     --- Example: name:onFinish(function(text) print("Hello, " .. text) end)
     onFinish: (self: MenuRow, handler: (text: string) -> ()) -> MenuRow,
 
-    --- Starts typing into a text box, as pressing it does. Its menu must be
-    --- open and in front.
+    --- Adds a function called, on a tick, when the player cancels a text box
+    --- (Escape, or B on a gamepad); the old text is already back. Leaving the
+    --- menu does not call it. Gives the row back.
+    --- Example: name:onCancel(function() print("Never mind") end)
+    onCancel: (self: MenuRow, handler: () -> ()) -> MenuRow,
+
+    --- Adds a function called, on a tick, whenever typing into a text box
+    --- starts (true) or stops (false), for any reason: a press, Enter,
+    --- Escape, leaving the menu, the window losing focus. Gives the row back.
+    --- Example: name:onTyping(function(isTyping) hint.visible = isTyping end)
+    onTyping: (self: MenuRow, handler: (isTyping: boolean) -> ()) -> MenuRow,
+
+    --- Starts typing into a text box, as pressing it does (a gamepad gets
+    --- the on-screen keyboard). Its menu must be open and in front. While
+    --- typing, the keyboard's keys press no actions, menu actions too (arrows,
+    --- Enter and the rest are for the text); the mouse and gamepad still work.
     --- Example: name:startTyping()
     startTyping: (self: MenuRow) -> (),
 
     --- Stops typing into a text box and keeps the text; `onFinish` is not
-    --- called.
+    --- called (that is the player pressing Enter).
     --- Example: name:stopTyping()
     stopTyping: (self: MenuRow) -> (),
 }
@@ -3477,12 +3491,18 @@ declare game: {
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
 
-        --- What the player typed since the last tick: letters as they are,
-        --- "\8" for Backspace, "\n" for Enter and "\27" for Escape. It is
+        --- The characters the player typed since the last tick, as they are
+        --- (no Backspace, Enter or Escape: `typedKeys` has those). It is
         --- empty unless `startTyping` was called. A `game.menu.textBox` reads
         --- it for you; use this for a text field of your own.
         --- Example: local typed = game.input.typed()
         typed: () -> string,
+
+        --- The editing keys pressed since the last tick, in order: "Backspace",
+        --- "Enter" and "Escape". The array is empty unless `startTyping` was
+        --- called. Characters come from `typed`.
+        --- Example: for _, key in game.input.typedKeys() do if key == "Enter" then print("done") end end
+        typedKeys: () -> { string },
 
         --- Turns the keyboard into a text input: keys no longer press
         --- actions (held keys are let go), the mouse and gamepad still do,
@@ -3490,18 +3510,21 @@ declare game: {
         --- Example: game.input.startTyping()
         startTyping: () -> (),
 
-        --- Gives the keyboard back to the actions.
+        --- Gives the keyboard back to the actions. It does not call a text
+        --- box's `onFinish`. The engine also does this when the window loses
+        --- focus, a new level loads or the script fails.
         --- Example: game.input.stopTyping()
         stopTyping: () -> (),
 
-        --- Whether the keyboard is a text input now.
+        --- Whether the keyboard is a text input now. It stays false while the
+        --- engine's on-screen keyboard is open, as that is not the keyboard.
         --- Example: if game.input.isTyping() then return end
         isTyping: () -> boolean,
 
         --- Whether the player last used a gamepad (not the keyboard and
-        --- mouse). A gamepad cannot type letters, so show an on-screen
-        --- keyboard.
-        --- Example: if game.input.usingGamepad() then openOnScreenKeyboard() end
+        --- mouse), as of this tick. It is safe to read in a tick or while
+        --- drawing, to show the right hint.
+        --- Example: hint.text = if game.input.usingGamepad() then "Press A" else "Press E"
         usingGamepad: () -> boolean,
     },
 
@@ -3607,12 +3630,14 @@ declare game: {
         --- keyboard instead, made by the menu kit with nothing to write: a
         --- grid of keys walked with the d-pad or stick, A types the key,
         --- X erases, Y types a space, a bumper or the Shift key turns
-        --- capitals on and off, Start is Done (`onFinish`) and B puts the
-        --- old text back. The pointer can click its keys. Letters typed
+        --- capitals on and off, Start is Done (`onFinish`; Start also
+        --- finishes a box typed into from the keyboard) and B puts the
+        --- old text back (`onCancel`). A value longer than `maxLength` is
+        --- cut to fit. The pointer can click its keys. Letters typed
         --- on a real keyboard in the meantime go in too, if the game asked
         --- for them with `game.input.startTyping`.
         --- Example: game.menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
-        textBox: (label: string, options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())? }?) -> MenuRow,
+        textBox: (label: string, options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())?, onCancel: (() -> ())?, onTyping: ((isTyping: boolean) -> ())? }?) -> MenuRow,
 
         --- A share from 0 to 1 as a percentage, for a slider's `format`:
         --- 0.25 is "25%".
@@ -3624,6 +3649,14 @@ declare game: {
         --- pixels on a screen 1080 high) and `width` (820).
         --- Example: local sound = game.menu.new("Sound", { music, volume }, { right = 40, down = 40, width = 640 })
         new: (title: string, rows: { MenuRow }, place: { right: number?, down: number?, width: number? }?) -> Menu,
+
+        --- Whether a gamepad pressing a text box gets the engine's on-screen
+        --- keyboard (true). Set it false to show your own: the press still
+        --- starts typing (`row.typing`, `onTyping`), the kit draws no
+        --- keyboard, Start finishes and B cancels, and your keyboard sets
+        --- `row.value`.
+        --- Example: game.menu.onScreenKeyboard = false
+        onScreenKeyboard: boolean,
 
         --- Shows menus as tabs of one screen, the first in front.
         --- Example: local options = game.menu.tabs({ sound, video })

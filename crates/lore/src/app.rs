@@ -619,6 +619,7 @@ impl<G: Game> App<G> {
                     log::warn!("{warning}");
                 }
                 self.game.level_saved(&level);
+                self.stop_typing();
                 self.level_problem = None;
                 log::info!(
                     "Loaded {} again: {}.",
@@ -744,6 +745,18 @@ impl<G: Game> App<G> {
                 }
             }
         }
+    }
+
+    /// Takes the keyboard back from a game that is typing, and tells the
+    /// game: the window lost focus or the level changed under a text box.
+    fn stop_typing(&mut self) {
+        if self.input.is_typing() {
+            self.input.set_typing(false);
+            if let Some(window) = &self.window {
+                window.set_ime_allowed(false);
+            }
+        }
+        self.game.typing_ended();
     }
 
     /// Gives the cursor back to the desktop.
@@ -1322,6 +1335,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                 if focused {
                     self.gamepads.resync(&mut self.input);
                 } else {
+                    self.stop_typing();
                     self.release_mouse();
                     self.input.release_all();
                     self.pointer_down = false;
@@ -1360,7 +1374,11 @@ impl<G: Game> ApplicationHandler for App<G> {
                     self.input.press(key);
                 }
             }
-            WindowEvent::Ime(Ime::Commit(text)) => self.input.type_text(&text),
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                if text.chars().all(|c| !c.is_control()) {
+                    self.input.type_text(&text);
+                }
+            }
             // In pixels, as the window's size is, so a menu can tell what
             // the pointer is over.
             #[allow(clippy::cast_possible_truncation)]

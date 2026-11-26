@@ -1274,3 +1274,70 @@ fn abilities_are_switches_and_their_numbers_sit_beside_the_others() {
         assert!(message.contains(part), "{call}: {message}");
     }
 }
+
+#[test]
+fn typed_is_text_and_typed_keys_are_the_editing_keys_in_order() {
+    let mut host = game(
+        r#"game.onTick(function()
+            local keys = game.input.typedKeys()
+            print(game.input.typed() .. "|" .. table.concat(keys, ","))
+        end)"#,
+    );
+    let mut input = Input::new(ActionMap::standard());
+    input.set_typing(true);
+    input.type_text("Ad\u{8}a\n\u{1b}");
+    host.tick(input.tick(), STEP);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["Ada|Backspace,Enter,Escape", "|"]);
+}
+
+#[test]
+fn nothing_typed_gives_the_same_empty_array_every_tick() {
+    let mut host = game(
+        r#"local first
+        game.onTick(function()
+            local keys = game.input.typedKeys()
+            first = first or keys
+            print(tostring(#keys == 0 and rawequal(first, keys)))
+        end)"#,
+    );
+    run(&mut host, 3);
+    assert_eq!(printed(), ["true", "true", "true"]);
+}
+
+#[test]
+fn the_device_is_part_of_the_tick() {
+    let mut host =
+        game(r#"game.onTick(function() print(tostring(game.input.usingGamepad())) end)"#);
+    let mut input = Input::new(ActionMap::standard());
+    input.press(GamepadButton::GamepadSouth);
+    host.tick(input.tick(), STEP);
+    input.press(Key::Space);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["true", "false"]);
+}
+
+#[test]
+fn the_engine_ending_typing_reads_as_not_typing_and_asks_nothing() {
+    let mut host = game(
+        r#"game.input.startTyping()
+        game.onTick(function() print(tostring(game.input.isTyping())) end)"#,
+    );
+    assert_eq!(host.take_typing(), Some(true));
+    host.typing_ended();
+    assert_eq!(host.take_typing(), None);
+    run(&mut host, 1);
+    assert_eq!(printed(), ["false"]);
+}
+
+#[test]
+fn a_script_that_fails_while_typing_gives_the_keyboard_back() {
+    let mut host = game(
+        r#"game.input.startTyping()
+        game.onTick(function() error("boom") end)"#,
+    );
+    assert_eq!(host.take_typing(), Some(true));
+    run(&mut host, 1);
+    assert!(host.last_error().is_some());
+    assert_eq!(host.take_typing(), Some(false));
+}

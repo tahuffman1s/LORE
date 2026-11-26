@@ -689,6 +689,12 @@ impl Tools {
         self.device.get() == Device::Gamepad
     }
 
+    /// The device the tick says the player used, for what a script reads
+    /// as it runs.
+    pub fn set_device_kind(&self, device: Device) {
+        self.device.set(device);
+    }
+
     pub fn set_device(&self, device: Device, style: GamepadStyle) {
         self.device.set(device);
         self.style.set(style);

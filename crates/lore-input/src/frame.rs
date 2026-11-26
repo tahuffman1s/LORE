@@ -1,6 +1,7 @@
 //! The per-tick snapshot of every action.
 
-use crate::map::ActionId;
+use crate::map::{ActionId, Device};
+use crate::typing::TypedKey;
 
 /// What one action is doing during one tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -37,11 +38,15 @@ pub struct InputFrame {
     /// Notches the wheel rolled over the free pointer since the previous tick.
     /// Above zero is away from the player. A touchpad gives parts of a notch.
     pub wheel: f32,
-    /// What the player typed since the previous tick, while a script takes
-    /// text (see [`Input::set_typing`](crate::Input::set_typing)): letters as
-    /// they are, `"\u{8}"` for Backspace, `"\n"` for Enter, `"\u{1b}"` for
-    /// Escape. Empty when nothing was typed.
+    /// The characters the player typed since the previous tick, while a
+    /// script takes text (see [`Input::set_typing`](crate::Input::set_typing)).
+    /// Empty when nothing was typed.
     pub typed: String,
+    /// Backspace, Enter and Escape, in the order pressed since the previous
+    /// tick, while a script takes text.
+    pub typed_keys: Vec<TypedKey>,
+    /// The device the player last used on purpose, as of this tick.
+    pub device: Device,
     pub(crate) actions: Vec<ActionState>,
 }
 
@@ -62,6 +67,8 @@ impl Clone for InputFrame {
             screen: self.screen,
             wheel: self.wheel,
             typed: self.typed.clone(),
+            typed_keys: self.typed_keys.clone(),
+            device: self.device,
             actions: self.actions.clone(),
         }
     }
@@ -74,6 +81,8 @@ impl Clone for InputFrame {
         self.screen = source.screen;
         self.wheel = source.wheel;
         self.typed.clone_from(&source.typed);
+        self.typed_keys.clone_from(&source.typed_keys);
+        self.device = source.device;
         self.actions.clone_from(&source.actions);
     }
 }
@@ -87,6 +96,8 @@ impl InputFrame {
             screen: DEFAULT_SCREEN,
             wheel: 0.0,
             typed: String::new(),
+            typed_keys: Vec::new(),
+            device: Device::KeyboardAndMouse,
             actions: vec![ActionState::default(); actions],
         }
     }

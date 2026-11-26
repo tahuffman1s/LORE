@@ -57,3 +57,4 @@ pub use map::{ActionId, ActionMap, ActionSetId, Conflict, Device, MapError, Mous
 pub use names::UnknownName;
 pub use rumble::Rumble;
 pub use shaping::Deadzone;
+pub use typing::TypedKey;

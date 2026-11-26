@@ -32,8 +32,6 @@ struct Played {
     drawn: Vec<Words>,
     /// Whether a mistake in the game's script fails the test.
     strict: bool,
-    /// The device the game was last told the player is using.
-    device: lore_input::Device,
 }
 
 impl Played {
@@ -77,7 +75,6 @@ impl Played {
             closed: false,
             drawn: Vec::new(),
             strict,
-            device: lore_input::Device::KeyboardAndMouse,
         };
         played.step();
         played
@@ -88,13 +85,6 @@ impl Played {
     fn step(&mut self) {
         let device = self.input.last_device();
         let style = lore_input::GamepadStyle::default();
-        if device != self.device {
-            // The window draws a frame between a press and the tick that
-            // hears it, so the game knows the device by then.
-            self.world
-                .frame(&mut Frame::new(0.0).with_device(device, style));
-            self.device = device;
-        }
         self.world.tick(self.input.tick(), STEP);
         let mut frame = Frame::new(1.0)
             .with_settings(self.settings)
@@ -1370,7 +1360,9 @@ fn typing_into_a_text_box_then_enter_finishes_it() {
 #[test]
 fn backspace_takes_off_a_letter_and_escape_puts_the_old_text_back() {
     let mut played = Played::typing_in_a_box();
-    played.type_text("Adx\u{8}a\u{8}é");
+    for part in ["Adx", "\u{8}", "a", "\u{8}", "é"] {
+        played.type_text(part);
+    }
     assert!(played.value_of("Name").starts_with("Adé"));
     played.type_text("\u{8}\u{8}\u{8}\u{8}");
     assert!(played.value_of("Name").starts_with('|') || played.value_of("Name").is_empty());
@@ -1623,4 +1615,127 @@ fn enter_on_a_text_box_with_a_keyboard_still_types_on_the_keyboard() {
     );
     played.type_text("hi\n");
     assert_eq!(played.value_of("Name"), "hi");
+}
+
+/// A text box game with the new events and a short limit, for what a script
+/// hears of typing.
+const TEXT_BOX_EVENTS: &str = r#"
+    local log = ""
+    local menu
+    local name = game.menu.textBox("Name", {
+        maxLength = 4,
+        value = "toolong",
+        onTyping = function(on) log ..= if on then "T" else "t" end,
+        onCancel = function() log ..= "C" end,
+        onFinish = function() log ..= "F" end,
+        onChange = function(text) if string.sub(text, -1) == "!" then error("boom") end end,
+    })
+    local tell = game.menu.info("Log", { text = function() return "log " .. log end })
+    menu = game.menu.new("Form", { name, tell })
+    game.input.bind("form", { "F6" })
+    game.onTick(function()
+        if game.input.justPressed("form") then menu:toggle() end
+    end)
+"#;
+
+impl Played {
+    fn with_events() -> Self {
+        let mut played = Played::with_main(TEXT_BOX_EVENTS, Settings::default());
+        played.tap(Key::F6);
+        played
+    }
+}
+
+#[test]
+fn a_value_longer_than_max_length_is_cut_and_a_smaller_limit_cuts_it() {
+    let played = Played::with_events();
+    assert_eq!(played.value_of("Name"), "tool");
+    let mut played = Played::with_main(
+        r#"local row = game.menu.textBox("Name", { value = "héllo" })
+        row.maxLength = 3
+        local menu = game.menu.new("Form", { row, game.menu.info("Now", { text = function() return row.value end }) })
+        row.value = "ñññññ"
+        menu:open()"#,
+        Settings::default(),
+    );
+    played.step();
+    assert_eq!(played.value_of("Now"), "ñññ");
+}
+
+#[test]
+fn on_typing_hears_start_and_stop_and_on_cancel_hears_escape_only() {
+    let mut played = Played::with_events();
+    played.tap(Key::Enter);
+    assert!(played.shows("log T"), "{:?}", played.words());
+    played.type_text("\u{1b}");
+    assert!(played.shows("log TtC"), "{:?}", played.words());
+    played.tap(Key::Enter);
+    played.type_text("\n");
+    assert!(played.shows("log TtCTtF"), "{:?}", played.words());
+    // Start from a gamepad finishes a box typed into from the keyboard.
+    played.tap(Key::Enter);
+    played.tap(GamepadButton::GamepadStart);
+    assert!(played.shows("log TtCTtFTtF"), "{:?}", played.words());
+    assert!(!played.input.is_typing());
+}
+
+#[test]
+fn a_script_error_while_typing_leaves_the_keys_working() {
+    let mut played = Played::with_events();
+    played.tap(Key::Enter);
+    assert!(played.input.is_typing());
+    // The first letter fails in onChange: the engine takes typing back.
+    played.type_text("\u{8}");
+    played.strict = false;
+    played.type_text("!");
+    played.step();
+    assert!(!played.input.is_typing(), "{:?}", played.words());
+    played.tap(Key::Enter);
+    assert!(
+        played.input.is_typing(),
+        "the box can be typed into again: {:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn a_game_with_its_own_keyboard_gets_typing_without_the_engines() {
+    let mut played = Played::with_main(
+        &TEXT_BOX_EVENTS.replace(
+            "local log",
+            "game.menu.onScreenKeyboard = false\n    local log",
+        ),
+        Settings::default(),
+    );
+    played.tap(Key::F6);
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.shows("log T"), "{:?}", played.words());
+    assert!(!played.shows("Space"), "no engine keyboard");
+    assert!(!played.input.is_typing(), "a gamepad types nothing");
+    played.tap(GamepadButton::GamepadEast);
+    assert!(played.shows("log TtC"), "B cancels: {:?}", played.words());
+}
+
+#[test]
+fn an_on_screen_keyboard_works_in_a_game_without_erase_and_space_actions() {
+    // `justPressed` on an action the game does not have is an error, so the
+    // kit asks once and leaves those keys out.
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::GamepadWest);
+    played.tap(GamepadButton::GamepadNorth);
+    assert!(played.shows("Space"), "{:?}", played.words());
+}
+
+#[test]
+fn start_typing_from_a_script_opens_the_keyboard_for_a_gamepad_as_a_press_does() {
+    let mut played = Played::with_main(
+        r#"local name = game.menu.textBox("Name")
+        local go = game.menu.button("Go", { onPress = function() name:startTyping() end })
+        local menu = game.menu.new("Form", { go, name })
+        menu:open()"#,
+        Settings::default(),
+    );
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.shows("Space"), "{:?}", played.words());
+    assert!(!played.input.is_typing());
 }
