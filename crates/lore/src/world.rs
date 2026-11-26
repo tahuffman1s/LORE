@@ -566,6 +566,19 @@ impl World {
         self.climate.weather()
     }
 
+    /// How hard the game is, as the numbers the engine's own people follow:
+    /// how much they hurt the player, how fast they notice and how well they
+    /// aim, each 1 at the middle of `game.difficulty`'s dial, 0.5 at its
+    /// easiest step and 1.5 at its hardest. It changes only on a tick.
+    #[must_use]
+    pub fn difficulty(&self) -> lore_script::DifficultyScales {
+        // The dial and the assists start from the player's settings file,
+        // not from the seed or the presses: a save (#73) and a replay file
+        // (#193) must hold the starting dial and assists, and any change to
+        // them from outside the game, for the same game to come back.
+        self.game.host().difficulty_scales()
+    }
+
     /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
     /// half past one in the afternoon), or `None` in a game with no time of
     /// day: one whose script never set `game.clock`. Plain data that moves
@@ -1137,7 +1150,7 @@ impl Game for World {
         // A hard landing hurts, through the same path as a weapon.
         if walking && player.grounded && !before.grounded {
             let hurt = fall_damage(-before.velocity[1]);
-            if hurt > 0.0 {
+            if hurt > 0.0 && host.setting_on(FALL_DAMAGE) != Some(false) {
                 host.damage(CharacterId::PLAYER, hurt, None, "fall");
             }
         }
@@ -1599,6 +1612,10 @@ fn reach_ahead(model: &lore_assets::Scene) -> f32 {
     }
     ahead
 }
+
+/// The player's setting that, turned off, lets them land from any height
+/// unhurt.
+const FALL_DAMAGE: &str = "fall_damage";
 
 /// How fast a body may hit the ground unhurt, in metres a second: a drop
 /// of about six metres (v² = 2gh).
@@ -2802,6 +2819,90 @@ mod tests {
         }
         // Drawing does not change the game: the ticks are where they were.
         assert_eq!(game.seen(), after);
+    }
+
+    #[test]
+    fn with_fall_damage_off_the_player_lands_unhurt() {
+        use crate::settings::Settings;
+        let actions = ActionMap::standard();
+        let health_after_a_drop = |fall_damage: bool| {
+            let scripts = [(
+                "main.luau".to_owned(),
+                "game.onStart(function() game.player:teleport(vector.create(0, 25, 0)) end)"
+                    .to_owned(),
+            )];
+            let settings = Settings {
+                fall_damage,
+                ..Settings::default()
+            };
+            let script = ScriptGame::from_sources_with_settings(scripts, &actions, settings);
+            let mut world = World::new(script, 60);
+            for _ in 0..240 {
+                world.tick(&InputFrame::default(), 1.0 / 60.0);
+            }
+            assert!(world.player().grounded);
+            world
+                .game()
+                .host()
+                .health(CharacterId::PLAYER)
+                .map(|(now, _)| now)
+        };
+        assert!(health_after_a_drop(true).is_some_and(|health| health < 100.0));
+        assert_eq!(health_after_a_drop(false), Some(100.0));
+    }
+
+    #[test]
+    fn a_turn_of_the_difficulty_is_the_same_from_the_same_input_at_any_frame_rate() {
+        use crate::playback::{Did, TICK_RATE, first_difference, paces, play, recording, steady};
+        use lore_input::Key;
+        // Each press of jump turns the dial a step harder, round to the
+        // easiest after the hardest: as a player would in a menu.
+        const RULES: &str = r#"
+            game.onTick(function()
+                if game.input.justPressed("jump") then
+                    local steps = game.difficulty.steps
+                    local at = table.find(steps, game.difficulty.name) or 1
+                    game.difficulty.name = steps[at % #steps + 1]
+                end
+            end)
+        "#;
+        let mut presses = recording(240);
+        for tick in [20, 70, 150] {
+            presses[tick].push(Did::Press(Key::Space.into()));
+            presses[tick + 3].push(Did::Release(Key::Space.into()));
+        }
+        let state = |game: &Playing| {
+            let scales = game.world.difficulty();
+            let done = game.world.game().host().rules_fingerprint();
+            (
+                scales.damage.to_bits(),
+                scales.notice.to_bits(),
+                scales.aim.to_bits(),
+                done,
+            )
+        };
+        let start = || {
+            let actions = ActionMap::standard();
+            Playing::start(
+                ScriptGame::from_source(RULES, &actions),
+                None,
+                &actions,
+                TICK_RATE,
+            )
+        };
+        let expected = play(&mut start(), &presses, steady(TICK_RATE), state);
+        // Standard, Hard, Story, Standard.
+        let damage = |tick: usize| f32::from_bits(expected.states[tick].0);
+        assert_eq!(
+            [damage(10), damage(30), damage(100), damage(200)],
+            [1.0, 1.5, 0.5, 1.0]
+        );
+        for (pace, frame_times) in paces() {
+            let found = play(&mut start(), &presses, frame_times, state);
+            if let Some(difference) = first_difference(&expected.states, &found.states) {
+                panic!("At {pace}, {difference}");
+            }
+        }
     }
 
     #[test]

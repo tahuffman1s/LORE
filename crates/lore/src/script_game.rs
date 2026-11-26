@@ -644,7 +644,10 @@ impl Game for ScriptGame {
             self.host.controls_changed(change.clone());
         }
         frame.hide_controls_notice(!self.host.controls_notice_shown());
-        frame.set_time_speed(self.host.time_speed());
+        // The player's "game speed" slows the whole game: fewer ticks a
+        // second, each the same, so the rules do not change.
+        let pace = (self.told.game_speed / 100.0).clamp(0.5, 1.0);
+        frame.set_time_speed(self.host.time_speed() * pace);
         self.follow_settings(frame);
         // After those, so what the script asks for while drawing is in this frame.
         self.host.draw(frame.alpha());

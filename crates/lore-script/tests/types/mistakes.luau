@@ -123,6 +123,10 @@ game.player:goTo("Gate") -- wrong: only an NPC walks by itself; game.player is n
 local who: Npc = game.player -- wrong: game.player is a Character, not an NPC
 print(who)
 
+-- Difficulty is a dial of named steps: its level is read, its name set.
+game.difficulty.name = 2 -- wrong: a step is named in text
+print(game.difficulty.scale("hard")) -- wrong: it scales a number
+
 -- The clock's time is text, and its day is counted, not set.
 game.clock.onHour("eight", function() end) -- wrong: the hour is a number
 game.clock.time = true -- wrong: the time is text like "8:00"

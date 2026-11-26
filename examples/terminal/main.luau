@@ -186,6 +186,11 @@ local function item(id)
     error("there is no item called " .. id)
 end
 
+-- The dial turned in the pause menu is said on the HUD.
+game.difficulty.onChange(function(now)
+    notice("Difficulty", now .. ". The drum's heat follows it.")
+end)
+
 -- Eats a ration, from the HUD's key or from the pack. Says why if it cannot.
 local function eat()
     local ration, player = item("ration"), game.player
@@ -628,7 +633,8 @@ game.onTick(function(step)
         heat += step
         if heat >= 0.25 then
             heat -= 0.25
-            player:damage(4, { how = "heat" })
+            -- 2 on Story, 4 on Standard, 6 on Hard.
+            player:damage(game.difficulty.scale(4), { how = "heat" })
         end
     end
 
