@@ -351,6 +351,15 @@ fn set_volume(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             example: &|sound| format!("game.audio.setVolume(\"{sound}\", 0.5)"),
             strict: false,
         };
+        // `game.audio.setVolume(0.5)` is the likeliest slip: the master
+        // volume is not here, so say what this one is.
+        if !matches!(name, Value::String(_)) || matches!(volume, Value::Nil) {
+            return Err(fail(
+                lua,
+                "game.audio.setVolume(name, volume) sets one sound's volume. Write it like \
+                 this: game.audio.setVolume(\"footstep\", 0.5)",
+            ));
+        }
         let name = tweak_name(lua, &shared.audio, &naming, &name)?;
         #[allow(clippy::cast_possible_truncation)]
         let shown = name.as_str();

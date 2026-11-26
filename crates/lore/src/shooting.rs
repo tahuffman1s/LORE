@@ -411,6 +411,9 @@ impl Shooting {
                 self.targets.clear();
                 self.targets
                     .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+                // A blast of pellets is one shot, so it makes one strike
+                // noise: where its nearest pellet struck the level.
+                let mut nearest: Option<(f32, [f32; 3])> = None;
                 for shot in &self.shots {
                     let direction = toward_mark(
                         level,
@@ -427,7 +430,9 @@ impl Shooting {
                     };
                     let (victim, part) = match hit.struck {
                         Struck::Level => {
-                            noises.push(struck_noise(hit.point, tick));
+                            if nearest.is_none_or(|(least, _)| hit.distance < least) {
+                                nearest = Some((hit.distance, hit.point));
+                            }
                             (None, None)
                         }
                         Struck::Target { id, zone } => (name_of(dummies, id), Some(zone)),
@@ -443,6 +448,9 @@ impl Shooting {
                         cover: hit.cover,
                         explosion: false,
                     }));
+                }
+                if let Some((_, point)) = nearest {
+                    noises.push(struck_noise(point, tick));
                 }
             }
             Delivery::Projectile(_) => {

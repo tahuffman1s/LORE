@@ -357,6 +357,24 @@ fn a_game_that_names_no_sounds_keeps_the_engines_own() {
 }
 
 #[test]
+fn a_shotgun_blast_into_the_floor_makes_one_strike_noise() {
+    use lore::noise::NoiseKind;
+    let script = TELLS_ALL.replace("giveWeapon(\"rifle\")", "giveWeapon(\"shotgun\")");
+    let mut world = world(&script);
+    play(&mut world, 40);
+    ask(&mut world, |asked| {
+        asked.pitch = -0.4;
+        asked.fire = true;
+    });
+    let heard = heard_over(&mut world, 3);
+    let strikes = heard
+        .iter()
+        .filter(|noise| noise.kind == NoiseKind::Impact)
+        .count();
+    assert_eq!(strikes, 1, "{heard:?}");
+}
+
+#[test]
 fn a_bullet_striking_the_floor_and_a_bomb_going_off_are_heard_where_they_happened() {
     use lore::noise::NoiseKind;
     // Looking down at the floor a few metres ahead.

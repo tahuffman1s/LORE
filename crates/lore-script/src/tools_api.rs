@@ -283,6 +283,8 @@ impl Default for MoveSaid {
             ladder_speed: 2.2,
             dodge_seconds: 0.35,
             dodge_distance: 3.2,
+            // The same as `lore_audio::FootstepSettings::default().walk_stride`,
+            // which a test in the `lore` crate holds it to.
             stride: 2.0,
             step_loudness: 1.0,
         }
@@ -389,7 +391,7 @@ impl MoveNumber {
                 "setStepLoudness",
                 "game.player:setStepLoudness(0.5)",
                 "how loud every step and landing is: 1 as now, 0 silent, 2 twice as loud",
-                (0.0, 10.0),
+                (0.0, 4.0),
             ),
         }
     }

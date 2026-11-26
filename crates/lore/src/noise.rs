@@ -307,11 +307,13 @@ pub(crate) fn play(
     if noise.silenced || tweak.volume <= 0.0 {
         return None;
     }
-    let name = tweak
+    // A replacement the game has no sound ready for must not silence the
+    // engine's own: fall back to the sound it would have played.
+    let mut play = tweak
         .replace
         .as_ref()
-        .map_or_else(|| noise.sound_name(), lore_script::SoundName::as_str);
-    let mut play = sounds.take(name, seed)?;
+        .and_then(|name| sounds.take(name.as_str(), seed))
+        .or_else(|| sounds.take(noise.sound_name(), seed))?;
     play.volume *= noise.loudness * tweak.volume;
     if noise.pitch.is_finite() {
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
@@ -323,4 +325,38 @@ pub(crate) fn play(
     // A noise of the world keeps the world's time: it waits while the
     // game is paused and is slow in slow motion.
     Some(play.after(noise.delay).in_world())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lore_script::{MoveSaid, SoundTweak};
+
+    #[test]
+    fn a_replacement_with_no_sound_ready_plays_the_engines_own() {
+        let mut sounds = Sounds::starter();
+        let noise = Noise::new(NoiseKind::Footstep, [0.0; 3], 0.6, 1.0, 0.0, 1);
+        let swapped = |name: &str| SoundTweak {
+            volume: 1.0,
+            replace: SoundName::new(name),
+        };
+        // The game has no "boots" sound, so the starter footstep plays.
+        assert!(play(&noise, 0, &mut sounds, swapped("boots")).is_some());
+        // One it has is played in its place.
+        assert!(play(&noise, 0, &mut sounds, swapped("landing")).is_some());
+        // Turned right down, nothing plays.
+        let off = SoundTweak {
+            volume: 0.0,
+            replace: None,
+        };
+        assert!(play(&noise, 0, &mut sounds, off).is_none());
+    }
+
+    #[test]
+    fn the_stride_a_script_starts_with_is_the_engines_own() {
+        assert_eq!(
+            MoveSaid::default().stride,
+            FootstepSettings::default().walk_stride
+        );
+    }
 }

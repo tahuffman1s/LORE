@@ -422,3 +422,16 @@ fn a_mistake_with_the_engines_own_sounds_says_what_to_write() {
         "{message}"
     );
 }
+
+#[test]
+fn set_volume_with_no_name_says_it_is_for_one_sound() {
+    let said = "game.audio.setVolume(name, volume) sets one sound's volume. Write it like \
+                this: game.audio.setVolume(\"footstep\", 0.5)";
+    for call in [
+        "game.audio.setVolume(0.5)",
+        "game.audio.setVolume()",
+        r#"game.audio.setVolume("footstep")"#,
+    ] {
+        assert_eq!(mistake(call), said, "{call}");
+    }
+}
