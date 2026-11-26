@@ -130,6 +130,25 @@ pub struct SoundRequest {
     pub looping: bool,
 }
 
+/// A sound a script played at a place, as the NPCs hear it: the engine
+/// adds it to the world's noises, as loud and as far-carrying as it is
+/// played. One played with `npcsHear = false`, looping, or while drawing
+/// (in `game.onDraw`) is not one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptNoise {
+    /// The sound's name.
+    pub sound: String,
+    /// Where it was played, in metres.
+    pub position: [f32; 3],
+    /// How loud, from 0 to 1.
+    pub loudness: f32,
+    /// How many metres away it can still be heard, when the script said.
+    pub range: Option<f32>,
+    /// The NPC whose own function played it (its `onSee`, `onHear`,
+    /// `onLoseSight` or `onUse`), who does not hear it itself.
+    pub by: Option<crate::CharacterId>,
+}
+
 /// What a script asked of the engine's sound.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioCommand {
@@ -156,6 +175,12 @@ pub(crate) struct AudioState {
     waiting: RefCell<VecDeque<AudioCommand>>,
     /// What the script did to the sounds the engine plays by itself.
     tweaks: RefCell<Tweaks>,
+    /// The sounds played at a place since the world last took them, for
+    /// the NPCs to hear.
+    heard: RefCell<Vec<ScriptNoise>>,
+    /// The NPC whose function is running, if one is: what it plays is its
+    /// own.
+    pub(crate) by: Cell<Option<crate::CharacterId>>,
 }
 
 impl AudioState {
@@ -208,6 +233,17 @@ impl AudioState {
             looping: false,
         };
         self.push(AudioCommand::Play(request));
+    }
+
+    /// Calls `see` with each sound played at a place since the last call,
+    /// in the order played, for the NPCs to hear, and forgets them. Sets
+    /// no memory aside.
+    pub(crate) fn take_heard(&self, mut see: impl FnMut(&ScriptNoise)) {
+        let mut heard = self.heard.borrow_mut();
+        for noise in heard.iter() {
+            see(noise);
+        }
+        heard.clear();
     }
 
     fn next_id(&self) -> SoundId {
@@ -345,7 +381,7 @@ impl Call {
     fn options(self) -> &'static [&'static str] {
         match self {
             Self::Play => &["volume", "pitch", "loop"],
-            Self::PlayAt => &["volume", "pitch", "loop", "range"],
+            Self::PlayAt => &["volume", "pitch", "loop", "range", "npcsHear"],
         }
     }
 }
@@ -592,7 +628,27 @@ fn function(lua: &Lua, shared: &Rc<Shared>, call: Call) -> mlua::Result<Function
             range: None,
             looping: false,
         };
-        read_options(lua, call, &options, &mut request)?;
+        let mut npcs_hear = true;
+        read_options(lua, call, &options, &mut request, &mut npcs_hear)?;
+        // A sound played once at a place is heard by the NPCs as by the
+        // player: a bottle a script smashes draws a guard. A loop is the
+        // sound of a place, not something that happened. One played while
+        // drawing still plays, but no NPC hears it: what NPCs hear must not
+        // depend on how often pictures are drawn.
+        if let (Some(position), true, false) = (request.position, npcs_hear, request.looping)
+            && !shared.clock.is_drawing()
+        {
+            let mut heard = shared.audio.heard.borrow_mut();
+            if heard.len() < MAX_WAITING {
+                heard.push(ScriptNoise {
+                    sound: request.name.clone(),
+                    position,
+                    loudness: request.volume,
+                    range: request.range,
+                    by: shared.audio.by.get(),
+                });
+            }
+        }
         let id = request.id;
         shared.audio.push(AudioCommand::Play(request));
         lua.create_userdata(SoundRef(id))
@@ -691,6 +747,7 @@ fn read_options(
     call: Call,
     options: &Value,
     request: &mut SoundRequest,
+    npcs_hear: &mut bool,
 ) -> mlua::Result<()> {
     let function = call.name();
     let options = match options {
@@ -768,6 +825,27 @@ fn read_options(
                     ));
                 }
                 request.range = Some(range);
+            }
+            "npcsHear" if call == Call::PlayAt => match value {
+                Value::Boolean(hear) => *npcs_hear = hear,
+                other => {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{function} needs true or false for `npcsHear`, but it was given \
+                             {}. Write it like this: {{ npcsHear = false }}",
+                            describe(&other)
+                        ),
+                    ));
+                }
+            },
+            "npcsHear" => {
+                return Err(fail(
+                    lua,
+                    "game.audio.play has no `npcsHear`, because its sound is not in the world, \
+                     so no NPC hears it. To play a sound from a place NPCs can hear, use \
+                     game.audio.playAt.",
+                ));
             }
             "range" => {
                 return Err(fail(

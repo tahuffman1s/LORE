@@ -121,6 +121,13 @@ guard:onArrive("there") -- wrong: it takes a function
 guard:onCannotReach(print, 5) -- wrong: it takes one function
 game.player:goTo("Gate") -- wrong: only an NPC walks by itself; game.player is not one
 local who: Npc = game.player -- wrong: game.player is a Character, not an NPC
+guard.onSee(function(who) end) -- wrong: needs a colon, guard:onSee(...)
+guard:onHear("noise") -- wrong: it takes a function
+guard.sightDistance = "far" -- wrong: a distance is a number in metres
+guard.hearing = false -- wrong: deaf is guard.hearing = 0
+print(guard:canSee("Player")) -- wrong: it takes a character, such as game.player
+game.npc { name = "Cook", at = "Gate", sightAngle = "wide" } -- wrong: an angle is a number of degrees
+game.audio.playAt("landing", vector.create(0, 0, 0), { npcsHear = "no" }) -- wrong: npcsHear is true or false
 print(who)
 
 -- Difficulty is a dial of named steps: its level is read, its name set.

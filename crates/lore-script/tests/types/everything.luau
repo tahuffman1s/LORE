@@ -721,6 +721,20 @@ if false then
     guard:onArrive(function(npc: Npc, where) print(npc.name, where) end)
     guard:onCannotReach(function(npc: Npc, why: string) print(npc.name, why) end)
     game.thing("Cellar door"):onUse(function(door: Thing, who: Character) print(door.name, who.name) end)
+    local watcher: Npc = game.npc { name = "Watcher", at = "Gate", sightDistance = 40, sightAngle = 90, hearing = 2, nightSight = 0.5 }
+    watcher.sightDistance = 0
+    watcher.sightAngle = 360
+    watcher.hearing = 0
+    watcher.nightSight = 1
+    print(watcher.sightDistance, watcher.sightAngle, watcher.hearing, watcher.nightSight)
+    watcher:onSee(function(who: Character) print(who.name, who.dead) end)
+    watcher:onLoseSight(function(who: Character, lastSeen: vector) print(who.name, lastSeen.x) end)
+    watcher:onHear(function(noise: Noise) print(noise.sound, noise.by, noise.weapon, noise.loudness) end)
+    local sees: boolean = watcher:canSee(game.player)
+    print(sees)
+    local seen: { Character } = watcher:inSight()
+    for _, who: Character in seen do print(who.name) end
+    game.audio.playAt("landing", watcher.position, { npcsHear = false })
 end
 game.showUsePrompt(true)
 local meant: (Thing | Npc)? = game.player.lookingAt

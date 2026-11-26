@@ -24,7 +24,7 @@
 //! order gives way.
 
 use lore_nav::{GateId, Openings, Scratch};
-use lore_npc::{Around, Face, Goal, Going, Mind, News, Upright};
+use lore_npc::{Around, Face, Goal, Going, Keenness, Mind, News, Senses, Upright};
 use lore_physics::{Level, MoveSettings, Player};
 use lore_script::{CharacterId, NpcAsk, ScriptHost, Toward, WalkAsk};
 
@@ -59,6 +59,8 @@ pub struct Npc {
     pub(crate) chasing: Option<CharacterId>,
     /// When its feet come down, for the noise of its steps.
     steps: Walking,
+    /// What it sees and has lately heard (see `super::sensing`).
+    pub senses: Senses<CharacterId, crate::noise::Which>,
 }
 
 impl Npc {
@@ -125,7 +127,7 @@ fn stand(
 }
 
 /// How tall a body is now: crouched or standing.
-fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
+pub(super) fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
     if body.crouched {
         rules.crouched_height
     } else {
@@ -246,6 +248,9 @@ impl Npcs {
                         npc.mind = Mind::standing(facing);
                         npc.chasing = None;
                         npc.steps = Walking::default();
+                        // Put somewhere new, it looks about afresh.
+                        npc.senses.forget();
+                        host.npc_blinded(id);
                     }
                 }
                 NpcAsk::Removed { id } => self.list.retain(|npc| npc.who != id),
@@ -324,6 +329,7 @@ impl Npcs {
                 down: false,
                 chasing: None,
                 steps: Walking::default(),
+                senses: Senses::new(Keenness::default(), Some(CharacterId::PLAYER)),
             },
         );
     }
@@ -660,6 +666,11 @@ impl Npcs {
     /// Every NPC, in the order of their ids.
     pub(crate) fn list(&self) -> &[Npc] {
         &self.list
+    }
+
+    /// Every NPC, in the order of their ids, to change.
+    pub(crate) fn list_mut(&mut self) -> &mut [Npc] {
+        &mut self.list
     }
 }
 

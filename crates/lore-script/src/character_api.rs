@@ -200,6 +200,13 @@ impl CharacterId {
     /// The player: the one character every game has, from before its
     /// script loads until it is closed. It is `game.player` to the script.
     pub const PLAYER: Self = Self(0);
+
+    /// The number itself: the order characters came into the world in,
+    /// the player's 0.
+    #[must_use]
+    pub const fn number(self) -> u32 {
+        self.0
+    }
 }
 
 /// One character as the script can read it.
@@ -917,6 +924,28 @@ impl UserData for CharacterRef {
                 crate::npc_api::on_walk(lua, this.0, arrive, handler)
             });
         }
+        // What an NPC sees and hears (#55).
+        for (event, arguments) in [
+            ("onSee", "(function(who) print(\"Halt!\") end)"),
+            ("onLoseSight", "(function(who, lastSeen) end)"),
+            ("onHear", "(function(noise) end)"),
+        ] {
+            methods.add_function(event, move |lua, (this, handler): (Value, Value)| {
+                let this = npc_receiver(lua, &this, event, arguments)?;
+                this.read(lua, event)?;
+                crate::npc_api::on_sense(lua, this.0, event, handler)
+            });
+        }
+        methods.add_function("canSee", |lua, (this, who): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "canSee", "(game.player)")?;
+            this.read(lua, "canSee")?;
+            crate::npc_api::can_see(lua, this.0, &who)
+        });
+        methods.add_function("inSight", |lua, this: Value| {
+            let this = npc_receiver(lua, &this, "inSight", "()")?;
+            this.read(lua, "inSight")?;
+            crate::npc_api::in_sight(lua, this.0)
+        });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this

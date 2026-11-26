@@ -592,3 +592,94 @@ fn a_reloaded_script_leaves_the_same_npcs_as_a_fresh_start() {
         );
     }
 }
+
+fn step() -> lore_script::NoiseTold<'static> {
+    lore_script::NoiseTold {
+        sound: "footstep",
+        position: [0.0; 3],
+        loudness: 0.5,
+        heard_within: 30.0,
+        by: Some(CharacterId::PLAYER),
+        weapon: None,
+    }
+}
+
+#[test]
+fn after_a_reload_the_new_sense_functions_are_called_with_the_new_tables() {
+    let game = GameFolder::new(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        game.onNoise(function(noise) end)
+        guard:onSee(function(who) print("one sees " .. who.name) end)
+        guard:onHear(function(noise) print("one hears") end)"#,
+    );
+    let mut host = game.open();
+    assert_eq!(host.last_error(), None);
+    let mut ids = Vec::new();
+    host.each_npc(|npc| ids.push(npc.id));
+    let guard = *ids.last().unwrap();
+    // A table built for the first version's noise this tick.
+    host.start_noises();
+    host.noise_made(&step());
+    game.write(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        local told
+        game.onNoise(function(noise) told = noise end)
+        guard:onSee(function(who) print("two sees " .. who.name) end)
+        guard:onHear(function(noise) print("two hears", rawequal(noise, told)) end)"#,
+    );
+    host.reload().unwrap();
+    printed();
+    host.npc_saw(guard, CharacterId::PLAYER);
+    assert_eq!(printed(), ["two sees Player"]);
+    // Not the old version's table: the new one game.onNoise was handed.
+    host.start_noises();
+    host.noise_made(&step());
+    host.npc_heard(guard, 0, &step());
+    assert_eq!(printed(), ["two hears true"]);
+    assert_eq!(host.last_error(), None);
+}
+
+#[test]
+fn a_sense_function_may_add_another_while_it_runs() {
+    let mut host = game(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        guard:onSee(function(who)
+            print("first")
+            guard:onSee(function() print("added") end)
+        end)"#,
+    );
+    let mut ids = Vec::new();
+    host.each_npc(|npc| ids.push(npc.id));
+    let guard = *ids.last().unwrap();
+    host.npc_saw(guard, CharacterId::PLAYER);
+    // The one added is first called the next time.
+    assert_eq!(printed(), ["first"]);
+    host.npc_lost_sight(guard, CharacterId::PLAYER, [0.0; 3]);
+    host.npc_saw(guard, CharacterId::PLAYER);
+    assert_eq!(printed(), ["first", "added"]);
+    assert_eq!(host.last_error(), None);
+}
+
+#[test]
+fn in_sight_lists_whom_the_npc_sees() {
+    let mut host = game(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        game.onTick(function()
+            local names = {}
+            for _, who in guard:inSight() do table.insert(names, who.name) end
+            print(#names, table.concat(names, ","))
+        end)"#,
+    );
+    let mut ids = Vec::new();
+    host.each_npc(|npc| ids.push(npc.id));
+    let [smith, guard] = ids[..] else {
+        panic!("{ids:?}");
+    };
+    host.npc_saw(guard, smith);
+    host.npc_saw(guard, CharacterId::PLAYER);
+    host.tick(&InputFrame::default(), STEP);
+    assert_eq!(printed(), ["2 Smith,Player"]);
+    host.npc_lost_sight(guard, smith, [0.0; 3]);
+    host.tick(&InputFrame::default(), STEP);
+    assert_eq!(printed(), ["1 Player"]);
+}

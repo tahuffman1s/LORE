@@ -121,7 +121,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload, the player dying,\nstanding in a burning puddle, the difficulty being turned and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying,\nstanding in a burning puddle, each NPC seeing and hearing the player,\nthe difficulty being turned and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -535,6 +535,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut pairs = 0;
     let mut used = 0;
     let mut zones = 0;
+    let mut sensing = 0;
     let mut carrying = false;
     let mut slides = 0;
     let mut walks = 0;
@@ -683,6 +684,10 @@ fn check(folder: &Path) -> Result<(), String> {
         }
         game.host_mut().set_use_target(None, 0.0);
         used = usable.len() + npcs.len();
+        // Each NPC with onSee, onHear or onLoseSight is said to see the
+        // player, hear a step of theirs and lose sight of them.
+        sensing = game.host_mut().pretend_senses();
+        game.tick(input.tick(), step);
         // The first thing that can be carried is said to be picked up,
         // put down, picked up again and thrown.
         let mut carried = None;
@@ -923,6 +928,20 @@ fn check(folder: &Path) -> Result<(), String> {
              down, pick it up again and throw it, so game.onPickUp and game.onDrop ran, \
              with no errors. Nothing was really lifted."
         );
+    }
+    match sensing {
+        0 => {}
+        1 => println!(
+            "The one NPC with npc:onSee, npc:onHear or npc:onLoseSight was said to see the \
+             player, hear a step of theirs and lose sight of them, with no errors. Nobody \
+             really moved: what an NPC sees from where it stands is for `lore run`."
+        ),
+        sensing => println!(
+            "Each of the {sensing} NPCs with npc:onSee, npc:onHear or npc:onLoseSight was \
+             said to see the player, hear a step of theirs and lose sight of them, with no \
+             errors. Nobody really moved: what an NPC sees from where it stands is for \
+             `lore run`."
+        ),
     }
     match zones {
         0 => {}

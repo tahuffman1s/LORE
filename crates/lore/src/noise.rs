@@ -55,6 +55,10 @@ pub enum NoiseKind {
     Explosion,
     /// A bullet or a rocket striking a surface, heard from where it did.
     Impact,
+    /// A sound a script played once at a place (`game.audio.playAt`): in
+    /// the list so the NPCs hear it, but neither played again from it (the
+    /// script's own request plays it) nor told to `game.onNoise`.
+    Script,
 }
 
 impl NoiseKind {
@@ -82,6 +86,7 @@ impl NoiseKind {
             Self::FarThunder => "thunder-far",
             Self::Explosion => "explosion",
             Self::Impact => "impact",
+            Self::Script => "",
         }
     }
 
@@ -92,7 +97,7 @@ impl NoiseKind {
     pub const fn is_at_a_place(self) -> bool {
         matches!(
             self,
-            Self::Patter | Self::Pour | Self::Explosion | Self::Impact
+            Self::Patter | Self::Pour | Self::Explosion | Self::Impact | Self::Script
         )
     }
 
@@ -106,8 +111,32 @@ impl NoiseKind {
                 | Self::Pour
                 | Self::Explosion
                 | Self::Impact
+                | Self::Script
                 | Self::Thunder
                 | Self::FarThunder
+        )
+    }
+
+    /// Whether it is the sound of the world going on (thunder, fluid
+    /// pattering or pouring) rather than something someone did. NPCs keep
+    /// it among what they heard, but it does not draw their attention and
+    /// is not told to their `onHear`: in rain it would come several times a
+    /// second. The one place that says which kinds are.
+    #[must_use]
+    pub const fn is_of_the_world(self) -> bool {
+        matches!(
+            self,
+            Self::Thunder | Self::FarThunder | Self::Patter | Self::Pour
+        )
+    }
+
+    /// Whether a weapon makes it: a shot, its dry click or reload, a blast,
+    /// a bullet striking.
+    #[must_use]
+    pub const fn is_of_a_weapon(self) -> bool {
+        matches!(
+            self,
+            Self::Gunshot | Self::DryFire | Self::Reload | Self::Explosion | Self::Impact
         )
     }
 
@@ -158,6 +187,11 @@ impl NoiseKind {
                 far: 40.0,
             },
             Self::DryFire | Self::Reload => Range {
+                near: 1.0,
+                far: 50.0,
+            },
+            // Most sounds' reach; a script's own carries as it is played.
+            Self::Script => Range {
                 near: 1.0,
                 far: 50.0,
             },
@@ -248,6 +282,17 @@ impl Noise {
         self.sound
             .map_or_else(|| self.kind.sound(), |id| names.get(id))
     }
+}
+
+/// What a noise an NPC heard was: its kind and the sound it was played
+/// with, kept with what the NPC heard (`lore_npc::Heard::what`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Which {
+    /// What made it.
+    pub kind: NoiseKind,
+    /// The sound it was played with, when not the kind's own: a short id
+    /// into the world's [`Names`].
+    pub sound: Option<NameId>,
 }
 
 /// A short id for a name in [`Names`].
@@ -356,7 +401,8 @@ pub(crate) fn play(
     tweak: lore_script::SoundTweak,
 ) -> Option<Play> {
     let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
-    if noise.silenced || tweak.volume <= 0.0 {
+    // A script's sound is already played by its own request.
+    if noise.silenced || tweak.volume <= 0.0 || noise.kind == NoiseKind::Script {
         return None;
     }
     // A replacement the game has no sound ready for must not silence the
