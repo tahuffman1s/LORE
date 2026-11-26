@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use lore_input::{ActionMap, InputFrame};
-use lore_script::{DEFAULT_REACH, Placed, PlacedValue, ScriptHost, UseSaid};
+use lore_script::{DEFAULT_REACH, Placed, PlacedValue, ScriptHost, Usable, UseSaid};
 
 thread_local! {
     /// What scripts on this test's thread printed.
@@ -70,7 +70,11 @@ fn game(script: &str) -> ScriptHost {
 
 fn usable(host: &ScriptHost) -> Vec<(String, UseSaid)> {
     let mut seen = Vec::new();
-    host.each_usable(|id, _, said| seen.push((id.to_owned(), said.clone())));
+    host.each_usable(|meant, _, said| {
+        if let Usable::Thing(id) = meant {
+            seen.push((id.to_owned(), said.clone()));
+        }
+    });
     seen
 }
 
@@ -137,9 +141,9 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
     assert_eq!(host.use_prompt(), None, "nothing is under the crosshair");
 
     // The engine says which thing the player means, and the prompt follows.
-    host.set_use_target(Some("b2"), 0.25);
+    host.set_use_target(Some(Usable::Thing("b2")), 0.25);
     assert_eq!(host.use_prompt(), Some(("Use".to_owned(), 0.25)));
-    host.set_use_target(Some("a1"), 0.0);
+    host.set_use_target(Some(Usable::Thing("a1")), 0.0);
     assert_eq!(host.use_prompt(), Some(("Open".to_owned(), 0.0)));
     host.use_thing("a1");
     host.tick(&InputFrame::default(), 1.0 / 60.0);
@@ -159,7 +163,7 @@ fn one_line_makes_a_thing_usable_and_using_it_calls_the_function() {
 fn a_game_can_draw_its_own_prompt() {
     let mut host =
         game("game.showUsePrompt(false)\ngame.thing(\"Old chest\"):onUse(function() end)");
-    host.set_use_target(Some("b2"), 0.0);
+    host.set_use_target(Some(Usable::Thing("b2")), 0.0);
     assert_eq!(host.use_prompt(), None);
     assert_eq!(usable(&host).len(), 1);
 }

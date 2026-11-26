@@ -663,21 +663,33 @@ fn check(folder: &Path) -> Result<(), String> {
         game.tick(input.tick(), step);
         // Every thing the script made usable is used once, so what each
         // does is run too, wherever in the level it stands.
+        // The NPCs with an onUse function too, each spoken to once.
         let mut usable = Vec::new();
-        game.host()
-            .each_usable(|id, _, _| usable.push(id.to_owned()));
+        let mut npcs = Vec::new();
+        game.host().each_usable(|meant, _, _| match meant {
+            lore_script::Usable::Thing(id) => usable.push(id.to_owned()),
+            lore_script::Usable::Npc(id) => npcs.push(id),
+        });
         for id in &usable {
-            game.host_mut().set_use_target(Some(id), 0.0);
+            (game.host_mut()).set_use_target(Some(lore_script::Usable::Thing(id)), 0.0);
             game.host_mut().use_thing(id);
             game.tick(input.tick(), step);
         }
+        for id in &npcs {
+            (game.host_mut()).set_use_target(Some(lore_script::Usable::Npc(*id)), 0.0);
+            game.host_mut().use_npc(*id);
+            game.tick(input.tick(), step);
+        }
         game.host_mut().set_use_target(None, 0.0);
-        used = usable.len();
+        used = usable.len() + npcs.len();
         // The first thing that can be carried is said to be picked up,
         // put down, picked up again and thrown.
         let mut carried = None;
-        game.host().each_usable(|id, _, _| {
-            if carried.is_none() && game.host().carryable(id) {
+        game.host().each_usable(|meant, _, _| {
+            if let lore_script::Usable::Thing(id) = meant
+                && carried.is_none()
+                && game.host().carryable(id)
+            {
                 carried = Some(id.to_owned());
             }
         });
@@ -852,14 +864,14 @@ fn check(folder: &Path) -> Result<(), String> {
     match used {
         0 => {}
         1 => println!(
-            "The one thing a player can use (one with thing:onUse, or one light enough to \
-             pick up) was used once, with no errors. Nobody walked up to it: whether a \
-             player can reach it is for `lore run`."
+            "The one thing a player can use (one with thing:onUse or npc:onUse, or one light \
+             enough to pick up) was used once, with no errors. Nobody walked up to it: \
+             whether a player can reach it is for `lore run`."
         ),
         used => println!(
-            "Each of the {used} things a player can use (those with thing:onUse, and those \
-             light enough to pick up) was used once, with no errors. Nobody walked up to \
-             them: whether a player can reach each is for `lore run`."
+            "Each of the {used} things and NPCs a player can use (those with thing:onUse or \
+             npc:onUse, and those light enough to pick up) was used once, with no errors. \
+             Nobody walked up to them: whether a player can reach each is for `lore run`."
         ),
     }
     if slides > 0 {

@@ -73,7 +73,7 @@ pub struct Figure<'a> {
 
 /// The most figures drawn in one frame; any more are left out, and the
 /// log says so once.
-pub(crate) const MOST_FIGURES: usize = 64;
+pub const MOST_FIGURES: usize = 64;
 
 /// The most joints the figures of one frame may have together: as many as
 /// [`MOST_FIGURES`] of the largest skins, and room for the parts no skin

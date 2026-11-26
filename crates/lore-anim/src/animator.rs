@@ -435,6 +435,19 @@ impl Body {
         &self.clips
     }
 
+    /// Writes clip `clip`'s pose at `time` seconds over `out` (as long as
+    /// the skeleton), held at its last pose past its end if it does not
+    /// loop: a body lying where it fell. Bones the clip does not move keep
+    /// what `out` held. Does nothing for a clip it does not have.
+    pub fn sample(&self, clip: u32, time: f32, out: &mut [Pose]) {
+        if let (Some(c), Some(binding)) = (
+            self.clips.get(clip as usize),
+            self.bindings.get(clip as usize),
+        ) {
+            c.sample(binding, time, out);
+        }
+    }
+
     /// The number of the clip called `name`.
     #[must_use]
     pub fn clip(&self, name: &str) -> Option<u32> {

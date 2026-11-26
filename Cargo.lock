@@ -1561,6 +1561,7 @@ dependencies = [
  "lore-fluid",
  "lore-input",
  "lore-nav",
+ "lore-npc",
  "lore-pack",
  "lore-physics",
  "lore-render",
@@ -1642,6 +1643,15 @@ dependencies = [
  "glam 0.33.12",
  "libm",
  "rerecast",
+]
+
+[[package]]
+name = "lore-npc"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-nav",
+ "lore-physics",
 ]
 
 [[package]]

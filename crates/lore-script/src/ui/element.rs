@@ -459,6 +459,19 @@ impl UserData for ElementValue {
                 .map(|_| ())
                 .map_err(|e| markup_fail(lua, "element:append could not add that HTML", &e))
         });
+        methods.add_function("before", |lua, (this, html): (Value, Value)| {
+            let html = text_arg(
+                lua,
+                &html,
+                "element:before",
+                "element:before(\"<p>Hello</p>\")",
+            )?;
+            edit(lua, &this, "before", |page, id| {
+                page.insert_html_before(id, &html)
+            })?
+            .map(|_| ())
+            .map_err(|e| markup_fail(lua, "element:before could not add that HTML", &e))
+        });
         methods.add_function("remove", |lua, this: Value| {
             edit(lua, &this, "remove", |page, id| page.remove(id)).map(|_| ())
         });

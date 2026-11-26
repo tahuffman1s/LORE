@@ -21,6 +21,7 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 - The standard controls are an adventure's: `use_item`, `next_item`, `previous_item`, `map` and `inventory`, and no `scoreboard` or `grenade` (#313, #317)
 - Walkable ground worked out from the level with nothing to place: doors that shut ways, `game.canWalk` and `game.findWay`, and `lore check` naming places that cannot be reached (#53)
 - One clock for the world and its sky: a game says how long a day lasts and what time it is, skips to a time to sleep or wait, counts the days, and hears each hour that passes with `game.clock.onHour` (#59)
+- An NPC in one line (`game.npc`), or placed in `map.toml`: a solid body that can be shot, struck, used and locked on to, falls at no health, stands idle and turns its head to the player (#52)
 - How hard the game is: one dial of named steps a game reads, scales its numbers by and can name its own, which the player turns at any time on the pause menu's Gameplay tab beside the assists "Game speed" and "Fall damage" (#63)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
@@ -80,7 +81,6 @@ One player in first or third person: move, look, use things, fight, hear and pau
 
 NPCs. They stand in the world, find their way with nothing placed by hand, see and hear, follow a readable list of rules, and can say why they did what they did. Then the ones a game is built around: enemies described as kinds, bosses with phases, enemies that fly, and companions who take orders and get back up.
 
-- An NPC is one call: someone stands in the world, breathes, and looks at you (#52)
 - NPCs walk to places: round corners, through doors, and past each other (#54)
 - NPCs see and hear: sight that walls block, and the very sounds the player hears (#55)
 - NPCs notice bit by bit: curious, searching, alarmed, and calm again (#56)

@@ -210,7 +210,12 @@ The function is handed one table:
 | `event.value` | A number for a slider, true or false for a tick box, text for a text box or a drop-down. Nil for a click or focus. |
 | `event.screen` | The screen. |
 
-- A slider sends `input` and then `change`, each with its new number.
+- A slider sends `input` and then `change`, each with its new number, on every move
+  of a drag and every d-pad step, not once when the player lets go. Letting go over the
+  slider is also a click on it (so an `onclick` on it, or on what holds it, hears a
+  drag too). A drag ends when another screen opens on top or the player takes up a gamepad.
+- A `<label for="id">` (or a label with a control inside it) focuses its control when
+  pressed, and ticks it if it is a tick box. It does not press a button.
   A text box sends `input` for every letter and `change` when Enter is pressed.
 - A click on something inside a button counts as a click on the button.
 - Changes your script makes (`values`, `element.value = ...`) send no events.
@@ -276,6 +281,7 @@ Methods:
 | `hasClass(name)` | True or false. |
 | `setVar("--gold", "#ffd75e")` | Sets a CSS variable for the element and everything in it. On `main:find("body")` it changes a colour for the whole screen. |
 | `append(html)` | Adds HTML at the end of the element. |
+| `before(html)` | Adds HTML just before the element, as its sibling: `row:before("<li>Gold</li>")`. `append` puts it inside, at the end. Stops with an error on the page's root. |
 | `remove()` | Takes the element, and what is in it, off the page. |
 | `focus()` | Moves focus to the element, if it can take focus. |
 | `find(selector)`, `findAll(selector)` | Search inside this element. |
@@ -329,7 +335,7 @@ end)
 
 `game.ui.escape(text)` writes `&`, `<`, `>` and `"` as HTML does. Use it on
 anything that is not yours: a name the player typed, text from a save file. Without
-it, a name with a `<` in it breaks the page, and `append` and `fill` stop with an
+it, a name with a `<` in it breaks the page, and `append`, `before` and `fill` stop with an
 error.
 
 The new elements keep what the `onclick` names, so answer it once with
@@ -472,7 +478,7 @@ Kept:
 
 Lost:
 
-- Classes and styles your script set, and elements it added with `append` or
+- Classes and styles your script set, and elements it added with `append`, `before` or
   `fill`. The log says so, once, in one line. Run the code that makes them again.
 - Element handles, if the elements are not the same any more. Find them again.
 

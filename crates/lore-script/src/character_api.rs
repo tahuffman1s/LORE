@@ -292,6 +292,13 @@ impl Characters {
         }
     }
 
+    /// Calls a character something else. Does nothing for one that is gone.
+    pub fn rename(&self, id: CharacterId, name: &str) {
+        if let Some(entry) = self.here.borrow_mut().iter_mut().find(|e| e.id == id) {
+            name.clone_into(&mut entry.name);
+        }
+    }
+
     /// Whether the character is in the world.
     pub fn has(&self, id: CharacterId) -> bool {
         self.here.borrow().iter().any(|entry| entry.id == id)
@@ -376,6 +383,11 @@ impl Characters {
         self.motion(id)
     }
 
+    /// What a character is called and where its feet are.
+    pub(crate) fn name_and_place(&self, id: CharacterId) -> Option<(String, [f32; 3])> {
+        self.read(id)
+    }
+
     /// What a character is called and where it is.
     fn read(&self, id: CharacterId) -> Option<(String, [f32; 3])> {
         let here = self.here.borrow();
@@ -426,11 +438,16 @@ pub(crate) fn shared_of(lua: &Lua) -> mlua::Result<Rc<Shared>> {
         .ok_or_else(|| mlua::Error::runtime("the game is not ready yet"))
 }
 
+/// What a message calls an NPC.
+const NPC_PATH: &str = "npc";
+
 /// How a message names the character `id`: the player is where every
 /// script finds them, and anything else is whatever the script called it.
-fn path(id: CharacterId) -> &'static str {
+fn path(lua: &Lua, id: CharacterId) -> &'static str {
     if id == CharacterId::PLAYER {
         "game.player"
+    } else if shared_of(lua).is_ok_and(|shared| shared.npcs.has(id)) {
+        NPC_PATH
     } else {
         "character"
     }
@@ -649,6 +666,17 @@ impl UserData for CharacterRef {
             this.read(lua, "maxWeapons")?;
             Ok(weapon_api::most_carried(&*shared_of(lua)?, this.0))
         });
+        // What an NPC has besides: read and set, and an error on anyone else.
+        for &field in crate::npc_api::NPC_FIELDS {
+            fields.add_field_method_get(field, move |lua, this| {
+                this.read(lua, field)?;
+                crate::npc_api::get(lua, this.0, field)
+            });
+            fields.add_field_method_set(field, move |lua, this, value: Value| {
+                this.read(lua, field)?;
+                crate::npc_api::set(lua, this.0, field, &value)
+            });
+        }
         fields.add_field_method_get("ammo", |lua, this| {
             this.read(lua, "ammo")?;
             Ok(weapon_api::rounds(&*shared_of(lua)?, this.0).0)
@@ -843,6 +871,16 @@ impl UserData for CharacterRef {
                 crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
             },
         );
+        methods.add_function("onUse", |lua, (this, handler): (Value, Value)| {
+            let this = npc_receiver(lua, &this, "onUse", "(function() print(\"Halt!\") end)")?;
+            this.read(lua, "onUse")?;
+            crate::npc_api::on_use(lua, this.0, handler)
+        });
+        methods.add_function("remove", |lua, this: Value| {
+            let this = npc_receiver(lua, &this, "remove", "()")?;
+            this.read(lua, "remove")?;
+            crate::npc_api::remove(lua, this.0)
+        });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this
@@ -850,9 +888,16 @@ impl UserData for CharacterRef {
                 .map_or_else(|_| "a character who is gone".to_owned(), |(name, _)| name))
         });
         methods.add_meta_function(MetaMethod::Index, |lua, (this, key): (Value, Value)| {
+            let id = id_of(&this);
+            let path = path(lua, id);
+            if path == NPC_PATH {
+                let fields = [CHARACTER_FIELDS, crate::npc_api::NPC_FIELDS].concat();
+                let methods = [CHARACTER_METHODS, crate::npc_api::NPC_METHODS].concat();
+                return Err::<(), _>(missing(lua, path, &key, &fields, &methods));
+            }
             Err::<(), _>(missing(
                 lua,
-                path(id_of(&this)),
+                path,
                 &key,
                 CHARACTER_FIELDS,
                 CHARACTER_METHODS,
@@ -861,7 +906,8 @@ impl UserData for CharacterRef {
         methods.add_meta_function(
             MetaMethod::NewIndex,
             |lua, (this, key, _): (Value, Value, Value)| {
-                Err::<(), _>(read_only(lua, path(id_of(&this)), &key))
+                let id = id_of(&this);
+                Err::<(), _>(read_only(lua, path(lua, id), &key))
             },
         );
     }
@@ -896,6 +942,28 @@ fn receiver(lua: &Lua, this: &Value, method: &str, arguments: &str) -> mlua::Res
         format!(
             "{method} needs a colon before it, not a dot, because it acts on the one it is \
              called on. Write it like this: game.player:{method}{arguments}"
+        ),
+    ))
+}
+
+/// The NPC a method was called on, or an error saying to use a colon if
+/// it was called with a dot.
+fn npc_receiver(
+    lua: &Lua,
+    this: &Value,
+    method: &str,
+    arguments: &str,
+) -> mlua::Result<CharacterRef> {
+    if let Value::UserData(this) = this
+        && let Ok(this) = this.borrow::<CharacterRef>()
+    {
+        return Ok(*this);
+    }
+    Err(fail(
+        lua,
+        format!(
+            "{method} needs a colon before it, not a dot, because it acts on the NPC it is \
+             called on. Write it like this: guard:{method}{arguments}"
         ),
     ))
 }
@@ -980,6 +1048,10 @@ fn read_only(lua: &Lua, what: &str, key: &Value) -> mlua::Error {
              = 25, reserve = 100 }}). Giving a weapon again hands over a full one: \
              {what}:giveWeapon(\"smg\")"
         )
+    } else if key == "position" && what == NPC_PATH {
+        "An NPC stands where its game.npc line put it: change `at` there and save, and it \
+         stands there instead."
+            .to_owned()
     } else if key == "position" {
         "The engine moves characters: the player by what they press. To put the player \
          somewhere, write: game.player:teleport(vector.create(0, 2, 0))"

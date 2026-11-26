@@ -442,7 +442,11 @@ pub(crate) fn build(
     }
 }
 
-fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
+/// The radius of each corner, top-left, top-right, bottom-right,
+/// bottom-left. A percentage is of the box's shorter side, so on a box that
+/// is not square it is drawn round (ovals are #612). Neighbouring radii may
+/// not overlap along a side: when they would, all are scaled down together.
+pub(crate) fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
     let basis = w.min(h);
     let mut r = [
         cs.border_top_left_radius.resolve(basis).max(0.0),
@@ -450,7 +454,6 @@ fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
         cs.border_bottom_right_radius.resolve(basis).max(0.0),
         cs.border_bottom_left_radius.resolve(basis).max(0.0),
     ];
-    // Neighbouring radii may not overlap along a side.
     let mut f = 1.0f32;
     for (sum, side) in [
         (r[0] + r[1], w),

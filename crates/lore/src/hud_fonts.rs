@@ -178,8 +178,9 @@ fn group_families(files: &[(String, Vec<u8>)], families: &[String]) -> Vec<HudFo
             Ok(info) => info,
             Err(problem) => {
                 log::warn!(
-                    "The font file {name} cannot be used: {problem}. Replace it with a TrueType \
-                     (.ttf) or OpenType (.otf) file, or delete it."
+                    "The font file {name} cannot be used: {problem}. A font must be a TrueType \
+                     (.ttf) or OpenType (.otf) file: fix {name} in the game's `fonts` folder, \
+                     and pack the game again if it is packed."
                 );
                 continue;
             }

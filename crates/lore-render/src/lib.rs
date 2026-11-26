@@ -70,7 +70,7 @@ pub use camera::Camera;
 pub use effects::Splash;
 pub use error::{RenderError, Version};
 pub use eye::EyeAdaptation;
-pub use figures::{Figure, ModelId};
+pub use figures::{Figure, MOST_FIGURES, ModelId};
 pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS, PoolDrawn};
 pub use font::{Font, FontFileInfo, HudFontFamily, font_file_info};
 pub use game_shaders::{

@@ -55,6 +55,11 @@ game.onTick(function()
     end
 end)
 
+-- Someone to meet: a guard beside the arch, who looks at you as you pass.
+-- Walk up to her and press E (or Y on a gamepad) to talk.
+local guard = game.npc { name = "Guard", at = vector.create(1.8, 0, 5.5), facing = 90 }
+guard:onUse(function() print("Guard: The tower? Straight on, through the arch.") end)
+
 -- How the game is seen: "first" from the player's eyes, or "third" from
 -- over their shoulder. The player can switch with F, or the View button on
 -- a gamepad, because of game.player:allowViewSwitch(true).

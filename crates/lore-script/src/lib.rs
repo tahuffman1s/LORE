@@ -67,6 +67,7 @@ mod limit;
 mod listen_api;
 mod look_api;
 mod modules;
+mod npc_api;
 mod pool_api;
 mod settings_api;
 mod shader_api;
@@ -99,11 +100,12 @@ pub use lighting_api::{EyeSaid, OcclusionSaid};
 pub use listen_api::BindingAsk;
 pub use look_api::{LookSaid, ToneMappingSaid};
 pub use lore_weapons as weapons;
+pub use npc_api::{DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcTold};
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,
 };
-pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, ThingAsk, ThingMotion, UseSaid};
+pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, ThingAsk, ThingMotion, Usable, UseSaid};
 pub use tools_api::{
     Abilities, BindingChange, ControlsChange, FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport,
     ViewTold,

@@ -695,8 +695,23 @@ if false then
     local door: Thing = game.thing("Cellar door")
     print(door)
 end
+if false then
+    local guard: Npc = game.npc { name = "Guard", at = "Gate" }
+    local cook: Npc = game.npc { name = "Cook", at = vector.create(4, 0, -2), facing = 90 }
+    local smith: Npc = game.npc("Smith")
+    guard.useText = "Ask about the road"
+    guard.useReach = 3
+    guard.useSeconds = 0
+    guard.usable = true
+    guard.lookDistance = 8
+    guard:onUse(function(npc: Npc) print(npc.name, npc.useText, npc.usable, npc.lookDistance) end)
+    print(cook.health, smith.position, guard.useReach, guard.useSeconds)
+    for _, npc: Npc in game.npcs() do
+        if npc.dead then npc:remove() end
+    end
+end
 game.showUsePrompt(true)
-local meant: Thing? = game.player.lookingAt
+local meant: (Thing | Npc)? = game.player.lookingAt
 print(meant, game.player.useProgress)
 game.player:hold("sword")
 game.player:hold("torch", { hand = "left" })
@@ -993,6 +1008,7 @@ if play then
     print(play:hasClass("a"), play.id, play.tag, play.parent, play.style.color)
     play:setVar("--gold", "#ffd75e")
     play:append("<p>" .. game.ui.escape("Ann & Bea") .. "</p>")
+    play:before("<p>" .. game.ui.escape("Cy") .. "</p>")
     play:focus()
     local inner: Element? = play:find("p")
     local inners: { Element } = play:findAll("p")
