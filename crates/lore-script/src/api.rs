@@ -145,6 +145,11 @@ pub(crate) struct Handlers {
     pub used: Vec<(Rc<str>, Function)>,
     /// `npc:onUse`: each with the NPC it is for.
     pub npc_used: Vec<(CharacterId, Function)>,
+    /// `npc:onSee`, `npc:onLoseSight` and `npc:onHear`, each with the NPC
+    /// it is for.
+    pub npc_saw: Vec<(CharacterId, Function)>,
+    pub npc_lost: Vec<(CharacterId, Function)>,
+    pub npc_heard: Vec<(CharacterId, Function)>,
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
@@ -241,6 +246,10 @@ pub(crate) struct Shared {
     pub thing_uses: crate::thing_api::ThingUses,
     /// Who is an NPC. It outlives this version of the script.
     pub npcs: Rc<crate::npc_api::NpcState>,
+    /// The table handed to the script for each noise of the tick, by its
+    /// place in the tick's list, once built: `game.onNoise` and every NPC's
+    /// `onHear` get the same one. Belongs to this version's Lua.
+    pub noise_tables: RefCell<Vec<Option<mlua::Table>>>,
     /// What this version has said of its NPCs, and which it made as its
     /// file loaded.
     pub npc_version: crate::npc_api::NpcVersion,

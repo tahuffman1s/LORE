@@ -38,13 +38,40 @@ pub(crate) const NPC_FIELDS: &[&str] = &[
     "useSeconds",
     "usable",
     "lookDistance",
+    // What it sees and hears (#55).
+    "sightDistance",
+    "sightAngle",
+    "hearing",
+    "nightSight",
 ];
 
 /// What an NPC can be asked, besides what every character can.
-pub(crate) const NPC_METHODS: &[&str] = &["onUse", "remove"];
+pub(crate) const NPC_METHODS: &[&str] = &[
+    "onUse",
+    "remove",
+    // What it sees and hears (#55).
+    "onSee",
+    "onLoseSight",
+    "onHear",
+    "canSee",
+    "inSight",
+];
 
 /// What `game.npc { ... }` takes.
-const NPC_OPTIONS: &[&str] = &["name", "at", "facing", "side"];
+const NPC_OPTIONS: &[&str] = &[
+    "name",
+    "at",
+    "facing",
+    "side",
+    "sightDistance",
+    "sightAngle",
+    "hearing",
+    "nightSight",
+];
+
+/// The options of `game.npc { ... }` that set its senses: each is also a
+/// field of the NPC, by the same name.
+const SENSE_OPTIONS: [&str; 4] = ["sightDistance", "sightAngle", "hearing", "nightSight"];
 
 /// The kind of map entity that is an NPC.
 pub const NPC_KIND: &str = "npc";
@@ -72,6 +99,37 @@ const REACHES: (f32, f32) = (0.5, 50.0);
 const LONGEST_HOLD: f32 = 30.0;
 /// How far from the middle of the world an NPC may be put, in metres.
 const FURTHEST_PLACE: f32 = 1_000_000.0;
+
+/// How keen an NPC's senses are, as the script set them: what the engine
+/// sees and hears with for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NpcSenses {
+    /// How far it sees in full light, in metres. 0 is blind.
+    pub sight_distance: f32,
+    /// How wide it sees, in degrees from edge to edge; 360 sees all round.
+    pub sight_angle: f32,
+    /// How well it hears: 1 as the player does, 0 deaf.
+    pub hearing: f32,
+    /// How well it sees in the dark, from 0 (as a person) to 1 (as by day).
+    pub night_sight: f32,
+}
+
+impl Default for NpcSenses {
+    /// A person's, until the script says otherwise.
+    fn default() -> Self {
+        Self {
+            sight_distance: 30.0,
+            sight_angle: 120.0,
+            hearing: 1.0,
+            night_sight: 0.0,
+        }
+    }
+}
+
+/// The furthest an NPC can be set to see, in metres.
+const FURTHEST_SIGHT: f32 = 500.0;
+/// The best an NPC can be set to hear.
+const BEST_HEARING: f32 = 10.0;
 
 /// What the scripts asked of the NPCs' bodies, for the engine to do.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -152,6 +210,9 @@ pub(crate) struct NpcState {
     /// does not bring them back.
     left: RefCell<Vec<String>>,
     asks: RefCell<Vec<NpcAsk>>,
+    /// Who each NPC sees now, as the engine last told: (NPC, who), for
+    /// `npc:canSee`.
+    in_view: RefCell<Vec<(CharacterId, CharacterId)>>,
 }
 
 /// What one NPC was made with, or found as, while a version of the script
@@ -172,6 +233,8 @@ struct Said {
     used: UseSaid,
     /// How close the player comes before it looks at them, in metres.
     look: f32,
+    /// How keen its senses are.
+    senses: NpcSenses,
 }
 
 impl Said {
@@ -185,6 +248,7 @@ impl Said {
                 ..UseSaid::default()
             },
             look: DEFAULT_LOOK_DISTANCE,
+            senses: NpcSenses::default(),
         }
     }
 }
@@ -309,7 +373,56 @@ impl NpcState {
         }
         drop(entries);
         self.ask(NpcAsk::Removed { id });
+        (self.in_view.borrow_mut()).retain(|&(npc, who)| npc != id && who != id);
         true
+    }
+
+    /// Notes that the NPC `npc` now sees `who`, or no longer does.
+    pub(crate) fn set_in_view(&self, npc: CharacterId, who: CharacterId, seen: bool) {
+        let mut in_view = self.in_view.borrow_mut();
+        let at = in_view.iter().position(|&pair| pair == (npc, who));
+        match (at, seen) {
+            (None, true) => in_view.push((npc, who)),
+            (Some(at), false) => {
+                in_view.remove(at);
+            }
+            _ => {}
+        }
+    }
+
+    /// Notes that the NPC `npc` sees nobody.
+    pub(crate) fn blind(&self, npc: CharacterId) {
+        self.in_view.borrow_mut().retain(|&(seer, _)| seer != npc);
+    }
+
+    /// The NPCs that see `who`, as the engine last told, in the order of
+    /// their ids.
+    pub(crate) fn seers_of(&self, who: CharacterId) -> Vec<CharacterId> {
+        let mut seers: Vec<CharacterId> = (self.in_view.borrow().iter())
+            .filter(|&&(_, seen)| seen == who)
+            .map(|&(npc, _)| npc)
+            .collect();
+        seers.sort_unstable();
+        seers
+    }
+
+    /// Whom the NPC `npc` sees, as the engine last told, in the order they
+    /// came into view.
+    pub(crate) fn seen_by(&self, npc: CharacterId) -> Vec<CharacterId> {
+        (self.in_view.borrow().iter())
+            .filter(|&&(seer, _)| seer == npc)
+            .map(|&(_, who)| who)
+            .collect()
+    }
+
+    /// Whether the NPC `npc` sees `who`, as the engine last told.
+    pub(crate) fn sees(&self, npc: CharacterId, who: CharacterId) -> bool {
+        self.in_view.borrow().contains(&(npc, who))
+    }
+
+    /// The NPCs, in the order of their ids.
+    pub(crate) fn all(&self) -> Vec<CharacterId> {
+        self.ids()
     }
 
     /// Calls `see` with every NPC, in the order of their ids.
@@ -423,6 +536,14 @@ impl NpcVersion {
             .borrow()
             .get(&id)
             .map_or(DEFAULT_LOOK_DISTANCE, |said| said.look)
+    }
+
+    /// How keen the senses of the NPC `id` are.
+    pub(crate) fn senses(&self, id: CharacterId) -> NpcSenses {
+        self.said
+            .borrow()
+            .get(&id)
+            .map_or_else(NpcSenses::default, |said| said.senses)
     }
 }
 
@@ -555,6 +676,30 @@ fn find(lua: &Lua, shared: &Rc<Shared>, wanted: &str) -> mlua::Result<AnyUserDat
 
 /// `game.npc { name = ..., at = ..., facing = ... }`.
 fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUserData> {
+    // The senses are read first, so a mistake in one makes nobody.
+    let mut senses = Vec::new();
+    for field in SENSE_OPTIONS {
+        let value = options.raw_get::<Value>(field)?;
+        if !value.is_nil() {
+            senses.push((field, sense_value(lua, field, &value)?));
+        }
+    }
+    let npc = make_one(lua, shared, options)?;
+    if !senses.is_empty()
+        && let Some(id) = crate::character_api::id_of_value(lua, &Value::UserData(npc.clone()))
+    {
+        let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
+        for (field, value) in senses {
+            shared
+                .npc_version
+                .change(id, &name, |said| set_sense(&mut said.senses, field, value));
+        }
+    }
+    Ok(npc)
+}
+
+/// `game.npc { ... }` but for its senses.
+fn make_one(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUserData> {
     const EXAMPLE: &str = "game.npc { name = \"Guard\", at = \"Gate\" }";
     crate::time_api::rules_only(lua, shared, "game.npc")?;
     let mut unknown: Vec<String> = Vec::new();
@@ -914,7 +1059,7 @@ pub(crate) fn get(lua: &Lua, id: CharacterId, field: &str) -> mlua::Result<Value
     let shared = shared_of(lua)?;
     only_npc(lua, &shared, id, field)?;
     let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
-    let Said { used, look } = shared.npc_version.said(id, &name);
+    let Said { used, look, senses } = shared.npc_version.said(id, &name);
     Ok(match field {
         "useText" => Value::String(lua.create_string(used.text)?),
         "useReach" => Value::Number(f64::from(used.reach)),
@@ -924,6 +1069,10 @@ pub(crate) fn get(lua: &Lua, id: CharacterId, field: &str) -> mlua::Result<Value
             Value::Boolean(used.usable && used.handled && alive)
         }
         "lookDistance" => Value::Number(f64::from(look)),
+        "sightDistance" => Value::Number(f64::from(senses.sight_distance)),
+        "sightAngle" => Value::Number(f64::from(senses.sight_angle)),
+        "hearing" => Value::Number(f64::from(senses.hearing)),
+        "nightSight" => Value::Number(f64::from(senses.night_sight)),
         _ => Value::Nil,
     })
 }
@@ -1001,6 +1150,10 @@ pub(crate) fn set(lua: &Lua, id: CharacterId, field: &str, value: &Value) -> mlu
             .clamp(LOOK_DISTANCES.0, LOOK_DISTANCES.1);
             version.change(id, &name, |said| said.look = look);
         }
+        "sightDistance" | "sightAngle" | "hearing" | "nightSight" => {
+            let value = sense_value(lua, field, value)?;
+            version.change(id, &name, |said| set_sense(&mut said.senses, field, value));
+        }
         _ => {}
     }
     Ok(())
@@ -1032,10 +1185,183 @@ pub(crate) fn remove(lua: &Lua, id: CharacterId) -> mlua::Result<()> {
     let shared = shared_of(lua)?;
     only_npc(lua, &shared, id, "remove")?;
     crate::time_api::rules_only(lua, &shared, "npc:remove")?;
-    shared.npcs.forget(id);
-    shared.characters.remove(id);
-    shared.handles.forget(id);
-    shared.weapons.forget(id);
-    shared.sides.table.borrow_mut().forget(id.number());
+    let told = tell_lost_before_leaving(lua, &shared, id);
+    // One of those functions may have taken it out already.
+    if shared.characters.has(id) {
+        shared.npcs.forget(id);
+        shared.characters.remove(id);
+        shared.handles.forget(id);
+        shared.weapons.forget(id);
+        shared.sides.table.borrow_mut().forget(id.number());
+    }
+    told
+}
+
+/// Calls the `onLoseSight` functions of every NPC that sees `id`, which is
+/// about to be taken out of the world, while it can still be read: so each
+/// `onSee` has its `onLoseSight`. Each NPC is first noted as no longer
+/// seeing it, so a function that takes it out again tells nobody twice.
+fn tell_lost_before_leaving(lua: &Lua, shared: &Rc<Shared>, id: CharacterId) -> mlua::Result<()> {
+    let seers = shared.npcs.seers_of(id);
+    if seers.is_empty() {
+        return Ok(());
+    }
+    for &npc in &seers {
+        shared.npcs.set_in_view(npc, id, false);
+    }
+    let who = shared.handles.character(lua, id)?;
+    let [x, y, z] = shared.characters.position(id).unwrap_or_default();
+    let at = mlua::Vector::new(x, y, z);
+    for npc in seers {
+        let count = shared.handlers.borrow().npc_lost.len();
+        let was = shared.audio.by.replace(Some(npc));
+        for index in 0..count {
+            let handler = (shared.handlers.borrow().npc_lost.get(index))
+                .and_then(|(seer, handler)| (*seer == npc).then(|| handler.clone()));
+            let Some(handler) = handler else { continue };
+            if let Err(error) = handler.call::<()>((who.clone(), at)) {
+                shared.audio.by.set(was);
+                return Err(error);
+            }
+        }
+        shared.audio.by.set(was);
+    }
     Ok(())
+}
+
+/// The number `value` written for the sense `field` (a field of an NPC and
+/// an option of `game.npc`), kept within what it can be.
+fn sense_value(lua: &Lua, field: &str, value: &Value) -> mlua::Result<f32> {
+    let (meaning, example, (low, high)) = match field {
+        "sightDistance" => (
+            "how far the NPC sees in daylight, in metres: 0 is blind, up to 500",
+            "guard.sightDistance = 40",
+            (0.0, FURTHEST_SIGHT),
+        ),
+        "sightAngle" => (
+            "how wide the NPC sees, in degrees from one edge to the other: 120 is a \
+             person's, 360 sees all round",
+            "guard.sightAngle = 90",
+            (0.0, 360.0),
+        ),
+        "hearing" => (
+            "how well the NPC hears: 1 as the player does, 2 twice as far, 0 deaf",
+            "guard.hearing = 0",
+            (0.0, BEST_HEARING),
+        ),
+        _ => (
+            "how well the NPC sees in the dark, from 0 (as a person does) to 1 (as well as \
+             by day)",
+            "guard.nightSight = 1",
+            (0.0, 1.0),
+        ),
+    };
+    Ok(number(
+        lua,
+        &format!("An NPC's `{field}`"),
+        Some(value),
+        meaning,
+        example,
+    )?
+    .clamp(low, high))
+}
+
+/// Sets the sense `field` of `senses` to `value`.
+fn set_sense(senses: &mut NpcSenses, field: &str, value: f32) {
+    match field {
+        "sightDistance" => senses.sight_distance = value,
+        "sightAngle" => senses.sight_angle = value,
+        "hearing" => senses.hearing = value,
+        _ => senses.night_sight = value,
+    }
+}
+
+/// `npc:onSee(function(who) ... end)`, `npc:onLoseSight(function(who,
+/// lastSeen) ... end)` and `npc:onHear(function(noise) ... end)`.
+pub(crate) fn on_sense(
+    lua: &Lua,
+    id: CharacterId,
+    event: &str,
+    handler: Value,
+) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, event)?;
+    let example = match event {
+        "onSee" => "guard:onSee(function(who) print(\"Halt!\") end)",
+        "onLoseSight" => {
+            "guard:onLoseSight(function(who, lastSeen) print(\"Where did they go?\") end)"
+        }
+        _ => "guard:onHear(function(noise) print(\"What was that?\") end)",
+    };
+    let Value::Function(handler) = handler else {
+        let what = match event {
+            "onSee" => "when the NPC sees someone come into view",
+            "onLoseSight" => "when someone the NPC sees goes out of its view",
+            _ => "when the NPC hears a noise",
+        };
+        return Err(fail(
+            lua,
+            format!(
+                "{event} needs the function to call {what}, but it was given {}. Write it like \
+                 this: {example}",
+                describe(&handler)
+            ),
+        ));
+    };
+    let mut handlers = shared.handlers.borrow_mut();
+    let list = match event {
+        "onSee" => &mut handlers.npc_saw,
+        "onLoseSight" => &mut handlers.npc_lost,
+        _ => &mut handlers.npc_heard,
+    };
+    list.push((id, handler));
+    Ok(())
+}
+
+/// `npc:canSee(who)`: whether the NPC sees `who` now, as of its last look
+/// (a few times a second).
+pub(crate) fn can_see(lua: &Lua, id: CharacterId, who: &Value) -> mlua::Result<bool> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "canSee")?;
+    let Some(who) = crate::character_api::id_of_value(lua, who) else {
+        return Err(fail(
+            lua,
+            format!(
+                "canSee needs a character (game.player or an NPC), but it was given {}. Write it like this: if guard:canSee(game.player) then print(\"Halt!\") end",
+                describe(who)
+            ),
+        ));
+    };
+    let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+    Ok(alive && shared.npcs.sees(id, who))
+}
+
+/// Whether the NPC `id` has a function for what `pick` says: `onSee`,
+/// `onLoseSight` or `onHear`.
+pub(crate) fn has_sense_handler(
+    shared: &Shared,
+    id: CharacterId,
+    pick: impl Fn(&crate::api::Handlers) -> &Vec<(CharacterId, Function)>,
+) -> bool {
+    (pick(&shared.handlers.borrow()).iter()).any(|(known, _)| *known == id)
+}
+
+/// `npc:inSight()`: everyone the NPC sees now, as of its last look, in the
+/// order they came into view; none once its health is gone.
+pub(crate) fn in_sight(lua: &Lua, id: CharacterId) -> mlua::Result<Table> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "inSight")?;
+    let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+    let seen = if alive {
+        shared.npcs.seen_by(id)
+    } else {
+        Vec::new()
+    };
+    let list = lua.create_table_with_capacity(seen.len(), 0)?;
+    for who in seen {
+        if shared.characters.has(who) {
+            list.raw_push(shared.handles.character(lua, who)?)?;
+        }
+    }
+    Ok(list)
 }

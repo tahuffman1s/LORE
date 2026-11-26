@@ -27,6 +27,7 @@ mod climate;
 mod fluids;
 mod ground;
 mod npcs;
+mod sensing;
 mod spawn;
 mod trail;
 mod walk;
@@ -68,6 +69,8 @@ pub struct World {
     npcs: npcs::Npcs,
     /// What the world's people make of what is done in front of them.
     witnessing: witness::Witnessing,
+    /// What the NPCs see and hear, kept from tick to tick.
+    sensing: sensing::Sensing,
     /// The number the next dummy or NPC is known by to a weapon. The player
     /// is 0.
     next_target: u32,
@@ -281,6 +284,7 @@ impl World {
             dummies: Vec::new(),
             npcs,
             witnessing: witness::Witnessing::default(),
+            sensing: sensing::Sensing::default(),
             next_target,
             standing: Vec::new(),
             tick: 0,
@@ -622,6 +626,13 @@ impl World {
     /// else is asked.
     pub fn ask(&mut self, asked: PlayerInput) {
         self.player.asked = asked;
+    }
+
+    /// How many rays the NPCs' senses cast at the level in the newest tick:
+    /// what a crowd's sight and hearing cost.
+    #[must_use]
+    pub fn sense_rays(&self) -> u32 {
+        self.sensing.rays
     }
 
     /// The noises the player made in the newest tick, in the order they
@@ -1048,15 +1059,6 @@ impl Game for World {
         {
             host.lock_on(None);
         }
-        // Who holds what against whom: what was done since the last tick,
-        // who saw it, and what people near each other told each other.
-        (self.witnessing).step(
-            host,
-            self.npcs.list(),
-            level,
-            player.eye_position(),
-            (self.tick, *tick),
-        );
         if walking {
             self.npcs.keep_out(player, rules, level);
         }
@@ -1342,13 +1344,33 @@ impl Game for World {
             ));
         }
         // The script hears each noise of the tick, in the order made; one
-        // it answers `false` to is kept in the list but not played.
+        // it answers `false` to is kept in the list but not played. The
+        // table it is handed for each is handed again to the NPCs that
+        // hear it.
+        self.game.host_mut().start_noises();
         for noise in &mut self.noises {
             if !self.game.host_mut().noise_made(&noise.told(&self.names)) {
                 noise.silenced = true;
             }
         }
         self.game.tick(input, step);
+        // What the script played at a place in its tick is heard by the
+        // NPCs as the player hears it.
+        let (now, noises, names) = (self.tick, &mut self.noises, &mut self.names);
+        self.game.take_script_noises(|noise, range| {
+            let mut heard = Noise::new(
+                crate::noise::NoiseKind::Script,
+                noise.position,
+                noise.loudness,
+                1.0,
+                0.0,
+                now,
+            );
+            heard.range = range;
+            heard.sound = names.intern(&noise.sound);
+            heard.by = noise.by;
+            noises.push(heard);
+        });
         // The script may have put the player somewhere.
         self.teleport();
         // Lightning the script asked for in this tick falls where it asked,
@@ -1361,6 +1383,29 @@ impl Game for World {
                 .map_or(place, |hit| hit.point);
             self.strike(struck);
         }
+        // Last, what each NPC sees and hears of the tick, the script's own
+        // sounds among it, and what the script is told of that.
+        let this_tick = sensing::Tick {
+            tick: self.tick,
+            level: &self.ground.level,
+            rules: &self.ground.rules,
+            player: &self.player.player,
+            noises: &self.noises,
+            names: &self.names,
+            weather: self.climate.weather(),
+        };
+        (self.sensing).tick(&mut self.npcs, self.game.host_mut(), &this_tick);
+        // Who holds what against whom: what was done up to now, who
+        // witnessed it, and what people near each other told each other.
+        // Last of all, so each NPC's senses are those of this very tick:
+        // the noise of a shot made on it is already heard.
+        let (player_eyes, dt) = (self.player.player.eye_position(), self.ground.step);
+        (self.witnessing).step(
+            self.game.host_mut(),
+            self.npcs.list(),
+            player_eyes,
+            (self.tick, dt),
+        );
     }
 
     /// The script's own presenting, such as its HUD and its rumble.
@@ -2437,9 +2482,11 @@ impl Game for Playing {
         let (now, tick_rate) = (self.world.tick, self.world.ground.tick_rate);
         self.heard.retain(|noise| fresh(noise, now, tick_rate));
         let room = MOST_HEARD.saturating_sub(self.heard.len());
-        let noises = self.world.noises();
-        self.heard
-            .extend_from_slice(&noises[..noises.len().min(room)]);
+        // A script's own sound is played by its request, not from here.
+        let noises = (self.world.noises().iter())
+            .filter(|noise| noise.kind != crate::noise::NoiseKind::Script)
+            .take(room);
+        self.heard.extend(noises);
         let room = MOST_MARKS.saturating_sub(self.marks.len());
         let marks = self.world.water_marks();
         self.marks

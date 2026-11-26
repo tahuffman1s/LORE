@@ -10,18 +10,24 @@
 //! their side who stand near them what they hold against whom, so word
 //! goes from person to person, never all at once.
 //!
-//! Who saw what is decided by [`sees`], a stand-in until NPCs have senses
-//! of their own (#55): the one place to swap.
+//! Who saw what is decided by [`witnessed`], from the NPC's own senses
+//! (#55): it sees the one who did it, or heard them make a noise just now
+//! and the deed was done near. Word between people is by nearness alone:
+//! anyone of the side within [`TELLING_DISTANCE`] hears it, wall or no wall.
 
 use lore_npc::{Act, Feeling};
-use lore_physics::Level;
 use lore_script::{CharacterId, Deed, ScriptHost};
 
 use super::npcs::Npc;
 
-/// How far an NPC sees someone do something, in metres, until NPCs have
-/// senses of their own (#55).
-pub(crate) const WITNESS_DISTANCE: f32 = 25.0;
+/// How far from an NPC a deed is done for the noise of it, heard from the
+/// one who did it, to make the NPC a witness, in metres: a guard round the
+/// corner who hears the shot that kills a friend minds it; one in the next
+/// town does not.
+pub(crate) const HEARD_DEED_DISTANCE: f32 = 30.0;
+/// How long a noise made by the one who did a deed still counts as the
+/// deed's own, in seconds.
+const NOISE_COUNTS_FOR: f32 = 1.0;
 /// How near two people of a side stand to tell each other what they
 /// hold against whom, in metres: within speaking distance.
 pub(crate) const TELLING_DISTANCE: f32 = 4.0;
@@ -40,24 +46,26 @@ pub(crate) struct Witnessing {
     near: Vec<(u32, [f32; 3])>,
 }
 
-/// Whether the NPC `npc` saw something done by someone whose body is at
-/// `at`: within [`WITNESS_DISTANCE`] of its eyes, with nothing of the
-/// level between.
-///
-/// A stand-in for NPCs' own senses (#55): it sees all the way round and in
-/// the dark. When senses land, this answers from them (whether `npc`
-/// perceives `at` this tick) and [`Witnessing::step`] is unchanged.
-fn sees(npc: &Npc, at: [f32; 3], level: &Level) -> bool {
-    let eyes = npc.eyes();
-    let way = [at[0] - eyes[0], at[1] - eyes[1], at[2] - eyes[2]];
-    let far = (way[0] * way[0] + way[1] * way[1] + way[2] * way[2]).sqrt();
-    if far > WITNESS_DISTANCE {
-        return false;
-    }
-    if far < 1e-3 {
+/// Whether the NPC `npc` witnessed a deed done by `doer`, whose eyes were
+/// at `at`, on tick `tick` (each `step` seconds long), by its own senses:
+/// it holds a sighting of `doer` in view ([`lore_npc::Senses::sees`]), or it
+/// heard a noise `doer` made within the last [`NOISE_COUNTS_FOR`] second
+/// and the deed was done within [`HEARD_DEED_DISTANCE`] of its body.
+/// A blind NPC that is also deaf witnesses nothing. Allocates nothing.
+fn witnessed(npc: &Npc, doer: CharacterId, at: [f32; 3], (tick, step): (u32, f32)) -> bool {
+    if npc.senses.sees(doer) {
         return true;
     }
-    level.raycast(eyes, way, far).is_none()
+    let lately = (NOISE_COUNTS_FOR / step.max(1e-6)).round().max(1.0) as u32;
+    let Some(heard) = npc.senses.heard_from(doer) else {
+        return false;
+    };
+    if tick.wrapping_sub(heard.tick) > lately {
+        return false;
+    }
+    let me = npc.body.position;
+    let way = [at[0] - me[0], at[1] - me[1], at[2] - me[2]];
+    way[0] * way[0] + way[1] * way[1] + way[2] * way[2] <= HEARD_DEED_DISTANCE * HEARD_DEED_DISTANCE
 }
 
 impl Witnessing {
@@ -70,7 +78,6 @@ impl Witnessing {
         &mut self,
         host: &mut ScriptHost,
         npcs: &[Npc],
-        level: &Level,
         player_eyes: [f32; 3],
         (tick, step): (u32, f32),
     ) {
@@ -107,13 +114,12 @@ impl Witnessing {
                 if npc.down || npc.who == deed.victim || npc.who == deed.by {
                     continue;
                 }
-                // Only what is done to a friend is minded: asked before the
-                // look, which costs a ray.
+                // Only what is done to a friend is minded.
                 let witness = npc.who.number();
                 if sides.feels(witness, victim) != Feeling::Friend {
                     continue;
                 }
-                if sees(npc, at, level) {
+                if witnessed(npc, deed.by, at, (tick, step)) {
                     sides.perceive(witness, Act::Hurt { victim, by, killed });
                 }
             }
@@ -161,28 +167,76 @@ mod tests {
         scene
     }
 
-    /// The player hurts a villager on tick 5. A guard stands in sight of
-    /// it; another stands three metres from that one, behind a wall.
+    /// The player hurts a villager on tick 30 (NPCs have looked by then), saying nothing. A guard
+    /// stands facing the player, in sight of the deed; another stands three
+    /// metres from that one, facing the player too, behind a wall.
     const SCRIPT: &str = r#"
         game.sides { Town = { friends = { "Guards" } }, Guards = {} }
         local villager = game.npc { name = "Villager", at = vector.create(0, 0, -2), side = "Town" }
-        game.npc { name = "Seer", at = vector.create(4.5, 0, 0), side = "Guards" }
-        game.npc { name = "Walled", at = vector.create(7.5, 0, 0), side = "Guards" }
+        game.npc { name = "Seer", at = vector.create(4.5, 0, 0), facing = 90, side = "Guards" }
+        game.npc { name = "Walled", at = vector.create(7.5, 0, 0), facing = 90, side = "Guards" }
         game.onStart(function() game.player:teleport(vector.create(0, 0, 0)) end)
         local ticks = 0
         game.onTick(function()
             ticks += 1
-            if ticks == 5 then villager:damage(10, { from = game.player }) end
+            if ticks == 30 then villager:damage(10, { from = game.player }) end
         end)
     "#;
 
     fn world() -> World {
+        world_of(SCRIPT)
+    }
+
+    fn world_of(script: &str) -> World {
         let level = blocks(&[
             ([-10.0, -0.2, -10.0], [10.0, 0.0, 10.0]),
             ([5.9, 0.0, -10.0], [6.1, 3.0, 10.0]),
         ]);
-        let game = ScriptGame::from_source(SCRIPT, &ActionMap::standard());
+        let game = ScriptGame::from_source(script, &ActionMap::standard());
         World::new(game, 60).with_level(&level)
+    }
+
+    /// A villager of the town 2 m north of the player, who stands at the
+    /// middle; a guard 3 m east of the player with the script's `guard`
+    /// line, who is not told anything. The deed (`deed`) is done on tick 30.
+    fn guard_script(guard: &str, deed: &str) -> String {
+        format!(
+            r#"
+            game.sides {{ Town = {{ friends = {{ "Guards" }} }}, Guards = {{}} }}
+            local villager = game.npc {{ name = "Villager", at = vector.create(0, 0, -2), side = "Town" }}
+            local guard = game.npc {{ name = "Guard", at = vector.create(3, 0, 0), side = "Guards", {guard} }}
+            game.weapon("quiet", {{ from = "pistol" }})
+            game.onSpawn(function() game.player:giveWeapon("quiet") end)
+            game.onStart(function() game.player:teleport(vector.create(0, 0, 0)) end)
+            local ticks = 0
+            game.onTick(function()
+                ticks += 1
+                if ticks == 30 then {deed} end
+            end)
+            "#
+        )
+    }
+
+    const SILENT_BLOW: &str = "villager:damage(10, { from = game.player })";
+    const NOTHING: &str = "";
+
+    /// Runs the world for 50 ticks, the player firing on tick 30 if they
+    /// `shoot`, and says whether the guard (the second NPC) came to count
+    /// the player an enemy.
+    fn guard_minds(script: &str, shoot: bool) -> bool {
+        let mut world = world_of(script);
+        let still = InputFrame::default();
+        for tick in 0..50 {
+            if tick == 29 || tick == 31 {
+                let mut asked = world.asked();
+                asked.fire = shoot && tick == 29;
+                world.ask(asked);
+            }
+            world.tick(&still, 1.0 / 60.0);
+        }
+        assert_eq!(world.game.host().last_error(), None);
+        let guard = world.npcs()[1].who.number();
+        world.game.host().sides().is_enemy(guard, 0)
     }
 
     /// Whether the villager, the guard in sight and the one behind the
@@ -202,7 +256,7 @@ mod tests {
         let still = InputFrame::default();
         let mut seen_on = None;
         let mut told_on = None;
-        for _ in 0..70 {
+        for _ in 0..100 {
             world.tick(&still, 1.0 / 60.0);
             let [villager, seer, walled] = enemies(&world);
             assert_eq!(villager, seer, "the one hurt and the one who saw, together");
@@ -228,7 +282,7 @@ mod tests {
         let run = || {
             let mut world = world();
             let still = InputFrame::default();
-            (0..70)
+            (0..100)
                 .map(|_| {
                     world.tick(&still, 1.0 / 60.0);
                     (world.tick, enemies(&world))
@@ -297,11 +351,11 @@ mod tests {
     fn a_quiet_crowd_holds_no_grudges_and_one_who_falls_is_no_longer_minded() {
         let mut world = world();
         let still = InputFrame::default();
-        for _ in 0..4 {
+        for _ in 0..28 {
             world.tick(&still, 1.0 / 60.0);
         }
         assert_eq!(world.game.host().sides().grudges(), 0, "nothing done yet");
-        for _ in 0..70 {
+        for _ in 0..100 {
             world.tick(&still, 1.0 / 60.0);
         }
         assert!(world.game.host().sides().grudges() >= 3);
@@ -309,5 +363,35 @@ mod tests {
         world.game.host_mut().sides_mut().forget(0);
         assert_eq!(world.game.host().sides().grudges(), 0);
         assert_eq!(enemies(&world), [false; 3]);
+    }
+
+    #[test]
+    fn a_guard_facing_away_does_not_see_a_silent_blow_and_one_facing_it_does() {
+        let facing = |way: &str| guard_script(way, SILENT_BLOW);
+        assert!(guard_minds(&facing("facing = 90"), false), "west, at it");
+        assert!(!guard_minds(&facing("facing = 270"), false), "east, away");
+    }
+
+    #[test]
+    fn a_blind_guard_who_is_not_deaf_hears_a_shot_but_not_a_silent_blow() {
+        let blind = |deed: &str| guard_script("facing = 270, sightDistance = 0", deed);
+        assert!(!guard_minds(&blind(SILENT_BLOW), false));
+        // The shot is made by the player and kills nobody here: a bullet
+        // hurts the villager 2 m ahead of the player.
+        assert!(guard_minds(&blind(NOTHING), true), "heard the shot");
+    }
+
+    #[test]
+    fn a_blind_and_deaf_guard_witnesses_nothing() {
+        let both = |deed: &str| guard_script("facing = 90, sightDistance = 0, hearing = 0", deed);
+        assert!(!guard_minds(&both(SILENT_BLOW), false));
+        assert!(!guard_minds(&both(NOTHING), true));
+    }
+
+    #[test]
+    fn a_shot_heard_from_further_than_the_distance_is_not_witnessed() {
+        let script = guard_script("facing = 270, sightDistance = 0, hearing = 3", NOTHING)
+            .replace("vector.create(3, 0, 0)", "vector.create(0, 0, 40)");
+        assert!(!guard_minds(&script, true));
     }
 }
