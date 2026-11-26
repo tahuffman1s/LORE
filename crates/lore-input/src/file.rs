@@ -50,6 +50,21 @@ const HEADER: &str = "\
 # are actions that games made for themselves.
 ";
 
+/// What a game's own file says before its bindings.
+const GAME_HEADER: &str = "\
+# Controls for this game only. Change a line and save this file: the game
+# uses it at once when it is running, and at its next start otherwise.
+#
+# A line that starts with # is not read: that action keeps the game's own
+# controls. To change one, take away the # and edit the names in its list.
+# Keep one name for keyboard or mouse and one for gamepad in every list.
+#
+# What is here wins over your file for every game (bindings.toml), which wins
+# over the game's own choice. To change one of LORE's standard actions in this
+# game only, add a [bindings] table with a line such as
+# jump = [\"F\", \"GamepadSouth\"].
+";
+
 /// Why a bindings file could not be read at all: it is not valid TOML.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingsError {
@@ -392,6 +407,19 @@ impl ActionMap {
             self.write_table(&mut text, defaults, true);
         }
         text
+    }
+
+    /// The text of a game's own bindings file: the actions the game made for
+    /// itself under `[game_bindings]`, as [`write_bindings`](Self::write_bindings)
+    /// writes them. `None` when the game made none.
+    #[must_use]
+    pub fn write_game_bindings(&self, defaults: &Self) -> Option<String> {
+        if !self.actions().any(|action| self.is_own(action)) {
+            return None;
+        }
+        let mut text = format!("{GAME_HEADER}\n[{GAME_TABLE}]\n");
+        self.write_table(&mut text, defaults, true);
+        Some(text)
     }
 
     /// Writes one line for each action that is (`own`) or is not a game's own.
@@ -789,6 +817,38 @@ mod tests {
         // A map with no own actions writes no second table.
         let plain = ActionMap::standard();
         assert!(!plain.write_bindings(&plain).contains("\n[game_bindings]\n"));
+    }
+
+    #[test]
+    fn a_games_own_file_has_its_actions_and_reads_back_with_standard_overrides() {
+        let defaults = game_map();
+        let text = defaults.write_game_bindings(&defaults).unwrap();
+        assert!(text.contains("\n[game_bindings]\n"), "{text}");
+        assert!(!text.contains("\n[bindings]\n"), "{text}");
+        assert!(
+            text.contains("\n# zoom = [\"F2\", \"GamepadSelect\"]\n"),
+            "{text}"
+        );
+        assert!(
+            !text
+                .split("[game_bindings]")
+                .nth(1)
+                .unwrap()
+                .contains("jump"),
+            "{text}"
+        );
+        assert!(
+            ActionMap::standard()
+                .write_game_bindings(&ActionMap::standard())
+                .is_none()
+        );
+
+        // The standard actions may be changed there for this game alone.
+        let mut map = defaults.clone();
+        let edited = format!("{text}\n[bindings]\njump = [\"F\", \"GamepadSouth\"]\n");
+        assert_eq!(map.read_bindings(&edited), Ok(Vec::new()));
+        let jump = map.action("jump").unwrap();
+        assert_eq!(map.bindings(jump)[0].to_string(), "F");
     }
 
     #[test]

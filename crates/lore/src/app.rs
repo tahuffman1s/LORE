@@ -214,6 +214,11 @@ pub struct Config {
     /// };
     /// ```
     pub controls_file: Option<std::path::PathBuf>,
+    /// The game's own bindings file, read after the player's and winning
+    /// over it, and watched the same way
+    /// ([`controls::game_file`](crate::controls::game_file) says where it
+    /// is kept). Only used with `controls_file`. `None` reads no such file.
+    pub game_controls_file: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -231,6 +236,7 @@ impl Default for Config {
             settings: Settings::default(),
             settings_file: None,
             controls_file: None,
+            game_controls_file: None,
             level_folder: None,
         }
     }
@@ -301,8 +307,9 @@ impl std::error::Error for AppError {
 /// or no graphics card here can draw with Vulkan 1.3. The error's message says
 /// what to do about it.
 pub fn run(mut config: Config, game: impl Game) -> Result<(), AppError> {
+    let game_file = config.game_controls_file.take();
     let controls = config.controls_file.take().map(|file| {
-        let (live, said) = controls::Live::start(file, &mut config.actions);
+        let (live, said) = controls::Live::start(file, game_file, &mut config.actions);
         for problem in said {
             log::warn!("{problem}");
         }
@@ -422,7 +429,7 @@ struct App<G> {
     /// What the strength of every rumble is multiplied by: the player's
     /// setting, which no game gets round.
     rumble_share: f32,
-    /// The player's bindings file, watched for saves.
+    /// The player's bindings file and the game's, watched for saves.
     controls: Option<controls::Live>,
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
@@ -849,8 +856,8 @@ impl<G: Game> App<G> {
         !self.occluded && Instant::now() >= self.draw_after
     }
 
-    /// Puts the player's bindings file into effect if it was saved since
-    /// it was last read.
+    /// Puts the player's bindings files into effect if one was saved since
+    /// they were last read.
     fn follow_controls(&mut self) {
         let Some(reread) = self.controls.as_mut().and_then(controls::Live::changed) else {
             return;
@@ -882,7 +889,7 @@ impl<G: Game> App<G> {
     }
 
     /// Puts into use the actions a game changed while it runs: `own` is its
-    /// map, the player's bindings file is read onto it again, and the input
+    /// map, the player's bindings files are read onto it again, and the input
     /// takes the result.
     fn follow_game_actions(&mut self, own: ActionMap) {
         let controls = match self.controls.as_mut() {
