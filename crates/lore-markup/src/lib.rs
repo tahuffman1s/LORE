@@ -20,6 +20,7 @@ pub mod error;
 pub mod html;
 pub mod intern;
 pub mod selector;
+pub mod style;
 
 pub use dom::{
     Children, Descendants, Dirty, Document, ElementId, FormState, HandlerKind, InputType, Node,
@@ -31,3 +32,4 @@ pub use intern::{Atom, Interner};
 pub use selector::{
     Combinator, Compound, ElementState, NoState, PseudoClass, Selector, Specificity, matches,
 };
+pub use style::{AnimValue, ComputedStyle, StyleChange, Styles};
