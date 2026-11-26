@@ -392,6 +392,14 @@ struct Painter<'a, 'b> {
     lines: &'a mut LineBuf,
     cx: &'a PaintCx<'b>,
     measure: &'a mut dyn TextMeasure,
+    order: &'a mut Vec<(i32, u32)>,
+    fam: &'a mut Vec<(Atom, Range<u32>)>,
+}
+
+/// Buffers `build` reuses from one frame to the next, so repainting does
+/// not allocate once they have grown.
+#[derive(Default)]
+pub(crate) struct PaintScratch {
     order: Vec<(i32, u32)>,
     fam: Vec<(Atom, Range<u32>)>,
 }
@@ -403,16 +411,19 @@ pub(crate) fn build(
     lines: &mut LineBuf,
     cx: &PaintCx,
     measure: &mut dyn TextMeasure,
+    scratch: &mut PaintScratch,
 ) {
     frame.clear();
+    scratch.order.clear();
+    scratch.fam.clear();
     let mut p = Painter {
         frame,
         nodes,
         lines,
         cx,
         measure,
-        order: Vec::new(),
-        fam: Vec::new(),
+        order: &mut scratch.order,
+        fam: &mut scratch.fam,
     };
     p.node(
         0,

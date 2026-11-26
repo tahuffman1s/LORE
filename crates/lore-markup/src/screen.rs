@@ -7,11 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::anim::Animator;
 use crate::dom::{Dirty, Document, ElementId, Node, NodeKind, Tag};
 use crate::error::MarkupError;
 use crate::html::{StyleBlock, StylesheetLink, parse};
 use crate::layout::{Env, Layouter, TextMeasure};
-use crate::paint::{Frame, PaintCx, Rect, build};
+use crate::paint::{Frame, PaintCx, PaintScratch, Rect, build};
 use crate::selector::ElementState;
 use crate::style::{ComputedStyle, StyleChange, Styles};
 
@@ -75,6 +76,8 @@ pub struct Screen {
     changes: Vec<StyleChange>,
     touched: Vec<ElementId>,
     file: String,
+    pub(crate) anim: Animator,
+    scratch: PaintScratch,
 }
 
 impl Screen {
@@ -112,7 +115,10 @@ impl Screen {
             changes: Vec::new(),
             touched: Vec::new(),
             file: file.to_owned(),
+            anim: Animator::default(),
+            scratch: PaintScratch::default(),
         };
+        screen.anim.file = file.to_owned();
         screen.warnings.reserve(0);
         Ok(screen)
     }
@@ -146,6 +152,43 @@ impl Screen {
             .add_css(href, css, 1, 1, index as u32, self.doc.interner_mut())?;
         self.dirty = true;
         Ok(())
+    }
+
+    /// Advances animation by one tick. Transitions and keyframe animations
+    /// move on; the next [`frame`](Screen::frame) shows the result.
+    pub fn tick(&mut self) {
+        if self.anim.tick(&self.doc, &self.styles, &mut self.used) {
+            self.dirty = true;
+        }
+    }
+
+    /// Ticks per second (default 60). Animation lengths are in seconds, so
+    /// this is how many ticks a second of animation takes.
+    pub fn set_tick_rate(&mut self, hz: f64) {
+        self.anim.set_rate(hz);
+    }
+
+    /// The tick rate.
+    pub fn tick_rate(&self) -> f64 {
+        self.anim.rate()
+    }
+
+    /// Reduced motion: transitions jump to their end at once and keyframe
+    /// animations do not run (an element shows the end state when the
+    /// animation fills forwards, else its ordinary style). Switching it off
+    /// again does not bring back animations that were skipped.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        if on && !self.anim.reduce_motion() {
+            self.anim.snap_to_end(&self.styles, &mut self.used);
+            self.dirty = true;
+        }
+        self.anim.set_reduce(on);
+    }
+
+    /// Whether a transition or an animation is running (a paused animation
+    /// or one holding its end state is not).
+    pub fn is_animating(&self) -> bool {
+        self.anim.is_animating()
     }
 
     /// Sets the screen size in pixels (a screen 1080 high is the usual unit).
@@ -293,6 +336,21 @@ impl Screen {
                 self.touched.push(ch.element);
             }
         }
+        for k in 0..self.changes.len() {
+            if let Some(ch) = self.changes.get(k) {
+                self.anim
+                    .on_change(ch, &mut self.doc, &mut self.styles, &mut self.used);
+            }
+        }
+        for w in std::mem::take(&mut self.anim.warnings) {
+            self.warn(w);
+        }
+        for e in self.anim.layout_dirty.drain(..) {
+            if !self.touched.contains(&e) {
+                self.touched.push(e);
+            }
+        }
+        self.anim.take_dirty();
         // Text edits and the like raise the layout flag without a style change.
         let mut flagged = false;
         for d in self.doc.descendants(root) {
@@ -333,6 +391,7 @@ impl Screen {
             &mut self.layout.lines,
             &cx,
             measure,
+            &mut self.scratch,
         );
         for e in missing {
             let (line, column, src) = self

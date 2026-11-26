@@ -14,6 +14,7 @@
 //! # Ok::<(), lore_markup::MarkupError>(())
 //! ```
 
+pub mod anim;
 pub mod css;
 pub mod dom;
 pub mod error;
@@ -47,3 +48,6 @@ mod screen_tests;
 
 #[cfg(test)]
 mod focus_tests;
+
+#[cfg(test)]
+mod anim_tests;
