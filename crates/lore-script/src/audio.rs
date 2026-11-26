@@ -183,6 +183,33 @@ impl AudioState {
         waiting.push_back(command);
     }
 
+    /// Asks for the sound `name` at `volume`, as `game.audio.play` does,
+    /// for the engine's own screens. A name the game has no sound for, or
+    /// one that is too long, plays nothing.
+    pub(crate) fn play_named(&self, name: &str, volume: f32) {
+        if SoundName::new(name).is_none() {
+            return;
+        }
+        let known = self
+            .names
+            .borrow()
+            .as_ref()
+            .is_none_or(|names| names.binary_search_by(|it| it.as_str().cmp(name)).is_ok());
+        if !known {
+            return;
+        }
+        let request = SoundRequest {
+            id: self.next_id(),
+            name: name.to_owned(),
+            position: None,
+            volume: volume.clamp(0.0, 1.0),
+            pitch: 1.0,
+            range: None,
+            looping: false,
+        };
+        self.push(AudioCommand::Play(request));
+    }
+
     fn next_id(&self) -> SoundId {
         let id = self.next.get();
         self.next.set(id.wrapping_add(1));

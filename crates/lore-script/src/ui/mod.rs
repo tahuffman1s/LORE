@@ -19,8 +19,13 @@
 //!   are saved. A mistake in any of them goes to the script error panel with
 //!   the file and line it is on.
 //!
-//! Input, focus and events are not here yet: a screen is shown, hidden and
-//! drawn, and it moves.
+//! - Every tick the top screen that has a control takes the player's input:
+//!   the pointer, the d-pad, A, B, the bumpers and typed text. What a control
+//!   does (a click, a slider moved) comes back as an event, which `input.rs`
+//!   collects and the host answers with the script's functions.
+//! - `element.rs` is what a script holds for one element of a page, and
+//!   `keyboard.rs` is the engine's own on-screen keyboard, which is a screen
+//!   like the others.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -35,13 +40,52 @@ use crate::tools_api::Tools;
 
 pub(crate) mod api;
 pub(crate) mod draw;
+pub(crate) mod element;
+mod input;
+mod keyboard;
+
+pub(crate) use input::{Controls, Fired, FiredKind};
 
 /// The functions and values of `game.ui`.
-pub(crate) const UI_FUNCTIONS: &[&str] = &["load", "anyOpen", "reduceMotion"];
+pub(crate) const UI_FUNCTIONS: &[&str] = &[
+    "load",
+    "anyOpen",
+    "reduceMotion",
+    "escape",
+    "onScreenKeyboard",
+];
+/// What `game.ui.sounds` holds.
+pub(crate) const UI_SOUNDS: &[&str] = &["move", "press", "volume"];
 /// What a screen can be asked to do: `screen:show()`.
-pub(crate) const SCREEN_METHODS: &[&str] = &["show", "hide", "toggle", "remove"];
+pub(crate) const SCREEN_METHODS: &[&str] = &[
+    "show", "hide", "toggle", "remove", "on", "find", "findAll", "bind",
+];
 /// What a screen has: `screen.visible`.
-pub(crate) const SCREEN_FIELDS: &[&str] = &["visible", "file", "pauses"];
+pub(crate) const SCREEN_FIELDS: &[&str] = &["visible", "file", "pauses", "values", "focused"];
+/// What an element of a page has.
+pub(crate) const ELEMENT_FIELDS: &[&str] = &[
+    "text", "value", "checked", "hidden", "disabled", "class", "id", "tag", "parent", "style",
+];
+/// What an element can be asked to do.
+pub(crate) const ELEMENT_METHODS: &[&str] = &[
+    "addClass",
+    "removeClass",
+    "toggleClass",
+    "hasClass",
+    "setVar",
+    "append",
+    "remove",
+    "focus",
+    "find",
+    "findAll",
+    "attribute",
+    "setAttribute",
+    "on",
+    "fill",
+];
+/// What the table an event handler is given holds.
+#[cfg(test)]
+pub(crate) const EVENT_FIELDS: &[&str] = &["name", "kind", "element", "value", "screen"];
 
 /// The unit screens are written in: a screen is this many pixels high.
 pub(crate) const SCREEN_HEIGHT: f32 = 1080.0;
@@ -57,10 +101,71 @@ pub(crate) type ScreenId = u32;
 /// version of the script's VM, so they live in `Shared` and go with it;
 /// the screens themselves outlive it.
 #[derive(Default)]
-#[allow(dead_code, reason = "events are answered by a later part of game.ui")]
 pub(crate) struct UiHandlers {
     /// By screen, then the name an `onclick` attribute gives.
     pub by_screen: HashMap<ScreenId, HashMap<String, mlua::Function>>,
+    /// The number the next generated handler name is made with.
+    pub next_name: u32,
+}
+
+/// An element a script holds: its screen, the element and which version of
+/// the screen's structure it was found in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ElementRef {
+    pub screen: ScreenId,
+    pub id: ElementId,
+    pub generation: u32,
+}
+
+/// Why a script's element or screen cannot be used.
+#[derive(Debug)]
+pub(crate) enum Problem {
+    /// The screen was removed.
+    NoScreen,
+    /// The screen's file has a mistake and nothing was ever read from it.
+    NoPage(String),
+    /// The element was removed, or its screen was read again with other
+    /// elements in it. Holds the screen's file.
+    Stale(String),
+}
+
+/// What the player did with the keyboard's Space, Erase and Done, and what
+/// the engine keeps while its keyboard is open.
+pub(crate) struct Keyboard {
+    pub screen: ScreenId,
+    pub target: (ScreenId, ElementId),
+    pub shift: bool,
+    /// The text last put in the row that shows what was typed.
+    pub shown: String,
+}
+
+/// `game.ui.sounds`.
+pub(crate) struct Sounds {
+    pub moved: Option<String>,
+    pub press: Option<String>,
+    pub volume: f32,
+}
+
+impl Default for Sounds {
+    fn default() -> Self {
+        Self {
+            moved: Some("menu-move".to_owned()),
+            press: Some("menu-choose".to_owned()),
+            volume: 0.6,
+        }
+    }
+}
+
+/// An input a script bound to a setting.
+struct Bind {
+    input: String,
+    setting: String,
+    element: ElementId,
+    generation: u32,
+    /// What the setting was when it was last looked at.
+    seen_setting: crate::SettingValue,
+    /// What the input read after it was last given the setting.
+    seen_input: crate::SettingValue,
 }
 
 /// One file a screen is made of, watched for a save.
@@ -101,9 +206,18 @@ struct Entry {
     warned: usize,
     /// Focus to put back at the next picture, after a reload.
     refocus: Option<Refocus>,
+    /// The engine's own screen (the on-screen keyboard): no script made it.
+    engine: bool,
+    /// Handler names nobody answered, said once each.
+    unanswered: HashSet<String>,
+    /// Inputs bound to settings.
+    binds: Vec<Bind>,
+    /// An element a script asked to focus, done at the next picture.
+    focus_asked: Option<ElementId>,
+    /// The text box that has focus, and what it held when it got it.
+    text_focus: Option<(ElementId, String)>,
 }
 
-#[derive(Default)]
 struct Inner {
     entries: Vec<Entry>,
     next_id: ScreenId,
@@ -115,6 +229,77 @@ struct Inner {
     stops: Vec<lore_ui::Stop>,
     /// Pictures a page named that the game does not have, said once.
     unknown_pictures: HashSet<String>,
+    sounds: Sounds,
+    /// Whether a text box pressed with a gamepad opens the on-screen keyboard.
+    on_screen_keyboard: bool,
+    keyboard: Option<Keyboard>,
+    /// Whether the UI paused the game, and so is to resume it.
+    paused_by_ui: bool,
+    /// Events taken from a page, kept to not set memory aside every tick.
+    events: Vec<lore_markup::Event>,
+}
+
+impl Entry {
+    /// A screen that is not showing and has nothing in it yet.
+    fn blank(id: ScreenId, path: &str) -> Self {
+        Self {
+            id,
+            path: path.to_owned(),
+            page: None,
+            visible: false,
+            pauses: false,
+            claimed: false,
+            fresh: false,
+            watches: Vec::new(),
+            error: None,
+            kbd: Vec::new(),
+            generation: 0,
+            warned: 0,
+            refocus: None,
+            engine: false,
+            unanswered: HashSet::new(),
+            binds: Vec::new(),
+            focus_asked: None,
+            text_focus: None,
+        }
+    }
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_id: 0,
+            stack: Vec::new(),
+            reduce_motion: false,
+            stops: Vec::new(),
+            unknown_pictures: HashSet::new(),
+            sounds: Sounds::default(),
+            on_screen_keyboard: true,
+            keyboard: None,
+            paused_by_ui: false,
+            events: Vec::new(),
+        }
+    }
+}
+
+impl Inner {
+    /// Puts a screen on top of the stack, or takes it out of it.
+    fn set_visible(&mut self, id: ScreenId, shown: bool) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
+            return false;
+        };
+        entry.visible = shown;
+        self.stack.retain(|on| *on != id);
+        if shown {
+            self.stack.push(id);
+        }
+        true
+    }
+}
+
+fn entry_mut(entries: &mut [Entry], id: ScreenId) -> Option<&mut Entry> {
+    entries.iter_mut().find(|entry| entry.id == id)
 }
 
 /// Every screen of the game. See the [module](self) text.
@@ -469,7 +654,7 @@ impl UiState {
         let mut inner = self.inner.borrow_mut();
         inner
             .entries
-            .retain(|entry| if loaded { entry.claimed } else { !entry.fresh });
+            .retain(|entry| entry.engine || if loaded { entry.claimed } else { !entry.fresh });
         let Inner { entries, stack, .. } = &mut *inner;
         stack.retain(|id| entries.iter().any(|entry| entry.id == *id));
         for entry in entries.iter_mut() {
@@ -491,21 +676,11 @@ impl UiState {
         let id = inner.next_id;
         inner.next_id = inner.next_id.wrapping_add(1);
         let built = build(&self.files, path, SAVE_TO_FIX);
-        let mut entry = Entry {
-            id,
-            path: path.to_owned(),
-            page: None,
-            visible: false,
-            pauses,
-            claimed: true,
-            fresh: true,
-            watches: built.watches,
-            error: None,
-            kbd: Vec::new(),
-            generation: 0,
-            warned: 0,
-            refocus: None,
-        };
+        let mut entry = Entry::blank(id, path);
+        entry.pauses = pauses;
+        entry.claimed = true;
+        entry.fresh = true;
+        entry.watches = built.watches;
         match built.page {
             Ok(mut page) => {
                 page.set_reduce_motion(reduce);
@@ -547,16 +722,7 @@ impl UiState {
 
     /// Puts a screen on top of the stack, or takes it out of it.
     pub(crate) fn set_visible(&self, id: ScreenId, shown: bool) -> bool {
-        let mut inner = self.inner.borrow_mut();
-        let Some(entry) = inner.entries.iter_mut().find(|entry| entry.id == id) else {
-            return false;
-        };
-        entry.visible = shown;
-        inner.stack.retain(|on| *on != id);
-        if shown {
-            inner.stack.push(id);
-        }
-        true
+        self.inner.borrow_mut().set_visible(id, shown)
     }
 
     /// Takes a screen away altogether.
@@ -564,6 +730,53 @@ impl UiState {
         let mut inner = self.inner.borrow_mut();
         inner.entries.retain(|entry| entry.id != id);
         inner.stack.retain(|on| *on != id);
+        if inner
+            .keyboard
+            .as_ref()
+            .is_some_and(|keys| keys.target.0 == id)
+        {
+            input::close_keyboard(&mut inner);
+        }
+    }
+
+    /// Whether any showing screen pauses the game.
+    pub(crate) fn wants_pause(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner
+            .entries
+            .iter()
+            .any(|entry| entry.visible && entry.pauses && !entry.engine)
+    }
+
+    /// Notes that the UI paused the game (`true`) or gave it back, and says
+    /// what it was before.
+    pub(crate) fn set_paused_by_ui(&self, paused: bool) -> bool {
+        std::mem::replace(&mut self.inner.borrow_mut().paused_by_ui, paused)
+    }
+
+    /// The words a screen's problem comes down to.
+    pub(crate) fn sounds(&self) -> std::cell::Ref<'_, Sounds> {
+        std::cell::Ref::map(self.inner.borrow(), |inner| &inner.sounds)
+    }
+
+    pub(crate) fn set_sound(&self, which: &str, name: Option<String>) {
+        let mut inner = self.inner.borrow_mut();
+        match which {
+            "move" => inner.sounds.moved = name,
+            _ => inner.sounds.press = name,
+        }
+    }
+
+    pub(crate) fn set_sound_volume(&self, volume: f32) {
+        self.inner.borrow_mut().sounds.volume = volume;
+    }
+
+    pub(crate) fn on_screen_keyboard(&self) -> bool {
+        self.inner.borrow().on_screen_keyboard
+    }
+
+    pub(crate) fn set_on_screen_keyboard(&self, on: bool) {
+        self.inner.borrow_mut().on_screen_keyboard = on;
     }
 
     /// Whether showing the screen pauses the game.
@@ -598,12 +811,6 @@ impl UiState {
         }
     }
 
-    /// The ids of the showing screens, bottom to top.
-    #[allow(dead_code, reason = "input is handled by a later part of game.ui")]
-    pub(crate) fn stack(&self) -> Vec<ScreenId> {
-        self.inner.borrow().stack.clone()
-    }
-
     /// What is wrong with the screen files now: the first mistake, in the
     /// order the screens were loaded.
     pub(crate) fn first_error(&self) -> Option<ScriptError> {
@@ -614,29 +821,93 @@ impl UiState {
             .find_map(|entry| entry.error.clone())
     }
 
-    /// One tick: every showing screen moves on by one tick (`rate` ticks
-    /// make a second), and its `<kbd>` elements show what `label` says of
-    /// their actions.
-    pub(crate) fn tick(&self, rate: f64, label: impl Fn(&str) -> String) {
+    /// Runs `read` on the page of screen `id`.
+    pub(crate) fn with_page<R>(
+        &self,
+        id: ScreenId,
+        read: impl FnOnce(&mut Page, u32) -> R,
+    ) -> Result<R, Problem> {
         let mut inner = self.inner.borrow_mut();
-        let Inner {
-            entries,
-            reduce_motion,
-            ..
-        } = &mut *inner;
-        for entry in entries.iter_mut().filter(|entry| entry.visible) {
-            let Some(page) = &mut entry.page else {
-                continue;
-            };
-            if rate > 0.0 && (page.tick_rate() - rate).abs() > f64::EPSILON {
-                page.set_tick_rate(rate);
-            }
-            page.set_reduce_motion(*reduce_motion);
-            sync_labels(page, &mut entry.kbd, &label);
-            page.tick();
+        let entry = entry_mut(&mut inner.entries, id).ok_or(Problem::NoScreen)?;
+        let generation = entry.generation;
+        match &mut entry.page {
+            Some(page) => Ok(read(page, generation)),
+            None => Err(Problem::NoPage(entry.path.clone())),
         }
     }
 
+    /// Runs `read` on a script's element, if it is still the element it
+    /// was found as.
+    pub(crate) fn with_element<R>(
+        &self,
+        element: ElementRef,
+        read: impl FnOnce(&mut Page, ElementId) -> R,
+    ) -> Result<R, Problem> {
+        let mut inner = self.inner.borrow_mut();
+        let entry = entry_mut(&mut inner.entries, element.screen).ok_or(Problem::NoScreen)?;
+        let generation = entry.generation;
+        let file = entry.path.clone();
+        let Some(page) = &mut entry.page else {
+            return Err(Problem::NoPage(file));
+        };
+        let alive = page.element_tag(element.id).is_some();
+        if generation != element.generation || !alive {
+            return Err(Problem::Stale(file));
+        }
+        Ok(read(page, element.id))
+    }
+
+    /// Asks for an element to take focus at the next picture, when the
+    /// page has a layout to say where it is.
+    pub(crate) fn ask_focus(&self, element: ElementRef) -> Result<(), Problem> {
+        self.with_element(element, |_, _| ())?;
+        if let Some(entry) = entry_mut(&mut self.inner.borrow_mut().entries, element.screen) {
+            entry.focus_asked = Some(element.id);
+        }
+        Ok(())
+    }
+
+    /// The element of a screen that has focus.
+    pub(crate) fn focused(&self, id: ScreenId) -> Result<Option<ElementRef>, Problem> {
+        self.with_page(id, |page, generation| {
+            page.focused().map(|element| ElementRef {
+                screen: id,
+                id: element,
+                generation,
+            })
+        })
+    }
+
+    /// What `back` does on a screen nobody answered it on: the screen goes
+    /// away if there is another one that takes input under it.
+    pub(crate) fn default_back(&self, id: ScreenId) {
+        let mut inner = self.inner.borrow_mut();
+        let Inner { entries, stack, .. } = &mut *inner;
+        let takes: Vec<ScreenId> = stack
+            .iter()
+            .copied()
+            .filter(|on| {
+                entries
+                    .iter()
+                    .any(|e| e.id == *on && e.page.as_ref().is_some_and(has_control))
+            })
+            .collect();
+        if takes.len() > 1 && takes.last() == Some(&id) {
+            inner.set_visible(id, false);
+        }
+    }
+
+    /// Whether the first time a handler name nobody answers is now.
+    pub(crate) fn first_unanswered(&self, id: ScreenId, name: &str) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        entry_mut(&mut inner.entries, id).is_some_and(|entry| {
+            !entry.unanswered.contains(name) && entry.unanswered.insert(name.to_owned())
+        })
+    }
+
+    /// One tick: every showing screen moves on by one tick (`rate` ticks
+    /// make a second), and its `<kbd>` elements show what `label` says of
+    /// their actions.
     /// Looks at the files of every screen and reads again the ones that
     /// were saved. Whether any screen's state (and so its error) changed.
     pub(crate) fn poll(&self) -> bool {
@@ -646,7 +917,7 @@ impl UiState {
         let mut changed = false;
         let mut inner = self.inner.borrow_mut();
         let reduce = inner.reduce_motion;
-        for entry in &mut inner.entries {
+        for entry in inner.entries.iter_mut().filter(|entry| !entry.engine) {
             let mut saved = Vec::new();
             for file in &mut entry.watches {
                 let seen = file.path.as_deref().and_then(stamp);
@@ -740,6 +1011,10 @@ impl UiState {
                 page.frame(&mut measurer);
                 refocus.apply(page);
             }
+            if let Some(asked) = entry.focus_asked.take() {
+                page.frame(&mut measurer);
+                page.focus(asked);
+            }
             let frame = page.frame(&mut measurer);
             let mut unknown = |name: &str| {
                 if unknown_pictures.insert(name.to_owned()) {
@@ -768,8 +1043,153 @@ impl UiState {
     }
 }
 
+/// Moves every showing screen on by one tick.
+fn tick_entries(inner: &mut Inner, rate: f64, label: &dyn Fn(&str) -> String) {
+    let Inner {
+        entries,
+        reduce_motion,
+        ..
+    } = inner;
+    for entry in entries.iter_mut().filter(|entry| entry.visible) {
+        let Some(page) = &mut entry.page else {
+            continue;
+        };
+        if rate > 0.0 && (page.tick_rate() - rate).abs() > f64::EPSILON {
+            page.set_tick_rate(rate);
+        }
+        page.set_reduce_motion(*reduce_motion);
+        sync_labels(page, &mut entry.kbd, label);
+        page.tick();
+    }
+}
+
+/// What keeping an input and a setting the same needs: the settings, and the
+/// clock the changes are noted on.
+pub(crate) struct SettingsSync<'a> {
+    pub settings: &'a crate::settings_api::SettingsState,
+    pub clock: &'a crate::time_api::Clock,
+}
+
+/// What an input of a page holds, as a setting value would.
+pub(crate) fn read_input(page: &Page, element: ElementId) -> Option<crate::SettingValue> {
+    use crate::SettingValue;
+    if let Some(on) = page.checked(element) {
+        Some(SettingValue::Toggle(on))
+    } else if let Some(number) = page.range_value(element) {
+        Some(SettingValue::Number(f64::from(number)))
+    } else {
+        page.value(element)
+            .map(|text| SettingValue::Choice(text.to_owned()))
+    }
+}
+
+/// Puts a setting's value in an input. False if the input cannot hold it.
+pub(crate) fn write_input(
+    page: &mut Page,
+    element: ElementId,
+    value: &crate::SettingValue,
+) -> bool {
+    use crate::SettingValue;
+    match value {
+        SettingValue::Toggle(on) => page.set_checked(element, *on),
+        // The input keeps what a slider shows to the size of a picture.
+        #[allow(clippy::cast_possible_truncation)]
+        SettingValue::Number(number) => page.set_range_value(element, *number as f32),
+        SettingValue::Choice(word) => choose_text(page, element, word),
+    }
+}
+
+/// Makes a drop-down show the option whose value is `word`, or a text box
+/// hold it.
+pub(crate) fn choose_text(page: &mut Page, element: ElementId, word: &str) -> bool {
+    if page.element_tag(element) == Some(lore_markup::Tag::Select) {
+        let mut options = Vec::new();
+        page.children(element, &mut options);
+        let at = options
+            .iter()
+            .position(|option| page.document().option_value(*option) == word);
+        return at.is_some_and(|at| {
+            page.select_index(element, at);
+            true
+        });
+    }
+    page.set_value(element, word)
+}
+
+/// One tick of keeping a bound input and its setting the same. A setting
+/// changed from somewhere else wins; otherwise a change the player made to
+/// the input is written to the setting.
+fn bind_tick(page: &mut Page, bind: &mut Bind, generation: u32, sync: &SettingsSync<'_>) {
+    if bind.generation != generation || page.element_tag(bind.element).is_none() {
+        let Some(element) = named(page, &bind.input) else {
+            return;
+        };
+        bind.element = element;
+        bind.generation = generation;
+    }
+    let element = bind.element;
+    let Some(same) = sync.settings.is(&bind.setting, &bind.seen_setting) else {
+        return;
+    };
+    if !same {
+        let Some(now) = sync.settings.value_of(&bind.setting) else {
+            return;
+        };
+        write_input(page, element, &now);
+        bind.seen_input = read_input(page, element).unwrap_or_else(|| now.clone());
+        bind.seen_setting = now;
+        return;
+    }
+    let Some(now) = read_input(page, element) else {
+        return;
+    };
+    if now == bind.seen_input {
+        return;
+    }
+    if let Some(new) = sync.settings.set_from_screen(&bind.setting, &now) {
+        sync.clock.note(&bind.setting);
+        sync.clock.note(&new.noted());
+        bind.seen_setting = new;
+    }
+    bind.seen_input = now;
+}
+
+impl UiState {
+    /// Keeps the input named `input` on screen `id` the same as a setting,
+    /// starting from the setting's value `initial`.
+    pub(crate) fn add_bind(
+        &self,
+        id: ScreenId,
+        input: &str,
+        setting: &str,
+        initial: crate::SettingValue,
+    ) -> Result<(), Problem> {
+        let mut inner = self.inner.borrow_mut();
+        let entry = entry_mut(&mut inner.entries, id).ok_or(Problem::NoScreen)?;
+        let generation = entry.generation;
+        let Some(page) = &mut entry.page else {
+            return Err(Problem::NoPage(entry.path.clone()));
+        };
+        let Some(element) = named(page, input) else {
+            return Err(Problem::Stale(entry.path.clone()));
+        };
+        write_input(page, element, &initial);
+        let seen_input = read_input(page, element).unwrap_or_else(|| initial.clone());
+        entry.binds.retain(|bind| bind.input != input);
+        entry.binds.push(Bind {
+            input: input.to_owned(),
+            setting: setting.to_owned(),
+            element,
+            generation,
+            seen_setting: initial,
+            seen_input,
+        });
+        Ok(())
+    }
+}
+
 /// Sets the text of each `<kbd>` to what `label` says, where it changed.
-fn sync_labels(page: &mut Page, kbd: &mut [Kbd], label: &impl Fn(&str) -> String) {
+fn sync_labels(page: &mut Page, kbd: &mut [Kbd], label: &dyn Fn(&str) -> String) {
     for one in kbd {
         let now = label(&one.action);
         if now != one.shown {

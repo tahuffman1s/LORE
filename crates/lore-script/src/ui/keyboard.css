@@ -1,0 +1,104 @@
+/* The on-screen keyboard. Colours are in one place, at the top. */
+#shade {
+  --gold: #ffd75e;
+  --ink: #f4efe2;
+  --cap: #27325a;
+  --cap-edge: #3f5090;
+  --well: #0a0e1c;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(4, 6, 14, 0.62);
+  color: var(--ink);
+  font-size: 30px;
+  animation: rise 0.18s ease-out both;
+}
+
+#board {
+  padding: 28px 34px 22px 34px;
+  margin-bottom: 48px;
+  background: linear-gradient(to bottom, #1e2848, #10162a);
+  border: 2px solid var(--cap-edge);
+  border-radius: 24px;
+  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.65);
+}
+
+#typed-row {
+  height: 66px;
+  margin-bottom: 20px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  background-color: var(--well);
+  border: 2px solid var(--gold);
+  border-radius: 16px;
+  font-size: 34px;
+  box-shadow: 0 0 22px rgba(255, 215, 94, 0.25);
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.key {
+  width: 68px;
+  padding: 13px 0;
+  text-align: center;
+  background-color: var(--cap);
+  color: var(--ink);
+  border: 2px solid var(--cap-edge);
+  border-radius: 14px;
+  box-shadow: 0 5px 0 #0a0f20;
+  transition: background-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.wide { width: 128px; }
+.space { width: 420px; }
+.action { width: 170px; font-size: 26px; padding: 15px 0; }
+.done { background-color: #2d5a45; border-color: #4c9a75; }
+
+/* The same look for the pointer and the d-pad: a gold cap with a glow. */
+.key:hover,
+.key:focus {
+  background-color: var(--gold);
+  color: #1a1a1a;
+  border-color: #fff1b8;
+  outline: 0 solid transparent;
+  transform: scale(1.08);
+  box-shadow: 0 0 26px rgba(255, 215, 94, 0.85), 0 5px 0 #8a6d1a;
+}
+
+.key:active {
+  transform: scale(0.97);
+  box-shadow: 0 0 12px rgba(255, 215, 94, 0.6);
+}
+
+#hints {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 16px;
+  font-size: 22px;
+  color: #aeb7d6;
+}
+
+kbd {
+  margin-left: 14px;
+  padding: 2px 10px;
+  background-color: #1b2340;
+  border: 2px solid var(--cap-edge);
+  border-radius: 8px;
+  color: var(--gold);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(40px); }
+  to   { opacity: 1; transform: translateY(0px); }
+}

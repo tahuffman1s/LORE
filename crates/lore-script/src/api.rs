@@ -977,7 +977,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 60] = [
+        let groups: [(&str, &[&str]); 64] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1038,6 +1038,10 @@ mod tests {
             ("game.ui.", crate::ui::UI_FUNCTIONS),
             ("Screen:", crate::ui::SCREEN_METHODS),
             ("Screen.", crate::ui::SCREEN_FIELDS),
+            ("game.ui.sounds.", crate::ui::UI_SOUNDS),
+            ("Element:", crate::ui::ELEMENT_METHODS),
+            ("Element.", crate::ui::ELEMENT_FIELDS),
+            ("UiEvent.", crate::ui::EVENT_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

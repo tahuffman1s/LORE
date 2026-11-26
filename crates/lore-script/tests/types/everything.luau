@@ -941,3 +941,51 @@ game.ui.reduceMotion = true
 local reduced: boolean = game.ui.reduceMotion
 pausing:remove()
 print(reduced)
+
+screen:on("startGame", function(event: UiEvent)
+    local named: string = event.name
+    local kind: string = event.kind
+    local over: Screen = event.screen
+    local from: Element? = event.element
+    local held: (number | boolean | string)? = event.value
+    print(named, kind, over.file, from, held)
+end)
+local play: Element? = screen:find("#play")
+local rows: { Element } = screen:findAll(".row")
+if play then
+    play.text = "Go"
+    play.value = 3
+    play.checked = true
+    play.hidden = false
+    play.disabled = true
+    play.class = "big"
+    play.style.color = "gold"
+    play.style["border-radius"] = "12px"
+    play.style.borderRadius = 12
+    play:addClass("a")
+    play:removeClass("a")
+    play:toggleClass("a")
+    print(play:hasClass("a"), play.id, play.tag, play.parent, play.style.color)
+    play:setVar("--gold", "#ffd75e")
+    play:append("<p>" .. game.ui.escape("Ann & Bea") .. "</p>")
+    play:focus()
+    local inner: Element? = play:find("p")
+    local inners: { Element } = play:findAll("p")
+    print(play:attribute("data-id"), inner, #inners)
+    play:setAttribute("data-id", 7)
+    play:on("click", function(event: UiEvent) print(event.kind) end)
+    play:fill({ "a", "b" }, function(row: string, index: number) return "<p>" .. row .. index .. "</p>" end)
+    play:remove()
+end
+print(#rows, screen.focused, screen.values.volume)
+screen.values.volume = 50
+screen:bind("volume")
+screen:bind("music", "music_volume")
+game.ui.sounds.move = "tick"
+game.ui.sounds.press = nil
+game.ui.sounds.volume = 0.4
+local soundVolume: number = game.ui.sounds.volume
+local soundMove: string? = game.ui.sounds.move
+game.ui.onScreenKeyboard = false
+local keyboardOn: boolean = game.ui.onScreenKeyboard
+print(soundVolume, soundMove, keyboardOn)

@@ -117,7 +117,7 @@ impl SettingValue {
     }
 
     /// How the rules' fingerprint tells one value from another.
-    fn noted(&self) -> String {
+    pub(crate) fn noted(&self) -> String {
         match self {
             Self::Number(number) => number.to_string(),
             Self::Toggle(on) => on.to_string(),
@@ -204,9 +204,67 @@ impl SettingsState {
         self.quit.take()
     }
 
+    /// The kind of the setting called `name`.
+    pub(crate) fn kind_of(&self, name: &str) -> Option<SettingKind> {
+        let list = self.list.borrow();
+        list.iter()
+            .find(|setting| setting.name == name)
+            .map(|setting| setting.kind.clone())
+    }
+
+    /// What the setting called `name` is set to.
+    pub(crate) fn value_of(&self, name: &str) -> Option<SettingValue> {
+        let list = self.list.borrow();
+        list.iter()
+            .find(|setting| setting.name == name)
+            .map(|setting| setting.value.clone())
+    }
+
+    /// Whether the setting called `name` is set to `value`. Nothing is
+    /// set aside to ask.
+    pub(crate) fn is(&self, name: &str, value: &SettingValue) -> Option<bool> {
+        let list = self.list.borrow();
+        list.iter()
+            .find(|setting| setting.name == name)
+            .map(|setting| setting.value == *value)
+    }
+
+    /// A screen's control was changed by the player: sets the setting to
+    /// `wanted` as `game.settings.set` would (a number is kept between the
+    /// ends, a word must be one of the options) and marks it changed so the
+    /// engine saves it. Gives what it is now, or nothing when the setting
+    /// does not exist or cannot be that.
+    pub(crate) fn set_from_screen(
+        &self,
+        name: &str,
+        wanted: &SettingValue,
+    ) -> Option<SettingValue> {
+        let mut list = self.list.borrow_mut();
+        let setting = list.iter_mut().find(|setting| setting.name == name)?;
+        let new = match (&setting.kind, wanted) {
+            (SettingKind::Number { min, max, .. }, SettingValue::Number(number))
+                if number.is_finite() =>
+            {
+                SettingValue::Number(number.clamp(*min, *max))
+            }
+            (SettingKind::Toggle, SettingValue::Toggle(on)) => SettingValue::Toggle(*on),
+            (SettingKind::Choice { options }, SettingValue::Choice(word)) => {
+                let wanted = word.trim().to_lowercase();
+                SettingValue::Choice(options.iter().find(|option| **option == wanted)?.clone())
+            }
+            _ => return None,
+        };
+        if setting.value != new {
+            setting.value = new.clone();
+            drop(list);
+            self.note_changed(name);
+        }
+        Some(new)
+    }
+
     /// The words for a name that is no setting: the nearest real name, or
     /// all of them.
-    fn unknown(&self, function: &str, name: &str) -> String {
+    pub(crate) fn unknown(&self, function: &str, name: &str) -> String {
         let list = self.list.borrow();
         if list.is_empty() {
             return format!(
