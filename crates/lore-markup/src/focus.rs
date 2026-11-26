@@ -855,15 +855,23 @@ impl Screen {
         };
         self.ix.pressed = None;
         self.set_active(None);
-        // Letting go of a slider, wherever the pointer is, ends the drag.
-        if p.drag {
-            return;
-        }
+        // Letting go of a slider ends the drag, wherever the pointer is; it
+        // is a click only if the pointer is over the slider, as on a web page.
         if self.target_of(self.ix.hover) == Some(p.element) {
             if p.via_label && !self.is_checkbox(p.element) {
                 return;
             }
             self.click(p.element);
+        }
+    }
+
+    /// The pointer press is over without a click: a drag ends where it is.
+    /// For when the button's release will not arrive (another screen came on
+    /// top, the gamepad took over).
+    pub fn pointer_cancel(&mut self) {
+        if self.ix.pressed.is_some_and(|p| !p.by_key) {
+            self.ix.pressed = None;
+            self.set_active(None);
         }
     }
 

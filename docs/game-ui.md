@@ -210,7 +210,12 @@ The function is handed one table:
 | `event.value` | A number for a slider, true or false for a tick box, text for a text box or a drop-down. Nil for a click or focus. |
 | `event.screen` | The screen. |
 
-- A slider sends `input` and then `change`, each with its new number.
+- A slider sends `input` and then `change`, each with its new number, on every move
+  of a drag and every d-pad step, not once when the player lets go. Letting go over the
+  slider is also a click on it (so an `onclick` on it, or on what holds it, hears a
+  drag too). A drag ends when another screen opens on top or the player takes up a gamepad.
+- A `<label for="id">` (or a label with a control inside it) focuses its control when
+  pressed, and ticks it if it is a tick box. It does not press a button.
   A text box sends `input` for every letter and `change` when Enter is pressed.
 - A click on something inside a button counts as a click on the button.
 - Changes your script makes (`values`, `element.value = ...`) send no events.

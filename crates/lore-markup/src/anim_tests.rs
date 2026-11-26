@@ -168,6 +168,34 @@ fn an_interrupted_transition_starts_from_the_value_on_screen() {
 }
 
 #[test]
+fn a_transition_turned_round_again_takes_the_time_its_last_leg_had_run() {
+    let mut s = page(
+        "#a { width: 100px; height: 50px; transition: opacity 1s linear; } #a:hover { opacity: 0; }",
+        r#"<div id="a">x</div>"#,
+    );
+    s.pointer_move(10.0, 10.0);
+    s.frame(&mut M);
+    ticks(&mut s, 30);
+    assert!(near(opacity(&s, "a"), 0.5), "{}", opacity(&s, "a"));
+    // Turned round once: back to 1 in the half second it had run.
+    s.pointer_move(500.0, 500.0);
+    s.frame(&mut M);
+    ticks(&mut s, 15);
+    assert!(near(opacity(&s, "a"), 0.75), "{}", opacity(&s, "a"));
+    // Twice: down to 0 in the quarter second the last leg ran, not a second.
+    s.pointer_move(10.0, 10.0);
+    s.frame(&mut M);
+    ticks(&mut s, 5);
+    assert!(near(opacity(&s, "a"), 0.5), "{}", opacity(&s, "a"));
+    // Three times: up to 1 in the 5 ticks the last leg ran.
+    s.pointer_move(500.0, 500.0);
+    s.frame(&mut M);
+    ticks(&mut s, 5);
+    assert!(near(opacity(&s, "a"), 1.0), "{}", opacity(&s, "a"));
+    assert!(!s.is_animating());
+}
+
+#[test]
 fn a_transition_turned_round_goes_back_in_the_time_it_has_taken() {
     let mut s = page(
         "#a { width: 100px; height: 50px; transition: opacity 1s linear 0.5s; } #a:hover { opacity: 0; }",

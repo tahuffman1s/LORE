@@ -243,7 +243,7 @@ A handler turns into an event the engine queues for your script:
 
 - A click on something inside a button goes to the nearest element at or above it that has an `onclick`.
   This is called bubbling. A click on a plain `div` with no handler anywhere above it does nothing.
-- A tick box sends `Change` with true or false. A slider sends `Input` and then `Change` with its new number.
+- A tick box sends `Change` with true or false. A slider sends `Input` and then `Change` with its new number, on every step of a drag and of the d-pad, not once at the end; a click is sent when the pointer is let go over the slider.
   A drop-down sends `Change` with the new option's `value`. A tick box or drop-down that also has an `onclick`
   sends `Click` first.
 - Events your script causes (setting a value, for instance) do not send events.
@@ -442,7 +442,7 @@ Shorthands, written out to the longhands above:
 | `inset` | `top`, `right`, `bottom`, `left` | same 1 to 4 pattern. |
 | `border-width`, `border-style`, `border-color` | the four sides | 1 to 4 values. |
 | `border`, `border-top`, `border-right`, `border-bottom`, `border-left` | width, style, colour | In any order. **Style is `none` unless you write `solid`**, so `border: 2px red` draws nothing; write `border: 2px solid red`. Width is 3px if left out, colour is the text colour. |
-| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/`. `50%` on a box that is not square is measured as an oval but drawn as a circle for now. |
+| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/`. A percentage is of the box's shorter side, so on a box that is not square the corner is drawn round; ovals are #612. |
 | `background` | colour, picture | One colour and/or one picture (`url(name)` or a gradient). Resets size and position. |
 | `border-image` | source, slice, width | `border-image: url(frame) 12 fill / 12px;`. |
 | `outline` | width, style, colour | Same rules as `border`. |
@@ -510,7 +510,7 @@ If you know HTML and CSS from web pages, these are different here, on purpose.
 - **A drop-down cycles.** Left and Right on a focused `select` choose the previous or next
   option and wrap round. A or Enter chooses the next one.
 - **A slider moves with Left and Right** by its `step` (1 if you left it out).
-- **A slider follows the pointer.** Press anywhere on it and the value jumps there, then follows the pointer until you let go, even outside the slider.
+- **A slider follows the pointer.** Press anywhere on it and the value jumps there, then follows the pointer until you let go, even outside the slider. The drag also ends if another screen opens on top or the player picks up a gamepad. Letting go over the slider is a click on it, as on a web page, so an `onclick` on a slider or its parent hears a drag too.
 - **First focus.** Nothing has focus at first unless an element has `autofocus`.
   The first d-pad press (or Tab) focuses the `autofocus` element or, if none, the first
   focusable element in page order. It does not move yet.
@@ -676,4 +676,4 @@ They are kept as warnings with the same shape.
 So you do not look for it: no `<table>`, `<ul>`, `<a>`, `<form>`, `<textarea>`, `<canvas>` or `<script>`
 (behaviour is Luau, named by `onclick` and friends); no `grid`, `float`, inline-block or tables;
 no `@media`, `@import` or `@font-face`; no attribute selectors, sibling selectors or `::before`;
-no `repeating-` gradients; oval corners are measured but drawn round; no text selection, no multi-line text boxes; no right-to-left text.
+no `repeating-` gradients; no oval corners (a percentage corner on a box that is not square is drawn round, #612); no text selection, no multi-line text boxes; no right-to-left text.

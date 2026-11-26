@@ -118,6 +118,9 @@ struct Running {
     prop: PropId,
     from: AnimValue,
     to: AnimValue,
+    /// Where turning round again would go: the far end of the leg this one
+    /// turned back from, or this leg's own start.
+    back: AnimValue,
     start: u64,
     delay: f64,
     duration: f64,
@@ -486,9 +489,12 @@ impl Animator {
                 .unwrap_or(old_v);
             // Turned round part way, back to where it began: it takes the
             // time it has already taken, not its full length again.
+            let back = running
+                .and_then(|i| self.transitions.get(i))
+                .map_or(from, |t| if t.back == new_v { t.to } else { from });
             let taken = running
                 .and_then(|i| self.transitions.get(i))
-                .filter(|t| t.from == new_v)
+                .filter(|t| t.back == new_v)
                 .map(|t| self.elapsed(t.start) - t.delay)
                 .filter(|taken| *taken > 0.0);
             if let Some(i) = running {
@@ -501,6 +507,7 @@ impl Animator {
                         prop: p,
                         from,
                         to: new_v,
+                        back,
                         start: self.now,
                         delay: if taken.is_some() {
                             0.0
