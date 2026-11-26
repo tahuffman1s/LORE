@@ -276,6 +276,7 @@ Methods:
 | `hasClass(name)` | True or false. |
 | `setVar("--gold", "#ffd75e")` | Sets a CSS variable for the element and everything in it. On `main:find("body")` it changes a colour for the whole screen. |
 | `append(html)` | Adds HTML at the end of the element. |
+| `before(html)` | Adds HTML just before the element, as its sibling: `row:before("<li>Gold</li>")`. `append` puts it inside, at the end. Stops with an error on the page's root. |
 | `remove()` | Takes the element, and what is in it, off the page. |
 | `focus()` | Moves focus to the element, if it can take focus. |
 | `find(selector)`, `findAll(selector)` | Search inside this element. |
@@ -329,7 +330,7 @@ end)
 
 `game.ui.escape(text)` writes `&`, `<`, `>` and `"` as HTML does. Use it on
 anything that is not yours: a name the player typed, text from a save file. Without
-it, a name with a `<` in it breaks the page, and `append` and `fill` stop with an
+it, a name with a `<` in it breaks the page, and `append`, `before` and `fill` stop with an
 error.
 
 The new elements keep what the `onclick` names, so answer it once with
@@ -472,7 +473,7 @@ Kept:
 
 Lost:
 
-- Classes and styles your script set, and elements it added with `append` or
+- Classes and styles your script set, and elements it added with `append`, `before` or
   `fill`. The log says so, once, in one line. Run the code that makes them again.
 - Element handles, if the elements are not the same any more. Find them again.
 

@@ -484,6 +484,13 @@ impl Animator {
                 .and_then(|i| self.transitions.get(i))
                 .and_then(|t| self.transition_value(t))
                 .unwrap_or(old_v);
+            // Turned round part way, back to where it began: it takes the
+            // time it has already taken, not its full length again.
+            let taken = running
+                .and_then(|i| self.transitions.get(i))
+                .filter(|t| t.from == new_v)
+                .map(|t| self.elapsed(t.start) - t.delay)
+                .filter(|taken| *taken > 0.0);
             if let Some(i) = running {
                 self.transitions.swap_remove(i);
             }
@@ -495,8 +502,14 @@ impl Animator {
                         from,
                         to: new_v,
                         start: self.now,
-                        delay: f64::from(s.delay),
-                        duration: f64::from(s.duration),
+                        delay: if taken.is_some() {
+                            0.0
+                        } else {
+                            f64::from(s.delay)
+                        },
+                        duration: taken.map_or(f64::from(s.duration), |taken| {
+                            f64::from(s.duration).min(taken)
+                        }),
                         timing: s.timing,
                     });
                     self.mark(el, p);

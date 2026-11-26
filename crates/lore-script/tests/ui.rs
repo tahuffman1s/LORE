@@ -954,6 +954,28 @@ fn fill_replaces_the_children_with_the_rows_html() {
 }
 
 #[test]
+fn before_adds_html_ahead_of_an_element() {
+    let script = "local main = game.ui.load(\"ui/main.html\")\n\
+        game.onStart(function()\n\
+            main:show()\n\
+            local last = main:find(\"#last\")\n\
+            last:before(\"<button>\" .. game.ui.escape(\"a<b\") .. \"</button><button>two</button>\")\n\
+            local names = {}\n\
+            for _, b in main:findAll(\"#list button\") do table.insert(names, b.text) end\n\
+            print(table.concat(names, \",\"))\n\
+            print(select(2, pcall(function() last:before(\"<blink>\") end)))\n\
+        end)\n";
+    let mut play = Play::new(
+        script,
+        "<div id=\"list\"><button>one</button><button id=\"last\">three</button></div>",
+    );
+    play.ticks(2);
+    let said = printed();
+    assert_eq!(said[0], "one,a<b,two,three", "{said:?}");
+    assert!(said[1].contains("element:before"), "{said:?}");
+}
+
+#[test]
 fn a_screen_that_pauses_pauses_the_game_and_gives_it_back() {
     let script = "local main = game.ui.load(\"ui/main.html\", { pauses = true })\n\
         main:on(\"pickA\", function() main:hide() end)\n\

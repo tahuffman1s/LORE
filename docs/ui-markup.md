@@ -178,7 +178,7 @@ What it shows:
 | `style` | CSS inside the page. Errors point at the right line of the HTML file. | none |
 | `link` | Names a stylesheet. Void (no closing tag). | `rel` (must be `stylesheet`, required), `href` (required) |
 | `div` | A box. | none |
-| `span`, `label` | Text that flows inside its parent. A box inside a flex box, when placed by `position`, or when it holds a box (see [Defaults](#defaults-to-know)). | `label`: `for` (read, not used yet) |
+| `span`, `label` | Text that flows inside its parent. A box inside a flex box, when placed by `position`, or when it holds a box (see [Defaults](#defaults-to-know)). | `label`: `for` (the `id` of a control). Pressing a label focuses its control, and ticks it if it is a tick box; a label with a control inside it and no `for` does the same |
 | `kbd` | A box showing the key or button for an action (a key cap: padding, radius, faint fill). Its text is filled in by the game for the device in use; style it as a key cap. | `action` (the action's name, required) |
 | `p` | A paragraph, with space above and below. | none |
 | `h1`, `h2`, `h3` | Headings: bold, 2em, 1.5em, 1.17em. | none |
@@ -442,7 +442,7 @@ Shorthands, written out to the longhands above:
 | `inset` | `top`, `right`, `bottom`, `left` | same 1 to 4 pattern. |
 | `border-width`, `border-style`, `border-color` | the four sides | 1 to 4 values. |
 | `border`, `border-top`, `border-right`, `border-bottom`, `border-left` | width, style, colour | In any order. **Style is `none` unless you write `solid`**, so `border: 2px red` draws nothing; write `border: 2px solid red`. Width is 3px if left out, colour is the text colour. |
-| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/` (round, not oval). |
+| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/`. `50%` on a box that is not square is measured as an oval but drawn as a circle for now. |
 | `background` | colour, picture | One colour and/or one picture (`url(name)` or a gradient). Resets size and position. |
 | `border-image` | source, slice, width | `border-image: url(frame) 12 fill / 12px;`. |
 | `outline` | width, style, colour | Same rules as `border`. |
@@ -510,6 +510,7 @@ If you know HTML and CSS from web pages, these are different here, on purpose.
 - **A drop-down cycles.** Left and Right on a focused `select` choose the previous or next
   option and wrap round. A or Enter chooses the next one.
 - **A slider moves with Left and Right** by its `step` (1 if you left it out).
+- **A slider follows the pointer.** Press anywhere on it and the value jumps there, then follows the pointer until you let go, even outside the slider.
 - **First focus.** Nothing has focus at first unless an element has `autofocus`.
   The first d-pad press (or Tab) focuses the `autofocus` element or, if none, the first
   focusable element in page order. It does not move yet.
@@ -615,7 +616,7 @@ and a text measurer that gives the width of a string in a font and the ascent an
 - **Deterministic.** The same page, the same inputs and the same ticks give the same frame, every time.
   A replay or a test gets exactly what the player saw.
 - **Transitions** start when a property that is listed in `transition-property` changes (from a class,
-  a `:hover`, a script change). If it changes again part way, it starts from the value on screen.
+  a `:hover`, a script change). If it changes again part way, it starts from the value on screen. Turned back to where it began, it goes back in the time it had already taken, not its full length again.
   An element that has just appeared does not transition.
 - **Keyframe animations** start when an element gets an `animation-name` with a duration.
   Properties named in the keyframes are blended between the stops, using the animation's timing function.
@@ -675,4 +676,4 @@ They are kept as warnings with the same shape.
 So you do not look for it: no `<table>`, `<ul>`, `<a>`, `<form>`, `<textarea>`, `<canvas>` or `<script>`
 (behaviour is Luau, named by `onclick` and friends); no `grid`, `float`, inline-block or tables;
 no `@media`, `@import` or `@font-face`; no attribute selectors, sibling selectors or `::before`;
-no `repeating-` gradients; no oval corners; no text selection, no multi-line text boxes; no right-to-left text.
+no `repeating-` gradients; oval corners are measured but drawn round; no text selection, no multi-line text boxes; no right-to-left text.

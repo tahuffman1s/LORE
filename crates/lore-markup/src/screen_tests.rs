@@ -868,3 +868,38 @@ fn explicit_body_after_a_bare_link_still_works() {
         .is_ok()
     );
 }
+
+#[test]
+fn a_percentage_radius_on_a_box_that_is_not_square_is_an_oval() {
+    let mut s = page(
+        "#a{width:200px;height:100px;border-radius:50%} #b{width:100px;height:100px;border-radius:50%}",
+        "<div id=a></div><div id=b></div>",
+    );
+    s.frame(&mut TestMeasure);
+    let radii = |s: &Screen, name: &str, w: f32, h: f32| {
+        let cs = s.used_style(id(s, name)).unwrap();
+        crate::paint::oval_radii(cs, w, h)
+    };
+    // Each corner's two radii come from the width and the height.
+    for corner in radii(&s, "a", 200.0, 100.0) {
+        assert!(
+            near(corner[0], 100.0) && near(corner[1], 50.0),
+            "{corner:?}"
+        );
+    }
+    // A square box stays a circle.
+    for corner in radii(&s, "b", 100.0, 100.0) {
+        assert!(near(corner[0], 50.0) && near(corner[1], 50.0), "{corner:?}");
+    }
+    // Lengths are the same both ways, and corners that would overlap are
+    // scaled down together.
+    let mut s = page(
+        "#a{width:100px;height:40px;border-radius:30px}",
+        "<div id=a></div>",
+    );
+    s.frame(&mut TestMeasure);
+    let cs = s.used_style(id(&s, "a")).unwrap();
+    for corner in crate::paint::oval_radii(cs, 100.0, 40.0) {
+        assert!(near(corner[0], 20.0) && near(corner[1], 20.0), "{corner:?}");
+    }
+}

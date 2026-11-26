@@ -474,3 +474,73 @@ fn hover_follows_content_that_moves_under_a_still_pointer() {
     s.frame(&mut M);
     assert_ne!(s.ix.hover, Some(a));
 }
+
+#[test]
+fn a_slider_follows_the_pointer_while_it_is_held_down() {
+    let mut s = page(
+        "body{margin:0} input{display:block;width:200px;height:40px;margin:0}",
+        "<input id=\"r\" type=\"range\" min=\"0\" max=\"10\" step=\"1\" value=\"0\" onchange=\"ch\" oninput=\"inp\">",
+    );
+    let r = id(&s, "r");
+    s.pointer_move(100.0, 20.0);
+    s.pointer_down();
+    assert_eq!(s.range_value(r), Some(5.0));
+    assert_eq!(s.focused(), Some(r));
+    let ev = events(&mut s);
+    assert_eq!(ev.len(), 2);
+    assert_eq!(ev[0].kind, EventKind::Input);
+    assert_eq!(ev[1].kind, EventKind::Change);
+    assert_eq!(ev[1].value, EventValue::Number(5.0));
+    s.pointer_move(160.0, 20.0);
+    assert_eq!(s.range_value(r), Some(8.0));
+    // Past the end of the track, and off the control, the drag goes on.
+    s.pointer_move(900.0, 400.0);
+    assert_eq!(s.range_value(r), Some(10.0));
+    s.pointer_move(-50.0, 400.0);
+    assert_eq!(s.range_value(r), Some(0.0));
+    // Released outside the control: the drag ends there.
+    s.pointer_up();
+    events(&mut s);
+    s.pointer_move(150.0, 20.0);
+    assert_eq!(s.range_value(r), Some(0.0));
+    assert!(events(&mut s).is_empty());
+}
+
+#[test]
+fn pressing_a_label_focuses_and_ticks_its_control() {
+    let mut s = page(
+        "body{margin:0} label,input{display:block;width:100px;height:30px;margin:0} #c{width:30px}",
+        "<label id=\"l\" for=\"c\">Tick</label><input id=\"c\" type=\"checkbox\" onchange=\"flip\">\
+         <label id=\"m\" for=\"r\">Slide</label><input id=\"r\" type=\"range\" min=\"0\" max=\"10\" value=\"3\">",
+    );
+    s.pointer_move(10.0, 10.0);
+    s.pointer_down();
+    assert_eq!(s.focused(), Some(id(&s, "c")));
+    s.pointer_up();
+    assert_eq!(s.checked(id(&s, "c")), Some(true));
+    let ev = events(&mut s);
+    assert_eq!(
+        ev.last().map(|e| e.value.clone()),
+        Some(EventValue::Bool(true))
+    );
+    // A label of a slider focuses it and changes nothing.
+    s.pointer_move(10.0, 70.0);
+    s.pointer_down();
+    s.pointer_up();
+    assert_eq!(s.focused(), Some(id(&s, "r")));
+    assert_eq!(s.range_value(id(&s, "r")), Some(3.0));
+}
+
+#[test]
+fn a_label_wrapped_round_a_control_stands_for_it() {
+    let mut s = page(
+        "body{margin:0} label{display:flex;width:200px;height:30px} input{width:30px;height:30px}",
+        "<label id=\"l\"><span id=\"t\">Tick</span><input id=\"c\" type=\"checkbox\"></label>",
+    );
+    s.pointer_move(5.0, 15.0);
+    assert_eq!(s.element_rect(id(&s, "t")).map(|r| r.x), Some(0.0));
+    s.pointer_down();
+    s.pointer_up();
+    assert_eq!(s.checked(id(&s, "c")), Some(true));
+    assert_eq!(s.focused(), Some(id(&s, "c")));
+}

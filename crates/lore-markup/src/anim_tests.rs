@@ -160,10 +160,40 @@ fn an_interrupted_transition_starts_from_the_value_on_screen() {
     s.pointer_move(500.0, 500.0);
     s.frame(&mut M);
     assert!(near(opacity(&s, "a"), 0.5));
-    ticks(&mut s, 30);
-    // Back towards 1 over a fresh second, from 0.5.
+    ticks(&mut s, 15);
+    // Back towards 1 from 0.5 in the half second it has already taken.
     assert!(near(opacity(&s, "a"), 0.75), "{}", opacity(&s, "a"));
-    ticks(&mut s, 30);
+    ticks(&mut s, 15);
+    assert!(near(opacity(&s, "a"), 1.0));
+}
+
+#[test]
+fn a_transition_turned_round_goes_back_in_the_time_it_has_taken() {
+    let mut s = page(
+        "#a { width: 100px; height: 50px; transition: opacity 1s linear 0.5s; } #a:hover { opacity: 0; }",
+        r#"<div id="a">x</div>"#,
+    );
+    s.pointer_move(10.0, 10.0);
+    s.frame(&mut M);
+    // 0.5 s of delay, then a quarter of the way in 0.25 s.
+    ticks(&mut s, 45);
+    assert!(near(opacity(&s, "a"), 0.75), "{}", opacity(&s, "a"));
+    s.pointer_move(500.0, 500.0);
+    s.frame(&mut M);
+    // Back to 1 in 0.25 s, with no delay first.
+    ticks(&mut s, 6);
+    assert!(near(opacity(&s, "a"), 0.85), "{}", opacity(&s, "a"));
+    ticks(&mut s, 9);
+    assert!(near(opacity(&s, "a"), 1.0));
+    assert!(!s.is_animating());
+    // Turned round before its delay is over: nothing has been taken, so
+    // it starts as any transition does.
+    s.pointer_move(10.0, 10.0);
+    s.frame(&mut M);
+    ticks(&mut s, 10);
+    s.pointer_move(500.0, 500.0);
+    s.frame(&mut M);
+    ticks(&mut s, 5);
     assert!(near(opacity(&s, "a"), 1.0));
 }
 

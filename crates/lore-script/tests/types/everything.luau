@@ -973,6 +973,7 @@ if play then
     print(play:hasClass("a"), play.id, play.tag, play.parent, play.style.color)
     play:setVar("--gold", "#ffd75e")
     play:append("<p>" .. game.ui.escape("Ann & Bea") .. "</p>")
+    play:before("<p>" .. game.ui.escape("Cy") .. "</p>")
     play:focus()
     local inner: Element? = play:find("p")
     local inners: { Element } = play:findAll("p")

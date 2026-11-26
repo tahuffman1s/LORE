@@ -74,6 +74,7 @@ pub(crate) const ELEMENT_METHODS: &[&str] = &[
     "hasClass",
     "setVar",
     "append",
+    "before",
     "remove",
     "focus",
     "find",

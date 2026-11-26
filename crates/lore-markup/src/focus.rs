@@ -123,6 +123,11 @@ pub struct Unreachable {
 pub(crate) struct Press {
     element: ElementId,
     by_key: bool,
+    /// The pointer is dragging a slider: its value follows the pointer.
+    drag: bool,
+    /// The press landed on a `<label>`: it focuses its control and ticks a
+    /// tick box, and does nothing else.
+    via_label: bool,
 }
 
 const DIRTY: Dirty = Dirty {
@@ -800,6 +805,11 @@ impl Screen {
             if is_interactive(node) {
                 return if node.disabled { None } else { Some(e) };
             }
+            if node.tag() == Some(Tag::Label)
+                && let Some(control) = self.label_control(e)
+            {
+                return Some(control);
+            }
             cur = self.doc.parent(e);
         }
         None
@@ -810,20 +820,30 @@ impl Screen {
         self.ix.pointer = Some([x, y]);
         let hit = self.pick(0, x, y, None);
         self.set_hover(hit);
+        if let Some(p) = self.ix.pressed.filter(|p| p.drag) {
+            self.drag_to(p.element, x);
+        }
     }
 
     /// The pointer button went down. Focuses the target if it can take
     /// focus, otherwise takes focus away.
     pub fn pointer_down(&mut self) {
         let target = self.target_of(self.ix.hover);
+        let via_label = self.label_hit(self.ix.hover);
+        let drag = !via_label && target.is_some_and(|t| self.is_range(t));
         self.ix.pressed = target.map(|element| Press {
             element,
             by_key: false,
+            drag,
+            via_label,
         });
         self.set_active(target.and(self.ix.hover));
         match target {
             Some(t) if self.can_take_focus(t) => self.set_focus(Some(t)),
             _ => self.set_focus(None),
+        }
+        if drag && let (Some(t), Some([x, _])) = (target, self.ix.pointer) {
+            self.drag_to(t, x);
         }
     }
 
@@ -835,8 +855,78 @@ impl Screen {
         };
         self.ix.pressed = None;
         self.set_active(None);
+        // Letting go of a slider, wherever the pointer is, ends the drag.
+        if p.drag {
+            return;
+        }
         if self.target_of(self.ix.hover) == Some(p.element) {
+            if p.via_label && !self.is_checkbox(p.element) {
+                return;
+            }
             self.click(p.element);
+        }
+    }
+
+    fn is_range(&self, el: ElementId) -> bool {
+        self.doc
+            .get(el)
+            .is_some_and(|n| n.tag() == Some(Tag::Input) && n.form.input_type == InputType::Range)
+    }
+
+    fn is_checkbox(&self, el: ElementId) -> bool {
+        self.doc.get(el).is_some_and(|n| {
+            n.tag() == Some(Tag::Input) && n.form.input_type == InputType::Checkbox
+        })
+    }
+
+    /// Whether the pointer is over a `<label>` that stands for a control
+    /// rather than doing something itself.
+    fn label_hit(&self, from: Option<ElementId>) -> bool {
+        let mut cur = from;
+        while let Some(e) = cur {
+            let Some(node) = self.doc.get(e) else {
+                return false;
+            };
+            if is_interactive(node) {
+                return false;
+            }
+            if node.tag() == Some(Tag::Label) {
+                return self.label_control(e).is_some();
+            }
+            cur = self.doc.parent(e);
+        }
+        false
+    }
+
+    /// The control a `<label>` stands for: the element its `for` names, or,
+    /// with no `for`, the first control inside it.
+    fn label_control(&self, label: ElementId) -> Option<ElementId> {
+        let node = self.doc.get(label)?;
+        let control = match node.attr(self.doc.interner(), "for") {
+            Some(id) => self.doc.find_by_id_str(id)?,
+            None => self
+                .doc
+                .descendants(label)
+                .find(|&d| self.doc.get(d).is_some_and(|n| is_control(n.tag())))?,
+        };
+        let target = self.doc.get(control)?;
+        (is_control(target.tag()) && !target.disabled).then_some(control)
+    }
+
+    /// Moves the slider `el` to where a pointer at screen `x` is along it.
+    fn drag_to(&mut self, el: ElementId, x: f32) {
+        let Some(b) = self.bounds(el).filter(|b| b.w > 0.0) else {
+            return;
+        };
+        let Some(n) = self.doc.get(el) else {
+            return;
+        };
+        let (lo, hi) = (n.form.min, n.form.max.max(n.form.min));
+        let frac = ((x - b.x) / b.w).clamp(0.0, 1.0);
+        if self.set_range(el, lo + frac * (hi - lo)) {
+            let now = self.doc.get(el).map_or(lo, |n| n.form.number);
+            self.emit(el, EventKind::Input, EventValue::Number(f64::from(now)));
+            self.emit(el, EventKind::Change, EventValue::Number(f64::from(now)));
         }
     }
 
@@ -850,6 +940,8 @@ impl Screen {
         self.ix.pressed = Some(Press {
             element: f,
             by_key: true,
+            drag: false,
+            via_label: false,
         });
         self.set_active(Some(f));
     }

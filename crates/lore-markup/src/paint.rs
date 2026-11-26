@@ -442,32 +442,44 @@ pub(crate) fn build(
     }
 }
 
-fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
-    let basis = w.min(h);
+/// Each corner's horizontal and vertical radius, top-left, top-right,
+/// bottom-right, bottom-left. A length is the same both ways; a percentage
+/// takes its horizontal radius from the box's width and its vertical one
+/// from its height, so on a box that is not square it is an oval. When
+/// neighbouring corners would overlap along a side, all are scaled down
+/// together.
+pub(crate) fn oval_radii(cs: &ComputedStyle, w: f32, h: f32) -> [[f32; 2]; 4] {
+    let corner = |r: crate::style::LenPct| [r.resolve(w).max(0.0), r.resolve(h).max(0.0)];
     let mut r = [
-        cs.border_top_left_radius.resolve(basis).max(0.0),
-        cs.border_top_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_left_radius.resolve(basis).max(0.0),
+        corner(cs.border_top_left_radius),
+        corner(cs.border_top_right_radius),
+        corner(cs.border_bottom_right_radius),
+        corner(cs.border_bottom_left_radius),
     ];
-    // Neighbouring radii may not overlap along a side.
     let mut f = 1.0f32;
     for (sum, side) in [
-        (r[0] + r[1], w),
-        (r[1] + r[2], h),
-        (r[2] + r[3], w),
-        (r[3] + r[0], h),
+        (r[0][0] + r[1][0], w),
+        (r[1][1] + r[2][1], h),
+        (r[2][0] + r[3][0], w),
+        (r[3][1] + r[0][1], h),
     ] {
         if sum > side && sum > 0.0 {
             f = f.min(side / sum);
         }
     }
     if f < 1.0 {
-        for v in &mut r {
-            *v *= f;
+        for c in &mut r {
+            *c = c.map(|v| v * f);
         }
     }
     r
+}
+
+/// The one radius per corner the renderer draws: the smaller of a corner's
+/// two (they are the same unless a percentage met a box that is not
+/// square; see [`oval_radii`]).
+fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
+    oval_radii(cs, w, h).map(|[x, y]| x.min(y))
 }
 
 fn shrink_radii(r: [f32; 4], b: [f32; 4]) -> [f32; 4] {
