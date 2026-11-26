@@ -4149,7 +4149,11 @@ declare game: {
         --- "LeftBumper"... Give at least one keyboard or mouse button and one
         --- gamepad button; without both, bind stops with an error. A
         --- gamepad has two buttons LORE leaves free for a game:
-        --- GamepadSelect and LeftBumper. Sharing any other button with an
+        --- GamepadSelect and LeftBumper. They are the engine's switch_view
+        --- and lock_on buttons, which do nothing until the game turns them
+        --- on (`allowViewSwitch`, `setAbility("lockOn")`); the Controls page
+        --- shows no clash until then, and a game that turns one on is told
+        --- to pick another button. Sharing any other button with an
         --- engine action works, but the player is told of the clash. Write
         --- it at the top of the file, outside any function; once made, read
         --- it like any action. Bind each action once: a name written twice is

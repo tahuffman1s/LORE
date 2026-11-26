@@ -125,7 +125,7 @@ pub enum AnimationAsk {
 /// the script.
 #[derive(Debug, Default)]
 pub(crate) struct BodyState {
-    view: Cell<CameraView>,
+    pub(crate) view: Cell<CameraView>,
     /// Who the camera and body are held on (`lockOn`).
     locked: Cell<Option<crate::CharacterId>>,
     /// Whether the player is blocking.

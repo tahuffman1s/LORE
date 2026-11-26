@@ -1912,13 +1912,30 @@ fn the_controls_tab_lists_what_a_player_can_rebind_and_leaves_the_menu_keys_out(
 }
 
 #[test]
+fn a_game_that_turns_on_switch_view_and_lock_on_sees_them_share_select_and_the_bumper() {
+    let game = format!(
+        "game.onStart(function()\n  game.player:allowViewSwitch(true)\n  game.player:setAbility('lockOn', true)\nend)\n{}",
+        bindings_game()
+    );
+    let mut played = Played::on_bindings_page(&game);
+    played.go_to("Open map");
+    played.tap(GamepadButton::DpadDown);
+    assert_eq!(played.value_of("Open map"), "View  (also Switch view)");
+    played.pad_choose("Open map");
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::LeftBumper);
+    assert_eq!(played.page_value("Open map"), "LB  (also Lock on)");
+}
+
+#[test]
 fn the_controls_tab_follows_the_device_the_player_uses() {
     let mut played = Played::on_bindings_page(&bindings_game());
     played.go_to("Open map");
     assert_eq!(played.value_of("Open map"), "F1");
     played.tap(GamepadButton::DpadDown);
-    // Select is the standard "switch_view" button too, which the page says.
-    assert_eq!(played.value_of("Open map"), "View  (also Switch view)");
+    // Select is the standard "switch_view" button too, but this game has
+    // not let the player switch views, so the page says nothing of it.
+    assert_eq!(played.value_of("Open map"), "View");
     played.tap(Key::ArrowDown);
     assert_eq!(played.value_of("Open map"), "F1");
 }
@@ -1998,8 +2015,8 @@ fn a_gamepad_hears_its_own_buttons_and_leaves_the_keys_be() {
     played.tap(Key::F5);
     assert!(played.shows("Press a button (Start to cancel)"));
     played.tap(GamepadButton::LeftBumper);
-    // Lock on has it too, which the page says.
-    assert_eq!(played.page_value("Open map"), "LB  (also Lock on)");
+    // Lock on has it too, but this game has not turned it on.
+    assert_eq!(played.page_value("Open map"), "LB");
     assert_eq!(played.bound("open_map"), "F1,LeftBumper");
 }
 
@@ -2096,10 +2113,10 @@ fn every_clash_that_stands_is_marked_but_not_the_pairs_the_engine_shares() {
     // Aim and Block share right click on purpose.
     assert_eq!(played.page_value("Aim"), "Right click");
     assert_eq!(played.page_value("Block"), "Right click");
-    // The keyboard's clash is not on the gamepad's view.
+    // The keyboard's clash is not on the gamepad's view, and lock on is not on.
     played.go_to("Wave");
     played.tap(GamepadButton::DpadDown);
-    assert_eq!(played.value_of("Wave"), "LB  (also Lock on)");
+    assert_eq!(played.value_of("Wave"), "LB");
 }
 
 #[test]

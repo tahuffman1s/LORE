@@ -1130,7 +1130,8 @@ pub(crate) const SWITCH_VIEW: &str = "switch_view";
 
 /// The gamepad button to suggest for an action that has none. Every button
 /// is in the standard map; this is the one the engine leaves for games
-/// (`GamepadSelect` is `switch_view`).
+/// (`GamepadSelect` is `switch_view`; it and the bumper's `lock_on` do
+/// nothing until the game turns them on, so a game may use either).
 const FREE_GAMEPAD_BUTTON: &str = "LeftBumper";
 
 /// How a binding is told apart in an error: what it does.
