@@ -8,3 +8,6 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+taffy = { version = "0.16", default-features = false, features = ["std", "flexbox", "block_layout", "calc", "content_size"] }

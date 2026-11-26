@@ -19,6 +19,9 @@ pub mod dom;
 pub mod error;
 pub mod html;
 pub mod intern;
+pub mod layout;
+pub mod paint;
+pub mod screen;
 pub mod selector;
 pub mod style;
 
@@ -29,7 +32,13 @@ pub use dom::{
 pub use error::{MarkupError, did_you_mean};
 pub use html::{Parsed, StyleBlock, StylesheetLink, parse, parse_fragment};
 pub use intern::{Atom, Interner};
+pub use layout::{FontRef, TextMeasure};
+pub use paint::{Clip, ColorStop, Common, Fill, Frame, Hit, NineSlice, Paint, Rect, TextShadow};
+pub use screen::Screen;
 pub use selector::{
     Combinator, Compound, ElementState, NoState, PseudoClass, Selector, Specificity, matches,
 };
 pub use style::{AnimValue, ComputedStyle, StyleChange, Styles};
+
+#[cfg(test)]
+mod screen_tests;
