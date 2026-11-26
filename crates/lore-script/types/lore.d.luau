@@ -845,8 +845,20 @@ declare extern type Noise with
     heardWithin: number
     --- True for the player's own steps and weapon; false for what the
     --- world makes: thunder, dripping, an explosion's blast, a bullet strike.
+    --- Shorthand for `noise.by == game.player`. A blast or a strike is the
+    --- world's even when the player fired it.
     --- Example: if not noise.byPlayer then print("the world made a noise") end
     byPlayer: boolean
+    --- The weapon that made it, by its name as in `game.weapon("bow", ...)`
+    --- or `game.player:giveWeapon`: a shot, a dry click or a reload. Nil for
+    --- anything else, a blast or a strike included.
+    --- Example: if noise.weapon == "bow" then print("an arrow loosed") end
+    weapon: string?
+    --- Who made it: `game.player` for their steps, landings, shots and
+    --- splashes; nil for what the world makes (thunder, dripping, a blast).
+    --- Only the player makes noises today.
+    --- Example: if noise.by == game.player then print("you made that") end
+    by: Character?
 end
 
 --- A hurt: what a `game.onDamage` function is handed.

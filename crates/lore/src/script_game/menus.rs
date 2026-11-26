@@ -98,6 +98,9 @@ impl Played {
         let device = self.input.last_device();
         let style = lore_input::GamepadStyle::default();
         self.world.tick(self.input.tick(), STEP);
+        if let Some(hears) = self.world.take_listening() {
+            self.input.set_listening(hears);
+        }
         let mut frame = Frame::new(1.0)
             .with_settings(self.settings)
             .with_device(device, style);
@@ -110,9 +113,6 @@ impl Played {
         }
         if let Some(on) = frame.typing() {
             self.input.set_typing(on);
-        }
-        if let Some(hears) = frame.listening() {
-            self.input.set_listening(hears);
         }
         if let Some(settings) = frame.take_settings() {
             self.settings = settings;

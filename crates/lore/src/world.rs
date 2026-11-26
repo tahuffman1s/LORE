@@ -70,6 +70,8 @@ pub struct World {
     walking: Walking,
     /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
+    /// The sound and weapon names those noises carry by id.
+    names: crate::noise::Names,
     /// What the player did to the water in the newest tick.
     marks: Vec<WaterMark>,
     /// The trail the player is leaving in the snow, and where they pressed
@@ -259,6 +261,7 @@ impl World {
             shooting: Shooting::default(),
             walking: Walking::default(),
             noises: Vec::new(),
+            names: crate::noise::Names::default(),
             marks: Vec::new(),
             trail: trail::Trail::default(),
             treads: Vec::with_capacity(8),
@@ -548,6 +551,12 @@ impl World {
         &self.noises
     }
 
+    /// The names the noises of this world carry by id.
+    #[must_use]
+    pub fn names(&self) -> &crate::noise::Names {
+        &self.names
+    }
+
     /// What the player did to the water in the newest tick, in the order
     /// it happened: each splash of going in, of a stroke or of a foot in
     /// the shallows, and each lot of bubbles let go under it. The player
@@ -693,6 +702,18 @@ impl World {
 impl Game for World {
     fn level_saved(&mut self, level: &Scene) {
         self.change_level(level);
+    }
+
+    fn typing_ended(&mut self) {
+        self.game.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.game.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.game.take_listening()
     }
 
     /// Steps the world by one tick. `input` is what the game's script reads
@@ -1158,6 +1179,7 @@ impl Game for World {
             *tick,
             self.game.host_mut(),
             &mut self.noises,
+            &mut self.names,
         );
         // The script hears how much fluid there is and what the player
         // stands in, before its own tick. Only someone walking with their
@@ -1183,7 +1205,7 @@ impl Game for World {
         // The script hears each noise of the tick, in the order made; one
         // it answers `false` to is kept in the list but not played.
         for noise in &mut self.noises {
-            if !self.game.host_mut().noise_made(&noise.told()) {
+            if !self.game.host_mut().noise_made(&noise.told(&self.names)) {
                 noise.silenced = true;
             }
         }
@@ -2171,6 +2193,18 @@ impl Game for Playing {
         self.world.change_level(level);
     }
 
+    fn typing_ended(&mut self) {
+        self.world.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.world.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.world.take_listening()
+    }
+
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
         let mut asked = self
@@ -2347,9 +2381,10 @@ impl Game for Playing {
             if !fresh(&noise, now, tick_rate) {
                 continue;
             }
-            let tweak = self.world.game.host().sound_tweak(noise.sound_name());
+            let names = &self.world.names;
+            let tweak = self.world.game.host().sound_tweak(noise.sound_name(names));
             let sounds = self.world.game.sounds_mut();
-            if let Some(play) = noise::play(&noise, nth, sounds, tweak) {
+            if let Some(play) = noise::play(&noise, nth, names, sounds, tweak) {
                 frame.sound(SoundAsk::Once(play));
             }
         }

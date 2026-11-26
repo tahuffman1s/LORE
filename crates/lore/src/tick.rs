@@ -183,10 +183,22 @@ pub(crate) fn run_due(
     let step = clock.step().as_secs_f32();
     let due = clock.advance_counting(elapsed);
     for _ in 0..due.ticks {
+        // Listening for a button starts and stops between ticks, so the
+        // button is heard on the same tick at any frame rate, and a
+        // recording of the ticks holds it.
+        follow_listening(game, input);
         game.tick(input.tick(), step);
+        follow_listening(game, input);
         after_tick(input);
     }
     due
+}
+
+/// Puts into force what the game asked of listening for a button.
+fn follow_listening(game: &mut impl Game, input: &mut Input) {
+    if let Some(hears) = game.take_listening() {
+        input.set_listening(hears);
+    }
 }
 
 /// Says in the log that ticks were skipped: once for a hitch, and not again
