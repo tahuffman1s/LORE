@@ -891,7 +891,7 @@ fn a_game_with_its_own_pause_menu_gets_only_that_one() {
 #[test]
 fn pause_menu_enabled_false_turns_it_off_and_closes_it() {
     let main = r#"
-        game.input.bind("off", { "F5" })
+        game.input.bind("off", { "F5", "GamepadSelect" })
         game.onTick(function()
             if game.input.justPressed("off") then
                 game.pauseMenu.enabled = false
@@ -1108,8 +1108,8 @@ fn the_pause_menu_is_read_with_is_open_and_opened_with_either_call() {
     let main = r#"
         local pause = game.pauseMenu
         assert(pause.isOpen == false, "isOpen is a boolean")
-        game.input.bind("go", { "F6" })
-        game.input.bind("stop", { "F5" })
+        game.input.bind("go", { "F6", "GamepadSelect" })
+        game.input.bind("stop", { "F5", "GamepadSelect" })
         game.onTick(function()
             if game.input.justPressed("go") then pause:open() end
             if game.input.justPressed("stop") then pause.close() end
@@ -1209,7 +1209,7 @@ fn a_menu_and_tabs_say_that_open_and_current_are_read_only() {
 #[test]
 fn a_confirm_and_a_click_in_one_tick_cannot_press_a_row_of_a_closed_screen() {
     let main = r#"
-        game.input.bind("open", { "F6" })
+        game.input.bind("open", { "F6", "GamepadSelect" })
         local told = game.hud.text("none", { at = "bottom" })
         local count = 0
         local screen
@@ -1269,7 +1269,7 @@ fn closing_a_script_menu_with_escape_or_b_does_not_open_the_pause_menu() {
 #[test]
 fn changing_tabs_over_the_pause_menu_hides_the_last_tab_and_shows_the_next() {
     let main = r#"
-        game.input.bind("tabs", { "F6" })
+        game.input.bind("tabs", { "F6", "GamepadSelect" })
         local sound = game.menu.new("Sound", { game.menu.info("Music row", { text = "on" }) })
         local video = game.menu.new("Video", { game.menu.info("Shadows row", { text = "high" }) })
         local options = game.menu.tabs({ sound, video })
@@ -1296,7 +1296,7 @@ fn changing_tabs_over_the_pause_menu_hides_the_last_tab_and_shows_the_next() {
 #[test]
 fn a_change_that_closes_the_screen_is_not_followed_by_a_press_on_it() {
     let main = r#"
-        game.input.bind("open", { "F6" })
+        game.input.bind("open", { "F6", "GamepadSelect" })
         local told = game.hud.text("none", { at = "bottom" })
         local heard = 0
         local screen
@@ -1325,7 +1325,7 @@ fn a_change_that_closes_the_screen_is_not_followed_by_a_press_on_it() {
 }
 
 const TEXT_BOX: &str = r#"
-    game.input.bind("form", { "F6" })
+    game.input.bind("form", { "F6", "GamepadSelect" })
     local log = "none"
     local changes = 0
     local menu
@@ -1659,7 +1659,7 @@ const TEXT_BOX_EVENTS: &str = r#"
     })
     local tell = game.menu.info("Log", { text = function() return "log " .. log end })
     menu = game.menu.new("Form", { name, tell })
-    game.input.bind("form", { "F6" })
+    game.input.bind("form", { "F6", "GamepadSelect" })
     game.onTick(function()
         if game.input.justPressed("form") then menu:toggle() end
     end)

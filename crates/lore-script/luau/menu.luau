@@ -1294,7 +1294,6 @@ local KEY_ROW = 58 -- from one row of keys to the next
 local KEYS_LEFT = 30 -- the room at the left of the panel
 local KEYBOARD_W = 840
 local KEYBOARD_H = 430
-local KEYBOARD_DOWN = 610 -- from the top of a screen 1080 high
 local LETTERS = { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-'." }
 local KEY_COLOR = "#ffffff1a"
 
@@ -1335,8 +1334,11 @@ local function buildKeyboard(): Keyboard
     end
     local style = menu.style
     local layer = style.layer + 1
-    local left = (1920 - KEYBOARD_W) // 2
-    local top = KEYBOARD_DOWN
+    -- In the middle along the bottom of the room the HUD has, which is the
+    -- screen less its safe margin: `right` and `down` are measured in it.
+    local wide, high = game.hud.size()
+    local left = math.max(0, (wide - KEYBOARD_W) // 2)
+    local top = math.max(0, high - KEYBOARD_H)
     local pieces: { any } = {}
     local function add(piece: any): any
         table.insert(pieces, piece)
