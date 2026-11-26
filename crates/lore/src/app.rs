@@ -858,20 +858,46 @@ impl<G: Game> App<G> {
         for problem in &reread.said {
             log::warn!("{problem}");
         }
-        let Some(mut controls) = reread.controls else {
+        let Some(controls) = reread.controls else {
             return;
         };
+        self.input
+            .set_bindings(self.keep_settings(controls.clone()));
+        self.new_controls = Some(controls);
+        log::info!("Your controls were saved, so they were read again and are in use.");
+    }
+
+    /// `controls` with the player's own settings kept: how fast the view
+    /// turns is theirs, not the file's. Warns of an action a gamepad
+    /// cannot press.
+    fn keep_settings(&self, mut controls: ActionMap) -> ActionMap {
         for gap in controls.parity_gaps() {
             log::warn!("{gap}");
         }
-        // How fast the view turns is the player's setting, not the file's.
         if let Some(look) = self.look {
             let now = self.input.map();
             controls.set_sensitivities(look, now.sensitivity(look), now.stick_sensitivity(look));
         }
-        self.input.set_bindings(controls.clone());
+        controls
+    }
+
+    /// Puts into use the actions a game changed while it runs: `own` is its
+    /// map, the player's bindings file is read onto it again, and the input
+    /// takes the result.
+    fn follow_game_actions(&mut self, own: ActionMap) {
+        let controls = match self.controls.as_mut() {
+            Some(live) => {
+                let (controls, said) = live.rebase(own);
+                for problem in said {
+                    log::warn!("{problem}");
+                }
+                controls
+            }
+            None => own,
+        };
+        let controls = self.keep_settings(controls);
+        self.input.set_map(controls.clone());
         self.new_controls = Some(controls);
-        log::info!("Your controls were saved, so they were read again and are in use.");
     }
 
     /// Tells the input where the free pointer is, in the HUD's own units,
@@ -1165,6 +1191,9 @@ impl<G: Game> App<G> {
         }
         (self.settings_file).save_when_settled(&self.config.settings, now);
         self.sound.handle(frame.take_sounds());
+        if let Some(own) = frame.take_new_actions() {
+            self.follow_game_actions(own);
+        }
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
         }

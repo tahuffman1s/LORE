@@ -320,6 +320,13 @@ end)
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
 game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.addSet("riding", { mouse = "look" })
+game.input.addSet("shop", { mouse = "pointer" })
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+for _, setName in game.input.sets() do
+    print(setName, #game.input.actions(setName), #game.input.actions())
+end
+print(table.concat(game.input.bindings("gallop"), ", "))
 local mapShown = false
 local selected = 1
 local scroll = 0

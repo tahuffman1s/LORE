@@ -666,6 +666,10 @@ impl Game for ScriptGame {
                 number.wrapping_mul(0x9E37_79B1),
             ));
         }
+        // Before the set: a saved script's new sets are in the input first.
+        if let Some(actions) = self.host.take_new_actions() {
+            frame.replace_actions(actions);
+        }
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
         }

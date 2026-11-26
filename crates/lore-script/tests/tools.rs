@@ -252,88 +252,28 @@ fn an_engine_action_cannot_be_bound_again() {
 #[test]
 fn binding_one_name_twice_in_a_version_is_a_mistake() {
     let message = load_mistake(
-        "game.input.bind(\"open_map\", { \"F1\" })\ngame.input.bind(\"open_map\", { \"F2\" })",
+        "game.input.bind(\"open_map\", { \"F1\", \"LeftBumper\" })\n\
+         game.input.bind(\"open_map\", { \"F2\", \"LeftBumper\" })",
     );
     assert!(message.contains("twice"), "{message}");
 }
 
 #[test]
-fn a_button_with_no_gamepad_button_or_a_clash_is_a_warning_not_a_failure() {
-    let _host = game(r#"game.input.bind("open_map", { "F1" })"#);
-    let said = warnings();
-    assert!(said.iter().any(|w| w.contains("LeftBumper")), "{said:?}");
+fn a_button_with_no_gamepad_button_is_a_mistake_and_a_clash_a_warning() {
+    let message = load_mistake(r#"game.input.bind("open_map", { "F1" })"#);
+    assert!(message.contains("needs a gamepad button too"), "{message}");
+    assert!(message.contains("LeftBumper"), "{message}");
+    let message = load_mistake(r#"game.input.bind("open_map", { "GamepadSelect" })"#);
+    assert!(
+        message.contains("needs a keyboard or mouse button too"),
+        "{message}"
+    );
 
     let _host = game(r#"game.input.bind("heal", { "Space", "GamepadSelect" })"#);
     let said = warnings();
     assert!(
         said.iter()
             .any(|w| w.contains("\"Space\"") && w.contains("heal")),
-        "{said:?}"
-    );
-}
-
-#[test]
-fn a_reload_keeps_the_players_bindings_and_warns_of_a_new_action() {
-    let folder = GameFolder::new(OPEN_MAP);
-    let mut host = folder.open();
-    // The engine takes the map, and the player rebinds the action.
-    let mut map = host.actions();
-    let open = map.action("open_map").unwrap();
-    map.replace_button(
-        open,
-        "F1".parse().map(|b: lore_input::Button| b).unwrap(),
-        "F5".parse().unwrap(),
-    );
-    run(&mut host, 1);
-    warnings();
-
-    folder.write(&format!(
-        "{OPEN_MAP}\ngame.input.bind(\"zoom\", {{ \"Z\", \"LeftBumper\" }})"
-    ));
-    host.reload().unwrap();
-    let said = warnings();
-    assert!(
-        said.iter()
-            .any(|w| w.contains("will not hear it until the game is started again")),
-        "{said:?}"
-    );
-    // The name the map already had changed nothing, and the new one is in
-    // the host's map for the next start of the game.
-    let after = host.actions();
-    assert!(after.action("zoom").is_ok());
-    assert_eq!(
-        after.bindings(after.action("open_map").unwrap()).len(),
-        2,
-        "its bindings were not added again"
-    );
-    // The engine's old map does not know it: reading it reads not pressed.
-    let mut input = Input::new(map);
-    host.tick(input.tick(), STEP);
-    assert!(host.last_error().is_none());
-}
-
-#[test]
-fn a_reload_with_other_keys_for_an_existing_action_says_they_wait() {
-    let folder = GameFolder::new(OPEN_MAP);
-    let mut host = folder.open();
-    infos();
-    // The same keys in another order say nothing.
-    folder.write(&OPEN_MAP.replace(
-        "{ \"F1\", \"GamepadSelect\" }",
-        "{ \"GamepadSelect\", \"F1\" }",
-    ));
-    host.reload().unwrap();
-    let said = infos();
-    assert!(
-        said.iter().all(|line| !line.contains("open_map")),
-        "{said:?}"
-    );
-    folder.write(&OPEN_MAP.replace("\"F1\"", "\"F6\""));
-    host.reload().unwrap();
-    let said = infos();
-    assert!(
-        said.iter()
-            .any(|line| line.contains("open_map") && line.contains("started again")),
         "{said:?}"
     );
 }

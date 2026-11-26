@@ -457,6 +457,20 @@ mod tests {
     }
 
     #[test]
+    fn an_own_action_of_a_set_is_pressed_with_its_set_live() {
+        let mut map = ActionMap::standard();
+        let riding = map.add_set("riding", MouseMode::Look).unwrap();
+        let gallop = map.own_button_in("gallop", ["H"], riding).unwrap();
+        let mut input = Input::new(map);
+        let mut heard = false;
+        every_action(&mut input, |action, frame| {
+            heard |= action == gallop && frame.pressed(gallop);
+        });
+        assert!(heard, "gallop was never heard");
+        assert_eq!(input.active_set(), ActionMap::GAMEPLAY);
+    }
+
+    #[test]
     fn an_action_in_another_set_is_pressed_and_the_live_set_is_put_back() {
         let mut map = ActionMap::new();
         map.button("pause", ["Escape"]).unwrap();

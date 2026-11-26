@@ -31,9 +31,9 @@
 -- every new game starts with, as `lore new` writes it.
 
 game.input.bind("weather_menu", { "F1", "GamepadSelect" })
-game.input.bind("debug_menu", { "F7" })
+game.input.bind("debug_menu", { "F7", "LeftStickPress" })
 -- game.input.bind("fluid_menu", { "F2" })
-game.input.bind("frame_meter", { "F12" })
+game.input.bind("frame_meter", { "F12", "RightStickPress" })
 -- game.input.bind("clear_fluids", { "F8", "LeftBumper" })
 game.input.bind("hide_hud", { "F2", "LeftBumper" })
 

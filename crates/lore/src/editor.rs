@@ -709,6 +709,9 @@ impl Game for Editor {
             frame.use_action_set(play.action_set());
             frame.show_grid(false);
             play.frame(frame);
+            // The editor's input has actions of its own: a saved script's
+            // new ones are not put into it yet.
+            let _ = frame.take_new_actions();
             return;
         }
         // A game that was played leaves its shaders behind it.

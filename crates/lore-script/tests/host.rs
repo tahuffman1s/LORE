@@ -1533,7 +1533,7 @@ fn a_mistake_with_an_action_set_says_what_to_write() {
         said[2].contains(
             "main.luau:4: game.input.useSet needs the name of an action set in quotes, but it \
              was given a number. Write it like this: game.input.useSet(\"menu\"). The action \
-             sets are \"gameplay\" and \"menu\"."
+             sets are \"gameplay\", \"menu\"."
         ),
         "{said:?}"
     );
@@ -1551,4 +1551,246 @@ fn a_mistake_with_an_action_set_says_what_to_write() {
         "{error}"
     );
     assert_eq!(host.take_action_set(), None);
+}
+
+const RIDING: &str = r#"
+game.input.addSet("riding")
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+game.input.bind("wave", { "F3", "GamepadSelect" })
+game.onTick(function()
+    if game.input.justPressed("gallop") then print("gallop") end
+    if game.input.justPressed("wave") then print("wave") end
+end)
+"#;
+
+#[test]
+fn a_game_declares_a_set_and_an_action_that_only_that_set_hears() {
+    let game = GameFolder::new(RIDING);
+    let mut host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let map = host.actions();
+    let riding = map.set("riding").unwrap();
+    let mut input = Input::new(map);
+
+    input.press(Key::H);
+    input.press(Key::F3);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["wave"], "gallop is not heard in gameplay");
+    input.release(Key::H);
+    input.release(Key::F3);
+    host.tick(input.tick(), STEP);
+
+    input.set_active_set(riding);
+    input.press(Key::H);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["gallop"]);
+}
+
+#[test]
+fn the_helpers_list_sets_actions_and_buttons() {
+    let game = GameFolder::new(
+        r#"
+game.input.addSet("riding", { mouse = "pointer" })
+game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
+game.input.bind("wave", { "F3", "GamepadSelect" })
+local function has(list, name) return table.find(list, name) ~= nil end
+local gameplay = game.input.actions("gameplay")
+local riding = game.input.actions("riding")
+print(table.concat(game.input.sets(), " "))
+print(has(gameplay, "gallop"), has(gameplay, "wave"))
+print(has(riding, "gallop"), has(riding, "wave"), has(riding, "jump"))
+print(table.concat(game.input.bindings("gallop"), "+"))
+print(#game.input.actions() > #gameplay)
+"#,
+    );
+    let host = game.open();
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        printed(),
+        [
+            "gameplay menu riding",
+            "false true",
+            "true true false",
+            "H+LeftBumper",
+            "true"
+        ]
+    );
+}
+
+#[test]
+fn set_and_device_mistakes_say_what_to_write() {
+    let cases = [
+        (
+            r#"game.input.bind("gallop", { "H" })"#,
+            "needs a gamepad button too",
+        ),
+        (
+            r#"game.input.bind("gallop", { "LeftBumper" })"#,
+            "needs a keyboard or mouse button too",
+        ),
+        (
+            r#"game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })"#,
+            "game.input.addSet(\"riding\")",
+        ),
+        (
+            r#"game.input.bind("gallop", { "H", "LeftBumper" }, { set = 5 })"#,
+            "needs the name of an action set in quotes",
+        ),
+        (
+            r#"game.input.bind("gallop", { "H", "LeftBumper" }, { sets = "menu" })"#,
+            "no option called \"sets\"",
+        ),
+        (r#"game.input.addSet("menu")"#, "already an action set"),
+        (r#"game.input.addSet("editor")"#, "name of its own"),
+        (
+            "game.input.addSet(\"riding\")\ngame.input.addSet(\"riding\")",
+            "already an action set",
+        ),
+        (
+            r#"game.input.addSet("Riding Horse")"#,
+            "game.input.addSet(\"riding_horse\")",
+        ),
+        (
+            r#"game.input.addSet("riding", { mouse = "hover" })"#,
+            "\"look\" or \"pointer\"",
+        ),
+        (r#"game.input.actions("riding")"#, "addSet(\"riding\")"),
+    ];
+    for (script, wanted) in cases {
+        let game = GameFolder::new(script);
+        let host = game.open();
+        let said = host
+            .last_error()
+            .map(|error| error.message.clone())
+            .unwrap_or_default();
+        assert!(said.contains(wanted), "{script}: {said}");
+    }
+}
+
+#[test]
+fn a_set_is_declared_at_the_top_of_the_file_only() {
+    let game = GameFolder::new(r#"game.onTick(function() game.input.addSet("riding") end)"#);
+    let mut host = game.open();
+    host.tick(&idle(), STEP);
+    let said = host.last_error().unwrap().message.clone();
+    assert!(said.contains("top of the file"), "{said}");
+}
+
+#[test]
+fn a_saved_script_adds_changes_and_removes_actions_for_the_engine() {
+    let game = GameFolder::new(RIDING);
+    let mut host = game.open();
+    let map = host.actions();
+    let mut input = Input::new(map.clone());
+    notes();
+
+    // Nothing changed: nothing for the engine.
+    host.reload().unwrap();
+    assert!(host.take_new_actions().is_none());
+
+    // Added: a new action in a new set.
+    game.write(&format!(
+        "{RIDING}\ngame.input.addSet(\"shop\", {{ mouse = \"pointer\" }})\n\
+         game.input.bind(\"haggle\", {{ \"J\", \"RightBumper\" }}, {{ set = \"shop\" }})"
+    ));
+    host.reload().unwrap();
+    let added = host.take_new_actions().expect("the engine is told");
+    assert!(added.action("haggle").is_ok());
+    assert!(added.set("shop").is_ok());
+    assert!(host.take_new_actions().is_none(), "told once");
+    let said = notes();
+    assert!(
+        said.iter().any(|line| line.contains("added haggle")),
+        "{said:?}"
+    );
+
+    // Until the engine swaps, its old frames press nothing (no panic).
+    input.press(Key::F3);
+    host.tick(input.tick(), STEP);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    input.release(Key::F3);
+    input.tick();
+
+    input.set_map(added.clone());
+    input.press(Key::F3);
+    host.tick(input.tick(), STEP);
+    assert!(printed().ends_with(&["wave".to_owned()]));
+    input.release(Key::F3);
+    input.tick();
+    input.set_active_set(added.set("shop").unwrap());
+    input.press(Key::J);
+    let frame = input.tick();
+    assert!(frame.just_pressed(added.action("haggle").unwrap()));
+    host.tick(&frame.clone(), STEP);
+
+    // Changed: other buttons, and another set.
+    game.write(
+        &RIDING
+            .replace("\"H\"", "\"K\"")
+            .replace("{ set = \"riding\" }", "{ set = \"gameplay\" }"),
+    );
+    host.reload().unwrap();
+    let changed = host.take_new_actions().expect("the engine is told");
+    let gallop = changed.action("gallop").unwrap();
+    assert_eq!(changed.set_of(gallop), Some(ActionMap::GAMEPLAY));
+    assert_eq!(changed.bindings(gallop).len(), 2);
+    assert!(changed.action("haggle").is_err(), "removed too");
+    assert!(changed.set("shop").is_err());
+    input.set_map(changed.clone());
+    input.release(Key::J);
+    input.tick();
+    input.press(Key::K);
+    host.tick(input.tick(), STEP);
+    assert!(printed().ends_with(&["gallop".to_owned()]));
+    assert_eq!(
+        host.actions().len(),
+        changed.len(),
+        "the script reads the same map"
+    );
+
+    // Removed: back to the standard actions.
+    game.write("print(\"bare\")");
+    host.reload().unwrap();
+    let bare = host.take_new_actions().expect("the engine is told");
+    assert!(bare.action("gallop").is_err() && bare.action("wave").is_err());
+    assert_eq!(bare, ActionMap::standard());
+}
+
+#[test]
+fn a_swap_that_keeps_the_action_count_still_reads_old_frames_as_idle() {
+    let game = GameFolder::new(RIDING);
+    let mut host = game.open();
+    let mut input = Input::new(host.actions());
+    notes();
+    // One action goes and another comes: the same count, the same ids.
+    game.write(&RIDING.replace("\"wave\"", "\"dance\""));
+    host.reload().unwrap();
+    let new = host.take_new_actions().expect("the engine is told");
+    assert_eq!(new.len(), host.actions().len());
+    // The old frame has F3 (the old "wave") pressed; "dance" must not hear it.
+    input.press(Key::F3);
+    let old = input.tick().clone();
+    assert!(old.layout != new.layout());
+    host.tick(&old, STEP);
+    assert!(
+        !printed().contains(&"dance".to_owned()),
+        "a frame for the old map is idle"
+    );
+    input.set_map(new);
+    input.release(Key::F3);
+    input.tick();
+    input.press(Key::F3);
+    host.tick(input.tick(), STEP);
+    assert!(printed().contains(&"dance".to_owned()));
+}
+
+#[test]
+fn a_script_that_fails_to_load_leaves_the_actions_as_they_were() {
+    let game = GameFolder::new(RIDING);
+    let mut host = game.open();
+    let before = host.actions();
+    game.write(&format!("{RIDING}\ngame.input.bind(\"zoom\", {{ \"Z\" }})"));
+    assert!(host.reload().is_err());
+    assert!(host.take_new_actions().is_none());
+    assert_eq!(host.actions(), before);
 }

@@ -88,6 +88,8 @@ pub struct Frame {
     close: bool,
     view: Option<View>,
     action_set: Option<ActionSetId>,
+    /// The game's actions, when a change to the game made new ones.
+    new_actions: Option<ActionMap>,
     rumble: Option<Rumble>,
     /// The sounds to start and stop. Empty, and so without memory of its
     /// own, in a frame that asks for none.
@@ -260,6 +262,7 @@ impl Frame {
             close: false,
             view: None,
             action_set: None,
+            new_actions: None,
             rumble: None,
             sounds: Vec::new(),
             splashes: Vec::new(),
@@ -847,6 +850,25 @@ impl Frame {
     /// Where the game asked the world to be seen from this frame, if it did.
     pub(crate) fn view(&self) -> Option<View> {
         self.view
+    }
+
+    /// Replaces the game's own actions and action sets while it runs, as a
+    /// saved script does when it adds, changes or removes one.
+    ///
+    /// `actions` is the game's map: the standard controls and the game's own
+    /// on top, as they were first given in [`Config::actions`](crate::Config).
+    /// The window reads the player's bindings file onto it again and puts the
+    /// result into use, so what the player rebound stays rebound. The frame
+    /// after, [`new_controls`](Self::new_controls) has the map. Ids of the
+    /// standard actions stay as they were as long as the game only adds
+    /// actions after them. A game run with no window ignores this.
+    pub fn replace_actions(&mut self, actions: ActionMap) {
+        self.new_actions = Some(actions);
+    }
+
+    /// The actions a game replaced this frame, if it did.
+    pub(crate) fn take_new_actions(&mut self) -> Option<ActionMap> {
+        self.new_actions.take()
     }
 
     /// The action set requested this frame, if any.

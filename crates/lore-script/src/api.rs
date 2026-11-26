@@ -81,6 +81,10 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "useSet",
     "currentSet",
     "bind",
+    "addSet",
+    "sets",
+    "actions",
+    "bindings",
     "pointer",
     "wheel",
     "stepped",
@@ -154,9 +158,6 @@ pub(crate) struct Shared {
     pub actions: Rc<RefCell<ActionMap>>,
     /// The names this version of the script has bound with `game.input.bind`.
     pub bound: RefCell<Vec<String>>,
-    /// Whether the engine already has a copy of the actions, so a new one
-    /// added now is not heard until the game is started again.
-    pub reloading: bool,
     /// What the engine feeds the script about the screen, the frames and
     /// the player. It outlives this version of the script.
     pub tools: Rc<Tools>,
@@ -713,8 +714,9 @@ fn use_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                 format!(
                     "game.input.useSet needs the name of an action set in quotes, but it was \
                      given {}. Write it like this: game.input.useSet(\"menu\"). The action \
-                     sets are \"gameplay\" and \"menu\".",
-                    describe(&value)
+                     sets are {}.",
+                    describe(&value),
+                    tools_api::set_names(&shared.actions.borrow())
                 ),
             ));
         };
@@ -739,7 +741,7 @@ fn use_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                         }
                         message.push_str(actions.set_name(set));
                     }
-                    message.push('.');
+                    message.push_str(". Make one of your own with game.input.addSet.");
                 }
                 Err(fail(lua, message))
             }

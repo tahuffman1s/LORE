@@ -151,6 +151,21 @@ impl Live {
         (live, said)
     }
 
+    /// Starts again from `own`, the game's own controls after the game
+    /// changed them (a saved script added or removed actions), and gives
+    /// the controls now in effect: `own` with the file read onto it, and
+    /// what to tell the player, as [`load`] does. A later save of the file
+    /// is read onto `own` too, so it does not undo the change.
+    pub(crate) fn rebase(&mut self, own: ActionMap) -> (ActionMap, Vec<String>) {
+        // Looked at before it is read: a save in between is seen as a change.
+        self.known = stamp(&self.path);
+        self.pending = None;
+        let mut controls = own.clone();
+        self.own = own;
+        let said = load(&self.path, &mut controls);
+        (controls, said)
+    }
+
     /// The controls as the file now has them, if it was saved since it was
     /// last read. `None` when nothing changed.
     ///
@@ -248,6 +263,43 @@ mod tests {
         let _ = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder).unwrap();
         folder
+    }
+
+    #[test]
+    fn a_rebase_puts_the_file_on_the_games_new_actions_and_keeps_them_later() {
+        let path = scratch("rebase").join("bindings.toml");
+        fs::write(&path, "[bindings]\njump = [\"J\", \"GamepadSouth\"]\n").unwrap();
+        let mut own = ActionMap::standard();
+        let (mut live, _) = Live::start(path.clone(), &mut own);
+
+        // The game gains an action of its own and a set.
+        let mut grown = ActionMap::standard();
+        let riding = grown
+            .add_set("riding", lore_input::MouseMode::Look)
+            .unwrap();
+        grown
+            .own_button_in("gallop", ["H", "LeftBumper"], riding)
+            .unwrap();
+        let (controls, said) = live.rebase(grown.clone());
+
+        assert_eq!(said, Vec::<String>::new());
+        assert!(controls.action("gallop").is_ok());
+        let jump = controls.action("jump").unwrap();
+        assert_eq!(controls.bindings(jump)[0].to_string(), "J");
+
+        // A later save of the file is read onto the new actions.
+        fs::write(&path, "[bindings]\njump = [\"K\", \"GamepadSouth\"]\n").unwrap();
+        live.next_poll = Instant::now();
+        assert!(
+            live.changed().is_none(),
+            "seen once, waiting to be seen again"
+        );
+        live.next_poll = Instant::now();
+        let reread = live.changed().expect("read again");
+        let controls = reread.controls.unwrap();
+        assert!(controls.action("gallop").is_ok(), "the new action stays");
+        let jump = controls.action("jump").unwrap();
+        assert_eq!(controls.bindings(jump)[0].to_string(), "K");
     }
 
     #[test]
