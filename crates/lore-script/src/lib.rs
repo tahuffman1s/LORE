@@ -71,6 +71,7 @@ mod npc_api;
 mod pool_api;
 mod settings_api;
 mod shader_api;
+mod sides_api;
 mod thing_api;
 mod time_api;
 mod tools_api;
@@ -92,6 +93,7 @@ pub use fonts::{
     FONTS_FOLDER, families_of as font_families_of, family_of as font_family_of, is_font_file,
     scan as scan_fonts,
 };
+pub use health_api::Deed;
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape, HudStyle};
 pub use images::{HudImageInfo, IMAGES_FOLDER, png_size, scan as scan_images};

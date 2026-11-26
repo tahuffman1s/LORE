@@ -1698,6 +1698,7 @@ dependencies = [
  "lore-input",
  "lore-markup",
  "lore-nav",
+ "lore-npc",
  "lore-shader",
  "lore-sky",
  "lore-ui",

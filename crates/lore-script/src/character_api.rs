@@ -72,6 +72,7 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "useProgress",
     "carrying",
     "carryWeight",
+    "side",
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
@@ -182,6 +183,8 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "swing",
     "lockOn",
     "block",
+    "feelsAbout",
+    "forgive",
 ];
 
 /// How high the eyes are above the feet of a character the engine has said
@@ -201,11 +204,17 @@ impl CharacterId {
     /// script loads until it is closed. It is `game.player` to the script.
     pub const PLAYER: Self = Self(0);
 
-    /// The number itself: the order characters came into the world in,
-    /// the player's 0.
+    /// The number itself, as the engine's plain data keeps it (who is on
+    /// which side, who holds what against whom).
     #[must_use]
     pub const fn number(self) -> u32 {
         self.0
+    }
+
+    /// The character known by `number`, as [`number`](Self::number) gave it.
+    #[must_use]
+    pub const fn from_number(number: u32) -> Self {
+        Self(number)
     }
 }
 
@@ -684,6 +693,15 @@ impl UserData for CharacterRef {
                 crate::npc_api::set(lua, this.0, field, &value)
             });
         }
+        // Which side it is on (`game.sides`): read and set by anyone.
+        fields.add_field_method_get("side", |lua, this| {
+            this.read(lua, "side")?;
+            crate::sides_api::side_of(lua, this.0)
+        });
+        fields.add_field_method_set("side", |lua, this, value: Value| {
+            this.read(lua, "side")?;
+            crate::sides_api::set_side(lua, this.0, &value)
+        });
         fields.add_field_method_get("ammo", |lua, this| {
             this.read(lua, "ammo")?;
             Ok(weapon_api::rounds(&*shared_of(lua)?, this.0).0)
@@ -878,6 +896,17 @@ impl UserData for CharacterRef {
                 crate::body_api::on_moment(lua, &shared_of(lua)?, &moment, handler)
             },
         );
+        // How it feels about someone, and letting a grudge go (`game.sides`).
+        methods.add_function("feelsAbout", |lua, (this, who): (Value, Value)| {
+            let this = receiver(lua, &this, "feelsAbout", "(guard)")?;
+            this.read(lua, "feelsAbout")?;
+            crate::sides_api::feels_about(lua, this.0, &who)
+        });
+        methods.add_function("forgive", |lua, (this, who): (Value, Value)| {
+            let this = receiver(lua, &this, "forgive", "(guard)")?;
+            this.read(lua, "forgive")?;
+            crate::sides_api::forgive(lua, this.0, &who)
+        });
         methods.add_function("onUse", |lua, (this, handler): (Value, Value)| {
             let this = npc_receiver(lua, &this, "onUse", "(function() print(\"Halt!\") end)")?;
             this.read(lua, "onUse")?;
