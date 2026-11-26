@@ -270,3 +270,24 @@ fn play_from_the_editor_has_no_npc_the_editor_deleted() {
     world.game().host().each_npc(|_| names += 1);
     assert_eq!(names, 0);
 }
+
+#[test]
+fn the_lock_on_lets_go_of_an_npc_that_goes_down() {
+    let mut world = world(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        game.player:lockOn(guard)
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 5 then guard:damage(500) end
+            if ticks == 4 or ticks == 7 then print(game.player.lockedOn) end
+        end)"#,
+    );
+    play(&mut world, 3);
+    assert!(world.game().host().locked_on().is_some());
+    play(&mut world, 5);
+    assert_eq!(world.game().host().locked_on(), None);
+    let said = printed();
+    assert_eq!(said.len(), 2, "{said:#?}");
+    assert_eq!(said[1], "nil");
+}

@@ -998,6 +998,13 @@ impl Game for World {
             player: player.position,
         };
         (self.npcs).step(self.game.host(), &this_tick, *tick);
+        // Whoever the view was held on lets go of it once they are down.
+        let host = self.game.host_mut();
+        if let Some(locked) = host.locked_on()
+            && host.health(locked).is_none_or(|(now, _)| now <= 0.0)
+        {
+            host.lock_on(None);
+        }
         if walking {
             self.npcs.keep_out(player, rules, level);
         }
