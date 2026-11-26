@@ -265,8 +265,11 @@ end)"#;
 #[test]
 fn a_listened_for_button_is_heard_on_the_same_tick_at_any_frame_rate() {
     let mut recording = recording(120);
-    recording[20].push(Did::Press(key(Key::Q)));
-    recording[30].push(Did::Release(key(Key::Q)));
+    // The key goes down on the tick after the script asks: a game that
+    // began to listen only when a picture was drawn would miss it at a slow
+    // pace, where several ticks pass between two pictures.
+    recording[5].push(Did::Press(key(Key::Q)));
+    recording[15].push(Did::Release(key(Key::Q)));
     let heard_on = |frame_times: Box<dyn Iterator<Item = Duration>>| {
         let actions = ActionMap::standard();
         let script = ScriptGame::from_source(LISTENER, &actions);
@@ -283,7 +286,7 @@ fn a_listened_for_button_is_heard_on_the_same_tick_at_any_frame_rate() {
         .filter(|&tick| expected[tick] != expected[tick - 1])
         .collect::<Vec<_>>();
     assert_eq!(changed.len(), 1, "{changed:?}");
-    assert!((20..=22).contains(&changed[0]), "{changed:?}");
+    assert!((5..=7).contains(&changed[0]), "{changed:?}");
     for (pace, frame_times) in paces() {
         let found = heard_on(frame_times);
         if let Some(difference) = first_difference(&expected, &found) {
