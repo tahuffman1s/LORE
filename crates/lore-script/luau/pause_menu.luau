@@ -18,11 +18,11 @@
 -- with `if game.paused() then return end`. The player works it as any
 -- game.menu: arrows or d-pad, Enter or A, Escape or B to go back.
 --
--- The settings also have a Bindings page (the engine's "Controls" tab is
--- sensitivity and the like): one row for each action the player
--- can rebind, the engine's (jump, move, look) and the game's own. Press a row,
--- then the key or button wanted. A game turns the page off, or hides one
--- action from it:
+-- The settings' Controls tab is sensitivity and the like, then a row for each
+-- action the player can rebind, the engine's (jump, move, look) and the game's
+-- own. Press a row, then the key or button wanted; a tab that is longer than
+-- the screen scrolls. A game hides the buttons a player can rebind, or one
+-- action from them:
 --
 --     game.pauseMenu.controls = false
 --     game.pauseMenu.hideControl("melee")
@@ -111,7 +111,7 @@ local resumes = true
 -- a game's actions are all made when its script is first read.
 local canPause: boolean? = nil
 
--- Whether the settings have a Controls page, and the actions the game hid
+-- Whether the Controls tab has the buttons a player can rebind, and the actions the game hid
 -- from it with hideControl: each with the place it was said, for a message.
 local controlsOn = true
 local hiddenControls: { { name: string, at: string } } = {}
@@ -171,12 +171,6 @@ local function apart(a: string, b: string): number
 end
 
 -- ---------------------------------------------------------------- Controls
-
--- Where the kit puts the rows of a menu, to tell how many fit on a screen:
--- the tabs above them and the line of keys below (menu.luau has the same).
-local TABS_HIGH = 64
-local KEYS_HIGH = 52
-local ROW_HIGH = 34
 
 -- The words that only a gamepad's buttons and sticks have in their names.
 local PAD_WORDS = { "Gamepad", "Stick", "Dpad", "Bumper", "Trigger" }
@@ -385,9 +379,9 @@ local function controlRow(name: string): Row
     })
 end
 
--- The pages of the Controls tab: a row for each action the player can
--- rebind, and as many pages as the screen takes.
-local function controlPages(): { Menu }
+-- The rows that rebind: a heading, a row for each action the player can
+-- rebind, and a line for what to know. Empty when there is no action to show.
+local function controlRows(): { Row }
     setsOf = {}
     for _, set in game.input.sets() do
         if set ~= "menu" then
@@ -423,43 +417,25 @@ local function controlPages(): { Menu }
         end
     end
 
-    local _, high = game.hud.size()
-    local fit = math.max(4, (high - PLACE.down - TABS_HIGH - KEYS_HIGH) // ROW_HIGH - 3)
-    -- More than fit make more pages, each with about as many.
-    local per = math.ceil(#shown / math.max(1, math.ceil(#shown / fit)))
-    local pages: { Menu } = {}
-    local at = 1
-    repeat
-        local rows: { Row } = {}
-        for index = at, math.min(at + per - 1, #shown) do
-            table.insert(rows, controlRow(shown[index]))
-        end
-        at += per
-        -- A line for what to know, drawn from its name so it can be long.
-        local line: Row
-        line = menu.info("", {
-            text = function()
-                refreshClash()
-                line.label = note or clashLine or ""
-                return ""
-            end,
-        })
-        table.insert(rows, line)
-        table.insert(
-            rows,
-            menu.button("Put back the defaults", {
-                onPress = function()
-                    game.input.stopListening()
-                    busy, watch = nil, nil
-                    game.input.resetBindings()
-                    note = "Every control is back to the defaults"
-                end,
-            })
-        )
-        table.insert(rows, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
-        table.insert(pages, menu.new(if #pages == 0 then "Bindings" else "Bindings " .. (#pages + 1), rows, PLACE))
-    until at > #shown
-    return pages
+    local rows: { Row } = {}
+    if #shown == 0 then
+        return rows
+    end
+    table.insert(rows, menu.info("Buttons"))
+    for _, each in shown do
+        table.insert(rows, controlRow(each))
+    end
+    -- A line for what to know, drawn from its name so it can be long.
+    local line: Row
+    line = menu.info("", {
+        text = function()
+            refreshClash()
+            line.label = note or clashLine or ""
+            return ""
+        end,
+    })
+    table.insert(rows, line)
+    return rows
 end
 
 -- Makes the screens, once.
@@ -511,10 +487,40 @@ local function build()
         end
         table.insert(rowsUnder[setting.group], rowFor(setting))
     end
+    -- The Controls tab holds the buttons to rebind too, after its settings;
+    -- a game with no such group gets a tab of its own, last.
+    local buttons: { Row } = {}
+    if controlsOn then
+        busy, note, watch = nil, nil, nil
+        buttons = controlRows()
+    end
+    if #buttons > 0 and not rowsUnder["Controls"] then
+        rowsUnder["Controls"] = {}
+        table.insert(headings, "Controls")
+    end
     local pages: { Menu } = {}
     for _, heading in headings do
         local under = rowsUnder[heading]
-        table.insert(under, menu.button("Reset all to defaults", { onPress = function() game.settings.reset() end }))
+        local withButtons = heading == "Controls" and #buttons > 0
+        if withButtons then
+            for _, row in buttons do
+                table.insert(under, row)
+            end
+        end
+        table.insert(
+            under,
+            menu.button("Reset all to defaults", {
+                onPress = function()
+                    game.settings.reset()
+                    if withButtons then
+                        game.input.stopListening()
+                        busy, watch = nil, nil
+                        game.input.resetBindings()
+                        note = "Every control is back to the defaults"
+                    end
+                end,
+            })
+        )
         table.insert(under, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
         table.insert(pages, menu.new(heading, under, PLACE))
     end
@@ -525,14 +531,6 @@ local function build()
         menu.button("Quit", { onPress = game.quit }),
     }, PLACE)
     quit = ask
-
-    -- The Controls page comes after the engine's settings.
-    if controlsOn then
-        busy, note, watch = nil, nil, nil
-        for _, page in controlPages() do
-            table.insert(pages, page)
-        end
-    end
 
     -- A game started with no settings has nothing to put on that screen.
     if #pages > 0 then
@@ -577,7 +575,7 @@ function methods.addRow(row: Row)
     teardown()
 end
 
--- Hides one action from the Controls page. The name is checked when the page
+-- Hides one action from the buttons on the Controls tab. The name is checked when the page
 -- is built, so this can be said at the top of main.luau before the game's own
 -- actions exist.
 -- Example: game.pauseMenu.hideControl("melee")

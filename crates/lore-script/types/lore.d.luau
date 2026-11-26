@@ -3911,7 +3911,9 @@ declare game: {
 
         --- Makes a menu from a title and rows, hidden until opened. Each row
         --- belongs to one menu. `place` can say `right`, `down` (40 and 40,
-        --- pixels on a screen 1080 high) and `width` (820).
+        --- pixels on a screen 1080 high) and `width` (820). Long menus scroll
+        --- by themselves: more rows than fit the screen show a window that keeps the
+        --- chosen row in view, with the mouse wheel to scroll it.
         --- Example: local sound = game.menu.new("Sound", { music, volume }, { right = 40, down = 40, width = 640 })
         new: (title: string, rows: { MenuRow }, place: { right: number?, down: number?, width: number? }?) -> Menu,
 
@@ -3989,15 +3991,16 @@ declare game: {
         --- Example: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
         addRow: (row: MenuRow) -> (),
 
-        --- Whether the settings have a Controls page (true): a row for
-        --- every action the player can rebind, the engine's and the game's
-        --- own, where pressing a row and then a key or button gives it a new
-        --- one, and a row that puts the defaults back. False takes the page
-        --- away. Say it at the top of the script, before the menu opens.
+        --- Whether the Controls tab of the settings has the buttons a player
+        --- can rebind (true): after its settings, a row for every action,
+        --- the engine's and the game's own, where pressing a row and then a
+        --- key or button gives it a new one; its reset row puts the buttons
+        --- back too. False hides the buttons and leaves the rest of the tab.
+        --- Say it at the top of the script, before the menu opens.
         --- Example: game.pauseMenu.controls = false
         controls: boolean,
 
-        --- Leaves one action out of the Controls page, such as one the
+        --- Leaves one action out of the buttons on the Controls tab, such as one the
         --- player should not move. The name is checked when the page is
         --- built, so it can be said before the game's own actions are made.
         --- A name that is no action is told in the log, with the line.

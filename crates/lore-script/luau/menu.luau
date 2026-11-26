@@ -25,6 +25,9 @@
 -- `menu.onScreenKeyboard = false` leaves that to the game's own keyboard.
 -- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
 -- Change them before making menus: they apply to menus made afterwards.
+-- A menu with more rows than fit on the screen shows a window of them and
+-- scrolls by itself: the chosen row stays in view, the mouse wheel scrolls,
+-- and a line says when there is more above or below. Each tab scrolls on its own.
 -- The player: arrows, d-pad or pointer choose; Enter, A or a click press;
 -- Escape or B go back; Q and E change tab; P or Start close everything.
 
@@ -34,6 +37,9 @@ local menu = game.menu
 local TOP = 64 -- the tabs, above the rows
 local ROW = 34 -- each row
 local FOOT = 52 -- the line of keys below the rows
+local MORE = 30 -- the line that says "more above" or "more below", only on a menu that scrolls
+local EDGE = 40 -- the room kept free at the bottom of the screen
+local WHEEL = 3 -- rows a notch of the mouse wheel scrolls
 local TEXT = 26 -- the size of the words
 local LABEL_WIDE = 270 -- the room for a row's name; its value starts after it
 local BAR_WIDE = 210 -- a slider's bar, at the right of the row
@@ -675,6 +681,13 @@ type MenuState = {
     shadow: any,
     accentLine: any,
     marker: any,
+    -- How many rows are on the screen at once (all of them unless the menu
+    -- is too tall), the number of the first one shown, the first the
+    -- pieces are placed for, and the HUD text that says there is more.
+    fit: number,
+    first: number,
+    laid: number,
+    more: any,
     -- The screen it is shown on: one made for it alone, or the tabs it is in.
     tabs: any,
     -- What the line of keys says "menu_back" does; nil for the kit's own word.
@@ -707,18 +720,83 @@ local tabsOf: { [any]: TabsState } = setmetatable({}, { __mode = "k" }) :: any
 local stack: { TabsState } = {}
 local returnTo = "gameplay"
 
+-- True when the menu has more rows than it shows at once.
+local function scrolls(m: MenuState): boolean
+    return m.fit < #m.rows
+end
+
+-- Whether row `number` is in the window of rows shown.
+local function inWindow(m: MenuState, number: number): boolean
+    return number >= m.first and number < m.first + m.fit
+end
+
+-- Puts the pieces of each row where the window has it (rows out of it are
+-- hidden), and shows them or hides them all with `visible`. The pieces
+-- are the ones made with the menu: they are moved, never made again.
+local function layout(m: MenuState, visible: boolean)
+    m.laid = m.first
+    for number, row in m.rows do
+        local inside = visible and inWindow(m, number)
+        local top = m.down + TOP + (number - m.first) * ROW
+        if row.box then
+            row.box.down = top
+        end
+        row.name.down = top + 2
+        row.shown.down = top + 2
+        if row.bar then
+            row.bar.down = top + 11
+        end
+        if row.knob then
+            row.knob.down = top + 4
+        end
+        for _, piece in row.pieces do
+            piece.visible = inside
+        end
+    end
+end
+
 local function setVisible(m: MenuState, visible: boolean)
     m.back.visible = visible
-    for _, piece in { m.shadow, m.accentLine, m.marker } :: { any } do
+    for _, piece in { m.shadow, m.accentLine, m.marker, m.more } :: { any } do
         if piece then
             piece.visible = visible
         end
     end
-    for _, row in m.rows do
-        for _, piece in row.pieces do
-            piece.visible = visible
+    layout(m, visible)
+end
+
+-- Scrolls so the chosen row is in the window. Rows that only tell, just
+-- above the first row that can be chosen (a heading), are kept with it.
+local function keepInView(m: MenuState)
+    if not scrolls(m) then
+        return
+    end
+    local at, first = m.chosen, m.first
+    if at < first then
+        first = at
+    elseif at >= first + m.fit then
+        first = at - m.fit + 1
+    end
+    local onlyInfoAbove = true
+    for number = 1, at - 1 do
+        if m.rows[number].kind ~= "info" then
+            onlyInfoAbove = false
+            break
         end
     end
+    local onlyInfoBelow = true
+    for number = at + 1, #m.rows do
+        if m.rows[number].kind ~= "info" then
+            onlyInfoBelow = false
+            break
+        end
+    end
+    if onlyInfoAbove then
+        first = 1
+    elseif onlyInfoBelow then
+        first = #m.rows - m.fit + 1
+    end
+    m.first = math.clamp(first, 1, #m.rows - m.fit + 1)
 end
 
 -- Moves the chosen row `by` rows down (up when below 0), going round at the
@@ -738,6 +816,7 @@ local function move(m: MenuState, by: number)
         end
     end
     m.chosen = at
+    keepInView(m)
 end
 
 local MenuMethods = {}
@@ -747,7 +826,10 @@ local MenuMeta = {}
 -- fixed from then on: a row added to the list afterwards is not shown.
 -- `place` can say `right` and `down` (how far its top left corner is from
 -- the top left of the screen: 40 and 40) and `width` (820). It is as tall as
--- its rows need.
+-- its rows need. A menu with more rows than fit on the screen (the height
+-- from `game.hud.size()`) shows a window of them and scrolls by itself: the
+-- chosen row stays in view, the mouse wheel scrolls it, and a line says when
+-- there is more above or below. The size is read when the menu is made.
 -- Example: local sound = menu.new("Sound", { menu.toggle("Music", { value = true }) })
 function menu.new(title: string, rows: { any }, place: { right: number?, down: number?, width: number? }?): any
     if type(title) ~= "string" then
@@ -785,7 +867,14 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
     local right = place and place.right or 40
     local down = place and place.down or 40
     local width = place and place.width or 820
-    local height = TOP + #rows * ROW + FOOT
+    local fit = #rows
+    local height = TOP + fit * ROW + FOOT
+    local _, screenHigh = game.hud.size()
+    if down + height > screenHigh - EDGE then
+        -- Too tall for the screen: show as many rows as there is room for.
+        fit = math.clamp(math.floor((screenHigh - EDGE - down - TOP - MORE - FOOT) / ROW), 3, #rows)
+        height = TOP + fit * ROW + (if fit < #rows then MORE else 0) + FOOT
+    end
     -- Made before the menu's own back, so it is drawn under it.
     local shadow = if style.shadow
         then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow, layer = style.layer })
@@ -803,6 +892,10 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
         shadow = shadow,
         accentLine = nil,
         marker = nil,
+        fit = fit,
+        first = 1,
+        laid = 1,
+        more = nil,
         tabs = nil,
         backWord = nil,
         removed = false,
@@ -816,6 +909,7 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
         row.owner = m
         local top = down + TOP + (number - 1) * ROW
         local left = right + 12
+        -- (Rows past the window are hidden and moved by `layout`.)
         -- The box behind the row shows which is chosen, and catches the
         -- pointer anywhere along the row.
         if row.kind ~= "info" then
@@ -834,6 +928,9 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
                 table.insert(row.pieces, piece)
             end
         end
+    end
+    if fit < #inside then
+        m.more = game.hud.text("", { right = right + 26, down = down + TOP + fit * ROW + 2, size = 22, color = style.quiet, layer = style.layer })
     end
     setVisible(m, false)
     -- Start on the first row that can be chosen.
@@ -1769,6 +1866,22 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
         end
     end
     local x, y = game.input.stepped("menu_move")
+    local scroll = scrolls(m)
+    local wheel = game.input.wheel()
+    if wheel ~= 0 and scroll and not hovered(m.rows[m.chosen]) then
+        -- The wheel scrolls a long menu, unless the pointer is on the chosen
+        -- slider or choice, which it changes instead.
+        m.first = math.clamp(m.first - wheel * WHEEL, 1, #m.rows - m.fit + 1)
+        wheel = 0
+        if not inWindow(m, m.chosen) then
+            local edge = if m.chosen < m.first then m.first else m.first + m.fit - 1
+            local way = if m.chosen < m.first then 1 else -1
+            while m.rows[edge].kind == "info" and inWindow(m, edge + way) do
+                edge += way
+            end
+            m.chosen = edge
+        end
+    end
     if y ~= 0 then
         local was = m.chosen
         move(m, -y)
@@ -1779,7 +1892,7 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
     -- The pointer chooses the row it moves onto.
     if pointerMoved then
         for number, row in m.rows do
-            if row.kind ~= "info" and hovered(row) then
+            if row.kind ~= "info" and inWindow(m, number) and hovered(row) then
                 m.chosen = number
             end
         end
@@ -1792,7 +1905,6 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
             return
         end
     end
-    local wheel = game.input.wheel()
     if wheel ~= 0 and (row.kind == "slider" or row.kind == "choice") then
         change(row, if wheel > 0 then 1 else -1)
         sound(menu.sounds.move)
@@ -1816,7 +1928,7 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
             if m.removed or stack[#stack] ~= ts then
                 return
             end
-            if clicked.kind ~= "info" and hovered(clicked) then
+            if clicked.kind ~= "info" and inWindow(m, number) and hovered(clicked) then
                 m.chosen = number
                 local bar, shown = clicked.bar, clicked.shown
                 local along = if bar then bar:pointerAt() else -1
@@ -1904,6 +2016,14 @@ end
 -- Shows what each row of a menu is now.
 local function drawMenu(m: MenuState)
     local style = menu.style
+    local more = m.more
+    if more then
+        local above, below = m.first > 1, m.first + m.fit <= #m.rows
+        more.text = if above and below then "… more above     … more below"
+            elseif above then "… more above"
+            elseif below then "… more below"
+            else ""
+    end
     for number, row in m.rows do
         local chosen = number == m.chosen
         local box, name, shown = row.box, row.name, row.shown
@@ -1912,7 +2032,7 @@ local function drawMenu(m: MenuState)
         end
         local marker = m.marker
         if chosen and marker then
-            marker.down = m.down + TOP + (number - 1) * ROW
+            marker.down = m.down + TOP + (number - m.first) * ROW
         end
         if name and shown then
             name.color = if chosen then style.chosenWords elseif row.kind == "info" then style.quiet else style.words
@@ -1981,6 +2101,13 @@ game.onTick(function()
     local ts = stack[#stack]
     if ts then
         hear(ts)
+        -- Placed in the rules, not while drawing: the pointer finds rows
+        -- where the rules left them. (A screen closed or opened by now is
+        -- laid out as it is shown.)
+        local front = stack[#stack]
+        if front and front.current.laid ~= front.current.first then
+            layout(front.current, true)
+        end
     end
 end)
 
