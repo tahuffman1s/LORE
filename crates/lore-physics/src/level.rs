@@ -815,6 +815,32 @@ impl Level {
         (through <= most).then_some(through)
     }
 
+    /// Whether `point` is inside the level's own solid shapes: straight up
+    /// from it and straight down, the first face met is met from behind.
+    /// Under a roof that is a single sheet, with a floor below, is not
+    /// inside; under the ground, with nothing below, is not either (there
+    /// is no floor there to stand on, which is said another way).
+    #[must_use]
+    pub fn inside(&self, point: [f32; 3]) -> bool {
+        let Some(mesh) = self.mesh.as_ref() else {
+            return false;
+        };
+        let from = Vector::from_array(point);
+        if !from.is_finite() {
+            return false;
+        }
+        [Vector::Y, -Vector::Y].into_iter().all(|heading| {
+            let ray = Ray::new(from.as_dvec3(), heading.as_dvec3());
+            mesh.cast_local_ray_and_get_normal(&ray, f64::from(FARTHEST_RAY), false)
+                .is_some_and(|hit| {
+                    mesh.triangle(hit.subshape)
+                        .scaled_normal()
+                        .dot(heading.as_dvec3())
+                        > 0.0
+                })
+        })
+    }
+
     /// The level's own shapes, for a world of bodies to land on.
     pub(crate) fn mesh(&self) -> Option<&TriMesh> {
         self.mesh.as_ref()
@@ -1068,5 +1094,41 @@ mod rise_tests {
             assert_eq!(level.water_at(0.0, 0.0), None);
             assert_eq!(level.water_at(1.0, 0.0), Some(2.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod inside_tests {
+    use super::*;
+
+    /// A square sheet at `y`, facing up or down.
+    fn sheet(y: f32, up: bool) -> [[[f32; 3]; 3]; 2] {
+        let (a, b, c, d) = (
+            [-5.0, y, -5.0],
+            [5.0, y, 5.0],
+            [5.0, y, -5.0],
+            [-5.0, y, 5.0],
+        );
+        if up {
+            [[a, b, c], [a, d, b]]
+        } else {
+            [[a, c, b], [a, b, d]]
+        }
+    }
+
+    #[test]
+    fn a_point_in_a_slab_is_inside_and_one_under_a_roof_is_not() {
+        // A slab a metre thick: its bottom faces down, its top up.
+        let mut slab = sheet(0.0, false).to_vec();
+        slab.extend(sheet(1.0, true));
+        let slab = Level::from_triangles(&slab);
+        assert!(slab.inside([0.0, 0.5, 0.0]));
+        assert!(!slab.inside([0.0, 2.0, 0.0]));
+        // A floor, and a roof of one sheet over it.
+        let mut room = sheet(0.0, true).to_vec();
+        room.extend(sheet(3.0, true));
+        let room = Level::from_triangles(&room);
+        assert!(!room.inside([0.0, 1.0, 0.0]));
+        assert!(!Level::from_triangles(&[]).inside([0.0; 3]));
     }
 }

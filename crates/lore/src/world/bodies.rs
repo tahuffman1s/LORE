@@ -1,6 +1,6 @@
 //! Who is in a world: the player, and the training dummies that stand in
-//! it to be shot at. The people of a game will be kept here too, beside
-//! the player rather than as more players.
+//! it to be shot at. The NPCs are in `npcs`, beside the player rather than
+//! as more players.
 
 use lore_physics::{MoveInput, Player};
 use lore_script::CharacterId;
@@ -52,4 +52,34 @@ pub(crate) struct Dummy {
     pub(crate) feet: [f32; 3],
     /// Who it is to the game's script.
     pub(crate) name: CharacterId,
+}
+
+/// Someone besides the player who can be shot or struck, as the weapons
+/// and a swing see them this tick: a training dummy, or an NPC on its feet.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Standing {
+    /// The number weapons know it by. The player is 0.
+    pub(crate) target: u32,
+    /// Who it is to the game's script.
+    pub(crate) who: CharacterId,
+    /// Where its feet are, in metres.
+    pub(crate) feet: [f32; 3],
+    /// How tall it is, in metres.
+    pub(crate) height: f32,
+    /// Where its head is, if it has one: a shot there is a head shot.
+    pub(crate) head: Option<[f32; 3]>,
+}
+
+impl Dummy {
+    /// The dummy as something to shoot and strike: the size of a standing
+    /// person, its head the top of it.
+    pub(crate) fn standing(&self, height: f32) -> Standing {
+        Standing {
+            target: self.id.0,
+            who: self.name,
+            feet: self.feet,
+            height,
+            head: None,
+        }
+    }
 }

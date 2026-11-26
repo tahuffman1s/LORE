@@ -265,6 +265,16 @@ impl Default for UseSaid {
     }
 }
 
+/// Something the player can use: a thing placed in the map, by its id, or
+/// an NPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Usable<'a> {
+    /// The thing placed in the map with this id.
+    Thing(&'a str),
+    /// The NPC who is this character.
+    Npc(crate::CharacterId),
+}
+
 /// What is placed in the level, and what the engine last said of what the
 /// player would use. It outlives a version of the script.
 #[derive(Default)]
@@ -273,6 +283,8 @@ pub(crate) struct ThingState {
     /// The id of the thing the use button would act on now, as the engine
     /// last said, and how far through a held use the player is, 0 to 1.
     target: RefCell<Option<String>>,
+    /// The NPC the use button would act on now, if it is one.
+    npc_target: Cell<Option<crate::CharacterId>>,
     progress: Cell<f32>,
     /// Who is inside which watched zone: the zone's id and the character,
     /// as of the last tick.
@@ -430,6 +442,13 @@ pub(crate) struct ThingUses {
     prompt: Cell<bool>,
 }
 
+impl ThingUses {
+    /// Whether the engine shows its own prompt (`game.showUsePrompt`).
+    pub(crate) fn shows_prompt(&self) -> bool {
+        self.prompt.get()
+    }
+}
+
 impl Default for ThingUses {
     fn default() -> Self {
         Self {
@@ -529,12 +548,24 @@ impl ThingState {
         }
     }
 
-    pub(crate) fn set_target(&self, target: Option<&str>, progress: f32) {
+    pub(crate) fn set_target(&self, target: Option<Usable<'_>>, progress: f32) {
+        let (thing, npc) = match target {
+            Some(Usable::Thing(id)) => (Some(id), None),
+            Some(Usable::Npc(id)) => (None, Some(id)),
+            None => (None, None),
+        };
         let mut now = self.target.borrow_mut();
-        if now.as_deref() != target {
-            *now = target.map(str::to_owned);
+        if now.as_deref() != thing {
+            *now = thing.map(str::to_owned);
         }
+        self.npc_target.set(npc);
         self.progress.set(progress.clamp(0.0, 1.0));
+    }
+
+    /// The NPC the use button would act on now, if it is one, and how far
+    /// through a held use the player is.
+    pub(crate) fn npc_target(&self) -> Option<(crate::CharacterId, f32)> {
+        Some((self.npc_target.get()?, self.progress.get()))
     }
 
     /// The words of the prompt for the thing the player would use now and
@@ -564,6 +595,27 @@ impl ThingState {
             .iter()
             .find(|thing| thing.id == id)
             .cloned()
+    }
+
+    /// What is placed as `wanted`: the first with that name, else the one
+    /// with that id, else the first with that name in other capitals.
+    pub(crate) fn find_named(&self, wanted: &str) -> Option<Placed> {
+        let placed = self.placed.borrow();
+        let by = |same: &dyn Fn(&Placed) -> bool| placed.iter().find(|thing| same(thing));
+        by(&|thing| thing.name == wanted)
+            .or_else(|| by(&|thing| thing.id == wanted))
+            .or_else(|| {
+                by(&|thing| !thing.name.is_empty() && thing.name.eq_ignore_ascii_case(wanted))
+            })
+            .cloned()
+    }
+
+    /// What a script calls each thing placed: its name, or its id if it
+    /// has none, in the order they are placed.
+    pub(crate) fn names(&self) -> Vec<String> {
+        (self.placed.borrow().iter())
+            .map(|thing| called(thing).to_owned())
+            .collect()
     }
 }
 
@@ -639,18 +691,8 @@ pub(crate) fn thing(lua: &Lua, shared: &Rc<Shared>, name: &Value) -> mlua::Resul
     };
     let name = name.to_string_lossy();
     let wanted = name.trim();
-    let id = {
-        let placed = shared.things.placed.borrow();
-        let by = |same: &dyn Fn(&Placed) -> bool| placed.iter().find(|thing| same(thing));
-        by(&|thing| thing.name == wanted)
-            .or_else(|| by(&|thing| thing.id == wanted))
-            .or_else(|| {
-                by(&|thing| !thing.name.is_empty() && thing.name.eq_ignore_ascii_case(wanted))
-            })
-            .map(|thing| thing.id.clone())
-    };
-    match id {
-        Some(id) => handle(lua, shared, &id),
+    match shared.things.find_named(wanted) {
+        Some(thing) => handle(lua, shared, &thing.id),
         None => Err(unknown(lua, &shared.things, wanted, "game.thing")),
     }
 }
@@ -831,6 +873,13 @@ pub(crate) fn carry_handlers(shared: &Shared, picked: bool) -> Vec<Function> {
 
 /// The thing the player would use now, for `game.player.lookingAt`.
 pub(crate) fn looking_at(lua: &Lua, shared: &Shared) -> mlua::Result<Option<AnyUserData>> {
+    if let Some((npc, _)) = shared.things.npc_target() {
+        return if shared.npcs.has(npc) {
+            shared.handles.character(lua, npc).map(Some)
+        } else {
+            Ok(None)
+        };
+    }
     let target = shared.things.target.borrow().clone();
     match target {
         Some(id) if shared.things.find(&id).is_some() => handle(lua, shared, &id).map(Some),

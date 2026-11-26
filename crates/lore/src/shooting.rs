@@ -19,7 +19,7 @@ use lore_weapons::{
 use lore_audio::Range;
 
 use crate::noise::{Noise, NoiseKind};
-use crate::world::{Body, Dummy};
+use crate::world::{Body, Standing};
 
 /// The most rockets, grenades and slow bullets in flight at once. One more
 /// takes the place of the oldest.
@@ -112,7 +112,7 @@ impl Shooting {
     pub(crate) fn aim(
         &mut self,
         eyes: [f32; 3],
-        dummies: &[Dummy],
+        standing: &[Standing],
         level: &Level,
         rules: &MoveSettings,
         direction: [f32; 3],
@@ -120,7 +120,7 @@ impl Shooting {
         let settings = lore_weapons::WeaponSettings::default();
         self.targets.clear();
         self.targets
-            .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+            .extend(standing.iter().map(|body| target_of(body, rules)));
         let way = toward_mark(
             level,
             &self.targets,
@@ -185,25 +185,25 @@ fn player_target(body: &Body, rules: &MoveSettings) -> Target {
     }
 }
 
-/// A training dummy as something to shoot: the size of a standing person.
-fn dummy_target(dummy: &Dummy, rules: &MoveSettings) -> Target {
+/// A training dummy or an NPC as something to shoot. One with no head (a
+/// dummy has no skeleton) has its head at the top of it.
+fn target_of(body: &Standing, rules: &MoveSettings) -> Target {
     Target {
-        id: dummy.id.0,
-        feet: dummy.feet,
-        height: rules.standing_height,
+        id: body.target,
+        feet: body.feet,
+        height: body.height,
         radius: rules.radius,
-        // It has no skeleton: its head is the top of it.
-        head: None,
+        head: body.head,
     }
 }
 
 /// Who the target numbered `target` is to the script.
-fn name_of(dummies: &[Dummy], target: u32) -> Option<CharacterId> {
+fn name_of(standing: &[Standing], target: u32) -> Option<CharacterId> {
     if target == PLAYER {
         return Some(CharacterId::PLAYER);
     }
-    let dummy = dummies.iter().find(|dummy| dummy.id.0 == target)?;
-    Some(dummy.name)
+    let body = standing.iter().find(|body| body.target == target)?;
+    Some(body.who)
 }
 
 /// What the player is doing with the weapon they hold this tick.
@@ -242,7 +242,7 @@ impl Shooting {
     /// `step` is the length of a tick in seconds.
     ///
     /// Bullets, rockets and grenades are all judged against where the
-    /// player and the `dummies` are now.
+    /// player and the `standing` are now: the dummies and the NPCs on their feet.
     ///
     /// What the weapon was heard to do (each shot, the click of an empty
     /// magazine, a reload beginning) is added to `noises`.
@@ -250,7 +250,7 @@ impl Shooting {
     pub(crate) fn tick(
         &mut self,
         player: &Body,
-        dummies: &[Dummy],
+        standing: &[Standing],
         tick: u32,
         level: &Level,
         rules: &MoveSettings,
@@ -261,9 +261,9 @@ impl Shooting {
     ) {
         self.told.clear();
         self.fire(
-            player, dummies, tick, level, rules, step, host, noises, names,
+            player, standing, tick, level, rules, step, host, noises, names,
         );
-        self.fly(player, dummies, tick, level, rules, step, noises);
+        self.fly(player, standing, tick, level, rules, step, noises);
         // Told last, and in the order it happened: a function of the
         // script's may hand out or take away weapons, which must not change
         // what this tick's shots were.
@@ -287,7 +287,7 @@ impl Shooting {
     fn fire(
         &mut self,
         body: &Body,
-        dummies: &[Dummy],
+        standing: &[Standing],
         tick: u32,
         level: &Level,
         rules: &MoveSettings,
@@ -300,7 +300,7 @@ impl Shooting {
         // past it by the item button: a grenade while holding a rifle.
         for thrown in [false, true] {
             self.work(
-                body, dummies, tick, level, rules, step, host, noises, names, thrown,
+                body, standing, tick, level, rules, step, host, noises, names, thrown,
             );
         }
     }
@@ -311,7 +311,7 @@ impl Shooting {
     fn work(
         &mut self,
         body: &Body,
-        dummies: &[Dummy],
+        standing: &[Standing],
         tick: u32,
         level: &Level,
         rules: &MoveSettings,
@@ -388,7 +388,7 @@ impl Shooting {
             noises.push(heard(NoiseKind::DryFire, 0.0));
         }
         if !self.shots.is_empty() {
-            self.land(body, dummies, tick, level, rules, &held, noises);
+            self.land(body, standing, tick, level, rules, &held, noises);
         }
         // An empty magazine starts its reload after the shot that emptied it.
         if events.reload_started {
@@ -404,7 +404,7 @@ impl Shooting {
     fn land(
         &mut self,
         body: &Body,
-        dummies: &[Dummy],
+        standing: &[Standing],
         tick: u32,
         level: &Level,
         rules: &MoveSettings,
@@ -418,7 +418,7 @@ impl Shooting {
                 // Everyone but the player, where they are.
                 self.targets.clear();
                 self.targets
-                    .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+                    .extend(standing.iter().map(|body| target_of(body, rules)));
                 // A blast of pellets is one shot, so it makes one strike
                 // noise: where its nearest pellet struck the level.
                 let mut nearest: Option<(f32, [f32; 3])> = None;
@@ -443,7 +443,7 @@ impl Shooting {
                             }
                             (None, None)
                         }
-                        Struck::Target { id, zone } => (name_of(dummies, id), Some(zone)),
+                        Struck::Target { id, zone } => (name_of(standing, id), Some(zone)),
                     };
                     self.told.push(Told::Hit(WeaponHit {
                         shooter: CharacterId::PLAYER,
@@ -464,7 +464,7 @@ impl Shooting {
             Delivery::Projectile(_) => {
                 self.targets.clear();
                 self.targets
-                    .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+                    .extend(standing.iter().map(|body| target_of(body, rules)));
                 for shot in &self.shots {
                     let direction = toward_mark(
                         level,
@@ -501,7 +501,7 @@ impl Shooting {
     fn fly(
         &mut self,
         player: &Body,
-        dummies: &[Dummy],
+        standing: &[Standing],
         tick: u32,
         level: &Level,
         rules: &MoveSettings,
@@ -514,7 +514,7 @@ impl Shooting {
         self.targets.clear();
         self.targets.push(player_target(player, rules));
         self.targets
-            .extend(dummies.iter().map(|dummy| dummy_target(dummy, rules)));
+            .extend(standing.iter().map(|body| target_of(body, rules)));
         let (targets, told) = (&self.targets, &mut self.told);
         self.in_flight.retain_mut(|flying| {
             let flight = flying
@@ -540,7 +540,7 @@ impl Shooting {
                             noises.push(struck_noise(struck.point, tick));
                             (None, None)
                         }
-                        Struck::Target { id, zone } => (name_of(dummies, id), Some(zone)),
+                        Struck::Target { id, zone } => (name_of(standing, id), Some(zone)),
                     };
                     told.push(hit(victim, part, struck.damage, struck.point, false));
                 }
@@ -549,7 +549,7 @@ impl Shooting {
                     told.push(hit(None, None, 0.0, point, true));
                     for target in targets {
                         let damage = blast_damage(level, &flying.settings, point, target);
-                        let victim = name_of(dummies, target.id);
+                        let victim = name_of(standing, target.id);
                         if damage > 0.0 && victim.is_some() {
                             told.push(hit(victim, None, damage, point, true));
                         }

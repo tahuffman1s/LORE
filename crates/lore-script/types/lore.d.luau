@@ -16,8 +16,7 @@
 -- required, and scripts cannot require each other in a circle.
 
 --- Someone in the world. The player is one, `game.player`, and is always
---- there. The people and creatures of a game will be characters too, once
---- LORE has them; until then the only other one a script meets is the
+--- there; every NPC is one too (see `Npc`, and `game.npc`), and so is the
 --- training dummy `lore check` stands in front of the player.
 --- The same character is always the same value, so one can be compared
 --- with `==` and be a key in a table of your own: `hits[hit.victim] = 3`.
@@ -252,12 +251,12 @@ declare extern type Character with
     --- Example: print(game.player.carryWeight)
     carryWeight: number
 
-    --- The usable thing the player would use if they pressed "interact"
-    --- now: the one under the crosshair and in reach, or nil. It is worked
-    --- out once a tick. The engine shows its prompt for it unless
-    --- `game.showUsePrompt(false)`.
+    --- The usable thing or NPC the player would use if they pressed
+    --- "interact" now: the one under the crosshair and in reach, or nil.
+    --- It is worked out once a tick. The engine shows its prompt for it
+    --- unless `game.showUsePrompt(false)`.
     --- Example: if game.player.lookingAt then hint.text = game.player.lookingAt.useText end
-    lookingAt: Thing?
+    lookingAt: (Thing | Npc)?
 
     --- How far through holding "interact" on a thing with `useSeconds`
     --- the player is, from 0 to 1, as of the last tick. 0 when nothing is
@@ -822,6 +821,91 @@ declare extern type Thing with
     function has(self, who: Character): boolean
 end
 
+--- Someone of the game's own: a person (or, later, a creature) who stands
+--- in the world as the player does. Make one with one line,
+--- `game.npc { name = "Guard", at = "Gate" }`, or place one in the map as
+--- type "npc" and find it with `game.npc("Guard")`.
+---
+--- An NPC is a `Character` like `game.player`: it has health, is hurt by
+--- shots and swings (`game.onDamage`, `game.onDeath`), walks into zones
+--- and can be locked on to, and is the same value the engine hands to
+--- those functions, so `hurt.victim == guard` works. It is drawn as the
+--- engine's mannequin, standing and breathing, and turns its head to the
+--- player when they come close. It is solid: the player walks into it,
+--- not through it. When its health reaches 0 it falls and lies where it
+--- fell: no longer solid, shot at or usable. `setHealth` stands it up
+--- again (`heal` does not bring back the dead), and `remove` takes it out
+--- of the world.
+---
+--- An NPC the file makes as it loads is the same NPC when the file is
+--- saved and loads again: it is found by its name and keeps its health and
+--- whatever happened to it. Change its `at` and save, and it stands there
+--- instead; take the line out, and it leaves. `useText`, `useReach`,
+--- `useSeconds`, `usable`, `lookDistance` and `onUse` are said again each
+--- time the script loads, as a thing's are. In short: a save keeps its
+--- health and where it stands, and the file says the rest again. An NPC
+--- made later (in `game.onTick`, a timer) stays after a save, but its
+--- `onUse` and the rest must be said again: find it with `game.npc`. The
+--- NPCs placed in the map follow the map the same way, when it is saved
+--- while the game runs or played from the editor: moved, turned or
+--- renamed there, it is the same NPC moved, turned or renamed; taken out,
+--- it leaves; added, it comes in. An NPC that moved in play stays where
+--- it is unless its `at` (or its place in the map) changes.
+---
+--- A `Character` the engine hands you (`hurt.victim`, a zone's `who`) may
+--- be an NPC: compare it with `==` to the NPC you keep, or find it with
+--- `game.npc(victim.name)`. `facing` is only for making an NPC; the
+--- `facing` an NPC reads is a character's, which only the player has.
+--- Example: local guard = game.npc { name = "Guard", at = "Gate" }
+declare extern type Npc extends Character with
+    --- The word or two shown beside the button while the player can use
+    --- the NPC: "Talk to" and its name until the script says otherwise. Up
+    --- to 60 characters. Shown only once the NPC has an `onUse` function.
+    --- Example: guard.useText = "Ask about the road"
+    useText: string
+
+    --- How close the player's eyes must be to use the NPC, in metres: 2.5
+    --- until the script says otherwise. From 0.5 to 50.
+    --- Example: guard.useReach = 3
+    useReach: number
+
+    --- How long the use button is held to use the NPC, in seconds: 0 (a
+    --- press) until the script says otherwise. From 0 to 30.
+    --- Example: guard.useSeconds = 1
+    useSeconds: number
+
+    --- Whether the player can use the NPC now: true once it has an `onUse`
+    --- function, and false while the NPC is dead. Set it to false to stop the player
+    --- using it (someone who has said all they have to say), and to true
+    --- again.
+    --- Example: guard:onUse(function() guard.usable = false end)
+    usable: boolean
+
+    --- How close the player comes before the NPC turns its head to look at
+    --- them, in metres: 5 until the script says otherwise. 0 never looks;
+    --- up to 50. The head turns as far as a neck goes, eased, and not round
+    --- to someone behind.
+    --- Example: guard.lookDistance = 10
+    lookDistance: number
+
+    --- Calls `handler` each time the player uses the NPC: they look at it
+    --- from within reach and press the button bound to "interact" (E, or Y
+    --- on a gamepad, unless the player changed it), or hold it for
+    --- `useSeconds`. This one line makes the NPC usable: the engine shows
+    --- `useText` beside the key or button and calls the function, in the
+    --- game's tick. Each call adds another function; all are called.
+    --- `lore check` uses every usable NPC once.
+    --- Example: guard:onUse(function() print("Halt! Who goes there?") end)
+    function onUse(self, handler: (npc: Npc) -> ()): ()
+
+    --- Takes the NPC out of the world for good. Reading it afterwards is an
+    --- error that says it is gone, so let go of it too (`guard = nil`);
+    --- `game.npc` makes another. It changes the game, so it belongs in the
+    --- rules, not in `game.onDraw`.
+    --- Example: game.onDeath(function(victim) if victim == guard then game.after(30, function() guard:remove() end) end end)
+    function remove(self): ()
+end
+
 --- A noise the game made: what a `game.onNoise` function is handed.
 --- Example: game.onNoise(function(noise) if noise.byPlayer and noise.loudness > 0.5 then print("Heard " .. noise.sound) end end)
 declare extern type Noise with
@@ -963,6 +1047,9 @@ declare extern type Tween with
     --- Example: shown:to(game.player.ammo, 0.3)
     function to(self, target: number, seconds: number): ()
 end
+
+--- What `game.npc { ... }` takes to make an NPC.
+type NpcOptions = { name: string, at: string | vector | Thing, facing: number? }
 
 --- Where on the screen a piece of the HUD is pinned.
 type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
@@ -2716,6 +2803,35 @@ declare game: {
     --- Example: for _, chest in game.things("chest") do chest:onUse(open) end
     things: (kind: string?) -> { Thing },
 
+    --- Makes an NPC, or finds one. Given a table, it puts a person in the
+    --- world: `name` is what they are called and how `game.npc` finds them
+    --- again. `at` is where they stand: the name of something placed in
+    --- the map (any type; type "place" is a marker that is nothing else),
+    --- a position, or a `Thing`. `facing` is how far they are turned to the
+    --- left, in degrees, as the map writes it; at a place, they face the
+    --- way it does. A place the map does not have is an error that lists
+    --- the places it does have.
+    ---
+    --- Given a name, it finds the NPC called that, in any capitals: one a
+    --- script made, or one placed in the map as type "npc". A name no NPC
+    --- has is an error that lists the NPCs there are (`lore check` reports
+    --- it).
+    ---
+    --- One name is one person. Each call with a table makes a new person,
+    --- so make each NPC once, at the top of the file, and find it later by
+    --- name: a name some NPC already has ("guard" is "Guard") is an error
+    --- that suggests "Guard 2", so NPCs cannot pile up in `game.onTick`. A
+    --- removed NPC's name is free again. For a crowd, number them:
+    --- `for i = 1, 5 do game.npc { name = "Villager " .. i, at = "Square" } end`.
+    --- Example: local guard = game.npc { name = "Guard", at = "Gate" }
+    --- Example: local smith = game.npc("Smith")
+    npc: (nameOrOptions: string | NpcOptions) -> Npc,
+
+    --- Every NPC in the game, in the order they came into it: those placed
+    --- in the map, then those the script made.
+    --- Example: for _, person in game.npcs() do person.lookDistance = 8 end
+    npcs: () -> { Npc },
+
     --- Shows or hides the engine's own prompt (the key or button, and the
     --- thing's `useText`) while the player can use something. It is shown
     --- until a script says false: do that to draw your own from
@@ -3064,9 +3180,10 @@ declare game: {
 
     --- Calls `handler` each time the player is put at a spawn point: on
     --- the first tick, right after `game.onStart`, and again whenever they
-    --- are sent back to one, keeping the weapon they held. Dying sends the
-    --- player back, though nothing has health yet, so no shot kills
-    --- anybody. The function is handed nothing: the player is `game.player`.
+    --- are sent back to one, keeping the weapon they held. Running out of
+    --- health does not send the player back by itself: say what happens
+    --- then in `game.onDeath`. The function is handed nothing: the player
+    --- is `game.player`.
     --- Giving a weapon here hands over a new, full one each time.
     --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
     onSpawn: (handler: () -> ()) -> (),

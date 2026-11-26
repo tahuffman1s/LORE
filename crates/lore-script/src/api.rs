@@ -59,6 +59,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "thing",
     "things",
     "zone",
+    "npc",
+    "npcs",
     "showUsePrompt",
     "seed",
     "setSeed",
@@ -138,6 +140,8 @@ pub(crate) struct Handlers {
     pub moment: Vec<(String, Function)>,
     /// `thing:onUse`: each with the id of the thing it is for.
     pub used: Vec<(Rc<str>, Function)>,
+    /// `npc:onUse`: each with the NPC it is for.
+    pub npc_used: Vec<(CharacterId, Function)>,
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
@@ -228,6 +232,11 @@ pub(crate) struct Shared {
     pub things: Rc<crate::thing_api::ThingState>,
     /// What this version has said of using things.
     pub thing_uses: crate::thing_api::ThingUses,
+    /// Who is an NPC. It outlives this version of the script.
+    pub npcs: Rc<crate::npc_api::NpcState>,
+    /// What this version has said of its NPCs, and which it made as its
+    /// file loaded.
+    pub npc_version: crate::npc_api::NpcVersion,
     /// The values this version holds for things, by id.
     pub thing_handles: RefCell<std::collections::HashMap<String, mlua::AnyUserData>>,
     /// The game shaders the script turned on. It outlives this version of
@@ -498,6 +507,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     game.set(
         "things",
         lua.create_function(move |lua, kind: Value| crate::thing_api::things(lua, &state, &kind))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "npc",
+        lua.create_function(move |lua, given: Value| crate::npc_api::npc(lua, &state, &given))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "npcs",
+        lua.create_function(move |lua, ()| crate::npc_api::npcs(lua, &state))?,
     )?;
     let state = Rc::clone(shared);
     game.set(
@@ -832,12 +851,12 @@ pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
     const NO_ROUNDS: &str = "LORE has no rounds. Take it out. To do something when the game \
          begins, write game.onStart(function() ... end); to do it later, \
          game.after(60, function() ... end).";
-    const NO_KILLS: &str = "LORE does not count kills or deaths: nothing has health yet, so \
-         no shot kills anybody. Take it out. To count the shots that land on someone, write \
-         local hits = 0 at the top of the file and \
-         game.onWeaponHit(function(hit) if hit.victim then hits += 1 end end).";
+    const NO_KILLS: &str = "LORE does not count kills or deaths for you. Take it out. To \
+         count the ones the player brings down, write local kills = 0 at the top of the file \
+         and game.onDeath(function(victim, killer) if killer == game.player then kills += 1 \
+         end end).";
     let path = match path {
-        "game.player" | "character" => "character",
+        "game.player" | "character" | "npc" => "character",
         other => other,
     };
     Some(match (path, key) {
@@ -871,9 +890,9 @@ pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
         ("game", "onKill") | ("character", "kills" | "deaths") => NO_KILLS,
         ("character", "score" | "addScore") => NO_SCORE,
         ("character", "alive") => {
-            "LORE has no dead player: nothing has health yet, so game.player is always in \
-             the world. Take it out. To do something when the player is put back at a spawn \
-             point, write game.onSpawn(function() ... end)."
+            "A character has no `alive`: read `dead` instead, which is true once its health \
+             is gone: if not guard.dead then ... end. To do something when someone dies, \
+             write game.onDeath(function(victim, killer) ... end)."
         }
         _ => return None,
     })
@@ -960,7 +979,9 @@ mod tests {
             if line == "end" || line.starts_with('}') {
                 inside.pop();
             } else if let Some(class) = line.strip_prefix("declare extern type ") {
-                inside.push(class.strip_suffix(" with").unwrap());
+                let class = class.strip_suffix(" with").unwrap();
+                // `Npc extends Character` is listed by what `Npc` adds.
+                inside.push(class.split(" extends ").next().unwrap());
             } else if line == "declare game: {" {
                 inside.push("game");
             } else if let Some(method) = line.strip_prefix("function ") {
@@ -988,7 +1009,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 65] = [
+        let groups: [(&str, &[&str]); 67] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1018,6 +1039,8 @@ mod tests {
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
+            ("Npc.", crate::npc_api::NPC_FIELDS),
+            ("Npc:", crate::npc_api::NPC_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),
