@@ -17,6 +17,12 @@ local welcome = game.hud.text("Welcome to {name}!", { at = "top", down = 40, siz
 local hint = game.hud.text("Walk to the tower. Space or the bottom face button jumps.", { at = "top", down = 120 })
 local jumps = game.hud.text("Jumps: " .. saved.jumps, { at = "bottom left" })
 
+-- The title screen is ui/title.html and ui/title.css: HTML and CSS, which
+-- you can change and save while the game runs. `pauses` holds the game still
+-- behind it. "startGame" is the name the Start button gives in the HTML.
+local title = game.ui.load("ui/title.html", { pauses = true })
+title:on("startGame", function() title:hide() end)
+
 -- The welcome goes away after eight seconds.
 game.after(8, function()
     welcome.visible = false
@@ -24,6 +30,7 @@ game.after(8, function()
 end)
 
 game.onStart(function()
+    title:show()
     print("Welcome to {name}! Click the game window so it can see your mouse.")
     print("Jump: Space, or the bottom face button on a gamepad.")
     print("Fire: left mouse button, or the right trigger.")

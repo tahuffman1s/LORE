@@ -22,6 +22,8 @@ const MAX_NAME_LENGTH: usize = 64;
 const NAME_PLACEHOLDER: &str = "{name}";
 
 const MAIN_SCRIPT: &str = include_str!("../template/main.luau");
+const TITLE_HTML: &str = include_str!("../template/ui/title.html");
+const TITLE_CSS: &str = include_str!("../template/ui/title.css");
 const README: &str = include_str!("../template/README.md");
 const EDITOR_SETTINGS: &str = include_str!("../template/vscode-settings.json");
 const CLAUDE_GUIDE: &str = include_str!("../template/CLAUDE.md");
@@ -233,7 +235,10 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
 
     let editor_folder = folder.join(".vscode");
     let claude_folder = folder.join(".claude");
+    let ui_folder = folder.join("ui");
     let named = |text: &str| text.replace(NAME_PLACEHOLDER, &name).into_bytes();
+    // The name goes into a page, where `<` and `&` mean something.
+    let in_html = |text: &str| text.replace(NAME_PLACEHOLDER, &escaped(&name)).into_bytes();
     let files = [
         (
             folder.join(ENTRY_SCRIPT),
@@ -243,6 +248,8 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
             )),
         ),
         (folder.join(LEVEL_FILE), STARTER_LEVEL.to_vec()),
+        (ui_folder.join("title.html"), in_html(TITLE_HTML)),
+        (ui_folder.join("title.css"), TITLE_CSS.into()),
         (folder.join("README.md"), named(README)),
         (folder.join(TYPES_FILE), TYPE_DEFINITIONS.into()),
         (editor_folder.join("settings.json"), EDITOR_SETTINGS.into()),
@@ -253,7 +260,7 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
     // Only what this call made is removed again if a later step fails, so a
     // file someone else put there in the meantime is never touched.
     let mut made = 0;
-    let written = [&editor_folder, &claude_folder]
+    let written = [&editor_folder, &claude_folder, &ui_folder]
         .into_iter()
         .try_for_each(|subfolder| {
             fs::create_dir_all(subfolder).map_err(|source| NewGameError::Io {
@@ -281,6 +288,7 @@ pub fn new_game_of(path: &Path, kind: GameKind) -> Result<NewGame, NewGameError>
         }
         let _ = fs::remove_dir(&editor_folder);
         let _ = fs::remove_dir(&claude_folder);
+        let _ = fs::remove_dir(&ui_folder);
         if !existed {
             let _ = fs::remove_dir(&folder);
         }
@@ -313,6 +321,14 @@ pub fn refresh_types(folder: &Path) -> io::Result<bool> {
     }
     fs::write(&path, TYPE_DEFINITIONS)?;
     Ok(true)
+}
+
+/// `text` as it is written in HTML.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Creates an empty file that must not exist yet.
@@ -512,6 +528,40 @@ mod tests {
         ))
         .unwrap();
         assert!(example == STARTER_LEVEL, "copy template/level.glb over it");
+    }
+
+    #[test]
+    fn the_new_game_has_a_title_screen_that_loads_and_checks_clean() {
+        let scratch = Scratch::new();
+        let game = new_game(&scratch.path("Lantern & Co")).unwrap();
+        let html = fs::read_to_string(game.folder.join("ui/title.html")).unwrap();
+        assert!(html.contains("<h1>Lantern &amp; Co</h1>"), "{html}");
+        assert!(!html.contains(NAME_PLACEHOLDER));
+        assert!(game.folder.join("ui/title.css").is_file());
+
+        let host = ScriptHost::open(&game.folder, ActionMap::standard()).unwrap();
+        assert_eq!(host.last_error(), None);
+        let found = host.check_screens();
+        assert_eq!(found.screens, 1);
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_example_has_the_templates_title_screen() {
+        let example = |name: &str| {
+            fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../examples/hello/ui")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            example("title.html"),
+            TITLE_HTML.replace(NAME_PLACEHOLDER, "hello")
+        );
+        assert_eq!(example("title.css"), TITLE_CSS);
     }
 
     #[test]

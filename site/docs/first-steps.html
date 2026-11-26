@@ -130,7 +130,7 @@ Then open main.luau in an editor, change something and save: the running game up
 [INFO] Fire: left mouse button, or the right trigger.</code></pre>
     </div>
   </div>
-  <p>On Windows the first line says <code>.\main.luau</code>. Click the window, then look around with the mouse and walk with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. A gamepad works too: left stick to walk, right stick to look. The walls and the house are solid, a ramp and some steps lead up to a terrace, and you can hear your own footsteps. Press <kbd>Space</kbd> (or the bottom face button on a gamepad) a few times: the number in the bottom left counts your jumps, and the terminal does as well:</p>
+  <p>On Windows the first line says <code>.\main.luau</code>. A title screen comes first: press <kbd>Enter</kbd> (or the bottom face button on a gamepad) on Start. Then click the window, and look around with the mouse and walk with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. A gamepad works too: left stick to walk, right stick to look. The walls and the house are solid, a ramp and some steps lead up to a terrace, and you can hear your own footsteps. Press <kbd>Space</kbd> (or the bottom face button on a gamepad) a few times: the number in the bottom left counts your jumps, and the terminal does as well:</p>
   <div class="code">
     <pre class="out" tabindex="0"><code>[INFO] Jump number 1
 [INFO] Jump number 2</code></pre>
@@ -165,9 +165,9 @@ Then open main.luau in an editor, change something and save: the running game up
   </div>
   <p>Now break it on purpose. Change <code>game.onTick</code> to <code>game.onTik</code> and save:</p>
   <div class="code">
-    <pre class="out" data-says="mistake" tabindex="0"><code>[ERROR] Script error in main.luau, line 33:
+    <pre class="out" data-says="mistake" tabindex="0"><code>[ERROR] Script error in main.luau, line 40:
 
-    33 | game.onTik(function()
+    40 | game.onTik(function()
 
   game.onTik does not exist. Did you mean game.onTick?
   The game keeps running the last version that worked. Fix this and save the file: it reloads by itself.</code></pre>
