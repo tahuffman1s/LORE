@@ -59,7 +59,12 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "thing",
     "things",
     "zone",
+    "npc",
+    "npcs",
     "showUsePrompt",
+    "sides",
+    "side",
+    "onFeelingChange",
     "seed",
     "setSeed",
     "chance",
@@ -138,6 +143,13 @@ pub(crate) struct Handlers {
     pub moment: Vec<(String, Function)>,
     /// `thing:onUse`: each with the id of the thing it is for.
     pub used: Vec<(Rc<str>, Function)>,
+    /// `npc:onUse`: each with the NPC it is for.
+    pub npc_used: Vec<(CharacterId, Function)>,
+    /// `npc:onSee`, `npc:onLoseSight` and `npc:onHear`, each with the NPC
+    /// it is for.
+    pub npc_saw: Vec<(CharacterId, Function)>,
+    pub npc_lost: Vec<(CharacterId, Function)>,
+    pub npc_heard: Vec<(CharacterId, Function)>,
     /// `thing:onEnter` and `thing:onLeave`, likewise.
     pub entered: Vec<(Rc<str>, Function)>,
     pub left: Vec<(Rc<str>, Function)>,
@@ -149,9 +161,13 @@ pub(crate) struct Handlers {
     pub dropped: Vec<Function>,
     /// `game.input.onControlsChanged`.
     pub controls_changed: Vec<Function>,
+    /// `game.difficulty.onChange`.
+    pub difficulty: Vec<Function>,
     /// `game.clock.onHour`: each with the hour of the day it listens for,
     /// or none for every hour.
     pub hour: Vec<(Option<u8>, Function)>,
+    /// `game.onFeelingChange`.
+    pub feeling: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -228,6 +244,15 @@ pub(crate) struct Shared {
     pub things: Rc<crate::thing_api::ThingState>,
     /// What this version has said of using things.
     pub thing_uses: crate::thing_api::ThingUses,
+    /// Who is an NPC. It outlives this version of the script.
+    pub npcs: Rc<crate::npc_api::NpcState>,
+    /// The table handed to the script for each noise of the tick, by its
+    /// place in the tick's list, once built: `game.onNoise` and every NPC's
+    /// `onHear` get the same one. Belongs to this version's Lua.
+    pub noise_tables: RefCell<Vec<Option<mlua::Table>>>,
+    /// What this version has said of its NPCs, and which it made as its
+    /// file loaded.
+    pub npc_version: crate::npc_api::NpcVersion,
     /// The values this version holds for things, by id.
     pub thing_handles: RefCell<std::collections::HashMap<String, mlua::AnyUserData>>,
     /// The game shaders the script turned on. It outlives this version of
@@ -255,6 +280,9 @@ pub(crate) struct Shared {
     /// The player's settings as the script reads and changes them. They
     /// outlive this version of the script.
     pub settings: Rc<SettingsState>,
+    /// Where the difficulty dial stands. It outlives this version of the
+    /// script.
+    pub difficulty: Rc<crate::difficulty_api::DifficultyState>,
     /// The screens of `game.ui`. They outlive this version of the script.
     pub ui: Rc<crate::ui::UiState>,
     /// The functions of this version that answer a screen's events.
@@ -270,6 +298,8 @@ pub(crate) struct Shared {
     pub dice: Rc<crate::dice_api::Dice>,
     /// The player's body and camera. It outlives this version of the script.
     pub body: Rc<crate::body_api::BodyState>,
+    /// Who likes whom. It outlives this version of the script.
+    pub sides: Rc<crate::sides_api::SidesState>,
     /// The hurts the script has not yet heard of. They outlive this version.
     pub health: Rc<crate::health_api::HealthState>,
     /// The walkable ground of the level, and which doors are open. It
@@ -501,13 +531,28 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
     let state = Rc::clone(shared);
     game.set(
+        "npc",
+        lua.create_function(move |lua, given: Value| crate::npc_api::npc(lua, &state, &given))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
+        "npcs",
+        lua.create_function(move |lua, ()| crate::npc_api::npcs(lua, &state))?,
+    )?;
+    let state = Rc::clone(shared);
+    game.set(
         "showUsePrompt",
         lua.create_function(move |lua, shown: Value| {
             crate::thing_api::use_prompt(lua, &state, &shown)
         })?,
     )?;
 
+    crate::sides_api::install(lua, shared, &game)?;
     game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set(
+        "difficulty",
+        crate::difficulty_api::difficulty(lua, shared)?,
+    )?;
     game.set("clock", crate::clock_api::clock(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
@@ -543,6 +588,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
     members.push("camera");
+    members.push("difficulty");
     members.push("clock");
     members.push("fluids");
     members.push("frames");
@@ -832,12 +878,12 @@ pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
     const NO_ROUNDS: &str = "LORE has no rounds. Take it out. To do something when the game \
          begins, write game.onStart(function() ... end); to do it later, \
          game.after(60, function() ... end).";
-    const NO_KILLS: &str = "LORE does not count kills or deaths: nothing has health yet, so \
-         no shot kills anybody. Take it out. To count the shots that land on someone, write \
-         local hits = 0 at the top of the file and \
-         game.onWeaponHit(function(hit) if hit.victim then hits += 1 end end).";
+    const NO_KILLS: &str = "LORE does not count kills or deaths for you. Take it out. To \
+         count the ones the player brings down, write local kills = 0 at the top of the file \
+         and game.onDeath(function(victim, killer) if killer == game.player then kills += 1 \
+         end end).";
     let path = match path {
-        "game.player" | "character" => "character",
+        "game.player" | "character" | "npc" => "character",
         other => other,
     };
     Some(match (path, key) {
@@ -871,9 +917,9 @@ pub(crate) fn taken_out(path: &str, key: &str) -> Option<&'static str> {
         ("game", "onKill") | ("character", "kills" | "deaths") => NO_KILLS,
         ("character", "score" | "addScore") => NO_SCORE,
         ("character", "alive") => {
-            "LORE has no dead player: nothing has health yet, so game.player is always in \
-             the world. Take it out. To do something when the player is put back at a spawn \
-             point, write game.onSpawn(function() ... end)."
+            "A character has no `alive`: read `dead` instead, which is true once its health \
+             is gone: if not guard.dead then ... end. To do something when someone dies, \
+             write game.onDeath(function(victim, killer) ... end)."
         }
         _ => return None,
     })
@@ -960,7 +1006,9 @@ mod tests {
             if line == "end" || line.starts_with('}') {
                 inside.pop();
             } else if let Some(class) = line.strip_prefix("declare extern type ") {
-                inside.push(class.strip_suffix(" with").unwrap());
+                let class = class.strip_suffix(" with").unwrap();
+                // `Npc extends Character` is listed by what `Npc` adds.
+                inside.push(class.split(" extends ").next().unwrap());
             } else if line == "declare game: {" {
                 inside.push("game");
             } else if let Some(method) = line.strip_prefix("function ") {
@@ -988,7 +1036,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 65] = [
+        let groups: [(&str, &[&str]); 70] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1014,10 +1062,15 @@ mod tests {
             ("game.settings.", SETTINGS_FUNCTIONS),
             ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.difficulty.", crate::difficulty_api::DIFFICULTY_FIELDS),
             ("game.clock.", crate::clock_api::CLOCK_FIELDS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),
+            ("Npc.", crate::npc_api::NPC_FIELDS),
+            ("Npc:", crate::npc_api::NPC_METHODS),
+            ("Side.", crate::sides_api::SIDE_FIELDS),
+            ("Side:", crate::sides_api::SIDE_METHODS),
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),

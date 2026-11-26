@@ -121,7 +121,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload, the player dying,\nstanding in a burning puddle and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying,\nstanding in a burning puddle, each NPC seeing and hearing the player,\nthe difficulty being turned, one side's feeling about another changing and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -535,8 +535,11 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut pairs = 0;
     let mut used = 0;
     let mut zones = 0;
+    let mut sensing = 0;
     let mut carrying = false;
     let mut slides = 0;
+    let mut turned = 0;
+    let mut feelings = 0;
     let mut hours = 0;
     // Where an onHour function moved the clock to, if one did.
     let mut moved_to: Option<String> = None;
@@ -662,21 +665,37 @@ fn check(folder: &Path) -> Result<(), String> {
         game.tick(input.tick(), step);
         // Every thing the script made usable is used once, so what each
         // does is run too, wherever in the level it stands.
+        // The NPCs with an onUse function too, each spoken to once.
         let mut usable = Vec::new();
-        game.host()
-            .each_usable(|id, _, _| usable.push(id.to_owned()));
+        let mut npcs = Vec::new();
+        game.host().each_usable(|meant, _, _| match meant {
+            lore_script::Usable::Thing(id) => usable.push(id.to_owned()),
+            lore_script::Usable::Npc(id) => npcs.push(id),
+        });
         for id in &usable {
-            game.host_mut().set_use_target(Some(id), 0.0);
+            (game.host_mut()).set_use_target(Some(lore_script::Usable::Thing(id)), 0.0);
             game.host_mut().use_thing(id);
             game.tick(input.tick(), step);
         }
+        for id in &npcs {
+            (game.host_mut()).set_use_target(Some(lore_script::Usable::Npc(*id)), 0.0);
+            game.host_mut().use_npc(*id);
+            game.tick(input.tick(), step);
+        }
         game.host_mut().set_use_target(None, 0.0);
-        used = usable.len();
+        used = usable.len() + npcs.len();
+        // Each NPC with onSee, onHear or onLoseSight is said to see the
+        // player, hear a step of theirs and lose sight of them.
+        sensing = game.host_mut().pretend_senses();
+        game.tick(input.tick(), step);
         // The first thing that can be carried is said to be picked up,
         // put down, picked up again and thrown.
         let mut carried = None;
-        game.host().each_usable(|id, _, _| {
-            if carried.is_none() && game.host().carryable(id) {
+        game.host().each_usable(|meant, _, _| {
+            if let lore_script::Usable::Thing(id) = meant
+                && carried.is_none()
+                && game.host().carryable(id)
+            {
                 carried = Some(id.to_owned());
             }
         });
@@ -698,6 +717,14 @@ fn check(folder: &Path) -> Result<(), String> {
         // And each thing the script slides about is said to have arrived,
         // and to have found the player in its way.
         slides = game.host_mut().pretend_slides();
+        game.tick(input.tick(), step);
+        // And the difficulty is said to be turned, so each
+        // game.difficulty.onChange function runs.
+        turned = game.host_mut().pretend_difficulty_change();
+        game.tick(input.tick(), step);
+        // And one side is said to feel otherwise about another, so each
+        // game.onFeelingChange function runs.
+        feelings = game.host_mut().pretend_feeling_change();
         game.tick(input.tick(), step);
         // And a whole day is said to pass, so each game.clock.onHour
         // function hears its hour.
@@ -847,14 +874,14 @@ fn check(folder: &Path) -> Result<(), String> {
     match used {
         0 => {}
         1 => println!(
-            "The one thing a player can use (one with thing:onUse, or one light enough to \
-             pick up) was used once, with no errors. Nobody walked up to it: whether a \
-             player can reach it is for `lore run`."
+            "The one thing a player can use (one with thing:onUse or npc:onUse, or one light \
+             enough to pick up) was used once, with no errors. Nobody walked up to it: \
+             whether a player can reach it is for `lore run`."
         ),
         used => println!(
-            "Each of the {used} things a player can use (those with thing:onUse, and those \
-             light enough to pick up) was used once, with no errors. Nobody walked up to \
-             them: whether a player can reach each is for `lore run`."
+            "Each of the {used} things and NPCs a player can use (those with thing:onUse or \
+             npc:onUse, and those light enough to pick up) was used once, with no errors. \
+             Nobody walked up to them: whether a player can reach each is for `lore run`."
         ),
     }
     if slides > 0 {
@@ -863,6 +890,22 @@ fn check(folder: &Path) -> Result<(), String> {
              {} said to have arrived, or to have found the player in the way, with no \
              errors. Nothing really moved.",
             if slides == 1 { "was" } else { "were" }
+        );
+    }
+    if turned > 0 {
+        println!(
+            "The difficulty was said to be turned one step, so {} game.difficulty.onChange \
+             function{} ran, with no errors. The game stayed at the step it was at.",
+            if turned == 1 { "the one" } else { "every" },
+            if turned == 1 { "" } else { "s" },
+        );
+    }
+    if feelings > 0 {
+        println!(
+            "One side was said to feel otherwise about another, so {} game.onFeelingChange \
+             function{} ran, with no errors. No feeling really changed.",
+            if feelings == 1 { "the one" } else { "every" },
+            if feelings == 1 { "" } else { "s" },
         );
     }
     if hours > 0 {
@@ -886,6 +929,20 @@ fn check(folder: &Path) -> Result<(), String> {
              down, pick it up again and throw it, so game.onPickUp and game.onDrop ran, \
              with no errors. Nothing was really lifted."
         );
+    }
+    match sensing {
+        0 => {}
+        1 => println!(
+            "The one NPC with npc:onSee, npc:onHear or npc:onLoseSight was said to see the \
+             player, hear a step of theirs and lose sight of them, with no errors. Nobody \
+             really moved: what an NPC sees from where it stands is for `lore run`."
+        ),
+        sensing => println!(
+            "Each of the {sensing} NPCs with npc:onSee, npc:onHear or npc:onLoseSight was \
+             said to see the player, hear a step of theirs and lose sight of them, with no \
+             errors. Nobody really moved: what an NPC sees from where it stands is for \
+             `lore run`."
+        ),
     }
     match zones {
         0 => {}

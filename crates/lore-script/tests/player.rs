@@ -355,7 +355,7 @@ fn mistakes_with_the_player_say_what_to_write() {
         said.contains(", and the functions game.player:giveWeapon,"),
         "{said}"
     );
-    assert!(said.ends_with("game.player:block."), "{said}");
+    assert!(said.ends_with("game.player:forgive."), "{said}");
     assert_eq!(
         spawn_error("game.player.takeWeapon()"),
         "takeWeapon needs a colon before it, not a dot, because it acts on the one it is \
@@ -445,10 +445,9 @@ const NO_SCORE: &str = "LORE keeps no score: it has no matches to win. Take it o
      (score += 1 in game.onWeaponHit or game.onTick), and show it with game.hud.text.";
 const NO_ROUNDS: &str = "LORE has no rounds. Take it out. To do something when the game begins, \
      write game.onStart(function() ... end); to do it later, game.after(60, function() ... end).";
-const NO_DEATHS: &str = "LORE does not count kills or deaths: nothing has health yet, so no shot \
-     kills anybody. Take it out. To count the shots that land on someone, write local hits = 0 \
-     at the top of the file and \
-     game.onWeaponHit(function(hit) if hit.victim then hits += 1 end end).";
+const NO_DEATHS: &str = "LORE does not count kills or deaths for you. Take it out. To count \
+     the ones the player brings down, write local kills = 0 at the top of the file and \
+     game.onDeath(function(victim, killer) if killer == game.player then kills += 1 end end).";
 const NO_ROUND: &str = "LORE has no rounds. Take it out. To count down, write \
      game.after(60, function() ... end); game.time() gives the seconds the game has run.";
 
@@ -522,9 +521,9 @@ fn a_script_that_asks_the_player_for_a_team_or_a_score_is_told_lore_has_none() {
     );
     assert_eq!(
         spawn_error("if game.player.alive then print(\"in\") end"),
-        "game.player.alive does not exist. LORE has no dead player: nothing has health yet, \
-         so game.player is always in the world. Take it out. To do something when the player \
-         is put back at a spawn point, write game.onSpawn(function() ... end)."
+        "game.player.alive does not exist. A character has no `alive`: read `dead` instead, \
+         which is true once its health is gone: if not guard.dead then ... end. To do \
+         something when someone dies, write game.onDeath(function(victim, killer) ... end)."
     );
 }
 

@@ -49,6 +49,10 @@ const POLL_EVERY: Duration = Duration::from_millis(100);
 /// so a script failing in new ways every tick cannot flood the log.
 const MAX_REPORTED: usize = 32;
 
+/// The most noises of one tick whose script table is kept for the NPCs
+/// that hear them; one past that is built afresh for each.
+const MOST_NOISE_TABLES: usize = 1024;
+
 const KEEPS_RUNNING: &str =
     "The game keeps running. Fix this and save the file: it reloads by itself.";
 const KEEPS_PREVIOUS: &str = "The game keeps running the last version that worked. \
@@ -144,6 +148,10 @@ pub struct ScriptHost {
     respawn: bool,
     /// The player died and the script has not been told yet.
     spawn_due: bool,
+    /// The player's settings as the engine last told them, waiting for the
+    /// next tick to take effect: game state (the difficulty dial, fall
+    /// damage) changes only on a tick.
+    settings_due: Option<Vec<Setting>>,
     /// The game's time the last meteors were looked for at, in seconds.
     meteors_seen: Option<f64>,
     /// Rereads of the player's controls the script has not been told of.
@@ -187,12 +195,17 @@ pub struct ScriptHost {
     body: Rc<crate::body_api::BodyState>,
     /// Hurts the script has not yet heard of; they outlive a reload too.
     health: Rc<crate::health_api::HealthState>,
+    /// Who likes whom: the game's sides and the grudges its people hold.
+    /// It outlives a reload too.
+    sides: Rc<crate::sides_api::SidesState>,
     lighting: Rc<crate::lighting_api::LightingState>,
     look: Rc<crate::look_api::LookState>,
     /// Where the script said the world is seen from; it outlives a reload too.
     camera: Rc<crate::camera_api::CameraState>,
     /// What is placed in the level; it outlives a reload too.
     things: Rc<crate::thing_api::ThingState>,
+    /// Who is an NPC; they outlive a reload too.
+    npcs: Rc<crate::npc_api::NpcState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -201,6 +214,8 @@ pub struct ScriptHost {
     /// The player's settings, as the engine handed them over and as the
     /// script has changed them since. Kept here so a save loses no change.
     settings: Rc<SettingsState>,
+    /// Where the difficulty dial stands; it outlives a reload too.
+    difficulty: Rc<crate::difficulty_api::DifficultyState>,
     /// The screens of `game.ui`, which outlive a reload too.
     ui: Rc<crate::ui::UiState>,
     /// The mistake in a screen's files that is on `last_error` now.
@@ -479,7 +494,14 @@ impl ScriptHost {
     ) -> Self {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
+        let characters = Rc::<Characters>::default();
+        let npcs = Rc::<crate::npc_api::NpcState>::default();
+        // The NPCs placed in the map are there before the script's first
+        // line, so it can find them at the top of its file.
+        let _ = npcs.place(&placed, &characters);
         things.set_placed(placed);
+        let settings = Rc::new(SettingsState::new(settings));
+        let difficulty = Rc::new(crate::difficulty_api::DifficultyState::new(&settings));
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
             ui: Rc::new(crate::ui::UiState::new(Rc::clone(&files))),
@@ -499,10 +521,11 @@ impl ScriptHost {
             reported: HashSet::new(),
             watched: Vec::new(),
             next_poll: Instant::now() + POLL_EVERY,
-            characters: Rc::default(),
+            characters,
             kept: Rc::default(),
             respawn: false,
             spawn_due: false,
+            settings_due: None,
             meteors_seen: None,
             controls_told: Vec::new(),
             controls_notice: Rc::new(Cell::new(true)),
@@ -521,13 +544,16 @@ impl ScriptHost {
             lamps: Rc::default(),
             body: Rc::default(),
             health: Rc::default(),
+            sides: Rc::default(),
             lighting: Rc::default(),
             look: Rc::default(),
             camera: Rc::default(),
             things,
+            npcs,
             versions: 0,
             tools: Rc::default(),
-            settings: Rc::new(SettingsState::new(settings)),
+            settings,
+            difficulty,
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -594,6 +620,7 @@ impl ScriptHost {
             hud::update_pressed(&version.shared, click);
         }
         self.clock.begin_tick(step);
+        self.settings_due();
         // A held direction counts its ticks whether or not the script asks.
         self.tools.advance_steps(
             &self.actions.borrow(),
@@ -627,6 +654,10 @@ impl ScriptHost {
         self.run_screens(input);
         self.hurts_due();
         self.switches_due();
+        // A turn of the dial is heard even while paused: the pause menu is
+        // where the player turns it.
+        self.difficulty_due();
+        self.feelings_due();
         // Hours passed by the clock, or skipped by a timer, a menu or the
         // start, are heard before the tick's rules read the hour.
         if !stopped {
@@ -836,8 +867,25 @@ impl ScriptHost {
     /// script made that has not been taken yet
     /// ([`take_changed_settings`](Self::take_changed_settings)) stays, to
     /// be taken.
+    ///
+    /// They take effect at the start of the next tick, as anything that
+    /// changes the game does (or as the script is next reloaded, if that
+    /// comes first): a new "difficulty" turns the dial there, and
+    /// `game.difficulty.onChange` hears of it on that tick.
     pub fn set_settings(&mut self, settings: Vec<Setting>) {
+        self.settings_due = Some(settings);
+    }
+
+    /// Puts settings the engine told of into effect, at the start of a tick.
+    fn settings_due(&mut self) {
+        let Some(settings) = self.settings_due.take() else {
+            return;
+        };
+        let before = self.settings.value_of(crate::DIFFICULTY_SETTING);
         self.settings.replace(settings);
+        if self.settings.value_of(crate::DIFFICULTY_SETTING) != before {
+            self.difficulty.follow_setting(&self.settings);
+        }
     }
 
     /// The seconds of game time that have been run: the number of ticks
@@ -1070,6 +1118,13 @@ impl ScriptHost {
         self.body.blocking()
     }
 
+    /// What a character is called, or `None` for one that is not in the
+    /// world.
+    #[must_use]
+    pub fn character_name(&self, id: CharacterId) -> Option<String> {
+        self.characters.name_and_place(id).map(|(name, _)| name)
+    }
+
     /// Where a character's feet are, or `None` for one not in the world.
     #[must_use]
     pub fn character_position(&self, id: CharacterId) -> Option<[f32; 3]> {
@@ -1178,6 +1233,132 @@ impl ScriptHost {
         self.weather.hour()
     }
 
+    /// Whether the player's on-or-off setting called `name` is on, as the
+    /// script reads it (`game.settings.get`); `None` if there is no such
+    /// setting. It changes on a tick when the settings menu turns it.
+    #[must_use]
+    pub fn setting_on(&self, name: &str) -> Option<bool> {
+        match self.settings.value_of(name)? {
+            SettingValue::Toggle(on) => Some(on),
+            _ => None,
+        }
+    }
+
+    /// How hard the game is, from 0 (its easiest step) to 1 (its hardest):
+    /// where `game.difficulty` stands. It changes only on a tick, so a
+    /// replay of the same input reads the same.
+    #[must_use]
+    pub fn difficulty_level(&self) -> f64 {
+        self.difficulty.level()
+    }
+
+    /// The name of the step of difficulty the game is at (`game.difficulty.name`).
+    #[must_use]
+    pub fn difficulty_name(&self) -> Rc<str> {
+        self.difficulty.name()
+    }
+
+    /// The numbers the engine's own people follow at this difficulty: how
+    /// much they hurt the player, how fast they notice and how well they
+    /// aim. Each is 1 at the middle of the dial.
+    #[must_use]
+    pub fn difficulty_scales(&self) -> crate::DifficultyScales {
+        self.difficulty.scales()
+    }
+
+    /// Who likes whom: the game's sides, how each feels about the others,
+    /// who is on which and the grudges each holds. It is story state: what
+    /// a save keeps of it is this, whole. The world reads it on its tick
+    /// ([`lore_npc::Sides::is_enemy`] is a rule's "an enemy").
+    #[must_use]
+    pub fn sides(&self) -> std::cell::Ref<'_, lore_npc::Sides> {
+        self.sides.table.borrow()
+    }
+
+    /// The table of [`sides`](Self::sides), for the world to change on its
+    /// tick: the time, what people suffered, saw and told each other.
+    pub fn sides_mut(&mut self) -> std::cell::RefMut<'_, lore_npc::Sides> {
+        self.sides.table.borrow_mut()
+    }
+
+    /// Puts into `into` (emptied first) every hurt someone dealt someone
+    /// since this was last asked, oldest first: what the world's people
+    /// hold against whom, and what they may have seen.
+    pub fn take_deeds(&mut self, into: &mut Vec<crate::Deed>) {
+        self.health.take_deeds(into);
+    }
+
+    /// Calls every `game.onFeelingChange` function as if one side had come
+    /// to feel otherwise about another (the first two sides in the table:
+    /// an enemy become a friend, or anything else become an enemy),
+    /// without changing anything, so that `lore check` runs them. Gives
+    /// how many there are.
+    pub fn pretend_feeling_change(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().feeling.len();
+        if count == 0 {
+            return 0;
+        }
+        let told = {
+            let sides = self.sides.table.borrow();
+            let names: Vec<&str> = sides.names().collect();
+            let (side, toward) = match names.as_slice() {
+                [] => ("Town", "Outlaws"),
+                [only] => (*only, *only),
+                [first, second, ..] => (*first, *second),
+            };
+            let before = sides
+                .find(side)
+                .zip(sides.find(toward))
+                .map_or(lore_npc::Feeling::Neutral, |(a, b)| sides.between(a, b));
+            let now = if before == lore_npc::Feeling::Enemy {
+                lore_npc::Feeling::Friend
+            } else {
+                lore_npc::Feeling::Enemy
+            };
+            (
+                side.to_owned(),
+                toward.to_owned(),
+                now.word(),
+                before.word(),
+            )
+        };
+        self.call_all(|handlers| &handlers.feeling, told);
+        count
+    }
+
+    /// Calls every `game.difficulty.onChange` function as if the player had
+    /// turned the dial one step harder (or, at the hardest, one easier),
+    /// without turning it, so that `lore check` runs them. Gives how many
+    /// there are.
+    pub fn pretend_difficulty_change(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().difficulty.len();
+        let steps = self.difficulty.steps();
+        let at = steps
+            .iter()
+            .position(|step| *step == self.difficulty.name())
+            .unwrap_or(0);
+        let other = if at + 1 < steps.len() {
+            at + 1
+        } else {
+            at.saturating_sub(1)
+        };
+        // A dial of one step cannot be turned.
+        if other == at {
+            return count;
+        }
+        if let (Some(now), Some(before)) = (steps.get(other), steps.get(at)) {
+            let told = (now.to_string(), before.to_string());
+            self.call_all(|handlers| &handlers.difficulty, told);
+        }
+        count
+    }
+
     /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
     /// half past one in the afternoon), or `None` while the game has never
     /// said a time or a day length: such a game has no day and night.
@@ -1227,6 +1408,39 @@ impl ScriptHost {
             self.tell_hour(hour);
         }
         count
+    }
+
+    /// Tells `game.onFeelingChange` functions of each feeling between two
+    /// sides that changed since the last tick.
+    fn feelings_due(&mut self) {
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        for changed in self.sides.take_waiting() {
+            self.call_all(
+                |handlers| &handlers.feeling,
+                (
+                    changed.side,
+                    changed.toward,
+                    changed.now.word(),
+                    changed.before.word(),
+                ),
+            );
+        }
+    }
+
+    /// Tells `game.difficulty.onChange` functions of each turn of the dial
+    /// since the last tick.
+    fn difficulty_due(&mut self) {
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        for (now, before) in self.difficulty.take_waiting() {
+            self.call_all(
+                |handlers| &handlers.difficulty,
+                (now.to_string(), before.to_string()),
+            );
+        }
     }
 
     /// Tells `game.clock.onHour` functions of each hour the clock has come
@@ -1687,10 +1901,13 @@ impl ScriptHost {
         if !self.characters.remove(character) {
             return;
         }
+        // An NPC's body leaves the world with it.
+        self.npcs.forget(character);
         if let Some(version) = &self.running {
             version.shared.handles.forget(character);
         }
         self.weapons.forget(character);
+        self.sides.table.borrow_mut().forget(character.number());
     }
 
     /// Says how a character is moving: what the script reads as `velocity`,
@@ -1725,6 +1942,11 @@ impl ScriptHost {
     /// again while the game runs. A thing a script still holds that is no
     /// longer placed says so when it is next read.
     pub fn set_placed(&mut self, placed: Vec<crate::Placed>) {
+        // An NPC newly placed comes into the world, one moved or renamed in
+        // the map is moved or renamed, and one no longer placed leaves.
+        for gone in self.npcs.place(&placed, &self.characters) {
+            self.remove_character(gone);
+        }
         self.things.set_placed(placed);
     }
 
@@ -1858,27 +2080,40 @@ impl ScriptHost {
         self.things.take_asks()
     }
 
-    /// Calls `see` with every thing the player can use now: its id, where
-    /// it is and how it is used (`thing:onUse`, `thing.useText`).
-    pub fn each_usable(&self, see: impl FnMut(&str, [f32; 3], &crate::UseSaid)) {
+    /// Calls `see` with everything the player can use now: which it is,
+    /// where it is and how it is used (`thing:onUse`, `thing.useText`,
+    /// `npc:onUse`). The things placed in the map come first, in the order
+    /// they are placed, then the NPCs in the order they were made.
+    pub fn each_usable(&self, mut see: impl FnMut(crate::Usable<'_>, [f32; 3], &crate::UseSaid)) {
         if let Some(version) = &self.running {
-            self.things.each_usable(&version.shared.thing_uses, see);
+            (self.things).each_usable(&version.shared.thing_uses, |id, at, said| {
+                see(crate::Usable::Thing(id), at, said);
+            });
+            crate::npc_api::each_usable(&version.shared, |id, at, said| {
+                see(crate::Usable::Npc(id), at, said);
+            });
         }
     }
 
-    /// Says which thing the use button would act on now, by its id, and how
-    /// far through holding the button the player is (0 to 1): what
+    /// Says what the use button would act on now, and how far through
+    /// holding the button the player is (0 to 1): what
     /// `game.player.lookingAt` and `game.player.useProgress` read.
-    pub fn set_use_target(&mut self, target: Option<&str>, progress: f32) {
+    pub fn set_use_target(&mut self, target: Option<crate::Usable<'_>>, progress: f32) {
         self.things.set_target(target, progress);
     }
 
-    /// The words to show for the thing the player can use now, and how far
+    /// The words to show for what the player can use now, and how far
     /// through holding the button they are: `None` when there is nothing
     /// to use, or the script draws its own prompt (`game.showUsePrompt(false)`).
     #[must_use]
     pub fn use_prompt(&self) -> Option<(String, f32)> {
         let version = self.running.as_ref()?;
+        if let Some((npc, progress)) = self.things.npc_target() {
+            if !version.shared.thing_uses.shows_prompt() {
+                return None;
+            }
+            return Some((crate::npc_api::prompt(&version.shared, npc)?, progress));
+        }
         self.things.prompt(&version.shared.thing_uses)
     }
 
@@ -1887,6 +2122,254 @@ impl ScriptHost {
     #[must_use]
     pub fn use_label(&self) -> String {
         self.tools.label(&self.actions.borrow(), "interact")
+    }
+
+    /// Tells the script the player used the NPC `id`: its `onUse`
+    /// functions are called with the NPC.
+    pub fn use_npc(&mut self, id: CharacterId) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::npc_api::handlers_for(&shared, id);
+        if handlers.is_empty() || !self.characters.has(id) {
+            return;
+        }
+        let Ok(npc) = shared.handles.character(&version.vm, id) else {
+            return;
+        };
+        let was = self.audio.by.replace(Some(id));
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, npc.clone()) {
+                break;
+            }
+        }
+        self.audio.by.set(was);
+    }
+
+    /// How keen the senses of the NPC `id` are (`npc.sightDistance`,
+    /// `sightAngle`, `hearing`, `nightSight`): a person's until the script
+    /// says otherwise.
+    #[must_use]
+    pub fn npc_senses(&self, id: CharacterId) -> crate::NpcSenses {
+        (self.running.as_ref()).map_or_else(crate::NpcSenses::default, |version| {
+            version.shared.npc_version.senses(id)
+        })
+    }
+
+    /// Tells the script the NPC `npc` sees `who` now: they came into its
+    /// view. Its `onSee` functions are called with them, and `canSee` says
+    /// so until [`npc_lost_sight`](Self::npc_lost_sight).
+    pub fn npc_saw(&mut self, npc: CharacterId, who: CharacterId) {
+        // One taken out this tick is no longer anyone's to see or be seen.
+        if !(self.npcs.has(npc) && self.characters.has(who)) {
+            return;
+        }
+        self.npcs.set_in_view(npc, who, true);
+        self.tell_npc(npc, who, |handlers| &handlers.npc_saw, None);
+    }
+
+    /// Tells the script `who` went out of the NPC `npc`'s view, last seen
+    /// with their feet at `at`: its `onLoseSight` functions are called with
+    /// them and that place.
+    pub fn npc_lost_sight(&mut self, npc: CharacterId, who: CharacterId, at: [f32; 3]) {
+        self.npcs.set_in_view(npc, who, false);
+        self.tell_npc(npc, who, |handlers| &handlers.npc_lost, Some(at));
+    }
+
+    /// Tells the script the NPC `npc` heard `noise`, the one at `nth` in the
+    /// tick's list of noises: its `onHear` functions are called with the
+    /// very table `game.onNoise` was handed for it, built once for every
+    /// NPC that heard it.
+    pub fn npc_heard(&mut self, npc: CharacterId, nth: usize, noise: &crate::NoiseTold) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        if !crate::npc_api::has_sense_handler(&shared, npc, |h| &h.npc_heard)
+            || !self.characters.has(npc)
+        {
+            return;
+        }
+        let Some(table) = self.noise_table(&shared, nth, noise) else {
+            return;
+        };
+        self.call_npc_handlers(&shared, npc, |h| &h.npc_heard, table);
+    }
+
+    /// Forgets the tables the script was handed for the noises of the last
+    /// tick: call once a tick, before the first [`noise_made`](Self::noise_made).
+    pub fn start_noises(&mut self) {
+        if let Some(version) = &self.running {
+            version.shared.noise_tables.borrow_mut().clear();
+        }
+    }
+
+    /// The script's table for the noise at `nth` in the tick's list: the
+    /// one already built for it this tick, or a new one, kept for the rest.
+    fn noise_table(
+        &self,
+        shared: &Rc<Shared>,
+        nth: usize,
+        noise: &crate::NoiseTold,
+    ) -> Option<mlua::Table> {
+        let version = self.running.as_ref()?;
+        let mut tables = shared.noise_tables.borrow_mut();
+        if let Some(Some(table)) = tables.get(nth) {
+            return Some(table.clone());
+        }
+        let table = weapon_api::noise_table(&version.vm, shared, noise).ok()?;
+        if nth < MOST_NOISE_TABLES {
+            if tables.len() <= nth {
+                tables.resize(nth + 1, None);
+            }
+            tables[nth] = Some(table.clone());
+        }
+        Some(table)
+    }
+
+    /// Calls each function `pick` gives for the NPC `npc` with `args`, in
+    /// the order they were added, as that NPC (what one plays is its own).
+    /// The list is borrowed only to find the next one and nothing is
+    /// gathered first, so a function may add more while it runs: those are
+    /// first called on the next pass, so one that keeps adding cannot hold
+    /// up the tick. Functions are never taken out while a script runs.
+    fn call_npc_handlers(
+        &mut self,
+        shared: &Rc<Shared>,
+        npc: CharacterId,
+        pick: fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
+        args: impl IntoLuaMulti + Clone,
+    ) {
+        let was = self.audio.by.replace(Some(npc));
+        let count = pick(&shared.handlers.borrow()).len();
+        for index in 0..count {
+            let handler = (pick(&shared.handlers.borrow()).get(index))
+                .and_then(|(id, handler)| (*id == npc).then(|| handler.clone()));
+            let Some(handler) = handler else { continue };
+            if self.paused || !self.call(shared, &handler, args.clone()) {
+                break;
+            }
+        }
+        self.audio.by.set(was);
+    }
+
+    /// Notes that the NPC `npc` sees nobody, telling the script nothing:
+    /// its health is gone, or it was put somewhere else.
+    pub fn npc_blinded(&mut self, npc: CharacterId) {
+        self.npcs.blind(npc);
+    }
+
+    /// Calls the functions `pick` gives for the NPC `npc` with the
+    /// character `who`, and `at` after it when there is one.
+    fn tell_npc(
+        &mut self,
+        npc: CharacterId,
+        who: CharacterId,
+        pick: fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
+        at: Option<[f32; 3]>,
+    ) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        if !crate::npc_api::has_sense_handler(&shared, npc, pick)
+            || !self.characters.has(npc)
+            || !self.characters.has(who)
+        {
+            return;
+        }
+        let Ok(seen) = shared.handles.character(&version.vm, who) else {
+            return;
+        };
+        match at {
+            Some([x, y, z]) => {
+                let at = mlua::Vector::new(x, y, z);
+                self.call_npc_handlers(&shared, npc, pick, (seen, at));
+            }
+            None => self.call_npc_handlers(&shared, npc, pick, seen),
+        }
+    }
+
+    /// Tells each NPC with an `onSee`, `onLoseSight` or `onHear` function
+    /// that it saw the player, heard a footstep of theirs and lost sight of
+    /// them, though nobody moved: for `lore check`, so what each does is
+    /// run. Says how many NPCs that was.
+    pub fn pretend_senses(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let listening: Vec<CharacterId> = (shared.npcs.all().into_iter())
+            .filter(|&npc| {
+                let handlers = shared.handlers.borrow();
+                [&handlers.npc_saw, &handlers.npc_lost, &handlers.npc_heard]
+                    .iter()
+                    .any(|list| list.iter().any(|(id, _)| *id == npc))
+            })
+            .collect();
+        let player = CharacterId::PLAYER;
+        let at = self.characters.position(player).unwrap_or_default();
+        for &npc in &listening {
+            self.npc_saw(npc, player);
+            self.npc_heard(
+                npc,
+                usize::MAX,
+                &crate::NoiseTold {
+                    sound: "footstep",
+                    position: at,
+                    loudness: 0.6,
+                    heard_within: 30.0,
+                    by: Some(player),
+                    weapon: None,
+                },
+            );
+            self.npc_lost_sight(npc, player, at);
+        }
+        listening.len()
+    }
+
+    /// Calls `see` with each sound the script played once at a place since
+    /// the last call (`game.audio.playAt`, unless `npcsHear = false`), in
+    /// the order played, for the world to add to its noises so the NPCs
+    /// hear it. Sets no memory aside.
+    pub fn take_script_noises(&mut self, see: impl FnMut(&crate::ScriptNoise)) {
+        self.audio.take_heard(see);
+    }
+
+    /// What the scripts asked of the NPCs' bodies since this was last
+    /// called, in the order they asked: a new NPC to stand in the world,
+    /// one to put elsewhere, one gone.
+    pub fn take_npc_asks(&mut self) -> Vec<crate::NpcAsk> {
+        self.npcs.take_asks()
+    }
+
+    /// Calls `see` with every NPC in the game, in the order they were
+    /// made: who, where their feet are and the way they were put facing.
+    /// A world made for the game gives each a body from this; what was
+    /// asked before ([`take_npc_asks`](Self::take_npc_asks)) is then no
+    /// longer news.
+    pub fn each_npc(&self, see: impl FnMut(crate::NpcTold)) {
+        self.npcs.each(&self.characters, see);
+    }
+
+    /// Whether `id` is an NPC in the game.
+    #[must_use]
+    pub fn is_npc(&self, id: CharacterId) -> bool {
+        self.npcs.has(id)
+    }
+
+    /// How close the player comes before the NPC `id` turns its head to
+    /// look at them, in metres (`npc.lookDistance`): 0 never.
+    #[must_use]
+    pub fn npc_look_distance(&self, id: CharacterId) -> f32 {
+        (self.running.as_ref()).map_or(crate::DEFAULT_LOOK_DISTANCE, |version| {
+            version.shared.npc_version.look_distance(id)
+        })
+    }
+
+    /// Where the place called `name` is, and the way it faces (degrees
+    /// turned to the left, as the map writes it): the thing placed in the
+    /// map with that name (or id), of any type. Every function that takes
+    /// a place by name finds it this way; `None` for a name nothing has.
+    #[must_use]
+    pub fn place_of(&self, name: &str) -> Option<([f32; 3], f32)> {
+        let placed = crate::npc_api::place_named(&self.things, name.trim()).ok()?;
+        Some((placed.position, placed.facing))
     }
 
     /// Tells the script the player used the thing placed as `id`: its
@@ -2234,11 +2717,22 @@ impl ScriptHost {
         let Some(version) = &self.running else {
             return true;
         };
+        // Its place in the tick's list, for an NPC that hears it to be
+        // handed the same table.
+        let nth = version.shared.noise_tables.borrow().len();
         if self.paused || version.shared.handlers.borrow().noise.is_empty() {
+            if nth < MOST_NOISE_TABLES {
+                version.shared.noise_tables.borrow_mut().push(None);
+            }
             return true;
         }
         let shared = Rc::clone(&version.shared);
-        let Ok(table) = weapon_api::noise_table(&version.vm, &version.shared, noise) else {
+        let Some(table) = self.noise_table(&shared, nth, noise) else {
+            // Its place is held all the same, so the next noise's is right.
+            let mut tables = shared.noise_tables.borrow_mut();
+            if tables.len() <= nth && nth < MOST_NOISE_TABLES {
+                tables.resize(nth + 1, None);
+            }
             return true;
         };
         let count = shared.handlers.borrow().noise.len();
@@ -2338,6 +2832,9 @@ impl ScriptHost {
             }
             self.kept.replace(kept);
         }
+        // A reload comes between ticks too: settings the engine told of are
+        // in force for the new version as it loads.
+        self.settings_due();
         // The new version starts in `gameplay`, as its variables start
         // again: a shop that was open is closed in both. And it starts
         // with the game going on, since whatever paused it, a menu most
@@ -2348,9 +2845,16 @@ impl ScriptHost {
         let before = self.live_set.live.replace(ActionMap::GAMEPLAY);
         let was_paused = self.clock.is_paused();
         self.clock.set_paused(false);
+        // The new version names its own steps of difficulty, or has the
+        // engine's if it names none.
+        let steps = self.difficulty.usual_steps();
+        // Who likes whom, to put back if the new version fails to load.
+        let sides = self.sides.table.borrow().clone();
         if let Err(error) = self.install() {
             self.live_set.live.set(before);
             self.clock.set_paused(was_paused);
+            self.difficulty.restore_steps(steps);
+            self.sides.table.replace(sides);
             return Err(error);
         }
         if self.live_set.live.get() != before {
@@ -2371,6 +2875,9 @@ impl ScriptHost {
     /// Builds a version from the game's scripts and makes it the running one.
     fn install(&mut self) -> Result<(), ScriptError> {
         let before = self.shaders.begin_load();
+        // The file says what the sides are: a version that does not call
+        // game.sides has none.
+        self.sides.declared.set(false);
         let (touched, built) = self.build();
         // A version that failed is fixed by saving one of the files it read,
         // or one the running version did.
@@ -2399,6 +2906,9 @@ impl ScriptHost {
                              have started again."
                         );
                     }
+                }
+                if !self.sides.declared.get() {
+                    crate::sides_api::none_declared(&version.shared);
                 }
                 self.follow_actions(&version.shared.actions);
                 self.running = Some(version);
@@ -2482,11 +2992,15 @@ impl ScriptHost {
             shaders: Rc::clone(&self.shaders),
             body: Rc::clone(&self.body),
             health: Rc::clone(&self.health),
+            sides: Rc::clone(&self.sides),
             lighting: Rc::clone(&self.lighting),
             look: Rc::clone(&self.look),
             camera: Rc::clone(&self.camera),
             things: Rc::clone(&self.things),
             thing_uses: crate::thing_api::ThingUses::default(),
+            npcs: Rc::clone(&self.npcs),
+            noise_tables: RefCell::new(Vec::new()),
+            npc_version: crate::npc_api::NpcVersion::default(),
             thing_handles: RefCell::default(),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
@@ -2497,6 +3011,7 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            difficulty: Rc::clone(&self.difficulty),
             ui: Rc::clone(&self.ui),
             ui_handlers: RefCell::default(),
             controls_notice: Rc::clone(&self.controls_notice),
@@ -2508,6 +3023,13 @@ impl ScriptHost {
             next_timer: Cell::new(0),
         });
         let built = self.run(&shared);
+        // The NPCs the file made as it loaded: those the version before
+        // made and this one no longer does are gone, and if it failed to
+        // load, so are the ones it made.
+        let gone = (self.npcs).settle_load(&shared.npc_version, built.is_ok(), &self.characters);
+        for id in gone {
+            self.remove_character(id);
+        }
         (shared.modules.take_touched(), built)
     }
 

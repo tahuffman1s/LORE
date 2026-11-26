@@ -306,6 +306,13 @@ end
 
 game.sky.setHour(18.5)
 game.sky.setDayLength(24)
+game.difficulty.steps = { "Gentle", "Fair", "Cruel" }
+local stepNames: { string } = game.difficulty.steps
+local stepNow: string = game.difficulty.name
+local stepLevel: number = game.difficulty.level
+print(#stepNames, stepNow, stepLevel, game.difficulty.scale(20), game.difficulty.scale(5, 2, 0.5))
+game.difficulty.name = "Fair"
+game.difficulty.onChange(function(now, before) print(now .. " from " .. before) end)
 game.clock.dayLength = 20
 game.clock.time = "8:00"
 game.clock.hour = 6.5
@@ -688,8 +695,63 @@ if false then
     local door: Thing = game.thing("Cellar door")
     print(door)
 end
+if false then
+    local guard: Npc = game.npc { name = "Guard", at = "Gate" }
+    local cook: Npc = game.npc { name = "Cook", at = vector.create(4, 0, -2), facing = 90 }
+    local smith: Npc = game.npc("Smith")
+    guard.useText = "Ask about the road"
+    guard.useReach = 3
+    guard.useSeconds = 0
+    guard.usable = true
+    guard.lookDistance = 8
+    guard:onUse(function(npc: Npc) print(npc.name, npc.useText, npc.usable, npc.lookDistance) end)
+    print(cook.health, smith.position, guard.useReach, guard.useSeconds)
+    for _, npc: Npc in game.npcs() do
+        if npc.dead then npc:remove() end
+    end
+    local watcher: Npc = game.npc { name = "Watcher", at = "Gate", sightDistance = 40, sightAngle = 90, hearing = 2, nightSight = 0.5 }
+    watcher.sightDistance = 0
+    watcher.sightAngle = 360
+    watcher.hearing = 0
+    watcher.nightSight = 1
+    print(watcher.sightDistance, watcher.sightAngle, watcher.hearing, watcher.nightSight)
+    watcher:onSee(function(who: Character) print(who.name, who.dead) end)
+    watcher:onLoseSight(function(who: Character, lastSeen: vector) print(who.name, lastSeen.x) end)
+    watcher:onHear(function(noise: Noise) print(noise.sound, noise.by, noise.weapon, noise.loudness) end)
+    local sees: boolean = watcher:canSee(game.player)
+    print(sees)
+    local seen: { Character } = watcher:inSight()
+    for _, who: Character in seen do print(who.name) end
+    game.audio.playAt("landing", watcher.position, { npcsHear = false })
+end
+if false then
+    game.sides {
+        Town = { friends = { "Guards" }, enemies = { "Outlaws", "Wolves" }, forgives = 0, remembers = 600 },
+        Guards = { forgives = true },
+        Outlaws = { neutral = "Wolves", remembers = math.huge },
+        Wolves = { enemies = "everyone" },
+        everyone = { forgives = true },
+    }
+    game.player.side = "Town"
+    local guard: Npc = game.npc { name = "Guard", at = "Gate", side = "Guards" }
+    local sideName: string? = guard.side
+    local feeling: Feeling = guard:feelsAbout(game.player)
+    guard:forgive(game.player)
+    local town: Side = game.side("Town")
+    local townFeels: Feeling = town:feelsAbout("Outlaws")
+    print(sideName, feeling, town.name, townFeels, town:feelsAbout(game.side("Guards")))
+    town:setFeeling("Outlaws", "friend")
+    local peace: FeelingOptions = { bothWays = true }
+    town:setFeeling("Outlaws", "friend", peace)
+    game.side("Guards"):setFeeling(town, "friend", { bothWays = false })
+    game.side("Outlaws"):join(town)
+    town:forgive(game.player)
+    game.onFeelingChange(function(side: string, toward: string, now: Feeling, before: Feeling)
+        print(side, toward, now, before)
+    end)
+end
 game.showUsePrompt(true)
-local meant: Thing? = game.player.lookingAt
+local meant: (Thing | Npc)? = game.player.lookingAt
 print(meant, game.player.useProgress)
 game.player:hold("sword")
 game.player:hold("torch", { hand = "left" })

@@ -1561,6 +1561,7 @@ dependencies = [
  "lore-fluid",
  "lore-input",
  "lore-nav",
+ "lore-npc",
  "lore-pack",
  "lore-physics",
  "lore-render",
@@ -1645,6 +1646,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-npc"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-nav",
+ "lore-physics",
+]
+
+[[package]]
 name = "lore-pack"
 version = "0.0.0"
 
@@ -1688,6 +1698,7 @@ dependencies = [
  "lore-input",
  "lore-markup",
  "lore-nav",
+ "lore-npc",
  "lore-shader",
  "lore-sky",
  "lore-ui",

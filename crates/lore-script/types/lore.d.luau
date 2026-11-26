@@ -16,8 +16,7 @@
 -- required, and scripts cannot require each other in a circle.
 
 --- Someone in the world. The player is one, `game.player`, and is always
---- there. The people and creatures of a game will be characters too, once
---- LORE has them; until then the only other one a script meets is the
+--- there; every NPC is one too (see `Npc`, and `game.npc`), and so is the
 --- training dummy `lore check` stands in front of the player.
 --- The same character is always the same value, so one can be compared
 --- with `==` and be a key in a table of your own: `hits[hit.victim] = 3`.
@@ -252,12 +251,21 @@ declare extern type Character with
     --- Example: print(game.player.carryWeight)
     carryWeight: number
 
-    --- The usable thing the player would use if they pressed "interact"
-    --- now: the one under the crosshair and in reach, or nil. It is worked
-    --- out once a tick. The engine shows its prompt for it unless
-    --- `game.showUsePrompt(false)`.
+    --- The side they are on, by its name as `game.sides` wrote it, or nil
+    --- for none. Anyone can be on a side: the player, an NPC, a dummy.
+    --- Someone on no side is neutral to everyone, except to a side whose
+    --- enemies are "everyone". A name `game.sides` does not have is an
+    --- error that lists the sides there are.
+    --- Example: game.player.side = "Town"
+    --- Example: if bandit.side == "Outlaws" then print("a bandit") end
+    side: string?
+
+    --- The usable thing or NPC the player would use if they pressed
+    --- "interact" now: the one under the crosshair and in reach, or nil.
+    --- It is worked out once a tick. The engine shows its prompt for it
+    --- unless `game.showUsePrompt(false)`.
     --- Example: if game.player.lookingAt then hint.text = game.player.lookingAt.useText end
-    lookingAt: Thing?
+    lookingAt: (Thing | Npc)?
 
     --- How far through holding "interact" on a thing with `useSeconds`
     --- the player is, from 0 to 1, as of the last tick. 0 when nothing is
@@ -599,6 +607,27 @@ declare extern type Character with
     --- twice, at any frame rate. Only `game.player` has moments so far.
     --- Example: game.player:onMoment("left_foot_down", function(clip) print("step") end)
     function onMoment(self, name: string, handler: (clip: string) -> ()): ()
+
+    --- How they feel about `who`: "friend", "neutral" or "enemy". An enemy
+    --- is someone on a side theirs counts as enemies, or someone they hold
+    --- a grudge against: someone who hurt them, whom they saw hurt a
+    --- friend, or whom a friend of their side told them of. A grudge lasts
+    --- as long as their side `remembers` (five minutes unless it says),
+    --- or until `forgive`. They see it done by their own senses (see `onSee`),
+    --- or hear the noise the one who did it made, within 30 metres. Word
+    --- carries to anyone of their side within 4 metres, wall or no wall.
+    --- Each person holds at most 4 grudges; a new one
+    --- takes the place of the least important (one for a killing goes only
+    --- for another killing). A grudge against someone ends when they fall
+    --- or are removed. Everyone is their own friend.
+    --- Example: if guard:feelsAbout(game.player) == "enemy" then print("Halt, thief!") end
+    function feelsAbout(self, who: Character): Feeling
+
+    --- Lets go of the grudge they hold against `who`, if any: they feel
+    --- about them as their sides feel again. To have a whole side forgive,
+    --- use `game.side("Town"):forgive(game.player)`.
+    --- Example: guard:forgive(game.player)
+    function forgive(self, who: Character): ()
 end
 
 --- Something placed in the game's level: an entry of its `map.toml`, which
@@ -822,6 +851,170 @@ declare extern type Thing with
     function has(self, who: Character): boolean
 end
 
+--- Someone of the game's own: a person (or, later, a creature) who stands
+--- in the world as the player does. Make one with one line,
+--- `game.npc { name = "Guard", at = "Gate" }`, or place one in the map as
+--- type "npc" and find it with `game.npc("Guard")`.
+---
+--- An NPC is a `Character` like `game.player`: it has health, is hurt by
+--- shots and swings (`game.onDamage`, `game.onDeath`), walks into zones
+--- and can be locked on to, and is the same value the engine hands to
+--- those functions, so `hurt.victim == guard` works. It is drawn as the
+--- engine's mannequin, standing and breathing, and turns its head to the
+--- player when they come close. It is solid: the player walks into it,
+--- not through it. When its health reaches 0 it falls and lies where it
+--- fell: no longer solid, shot at or usable. `setHealth` stands it up
+--- again (`heal` does not bring back the dead), and `remove` takes it out
+--- of the world.
+---
+--- An NPC the file makes as it loads is the same NPC when the file is
+--- saved and loads again: it is found by its name and keeps its health and
+--- whatever happened to it. Change its `at` and save, and it stands there
+--- instead; take the line out, and it leaves. `useText`, `useReach`,
+--- `useSeconds`, `usable`, `lookDistance` and `onUse` are said again each
+--- time the script loads, as a thing's are. In short: a save keeps its
+--- health and where it stands, and the file says the rest again. An NPC
+--- made later (in `game.onTick`, a timer) stays after a save, but its
+--- `onUse` and the rest must be said again: find it with `game.npc`. The
+--- NPCs placed in the map follow the map the same way, when it is saved
+--- while the game runs or played from the editor: moved, turned or
+--- renamed there, it is the same NPC moved, turned or renamed; taken out,
+--- it leaves; added, it comes in. An NPC that moved in play stays where
+--- it is unless its `at` (or its place in the map) changes.
+---
+--- A `Character` the engine hands you (`hurt.victim`, a zone's `who`) may
+--- be an NPC: compare it with `==` to the NPC you keep, or find it with
+--- `game.npc(victim.name)`. `facing` is only for making an NPC; the
+--- `facing` an NPC reads is a character's, which only the player has.
+--- Example: local guard = game.npc { name = "Guard", at = "Gate" }
+declare extern type Npc extends Character with
+    --- The word or two shown beside the button while the player can use
+    --- the NPC: "Talk to" and its name until the script says otherwise. Up
+    --- to 60 characters. Shown only once the NPC has an `onUse` function.
+    --- Example: guard.useText = "Ask about the road"
+    useText: string
+
+    --- How close the player's eyes must be to use the NPC, in metres: 2.5
+    --- until the script says otherwise. From 0.5 to 50.
+    --- Example: guard.useReach = 3
+    useReach: number
+
+    --- How long the use button is held to use the NPC, in seconds: 0 (a
+    --- press) until the script says otherwise. From 0 to 30.
+    --- Example: guard.useSeconds = 1
+    useSeconds: number
+
+    --- Whether the player can use the NPC now: true once it has an `onUse`
+    --- function, and false while the NPC is dead. Set it to false to stop the player
+    --- using it (someone who has said all they have to say), and to true
+    --- again.
+    --- Example: guard:onUse(function() guard.usable = false end)
+    usable: boolean
+
+    --- How close the player comes before the NPC turns its head to look at
+    --- them, in metres: 5 until the script says otherwise. 0 never looks;
+    --- up to 50. The head turns as far as a neck goes, eased, and not round
+    --- to someone behind. It only turns the head: what the NPC notices is
+    --- `sightDistance`.
+    --- Example: guard.lookDistance = 10
+    lookDistance: number
+
+    --- Calls `handler` each time the player uses the NPC: they look at it
+    --- from within reach and press the button bound to "interact" (E, or Y
+    --- on a gamepad, unless the player changed it), or hold it for
+    --- `useSeconds`. This one line makes the NPC usable: the engine shows
+    --- `useText` beside the key or button and calls the function, in the
+    --- game's tick. Each call adds another function; all are called.
+    --- `lore check` uses every usable NPC once.
+    --- Example: guard:onUse(function() print("Halt! Who goes there?") end)
+    function onUse(self, handler: (npc: Npc) -> ()): ()
+
+    --- Takes the NPC out of the world for good. Reading it afterwards is an
+    --- error that says it is gone, so let go of it too (`guard = nil`);
+    --- `game.npc` makes another. It changes the game, so it belongs in the
+    --- rules, not in `game.onDraw`.
+    --- Example: game.onDeath(function(victim) if victim == guard then game.after(30, function() guard:remove() end) end end)
+    function remove(self): ()
+
+    --- How far the NPC sees in daylight, in metres: 30 until the script says
+    --- otherwise. 0 is blind; a number above 500 is taken as 500. It is what
+    --- the NPC notices (`onSee`), unlike `lookDistance`, which only turns its
+    --- head. Sight is a cone from its eyes the way its body faces, blocked
+    --- by walls, by things fixed in the level and by people standing in the
+    --- way. Someone is seen more weakly the further off they are, toward the
+    --- edge of the cone, in the dark or in fog, crouched or keeping still.
+    --- Behind a low wall, the part that shows is seen.
+    --- Example: guard.sightDistance = 0 -- blind
+    sightDistance: number
+
+    --- How wide the NPC sees, in degrees from one edge to the other: 120
+    --- until the script says otherwise (a person's). 360 sees all round, and
+    --- straight up and down too.
+    --- Example: guard.sightAngle = 90
+    sightAngle: number
+
+    --- How well the NPC hears: 1 until the script says otherwise, which
+    --- hears every noise as far as the player can (a footstep 30 metres, a
+    --- gunshot 150). 2 hears twice as far; 0 is deaf; up to 10. A wall
+    --- between it and a noise makes the noise quieter, not silent.
+    --- Example: guard.hearing = 0 -- deaf
+    hearing: number
+
+    --- How well the NPC sees in the dark, from 0 (as a person does, the
+    --- default) to 1 (as well as by day). The dark comes from the hour of
+    --- `game.clock` and the clouds; the game's lamps light it again. A game
+    --- with no clock is always day.
+    --- Example: wolf.nightSight = 1
+    nightSight: number
+
+    --- Calls `handler` with whoever comes into the NPC's view: the player,
+    --- or another NPC (one whose health is gone is seen too: check
+    --- `who.dead`). The NPC looks five times a second, so it is told within
+    --- a fifth of a second of someone stepping out; it is told again only
+    --- after they were lost from view. Called in the game's tick, NPCs in
+    --- the order they were made. Each call adds another function; all are
+    --- called. `lore check` tells it of the player once. For a crowd, give
+    --- each its function in a loop: the NPC is the loop's own variable.
+    --- An NPC sees at most eight people at once: the player first, then the
+    --- ones it sees most clearly.
+    --- Someone in view who falls is not told again. `game.onDeath` tells of
+    --- that, and `npc:canSee(victim)` says whether this NPC saw it.
+    --- Example: for _, npc in game.npcs() do npc:onSee(function(who) print(npc.name .. " sees " .. who.name) end) end
+    --- Example: guard:onSee(function(who) if who == game.player then print("Halt!") end end)
+    function onSee(self, handler: (who: Character) -> ()): ()
+
+    --- Calls `handler` when someone the NPC saw goes out of its view: behind
+    --- a wall, out of reach or into the dark. It is also called when they
+    --- are taken out of the world (`npc:remove()`), just before, while they
+    --- can still be read, so each `onSee` has its `onLoseSight`. `lastSeen` is where their feet
+    --- were when it last saw them, in metres as `position` is, to go and look.
+    --- Example: guard:onLoseSight(function(who, lastSeen) print("Where did they go?") end)
+    function onLoseSight(self, handler: (who: Character, lastSeen: vector) -> ()): ()
+
+    --- Calls `handler` with each noise the NPC hears: the very noises the
+    --- player hears (steps, shots, splashes, blasts, and sounds a script
+    --- plays at a place), the same `Noise` that `game.onNoise` is handed.
+    --- A noise is heard inside its `heardWithin` times the NPC's `hearing`,
+    --- through walls more quietly. An NPC does not hear its own. The
+    --- sounds of the world going on (thunder, rain, running water) are not
+    --- told: in rain they would come several times a second. `game.onNoise`
+    --- hears those. A sound played in `game.onDraw` is not heard by NPCs.
+    --- Example: guard:onHear(function(noise) if noise.weapon then print("A shot!") end end)
+    function onHear(self, handler: (noise: Noise) -> ()): ()
+
+    --- True if the NPC sees `who` now, as of its last look (five times a
+    --- second); false once its health is gone.
+    --- Example: if guard:canSee(game.player) then print("Halt!") end
+    function canSee(self, who: Character): boolean
+
+    --- Everyone the NPC saw at its last look (five times a second): the
+    --- player and other NPCs, in the order they came into view, so someone
+    --- who goes out of view and comes back is last. Empty once its health
+    --- is gone.
+    --- Example: for _, who in guard:inSight() do print(guard.name .. " sees " .. who.name) end
+    function inSight(self): { Character }
+end
+
 --- A noise the game made: what a `game.onNoise` function is handed.
 --- Example: game.onNoise(function(noise) if noise.byPlayer and noise.loudness > 0.5 then print("Heard " .. noise.sound) end end)
 declare extern type Noise with
@@ -855,8 +1048,9 @@ declare extern type Noise with
     --- Example: if noise.weapon == "bow" then print("an arrow loosed") end
     weapon: string?
     --- Who made it: `game.player` for their steps, landings, shots and
-    --- splashes; nil for what the world makes (thunder, dripping, a blast).
-    --- Only the player makes noises today.
+    --- splashes; the NPC whose own function played a sound with
+    --- `game.audio.playAt`; nil for what the world makes (thunder, dripping,
+    --- a blast) and for any other sound a script plays.
     --- Example: if noise.by == game.player then print("you made that") end
     by: Character?
 end
@@ -964,6 +1158,76 @@ declare extern type Tween with
     function to(self, target: number, seconds: number): ()
 end
 
+--- What `game.npc { ... }` takes to make an NPC. `side` is the side it
+--- is on, as `game.sides` names it; nil for none. `sightDistance`,
+--- `sightAngle`, `hearing` and `nightSight` set its senses, as the NPC's
+--- fields of the same names do.
+type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, side: string?, sightDistance: number?, sightAngle: number?, hearing: number?, nightSight: number? }
+
+--- How someone feels about someone else, or one side about another.
+type Feeling = "friend" | "neutral" | "enemy"
+
+--- Who a side's feeling is toward: a side's name, "everyone" (every other
+--- side, and everyone on none), or a list of side names in quotes with no
+--- `=` (`{ "Outlaws", "Wolves" }`; `{ Outlaws = true }` is an error).
+type SideNames = string | { string }
+
+--- One side in `game.sides { ... }`: who it counts as friends, as
+--- enemies, and as neutral (when it would otherwise feel as they feel
+--- about it); `forgives`, how many blows from a friend within half a
+--- minute it forgives, a whole number from 0 (none) to 100 (more is an
+--- error), or `true` (or `math.huge`) for every blow from a friend (2
+--- unless given; a killing blow never);
+--- and `remembers`, how many seconds its people hold a grudge (300 unless
+--- given; `math.huge` keeps it until forgiven). The key `everyone` takes
+--- only `forgives` and `remembers`: what every side has unless it says its
+--- own, and people on no side. As a key it is these settings for all, not
+--- a side (no side can be called "everyone"); as a value, `enemies =
+--- "everyone"`, it means every other side.
+--- Example: Town = { friends = { "Guards" }, enemies = { "Outlaws" }, forgives = 0, remembers = 600 }
+--- Example: everyone = { forgives = true } -- friends never hold a stray hit against anyone
+type SideOptions = { friends: SideNames?, enemies: SideNames?, neutral: SideNames?, forgives: (number | boolean)?, remembers: number? }
+
+--- What `setFeeling` takes after the feeling. `bothWays = true` overrules
+--- what the other side said: both sides feel the same about each other at
+--- once, whatever either said before.
+type FeelingOptions = { bothWays: boolean? }
+
+--- One side of the game: what `game.side("Town")` gives. It is looked up
+--- by its name each time it is used, so it keeps working when the file is
+--- saved and `game.sides` runs again.
+--- Example: local town = game.side("Town")
+declare extern type Side with
+    --- Its name, as `game.sides` wrote it.
+    --- Example: print(game.side("town").name) -- "Town"
+    name: string
+
+    --- How this side feels about `other` (a side's name, or a side):
+    --- "friend", "neutral" or "enemy". Each side is its own friend.
+    --- Example: if game.side("Outlaws"):feelsAbout("Town") == "enemy" then print("trouble") end
+    function feelsAbout(self, other: string | Side): Feeling
+
+    --- Makes this side feel `feeling` about `other`. It holds the other
+    --- way round too, unless `other` said its own feeling about this side
+    --- (in `game.sides` or with `setFeeling`): if the town named the
+    --- outlaws its enemies, the outlaws making friends leaves the town an
+    --- enemy. `{ bothWays = true }` overrules what the other side said and
+    --- sets both at once: peace, or war, agreed by both. `game.onFeelingChange` hears of
+    --- each feeling that changed, before the next `game.onTick`.
+    --- Example: game.side("Town"):setFeeling("Outlaws", "friend")
+    --- Example: game.side("Town"):setFeeling("Outlaws", "friend", { bothWays = true }) -- peace is made
+    function setFeeling(self, other: string | Side, feeling: Feeling, options: FeelingOptions?): ()
+
+    --- Everyone on this side is on `other` from now on: the side joins
+    --- the other. The side itself stays in the table, with no one on it.
+    --- Example: game.side("Outlaws"):join("Town")
+    function join(self, other: string | Side): ()
+
+    --- Everyone on this side lets go of the grudge they hold against
+    --- `who`: a fine paid, a pardon given.
+    --- Example: game.side("Town"):forgive(game.player)
+    function forgive(self, who: Character): ()
+end
 --- Where on the screen a piece of the HUD is pinned.
 type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
 
@@ -2716,6 +2980,73 @@ declare game: {
     --- Example: for _, chest in game.things("chest") do chest:onUse(open) end
     things: (kind: string?) -> { Thing },
 
+    --- Makes an NPC, or finds one. Given a table, it puts a person in the
+    --- world: `name` is what they are called and how `game.npc` finds them
+    --- again. `at` is where they stand: the name of something placed in
+    --- the map (any type; type "place" is a marker that is nothing else),
+    --- a position, or a `Thing`. `facing` is how far they are turned to the
+    --- left, in degrees, as the map writes it; at a place, they face the
+    --- way it does. A place the map does not have is an error that lists
+    --- the places it does have.
+    ---
+    --- Given a name, it finds the NPC called that, in any capitals: one a
+    --- script made, or one placed in the map as type "npc". A name no NPC
+    --- has is an error that lists the NPCs there are (`lore check` reports
+    --- it).
+    ---
+    --- One name is one person. Each call with a table makes a new person,
+    --- so make each NPC once, at the top of the file, and find it later by
+    --- name: a name some NPC already has ("guard" is "Guard") is an error
+    --- that suggests "Guard 2", so NPCs cannot pile up in `game.onTick`. A
+    --- removed NPC's name is free again. For a crowd, number them:
+    --- `for i = 1, 5 do game.npc { name = "Villager " .. i, at = "Square" } end`.
+    --- Example: local guard = game.npc { name = "Guard", at = "Gate" }
+    --- Example: local smith = game.npc("Smith")
+    npc: (nameOrOptions: string | NpcOptions) -> Npc,
+
+    --- Every NPC in the game, in the order they came into it: those placed
+    --- in the map, then those the script made.
+    --- Example: for _, person in game.npcs() do person.lookDistance = 8 end
+    npcs: () -> { Npc },
+
+    --- Names the game's sides and how each feels about the others, in one
+    --- table: each side by its name, with who it counts as `friends`,
+    --- `enemies` and `neutral` (see `SideOptions`). A feeling said one way
+    --- holds both ways unless the other side says its own, so a fight is
+    --- mutual. Every side is named here, `Guards = {}` for one that says
+    --- nothing; a name in a list that is not a side is an error that lists
+    --- the sides, with the closest suggested. Two people on one side are
+    --- friends. Someone on no side is neutral to everyone, except to a side
+    --- whose enemies are "everyone". When a side says "everyone" and
+    --- another names that side, each feels what it said: with Wolves =
+    --- { enemies = "everyone" } and Deer = { friends = { "Wolves" } }, the
+    --- wolves hunt the deer and the deer count them friends.
+    --- Call it once, at the top of the file (outside any function), before
+    --- giving anyone a side. Saving the script reads the table again: the
+    --- file wins, so feelings changed with `setFeeling` go back to what the
+    --- table says (and a file with no `game.sides` has no sides); whatever
+    --- the top of the file sets is so again (`game.player.side = ...`, and
+    --- an NPC made by `game.npc { }` takes its line's `side`, none if the
+    --- line gives none); a side given otherwise (while playing, or by
+    --- `join`) is kept while the table still names it. Grudges are kept, as
+    --- health is.
+    --- Example: game.sides { Town = { friends = { "Guards" }, enemies = { "Outlaws" } }, Guards = {}, Outlaws = {}, Wolves = { enemies = "everyone" } }
+    sides: (sides: { [string]: SideOptions }) -> (),
+
+    --- One side, by its name (capitals ignored), to read and change. A name
+    --- `game.sides` does not have is an error that lists the sides. Not to
+    --- be mixed up with `game.sides { ... }` (with an s), which names them all.
+    --- Example: game.side("Town"):setFeeling("Outlaws", "enemy")
+    side: (name: string) -> Side,
+
+    --- Calls `handler` each time one side comes to feel otherwise about
+    --- another (`setFeeling`), with both sides' names and the feeling now
+    --- and before, before the next `game.onTick`. A change that holds both
+    --- ways is heard twice, once for each side. Not called as the game
+    --- starts.
+    --- Example: game.onFeelingChange(function(side, toward, now, before) print(side .. " went from " .. before .. " to " .. now .. " about " .. toward) end)
+    onFeelingChange: (handler: (side: string, toward: string, now: Feeling, before: Feeling) -> ()) -> (),
+
     --- Shows or hides the engine's own prompt (the key or button, and the
     --- thing's `useText`) while the player can use something. It is shown
     --- until a script says false: do that to draw your own from
@@ -2761,6 +3092,62 @@ declare game: {
     --- Example: local flashlight = game.lamp("flashlight", { beam = 40, lumens = 300, kelvin = 5000 })
     --- Example: game.lamp("street lamp 1").on = false
     lamp: (name: string, settings: LampSettings?) -> Lamp,
+
+    --- How hard the game is: one dial with named steps, easiest first. The
+    --- engine's own are "Story" (for a game played for its story),
+    --- "Standard" and "Hard"; a game can name its own. The player turns it
+    --- in the pause menu's Gameplay settings at any time, with keys or a
+    --- gamepad, and a new game starts where they left it. What it changes
+    --- is the game's to say, with `game.difficulty.scale`. The same tab
+    --- has the player's assists, which work at any difficulty: "Game
+    --- speed" (the whole game slower) and "Fall damage" (off lands from any
+    --- height unhurt).
+    difficulty: {
+        --- The names of the steps, easiest first: 1 to 10 of them. Set it
+        --- at the top of the file. The game starts at the step nearest
+        --- where the player left the dial.
+        --- Example: game.difficulty.steps = { "Gentle", "Fair", "Cruel" }
+        steps: { string },
+
+        --- The step the game is at. Setting it turns the dial, as the
+        --- player can in the pause menu, and `onChange` hears of it.
+        --- Example: if game.difficulty.name == "Story" then game.player.maxHealth = 200 end
+        --- Example: game.difficulty.name = "Hard"
+        name: string,
+
+        --- Where the step stands, from 0 (the easiest) to 1 (the hardest),
+        --- evenly spread: "Story" 0, "Standard" 0.5, "Hard" 1. Read only.
+        --- Example: local share = 0.2 + 0.6 * game.difficulty.level
+        level: number,
+
+        --- `value` made harder or easier: multiplied by `easiest` (0.5
+        --- unless given) at the easiest step, by 1 at the middle and by
+        --- `hardest` (1.5 unless given) at the hardest, along a straight
+        --- line between. With the engine's steps, 20 is 10 at "Story", 20
+        --- at "Standard" and 30 at "Hard". Give the ends as the number to
+        --- multiply by at the easiest step, then at the hardest; nil for
+        --- one keeps its usual.
+        --- The middle of the dial is always 1 times, not the first step.
+        --- With two steps, { "Normal", "Hard" }, "Normal" is the easiest
+        --- and is 0.5 times. To keep a step at 1 times, pass the range:
+        --- `scale(10, 1, 1.5)` is 10 at "Normal" and 15 at "Hard". Put
+        --- `easiest` and `hardest` either side of 1 (or one of them at 1),
+        --- or the middle step is not between them.
+        --- For damage the player deals, which an easier game makes bigger,
+        --- turn the ends round: `scale(10, 1.5, 0.5)`.
+        --- `game.difficulty:scale(10)` works the same.
+        --- Example: enemy.damage = game.difficulty.scale(20)
+        --- Example: local wait = game.difficulty.scale(5, 2, 0.5) -- easier waits longer
+        --- Example: local hit = game.difficulty.scale(10, 1.5, 0.5) -- the player's blows
+        scale: (value: number, easiest: number?, hardest: number?) -> number,
+
+        --- Calls `handler` when the dial is turned, with the step's name
+        --- now and before, before the next `game.onTick`, even while the
+        --- game is paused. It is not called as the game starts: read
+        --- `game.difficulty.name` for that.
+        --- Example: game.difficulty.onChange(function(now, before) print("Now " .. now) end)
+        onChange: (handler: (now: string, before: string) -> ()) -> (),
+    },
 
     --- How the picture is exposed for the light there is. Light in a game
     --- is real light, and the picture is drawn as an eye sees it: the sky
@@ -3064,9 +3451,10 @@ declare game: {
 
     --- Calls `handler` each time the player is put at a spawn point: on
     --- the first tick, right after `game.onStart`, and again whenever they
-    --- are sent back to one, keeping the weapon they held. Dying sends the
-    --- player back, though nothing has health yet, so no shot kills
-    --- anybody. The function is handed nothing: the player is `game.player`.
+    --- are sent back to one, keeping the weapon they held. Running out of
+    --- health does not send the player back by itself: say what happens
+    --- then in `game.onDeath`. The function is handed nothing: the player
+    --- is `game.player`.
     --- Giving a weapon here hands over a new, full one each time.
     --- Example: game.onSpawn(function() game.player:giveWeapon("rifle") end)
     onSpawn: (handler: () -> ()) -> (),
@@ -3287,8 +3675,9 @@ declare game: {
     --- to keep the engine from playing it; return nothing to let it play.
     --- Example: game.onNoise(function(noise) if noise.sound == "footstep" then print("a step at", noise.position.x, noise.position.z) end end)
     --- Example: game.onNoise(function(noise) if noise.sound == "thunder" then return false end end)
-    --- The noise is still made when you return false, so anything else that
-    --- listens still hears it. A noise nothing registered for costs nothing.
+    --- The noise is still made when you return false, so another
+    --- game.onNoise function still hears it; NPCs do not, as the player
+    --- does not. A noise nothing registered for costs nothing.
     onNoise: (handler: (noise: Noise) -> boolean?) -> (),
 
     --- Calls `handler` when someone starts to reload, with who it is. This
@@ -3997,16 +4386,27 @@ declare game: {
         --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
 
-        --- Plays a sound from a place in the world: quieter the further the
-        --- player is from it, and louder in the ear it is nearer to. The
+        --- Plays a sound from a place in the world, which NPCs hear too:
+        --- quieter the further the player is from it, and louder in the ear
+        --- it is nearer to. The
         --- place is `vector.create(x, y, z)` in metres, with y up. Takes the
         --- options of `play`, and:
         ---   range: how many metres away it can still be heard, above 0. If
         ---     left out, a sound of your own carries 50 metres, and a starter
         ---     sound as far as the real thing: a gunshot 150, a footstep 30.
+        ---   npcsHear: false to keep NPCs from hearing it. Played once (not
+        ---     looped), it is a noise NPCs hear as the player does, as far as
+        ---     its range, as loud as its volume: a bottle a script smashes
+        ---     draws a guard (`npc:onHear`). A looped sound is the sound of a
+        ---     place, and no NPC hears it. Played from an NPC's own function
+        ---     (`onSee`, `onHear`, `onLoseSight`, `onUse`), it is that NPC's:
+        ---     `noise.by` is the NPC, and the NPC does not hear itself.
+        ---     Played in `game.onDraw`, it plays, but no NPC hears it: what
+        ---     NPCs hear must not depend on the frame rate.
         --- Example: game.audio.playAt("gunshot", vector.create(10, 1, -4))
         --- Example: game.audio.playAt("alarm", vector.create(0, 3, 0), { range = 80, loop = true })
-        playAt: (name: string, position: vector, options: { volume: number?, pitch: number?, loop: boolean?, range: number? }?) -> Sound,
+        --- Example: game.audio.playAt("whisper", game.player.eye, { npcsHear = false })
+        playAt: (name: string, position: vector, options: { volume: number?, pitch: number?, loop: boolean?, range: number?, npcsHear: boolean? }?) -> Sound,
 
         --- Stops every sound the script has played, such as when the player
         --- leaves a place. Sounds keep playing when the script is saved and loaded
@@ -4486,8 +4886,11 @@ declare game: {
     --- A change is in force at once, and the engine saves it to the
     --- player's settings file: a script never deals with files.
     ---
-    --- The settings today, by name: "volume", "music_volume",
-    --- "speech_volume" and "effects_volume" (0 to 100); "mouse_sensitivity" and
+    --- The settings today, by name: "difficulty" (0 to 100, where a new
+    --- game's dial starts and following it; `game.difficulty.name` turns
+    --- this game's), "game_speed" (50 to 100 percent) and "fall_damage"
+    --- (true or false); "volume", "music_volume", "speech_volume" and
+    --- "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"

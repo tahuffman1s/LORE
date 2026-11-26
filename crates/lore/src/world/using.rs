@@ -9,6 +9,7 @@
 //! drifts.
 
 use lore_physics::Level;
+use lore_script::{CharacterId, Usable as Meant};
 
 /// How far from the line of the crosshair a thing may be and still be
 /// meant, in metres: about an arm's width, so a small thing is easy to
@@ -90,11 +91,48 @@ pub(super) fn pick(
     best.map(|(nth, _)| nth)
 }
 
+/// What the player can use, kept between ticks: a thing placed in the map
+/// by its id, or an NPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum UseKey {
+    Thing(String),
+    Npc(CharacterId),
+}
+
+impl UseKey {
+    /// The same, as the script's host takes it.
+    pub(super) fn meant(&self) -> Meant<'_> {
+        match self {
+            Self::Thing(id) => Meant::Thing(id),
+            Self::Npc(id) => Meant::Npc(*id),
+        }
+    }
+
+    /// Makes this `meant`, keeping the memory of a thing's id when it was
+    /// one already, so a tick like the last sets none aside.
+    pub(super) fn set(&mut self, meant: Meant<'_>) {
+        match (self, meant) {
+            (Self::Thing(kept), Meant::Thing(id)) => {
+                kept.clear();
+                kept.push_str(id);
+            }
+            (this, meant) => *this = Self::of(meant),
+        }
+    }
+
+    pub(super) fn of(meant: Meant<'_>) -> Self {
+        match meant {
+            Meant::Thing(id) => Self::Thing(id.to_owned()),
+            Meant::Npc(id) => Self::Npc(id),
+        }
+    }
+}
+
 /// What the use button is doing, from tick to tick.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Using {
-    /// The id of the thing meant on the last tick.
-    pub(super) target: Option<String>,
+    /// What was meant on the last tick.
+    pub(super) target: Option<UseKey>,
     /// How long the button has been held on it, in seconds.
     held: f32,
     /// Whether the button was down on the last tick.
@@ -110,13 +148,13 @@ impl Using {
     /// far through a hold the player is, 0 to 1.
     pub(super) fn tick(
         &mut self,
-        target: Option<&str>,
+        target: Option<Meant<'_>>,
         seconds: f32,
         down: bool,
         step: f32,
     ) -> (bool, f32) {
-        if self.target.as_deref() != target {
-            self.target = target.map(str::to_owned);
+        if self.target.as_ref().map(UseKey::meant) != target {
+            self.target = target.map(UseKey::of);
             self.held = 0.0;
             // A button already down when a new thing comes under the
             // crosshair was not pressed for it.
@@ -229,12 +267,27 @@ mod tests {
     fn a_press_uses_a_thing_once() {
         let mut using = Using::default();
         let step = 1.0 / 60.0;
-        assert_eq!(using.tick(Some("door"), 0.0, false, step), (false, 0.0));
-        assert_eq!(using.tick(Some("door"), 0.0, true, step), (true, 0.0));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("door")), 0.0, false, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("door")), 0.0, true, step),
+            (true, 0.0)
+        );
         // Held on, nothing more happens; let go and pressed again, it does.
-        assert_eq!(using.tick(Some("door"), 0.0, true, step), (false, 0.0));
-        assert_eq!(using.tick(Some("door"), 0.0, false, step), (false, 0.0));
-        assert_eq!(using.tick(Some("door"), 0.0, true, step), (true, 0.0));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("door")), 0.0, true, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("door")), 0.0, false, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("door")), 0.0, true, step),
+            (true, 0.0)
+        );
     }
 
     #[test]
@@ -242,33 +295,60 @@ mod tests {
         let mut using = Using::default();
         let step = 1.0 / 60.0;
         assert_eq!(using.tick(None, 0.0, true, step), (false, 0.0));
-        assert_eq!(using.tick(Some("chest"), 0.0, true, step), (false, 0.0));
-        assert_eq!(using.tick(Some("chest"), 0.0, false, step), (false, 0.0));
-        assert_eq!(using.tick(Some("chest"), 0.0, true, step), (true, 0.0));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 0.0, true, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 0.0, false, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 0.0, true, step),
+            (true, 0.0)
+        );
     }
 
     #[test]
     fn a_hold_fills_up_and_starts_over_when_let_go() {
         let mut using = Using::default();
         let step = 0.25;
-        assert_eq!(using.tick(Some("chest"), 1.0, false, step), (false, 0.0));
-        assert_eq!(using.tick(Some("chest"), 1.0, true, step), (false, 0.25));
-        assert_eq!(using.tick(Some("chest"), 1.0, true, step), (false, 0.5));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, false, step),
+            (false, 0.0)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, true, step),
+            (false, 0.25)
+        );
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, true, step),
+            (false, 0.5)
+        );
         // Let go half way: it starts over.
-        assert_eq!(using.tick(Some("chest"), 1.0, false, step), (false, 0.0));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, false, step),
+            (false, 0.0)
+        );
         let mut used = Vec::new();
         for _ in 0..6 {
-            used.push(using.tick(Some("chest"), 1.0, true, step).0);
+            used.push(using.tick(Some(Meant::Thing("chest")), 1.0, true, step).0);
         }
         // Used once, on the fourth quarter second, and not again while held.
         assert_eq!(used, [false, false, false, true, false, false]);
         // Looking away part way through a hold forgets it.
         let mut using = Using::default();
-        using.tick(Some("chest"), 1.0, false, step);
-        using.tick(Some("chest"), 1.0, true, step);
-        assert_eq!(using.tick(Some("chest"), 1.0, true, step), (false, 0.5));
+        using.tick(Some(Meant::Thing("chest")), 1.0, false, step);
+        using.tick(Some(Meant::Thing("chest")), 1.0, true, step);
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, true, step),
+            (false, 0.5)
+        );
         assert_eq!(using.tick(None, 0.0, true, step), (false, 0.0));
         // Still held when it comes back under the crosshair: not a new hold.
-        assert_eq!(using.tick(Some("chest"), 1.0, true, step), (false, 0.0));
+        assert_eq!(
+            using.tick(Some(Meant::Thing("chest")), 1.0, true, step),
+            (false, 0.0)
+        );
     }
 }

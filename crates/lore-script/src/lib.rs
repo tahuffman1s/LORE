@@ -52,6 +52,7 @@ pub use body_api::{AnimationAsk, BUILT_IN_HELD, BUILT_IN_MODELS, CameraView, Hel
 mod character_api;
 mod clock_api;
 mod dice_api;
+mod difficulty_api;
 mod error;
 mod fluid_api;
 mod fonts;
@@ -66,9 +67,11 @@ mod limit;
 mod listen_api;
 mod look_api;
 mod modules;
+mod npc_api;
 mod pool_api;
 mod settings_api;
 mod shader_api;
+mod sides_api;
 mod thing_api;
 mod time_api;
 mod tools_api;
@@ -78,17 +81,19 @@ mod walk_api;
 mod weapon_api;
 mod weather_api;
 
-pub use audio::{AudioCommand, SoundId, SoundRequest, SoundTweak};
+pub use audio::{AudioCommand, ScriptNoise, SoundId, SoundRequest, SoundTweak};
 pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use clock_api::WorldClock;
 pub use dice_api::{Dice, seed_new_games};
+pub use difficulty_api::{DIFFICULTY_SETTING, DifficultyScales};
 pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
 pub use fonts::{
     FONTS_FOLDER, families_of as font_families_of, family_of as font_family_of, is_font_file,
     scan as scan_fonts,
 };
+pub use health_api::Deed;
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape, HudStyle};
 pub use images::{HudImageInfo, IMAGES_FOLDER, png_size, scan as scan_images};
@@ -97,11 +102,12 @@ pub use lighting_api::{EyeSaid, OcclusionSaid};
 pub use listen_api::BindingAsk;
 pub use look_api::{LookSaid, ToneMappingSaid};
 pub use lore_weapons as weapons;
+pub use npc_api::{DEFAULT_LOOK_DISTANCE, NPC_KIND, NpcAsk, NpcSenses, NpcTold};
 pub use settings_api::{Setting, SettingKind, SettingValue};
 pub use shader_api::{
     MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderSaid, ShaderUse,
 };
-pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, ThingAsk, ThingMotion, UseSaid};
+pub use thing_api::{DEFAULT_REACH, Placed, PlacedValue, ThingAsk, ThingMotion, Usable, UseSaid};
 pub use tools_api::{
     Abilities, BindingChange, ControlsChange, FRAME_HISTORY, Motion, MoveSaid, Movement, Teleport,
     ViewTold,
