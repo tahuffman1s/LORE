@@ -1,7 +1,7 @@
 //! Turning placed widgets into boxes and text.
 
 use crate::draw::Painter;
-use crate::fill::{Clip, Fill, Stop, Transform};
+use crate::fill::{Clip, Fill, Radii, Stop, Transform};
 use crate::hud_style::{HudStyle, MOST_STOPS};
 use crate::layout::{slider_track, tab_width, text_size};
 use crate::node::{Kind, Node, Rect};
@@ -54,7 +54,7 @@ fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
     let target = nodes.get(style.clip?.0 as usize)?;
     let rect = target.rect;
     if !target.visible {
-        return Some(Clip::new([rect.x, rect.y], [0.0; 2], [0.0; 4]));
+        return Some(Clip::new([rect.x, rect.y], [0.0; 2], Radii::SQUARE));
     }
     let own = target.style.as_deref();
     let angle = match target.kind {
@@ -71,7 +71,7 @@ fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
         ..Clip::new(
             [rect.x, rect.y],
             [rect.w, rect.h],
-            fitted(radii, rect.w, rect.h),
+            fitted(radii, rect.w, rect.h).into(),
         )
     })
 }

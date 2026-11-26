@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use lore_ui::{Clip, Color, Draw, DrawList, Fill, FontFace, Stop, Transform};
+use lore_ui::{Clip, Color, Draw, DrawList, Fill, FontFace, Radii, Stop, Transform};
 
 use crate::font::{Font, HudFontFamily, Set};
 
@@ -27,7 +27,7 @@ pub(crate) const ATLAS_HEIGHT: u32 = 1024;
 pub(crate) const MOST_QUADS: usize = 16_384;
 
 /// The bytes one box or letter takes in the buffer the shader reads:
-/// fifty-six `f32`s, fourteen groups of four, laid out as
+/// sixty-four `f32`s, sixteen groups of four, laid out as
 /// `shaders/ui.wgsl` expects:
 ///
 /// | floats | what |
@@ -35,21 +35,23 @@ pub(crate) const MOST_QUADS: usize = 16_384;
 /// | 0..4 | `rect`: left, top, width, height before the transform |
 /// | 4..8 | the transform's turning and scaling numbers `a`, `b`, `c`, `d` |
 /// | 8..12 | the transform's `e` and `f`, then where the band of a gradient starts and ends |
-/// | 12..16 | `radii`: top-left, top-right, bottom-right, bottom-left |
-/// | 16..20 | border widths top, right, bottom, left; a picture's slice; a shadow's offset |
-/// | 20..24 | `colour` |
-/// | 24..28 | `colour2`: the end of a gradient segment; an inside shadow's hole radii; the corners of the box an outside shadow falls from |
-/// | 28..32 | `source`: left, top, width, height in the atlas; a gradient segment's stop places; half the size of the box an outside shadow falls from |
-/// | 32..36 | `params`: what each kind needs besides these |
-/// | 36..40 | the clip: its middle on the screen, then half its width and height |
-/// | 40..44 | the clip's `radii` |
-/// | 44..48 | the clip's turn: from the screen back into the clip's own space |
-/// | 48..52 | the straight box the clip is also inside: left, top, right, bottom |
-/// | 52..56 | kind, how far the quad grows past `rect`, how much the transform scales, spare |
+/// | 12..16 | how far each corner reaches across: top-left, top-right, bottom-right, bottom-left |
+/// | 16..20 | how far each corner reaches down |
+/// | 20..24 | border widths top, right, bottom, left; a picture's slice; a shadow's offset, then for an outside shadow how far the first two corners of its box reach down |
+/// | 24..28 | `colour` |
+/// | 28..32 | `colour2`: the end of a gradient segment; how far an inside shadow's hole's corners reach across; how far the corners of the box an outside shadow falls from reach across |
+/// | 32..36 | `source`: left, top, width, height in the atlas; a gradient segment's stop places; how far an inside shadow's hole's corners reach down; half the size of the box an outside shadow falls from, then how far its last two corners reach down |
+/// | 36..40 | `params`: what each kind needs besides these |
+/// | 40..44 | the clip: its middle on the screen, then half its width and height |
+/// | 44..48 | how far the clip's corners reach across |
+/// | 48..52 | how far they reach down |
+/// | 52..56 | the clip's turn: from the screen back into the clip's own space |
+/// | 56..60 | the straight box the clip is also inside: left, top, right, bottom |
+/// | 60..64 | kind, how far the quad grows past `rect`, how much the transform scales, spare |
 ///
 /// The clip's own space is scaled to screen pixels, so that its soft edge is
 /// a pixel wide however the clip is scaled.
-pub(crate) const QUAD_BYTES: usize = 224;
+pub(crate) const QUAD_BYTES: usize = 256;
 
 /// What a quad is, as the shader's `kind` says it.
 const BOX: f32 = 0.0;
@@ -75,10 +77,10 @@ pub(crate) const MOST_LAYERS: u32 = 4;
 const MOST_CHECKED: usize = 64;
 
 /// Where the colour's alpha is in a quad, in floats, and the second colour's.
-const ALPHA: usize = 23;
-const ALPHA2: usize = 27;
+const ALPHA: usize = 27;
+const ALPHA2: usize = 31;
 /// Where the kind is.
-const KIND: usize = 52;
+const KIND: usize = 60;
 /// A band edge that no pixel of a gradient reaches.
 const FAR: f32 = 1e30;
 /// How far text may be blurred, in pixels.
@@ -403,7 +405,7 @@ struct Instance {
     transform: Transform,
     /// A gradient segment covers the pixels from `band[0]` up to `band[1]`.
     band: [f32; 2],
-    radii: [f32; 4],
+    radii: Radii,
     border: [f32; 4],
     colour: [f32; 4],
     colour2: [f32; 4],
@@ -422,7 +424,7 @@ impl Instance {
             rect,
             transform: Transform::IDENTITY,
             band: [-FAR, FAR],
-            radii: [0.0; 4],
+            radii: Radii::SQUARE,
             border: [0.0; 4],
             colour: rgba(color),
             colour2: [0.0; 4],
@@ -515,9 +517,10 @@ struct TextStyle {
     bold: f32,
 }
 
-/// Corner radii that fit a box of `size`: none below 0, and all shrunk
-/// together when two next to each other are longer than the side between.
-fn fit_radii(radii: [f32; 4], size: [f32; 2]) -> [f32; 4] {
+/// Corners that fit a box of `size`: none below 0, and all shrunk
+/// together, keeping their shapes, when two next to each other reach
+/// further along the side between them than it is long.
+fn fit_radii(radii: Radii, size: [f32; 2]) -> Radii {
     let radii = radii.map(|radius| {
         if radius.is_finite() {
             radius.max(0.0)
@@ -525,13 +528,13 @@ fn fit_radii(radii: [f32; 4], size: [f32; 2]) -> [f32; 4] {
             0.0
         }
     });
-    let [tl, tr, br, bl] = radii;
+    let ([tl, tr, br, bl], [tld, trd, brd, bld]) = (radii.across, radii.down);
     let mut fit = 1.0_f32;
     for (room, sum) in [
         (size[0], tl + tr),
-        (size[1], tr + br),
+        (size[1], trd + brd),
         (size[0], br + bl),
-        (size[1], bl + tl),
+        (size[1], bld + tld),
     ] {
         if sum > room {
             fit = fit.min(room / sum);
@@ -558,15 +561,17 @@ fn alphas(kind: f32) -> impl Iterator<Item = usize> {
     std::iter::once(ALPHA).chain(gradient.then_some(ALPHA2))
 }
 
-/// The four groups of numbers the shader gets for a clip: its middle and
-/// half its size, its corners, its turn back from the screen and the
+/// The five groups of numbers the shader gets for a clip: its middle and
+/// half its size, how far its corners reach across and down, its turn back
+/// from the screen and the
 /// straight box it is also inside, all in screen pixels; `None` if
 /// nothing is inside it. No clip is a huge one.
-fn clip_numbers(clip: Option<Clip>) -> Option<[[f32; 4]; 4]> {
+fn clip_numbers(clip: Option<Clip>) -> Option<[[f32; 4]; 5]> {
     const HUGE: f32 = 1e6;
     let Some(clip) = clip else {
         return Some([
             [0.0, 0.0, HUGE, HUGE],
+            [0.0; 4],
             [0.0; 4],
             [1.0, 0.0, 0.0, 1.0],
             [-HUGE, -HUGE, HUGE, HUGE],
@@ -592,6 +597,7 @@ fn clip_numbers(clip: Option<Clip>) -> Option<[[f32; 4]; 4]> {
         clip.position[1] + clip.size[1] / 2.0,
     ]);
     let [ia, ib, ic, id, ..] = back.matrix;
+    let fitted = fit_radii(clip.radii, clip.size).map(|radius| radius * scale);
     let within = match clip.within {
         None => [-HUGE, -HUGE, HUGE, HUGE],
         Some(within) if finite(&within) && within[2] > 0.0 && within[3] > 0.0 => [
@@ -609,7 +615,8 @@ fn clip_numbers(clip: Option<Clip>) -> Option<[[f32; 4]; 4]> {
             clip.size[0] / 2.0 * scale,
             clip.size[1] / 2.0 * scale,
         ],
-        fit_radii(clip.radii, clip.size).map(|radius| radius * scale),
+        fitted.across,
+        fitted.down,
         [ia * scale, ib * scale, ic * scale, id * scale],
         within,
     ])
@@ -755,7 +762,7 @@ impl Overlay {
                         0.0
                     };
                     left_out |= !self.push(Instance {
-                        radii: [corner; 4],
+                        radii: Radii::round([corner; 4]),
                         ..Instance::new(BOX, [left, top, width, height], color)
                     });
                 }
@@ -788,7 +795,7 @@ impl Overlay {
                     left_out |= match image {
                         None => !self.push(Instance {
                             transform,
-                            radii: [corner; 4],
+                            radii: Radii::round([corner; 4]),
                             ..Instance::new(BOX, rect, color)
                         }),
                         Some(number) => match self.images.places.get(number as usize) {
@@ -853,17 +860,25 @@ impl Overlay {
                             (size[0] / 2.0 - spread).max(0.0),
                             (size[1] / 2.0 - spread).max(0.0),
                         ];
-                        let hole = radii.map(|radius| {
-                            if radius > 0.0 {
-                                (radius - spread).clamp(0.0, half[0].min(half[1]))
-                            } else {
-                                0.0
-                            }
-                        });
+                        // Round corners stay round; an oval's reaches are
+                        // each kept to their own side.
+                        let pull = |reach: [f32; 4], side: f32| {
+                            std::array::from_fn(|corner| {
+                                let radius = reach[corner];
+                                let round = radii.across[corner] == radii.down[corner];
+                                let most = if round { half[0].min(half[1]) } else { side };
+                                if radius > 0.0 {
+                                    (radius - spread).clamp(0.0, most)
+                                } else {
+                                    0.0
+                                }
+                            })
+                        };
                         Instance {
                             radii,
                             border: [offset[0], offset[1], 0.0, 0.0],
-                            colour2: hole,
+                            colour2: pull(radii.across, half[0]),
+                            source: pull(radii.down, half[1]),
                             params: [half[0], half[1], sigma, 0.0],
                             ..Instance::new(
                                 INSET,
@@ -886,11 +901,12 @@ impl Overlay {
                         });
                         // The box it falls from, from the shadow's middle,
                         // which the shadow is not drawn under.
+                        let [d0, d1, d2, d3] = radii.down;
                         Instance {
                             radii: fit_radii(grown, [width, height]),
-                            border: [-offset[0], -offset[1], 0.0, 0.0],
-                            colour2: radii,
-                            source: [size[0] / 2.0, size[1] / 2.0, 0.0, 0.0],
+                            border: [-offset[0], -offset[1], d0, d1],
+                            colour2: radii.across,
+                            source: [size[0] / 2.0, size[1] / 2.0, d2, d3],
                             params: [width / 2.0, height / 2.0, sigma, 0.0],
                             grow: 3.0 * sigma + 1.0,
                             ..Instance::new(
@@ -964,7 +980,7 @@ impl Overlay {
         &mut self,
         position: [f32; 2],
         size: [f32; 2],
-        radii: [f32; 4],
+        radii: Radii,
         fill: Fill<'_>,
         (widths, border_color): ([f32; 4], Color),
         (transform, clip): (Transform, Option<Clip>),
@@ -1256,7 +1272,8 @@ impl Overlay {
             .rect
             .iter()
             .chain(&[a, b, c, d, e, f, instance.band[0], instance.band[1]])
-            .chain(&clean(instance.radii))
+            .chain(&clean(instance.radii.across))
+            .chain(&clean(instance.radii.down))
             .chain(&clean(instance.border))
             .chain(&clean(instance.colour))
             .chain(&clean(instance.colour2))
@@ -1585,6 +1602,7 @@ mod tests {
         matrix: [f32; 6],
         band: [f32; 2],
         radii: [f32; 4],
+        radii_down: [f32; 4],
         border: [f32; 4],
         from: [f32; 4],
         colour: [f32; 4],
@@ -1592,6 +1610,7 @@ mod tests {
         params: [f32; 4],
         clip: [f32; 4],
         clip_radii: [f32; 4],
+        clip_radii_down: [f32; 4],
         clip_turn: [f32; 4],
         within: [f32; 4],
         kind: f32,
@@ -1633,20 +1652,22 @@ mod tests {
                     ],
                     band: [number(10), number(11)],
                     radii: four(12),
-                    border: four(16),
-                    colour: four(20),
-                    colour2: four(24),
-                    from: four(28),
-                    params: four(32),
-                    clip: four(36),
-                    clip_radii: four(40),
-                    clip_turn: four(44),
-                    within: four(48),
-                    kind: number(52),
-                    grow: number(53),
+                    radii_down: four(16),
+                    border: four(20),
+                    colour: four(24),
+                    colour2: four(28),
+                    from: four(32),
+                    params: four(36),
+                    clip: four(40),
+                    clip_radii: four(44),
+                    clip_radii_down: four(48),
+                    clip_turn: four(52),
+                    within: four(56),
+                    kind: number(60),
+                    grow: number(61),
                     corner: number(12),
-                    letter: number(52) == 1.0,
-                    image: number(52) == 2.0,
+                    letter: number(60) == 1.0,
+                    image: number(60) == 2.0,
                     angle: number(5).atan2(number(4)),
                 }
             })
@@ -1929,7 +1950,7 @@ mod tests {
         Draw::Box {
             position: [10.0, 20.0],
             size: [100.0, 50.0],
-            radii: [8.0; 4],
+            radii: [8.0; 4].into(),
             fill,
             border_widths: border,
             border_color: Color::WHITE,
@@ -1991,8 +2012,8 @@ mod tests {
     }
 
     #[test]
-    fn a_quad_is_fifty_six_numbers() {
-        assert_eq!(QUAD_BYTES, 56 * 4);
+    fn a_quad_is_sixty_four_numbers() {
+        assert_eq!(QUAD_BYTES, 64 * 4);
     }
 
     #[test]
@@ -2036,12 +2057,12 @@ mod tests {
         let mut draw = a_box(Fill::Color(RED), [0.0; 4]);
         if let Draw::Box { radii, .. } = &mut draw {
             // 100 wide holds 40 + 40, and 50 high holds 40 + 0: unchanged.
-            *radii = [40.0, 40.0, 0.0, 0.0];
+            *radii = [40.0, 40.0, 0.0, 0.0].into();
         }
         assert_eq!(drawn(&[draw])[0].radii, [40.0, 40.0, 0.0, 0.0]);
         if let Draw::Box { radii, .. } = &mut draw {
             // 30 beside 30 on a side 50 high is too much for it: both shrink.
-            *radii = [30.0, 0.0, 0.0, 30.0];
+            *radii = [30.0, 0.0, 0.0, 30.0].into();
         }
         let out = drawn(&[draw]);
         assert!((out[0].radii[0] - 25.0).abs() < 1e-4, "{:?}", out[0].radii);
@@ -2225,7 +2246,7 @@ mod tests {
 
     #[test]
     fn a_clip_goes_to_every_kind_and_an_empty_one_draws_nothing() {
-        let clip = Clip::new([5.0, 6.0], [30.0, 40.0], [10.0, 0.0, 0.0, 99.0]);
+        let clip = Clip::new([5.0, 6.0], [30.0, 40.0], [10.0, 0.0, 0.0, 99.0].into());
         let stops = [stop(RED, 0.0), stop(BLUE, 1.0)];
         let fills = [
             Fill::Color(RED),
@@ -2351,7 +2372,7 @@ mod tests {
         let styled = |color: Color, spread: f32, inset: bool| Draw::Shadow {
             position: [10.0, 20.0],
             size: [100.0, 50.0],
-            radii: [8.0; 4],
+            radii: [8.0; 4].into(),
             color,
             offset: [3.0, 4.0],
             blur: 10.0,
@@ -2375,8 +2396,8 @@ mod tests {
         assert_eq!(quad.colour, [0.0, 0.0, 0.0, 0.5]);
         // The box it falls from, which it is not drawn under: from the
         // shadow's middle back by the offset, its own half size and corners.
-        assert_eq!(quad.border[..2], [-3.0, -4.0]);
-        assert_eq!(quad.from[..2], [50.0, 25.0]);
+        assert_eq!(quad.border, [-3.0, -4.0, 8.0, 8.0]);
+        assert_eq!(quad.from, [50.0, 25.0, 8.0, 8.0]);
         assert_eq!(quad.colour2, [8.0; 4]);
 
         let out = drawn(&[shadow(true)]);
@@ -2486,7 +2507,7 @@ mod tests {
         Draw::Box {
             position,
             size: [40.0, 40.0],
-            radii: [0.0; 4],
+            radii: [0.0; 4].into(),
             fill: Fill::Color(color),
             border_widths: [0.0; 4],
             border_color: Color::WHITE,
@@ -2507,7 +2528,7 @@ mod tests {
         let gradient = Draw::Box {
             position: [200.0, 0.0],
             size: [40.0, 40.0],
-            radii: [0.0; 4],
+            radii: [0.0; 4].into(),
             fill: Fill::Linear {
                 angle: 90.0,
                 stops: &stops,
@@ -2662,7 +2683,7 @@ mod tests {
         let clip = lore_ui::Clip {
             transform: Transform::about([50.0, 50.0], 2.0, std::f32::consts::FRAC_PI_2),
             within: Some([1.0, 2.0, 3.0, 4.0]),
-            ..Clip::new([0.0, 0.0], [100.0, 60.0], [10.0; 4])
+            ..Clip::new([0.0, 0.0], [100.0, 60.0], [10.0; 4].into())
         };
         let out = drawn(&[clipped(a_box(Fill::Color(RED), [0.0; 4]), clip)]);
         let quad = out[0];
@@ -2700,5 +2721,40 @@ mod tests {
         let (layered, jobs) = overlay.layers();
         assert_eq!(jobs.len(), 1);
         assert!(overlay.quads().len() + layered.len() <= MOST_QUADS * QUAD_BYTES);
+    }
+
+    #[test]
+    fn oval_corners_reach_across_and_down_and_shrink_together_to_fit() {
+        let oval = Radii {
+            across: [100.0; 4],
+            down: [50.0; 4],
+        };
+        let mut draw = a_box(Fill::Color(RED), [2.0; 4]);
+        if let Draw::Box { radii, size, .. } = &mut draw {
+            *radii = oval;
+            *size = [200.0, 100.0];
+        }
+        let out = drawn(&[draw]);
+        // The fill and the border both carry both reaches.
+        for quad in &out {
+            assert_eq!((quad.radii, quad.radii_down), ([100.0; 4], [50.0; 4]));
+        }
+        // Too far for the box: both shrink by the same share, keeping the
+        // oval's shape.
+        if let Draw::Box { radii, .. } = &mut draw {
+            *radii = Radii {
+                across: [200.0; 4],
+                down: [50.0; 4],
+            };
+        }
+        let quad = drawn(&[draw])[0];
+        assert_eq!((quad.radii, quad.radii_down), ([100.0; 4], [25.0; 4]));
+        // A clip's corners, in screen pixels.
+        let clip = Clip::new([0.0, 0.0], [200.0, 100.0], oval);
+        let quad = drawn(&[clipped(a_box(Fill::Color(RED), [0.0; 4]), clip)])[0];
+        assert_eq!(
+            (quad.clip_radii, quad.clip_radii_down),
+            ([100.0; 4], [50.0; 4])
+        );
     }
 }

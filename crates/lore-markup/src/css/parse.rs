@@ -736,8 +736,10 @@ fn expand(sh: Shorthand, cur: &mut Cur<'_>) -> Result<Items, MarkupError> {
         Shorthand::BorderRadius => sides(cur, &RADIUS, |c| {
             if matches!(c.peek().map(|t| &t.tok), Some(Tok::Delim('/'))) {
                 return Err(c.err_here(
-                    "elliptical corners (a `/` in border-radius) are not supported",
-                    "use one radius per corner",
+                    "elliptical corners written with a `/` in border-radius are not supported",
+                    "write one radius for each corner, such as `border-radius: 40px`. For an \
+                     oval corner use a percentage, which is of the box's width across and its \
+                     height down: `border-radius: 50%` on a box that is not square is an ellipse",
                 ));
             }
             Ok(Value::Length(c.length(LEN_POS)?))

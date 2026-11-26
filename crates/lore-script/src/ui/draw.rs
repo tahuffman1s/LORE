@@ -18,7 +18,7 @@
 //! - a clip keeps its transform, its moving part scaled.
 
 use lore_markup::{Fill as PageFill, Frame, Paint};
-use lore_ui::{Clip, Color, Draw, DrawBuffer, Fill, FontFace, Stop, TextMeasure, Transform};
+use lore_ui::{Clip, Color, Draw, DrawBuffer, Fill, FontFace, Radii, Stop, TextMeasure, Transform};
 
 use crate::images::HudImageInfo;
 
@@ -55,6 +55,14 @@ fn scaled4(values: [f32; 4], s: f32) -> [f32; 4] {
     values.map(|v| v * s)
 }
 
+/// The page's corners in real pixels, oval ones staying oval.
+fn scaled_radii(radii: lore_markup::Radii, s: f32) -> Radii {
+    Radii {
+        across: scaled4(radii.across, s),
+        down: scaled4(radii.down, s),
+    }
+}
+
 fn transform_of(common: &lore_markup::Common, s: f32) -> Transform {
     let [a, b, c, d, e, f] = common.transform;
     Transform {
@@ -68,7 +76,7 @@ fn clip_of(common: &lore_markup::Common, s: f32) -> Option<Clip> {
         Clip {
             position: [clip.rect.x * s, clip.rect.y * s],
             size: [clip.rect.w * s, clip.rect.h * s],
-            radii: scaled4(clip.radii, s),
+            radii: scaled_radii(clip.radii, s),
             transform: Transform {
                 matrix: [a, b, c, d, e * s, f * s],
             },
@@ -102,7 +110,7 @@ impl Mapper<'_> {
             } => out.push(Draw::Shadow {
                 position: [rect.x * s, rect.y * s],
                 size: [rect.w * s, rect.h * s],
-                radii: scaled4(*radii, s),
+                radii: scaled_radii(*radii, s),
                 color: tinted(*color),
                 offset: [offset[0] * s, offset[1] * s],
                 blur: blur * s,
@@ -150,7 +158,7 @@ impl Mapper<'_> {
                 out.push(Draw::Box {
                     position: [rect.x * s, rect.y * s],
                     size: [rect.w * s, rect.h * s],
-                    radii: [0.0; 4],
+                    radii: Radii::SQUARE,
                     fill: Fill::Image {
                         image: u32::try_from(image).unwrap_or(u32::MAX),
                         tint: tinted([1.0; 4]),
@@ -222,7 +230,7 @@ impl Mapper<'_> {
     fn rect(
         &mut self,
         frame: &Frame,
-        (rect, radii, fill): (&lore_markup::Rect, &[f32; 4], &PageFill),
+        (rect, radii, fill): (&lore_markup::Rect, &lore_markup::Radii, &PageFill),
         (widths, colors): (&[f32; 4], &[[f32; 4]; 4]),
         common: &lore_markup::Common,
         out: &mut DrawBuffer,
@@ -230,7 +238,7 @@ impl Mapper<'_> {
         let s = self.scale;
         let position = [rect.x * s, rect.y * s];
         let size = [rect.w * s, rect.h * s];
-        let radii = scaled4(*radii, s);
+        let radii = scaled_radii(*radii, s);
         let transform = transform_of(common, s);
         let clip = clip_of(common, s);
         let nothing = Color::rgba(0.0, 0.0, 0.0, 0.0);

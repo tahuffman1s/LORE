@@ -76,6 +76,43 @@ impl Rect {
     }
 }
 
+/// How far each corner reaches across and down, top-left, top-right,
+/// bottom-right, bottom-left. Equal reaches make a round corner, unequal a
+/// quarter of an oval.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Radii {
+    /// How far each corner reaches across.
+    pub across: [f32; 4],
+    /// How far each corner reaches down.
+    pub down: [f32; 4],
+}
+
+impl Radii {
+    /// Every length changed by `change`.
+    pub fn map(self, mut change: impl FnMut(f32) -> f32) -> Self {
+        Radii {
+            across: self.across.map(&mut change),
+            down: self.down.map(&mut change),
+        }
+    }
+}
+
+impl From<[f32; 4]> for Radii {
+    /// Round corners.
+    fn from(radii: [f32; 4]) -> Self {
+        Radii {
+            across: radii,
+            down: radii,
+        }
+    }
+}
+
+impl PartialEq<[f32; 4]> for Radii {
+    fn eq(&self, radii: &[f32; 4]) -> bool {
+        self.across == *radii && self.down == *radii
+    }
+}
+
 /// A clip: a rectangle with rounded corners, moved and turned by its own
 /// transform as the box it belongs to is, so a turned box clips along its
 /// turned edges.
@@ -83,8 +120,8 @@ impl Rect {
 pub struct Clip {
     /// The area kept, before `transform`.
     pub rect: Rect,
-    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-    pub radii: [f32; 4],
+    /// Corner radii.
+    pub radii: Radii,
     /// 2D affine `[a, b, c, d, e, f]`, as [`Common::transform`].
     pub transform: [f32; 6],
     /// A straight rectangle on the screen that is kept as well: what is left
@@ -107,33 +144,40 @@ impl Clip {
     }
 }
 
-/// Whether a point is inside a rectangle with round corners `radii`,
-/// top-left, top-right, bottom-right, bottom-left.
-pub(crate) fn inside_rounded(rect: &Rect, radii: [f32; 4], x: f32, y: f32) -> bool {
+/// Whether a point is inside a rectangle with corners `radii`.
+pub(crate) fn inside_rounded(rect: &Rect, radii: Radii, x: f32, y: f32) -> bool {
     if !rect.contains(x, y) {
         return false;
     }
     let (left, top) = (x < rect.x + rect.w / 2.0, y < rect.y + rect.h / 2.0);
-    let radius = match (left, top) {
-        (true, true) => radii[0],
-        (false, true) => radii[1],
-        (false, false) => radii[2],
-        (true, false) => radii[3],
+    let corner = match (left, top) {
+        (true, true) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
+    };
+    // A round corner is kept to half the shorter side, an oval one to half
+    // of each side.
+    let shorter = rect.w.min(rect.h) / 2.0;
+    let round = radii.across[corner] == radii.down[corner];
+    let across = radii.across[corner].clamp(0.0, if round { shorter } else { rect.w / 2.0 });
+    let down = radii.down[corner].clamp(0.0, if round { shorter } else { rect.h / 2.0 });
+    if across <= 0.0 || down <= 0.0 {
+        return true;
     }
-    .clamp(0.0, rect.w.min(rect.h) / 2.0);
     let cx = if left {
-        rect.x + radius
+        rect.x + across
     } else {
-        rect.right() - radius
+        rect.right() - across
     };
     let cy = if top {
-        rect.y + radius
+        rect.y + down
     } else {
-        rect.bottom() - radius
+        rect.bottom() - down
     };
-    let (dx, dy) = (x - cx, y - cy);
+    let (dx, dy) = ((x - cx) / across, (y - cy) / down);
     let in_corner = (dx < 0.0) == left && (dy < 0.0) == top;
-    !in_corner || dx * dx + dy * dy <= radius * radius
+    !in_corner || dx * dx + dy * dy <= 1.0
 }
 
 /// What every paint carries.
@@ -213,8 +257,8 @@ pub enum Paint {
     Shadow {
         /// The box that casts it (its border box, or padding box when inset).
         rect: Rect,
-        /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-        radii: [f32; 4],
+        /// Corner radii.
+        radii: Radii,
         /// Offset in pixels.
         offset: [f32; 2],
         /// Blur radius.
@@ -233,8 +277,8 @@ pub enum Paint {
     Rect {
         /// The border box.
         rect: Rect,
-        /// Corner radii: top-left, top-right, bottom-right, bottom-left.
-        radii: [f32; 4],
+        /// Corner radii.
+        radii: Radii,
         /// Inside.
         fill: Fill,
         /// Border widths: top, right, bottom, left.
@@ -408,7 +452,7 @@ pub(crate) fn bbox(m: &[f32; 6], r: &Rect) -> Rect {
 }
 
 /// A clip to `rect`, with round corners `radii`, moved by `m`.
-fn clip_to(m: [f32; 6], rect: Rect, radii: [f32; 4]) -> Clip {
+fn clip_to(m: [f32; 6], rect: Rect, radii: Radii) -> Clip {
     Clip {
         rect,
         radii,
@@ -436,7 +480,7 @@ fn intersect_clip(a: Option<Clip>, b: Clip) -> Clip {
         } else if rect == a.rect {
             a.radii
         } else {
-            [0.0; 4]
+            Radii::default()
         };
         Clip {
             rect,
@@ -533,49 +577,62 @@ pub(crate) fn build(
     }
 }
 
-/// The radius of each corner, top-left, top-right, bottom-right,
-/// bottom-left. A percentage is of the box's shorter side, so on a box that
-/// is not square it is drawn round (ovals are #612). Neighbouring radii may
-/// not overlap along a side: when they would, all are scaled down together.
-pub(crate) fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> [f32; 4] {
-    let basis = w.min(h);
-    let mut r = [
-        cs.border_top_left_radius.resolve(basis).max(0.0),
-        cs.border_top_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_right_radius.resolve(basis).max(0.0),
-        cs.border_bottom_left_radius.resolve(basis).max(0.0),
+/// How far each corner reaches across and down. A percentage is of the
+/// box's width across and of its height down, so `50%` on a box that is not
+/// square is an ellipse. Neighbouring corners may not overlap along a side:
+/// when they would, all are scaled down together, keeping their shapes.
+pub(crate) fn radii_of(cs: &ComputedStyle, w: f32, h: f32) -> Radii {
+    let corners = [
+        cs.border_top_left_radius,
+        cs.border_top_right_radius,
+        cs.border_bottom_right_radius,
+        cs.border_bottom_left_radius,
     ];
+    let mut r = Radii {
+        across: corners.map(|c| c.resolve(w).max(0.0)),
+        down: corners.map(|c| c.resolve(h).max(0.0)),
+    };
+    let (x, y) = (r.across, r.down);
     let mut f = 1.0f32;
     for (sum, side) in [
-        (r[0] + r[1], w),
-        (r[1] + r[2], h),
-        (r[2] + r[3], w),
-        (r[3] + r[0], h),
+        (x[0] + x[1], w),
+        (y[1] + y[2], h),
+        (x[2] + x[3], w),
+        (y[3] + y[0], h),
     ] {
         if sum > side && sum > 0.0 {
             f = f.min(side / sum);
         }
     }
     if f < 1.0 {
-        for v in &mut r {
-            *v *= f;
-        }
+        r = r.map(|v| v * f);
     }
     r
 }
 
-fn shrink_radii(r: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+/// The corners of the box inside the border: each pulled in on both axes by
+/// the wider of the two borders it joins, so round corners stay round.
+fn shrink_radii(r: Radii, b: [f32; 4]) -> Radii {
     // b is top, right, bottom, left; corners are tl, tr, br, bl.
-    [
-        (r[0] - b[0].max(b[3])).max(0.0),
-        (r[1] - b[0].max(b[1])).max(0.0),
-        (r[2] - b[2].max(b[1])).max(0.0),
-        (r[3] - b[2].max(b[3])).max(0.0),
-    ]
+    let by = [
+        b[0].max(b[3]),
+        b[0].max(b[1]),
+        b[2].max(b[1]),
+        b[2].max(b[3]),
+    ];
+    let pull = |v: [f32; 4]| std::array::from_fn(|i| (v[i] - by[i]).max(0.0));
+    Radii {
+        across: pull(r.across),
+        down: pull(r.down),
+    }
 }
 
-fn grow_radii(r: [f32; 4], d: f32) -> [f32; 4] {
-    r.map(|v| if v > 0.0 { v + d } else { 0.0 })
+fn grow_radii(r: Radii, d: f32) -> Radii {
+    let grow = |v: [f32; 4]| v.map(|v| if v > 0.0 { v + d } else { 0.0 });
+    Radii {
+        across: grow(r.across),
+        down: grow(r.down),
+    }
 }
 
 fn with_alpha(c: Color, k: f32) -> Color {
@@ -791,7 +848,7 @@ impl Painter<'_, '_> {
         cs: &ComputedStyle,
         brect: Rect,
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -897,7 +954,7 @@ impl Painter<'_, '_> {
         name: Atom,
         cs: &ComputedStyle,
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -1218,7 +1275,7 @@ impl Painter<'_, '_> {
                             w: p.w,
                             h: seg.asc + seg.desc,
                         },
-                        radii: [0.0; 4],
+                        radii: Radii::default(),
                         fill: Fill::Color(bg),
                         border_widths: [0.0; 4],
                         border_colors: [[0.0; 4]; 4],
@@ -1258,7 +1315,7 @@ impl Painter<'_, '_> {
         cs: &ComputedStyle,
         c: Control,
         crect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         common: &Common,
     ) {
         let doc = self.cx.env.doc;
@@ -1299,7 +1356,10 @@ impl Painter<'_, '_> {
                     TextAlign::Right => (crect.w - w).max(0.0),
                 };
                 let baseline = crect.y + (crect.h - lh) / 2.0 + (lh - (asc + desc)) / 2.0 + asc;
-                let clip = intersect_clip(common.clip, clip_to(common.transform, crect, [0.0; 4]));
+                let clip = intersect_clip(
+                    common.clip,
+                    clip_to(common.transform, crect, Radii::default()),
+                );
                 self.text_run(cs, [crect.x + x, baseline], text, color, Some(clip), common);
             }
             Control::Checkbox => {
@@ -1313,7 +1373,7 @@ impl Painter<'_, '_> {
                     };
                     self.frame.paints.push(Paint::Rect {
                         rect,
-                        radii: [2.0; 4],
+                        radii: [2.0; 4].into(),
                         fill: Fill::Color(cs.accent_color),
                         border_widths: [0.0; 4],
                         border_colors: [[0.0; 4]; 4],
@@ -1353,7 +1413,7 @@ impl Painter<'_, '_> {
         layout: &taffy::Layout,
         scroll: [f32; 2],
         prect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         b: [f32; 4],
         common: &Common,
     ) {
@@ -1413,7 +1473,7 @@ impl Painter<'_, '_> {
             if track[3] > 0.0 {
                 self.frame.paints.push(Paint::Rect {
                     rect: track_rect,
-                    radii: r,
+                    radii: r.into(),
                     fill: Fill::Color(track),
                     border_widths: [0.0; 4],
                     border_colors: [[0.0; 4]; 4],
@@ -1422,7 +1482,7 @@ impl Painter<'_, '_> {
             }
             self.frame.paints.push(Paint::Rect {
                 rect: thumb_rect,
-                radii: r,
+                radii: r.into(),
                 fill: Fill::Color(thumb),
                 border_widths: [0.0; 4],
                 border_colors: [[0.0; 4]; 4],
@@ -1436,7 +1496,7 @@ impl Painter<'_, '_> {
         el: ElementId,
         cs: &ComputedStyle,
         brect: Rect,
-        radii: [f32; 4],
+        radii: Radii,
         common: &Common,
     ) {
         let (mut width, mut offset, mut color) =

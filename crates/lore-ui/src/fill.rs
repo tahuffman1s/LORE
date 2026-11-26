@@ -126,6 +126,71 @@ impl Transform {
     }
 }
 
+/// How round each corner of a box is: how far each reaches across and
+/// down, for the corners top-left, top-right, bottom-right and bottom-left.
+/// A corner that reaches as far both ways is round; one that does not is a
+/// quarter of an oval. Four numbers make round corners:
+///
+/// ```
+/// use lore_ui::Radii;
+///
+/// let round = Radii::from([8.0; 4]);
+/// assert_eq!(round.across, round.down);
+/// let oval = Radii { across: [100.0; 4], down: [50.0; 4] };
+/// assert!(!oval.is_round());
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Radii {
+    /// How far each corner reaches across.
+    pub across: [f32; 4],
+    /// How far each corner reaches down.
+    pub down: [f32; 4],
+}
+
+impl Radii {
+    /// Square corners.
+    pub const SQUARE: Self = Self {
+        across: [0.0; 4],
+        down: [0.0; 4],
+    };
+
+    /// Round corners of `radii`.
+    #[must_use]
+    pub const fn round(radii: [f32; 4]) -> Self {
+        Self {
+            across: radii,
+            down: radii,
+        }
+    }
+
+    /// Whether every corner reaches as far across as down.
+    #[must_use]
+    pub fn is_round(&self) -> bool {
+        self.across == self.down
+    }
+
+    /// Each length changed by `change`.
+    #[must_use]
+    pub fn map(self, mut change: impl FnMut(f32) -> f32) -> Self {
+        Self {
+            across: self.across.map(&mut change),
+            down: self.down.map(&mut change),
+        }
+    }
+}
+
+impl From<[f32; 4]> for Radii {
+    fn from(radii: [f32; 4]) -> Self {
+        Self::round(radii)
+    }
+}
+
+impl PartialEq<[f32; 4]> for Radii {
+    fn eq(&self, radii: &[f32; 4]) -> bool {
+        self.across == *radii && self.down == *radii
+    }
+}
+
 /// Only what is inside this rounded box is drawn. The box is moved, turned
 /// and scaled by its own `transform`, as the piece it is the box of is, so
 /// a clip to a turned box cuts along the turned edges and corners.
@@ -136,7 +201,7 @@ impl Transform {
 /// // A 100 by 100 box turned an eighth of a turn about its middle.
 /// let clip = Clip {
 ///     transform: Transform::about([50.0, 50.0], 1.0, std::f32::consts::FRAC_PI_4),
-///     ..Clip::new([0.0, 0.0], [100.0, 100.0], [0.0; 4])
+///     ..Clip::new([0.0, 0.0], [100.0, 100.0], [0.0; 4].into())
 /// };
 /// assert!(clip.contains([50.0, 50.0]));
 /// // The corner of the straight box is outside the turned one.
@@ -148,9 +213,8 @@ pub struct Clip {
     pub position: [f32; 2],
     /// Width and height, before `transform`.
     pub size: [f32; 2],
-    /// How round each corner is: top-left, top-right, bottom-right,
-    /// bottom-left. 0 is square.
-    pub radii: [f32; 4],
+    /// How round each corner is.
+    pub radii: Radii,
     /// How the box is moved, turned and scaled on the screen.
     pub transform: Transform,
     /// A straight box on the screen, left, top, width and height, that
@@ -164,7 +228,7 @@ impl Clip {
     /// A straight box on the screen with corners `radii`, and nothing else
     /// to be inside.
     #[must_use]
-    pub const fn new(position: [f32; 2], size: [f32; 2], radii: [f32; 4]) -> Self {
+    pub const fn new(position: [f32; 2], size: [f32; 2], radii: Radii) -> Self {
         Self {
             position,
             size,
@@ -199,38 +263,38 @@ impl Clip {
 }
 
 /// Whether `point`, measured from a box's top-left corner, is inside the box
-/// `size` with round corners `radii` (top-left, top-right, bottom-right,
-/// bottom-left).
-pub(crate) fn inside_round_box(point: [f32; 2], size: [f32; 2], radii: [f32; 4]) -> bool {
+/// `size` with corners `radii`.
+pub(crate) fn inside_round_box(point: [f32; 2], size: [f32; 2], radii: Radii) -> bool {
     let [x, y] = point;
     let [w, h] = size;
     if !(x >= 0.0 && x < w && y >= 0.0 && y < h) {
         return false;
     }
-    let most = (w.min(h) / 2.0).max(0.0);
-    let [tl, tr, br, bl] = radii.map(|radius| radius.clamp(0.0, most));
-    // The corner the point is in, and the middle of its circle.
-    let (radius, middle) = match (x < w / 2.0, y < h / 2.0) {
-        (true, true) => (tl, [tl, tl]),
-        (false, true) => (tr, [w - tr, tr]),
-        (false, false) => (br, [w - br, h - br]),
-        (true, false) => (bl, [bl, h - bl]),
+    let (left, top) = (x < w / 2.0, y < h / 2.0);
+    let corner = match (left, top) {
+        (true, true) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
     };
-    let beyond_x = if x < w / 2.0 {
-        x < middle[0]
-    } else {
-        x > middle[0]
-    };
-    let beyond_y = if y < h / 2.0 {
-        y < middle[1]
-    } else {
-        y > middle[1]
-    };
-    if radius <= 0.0 || !(beyond_x && beyond_y) {
+    // A round corner is kept to half the shorter side, an oval one to half
+    // of each side.
+    let shorter = (w.min(h) / 2.0).max(0.0);
+    let round = radii.across[corner] == radii.down[corner];
+    let across = radii.across[corner].clamp(0.0, if round { shorter } else { w / 2.0 });
+    let down = radii.down[corner].clamp(0.0, if round { shorter } else { h / 2.0 });
+    // The middle of the corner's oval.
+    let middle = [
+        if left { across } else { w - across },
+        if top { down } else { h - down },
+    ];
+    let beyond_x = if left { x < middle[0] } else { x > middle[0] };
+    let beyond_y = if top { y < middle[1] } else { y > middle[1] };
+    if across <= 0.0 || down <= 0.0 || !(beyond_x && beyond_y) {
         return true;
     }
-    let (dx, dy) = (x - middle[0], y - middle[1]);
-    dx * dx + dy * dy <= radius * radius
+    let (dx, dy) = ((x - middle[0]) / across, (y - middle[1]) / down);
+    dx * dx + dy * dy <= 1.0
 }
 
 /// One colour of a gradient, and where along it the colour is.

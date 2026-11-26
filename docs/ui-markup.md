@@ -442,7 +442,7 @@ Shorthands, written out to the longhands above:
 | `inset` | `top`, `right`, `bottom`, `left` | same 1 to 4 pattern. |
 | `border-width`, `border-style`, `border-color` | the four sides | 1 to 4 values. |
 | `border`, `border-top`, `border-right`, `border-bottom`, `border-left` | width, style, colour | In any order. **Style is `none` unless you write `solid`**, so `border: 2px red` draws nothing; write `border: 2px solid red`. Width is 3px if left out, colour is the text colour. |
-| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. No `/`. A percentage is of the box's shorter side, so on a box that is not square the corner is drawn round; ovals are #612. |
+| `border-radius` | the four corners | 1 to 4 values, from the top-left clockwise. A percentage is of the box's width across and its height down, so `50%` on a box that is not square is an ellipse; a length is a round corner. No `/`: an oval corner is written as a percentage. |
 | `background` | colour, picture | One colour and/or one picture (`url(name)` or a gradient). Resets size and position. |
 | `border-image` | source, slice, width | `border-image: url(frame) 12 fill / 12px;`. |
 | `outline` | width, style, colour | Same rules as `border`. |

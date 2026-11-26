@@ -55,26 +55,36 @@ struct Corner {
     // From the middle of the rectangle to this pixel, before the transform.
     @location(0) offset: vec2<f32>,
     @location(1) @interpolate(flat) half_size: vec2<f32>,
-    // Top-left, top-right, bottom-right and bottom-left.
+    // How far each corner reaches across, then down: top-left, top-right,
+    // bottom-right and bottom-left. Equal reaches are a round corner.
     @location(2) @interpolate(flat) radii: vec4<f32>,
-    // Border widths top, right, bottom, left; a picture's slice; a shadow's offset.
-    @location(3) @interpolate(flat) border: vec4<f32>,
-    @location(4) @interpolate(flat) colour: vec4<f32>,
-    // The end of a gradient segment; the corners of an inside shadow's hole.
-    @location(5) @interpolate(flat) colour2: vec4<f32>,
-    // Left, top, width and height in the atlas; where a gradient segment starts and ends.
-    @location(6) @interpolate(flat) source: vec4<f32>,
-    @location(7) @interpolate(flat) params: vec4<f32>,
-    // The clip's middle on the screen and half its size, its corners, its
-    // turn from the screen into its own space, and the straight box on the
-    // screen it is inside: left, top, right, bottom.
-    @location(8) @interpolate(flat) clip: vec4<f32>,
-    @location(9) @interpolate(flat) clip_radii: vec4<f32>,
-    @location(10) @interpolate(flat) clip_turn: vec4<f32>,
-    @location(11) @interpolate(flat) within: vec4<f32>,
+    @location(3) @interpolate(flat) radii_down: vec4<f32>,
+    // Border widths top, right, bottom, left; a picture's slice; a shadow's
+    // offset, then how far the first two corners of an outside shadow's box
+    // reach down.
+    @location(4) @interpolate(flat) border: vec4<f32>,
+    @location(5) @interpolate(flat) colour: vec4<f32>,
+    // The end of a gradient segment; how far the corners of an inside
+    // shadow's hole, or an outside shadow's box, reach across.
+    @location(6) @interpolate(flat) colour2: vec4<f32>,
+    // Left, top, width and height in the atlas; where a gradient segment
+    // starts and ends; how far an inside shadow's hole's corners reach down;
+    // half an outside shadow's box, then how far its last two corners reach
+    // down.
+    @location(7) @interpolate(flat) source: vec4<f32>,
+    @location(8) @interpolate(flat) params: vec4<f32>,
+    // The clip's middle on the screen and half its size, how far its corners
+    // reach across and down, its turn from the screen into its own space,
+    // and the straight box on the screen it is inside: left, top, right,
+    // bottom.
+    @location(9) @interpolate(flat) clip: vec4<f32>,
+    @location(10) @interpolate(flat) clip_radii: vec4<f32>,
+    @location(11) @interpolate(flat) clip_radii_down: vec4<f32>,
+    @location(12) @interpolate(flat) clip_turn: vec4<f32>,
+    @location(13) @interpolate(flat) within: vec4<f32>,
     // The kind, where a gradient segment's band starts and ends, and how
     // much the transform stretches lengths.
-    @location(12) @interpolate(flat) kind: vec4<f32>,
+    @location(14) @interpolate(flat) kind: vec4<f32>,
 }
 
 @vertex
@@ -88,17 +98,19 @@ fn vertex(
     // Its e and f, then where a gradient segment's band starts and ends.
     @location(2) move_and_band: vec4<f32>,
     @location(3) radii: vec4<f32>,
-    @location(4) border: vec4<f32>,
-    @location(5) colour: vec4<f32>,
-    @location(6) colour2: vec4<f32>,
-    @location(7) source: vec4<f32>,
-    @location(8) params: vec4<f32>,
-    @location(9) clip: vec4<f32>,
-    @location(10) clip_radii: vec4<f32>,
-    @location(11) clip_turn: vec4<f32>,
-    @location(12) within: vec4<f32>,
+    @location(4) radii_down: vec4<f32>,
+    @location(5) border: vec4<f32>,
+    @location(6) colour: vec4<f32>,
+    @location(7) colour2: vec4<f32>,
+    @location(8) source: vec4<f32>,
+    @location(9) params: vec4<f32>,
+    @location(10) clip: vec4<f32>,
+    @location(11) clip_radii: vec4<f32>,
+    @location(12) clip_radii_down: vec4<f32>,
+    @location(13) clip_turn: vec4<f32>,
+    @location(14) within: vec4<f32>,
     // The kind, how far it grows past the rectangle, and the stretch.
-    @location(13) kind: vec4<f32>,
+    @location(15) kind: vec4<f32>,
 ) -> Corner {
     // 0,0 then 1,0 then 0,1 then 1,1: a strip of two triangles.
     let unit = vec2<f32>(f32(index & 1u), f32(index >> 1u));
@@ -120,6 +132,7 @@ fn vertex(
     corner.offset = from_middle;
     corner.half_size = rect.zw * 0.5;
     corner.radii = radii;
+    corner.radii_down = radii_down;
     corner.border = border;
     corner.colour = colour;
     corner.colour2 = colour2;
@@ -127,6 +140,7 @@ fn vertex(
     corner.params = params;
     corner.clip = clip;
     corner.clip_radii = clip_radii;
+    corner.clip_radii_down = clip_radii_down;
     corner.clip_turn = clip_turn;
     corner.within = within;
     corner.kind = vec4<f32>(kind.x, move_and_band.z, move_and_band.w, kind.z);
@@ -140,12 +154,31 @@ fn corner_radius(point: vec2<f32>, radii: vec4<f32>) -> f32 {
     return select(bottom, top, point.y < 0.0);
 }
 
-// How far `point` is outside a box with round corners, in pixels; negative
-// inside. The usual rounded-box distance, with a radius for each corner.
-fn outside_round_box(point: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
-    let radius = corner_radius(point, radii);
-    let from_corner = abs(point) - half_size + radius;
-    return length(max(from_corner, vec2<f32>(0.0))) + min(max(from_corner.x, from_corner.y), 0.0) - radius;
+// How far the corner `point` is nearest to reaches across and down.
+fn corner_reach(point: vec2<f32>, across: vec4<f32>, down: vec4<f32>) -> vec2<f32> {
+    return vec2<f32>(corner_radius(point, across), corner_radius(point, down));
+}
+
+// How far `point` is outside a box with round or oval corners, in pixels;
+// negative inside. A round corner takes the usual rounded-box distance; an
+// oval one the distance to its ellipse, worked out from how fast the
+// ellipse's equation changes, which is right to well under a pixel near
+// its edge, where it matters.
+fn outside_round_box(point: vec2<f32>, half_size: vec2<f32>, across: vec4<f32>, down: vec4<f32>) -> f32 {
+    let reach = corner_reach(point, across, down);
+    if reach.x == reach.y {
+        let radius = reach.x;
+        let from_corner = abs(point) - half_size + radius;
+        return length(max(from_corner, vec2<f32>(0.0))) + min(max(from_corner.x, from_corner.y), 0.0) - radius;
+    }
+    let from_corner = abs(point) - half_size + reach;
+    if from_corner.x > 0.0 && from_corner.y > 0.0 && min(reach.x, reach.y) > 0.0 {
+        let k1 = length(from_corner / reach);
+        let k2 = length(from_corner / (reach * reach));
+        return k1 * (k1 - 1.0) / k2;
+    }
+    let past = abs(point) - half_size;
+    return max(past.x, past.y);
 }
 
 // How much of a pixel is covered, given its distance outside an edge:
@@ -169,9 +202,16 @@ fn gaussian(x: f32, sigma: f32) -> f32 {
 // How much of a blurred box is across at `x`, a distance `y` above or below
 // the middle: the box's width at that height, with its corners rounded,
 // run through the blur.
-fn blurred_row(x: f32, y: f32, sigma: f32, corner: f32, half_size: vec2<f32>) -> f32 {
-    let delta = min(half_size.y - corner - abs(y), 0.0);
-    let curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+fn blurred_row(x: f32, y: f32, sigma: f32, corner: vec2<f32>, half_size: vec2<f32>) -> f32 {
+    let delta = min(half_size.y - corner.y - abs(y), 0.0);
+    var curved: f32;
+    if corner.x == corner.y {
+        curved = half_size.x - corner.x + sqrt(max(0.0, corner.x * corner.x - delta * delta));
+    } else {
+        // An oval corner: its width at that height.
+        let share = select(0.0, delta / corner.y, corner.y > 0.0);
+        curved = half_size.x - corner.x + corner.x * sqrt(max(0.0, 1.0 - share * share));
+    }
     let integral = 0.5 + 0.5 * erf_pair((x + vec2<f32>(-curved, curved)) * (0.70710678 / sigma));
     return integral.y - integral.x;
 }
@@ -179,8 +219,12 @@ fn blurred_row(x: f32, y: f32, sigma: f32, corner: f32, half_size: vec2<f32>) ->
 // How much of `point` a box with round corners covers once blurred with a
 // Gaussian of deviation `sigma`: the blur across is exact, and the blur
 // down is summed in four steps.
-fn blurred_box(point: vec2<f32>, half_size: vec2<f32>, sigma: f32, radii: vec4<f32>) -> f32 {
-    let corner = min(corner_radius(point, radii), min(half_size.x, half_size.y));
+fn blurred_box(point: vec2<f32>, half_size: vec2<f32>, sigma: f32, across: vec4<f32>, down: vec4<f32>) -> f32 {
+    let reach = corner_reach(point, across, down);
+    // A round corner is kept to half the shorter side; an oval one to half
+    // of each side.
+    let most = select(half_size, vec2<f32>(min(half_size.x, half_size.y)), reach.x == reach.y);
+    let corner = min(reach, most);
     let low = point.y - half_size.y;
     let high = point.y + half_size.y;
     let start = clamp(-3.0 * sigma, low, high);
@@ -380,10 +424,10 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         texel /= f32(reads.x * reads.y);
         texel = vec4<f32>(texel.rgb / max(texel.a, 1e-5), texel.a);
         var edge: f32;
-        if all(corner.radii == vec4<f32>(0.0)) {
+        if all(corner.radii == vec4<f32>(0.0)) && all(corner.radii_down == vec4<f32>(0.0)) {
             edge = covers(max(abs(corner.offset.x) - corner.half_size.x, abs(corner.offset.y) - corner.half_size.y) * scale);
         } else {
-            edge = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
+            edge = covers(outside_round_box(corner.offset, corner.half_size, corner.radii, corner.radii_down) * scale);
         }
         covered = texel.a * edge;
         colour = vec4<f32>(corner.colour.rgb * texel.rgb, corner.colour.a);
@@ -393,21 +437,27 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         // The outer rounded box without the inner one, which is the outer
         // pulled in by each side's width.
         let widths = corner.border;
-        let outer = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
+        let outer = covers(outside_round_box(corner.offset, corner.half_size, corner.radii, corner.radii_down) * scale);
         let left = -corner.half_size.x + widths.w;
         let right = corner.half_size.x - widths.y;
         let top = -corner.half_size.y + widths.x;
         let bottom = corner.half_size.y - widths.z;
         let inner_half = vec2<f32>(right - left, bottom - top) * 0.5;
         let inner_middle = vec2<f32>(right + left, bottom + top) * 0.5;
-        let inner_radii = max(
-            corner.radii - vec4<f32>(max(widths.w, widths.x), max(widths.y, widths.x), max(widths.y, widths.z), max(widths.w, widths.z)),
-            vec4<f32>(0.0),
-        );
+        // Each corner pulled in on both axes by the wider of its two sides,
+        // so a round corner stays round.
+        let pull = vec4<f32>(max(widths.w, widths.x), max(widths.y, widths.x), max(widths.y, widths.z), max(widths.w, widths.z));
+        let inner_across = max(corner.radii - pull, vec4<f32>(0.0));
+        let inner_down = max(corner.radii_down - pull, vec4<f32>(0.0));
         var hole = 0.0;
         if inner_half.x > 0.0 && inner_half.y > 0.0 {
-            let fitted = min(inner_radii, vec4<f32>(min(inner_half.x, inner_half.y)));
-            hole = covers(outside_round_box(corner.offset - inner_middle, inner_half, fitted) * scale);
+            // A round corner is kept to half the shorter side, so it stays
+            // round; an oval one to half of each side.
+            let round = inner_across == inner_down;
+            let shorter = vec4<f32>(min(inner_half.x, inner_half.y));
+            let fit_across = select(min(inner_across, vec4<f32>(inner_half.x)), min(inner_across, shorter), round);
+            let fit_down = select(min(inner_down, vec4<f32>(inner_half.y)), min(inner_down, shorter), round);
+            hole = covers(outside_round_box(corner.offset - inner_middle, inner_half, fit_across, fit_down) * scale);
         }
         // The hole lies inside the outer box, so what is left of a pixel
         // is one cover less the other. Multiplying them instead leaves a
@@ -428,26 +478,27 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         let mixed_solid = mix(corner.colour.rgb * corner.colour.a, corner.colour2.rgb * corner.colour2.a, share);
         let alpha = mix(corner.colour.a, corner.colour2.a, share);
         colour = vec4<f32>(mixed_solid / max(alpha, 1e-5), alpha);
-        covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
+        covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii, corner.radii_down) * scale);
     } else if kind == SHADOW {
         // The shadow of a box, blurred. `half_size` is the box's own,
         // grown by the spread; the rectangle is larger still. It is not
         // drawn under the box it falls from, so it never shows through a
         // box that is see-through; under the box's soft edge it is, so the
         // edge of a solid box does not show a light seam.
-        covered = blurred_box(corner.offset, corner.params.xy, corner.params.z, corner.radii);
-        let under = outside_round_box(corner.offset - corner.border.xy, corner.source.xy, corner.colour2);
+        covered = blurred_box(corner.offset, corner.params.xy, corner.params.z, corner.radii, corner.radii_down);
+        let own_down = vec4<f32>(corner.border.zw, corner.source.zw);
+        let under = outside_round_box(corner.offset - corner.border.xy, corner.source.xy, corner.colour2, own_down);
         covered *= 1.0 - covers(under * scale + 1.0);
     } else if kind == INSET {
         // Inside the box and outside the blurred hole.
-        let inside = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
+        let inside = covers(outside_round_box(corner.offset, corner.half_size, corner.radii, corner.radii_down) * scale);
         var hole = 0.0;
         if corner.params.x > 0.0 && corner.params.y > 0.0 {
-            hole = blurred_box(corner.offset - corner.border.xy, corner.params.xy, corner.params.z, corner.colour2);
+            hole = blurred_box(corner.offset - corner.border.xy, corner.params.xy, corner.params.z, corner.colour2, corner.source);
         }
         covered = inside * (1.0 - hole);
     } else {
-        covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
+        covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii, corner.radii_down) * scale);
     }
 
     // Cut by the clip: a rounded box turned with its transform, in its own
@@ -457,7 +508,7 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         corner.clip_turn.x * from_clip.x + corner.clip_turn.z * from_clip.y,
         corner.clip_turn.y * from_clip.x + corner.clip_turn.w * from_clip.y,
     );
-    covered *= covers(outside_round_box(in_clip, corner.clip.zw, corner.clip_radii));
+    covered *= covers(outside_round_box(in_clip, corner.clip.zw, corner.clip_radii, corner.clip_radii_down));
     let past = max(corner.within.xy - corner.position.xy, corner.position.xy - corner.within.zw);
     covered *= covers(max(past.x, past.y));
 

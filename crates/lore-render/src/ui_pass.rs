@@ -294,8 +294,8 @@ impl UiPass {
             .binding(0)
             .stride(QUAD_BYTES as u32)
             .input_rate(vk::VertexInputRate::INSTANCE)];
-        // Fourteen groups of four numbers: see `QUAD_BYTES`.
-        let attributes: [vk::VertexInputAttributeDescription; 14] = std::array::from_fn(|index| {
+        // Sixteen groups of four numbers: see `QUAD_BYTES`.
+        let attributes: [vk::VertexInputAttributeDescription; 16] = std::array::from_fn(|index| {
             vk::VertexInputAttributeDescription::default()
                 .location(index as u32)
                 .format(vk::Format::R32G32B32A32_SFLOAT)

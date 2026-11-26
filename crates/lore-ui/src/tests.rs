@@ -1870,8 +1870,8 @@ mod styled_drawing {
     use crate::draw::{Command, Painter};
     use crate::node::Rect;
     use crate::{
-        Clip, Color, Draw, DrawBuffer, DrawList, EstimatedText, Fill, FontFace, Stop, TextMeasure,
-        Transform,
+        Clip, Color, Draw, DrawBuffer, DrawList, EstimatedText, Fill, FontFace, Radii, Stop,
+        TextMeasure, Transform,
     };
 
     fn stop(at: f32) -> Stop {
@@ -1920,7 +1920,7 @@ mod styled_drawing {
         let clip = Clip {
             transform: Transform::translate([1.0, 1.0]),
             within: Some([0.0, 0.0, 10.0, 10.0]),
-            ..Clip::new([1.0, 2.0], [3.0, 4.0], [1.0; 4])
+            ..Clip::new([1.0, 2.0], [3.0, 4.0], [1.0; 4].into())
         };
         let (commands, _, kept) = painted(2.0, |painter| {
             painter.styled_box(
@@ -1981,13 +1981,13 @@ mod styled_drawing {
         };
         assert_eq!(
             (position, size, radii),
-            ([20.0, 40.0], [60.0, 80.0], [8.0; 4])
+            ([20.0, 40.0], [60.0, 80.0], Radii::round([8.0; 4]))
         );
         assert_eq!(border_widths, [2.0; 4]);
         assert_eq!(transform.matrix[4..], [10.0, 10.0]);
         assert_eq!(
             (clip.position, clip.size, clip.radii),
-            ([2.0, 4.0], [6.0, 8.0], [2.0; 4])
+            ([2.0, 4.0], [6.0, 8.0], Radii::round([2.0; 4]))
         );
         assert_eq!(clip.transform.matrix[4..], [2.0, 2.0]);
         assert_eq!(clip.within, Some([0.0, 0.0, 20.0, 20.0]));
@@ -2456,7 +2456,11 @@ mod hud_styles {
         };
         assert_eq!(
             clip,
-            Some(Clip::new(position, [100.0, 50.0], [8.0, 8.0, 0.0, 0.0]))
+            Some(Clip::new(
+                position,
+                [100.0, 50.0],
+                [8.0, 8.0, 0.0, 0.0].into()
+            ))
         );
         // A hidden box cuts everything off.
         ui.set_shown(panel, false).unwrap();

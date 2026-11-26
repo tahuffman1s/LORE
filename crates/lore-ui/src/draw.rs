@@ -3,7 +3,7 @@
 
 use std::fmt::{self, Write};
 
-use crate::fill::{Clip, Fill, FontFace, Stop, StoredFill, Transform};
+use crate::fill::{Clip, Fill, FontFace, Radii, Stop, StoredFill, Transform};
 use crate::node::Rect;
 use crate::theme::Color;
 
@@ -74,7 +74,7 @@ pub enum Draw<'a> {
         /// Width and height.
         size: [f32; 2],
         /// How round each corner is.
-        radii: [f32; 4],
+        radii: Radii,
         /// What the box is filled with.
         fill: Fill<'a>,
         /// How thick the border is on each side, inside the box's edge.
@@ -97,7 +97,7 @@ pub enum Draw<'a> {
         /// Width and height of that box.
         size: [f32; 2],
         /// How round each corner of the box is.
-        radii: [f32; 4],
+        radii: Radii,
         /// The colour of the shadow at its darkest.
         color: Color,
         /// How far the shadow is moved across and down.
@@ -163,7 +163,7 @@ pub(crate) enum Command {
     Box {
         position: [f32; 2],
         size: [f32; 2],
-        radii: [f32; 4],
+        radii: Radii,
         fill: StoredFill,
         border_widths: [f32; 4],
         border_color: Color,
@@ -173,7 +173,7 @@ pub(crate) enum Command {
     Shadow {
         position: [f32; 2],
         size: [f32; 2],
-        radii: [f32; 4],
+        radii: Radii,
         color: Color,
         offset: [f32; 2],
         blur: f32,
@@ -688,7 +688,7 @@ impl Painter<'_> {
         self.commands.push(Command::Box {
             position: [rect.x * scale, rect.y * scale],
             size: [rect.w * scale, rect.h * scale],
-            radii: radii.map(|radius| radius * scale),
+            radii: Radii::from(radii).map(|radius| radius * scale),
             fill,
             border_widths: border_widths.map(|width| width * scale),
             border_color,
@@ -718,7 +718,7 @@ impl Painter<'_> {
         self.commands.push(Command::Shadow {
             position: [rect.x * scale, rect.y * scale],
             size: [rect.w * scale, rect.h * scale],
-            radii: radii.map(|radius| radius * scale),
+            radii: Radii::from(radii).map(|radius| radius * scale),
             color,
             offset: offset.map(|value| value * scale),
             blur: blur * scale,

@@ -601,3 +601,21 @@ fn an_element_that_fades_is_one_group_round_its_paints_and_its_children() {
         .collect();
     assert_eq!(kinds, ["group 0.5", "paint", "paint", "end"], "{kinds:?}");
 }
+
+#[test]
+fn the_pointer_misses_the_corners_of_an_oval() {
+    // 200 by 100 with 50% corners: an ellipse.
+    let mut s = page(
+        "body{margin:0} #e{width:200px;height:100px;border-radius:50%}",
+        "<div id=e></div>",
+    );
+    s.frame(&mut M);
+    s.pointer_move(100.0, 50.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "e")));
+    // Inside a 50 px circle at the left end, but outside the ellipse.
+    s.pointer_move(15.0, 15.0);
+    assert_ne!(s.ix.hover, Some(id(&s, "e")));
+    // Near the end of the long axis.
+    s.pointer_move(5.0, 50.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "e")));
+}
