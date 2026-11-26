@@ -2155,6 +2155,40 @@ fn the_wheel_scrolls_a_long_menu() {
 }
 
 #[test]
+fn the_wheel_scrolls_with_the_pointer_resting_on_the_chosen_button() {
+    let mut played = Played::with_main(&rows_game(30), Settings::default());
+    played.point_at("Row 1");
+    played.input.roll_wheel(-1.0);
+    played.step();
+    assert!(!played.shows("Row 1"), "{:?}", played.words());
+}
+
+#[test]
+fn a_menu_of_two_rows_far_down_the_screen_still_opens() {
+    let main = r#"game.menu.new("Low", { game.menu.button("Row 1"), game.menu.button("Row 2") }, { down = 1000 }):open()"#;
+    let played = Played::with_main(main, Settings::default());
+    assert!(
+        played.shows("Row 1") && played.shows("Row 2"),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn a_scrolling_menus_message_stays_on_the_fixed_line() {
+    let main = r#"local rows = {}
+        for number = 1, 30 do rows[number] = game.menu.button("Row " .. number) end
+        local m = game.menu.new("Long", rows)
+        m.message = function() return "Saved for good" end
+        m:open()"#;
+    let mut played = Played::with_main(main, Settings::default());
+    assert!(played.shows("Saved for good"), "{:?}", played.words());
+    played.input.roll_wheel(-50.0);
+    played.step();
+    assert!(played.shows("Saved for good") && !played.shows("Row 1"));
+}
+
+#[test]
 fn a_short_menu_is_laid_out_as_it_always_was() {
     let mut played = Played::with_main(&rows_game(3), Settings::default());
     let [x, y] = played.find("Row 1").1;

@@ -73,7 +73,7 @@ pub(crate) const MENU_ROW_FIELDS: &[&str] = &[
 ];
 #[cfg(test)]
 pub(crate) const MENU_FIELDS: &[&str] = &[
-    "title", "isOpen", "chosen", "backWord", "open", "close", "toggle", "remove",
+    "title", "isOpen", "chosen", "backWord", "message", "open", "close", "toggle", "remove",
 ];
 #[cfg(test)]
 pub(crate) const MENU_TABS_FIELDS: &[&str] =

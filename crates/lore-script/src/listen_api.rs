@@ -18,6 +18,23 @@ const DEFAULT_SECONDS: f64 = 5.0;
 /// few a minute; reaching this means a script asks over and over.
 const MOST_ASKS: usize = 256;
 
+/// Drops what `ask` makes pointless: a reset of everything wipes all that
+/// came before it, and a change of an action replaces an earlier one for the
+/// same action. What is left reads the same as the whole list did.
+fn collapse(asks: &mut Vec<BindingAsk>, ask: &BindingAsk) {
+    let action = match ask {
+        BindingAsk::Reset(None) => {
+            asks.clear();
+            return;
+        }
+        BindingAsk::Set { action, .. } | BindingAsk::Reset(Some(action)) => action,
+    };
+    asks.retain(|earlier| match earlier {
+        BindingAsk::Set { action: other, .. } | BindingAsk::Reset(Some(other)) => other != action,
+        BindingAsk::Reset(None) => true,
+    });
+}
+
 /// A change of an action's buttons the script asked for, for the engine to
 /// put in force and save in the game's own bindings file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +112,7 @@ impl Listen {
 
     fn ask(&self, ask: BindingAsk) {
         let mut asks = self.asks.borrow_mut();
+        collapse(&mut asks, &ask);
         if asks.len() >= MOST_ASKS {
             asks.remove(0);
         }
@@ -424,4 +442,28 @@ pub(crate) fn install(lua: &mlua::Lua, shared: &Rc<Shared>, input: &Table) -> ml
         })?,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod collapse_tests {
+    use super::*;
+
+    fn set(action: &str, button: &str) -> BindingAsk {
+        BindingAsk::Set {
+            action: action.to_owned(),
+            buttons: vec![button.to_owned()],
+        }
+    }
+
+    #[test]
+    fn a_later_ask_replaces_what_it_makes_pointless() {
+        let mut asks = vec![set("jump", "F"), set("fire", "G")];
+        collapse(&mut asks, &set("jump", "H"));
+        assert_eq!(asks, vec![set("fire", "G")]);
+        collapse(&mut asks, &BindingAsk::Reset(Some("fire".into())));
+        assert!(asks.is_empty());
+        let mut asks = vec![set("jump", "F"), BindingAsk::Reset(Some("fire".into()))];
+        collapse(&mut asks, &BindingAsk::Reset(None));
+        assert!(asks.is_empty());
+    }
 }

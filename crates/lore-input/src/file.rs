@@ -442,6 +442,16 @@ impl ActionMap {
     /// ```
     #[must_use]
     pub fn write_game_changes(&self, baseline: &Self) -> String {
+        self.write_game_changes_keeping(baseline, "")
+    }
+
+    /// [`write_game_changes`](Self::write_game_changes) for a file that
+    /// already exists: lines in `existing` for actions this map does not
+    /// know (another version of the game may have them) are carried over as
+    /// they were written. An `existing` that is not TOML keeps nothing.
+    #[must_use]
+    pub fn write_game_changes_keeping(&self, baseline: &Self, existing: &str) -> String {
+        let document = DeTable::parse(existing).ok();
         let mut text = format!("{GAME_HEADER}\n");
         for (table, own) in [(TABLE, false), (GAME_TABLE, true)] {
             let mut lines = String::new();
@@ -462,6 +472,22 @@ impl ActionMap {
                     let _ = write!(lines, "{comma}\"{binding}\"");
                 }
                 lines.push_str("]\n");
+            }
+            let entries = document.as_ref().and_then(|document| {
+                match document.get_ref().get(table)?.get_ref() {
+                    DeValue::Table(entries) => Some(entries),
+                    _ => None,
+                }
+            });
+            for (action, list) in entries.into_iter().flatten() {
+                let name: &str = action.get_ref();
+                if self.action(name).is_ok() || self.renamed(name).is_some() {
+                    continue;
+                }
+                let (key, value) = (action.span(), list.span());
+                if let (Some(key), Some(value)) = (existing.get(key), existing.get(value)) {
+                    let _ = writeln!(lines, "{key} = {value}");
+                }
             }
             if !lines.is_empty() {
                 // Writing to a `String` cannot fail.
@@ -1006,5 +1032,30 @@ mod tests {
         let mut read = baseline.clone();
         assert_eq!(read.read_bindings(&none), Ok(Vec::new()));
         assert_eq!(read, baseline);
+    }
+    #[test]
+    fn a_rewrite_keeps_lines_for_actions_this_map_does_not_know() {
+        let baseline = game_map();
+        let mut map = baseline.clone();
+        assert_eq!(
+            map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]\n"),
+            Ok(Vec::new())
+        );
+        let existing = "[bindings]\nlevitate = [\"L\", \"GamepadNorth\"]\njump = [\"G\"]\n\
+                        [game_bindings]\n\"old thing\" = [\"F9\"]\n";
+        let text = map.write_game_changes_keeping(&baseline, existing);
+        assert!(
+            text.contains("levitate = [\"L\", \"GamepadNorth\"]\n"),
+            "{text}"
+        );
+        assert!(text.contains("\"old thing\" = [\"F9\"]\n"), "{text}");
+        assert!(
+            text.contains("jump = [\"F\", \"GamepadSouth\"]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("\"G\""), "{text}");
+        // Not TOML: nothing is kept, and nothing breaks.
+        let plain = map.write_game_changes_keeping(&baseline, "[bindings");
+        assert!(!plain.contains("levitate"), "{plain}");
     }
 }

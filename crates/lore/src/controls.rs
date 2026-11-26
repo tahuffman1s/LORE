@@ -402,7 +402,10 @@ impl Live {
         let Some(path) = self.game.clone() else {
             return Ok(());
         };
-        write_whole(&path, &controls.write_game_changes(&self.baseline()))?;
+        // Lines the file has for actions this game does not know are kept.
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = controls.write_game_changes_keeping(&self.baseline(), &existing);
+        write_whole(&path, &text)?;
         // Only the game's file: a save of the player-wide one that is still
         // waiting to be seen must be seen.
         self.known[1] = stamp(&path);

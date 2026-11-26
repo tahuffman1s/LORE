@@ -521,7 +521,9 @@ impl ScriptHost {
         // A frame made for the actions before a save is for other ids than
         // the script's now: until the engine has the new ones, nothing is
         // pressed, rather than the wrong thing.
-        let blank = InputFrame::default();
+        // What was heard still counts: listening must not hang on it.
+        let mut blank = InputFrame::default();
+        blank.heard = input.heard;
         let input = if input.layout == self.layout {
             input
         } else {

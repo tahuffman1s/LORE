@@ -688,6 +688,9 @@ type MenuState = {
     first: number,
     laid: number,
     more: any,
+    -- Words (or a function that gives them) for the fixed line under a
+    -- scrolling menu, in place of "more above / below" while there are some.
+    message: any,
     -- The screen it is shown on: one made for it alone, or the tabs it is in.
     tabs: any,
     -- What the line of keys says "menu_back" does; nil for the kit's own word.
@@ -872,7 +875,7 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
     local _, screenHigh = game.hud.size()
     if down + height > screenHigh - EDGE then
         -- Too tall for the screen: show as many rows as there is room for.
-        fit = math.clamp(math.floor((screenHigh - EDGE - down - TOP - MORE - FOOT) / ROW), 3, #rows)
+        fit = math.min(#rows, math.max(3, math.floor((screenHigh - EDGE - down - TOP - MORE - FOOT) / ROW)))
         height = TOP + fit * ROW + (if fit < #rows then MORE else 0) + FOOT
     end
     -- Made before the menu's own back, so it is drawn under it.
@@ -896,6 +899,7 @@ function menu.new(title: string, rows: { any }, place: { right: number?, down: n
         first = 1,
         laid = 1,
         more = nil,
+        message = nil,
         tabs = nil,
         backWord = nil,
         removed = false,
@@ -1161,6 +1165,8 @@ MenuMeta.__index = function(self: any, key: any): any
         return m.chosen
     elseif key == "backWord" then
         return m.backWord
+    elseif key == "message" then
+        return m.message
     end
     return MenuMethods[key]
 end
@@ -1190,10 +1196,15 @@ MenuMeta.__newindex = function(self: any, key: any, value: any)
             error('menu.backWord is a word in quotes, such as "resume", or nil', 2)
         end
         m.backWord = value
+    elseif key == "message" then
+        if value ~= nil and type(value) ~= "string" and type(value) ~= "function" then
+            error('menu.message is words in quotes, a function that gives them, or nil: menu.message = function() return "Saved" end', 2)
+        end
+        m.message = value
     elseif key == "isOpen" then
         error("menu.isOpen is read only: open or close the menu with menu:open() and menu:close()", 2)
     else
-        error(string.format('A menu has a title, chosen and backWord to set; "%s" is not one of them', tostring(key)), 2)
+        error(string.format('A menu has a title, chosen, backWord and message to set; "%s" is not one of them', tostring(key)), 2)
     end
 end
 
@@ -1868,7 +1879,8 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
     local x, y = game.input.stepped("menu_move")
     local scroll = scrolls(m)
     local wheel = game.input.wheel()
-    if wheel ~= 0 and scroll and not hovered(m.rows[m.chosen]) then
+    local under = m.rows[m.chosen]
+    if wheel ~= 0 and scroll and not ((under.kind == "slider" or under.kind == "choice") and hovered(under)) then
         -- The wheel scrolls a long menu, unless the pointer is on the chosen
         -- slider or choice, which it changes instead.
         m.first = math.clamp(m.first - wheel * WHEEL, 1, #m.rows - m.fit + 1)
@@ -2019,7 +2031,12 @@ local function drawMenu(m: MenuState)
     local more = m.more
     if more then
         local above, below = m.first > 1, m.first + m.fit <= #m.rows
-        more.text = if above and below then "… more above     … more below"
+        local say = m.message
+        if type(say) == "function" then
+            say = say()
+        end
+        more.text = if type(say) == "string" and say ~= "" then say
+            elseif above and below then "… more above     … more below"
             elseif above then "… more above"
             elseif below then "… more below"
             else ""

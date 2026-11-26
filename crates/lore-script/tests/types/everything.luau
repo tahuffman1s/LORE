@@ -846,6 +846,8 @@ local tabsOf: MenuTabs = game.menu.tabs({ soundMenu, videoMenu })
 soundMenu.title = "Sound and music"
 soundMenu.chosen = 2
 soundMenu.backWord = "close"
+soundMenu.message = function() return "Saved" end
+soundMenu.message = nil
 tabsOf:open(videoMenu)
 tabsOf:open()
 tabsOf:toggle(soundMenu)

@@ -527,7 +527,15 @@ local function build()
             })
         )
         table.insert(under, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
-        table.insert(pages, menu.new(heading, under, PLACE))
+        local page = menu.new(heading, under, PLACE)
+        if withButtons then
+            -- The rebind messages stay on the fixed line when the rows scroll.
+            page.message = function()
+                refreshClash()
+                return note or clashLine or ""
+            end
+        end
+        table.insert(pages, page)
     end
 
     -- The screen that asks before the game is left.

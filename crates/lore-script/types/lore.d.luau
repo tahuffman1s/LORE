@@ -1884,6 +1884,12 @@ export type Menu = {
     --- Example: sound.backWord = "resume"
     backWord: string?,
 
+    --- Words (or a function that gives them) shown on the fixed line under
+    --- a menu that scrolls, so they stay in view whichever rows show. They
+    --- replace "more above / below" while there are some. Nil for none.
+    --- Example: sound.message = function() return "Saved" end
+    message: (string | (() -> string))?,
+
     --- Opens it (with its tabs, if it is in some) on top of any other open
     --- screen. The player's own controls wait while a menu is open.
     --- Example: sound:open()
