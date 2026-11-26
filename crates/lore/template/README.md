@@ -40,7 +40,7 @@ A game can change how it looks with shaders of its own: put a WGSL file in a `sh
 The game is `main.luau`. Edit it and save: the running game loads the new version by itself.
 If there is a mistake, the terminal shows the line and what to try, and the game keeps running the last version that worked.
 
-Escape, or Start on a gamepad, pauses the game and opens its menu: Resume, Settings and Quit. The menu comes with LORE, with nothing in this folder: `game.pauseMenu.title = "My game"` changes its title, `game.pauseMenu.addRow(row)` adds a row of your own, and `game.pauseMenu.enabled = false` turns it off. Its settings screen lists every setting LORE has by itself, and LORE saves what the player changes there. Menus of your own are made the same way, with `game.menu`: `game.menu.new("Shop", { game.menu.button("Buy", { onPress = buy }) })`.
+Escape, or Start on a gamepad, pauses the game and opens its menu: Resume, Settings and Quit. The starter adds one row of its own, "Your name": a box to type in, with an on-screen keyboard on a gamepad. The menu comes with LORE, with nothing in this folder: `game.pauseMenu.title = "My game"` changes its title, `game.pauseMenu.addRow(row)` adds a row of your own, and `game.pauseMenu.enabled = false` turns it off. Its settings screen lists every setting LORE has by itself, and LORE saves what the player changes there. Menus of your own are made the same way, with `game.menu`: `game.menu.new("Shop", { game.menu.button("Buy", { onPress = buy }) })`.
 
 When `main.luau` gets long, move part of it to another file in this folder, such as `weapons.luau`, end that file with `return weapons`, and get it in `main.luau` with `local weapons = require("./weapons")`. Saving either file reloads the game.
 

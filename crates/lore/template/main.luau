@@ -9,7 +9,7 @@
 
 -- What is in this table is kept when the file is saved and loaded again,
 -- until the game is closed. Everything else in the file starts over.
-local saved = game.keep("saved", { jumps = 0 })
+local saved = game.keep("saved", { jumps = 0, name = "" })
 
 -- Text on the screen. Each piece is made once, here, and changed later.
 -- `at` is the part of the screen it sits in; `down` moves it down, in pixels.
@@ -59,3 +59,17 @@ game.onReload(function()
 end)
 
 -- The pause menu is the engine's: game.pauseMenu.enabled = false turns it off.
+
+-- A row of your own in the pause menu (Escape, or Start on a gamepad): a
+-- box to type a name in. On a gamepad it opens an on-screen keyboard by
+-- itself. game.menu has buttons, toggles, sliders and whole menus too.
+game.pauseMenu.addRow(game.menu.textBox("Your name", {
+    value = saved.name,
+    placeholder = "Type a name",
+    maxLength = 16,
+    onFinish = function(name)
+        saved.name = name
+        welcome.text = "Welcome, " .. name .. "!"
+        welcome.visible = true
+    end,
+}))
