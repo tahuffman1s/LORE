@@ -458,8 +458,8 @@ fn one_name_is_one_person_and_a_crowd_is_numbered() {
         .map(|error| error.message.clone())
         .unwrap();
     assert!(
-        error.contains("There is already an NPC called \"Guard\"")
-            && error.contains("in game.onTick it would make one every tick")
+        error.contains("There is already an NPC called \"Guard\".")
+            && error.contains("makes a new person every time it runs")
             && error.contains("find it later with game.npc(\"Guard\")")
             && error.contains("game.npc { name = \"Guard 2\", at = \"Gate\" }"),
         "{error}"
@@ -472,15 +472,17 @@ fn one_name_is_one_person_and_a_crowd_is_numbered() {
         game.npc { name = "guard", at = "Tower" }"#,
     );
     assert!(
-        twice.contains("There is already an NPC called \"guard\"")
-            && twice.contains("\"guard 2\"")
-            && twice.contains("for i = 1, 5 do"),
+        twice.contains(
+            "There is already an NPC called \"Guard\" (names ignore capitals, so \"guard\" is \
+             \"Guard\")"
+        ) && twice.contains("game.npc { name = \"guard 2\", at = \"Tower\" }")
+            && twice.contains("name = \"Villager \" .. i"),
         "{twice}"
     );
     // The smith is placed in the map.
     let smith = load_error(r#"game.npc { name = "Smith", at = "Gate" }"#);
     assert!(
-        smith.contains("called \"Smith\", placed in the map"),
+        smith.contains("\"Smith\" is already an NPC placed in the map. To use it, write game.npc"),
         "{smith}"
     );
 
@@ -520,7 +522,7 @@ fn two_npcs_placed_in_the_map_with_one_name_are_not_found_by_it() {
         .map(|error| error.message.clone())
         .unwrap();
     assert!(
-        error.contains("2 NPCs placed in the map are called \"Smith\"")
+        error.contains("More than one NPC placed in the map is called \"Smith\"")
             && error.contains("\"Smith 2\""),
         "{error}"
     );

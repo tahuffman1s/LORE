@@ -846,11 +846,11 @@ end
 --- health and where it stands, and the file says the rest again. An NPC
 --- made later (in `game.onTick`, a timer) stays after a save, but its
 --- `onUse` and the rest must be said again: find it with `game.npc`. The
---- NPCs placed in the map follow the map: saved while the game runs, or
---- played from the editor, one moved, turned or renamed there is moved,
---- turned or renamed (the same NPC, so what you keep of it still works),
---- one taken out leaves, and one added comes in. One that walked off stays
---- where it walked when a save does not change its line.
+--- NPCs placed in the map follow the map the same way, when it is saved
+--- while the game runs or played from the editor: moved, turned or
+--- renamed there, it is the same NPC moved, turned or renamed; taken out,
+--- it leaves; added, it comes in. An NPC that moved in play stays where
+--- it is unless its `at` (or its place in the map) changes.
 ---
 --- A `Character` the engine hands you (`hurt.victim`, a zone's `who`) may
 --- be an NPC: compare it with `==` to the NPC you keep, or find it with
@@ -875,7 +875,7 @@ declare extern type Npc extends Character with
     useSeconds: number
 
     --- Whether the player can use the NPC now: true once it has an `onUse`
-    --- function, and it is not dead. Set it to false to stop the player
+    --- function, and false while the NPC is dead. Set it to false to stop the player
     --- using it (someone who has said all they have to say), and to true
     --- again.
     --- Example: guard:onUse(function() guard.usable = false end)
@@ -2804,19 +2804,19 @@ declare game: {
     --- a position, or a `Thing`. `facing` is how far they are turned to the
     --- left, in degrees, as the map writes it; at a place, they face the
     --- way it does. A place the map does not have is an error that lists
-    --- the places it does have. Each call makes a new person, so make each
-    --- NPC once, at the top of the file, and find it later by name: in
-    --- `game.onTick`, a name some NPC already has is an error, not another
-    --- NPC every tick.
+    --- the places it does have.
     ---
-    --- One name is one person: no two NPCs share a name, in any capitals.
-    --- A second "Guard" is an error that suggests "Guard 2"; a removed
-    --- NPC's name is free again. For a crowd, number them:
+    --- Given a name, it finds the NPC called that, in any capitals: one a
+    --- script made, or one placed in the map as type "npc". A name no NPC
+    --- has is an error that lists the NPCs there are (`lore check` reports
+    --- it).
+    ---
+    --- One name is one person. Each call with a table makes a new person,
+    --- so make each NPC once, at the top of the file, and find it later by
+    --- name: a name some NPC already has ("guard" is "Guard") is an error
+    --- that suggests "Guard 2", so NPCs cannot pile up in `game.onTick`. A
+    --- removed NPC's name is free again. For a crowd, number them:
     --- `for i = 1, 5 do game.npc { name = "Villager " .. i, at = "Square" } end`.
-    ---
-    --- Given a name, it finds the NPC called that: one a script made, or
-    --- one placed in the map as type "npc". A name no NPC has is an error
-    --- that lists the NPCs there are (`lore check` reports it).
     --- Example: local guard = game.npc { name = "Guard", at = "Gate" }
     --- Example: local smith = game.npc("Smith")
     npc: (nameOrOptions: string | NpcOptions) -> Npc,

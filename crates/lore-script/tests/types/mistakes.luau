@@ -98,6 +98,7 @@ game.input.onControlsChanged(5) -- wrong: it takes a function
 -- script runs ("change `at` there and save").
 local guard = game.npc { name = "Guard", at = "Gate" }
 game.npc { name = "Cook" } -- wrong: it needs `at`, where the NPC stands
+game.npc { at = "Gate" } -- wrong: it needs a `name`
 game.npc { name = "Cook", at = 5 } -- wrong: a place is named in quotes, or a vector
 game.npc { name = 5, at = "Gate" } -- wrong: a name is in quotes
 game.npc(5) -- wrong: an NPC is found by its name, in quotes
