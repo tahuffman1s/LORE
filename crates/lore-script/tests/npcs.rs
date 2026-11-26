@@ -548,6 +548,9 @@ fn an_npc_is_not_usable_once_it_is_dead_and_is_again_when_stood_up() {
     assert_eq!(printed(), ["true false", "false true", "true false"]);
 }
 
+/// An NPC as a test compares them: id, name, feet, facing and health.
+type Seen = (CharacterId, String, [f32; 3], f32, Option<(f32, f32)>);
+
 #[test]
 fn a_reloaded_script_leaves_the_same_npcs_as_a_fresh_start() {
     let before = r#"game.npc { name = "Guard", at = "Gate" }
@@ -573,7 +576,7 @@ fn a_reloaded_script_leaves_the_same_npcs_as_a_fresh_start() {
     let fresh = fresh.open();
     let (reloaded, fresh) = (seen(&host), seen(&fresh));
     // The same people, in the same order, in the same places, as well.
-    let without_ids = |seen: &[(CharacterId, String, [f32; 3], f32, Option<(f32, f32)>)]| {
+    let without_ids = |seen: &[Seen]| {
         seen.iter()
             .map(|(_, name, feet, facing, health)| (name.clone(), *feet, *facing, *health))
             .collect::<Vec<_>>()
