@@ -257,9 +257,12 @@ impl Shooting {
         step: f32,
         host: &mut ScriptHost,
         noises: &mut Vec<Noise>,
+        names: &mut crate::noise::Names,
     ) {
         self.told.clear();
-        self.fire(player, standing, tick, level, rules, step, host, noises);
+        self.fire(
+            player, standing, tick, level, rules, step, host, noises, names,
+        );
         self.fly(player, standing, tick, level, rules, step, noises);
         // Told last, and in the order it happened: a function of the
         // script's may hand out or take away weapons, which must not change
@@ -291,12 +294,13 @@ impl Shooting {
         step: f32,
         host: &mut ScriptHost,
         noises: &mut Vec<Noise>,
+        names: &mut crate::noise::Names,
     ) {
         // What is in the hands by the trigger, and then what is thrown
         // past it by the item button: a grenade while holding a rifle.
         for thrown in [false, true] {
             self.work(
-                body, standing, tick, level, rules, step, host, noises, thrown,
+                body, standing, tick, level, rules, step, host, noises, names, thrown,
             );
         }
     }
@@ -314,6 +318,7 @@ impl Shooting {
         step: f32,
         host: &mut ScriptHost,
         noises: &mut Vec<Noise>,
+        names: &mut crate::noise::Names,
         thrown: bool,
     ) {
         let held = if thrown {
@@ -342,19 +347,22 @@ impl Shooting {
         }
         let eyes = body.player.eye_position();
         let sounds = held.sounds;
-        let heard = |kind: NoiseKind, delay: f32| {
+        let weapon = names.intern(&held.name);
+        let mut heard = |kind: NoiseKind, delay: f32| {
             let delay = if delay.is_finite() {
                 delay.clamp(0.0, step.max(0.0))
             } else {
                 0.0
             };
             let mut noise = Noise::new(kind, eyes, 1.0, 1.0, delay, tick);
-            noise.sound = match kind {
+            let named = match kind {
                 NoiseKind::Gunshot => sounds.fire,
                 NoiseKind::DryFire => sounds.empty,
                 NoiseKind::Reload => sounds.reload,
                 _ => None,
             };
+            noise.sound = named.and_then(|name| names.intern(name.as_str()));
+            noise.weapon = weapon;
             if kind == NoiseKind::Gunshot
                 && let Some(far) = sounds.heard_within
             {

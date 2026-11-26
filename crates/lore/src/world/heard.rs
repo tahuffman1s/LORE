@@ -477,7 +477,7 @@ fn a_script_plays_another_sound_in_the_place_of_the_engines() {
         played
             .noises
             .iter()
-            .all(|noise| noise.sound_name() == "footstep")
+            .all(|noise| noise.sound_name(played.game.world.names()) == "footstep")
     );
     let [left, right] = played.loudest;
     assert!((left - 0.5 * 0.6).abs() < 0.01, "{left}");

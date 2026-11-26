@@ -125,7 +125,7 @@ pub enum AnimationAsk {
 /// the script.
 #[derive(Debug, Default)]
 pub(crate) struct BodyState {
-    view: Cell<CameraView>,
+    pub(crate) view: Cell<CameraView>,
     /// Who the camera and body are held on (`lockOn`).
     locked: Cell<Option<crate::CharacterId>>,
     /// Whether the player is blocking.
@@ -325,23 +325,15 @@ pub(crate) fn allow_view_switch(
     };
     let mut view = shared.body.camera_view();
     if allowed && !view.switchable {
-        warn_if_switch_shared(shared);
+        crate::tools_api::warn_if_shared(
+            shared,
+            crate::tools_api::SWITCH_VIEW,
+            "switches between first and third person too",
+        );
     }
     view.switchable = allowed;
     shared.body.view.set(view);
     Ok(())
-}
-
-/// Says so if one of the game's own actions shares a button with
-/// `switch_view`, since in this game that button now switches the view too.
-fn warn_if_switch_shared(shared: &Shared) {
-    let map = shared.actions.borrow();
-    for clash in map.conflicts().iter().filter(|clash| {
-        clash.first == crate::tools_api::SWITCH_VIEW
-            || clash.second == crate::tools_api::SWITCH_VIEW
-    }) {
-        log::warn!("{clash} In this game that button now switches between first and third person.");
-    }
 }
 
 /// `game.player:setFacing("move" | "aim")`.

@@ -2191,7 +2191,7 @@ impl ScriptHost {
             return true;
         }
         let shared = Rc::clone(&version.shared);
-        let Ok(table) = weapon_api::noise_table(&version.vm, noise) else {
+        let Ok(table) = weapon_api::noise_table(&version.vm, &version.shared, noise) else {
             return true;
         };
         let count = shared.handlers.borrow().noise.len();

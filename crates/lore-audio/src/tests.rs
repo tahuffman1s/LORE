@@ -1179,6 +1179,29 @@ fn a_streamed_stereo_sound_at_a_place_is_folded_to_mono_and_placed() {
 }
 
 #[test]
+fn speech_has_a_volume_of_its_own() {
+    let mut mixer = Mixer::new(RATE);
+    // Speech in the left ear only and an effect in the right only.
+    let left = Sound::from_samples(RATE, 2, [0.5, 0.0].repeat(RATE as usize)).unwrap();
+    let right = Sound::from_samples(RATE, 2, [0.0, 0.5].repeat(RATE as usize)).unwrap();
+    mixer.play(Play::everywhere(left).speech().looping());
+    mixer.play(Play::everywhere(right).looping());
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(loudest(&out, 0), 0.5) && close(loudest(&out, 1), 0.5));
+
+    // Speech turned down leaves the effect alone.
+    mixer.set_group_volume(Group::Speech, 0.5);
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(out[out.len() - 2], 0.25) && close(out[out.len() - 1], 0.5));
+
+    // Effects turned down leaves speech at its own volume.
+    mixer.set_group_volume(Group::Speech, 1.0);
+    mixer.set_group_volume(Group::Effects, 0.0);
+    let out = mix(&mut mixer, 4_800);
+    assert!(close(out[out.len() - 2], 0.5) && close(out[out.len() - 1], 0.0));
+}
+
+#[test]
 fn music_has_a_volume_of_its_own() {
     let mut mixer = Mixer::new(RATE);
     // Music in the left ear only and an effect in the right only, so each

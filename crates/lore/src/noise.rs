@@ -9,6 +9,8 @@
 
 use lore_audio::{Feet, Footfall, FootstepSettings, Footsteps, Play, Range};
 
+use lore_script::CharacterId;
+#[cfg(test)]
 use lore_script::SoundName;
 
 use crate::sounds::Sounds;
@@ -188,7 +190,13 @@ pub struct Noise {
     pub range: Range,
     /// The sound it is played with, when what made it named one (a weapon's
     /// `fireSound`). `None` plays the kind's own: [`NoiseKind::sound`].
-    pub sound: Option<SoundName>,
+    /// A short id into the world's [`Names`], not the name itself.
+    pub sound: Option<NameId>,
+    /// The weapon that made it, for a shot, a dry click or a reload.
+    pub weapon: Option<NameId>,
+    /// Who made it: the player for a step, a landing, a shot or a splash;
+    /// nobody for thunder, dripping fluid, a blast or a strike.
+    pub by: Option<CharacterId>,
     /// Set when a script's `game.onNoise` function returned `false`: the
     /// noise stays in the list, for anything that listens, but is not played.
     pub silenced: bool,
@@ -215,30 +223,73 @@ impl Noise {
             tick,
             range: kind.range(),
             sound: None,
+            weapon: None,
+            by: kind.is_by_player().then_some(CharacterId::PLAYER),
             silenced: false,
         }
     }
 
     /// How a script's `game.onNoise` function is told of it.
     #[must_use]
-    pub fn told(&self) -> lore_script::NoiseTold<'_> {
+    pub fn told<'a>(&self, names: &'a Names) -> lore_script::NoiseTold<'a> {
         lore_script::NoiseTold {
-            sound: self.sound_name(),
+            sound: self.sound_name(names),
             position: self.position,
             loudness: self.loudness,
             heard_within: self.range.far,
-            by_player: self.kind.is_by_player(),
+            by: self.by,
+            weapon: self.weapon.map(|id| names.get(id)),
         }
     }
 
     /// The name of the sound it is played with.
     #[must_use]
-    pub fn sound_name(&self) -> &str {
+    pub fn sound_name<'a>(&self, names: &'a Names) -> &'a str {
         self.sound
-            .as_ref()
-            .map_or_else(|| self.kind.sound(), SoundName::as_str)
+            .map_or_else(|| self.kind.sound(), |id| names.get(id))
     }
 }
+
+/// A short id for a name in [`Names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameId(std::num::NonZeroU16);
+
+/// The sound and weapon names noises carry by id. A world fills it in the
+/// order names are first met in its ticks, so the same input gives the same
+/// ids, in a replay too.
+#[derive(Debug, Default, Clone)]
+pub struct Names {
+    names: Vec<Box<str>>,
+}
+
+impl Names {
+    /// The id of `name`, adding it the first time. `None` only after
+    /// 65 535 different names, when the noise keeps the kind's own sound.
+    pub fn intern(&mut self, name: &str) -> Option<NameId> {
+        let at = match self.names.iter().position(|known| &**known == name) {
+            Some(at) => at,
+            // A full table takes no more names, so it cannot grow for ever.
+            None if self.names.len() >= usize::from(u16::MAX) => return None,
+            None => {
+                self.names.push(name.into());
+                self.names.len() - 1
+            }
+        };
+        let id = u16::try_from(at + 1).ok()?;
+        std::num::NonZeroU16::new(id).map(NameId)
+    }
+
+    /// The name an id stands for.
+    #[must_use]
+    pub fn get(&self, id: NameId) -> &str {
+        self.names
+            .get(usize::from(id.0.get()) - 1)
+            .map_or("", |name| name)
+    }
+}
+
+// A town of listeners keeps many noises: it stays small.
+const _: () = assert!(std::mem::size_of::<Noise>() <= 56);
 
 /// Works out when the player's feet come down. A new one has walked
 /// nowhere yet: start again with one when the player is put somewhere new,
@@ -300,6 +351,7 @@ impl Walking {
 pub(crate) fn play(
     noise: &Noise,
     nth: u32,
+    names: &Names,
     sounds: &mut Sounds,
     tweak: lore_script::SoundTweak,
 ) -> Option<Play> {
@@ -313,7 +365,7 @@ pub(crate) fn play(
         .replace
         .as_ref()
         .and_then(|name| sounds.take(name.as_str(), seed))
-        .or_else(|| sounds.take(noise.sound_name(), seed))?;
+        .or_else(|| sounds.take(noise.sound_name(names), seed))?;
     play.volume *= noise.loudness * tweak.volume;
     if noise.pitch.is_finite() {
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
@@ -341,15 +393,36 @@ mod tests {
             replace: SoundName::new(name),
         };
         // The game has no "boots" sound, so the starter footstep plays.
-        assert!(play(&noise, 0, &mut sounds, swapped("boots")).is_some());
+        assert!(play(&noise, 0, &Names::default(), &mut sounds, swapped("boots")).is_some());
         // One it has is played in its place.
-        assert!(play(&noise, 0, &mut sounds, swapped("landing")).is_some());
+        assert!(
+            play(
+                &noise,
+                0,
+                &Names::default(),
+                &mut sounds,
+                swapped("landing")
+            )
+            .is_some()
+        );
         // Turned right down, nothing plays.
         let off = SoundTweak {
             volume: 0.0,
             replace: None,
         };
-        assert!(play(&noise, 0, &mut sounds, off).is_none());
+        assert!(play(&noise, 0, &Names::default(), &mut sounds, off).is_none());
+    }
+
+    #[test]
+    fn names_get_ids_in_the_order_they_are_met() {
+        let mut names = Names::default();
+        let bow = names.intern("bow").unwrap();
+        let twang = names.intern("twang").unwrap();
+        assert_ne!(bow, twang);
+        assert_eq!(names.intern("bow"), Some(bow));
+        assert_eq!(names.get(twang), "twang");
+        let mut again = Names::default();
+        assert_eq!(again.intern("bow"), Some(bow));
     }
 
     #[test]

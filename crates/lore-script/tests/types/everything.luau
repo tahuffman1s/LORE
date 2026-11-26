@@ -68,6 +68,11 @@ game.audio.replace("footstep", nil)
 game.onNoise(function(noise)
     local loud: number = noise.loudness
     print(noise.sound, noise.position.x, loud, noise.heardWithin, noise.byPlayer)
+    local weapon: string? = noise.weapon
+    local maker: Character? = noise.by
+    if weapon == "bow" and maker == game.player then
+        print("an arrow loosed")
+    end
     if noise.sound == "thunder" then
         return false
     end
