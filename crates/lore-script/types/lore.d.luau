@@ -2790,8 +2790,18 @@ declare game: {
         --- at "Standard" and 30 at "Hard". Give the ends as the number to
         --- multiply by at the easiest step, then at the hardest; nil for
         --- one keeps its usual.
+        --- The middle of the dial is always 1 times, not the first step.
+        --- With two steps, { "Normal", "Hard" }, "Normal" is the easiest
+        --- and is 0.5 times. To keep a step at 1 times, pass the range:
+        --- `scale(10, 1, 1.5)` is 10 at "Normal" and 15 at "Hard". Put
+        --- `easiest` and `hardest` either side of 1 (or one of them at 1),
+        --- or the middle step is not between them.
+        --- For damage the player deals, which an easier game makes bigger,
+        --- turn the ends round: `scale(10, 1.5, 0.5)`.
+        --- `game.difficulty:scale(10)` works the same.
         --- Example: enemy.damage = game.difficulty.scale(20)
         --- Example: local wait = game.difficulty.scale(5, 2, 0.5) -- easier waits longer
+        --- Example: local hit = game.difficulty.scale(10, 1.5, 0.5) -- the player's blows
         scale: (value: number, easiest: number?, hardest: number?) -> number,
 
         --- Calls `handler` when the dial is turned, with the step's name

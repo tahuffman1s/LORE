@@ -119,6 +119,9 @@ local hiddenControls: { { name: string, at: string } } = {}
 -- The screens, built the first time the menu opens, because the game's own
 -- scripts have run by then.
 local built = false
+-- The difficulty steps the settings screen was built with: steps a game
+-- names later build it again, so the row offers the steps there are.
+local builtSteps = ""
 local first: Menu?
 local settings: Tabs?
 local settingsStart: Menu?
@@ -461,6 +464,7 @@ local function build()
         return
     end
     built = true
+    builtSteps = table.concat(game.difficulty.steps, "\n")
     dim = game.hud.box({ at = "center", width = 8000, height = 4000, color = "#00000099", layer = menu.style.layer - 1 })
     dim.visible = false
 
@@ -497,12 +501,15 @@ local function build()
     -- under, in the order the engine lists them.
     local headings: { string } = {}
     local rowsUnder: { [string]: { Row } } = {}
+    local namesUnder: { [string]: { string } } = {}
     for _, setting in game.settings.list() do
         if not rowsUnder[setting.group] then
             rowsUnder[setting.group] = {}
+            namesUnder[setting.group] = {}
             table.insert(headings, setting.group)
         end
         table.insert(rowsUnder[setting.group], rowFor(setting))
+        table.insert(namesUnder[setting.group], setting.name)
     end
     -- The Controls tab holds the buttons to rebind too, after its settings;
     -- a game with no such group gets a tab of its own, last.
@@ -518,6 +525,7 @@ local function build()
     local pages: { Menu } = {}
     for _, heading in headings do
         local under = rowsUnder[heading]
+        local names = namesUnder[heading] or {}
         local withButtons = heading == "Controls" and #buttons > 0
         if withButtons then
             for _, row in buttons do
@@ -526,9 +534,15 @@ local function build()
         end
         table.insert(
             under,
+            -- Puts back the settings on this tab only: a reset of the sound
+            -- does not quietly change how hard the game is. On the Gameplay
+            -- tab it turns the dial back to the default, which the
+            -- difficulty row then shows.
             menu.button("Reset all to defaults", {
                 onPress = function()
-                    game.settings.reset()
+                    for _, name in names do
+                        game.settings.reset(name)
+                    end
                     if withButtons then
                         game.input.stopListening()
                         busy, watch = nil, nil
@@ -626,6 +640,9 @@ function methods.open()
     end
     if open then
         return
+    end
+    if built and table.concat(game.difficulty.steps, "\n") ~= builtSteps then
+        teardown()
     end
     build()
     open = true

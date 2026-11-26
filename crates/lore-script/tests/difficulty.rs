@@ -318,3 +318,89 @@ fn a_saved_script_that_names_no_steps_has_the_engine_s_again() {
     let _ = std::fs::remove_dir_all(&folder);
     assert_eq!(host.difficulty_name().as_ref(), "Hard");
 }
+
+/// A game in a folder of its own, with the steps
+/// `{ "Easy", "Normal", "Hard", "Legendary" }` and the dial turned to
+/// "Legendary" on its first tick; and its `main.luau`.
+fn legendary(test: &str) -> (ScriptHost, std::path::PathBuf) {
+    let folder = std::env::temp_dir().join(format!(
+        "lore-script-difficulty-{test}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let main = folder.join(lore_script::ENTRY_SCRIPT);
+    std::fs::write(&main, LEGENDARY).unwrap();
+    let _ = log::set_logger(&Capture);
+    let mut host =
+        ScriptHost::open_with_settings(&folder, ActionMap::standard(), settings(50.0, true))
+            .unwrap();
+    // Turned on the first tick, and told on the second.
+    assert_eq!(
+        lines(&mut host, 2),
+        ["loaded at Normal 50", "Normal to Legendary"]
+    );
+    assert_eq!(host.difficulty_name().as_ref(), "Legendary");
+    (host, main)
+}
+
+const LEGENDARY: &str = r#"
+game.difficulty.steps = { "Easy", "Normal", "Hard", "Legendary" }
+game.difficulty.onChange(function(now, before) print(before .. " to " .. now) end)
+print("loaded at", game.difficulty.name, game.settings.get("difficulty"))
+local turned = false
+game.onTick(function()
+    if not turned and game.difficulty.name == "Normal" then
+        game.difficulty.name = "Legendary"
+    end
+    turned = true
+end)
+"#;
+
+#[test]
+fn a_reload_leaves_the_dial_where_the_player_had_it() {
+    let (mut host, main) = legendary("reload");
+    std::fs::write(&main, LEGENDARY).unwrap();
+    host.reload().unwrap();
+    let _ = std::fs::remove_dir_all(main.parent().unwrap());
+    assert_eq!(host.difficulty_name().as_ref(), "Legendary");
+    assert!((host.difficulty_level() - 1.0).abs() < 1e-9);
+    // Nothing turned, so nothing is told; the setting is still the hardest.
+    assert_eq!(lines(&mut host, 3), ["loaded at Legendary 100"]);
+}
+
+#[test]
+fn a_reload_that_fails_leaves_the_dial_where_the_player_had_it() {
+    let (mut host, main) = legendary("failed");
+    std::fs::write(&main, "game.difficulty.steps = { ").unwrap();
+    assert!(host.reload().is_err());
+    let _ = std::fs::remove_dir_all(main.parent().unwrap());
+    assert_eq!(host.difficulty_name().as_ref(), "Legendary");
+    assert_eq!(
+        host.difficulty_scales(),
+        DifficultyScales {
+            damage: 1.5,
+            notice: 1.5,
+            aim: 1.5
+        }
+    );
+    assert!(lines(&mut host, 3).is_empty());
+}
+
+#[test]
+fn settings_changed_outside_the_game_take_effect_on_a_tick_and_the_dial_follows() {
+    let mut host = game_with(
+        r#"game.difficulty.onChange(function(now, before) print(before .. " to " .. now) end)"#,
+        settings(50.0, true),
+    );
+    run(&mut host, 1);
+    host.set_settings(settings(100.0, false));
+    // Between ticks nothing has changed yet.
+    assert_eq!(host.difficulty_name().as_ref(), "Standard");
+    assert_eq!(host.setting_on("fall_damage"), Some(true));
+    assert_eq!(lines(&mut host, 2), ["Standard to Hard"]);
+    assert_eq!(host.difficulty_name().as_ref(), "Hard");
+    assert_eq!(host.setting_on("fall_damage"), Some(false));
+    // The same settings told again turn nothing.
+    host.set_settings(settings(100.0, false));
+    assert!(lines(&mut host, 2).is_empty());
+}

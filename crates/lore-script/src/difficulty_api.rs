@@ -77,6 +77,20 @@ pub(crate) struct DifficultyState {
     turned: Cell<bool>,
     /// Changes `game.difficulty.onChange` has yet to hear of: now, before.
     waiting: RefCell<Vec<(Rc<str>, Rc<str>)>>,
+    /// After a reload, the step the player had turned the dial to, until the
+    /// new version names its steps or the dial is turned: the new steps
+    /// keep it by name, though the engine's own stood in while it loaded.
+    reloading: RefCell<Option<Rc<str>>>,
+}
+
+/// Where the dial stood before a new version of the script began to load,
+/// to put back exactly if it fails to.
+#[derive(Debug)]
+pub(crate) struct Dial {
+    steps: Vec<Rc<str>>,
+    at: usize,
+    wanted: f64,
+    turned: bool,
 }
 
 impl DifficultyState {
@@ -94,6 +108,7 @@ impl DifficultyState {
             wanted: Cell::new(wanted),
             turned: Cell::new(false),
             waiting: RefCell::default(),
+            reloading: RefCell::default(),
         };
         state.at.set(state.nearest(wanted));
         state
@@ -157,7 +172,7 @@ impl DifficultyState {
     /// goes to the step nearest where the player wanted it. Nobody is told:
     /// a game names its steps as it starts.
     fn set_steps(&self, steps: Vec<Rc<str>>) {
-        let name = self.name();
+        let name = self.reloading.take().unwrap_or_else(|| self.name());
         self.steps.replace(steps);
         let kept = if self.turned.get() {
             self.find(&name)
@@ -169,17 +184,32 @@ impl DifficultyState {
     }
 
     /// Puts the engine's own steps back, as a new version of the script
-    /// starts loading, and gives the ones there were.
-    pub(crate) fn usual_steps(&self) -> Vec<Rc<str>> {
-        let had = self.steps();
+    /// starts loading, and gives where the dial stood. Steps the new version
+    /// names keep the step the player had by name, so a reload never moves
+    /// the dial when the engine's steps share a name with the game's.
+    pub(crate) fn usual_steps(&self) -> Dial {
+        let had = Dial {
+            steps: self.steps(),
+            at: self.at.get(),
+            wanted: self.wanted.get(),
+            turned: self.turned.get(),
+        };
+        let name = self.name();
         self.set_steps(USUAL_STEPS.iter().map(|&step| Rc::from(step)).collect());
+        if had.turned {
+            self.reloading.replace(Some(name));
+        }
         had
     }
 
-    /// Puts back steps [`usual_steps`](Self::usual_steps) gave, when the
-    /// new version of the script failed to load.
-    pub(crate) fn restore_steps(&self, steps: Vec<Rc<str>>) {
-        self.set_steps(steps);
+    /// Puts the dial back exactly where [`usual_steps`](Self::usual_steps)
+    /// found it, when the new version of the script failed to load.
+    pub(crate) fn restore_steps(&self, dial: Dial) {
+        self.reloading.replace(None);
+        self.steps.replace(dial.steps);
+        self.at.set(dial.at);
+        self.wanted.set(dial.wanted);
+        self.turned.set(dial.turned);
     }
 
     /// Turns the dial to follow the player's "difficulty" setting, after a
@@ -200,6 +230,7 @@ impl DifficultyState {
         if index == self.at.get() {
             return;
         }
+        self.reloading.replace(None);
         self.at.set(index);
         self.wanted.set(self.level());
         self.turned.set(true);

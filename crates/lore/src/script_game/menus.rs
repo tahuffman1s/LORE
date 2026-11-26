@@ -380,10 +380,24 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     assert_eq!(settings::load(&path), (chosen, Vec::new()));
     let _ = std::fs::remove_dir_all(&folder);
 
-    // The row after the last setting puts every one of them back.
+    // The row after the last setting puts every one on its tab back, and
+    // only those: the other tabs, the dial among them, are left alone.
     assert!(played.shows("Reset all to defaults"));
     played.tap(GamepadButton::GamepadSouth);
-    assert_eq!(played.settings, usual);
+    let graphics = told.last().unwrap().group.clone();
+    let reset = Settings::default().described();
+    for (now, setting) in played.settings.described().iter().zip(&chosen.described()) {
+        let wanted = if setting.group == graphics {
+            &reset
+                .iter()
+                .find(|usual| usual.name == setting.name)
+                .unwrap()
+                .value
+        } else {
+            &setting.value
+        };
+        assert_eq!(&now.value, wanted, "{}", setting.name);
+    }
     assert_eq!(played.value_of("Vsync"), "on");
 
     // B goes back to the first screen, and B again to the game.
@@ -2286,4 +2300,63 @@ fn the_controls_tab_holds_the_settings_and_the_buttons_to_rebind() {
         assert!(played.shows(tab));
     }
     assert!(!played.shows("Bindings"));
+}
+
+#[test]
+fn a_reset_on_one_tab_leaves_the_others_and_the_dial_alone() {
+    let main =
+        r#"game.difficulty.onChange(function(now, before) print(before .. " to " .. now) end)"#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    // The dial one step harder, on the Gameplay tab.
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Difficulty"), "<  Hard  >");
+    assert_eq!(played.settings.difficulty, 100.0);
+    // The volume down on the Sound tab, and that tab put back.
+    played.tap(Key::E);
+    played.tap(Key::ArrowLeft);
+    assert_eq!(played.settings.volume, 95.0);
+    played.press_row("Reset all to defaults");
+    assert_eq!(played.settings.volume, 100.0);
+    assert_eq!(played.settings.difficulty, 100.0);
+    assert_eq!(played.host().difficulty_name().as_ref(), "Hard");
+    // The Gameplay tab's own reset turns the dial back, and its row says so.
+    played.tap(GamepadButton::LeftBumper);
+    played.press_row("Reset all to defaults");
+    played.go_to("Difficulty");
+    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
+    assert_eq!(played.settings.difficulty, 50.0);
+    assert_eq!(played.host().difficulty_name().as_ref(), "Standard");
+}
+
+#[test]
+fn steps_a_game_names_later_are_on_the_difficulty_row_when_it_next_opens() {
+    let main = r#"
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 40 then
+                game.difficulty.steps = { "Gentle", "Fair", "Cruel" }
+            end
+        end)"#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
+    played.tap(Key::Escape);
+    played.tap(Key::Escape);
+    assert!(!played.host().paused());
+    for _ in 0..60 {
+        played.step();
+    }
+    assert_eq!(played.host().difficulty_name().as_ref(), "Fair");
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert_eq!(played.value_of("Difficulty"), "<  Fair  >");
+    played.tap(Key::ArrowRight);
+    assert_eq!(played.value_of("Difficulty"), "<  Cruel  >");
 }

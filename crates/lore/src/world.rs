@@ -546,6 +546,10 @@ impl World {
     /// easiest step and 1.5 at its hardest. It changes only on a tick.
     #[must_use]
     pub fn difficulty(&self) -> lore_script::DifficultyScales {
+        // The dial and the assists start from the player's settings file,
+        // not from the seed or the presses: a save (#73) and a replay file
+        // (#193) must hold the starting dial and assists, and any change to
+        // them from outside the game, for the same game to come back.
         self.game.host().difficulty_scales()
     }
 

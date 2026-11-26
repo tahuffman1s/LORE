@@ -144,6 +144,10 @@ pub struct ScriptHost {
     respawn: bool,
     /// The player died and the script has not been told yet.
     spawn_due: bool,
+    /// The player's settings as the engine last told them, waiting for the
+    /// next tick to take effect: game state (the difficulty dial, fall
+    /// damage) changes only on a tick.
+    settings_due: Option<Vec<Setting>>,
     /// The game's time the last meteors were looked for at, in seconds.
     meteors_seen: Option<f64>,
     /// Rereads of the player's controls the script has not been told of.
@@ -507,6 +511,7 @@ impl ScriptHost {
             kept: Rc::default(),
             respawn: false,
             spawn_due: false,
+            settings_due: None,
             meteors_seen: None,
             controls_told: Vec::new(),
             controls_notice: Rc::new(Cell::new(true)),
@@ -599,6 +604,7 @@ impl ScriptHost {
             hud::update_pressed(&version.shared, click);
         }
         self.clock.begin_tick(step);
+        self.settings_due();
         // A held direction counts its ticks whether or not the script asks.
         self.tools.advance_steps(
             &self.actions.borrow(),
@@ -844,8 +850,25 @@ impl ScriptHost {
     /// script made that has not been taken yet
     /// ([`take_changed_settings`](Self::take_changed_settings)) stays, to
     /// be taken.
+    ///
+    /// They take effect at the start of the next tick, as anything that
+    /// changes the game does (or as the script is next reloaded, if that
+    /// comes first): a new "difficulty" turns the dial there, and
+    /// `game.difficulty.onChange` hears of it on that tick.
     pub fn set_settings(&mut self, settings: Vec<Setting>) {
+        self.settings_due = Some(settings);
+    }
+
+    /// Puts settings the engine told of into effect, at the start of a tick.
+    fn settings_due(&mut self) {
+        let Some(settings) = self.settings_due.take() else {
+            return;
+        };
+        let before = self.settings.value_of(crate::DIFFICULTY_SETTING);
         self.settings.replace(settings);
+        if self.settings.value_of(crate::DIFFICULTY_SETTING) != before {
+            self.difficulty.follow_setting(&self.settings);
+        }
     }
 
     /// The seconds of game time that have been run: the number of ticks
@@ -2423,6 +2446,9 @@ impl ScriptHost {
             }
             self.kept.replace(kept);
         }
+        // A reload comes between ticks too: settings the engine told of are
+        // in force for the new version as it loads.
+        self.settings_due();
         // The new version starts in `gameplay`, as its variables start
         // again: a shop that was open is closed in both. And it starts
         // with the game going on, since whatever paused it, a menu most
