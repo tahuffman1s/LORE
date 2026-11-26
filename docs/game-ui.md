@@ -384,6 +384,75 @@ They start as `"menu-move"` and `"menu-choose"`, at 0.6, the same as `game.menu`
 `game.ui.reduceMotion = true` makes things that fade or slide jump to where they
 end. Give it to players who ask for it.
 
+## The starter stylesheet
+
+A new game has `ui/lore.css`: classes for the things most screens need, so that a
+screen can be written without a stylesheet of its own. Link it first and your own
+sheet after it. A rule of yours then wins over one of its rules.
+
+```html ui/inventory.html
+<link rel="stylesheet" href="lore.css">
+<body class="green">
+  <div class="screen col center">
+    <div class="panel col gap-3 anim-rise">
+      <div class="panel-title upper">Inventory</div>
+      <div class="stat-row"><span class="dim">Weight</span><span>3.0</span></div>
+      <div class="bar"><div class="fill" style="width: 60%"></div></div>
+      <button class="btn" onclick="closeInventory" autofocus>Close</button>
+    </div>
+  </div>
+</body>
+```
+
+Every part of it is a class you add to an element:
+
+| For | Classes |
+| --- | --- |
+| Rows and columns | `row`, `col`, `wrap`, `center`, `between`, `around`, `start`, `end`, `grow`, `items-start`, `items-center`, `items-end`, `items-stretch` |
+| Size and place | `screen` (the whole window), `full`, `w-full`, `h-full`, `w-half`, `w-third`, `w-quarter`, `fill-10` to `fill-90`, `abs`, `rel`, `hidden`, `clip`, `scroll-y` |
+| Pinned to the parent | `tl`, `tr`, `bl`, `br` (corners), `tc`, `bc` (top and bottom middle), `mid`, `centred-screen` |
+| Space | `gap-1` to `gap-8`, `p-1` to `p-8`, `px-`, `py-`, `m-`, `mt-`, `mb-`, `ml-`, `mr-` with the same numbers (4, 8, 12, 16, 24, 32, 48 and 64 pixels), `p-0`, `m-0`, `ml-auto`, `mr-auto`, `mt-auto` |
+| Text | `text-xs`, `text-sm`, `text-md`, `text-lg`, `text-xl`, `text-xxl`, `text-huge`, `upper`, `lower`, `bold`, `italic`, `text-left`, `text-center`, `text-right`, `wide`, `nowrap`, `dim`, `accent`, `danger`, `good`, `light`, `dark`, `glow-text`, `shadow-text` |
+| Surfaces | `bg-panel`, `bg-dark`, `bg-faint`, `bg-ink`, `bg-danger`, `border`, `border-dim`, `border-t`, `border-b`, `round`, `round-lg`, `round-full`, `glow`, `glow-inner`, `shadow`, `vignette`, `opacity-50`, `opacity-75`, `faded` |
+| Pieces | `panel` with `panel-title`; `btn` with `btn-solid`, `btn-ghost`, `btn-danger`, `btn-lg`, `btn-sm`, `btn-left`; `key` for a `<kbd>`; `chip` (add `on`); `badge`; `toast` (add `out` to send it away); `tabs` holding `tab` (add `current`); `list-row`; `stat-row`; `slot` (add `selected`); `divider` |
+| Bars | `bar` holding a `fill`, and a `ghost` before it for the part just lost; `bar-thin`, `bar-fat`; `fill danger`, `fill good`. Set the width of the fill from the script. |
+| Hover and focus | `hover-bright`, `hover-grow`, `hover-glow`, `hover-dim`, `smooth`, `fast` |
+| Motion, once | `anim-fade-in`, `anim-fade-out`, `anim-rise`, `anim-drop`, `anim-slide-in-left`, `anim-slide-in-right`, `anim-zoom-in`, `anim-pop`, `anim-bounce`, `anim-shake`, `anim-beat`, `anim-flash`, `anim-warm` |
+| Motion, for ever | `anim-pulse`, `anim-spin`, `anim-beat-loop` |
+| Timing of motion | `slow`, `quick`, `delay-1` to `delay-4` |
+
+A bar follows a number when the script sets the width of its fill. The fill slides
+there by itself, and the ghost follows a moment later:
+
+```lua
+local hud = game.ui.load("ui/hud.html")
+hud:find("#health .fill").style.width = "40%"
+```
+
+The colours are variables on `body`, and a class on `body` picks a set: `amber` (what
+you get with none), `green`, `blue`, `white`, `rose` or `violet`. For a colour of your
+own, set the variables in your sheet:
+
+```css ui/mine.css
+body {
+  --ink: #7fe0d0;
+  --ink-dim: rgba(127, 224, 208, 0.5);
+  --ink-faint: rgba(127, 224, 208, 0.14);
+  --glow: rgba(127, 224, 208, 0.35);
+  --radius: 8px;
+}
+```
+
+`--ink` is the colour of text and lines, `--ink-dim` and `--ink-faint` are the same
+colour let through less, `--glow` is the light around panels, `--panel` and
+`--panel-top` are the panel's background, `--on-ink` is text on a filled button,
+`--danger` and `--good` are the two warning colours, `--line` is how thick borders
+are and `--radius` how round the corners.
+
+The file is part of your game, not of the engine. Change it, take classes out, or
+delete it: nothing else needs it. The starter's title screen does not link it and has
+its own small sheet, so you can read one screen from top to bottom.
+
 ## Hot reload
 
 Save the HTML or CSS of a screen and the running game shows the new one, with no
