@@ -248,28 +248,13 @@ impl UiPass {
             .binding(0)
             .stride(QUAD_BYTES as u32)
             .input_rate(vk::VertexInputRate::INSTANCE)];
-        let attributes = [
+        // Twelve groups of four numbers: see `QUAD_BYTES`.
+        let attributes: [vk::VertexInputAttributeDescription; 12] = std::array::from_fn(|index| {
             vk::VertexInputAttributeDescription::default()
-                .location(0)
+                .location(index as u32)
                 .format(vk::Format::R32G32B32A32_SFLOAT)
-                .offset(0),
-            vk::VertexInputAttributeDescription::default()
-                .location(1)
-                .format(vk::Format::R32G32B32A32_SFLOAT)
-                .offset(16),
-            vk::VertexInputAttributeDescription::default()
-                .location(2)
-                .format(vk::Format::R32G32B32A32_SFLOAT)
-                .offset(32),
-            vk::VertexInputAttributeDescription::default()
-                .location(3)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(48),
-            vk::VertexInputAttributeDescription::default()
-                .location(4)
-                .format(vk::Format::R32_SFLOAT)
-                .offset(56),
-        ];
+                .offset(index as u32 * 16)
+        });
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&vertex_bindings)
             .vertex_attribute_descriptions(&attributes);

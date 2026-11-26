@@ -44,10 +44,15 @@ const LINE_HIGH: f32 = 1.0;
 #[derive(Default)]
 pub(crate) struct ScriptHud {
     ui: Ui,
-    /// What each piece is drawn with, in the order the script made them.
+    /// What each piece is drawn with, in the order they are drawn.
     widgets: Vec<Placed>,
+    /// The id the script's HUD knows each of those pieces by, in the same
+    /// order: what a `clipTo` names.
+    ids: Vec<u64>,
     /// What [`ScriptHost::hud_layout`] was when `ui` was built.
     layout: Option<u64>,
+    /// The font text is measured with, if the game's own is shared.
+    font: Option<lore_render::Font>,
 }
 
 /// What one piece of the script's HUD is drawn with.
@@ -195,15 +200,26 @@ impl std::fmt::Debug for ScriptHud {
 }
 
 impl ScriptHud {
+    /// A HUD that measures text with `font`, which follows the game's fonts.
+    pub(crate) fn measuring(font: lore_render::Font) -> Self {
+        Self {
+            font: Some(font),
+            ..Self::default()
+        }
+    }
+
     /// Draws the HUD `host`'s script has made over this frame.
     pub(crate) fn show(&mut self, host: &mut ScriptHost, frame: &mut Frame) {
         let layout = host.hud_layout();
         if self.layout == Some(layout) {
-            let (ui, widgets) = (&mut self.ui, &mut self.widgets);
-            host.take_hud_changes(|place, piece| match widgets.get_mut(place) {
-                Some(Placed::One(widget)) => change(ui, *widget, piece),
-                Some(Placed::Graph(graph)) => graph.change(ui, piece),
-                None => {}
+            let (ui, widgets, ids) = (&mut self.ui, &mut self.widgets, &self.ids);
+            host.take_hud_changes(|place, piece| {
+                let clip = clip_of(piece, ids, widgets);
+                match widgets.get_mut(place) {
+                    Some(Placed::One(widget)) => change(ui, *widget, piece, clip),
+                    Some(Placed::Graph(graph)) => graph.change(ui, piece),
+                    None => {}
+                }
             });
             // A graph moves with every frame, whether or not the script
             // touched it.
@@ -216,9 +232,28 @@ impl ScriptHud {
             // A piece was made or removed, or the script was saved: build
             // the HUD again from the script's list.
             let mut ui = Ui::default();
-            ui.set_text_measure(crate::error_overlay::measure());
+            match &self.font {
+                Some(font) => ui.set_text_measure(Box::new(font.clone())),
+                None => ui.set_text_measure(crate::error_overlay::measure()),
+            }
             self.widgets.clear();
-            host.each_hud_piece(|_, piece| self.widgets.push(add(&mut ui, piece)));
+            self.ids.clear();
+            host.each_hud_piece(|_, piece| {
+                self.ids.push(piece.id);
+                self.widgets.push(add(&mut ui, piece));
+            });
+            // Pieces are cut to other pieces, so styles are set once all
+            // of them are made.
+            host.each_hud_piece(|place, piece| {
+                if let Some(Placed::One(widget)) = self.widgets.get(place) {
+                    style(
+                        &mut ui,
+                        *widget,
+                        piece,
+                        clip_of(piece, &self.ids, &self.widgets),
+                    );
+                }
+            });
             for placed in &self.widgets {
                 if let Placed::Graph(graph) = placed {
                     graph.follow(&mut ui, host);
@@ -255,17 +290,7 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> Placed {
         HudShape::Bar { value, size } => {
             ui.hud_bar(piece.anchor, piece.offset, *size, piece.color, *value)
         }
-        HudShape::Box {
-            size,
-            corner,
-            rotation,
-        } => {
-            let widget = ui.hud_rect(piece.anchor, piece.offset, *size, piece.color);
-            // The widget is this UI's own HUD rectangle, so neither can fail.
-            let _ = ui.set_corner(widget, *corner);
-            let _ = ui.set_angle(widget, rotation.to_radians());
-            widget
-        }
+        HudShape::Box { size } => ui.hud_rect(piece.anchor, piece.offset, *size, piece.color),
         HudShape::Line { to, thickness } => {
             let (offset, size, angle) =
                 lore_ui::hud_line(piece.anchor, piece.offset, *to, *thickness);
@@ -273,14 +298,8 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> Placed {
             let _ = ui.set_angle(widget, angle);
             widget
         }
-        HudShape::Image {
-            image,
-            size,
-            rotation,
-        } => {
-            let widget = ui.hud_image(piece.anchor, piece.offset, *size, *image, piece.color);
-            let _ = ui.set_angle(widget, rotation.to_radians());
-            widget
+        HudShape::Image { image, size } => {
+            ui.hud_image(piece.anchor, piece.offset, *size, *image, piece.color)
         }
         // The frame graph is drawn by the engine from the frame times.
         HudShape::Graph { size, frames } => {
@@ -295,7 +314,7 @@ fn add(ui: &mut Ui, piece: &HudPiece) -> Placed {
 
 /// Makes `widget` show what `piece` now holds. Where a piece is pinned
 /// never changes, so only the rest is copied.
-fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
+fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece, clip: Option<WidgetId>) {
     // `widget` was made from this piece by `add`, so it is of the kind
     // each of these takes and none of them can fail.
     let mut offset = piece.offset;
@@ -307,14 +326,8 @@ fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
             let _ = ui.set_bar(widget, *value);
             let _ = ui.set_size(widget, *size);
         }
-        HudShape::Box {
-            size,
-            corner,
-            rotation,
-        } => {
+        HudShape::Box { size } => {
             let _ = ui.set_size(widget, *size);
-            let _ = ui.set_corner(widget, *corner);
-            let _ = ui.set_angle(widget, rotation.to_radians());
         }
         HudShape::Line { to, thickness } => {
             let (placed, size, angle) =
@@ -323,13 +336,33 @@ fn change(ui: &mut Ui, widget: WidgetId, piece: &HudPiece) {
             let _ = ui.set_size(widget, size);
             let _ = ui.set_angle(widget, angle);
         }
-        HudShape::Image { size, rotation, .. } => {
+        HudShape::Image { size, .. } => {
             let _ = ui.set_size(widget, *size);
-            let _ = ui.set_angle(widget, rotation.to_radians());
         }
         HudShape::Graph { .. } => {}
     }
     let _ = ui.set_color(widget, piece.color);
     let _ = ui.set_offset(widget, offset);
     let _ = ui.set_shown(widget, piece.visible);
+    style(ui, widget, piece, clip);
+}
+
+/// The widget of the piece `piece` is cut to, if it is cut to one.
+fn clip_of(piece: &HudPiece, ids: &[u64], widgets: &[Placed]) -> Option<WidgetId> {
+    let target = piece.style.as_deref()?.clip_to?;
+    let place = ids.iter().position(|id| *id == target)?;
+    match widgets.get(place)? {
+        Placed::One(widget) => Some(*widget),
+        Placed::Graph(_) => None,
+    }
+}
+
+/// Gives `widget` the style of `piece`, cut to `clip`.
+fn style(ui: &mut Ui, widget: WidgetId, piece: &HudPiece, clip: Option<WidgetId>) {
+    let look = piece
+        .style
+        .as_deref()
+        .map(|held| lore_ui::HudStyle { clip, ..held.look });
+    // `widget` is a HUD piece of this UI's own, so this cannot fail.
+    let _ = ui.set_style(widget, look.as_ref());
 }

@@ -57,7 +57,7 @@ A hook runs rustfmt on every edited `.rs` file; don't format by hand.
 
 ## Research first
 
-Before designing anything a user touches (script API, CLI, editor, error text, docs, onboarding), search the web for how the best tools solve it and for newer ideas, then design. Use the `researcher` agent so the reading stays out of the main context. Note the sources that shaped the design in the commit or PR description.
+Before designing anything a user touches (script API, CLI, editor, error text, docs, onboarding), search the web for how the best tools solve it and for newer ideas, then design. Use the `researcher` agent so the reading stays out of the main context. Keep the sources in notes outside the repository. LORE is its own design: never name other engines, game tools, UI toolkits, games or studios as a source or a comparison in issues, PRs, commits, docs or code (Skyrim and Zelda above, as the kind of game, are the one exception; crates we depend on are named as usual).
 
 ## Working efficiently
 

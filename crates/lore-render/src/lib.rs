@@ -72,7 +72,7 @@ pub use error::{RenderError, Version};
 pub use eye::EyeAdaptation;
 pub use figures::{Figure, ModelId};
 pub use fluid::{FluidDrop, FluidLook, MOST_FLUID_DROPS, MOST_FLUID_KINDS, PoolDrawn};
-pub use font::Font;
+pub use font::{Font, FontFileInfo, HudFontFamily, font_file_info};
 pub use game_shaders::{
     GameShader, MOST_FLUID_SHADERS, MOST_SCREEN_EFFECTS, MOST_SURFACE_SHADERS, ShaderReport,
     ShaderUse, check_game_shader,

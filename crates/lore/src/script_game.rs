@@ -54,6 +54,8 @@ pub struct ScriptGame {
     sounds: Sounds,
     /// The pictures the script can show on its HUD.
     pictures: crate::hud_images::HudPictures,
+    /// The fonts the script can draw HUD text in.
+    fonts: crate::hud_fonts::HudFonts,
     /// What is placed in the level.
     map: Map,
     /// The map's file, looked at for saves. Only a game opened from a
@@ -140,15 +142,17 @@ impl ScriptGame {
     /// A game running `host` with no files behind it: it has the starter
     /// sounds, and nothing placed in its level.
     fn without_files(mut host: ScriptHost, settings: Settings) -> Self {
-        host.set_text_measure(crate::error_overlay::measure());
+        let fonts = crate::hud_fonts::HudFonts::default();
+        host.set_text_measure(Box::new(fonts.measuring()));
         let mut game = Self {
             host,
             errors: None,
             notice: None,
-            hud: ScriptHud::default(),
+            hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
+            fonts,
             map: Map::default(),
             map_file: None,
             map_error: None,
@@ -369,7 +373,8 @@ impl ScriptGame {
             settings.described(),
             placed_of(&map),
         )?;
-        host.set_text_measure(crate::error_overlay::measure());
+        let fonts = crate::hud_fonts::HudFonts::in_folder(folder);
+        host.set_text_measure(Box::new(fonts.measuring()));
         // Said once the game is known to be there to open.
         match &map_error {
             None => said_of(&map),
@@ -379,10 +384,11 @@ impl ScriptGame {
             host,
             errors: Some(ErrorOverlay::default()),
             notice: None,
-            hud: ScriptHud::default(),
+            hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
+            fonts,
             map,
             map_file: Some(map_file),
             map_error,
@@ -624,6 +630,7 @@ impl Game for ScriptGame {
             frame.set_moon_size(size);
         }
         self.pictures.follow(&self.host, frame);
+        self.fonts.follow(&self.host, frame);
         if let Some(shown) = self.host.take_ground() {
             frame.set_ground(shown);
         }
@@ -777,7 +784,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -841,7 +851,10 @@ mod tests {
                     color,
                     ..
                 } => Some((position, size, color)),
-                Draw::Text { .. } | Draw::Turned { .. } => None,
+                Draw::Text { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -986,7 +999,10 @@ mod tests {
                 Draw::Rect {
                     position, color, ..
                 } => Some((position, color)),
-                Draw::Text { .. } | Draw::Turned { .. } => None,
+                Draw::Text { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -1051,7 +1067,10 @@ mod tests {
             .iter()
             .find_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .unwrap_or_default();
         assert_eq!(said, "Cross");
@@ -1349,7 +1368,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect();
         rig.list = frame.take_shader_list();

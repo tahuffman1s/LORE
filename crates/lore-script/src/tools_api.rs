@@ -750,9 +750,16 @@ impl Tools {
         *self.measure.borrow_mut() = measure;
     }
 
-    /// The width of `text` drawn `height` high, with the HUD's own font.
-    pub fn text_size(&self, text: &str, height: f32) -> [f32; 2] {
-        lore_ui::hud_text_size(text, height, &**self.measure.borrow())
+    /// The size of `text` drawn `height` high in `font`, with
+    /// `letter_spacing` after every character, measured as the HUD draws it.
+    pub fn text_size_styled(
+        &self,
+        text: &str,
+        height: f32,
+        font: lore_ui::FontFace,
+        letter_spacing: f32,
+    ) -> [f32; 2] {
+        lore_ui::hud_text_size_styled(text, height, font, letter_spacing, &**self.measure.borrow())
     }
 
     pub fn take_teleport(&self) -> Option<Teleport> {

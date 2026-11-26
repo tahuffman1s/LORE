@@ -232,6 +232,10 @@ pub(crate) struct Shared {
     pub hud: HudState,
     /// The game's HUD images, by name: what `game.hud.image` can show.
     pub images: Rc<Vec<crate::images::HudImageInfo>>,
+    /// The game's font families, sorted: the `n`th is family `n + 1`. What
+    /// a text piece's `fontFamily` can name.
+    #[allow(dead_code, reason = "`fontFamily` reads it")]
+    pub fonts: Rc<Vec<String>>,
     /// The script files this version has read, and what `require` gave for each.
     pub modules: Modules,
     /// The tables this version asked for with `game.keep`.
