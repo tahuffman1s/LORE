@@ -75,6 +75,7 @@ pub use lore_assets as assets;
 pub use lore_audio as audio;
 pub use lore_input as input;
 pub use lore_input::{ActionId, ActionMap, ActionSetId, InputFrame, MouseMode, Rumble};
+pub use lore_nav as nav;
 pub use lore_render as render;
 
 pub use app::{AppError, Config, run};

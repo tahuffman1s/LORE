@@ -73,6 +73,7 @@ mod time_api;
 mod tools_api;
 mod typing_api;
 mod ui;
+mod walk_api;
 mod weapon_api;
 mod weather_api;
 
@@ -101,6 +102,7 @@ pub use tools_api::{
     ViewTold,
 };
 pub use ui::ScreensChecked;
+pub use walk_api::WalkingGround;
 pub use weapon_api::{HeldWeapon, HoldSaid, NoiseTold, SoundName, WeaponHit, WeaponSounds};
 pub use weather_api::{DEEPEST_SNOW, THICKEST_ICE, TornadoAsk, WeatherHere, WeatherSaid};
 
