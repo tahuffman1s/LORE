@@ -80,11 +80,20 @@ pub enum Importance {
 /// Which of the player's volume settings a sound follows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Group {
-    /// Everything that is not music: footsteps, gunfire, doors, menus.
+    /// Everything that is neither music nor speech: footsteps, gunfire,
+    /// doors, menus.
     #[default]
     Effects,
     /// Music, which many players turn down or off and keep the rest.
     Music,
+    /// People talking: voice lines, which players who need subtitles or
+    /// find the voices too loud or too quiet set apart from the rest.
+    Speech,
+}
+
+impl Group {
+    /// How many groups there are.
+    pub const COUNT: usize = 3;
 }
 
 /// A request to play a sound: what, where and how.
@@ -191,6 +200,15 @@ impl Play {
     #[must_use]
     pub fn looping(mut self) -> Self {
         self.looping = true;
+        self
+    }
+
+    /// Makes it speech: it follows the speech volume
+    /// ([`Mixer::set_group_volume`](crate::Mixer::set_group_volume)), not
+    /// the volume of effects or music.
+    #[must_use]
+    pub fn speech(mut self) -> Self {
+        self.group = Group::Speech;
         self
     }
 
