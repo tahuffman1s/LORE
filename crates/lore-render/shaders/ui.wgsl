@@ -193,19 +193,21 @@ fn slice_axis(p: f32, size: f32, start: f32, end: f32, edge_start: f32, edge_end
 }
 
 // Where in the atlas this pixel reads, before it is kept inside the picture.
-// `params.x` is how many screen pixels one pixel of the picture takes where
-// it is not stretched, or 0 for a picture stretched whole.
+// `params.xy` is how many screen pixels one pixel of the picture takes where
+// it is not stretched, across and down, or 0 for a picture stretched whole.
 fn atlas_position(corner: Corner, kind: i32) -> vec2<f32> {
     let size = corner.half_size * 2.0;
     let p = corner.offset + corner.half_size;
-    let scale = corner.params.x;
-    if kind != IMAGE || scale <= 0.0 {
+    // Across and down separately: a picture shrunk to fit may be shrunk
+    // more one way.
+    let scale = corner.params.xy;
+    if kind != IMAGE || scale.x <= 0.0 {
         return corner.source.xy + p / max(size, vec2<f32>(1.0)) * corner.source.zw;
     }
     // Left, top, right and bottom edges in the picture and on the screen. If
     // the box is too small for both edges of a side, they share it.
     let edges = vec4<f32>(corner.border.w, corner.border.x, corner.border.y, corner.border.z);
-    var on_screen = edges * scale;
+    var on_screen = edges * vec4<f32>(scale.x, scale.y, scale.x, scale.y);
     let room = size / max(vec2<f32>(on_screen.x + on_screen.z, on_screen.y + on_screen.w), vec2<f32>(1e-4));
     let fit = min(room, vec2<f32>(1.0));
     on_screen = vec4<f32>(on_screen.x * fit.x, on_screen.y * fit.y, on_screen.z * fit.x, on_screen.w * fit.y);
@@ -219,13 +221,18 @@ fn atlas_position(corner: Corner, kind: i32) -> vec2<f32> {
 fn letter_tap(at: vec2<f32>, source: vec4<f32>) -> f32 {
     let size = vec2<f32>(textureDimensions(atlas));
     let inside = all(at >= source.xy) && all(at <= source.xy + source.zw);
-    let read = textureSampleLevel(atlas, smooth_sampler, at / size, 0.0).r;
+    // Read half a pixel inside the letter's own part, as pictures are, so
+    // the bilinear read never mixes in a neighbour; what is outside is zero.
+    let kept = clamp(at, source.xy + 0.5, source.xy + source.zw - 0.5);
+    let read = textureSampleLevel(atlas, smooth_sampler, kept / size, 0.0).r;
     return select(0.0, read, inside);
 }
 
 // A letter's read made heavier: the most of itself and of what is `bold`
 // pixels away on each side.
-fn letter_read(at: vec2<f32>, source: vec4<f32>, bold: f32) -> f32 {
+// Crisp letters take eight reads around; soft ones, which already take
+// many, take the four along the axes.
+fn letter_read(at: vec2<f32>, source: vec4<f32>, bold: f32, soft: bool) -> f32 {
     var most = letter_tap(at, source);
     if bold > 0.0 {
         let near = vec2<f32>(bold, 0.0);
@@ -234,6 +241,9 @@ fn letter_read(at: vec2<f32>, source: vec4<f32>, bold: f32) -> f32 {
         most = max(most, letter_tap(at - near.xy, source));
         most = max(most, letter_tap(at + near.yx, source));
         most = max(most, letter_tap(at - near.yx, source));
+        if soft {
+            return most;
+        }
         most = max(most, letter_tap(at + far, source));
         most = max(most, letter_tap(at - far, source));
         most = max(most, letter_tap(at + far * vec2<f32>(1.0, -1.0), source));
@@ -246,10 +256,12 @@ fn letter_read(at: vec2<f32>, source: vec4<f32>, bold: f32) -> f32 {
 // seven by seven reads spread over the blur, weighted like a bell.
 fn letter_cover(at: vec2<f32>, source: vec4<f32>, blur: f32, bold: f32) -> f32 {
     if blur <= 0.0 {
-        return letter_read(at, source, bold);
+        return letter_read(at, source, bold, false);
     }
     let sigma = blur * 0.5;
-    let spacing = max(1.0, sigma * 0.8);
+    // At most two pixels apart, so that the reads stay dense and a wide
+    // blur is smooth rather than a scatter of copies.
+    let spacing = clamp(sigma * 0.8, 1.0, 2.0);
     var sum = 0.0;
     var weights = 0.0;
     for (var i = 0; i < 7; i++) {
@@ -258,7 +270,7 @@ fn letter_cover(at: vec2<f32>, source: vec4<f32>, blur: f32, bold: f32) -> f32 {
         for (var j = 0; j < 7; j++) {
             let dy = (f32(j) - 3.0) * spacing;
             let w = wx * exp(-0.5 * dy * dy / (sigma * sigma));
-            sum += w * letter_read(at + vec2<f32>(dx, dy), source, bold);
+            sum += w * letter_read(at + vec2<f32>(dx, dy), source, bold, true);
             weights += w;
         }
     }
@@ -346,13 +358,16 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         // colours at its ends. Colours are mixed weighted by how solid they
         // are, so a fade to nothing does not turn grey.
         let inside_band = t >= corner.kind.y && t < corner.kind.z;
+        if !inside_band {
+            discard;
+        }
         let band_start = corner.source.x;
         let band_end = corner.source.y;
         let share = clamp((t - band_start) / max(band_end - band_start, 1e-6), 0.0, 1.0);
         let mixed_solid = mix(corner.colour.rgb * corner.colour.a, corner.colour2.rgb * corner.colour2.a, share);
         let alpha = mix(corner.colour.a, corner.colour2.a, share);
         colour = vec4<f32>(mixed_solid / max(alpha, 1e-5), alpha);
-        covered = select(0.0, covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale), inside_band);
+        covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
     } else if kind == SHADOW {
         // The shadow of a box, blurred. `half_size` is the box's own,
         // grown by the spread; the rectangle is larger still.

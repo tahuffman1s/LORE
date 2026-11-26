@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use lore_ui::{Clip, Color, Draw, DrawList, Fill, Stop, Transform};
+use lore_ui::{Clip, Color, Draw, DrawList, Fill, FontFace, Stop, Transform};
 
-use crate::font::Font;
+use crate::font::{Font, HudFontFamily, Set};
 
 /// The size of the picture all glyphs are kept in, in pixels.
 ///
@@ -105,7 +105,7 @@ struct Full;
 struct Atlas {
     /// One byte a pixel: how much of it a letter covers.
     pixels: Vec<u8>,
-    glyphs: HashMap<(u16, u16), Glyph>,
+    glyphs: HashMap<(u16, u16, u16), Glyph>,
     /// Where the next letter goes, and the height of the tallest letter
     /// in the row being filled.
     next: [u32; 2],
@@ -157,10 +157,11 @@ impl Atlas {
         Ok(at)
     }
 
-    /// The picture of `glyph` at `size` quarter pixels, drawn now if this
-    /// is the first time it is asked for.
-    fn glyph(&mut self, font: &Font, glyph: u16, size: u16) -> Result<Glyph, Full> {
-        if let Some(found) = self.glyphs.get(&(glyph, size)) {
+    /// The picture of `glyph` of face `face` at `size` quarter pixels,
+    /// drawn now if this is the first time it is asked for.
+    fn glyph(&mut self, set: &Set, face: u16, glyph: u16, size: u16) -> Result<Glyph, Full> {
+        let key = (face, glyph, size);
+        if let Some(found) = self.glyphs.get(&key) {
             return Ok(*found);
         }
         if self.glyphs.len() >= MOST_GLYPHS {
@@ -173,16 +174,22 @@ impl Atlas {
             top: 0.0,
         };
         let px = f32::from(size) / SIZES_PER_PIXEL;
-        let drawn = font.rasterize(glyph, px).and_then(|(metrics, coverage)| {
-            let width = u16::try_from(metrics.width).ok()?;
-            let height = u16::try_from(metrics.height).ok()?;
-            // A picture that could never fit is left out, not waited for.
-            let fits = u32::from(width) + 2 <= ATLAS_WIDTH && u32::from(height) + 2 <= ATLAS_HEIGHT;
-            (width > 0 && height > 0 && fits && coverage.len() == metrics.width * metrics.height)
-                .then_some((metrics, coverage, width, height))
-        });
+        let drawn = set
+            .rasterize(face, glyph, px)
+            .and_then(|(metrics, coverage)| {
+                let width = u16::try_from(metrics.width).ok()?;
+                let height = u16::try_from(metrics.height).ok()?;
+                // A picture that could never fit is left out, not waited for.
+                let fits =
+                    u32::from(width) + 2 <= ATLAS_WIDTH && u32::from(height) + 2 <= ATLAS_HEIGHT;
+                (width > 0
+                    && height > 0
+                    && fits
+                    && coverage.len() == metrics.width * metrics.height)
+                    .then_some((metrics, coverage, width, height))
+            });
         let Some((metrics, coverage, width, height)) = drawn else {
-            self.glyphs.insert((glyph, size), nothing);
+            self.glyphs.insert(key, nothing);
             return Ok(nothing);
         };
         let [x, y] = self.place(u32::from(width), u32::from(height))?;
@@ -205,7 +212,7 @@ impl Atlas {
             left: metrics.xmin as f32,
             top: -((metrics.ymin + i32::from(height)) as f32),
         };
-        self.glyphs.insert((glyph, size), found);
+        self.glyphs.insert(key, found);
         Ok(found)
     }
 }
@@ -496,6 +503,12 @@ impl Overlay {
         std::mem::take(&mut self.images_changed).then_some(&self.images)
     }
 
+    /// Replaces the game's font families and forgets every letter drawn.
+    pub(crate) fn set_fonts(&mut self, families: &[HudFontFamily]) {
+        self.font.replace(families);
+        self.atlas.empty();
+    }
+
     /// The font the text is drawn in.
     pub(crate) fn font(&self) -> &Font {
         &self.font
@@ -705,10 +718,8 @@ impl Overlay {
                     blur,
                     transform,
                     clip,
-                    // Which face, and the room between letters, are for the
-                    // font step: the bundled font is drawn for now.
-                    font: _,
-                    letter_spacing: _,
+                    font,
+                    letter_spacing,
                 } => {
                     let visible = finite(&position) && size.is_finite() && blur.is_finite();
                     if !visible || size <= 0.0 {
@@ -720,7 +731,14 @@ impl Overlay {
                         blur: blur.clamp(0.0, MOST_BLUR),
                         bold: 0.0,
                     };
-                    left_out |= self.text(position, size, color, text, &style, skip)?;
+                    left_out |= self.text(
+                        (position, size),
+                        color,
+                        text,
+                        (font, letter_spacing),
+                        &style,
+                        skip,
+                    )?;
                 }
             }
         }
@@ -828,17 +846,17 @@ impl Overlay {
                                     inset(bottom) * share_y,
                                     inset(left) * share_x,
                                 ],
-                                scale / share_x.max(1e-4),
+                                [scale / share_x.max(1e-4), scale / share_y.max(1e-4)],
                             )
                         }
-                        None => ([0.0; 4], 0.0),
+                        None => ([0.0; 4], [0.0; 2]),
                     };
                     left_out |= !self.push(Instance {
                         kind: IMAGE,
                         colour: rgba(tint),
                         source: place,
                         border,
-                        params: [scale, 0.0, 0.0, 0.0],
+                        params: [scale[0], scale[1], 0.0, 0.0],
                         ..base
                     });
                 }
@@ -854,12 +872,7 @@ impl Overlay {
         if widths.iter().any(|&width| width > 0.0) && border_color.a > 0.0 {
             left_out |= !self.push(Instance {
                 kind: BORDER,
-                colour: [
-                    border_color.r,
-                    border_color.g,
-                    border_color.b,
-                    border_color.a,
-                ],
+                colour: rgba(border_color),
                 border: widths,
                 ..base
             });
@@ -913,10 +926,10 @@ impl Overlay {
     /// Adds the letters of one line. Returns whether any were left out.
     fn text(
         &mut self,
-        position: [f32; 2],
-        size: f32,
+        (position, size): ([f32; 2], f32),
         color: Color,
         text: &str,
+        (face, letter_spacing): (FontFace, f32),
         style: &TextStyle,
         skip: bool,
     ) -> Result<bool, Full> {
@@ -925,7 +938,10 @@ impl Overlay {
         let quarters = (size.clamp(SMALLEST_TEXT, LARGEST_TEXT) * SIZES_PER_PIXEL).round() as u16;
         let px = f32::from(quarters) / SIZES_PER_PIXEL;
         // Letters stand on whole pixels, or their flat edges blur.
-        let baseline = (position[1] + self.font.baseline(size, px)).round();
+        // The font is a cheap shared handle; taking its faces lets the
+        // letters be added to `self` while they are being read.
+        let set = self.font.set();
+        let baseline = (position[1] + set.baseline(size, px, set.pick(face).face)).round();
         // Soft or heavy letters spill past their picture; turned ones need
         // a pixel for their soft edge.
         let grow = if style.blur > 0.0 || style.bold > 0.0 {
@@ -937,14 +953,11 @@ impl Overlay {
         };
         let mut left_out = false;
         let mut stopped = false;
-        // The font is a cheap shared handle; taking a copy lets the letters
-        // be added to `self` while it is being read.
-        let font = self.font.clone();
-        font.each_glyph(text, px, |placed| {
+        set.each_glyph(text, px, face, letter_spacing, |placed| {
             if stopped {
                 return;
             }
-            let glyph = match self.atlas.glyph(&font, placed.glyph, quarters) {
+            let glyph = match self.atlas.glyph(&set, placed.face, placed.glyph, quarters) {
                 Ok(glyph) => glyph,
                 Err(Full) if skip => {
                     left_out = true;
@@ -970,12 +983,22 @@ impl Overlay {
                 f32::from(glyph.size[0]),
                 f32::from(glyph.size[1]),
             ];
+            // Letters made up as leaning are sheared about the line they
+            // stand on, then moved as the text is.
+            let transform = if placed.slant {
+                Transform {
+                    matrix: [1.0, 0.0, -Set::SLANT, 1.0, Set::SLANT * baseline, 0.0],
+                }
+                .then(style.transform)
+            } else {
+                style.transform
+            };
             left_out |= !self.push(Instance {
-                transform: style.transform,
+                transform,
                 clip: style.clip,
                 source: from,
-                params: [style.blur, style.bold, 0.0, 0.0],
-                grow,
+                params: [style.blur, style.bold + placed.bold, 0.0, 0.0],
+                grow: grow + placed.bold + if placed.slant { 1.0 } else { 0.0 },
                 ..Instance::new(LETTER, rect, color)
             });
         });
@@ -1776,6 +1799,74 @@ mod tests {
             out.iter()
                 .all(|quad| quad.letter && quad.clip == [5.0, 6.0, 30.0, 40.0])
         );
+    }
+
+    /// "iii" drawn in `font` with `letter_spacing`.
+    fn spaced(font: FontFace, letter_spacing: f32) -> Draw<'static> {
+        Draw::Text {
+            position: [10.0, 10.0],
+            size: 30.0,
+            color: RED,
+            text: "iii",
+            font,
+            letter_spacing,
+            blur: 0.0,
+            transform: Transform::IDENTITY,
+            clip: None,
+        }
+    }
+
+    #[test]
+    fn letter_spacing_moves_each_letter_further_from_the_last() {
+        let plain = drawn(&[spaced(FontFace::default(), 0.0)]);
+        let wide = drawn(&[spaced(FontFace::default(), 8.0)]);
+        assert_eq!((plain.len(), wide.len()), (3, 3));
+        // The first stays; the second is 8 further, the third 16.
+        assert_eq!(plain[0].rect[0], wide[0].rect[0]);
+        assert!((wide[1].rect[0] - plain[1].rect[0] - 8.0).abs() <= 1.0);
+        assert!((wide[2].rect[0] - plain[2].rect[0] - 16.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn heavy_and_leaning_text_is_made_up_only_when_no_face_fits() {
+        let plain = drawn(&[spaced(FontFace::default(), 0.0)]);
+        assert!(
+            plain
+                .iter()
+                .all(|q| q.params[1] == 0.0 && q.matrix[2] == 0.0)
+        );
+        let heavy = FontFace {
+            weight: 700,
+            ..FontFace::default()
+        };
+        let bold = drawn(&[spaced(heavy, 0.0)]);
+        assert!(bold.iter().all(|q| q.params[1] > 0.0));
+        // Heavier letters take a little more room.
+        assert!(bold[2].rect[0] > plain[2].rect[0]);
+        let leaning = FontFace {
+            italic: true,
+            ..FontFace::default()
+        };
+        let slanted = drawn(&[spaced(leaning, 0.0)]);
+        // Sheared about the line the letters stand on: a point on it stays.
+        assert!(slanted.iter().all(|quad| quad.matrix[2] < 0.0));
+        let baseline = (slanted[0].matrix[4] / -slanted[0].matrix[2]).round();
+        let moved_to = Transform {
+            matrix: slanted[0].matrix,
+        }
+        .apply([50.0, baseline]);
+        assert!((moved_to[0] - 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn replacing_the_fonts_forgets_the_letters_drawn_so_far() {
+        let mut overlay = Overlay::new(Font::bundled());
+        overlay
+            .build([spaced(FontFace::default(), 0.0)].into_iter(), false)
+            .unwrap();
+        assert!(!overlay.atlas.glyphs.is_empty());
+        overlay.set_fonts(&[]);
+        assert!(overlay.atlas.glyphs.is_empty());
     }
 
     #[test]

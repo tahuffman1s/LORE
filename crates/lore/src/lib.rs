@@ -39,6 +39,7 @@ mod error_overlay;
 mod game;
 mod game_shaders;
 mod gamepad;
+mod hud_fonts;
 mod hud_images;
 mod lamps;
 pub mod level;

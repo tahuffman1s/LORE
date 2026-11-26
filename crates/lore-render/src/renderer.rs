@@ -1028,6 +1028,17 @@ impl Renderer {
         self.overlay.set_images(images);
     }
 
+    /// Gives the HUD the game's fonts: family `n` of a [`FontFace`](lore_ui::FontFace)
+    /// is the `n`th of `families` (0 is the engine's own font). Which face
+    /// of a family draws text is chosen by weight and slant as the web
+    /// does; a weight or slant no face has is made up from the nearest one,
+    /// and a character a face lacks is drawn in the engine's font. Every
+    /// letter drawn so far is forgotten, so replacing the fonts shows at
+    /// once. A file that cannot be read is left out with a warning.
+    pub fn set_hud_fonts(&mut self, families: &[crate::HudFontFamily]) {
+        self.overlay.set_fonts(families);
+    }
+
     /// Draws the editor's panels over every frame from now on, on top of
     /// the HUD and menus, until other panels are set.
     ///

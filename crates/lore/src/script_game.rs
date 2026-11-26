@@ -54,6 +54,8 @@ pub struct ScriptGame {
     sounds: Sounds,
     /// The pictures the script can show on its HUD.
     pictures: crate::hud_images::HudPictures,
+    /// The fonts the script can draw HUD text in.
+    fonts: crate::hud_fonts::HudFonts,
     /// What is placed in the level.
     map: Map,
     /// The map's file, looked at for saves. Only a game opened from a
@@ -149,6 +151,7 @@ impl ScriptGame {
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
+            fonts: crate::hud_fonts::HudFonts::default(),
             map: Map::default(),
             map_file: None,
             map_error: None,
@@ -383,6 +386,7 @@ impl ScriptGame {
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
+            fonts: crate::hud_fonts::HudFonts::in_folder(folder),
             map,
             map_file: Some(map_file),
             map_error,
@@ -624,6 +628,7 @@ impl Game for ScriptGame {
             frame.set_moon_size(size);
         }
         self.pictures.follow(&self.host, frame);
+        self.fonts.follow(&self.host, frame);
         if let Some(shown) = self.host.take_ground() {
             frame.set_ground(shown);
         }
