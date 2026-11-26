@@ -592,6 +592,38 @@ impl Screen {
         Ok(added)
     }
 
+    /// Parses `html` as [`append_html`](Screen::append_html) does and adds
+    /// it just before `anchor`, as its siblings. Returns the new top-level
+    /// nodes. On an error nothing is added. The page's root has nothing
+    /// before it.
+    pub fn insert_html_before(
+        &mut self,
+        anchor: ElementId,
+        html: &str,
+    ) -> Result<Vec<ElementId>, MarkupError> {
+        let Some(parent) = self.doc.parent(anchor) else {
+            return Err(if self.doc.contains(anchor) {
+                script_err(
+                    "cannot add HTML before the top of the page".to_owned(),
+                    "call `before` on an element inside the page, or use `append` on the page",
+                )
+            } else {
+                stale()
+            });
+        };
+        let was_dirty = self.doc.get(parent).is_some_and(|n| n.dirty.style);
+        let added = parse_fragment(&mut self.doc, parent, SCRIPT, html)?;
+        for &node in &added {
+            self.doc.detach(node);
+            self.doc.insert_before(node, anchor);
+        }
+        if self.doc.get(parent).and_then(|n| n.tag()) == Some(Tag::Select) {
+            self.doc.refresh_select(parent);
+        }
+        self.settle_structure(parent, was_dirty);
+        Ok(added)
+    }
+
     /// Removes an element and everything in it. Focus, hover and a press
     /// inside it are dropped. False for a removed element or the root.
     pub fn remove(&mut self, id: ElementId) -> bool {

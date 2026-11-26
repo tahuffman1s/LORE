@@ -2125,6 +2125,12 @@ declare extern type Element with
     --- Example: list:append("<li>" .. game.ui.escape(name) .. "</li>")
     function append(self, html: string): ()
 
+    --- Adds HTML just before the element, as its sibling (`append` puts it
+    --- inside, at the end). Escape text a player wrote with
+    --- `game.ui.escape`. Stops with an error on the page's root element.
+    --- Example: row:before("<li>" .. game.ui.escape(name) .. "</li>")
+    function before(self, html: string): ()
+
     --- Takes the element, and everything in it, off the page.
     --- Example: row:remove()
     function remove(self): ()
