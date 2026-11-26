@@ -132,7 +132,8 @@ pub struct SoundRequest {
 
 /// A sound a script played at a place, as the NPCs hear it: the engine
 /// adds it to the world's noises, as loud and as far-carrying as it is
-/// played. One played with `npcsHear = false`, or looping, is not one.
+/// played. One played with `npcsHear = false`, looping, or while drawing
+/// (in `game.onDraw`) is not one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScriptNoise {
     /// The sound's name.
@@ -631,8 +632,12 @@ fn function(lua: &Lua, shared: &Rc<Shared>, call: Call) -> mlua::Result<Function
         read_options(lua, call, &options, &mut request, &mut npcs_hear)?;
         // A sound played once at a place is heard by the NPCs as by the
         // player: a bottle a script smashes draws a guard. A loop is the
-        // sound of a place, not something that happened.
-        if let (Some(position), true, false) = (request.position, npcs_hear, request.looping) {
+        // sound of a place, not something that happened. One played while
+        // drawing still plays, but no NPC hears it: what NPCs hear must not
+        // depend on how often pictures are drawn.
+        if let (Some(position), true, false) = (request.position, npcs_hear, request.looping)
+            && !shared.clock.is_drawing()
+        {
             let mut heard = shared.audio.heard.borrow_mut();
             if heard.len() < MAX_WAITING {
                 heard.push(ScriptNoise {
