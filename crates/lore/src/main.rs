@@ -121,7 +121,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload, the player dying and\nstanding in a burning puddle.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying,\nstanding in a burning puddle and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -537,6 +537,9 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut zones = 0;
     let mut carrying = false;
     let mut slides = 0;
+    let mut hours = 0;
+    // Where an onHour function moved the clock to, if one did.
+    let mut moved_to: Option<String> = None;
     // A script that fails to load never runs, so there is nothing to tick.
     if game.host().last_error().is_none() {
         for _ in 0..TICKS {
@@ -696,6 +699,20 @@ fn check(folder: &Path) -> Result<(), String> {
         // and to have found the player in its way.
         slides = game.host_mut().pretend_slides();
         game.tick(input.tick(), step);
+        // And a whole day is said to pass, so each game.clock.onHour
+        // function hears its hour.
+        let before = game.host().world_clock();
+        hours = game.host_mut().pretend_hours();
+        let after = game.host().world_clock();
+        if after != before {
+            let host = game.host();
+            moved_to = Some(format!(
+                "{} on day {}",
+                host.clock_text().unwrap_or_default(),
+                host.day().unwrap_or(1)
+            ));
+        }
+        game.tick(input.tick(), step);
         // And a picture of the game after all that.
         game.host_mut().draw(0.5);
     }
@@ -847,6 +864,21 @@ fn check(folder: &Path) -> Result<(), String> {
              errors. Nothing really moved.",
             if slides == 1 { "was" } else { "were" }
         );
+    }
+    if hours > 0 {
+        let heard = if hours == 1 {
+            "the one game.clock.onHour function heard its hour".to_owned()
+        } else {
+            format!("each of the {hours} game.clock.onHour functions heard its hours")
+        };
+        let clock = match &moved_to {
+            None => "The clock itself was not moved.".to_owned(),
+            Some(to) => format!(
+                "An onHour function set the clock or skipped it on, to {to}; in a real day that \
+                 happens at that hour."
+            ),
+        };
+        println!("A whole day was said to pass, so {heard}, with no errors. {clock}");
     }
     if carrying {
         println!(

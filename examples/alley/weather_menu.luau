@@ -43,12 +43,9 @@ local function compassPoint(degrees: number): string
     return compass[math.floor(degrees / 45 + 0.5) % 8 + 1]
 end
 
--- The hour of the day, and how many whole days have gone by.
+-- The hour of the day on the world's clock.
 local function hourOfDay(): number
-    return (game.sky.hour() or 12) % 24
-end
-local function daysGone(): number
-    return (game.sky.hour() or 12) // 24
+    return game.clock.hour or 12
 end
 
 -- The day it is: the sky's own, or until a date is said, the 20th of
@@ -233,7 +230,7 @@ return menu.new("Weather", {
         get = hourOfDay,
         -- The hour moves round the same day, so the moon stays as it is.
         set = function(hour)
-            game.sky.setHour(daysGone() * 24 + hour)
+            game.clock.hour = hour
         end,
         format = function(hour)
             local minutes = math.floor(hour * 60 + 0.5) % 1440
@@ -244,11 +241,11 @@ return menu.new("Weather", {
     menu.choice("Time passes", {
         options = { "stopped", "a day in 24 min", "a day in 8 min", "a day in 2 min" },
         get = function()
-            local minutes = game.sky.dayLength()
+            local minutes = game.clock.dayLength
             return if minutes == 0 then "stopped" else string.format("a day in %d min", minutes)
         end,
         set = function(length)
-            game.sky.setDayLength(dayLengths[length] or 0)
+            game.clock.dayLength = dayLengths[length] or 0
         end,
     }),
     -- The date and the place: saying either makes the sky the real one
@@ -528,8 +525,8 @@ return menu.new("Weather", {
             game.weather.setSnowDepth(0)
             game.weather.setIce(0)
             game.weather.stopTornado()
-            game.sky.setDayLength(0)
-            game.sky.setHour(13)
+            game.clock.dayLength = 0
+            game.clock.time = "13:00"
         end,
         text = function()
             return "fair, 13:00"
