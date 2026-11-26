@@ -540,6 +540,26 @@ impl World {
         self.climate.weather()
     }
 
+    /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
+    /// half past one in the afternoon), or `None` in a game with no time of
+    /// day: one whose script never set `game.clock`. Plain data that moves
+    /// only on ticks, so it is paused and sped up with the game, the same in
+    /// a replay, and what anything in the world that keeps hours (people's
+    /// days, shops) reads. The script's part of a tick moves it on, so
+    /// during [`tick`](crate::game::Game::tick) it is the hour the last tick
+    /// left.
+    #[must_use]
+    pub fn time_of_day(&self) -> Option<f64> {
+        self.game.host().time_of_day()
+    }
+
+    /// The day it is on the world's clock, counting the first as 1, or
+    /// `None` in a game with no time of day.
+    #[must_use]
+    pub fn day(&self) -> Option<u32> {
+        self.game.host().day()
+    }
+
     /// How many ticks the world has run.
     #[must_use]
     pub fn tick_number(&self) -> u32 {

@@ -91,3 +91,7 @@ game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's nam
 game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes
 game.input.showControlsNotice("off") -- wrong: it takes true or false
 game.input.onControlsChanged(5) -- wrong: it takes a function
+
+-- The clock's time is text, and its day is counted, not set.
+game.clock.onHour("eight", function() end) -- wrong: the hour is a number
+game.clock.time = true -- wrong: the time is text like "8:00"

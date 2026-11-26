@@ -9,8 +9,9 @@
 //! what that left at the player ([`WeatherHere`]): the snow that lies, the
 //! ice on the water, what is falling and where the tornado is.
 //!
-//! The hour is the script's too: it says it, and may say how long a day
-//! lasts, after which the hours pass by themselves.
+//! The hour the sky is drawn at is the world's clock (`crate::clock_api`):
+//! `game.sky.setHour` and `setDayLength` set the same clock `game.clock`
+//! does.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -19,6 +20,7 @@ use lore_sky::{Heavens, SkyPlace};
 use mlua::{Function, Lua, Table, Value, Variadic, Vector};
 
 use crate::api::{Handlers, Shared, describe, fail, strict};
+use crate::clock_api::DayClock;
 use crate::time_api::rules_only;
 
 /// Every function on `game.sky`.
@@ -309,13 +311,9 @@ pub struct Climate {
     strikes: RefCell<Vec<([f32; 3], u32)>>,
     /// How many strikes have been asked for.
     struck: Cell<u32>,
-    /// The hour of the day, if the script has said one, and whether it
-    /// has changed since the engine last took it.
-    hour: Cell<Option<f64>>,
-    hour_changed: Cell<bool>,
-    /// How many minutes a day lasts: 0 if the hours do not pass by
-    /// themselves.
-    day_minutes: Cell<f64>,
+    /// The world's clock: the hour the sky is drawn at. `game.clock` reads
+    /// and sets the same one.
+    pub(crate) day: DayClock,
     /// Where on the Earth the world lies, which way north is and on what
     /// day hour 0 was midnight, if the script has said any of it, and
     /// whether that has changed since the engine last took it.
@@ -377,8 +375,7 @@ impl Default for Climate {
             fog: Eased::at(usual.fog),
             strikes: RefCell::default(),
             struck: Cell::new(0),
-            hour: Cell::new(None),
-            hour_changed: Cell::new(false),
+            day: DayClock::default(),
             place: Cell::new(None),
             place_changed: Cell::new(false),
             moon_size: Cell::new(1.0),
@@ -398,7 +395,6 @@ impl Default for Climate {
             aurora_asked: Cell::new(false),
             meteors: Cell::new(1.0),
             meteors_asked: Cell::new(false),
-            day_minutes: Cell::new(0.0),
             snow_asked: Cell::new(None),
             ice_asked: Cell::new(None),
             tornado_asked: RefCell::default(),
@@ -426,14 +422,7 @@ impl Climate {
         ] {
             eased.step(step);
         }
-        let minutes = self.day_minutes.get();
-        if minutes > 0.0
-            && let Some(hour) = self.hour.get()
-        {
-            self.hour
-                .set(Some(hour + f64::from(step) * 24.0 / (minutes * 60.0)));
-            self.hour_changed.set(true);
-        }
+        self.day.step(step);
     }
 
     /// The weather as it now is.
@@ -451,7 +440,7 @@ impl Climate {
 
     /// The hour of the day, if the script has said one.
     pub(crate) fn hour(&self) -> Option<f64> {
-        self.hour.get()
+        self.day.hours()
     }
 
     /// Where the world lies and when its clock started, if it has changed
@@ -522,7 +511,7 @@ impl Climate {
     /// Where the sun, the moon and the stars are now, if the script has
     /// said the hour: as the renderer draws them.
     fn heavens(&self) -> Option<Heavens> {
-        let hour = self.hour.get()?;
+        let hour = self.day.hours()?;
         Some(Heavens::at(hour, self.place.get().as_ref()))
     }
 
@@ -536,7 +525,7 @@ impl Climate {
 
     /// The hour of the day, if it has changed since this was last asked.
     pub(crate) fn take_hour(&self) -> Option<f64> {
-        self.hour_changed.take().then(|| self.hour.get()).flatten()
+        self.day.take_changed()
     }
 
     pub(crate) fn take_strikes(&self) -> Vec<([f32; 3], u32)> {
@@ -751,15 +740,14 @@ pub(crate) fn sky(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 }
             };
             rules_only(lua, &rules, "game.sky.setHour")?;
-            climate.hour.set(Some(hour.max(0.0)));
-            climate.hour_changed.set(true);
+            climate.day.set_sky_hour(hour);
             Ok(())
         })?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(
         "hour",
-        lua.create_function(move |_, ()| Ok(climate.hour.get()))?,
+        lua.create_function(move |_, ()| Ok(climate.day.hours()))?,
     )?;
     let (climate, rules) = (Rc::clone(&shared.weather), Rc::clone(shared));
     sky.set(
@@ -774,21 +762,14 @@ pub(crate) fn sky(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 "game.sky.setDayLength(24)",
             )?;
             rules_only(lua, &rules, "game.sky.setDayLength")?;
-            climate
-                .day_minutes
-                .set(f64::from(minutes.clamp(0.0, 100_000.0)));
-            // The hours pass from some hour: noon, if none was said.
-            if minutes > 0.0 && climate.hour.get().is_none() {
-                climate.hour.set(Some(12.0));
-                climate.hour_changed.set(true);
-            }
+            climate.day.set_day_minutes(f64::from(minutes));
             Ok(())
         })?,
     )?;
     let climate = Rc::clone(&shared.weather);
     sky.set(
         "dayLength",
-        lua.create_function(move |_, ()| Ok(climate.day_minutes.get()))?,
+        lua.create_function(move |_, ()| Ok(climate.day.day_minutes()))?,
     )?;
     place(lua, shared, &sky)?;
     lights(lua, shared, &sky)?;
@@ -1024,14 +1005,9 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let first_day = lore_sky::days_from_2000(year, month as u32, day as u32);
             climate.change_place(|place| place.first_day = first_day);
-            // The day said is today: the hour stays, without the days
-            // that had passed.
-            if let Some(hour) = climate.hour.get()
-                && hour >= 24.0
-            {
-                climate.hour.set(Some(hour.rem_euclid(24.0)));
-                climate.hour_changed.set(true);
-            }
+            // The day said is today: the hour keeps its time of day, and the
+            // days it held stay on the world's clock (`game.clock.day`).
+            climate.day.start_calendar_today();
             Ok(())
         })?,
     )?;
@@ -1042,12 +1018,7 @@ fn place(lua: &Lua, shared: &Rc<Shared>, sky: &Table) -> mlua::Result<()> {
             let Some(place) = climate.place.get() else {
                 return Ok((None, None, None));
             };
-            // Whole days, held to some millions of years either way so an
-            // hour of 1e300 cannot carry the count past what an i64 holds.
-            #[allow(clippy::cast_possible_truncation)]
-            let passed = (climate.hour.get().unwrap_or(0.0) / 24.0)
-                .floor()
-                .clamp(-1e9, 1e9) as i64;
+            let passed = climate.day.days_since_date();
             let (year, month, day) = lore_sky::date_from_2000(place.first_day + passed);
             Ok((Some(year), Some(month), Some(day)))
         })?,

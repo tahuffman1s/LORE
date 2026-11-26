@@ -33,8 +33,13 @@ impl Walker {
     /// A game with no rules on the flat floor, the player facing
     /// [`START_YAW`].
     fn new() -> Self {
+        Self::playing("")
+    }
+
+    /// A game with these rules on the flat floor.
+    fn playing(rules: &str) -> Self {
         let actions = ActionMap::standard();
-        let script = ScriptGame::from_source("", &actions);
+        let script = ScriptGame::from_source(rules, &actions);
         let mut game = Playing::start(script, None, &actions, TICK_RATE);
         game.yaw = START_YAW;
         Self {
@@ -243,6 +248,48 @@ fn the_same_mouse_movement_turns_the_view_by_the_same_angle_at_any_frame_rate() 
         );
         // The picture ends where the game's rules have the view.
         assert_eq!(walker.drawn, (walker.game.yaw, walker.game.pitch), "{pace}");
+        if let Some(difference) = first_difference(&expected.states, &found.states) {
+            panic!("At {pace}, {difference}");
+        }
+    }
+}
+
+/// The world's clock after each tick, as bits: the hour, the day, and what
+/// the rules did (each hour told prints a line).
+fn clock_state(walker: &Walker) -> Vec<u32> {
+    let world = &walker.game.world;
+    let hour = world.time_of_day().unwrap_or(-1.0).to_bits();
+    let done = world.game().host().rules_fingerprint();
+    // Split in two, as the states are kept as u32s.
+    #[allow(clippy::cast_possible_truncation)]
+    let parts = [
+        hour as u32,
+        (hour >> 32) as u32,
+        world.day().unwrap_or(0),
+        done as u32,
+        (done >> 32) as u32,
+    ];
+    parts.to_vec()
+}
+
+#[test]
+fn the_hour_is_the_same_from_the_same_input_at_any_frame_rate() {
+    // A day of a minute: an hour every 2.5 seconds, so ten seconds pass
+    // midnight and four hours.
+    const RULES: &str = r#"
+        game.clock.dayLength = 1
+        game.clock.time = "22:00"
+        game.clock.onHour(function(hour) print("hour", hour, game.clock.day) end)
+    "#;
+    let recording = a_walk();
+    let mut walker = Walker::playing(RULES);
+    let expected = play(&mut walker, &recording, steady(TICK_RATE), clock_state);
+    assert_eq!(walker.game.world.day(), Some(2));
+    let hour = walker.game.world.time_of_day().unwrap_or_default();
+    assert!((hour - 2.0).abs() < 0.01, "{hour}");
+    for (pace, frame_times) in paces() {
+        let mut walker = Walker::playing(RULES);
+        let found = play(&mut walker, &recording, frame_times, clock_state);
         if let Some(difference) = first_difference(&expected.states, &found.states) {
             panic!("At {pace}, {difference}");
         }
