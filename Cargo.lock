@@ -1560,6 +1560,7 @@ dependencies = [
  "lore-audio",
  "lore-fluid",
  "lore-input",
+ "lore-npc",
  "lore-pack",
  "lore-physics",
  "lore-render",
@@ -1632,6 +1633,14 @@ name = "lore-markup"
 version = "0.0.0"
 dependencies = [
  "taffy",
+]
+
+[[package]]
+name = "lore-npc"
+version = "0.0.0"
+dependencies = [
+ "libm",
+ "lore-physics",
 ]
 
 [[package]]

@@ -25,6 +25,8 @@ lore-input = { path = "../lore-input" }
 lore-script = { path = "../lore-script" }
 lore-pack = { path = "../lore-pack" }
 lore-physics = { path = "../lore-physics" }
+# What an NPC is and decides: its mind, where its head turns.
+lore-npc = { path = "../lore-npc" }
 # The weapons players hold: firing, what a shot hits, rockets and grenades.
 lore-weapons = { path = "../lore-weapons" }
 # Reads a game's sound files, mixes them and plays them through the speakers.

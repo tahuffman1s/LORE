@@ -1,0 +1,15 @@
+[package]
+name = "lore-npc"
+description = "What the people and creatures of a LORE world are and decide, as plain data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lore-physics = { path = "../lore-physics" }
+# Sine, cosine and arctangent that give the same digits on every machine.
+libm = "0.2"
+
+[lints]
+workspace = true

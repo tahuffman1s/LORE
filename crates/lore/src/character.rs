@@ -736,6 +736,11 @@ impl Character {
         &self.model
     }
 
+    /// The body's skeleton and clips, to share with other figures of it.
+    pub(crate) fn body(&self) -> &Arc<Body> {
+        &self.body
+    }
+
     /// Which way the body faces now.
     pub(crate) fn yaw(&self) -> f32 {
         self.yaw

@@ -191,6 +191,8 @@ pub struct ScriptHost {
     camera: Rc<crate::camera_api::CameraState>,
     /// What is placed in the level; it outlives a reload too.
     things: Rc<crate::thing_api::ThingState>,
+    /// Who is an NPC; they outlive a reload too.
+    npcs: Rc<crate::npc_api::NpcState>,
     /// How many versions of the script have run: each has its own HUD.
     versions: u32,
     /// What the engine feeds the script about the screen, the frames and
@@ -465,6 +467,11 @@ impl ScriptHost {
     ) -> Self {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
+        let characters = Rc::<Characters>::default();
+        let npcs = Rc::<crate::npc_api::NpcState>::default();
+        // The NPCs placed in the map are there before the script's first
+        // line, so it can find them at the top of its file.
+        npcs.place(&placed, &characters);
         things.set_placed(placed);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
@@ -485,7 +492,7 @@ impl ScriptHost {
             reported: HashSet::new(),
             watched: Vec::new(),
             next_poll: Instant::now() + POLL_EVERY,
-            characters: Rc::default(),
+            characters,
             kept: Rc::default(),
             respawn: false,
             spawn_due: false,
@@ -510,6 +517,7 @@ impl ScriptHost {
             look: Rc::default(),
             camera: Rc::default(),
             things,
+            npcs,
             versions: 0,
             tools: Rc::default(),
             settings: Rc::new(SettingsState::new(settings)),
@@ -1571,6 +1579,8 @@ impl ScriptHost {
         if !self.characters.remove(character) {
             return;
         }
+        // An NPC's body leaves the world with it.
+        self.npcs.forget(character);
         if let Some(version) = &self.running {
             version.shared.handles.forget(character);
         }
@@ -1609,6 +1619,8 @@ impl ScriptHost {
     /// again while the game runs. A thing a script still holds that is no
     /// longer placed says so when it is next read.
     pub fn set_placed(&mut self, placed: Vec<crate::Placed>) {
+        // An NPC newly placed comes into the world; one already there stays.
+        self.npcs.place(&placed, &self.characters);
         self.things.set_placed(placed);
     }
 
@@ -1726,27 +1738,40 @@ impl ScriptHost {
         self.things.take_asks()
     }
 
-    /// Calls `see` with every thing the player can use now: its id, where
-    /// it is and how it is used (`thing:onUse`, `thing.useText`).
-    pub fn each_usable(&self, see: impl FnMut(&str, [f32; 3], &crate::UseSaid)) {
+    /// Calls `see` with everything the player can use now: which it is,
+    /// where it is and how it is used (`thing:onUse`, `thing.useText`,
+    /// `npc:onUse`). The things placed in the map come first, in the order
+    /// they are placed, then the NPCs in the order they were made.
+    pub fn each_usable(&self, mut see: impl FnMut(crate::Usable<'_>, [f32; 3], &crate::UseSaid)) {
         if let Some(version) = &self.running {
-            self.things.each_usable(&version.shared.thing_uses, see);
+            (self.things).each_usable(&version.shared.thing_uses, |id, at, said| {
+                see(crate::Usable::Thing(id), at, said);
+            });
+            crate::npc_api::each_usable(&version.shared, |id, at, said| {
+                see(crate::Usable::Npc(id), at, said);
+            });
         }
     }
 
-    /// Says which thing the use button would act on now, by its id, and how
-    /// far through holding the button the player is (0 to 1): what
+    /// Says what the use button would act on now, and how far through
+    /// holding the button the player is (0 to 1): what
     /// `game.player.lookingAt` and `game.player.useProgress` read.
-    pub fn set_use_target(&mut self, target: Option<&str>, progress: f32) {
+    pub fn set_use_target(&mut self, target: Option<crate::Usable<'_>>, progress: f32) {
         self.things.set_target(target, progress);
     }
 
-    /// The words to show for the thing the player can use now, and how far
+    /// The words to show for what the player can use now, and how far
     /// through holding the button they are: `None` when there is nothing
     /// to use, or the script draws its own prompt (`game.showUsePrompt(false)`).
     #[must_use]
     pub fn use_prompt(&self) -> Option<(String, f32)> {
         let version = self.running.as_ref()?;
+        if let Some((npc, progress)) = self.things.npc_target() {
+            if !version.shared.thing_uses.shows_prompt() {
+                return None;
+            }
+            return Some((crate::npc_api::prompt(&version.shared, npc)?, progress));
+        }
         self.things.prompt(&version.shared.thing_uses)
     }
 
@@ -1755,6 +1780,66 @@ impl ScriptHost {
     #[must_use]
     pub fn use_label(&self) -> String {
         self.tools.label(&self.actions.borrow(), "interact")
+    }
+
+    /// Tells the script the player used the NPC `id`: its `onUse`
+    /// functions are called with the NPC.
+    pub fn use_npc(&mut self, id: CharacterId) {
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let handlers = crate::npc_api::handlers_for(&shared, id);
+        if handlers.is_empty() || !self.characters.has(id) {
+            return;
+        }
+        let Ok(npc) = shared.handles.character(&version.vm, id) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, npc.clone()) {
+                break;
+            }
+        }
+    }
+
+    /// What the scripts asked of the NPCs' bodies since this was last
+    /// called, in the order they asked: a new NPC to stand in the world,
+    /// one to put elsewhere, one gone.
+    pub fn take_npc_asks(&mut self) -> Vec<crate::NpcAsk> {
+        self.npcs.take_asks()
+    }
+
+    /// Calls `see` with every NPC in the game, in the order they were
+    /// made: who, where their feet are and the way they were put facing.
+    /// A world made for the game gives each a body from this; what was
+    /// asked before ([`take_npc_asks`](Self::take_npc_asks)) is then no
+    /// longer news.
+    pub fn each_npc(&self, see: impl FnMut(crate::NpcTold)) {
+        self.npcs.each(&self.characters, see);
+    }
+
+    /// Whether `id` is an NPC in the game.
+    #[must_use]
+    pub fn is_npc(&self, id: CharacterId) -> bool {
+        self.npcs.has(id)
+    }
+
+    /// How close the player comes before the NPC `id` turns its head to
+    /// look at them, in metres (`npc.lookDistance`): 0 never.
+    #[must_use]
+    pub fn npc_look_distance(&self, id: CharacterId) -> f32 {
+        (self.running.as_ref()).map_or(crate::DEFAULT_LOOK_DISTANCE, |version| {
+            version.shared.npc_version.look_distance(id)
+        })
+    }
+
+    /// Where the place called `name` is, and the way it faces (degrees
+    /// turned to the left, as the map writes it): the thing placed in the
+    /// map with that name (or id), of any type. Every function that takes
+    /// a place by name finds it this way; `None` for a name nothing has.
+    #[must_use]
+    pub fn place_of(&self, name: &str) -> Option<([f32; 3], f32)> {
+        let placed = crate::npc_api::place_named(&self.things, name.trim()).ok()?;
+        Some((placed.position, placed.facing))
     }
 
     /// Tells the script the player used the thing placed as `id`: its
@@ -2355,6 +2440,8 @@ impl ScriptHost {
             camera: Rc::clone(&self.camera),
             things: Rc::clone(&self.things),
             thing_uses: crate::thing_api::ThingUses::default(),
+            npcs: Rc::clone(&self.npcs),
+            npc_version: crate::npc_api::NpcVersion::default(),
             thing_handles: RefCell::default(),
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
@@ -2375,6 +2462,13 @@ impl ScriptHost {
             next_timer: Cell::new(0),
         });
         let built = self.run(&shared);
+        // The NPCs the file made as it loaded: those the version before
+        // made and this one no longer does are gone, and if it failed to
+        // load, so are the ones it made.
+        let gone = (self.npcs).settle_load(&shared.npc_version, built.is_ok(), &self.characters);
+        for id in gone {
+            self.remove_character(id);
+        }
         (shared.modules.take_touched(), built)
     }
 

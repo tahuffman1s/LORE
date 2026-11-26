@@ -26,15 +26,17 @@ mod bodies;
 mod climate;
 mod fluids;
 mod ground;
+mod npcs;
 mod spawn;
 mod trail;
 mod wet;
 
-pub(crate) use bodies::{Body, Dummy};
+pub(crate) use bodies::{Body, Dummy, Standing};
 pub use bodies::{DummyId, PlayerInput};
 pub(crate) use climate::said as said_weather;
 pub(crate) use ground::Ground;
 pub use ground::{WalkCheck, try_walking};
+pub use npcs::Npc;
 pub use wet::WaterMark;
 
 /// What a training dummy is called to the game's script.
@@ -49,10 +51,10 @@ const DUMMY_NAME: &str = "Training dummy";
 /// of its own, so a world given the same input tick after tick goes the
 /// same way every time.
 ///
-/// Besides the player a world can hold training dummies
-/// ([`add_dummy`](Self::add_dummy)), which stand still to be shot at. The
-/// people of a game will stand beside them, as characters of their own
-/// and not as more players.
+/// Besides the player a world holds the game's NPCs ([`npcs`](Self::npcs)),
+/// each a body like the player's that its own mind moves, and can hold
+/// training dummies ([`add_dummy`](Self::add_dummy)), which stand still to
+/// be shot at.
 #[derive(Debug)]
 pub struct World {
     game: ScriptGame,
@@ -60,8 +62,14 @@ pub struct World {
     player: Body,
     /// The training dummies, in the order they were put in.
     dummies: Vec<Dummy>,
-    /// The number the next dummy is known by. The player is 0 to a weapon.
-    next_dummy: u32,
+    /// The NPCs, in the order of their ids.
+    npcs: npcs::Npcs,
+    /// The number the next dummy or NPC is known by to a weapon. The player
+    /// is 0.
+    next_target: u32,
+    /// The dummies and the NPCs on their feet, as this tick's shots and
+    /// swings see them: kept between ticks so a tick sets no memory aside.
+    standing: Vec<Standing>,
     /// How many ticks have been run.
     tick: u32,
     /// The weapon the player holds, and what they have launched.
@@ -103,7 +111,7 @@ pub struct World {
     /// The things that can be used and their ids, kept between ticks so a
     /// tick sets no memory aside.
     usable: Vec<using::Usable>,
-    usable_ids: Vec<String>,
+    usable_ids: Vec<using::UseKey>,
     /// Whether the fire button was down on the last tick: a throw is a
     /// press, not a hold.
     fire_was: bool,
@@ -249,12 +257,19 @@ impl World {
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
         let things = Self::things_of(&game, &ground);
         let ladders = crate::script_game::ladders_of(game.map());
+        // Every NPC the game has stands in the world from its first tick,
+        // however the world was made.
+        let mut next_target = 1;
+        let npcs = npcs::Npcs::of(game.host_mut(), &ground.rules, &mut next_target);
+        npcs.tell(game.host_mut());
         let mut world = Self {
             game,
             ground,
             player: Body { player, asked },
             dummies: Vec::new(),
-            next_dummy: 1,
+            npcs,
+            next_target,
+            standing: Vec::new(),
             tick: 0,
             shooting: Shooting::default(),
             walking: Walking::default(),
@@ -574,13 +589,20 @@ impl World {
     /// It is here so that shooting can be tried and tested before a game
     /// has people in it.
     pub fn add_dummy(&mut self, feet: [f32; 3]) -> DummyId {
-        let id = DummyId(self.next_dummy);
-        self.next_dummy = self.next_dummy.saturating_add(1);
+        let id = DummyId(self.next_target);
+        self.next_target = self.next_target.saturating_add(1);
         let host = self.game.host_mut();
         let name = host.add_character(DUMMY_NAME);
         host.set_position(name, feet);
         self.dummies.push(Dummy { id, feet, name });
         id
+    }
+
+    /// The game's NPCs, in the order of their ids: who each is, its body
+    /// and its mind. A world made with no level has them too.
+    #[must_use]
+    pub fn npcs(&self) -> &[Npc] {
+        self.npcs.list()
     }
 
     /// Where the feet of the dummy numbered `id` are, if it is still in
@@ -617,7 +639,8 @@ impl World {
             return;
         }
         self.spawned = self.spawned.wrapping_add(1);
-        let standing = self.dummies.iter().map(|dummy| dummy.feet);
+        let standing = (self.dummies.iter().map(|dummy| dummy.feet))
+            .chain(self.npcs.list().iter().map(|npc| npc.body.position));
         let Body { player, asked } = &mut self.player;
         *player = self
             .ground
@@ -717,6 +740,12 @@ impl Game for World {
         // before they move.
         self.respawn();
         self.tick = self.tick.saturating_add(1);
+        // The NPCs the script made, moved or took out in its last tick.
+        (self.npcs).hear(
+            self.game.host_mut(),
+            &self.ground.rules,
+            &mut self.next_target,
+        );
         // The weather moves on: what falls on the player raises the water
         // or settles as snow, the cold freezes the lakes, the tornado
         // travels. It is said to the level before anything is moved in it,
@@ -775,6 +804,8 @@ impl Game for World {
             ..
         } = &self.ground;
         let Body { player, asked } = &mut self.player;
+        // The NPCs move by the engine's own numbers, not the player's.
+        let npc_rules = *rules;
         // How the script wants the player to move, and how fast it flies.
         let mut moving = asked.movement;
         moving.mode = mode_of(self.game.host().movement());
@@ -908,6 +939,12 @@ impl Game for World {
                 player.velocity[2] *= most / pace;
             }
         }
+        // Then each NPC, in the order of their ids, and the player is kept
+        // out of those on their feet: a person is walked into, not through.
+        (self.npcs).step(self.game.host(), level, &npc_rules, *tick);
+        if walking {
+            self.npcs.keep_out(player, rules, level);
+        }
         // What the player walks into is pushed, and every solid thing
         // moves on by a tick.
         if walking {
@@ -949,6 +986,13 @@ impl Game for World {
         // is told of below and in its own tick, and how they are moving.
         let host = self.game.host_mut();
         host.set_position(CharacterId::PLAYER, player.position);
+        self.npcs.tell(host);
+        // Who can be shot and struck this tick: the dummies and the NPCs
+        // on their feet.
+        self.standing.clear();
+        (self.standing)
+            .extend((self.dummies.iter()).map(|dummy| dummy.standing(npc_rules.standing_height)));
+        self.npcs.standing(&npc_rules, &mut self.standing);
         // What slid where it was going, and what found the player in its way.
         for id in &slid.arrived {
             host.thing_arrived(id);
@@ -989,7 +1033,7 @@ impl Game for World {
         // the crosshair: for a game's own second mark.
         (motion.aim_point, motion.aim_blocked) =
             self.shooting
-                .aim(player.eye_position(), &self.dummies, level, rules, aim);
+                .aim(player.eye_position(), &self.standing, level, rules, aim);
         host.set_motion(CharacterId::PLAYER, motion);
         // Which usable thing the player means, and whether they use it.
         let eyes = player.eye_position();
@@ -997,13 +1041,10 @@ impl Game for World {
         // The ids are written over the ones kept from the last tick, so a
         // tick with the same things as the last sets no memory aside.
         let (usable, ids) = (&mut self.usable, &mut self.usable_ids);
-        host.each_usable(|id, at, said| {
+        host.each_usable(|meant, at, said| {
             match ids.get_mut(usable.len()) {
-                Some(kept) => {
-                    kept.clear();
-                    kept.push_str(id);
-                }
-                None => ids.push(id.to_owned()),
+                Some(kept) => kept.set(meant),
+                None => ids.push(using::UseKey::of(meant)),
             }
             usable.push(using::Usable {
                 at,
@@ -1018,7 +1059,7 @@ impl Game for World {
             let skip = (0..3).map(|i| gap[i] * aim[i]).sum::<f32>().max(0.0);
             std::array::from_fn(|i| camera[i] + aim[i] * skip)
         });
-        let chosen = (self.using.target.as_deref())
+        let chosen = (self.using.target.as_ref())
             .and_then(|target| self.usable_ids.iter().position(|id| id == target));
         let throwing = asked.fire && !self.fire_was;
         self.fire_was = asked.fire;
@@ -1030,8 +1071,9 @@ impl Game for World {
             let hands: [f32; 3] = std::array::from_fn(|i| {
                 eyes[i] + aim[i] * CARRY_AHEAD - if i == 1 { CARRY_LOW } else { 0.0 }
             });
-            let (used, _) = self.using.tick(Some(carried), 0.0, asked.interact, *tick);
-            host.set_use_target(Some(carried), 0.0);
+            let carried_one = Some(lore_script::Usable::Thing(carried));
+            let (used, _) = self.using.tick(carried_one, 0.0, asked.interact, *tick);
+            host.set_use_target(carried_one, 0.0);
             let let_go = if throwing {
                 Some(Some((motion.aim_point, player.velocity)))
             } else if used {
@@ -1054,11 +1096,14 @@ impl Game for World {
             }
         } else {
             let meant = using::pick(&self.usable, eyes, from, aim, level, chosen);
-            let target = meant.map(|nth| self.usable_ids[nth].as_str());
+            let target = meant.map(|nth| self.usable_ids[nth].meant());
             let seconds = meant.map_or(0.0, |nth| self.usable[nth].seconds);
             let (used, progress) = self.using.tick(target, seconds, asked.interact, *tick);
             host.set_use_target(target, progress);
-            if let (true, Some(target)) = (used, target) {
+            if let (true, Some(lore_script::Usable::Npc(npc))) = (used, target) {
+                host.use_npc(npc);
+            }
+            if let (true, Some(lore_script::Usable::Thing(target))) = (used, target) {
                 host.use_thing(target);
                 // Using a door opens it, or shuts it.
                 if let Some(open) = self.things.door(target) {
@@ -1151,7 +1196,7 @@ impl Game for World {
         // script hears of every shot, hit and reload here.
         self.shooting.tick(
             &self.player,
-            &self.dummies,
+            &self.standing,
             self.tick,
             level,
             rules,
@@ -1381,6 +1426,8 @@ pub struct Playing {
     /// How far ahead of its grip each weapon model reaches, worked out once
     /// from its shape: what says where the left hand goes.
     weapon_lengths: std::collections::HashMap<std::rc::Rc<str>, f32>,
+    /// The NPCs as they are drawn: never read by the world.
+    pub(crate) npc_figures: crate::npc_figures::NpcFigures,
 }
 
 /// How far ahead of its grip a weapon must reach to be held in both hands
@@ -1578,6 +1625,7 @@ impl Playing {
             cord: false,
             flying: Vec::new(),
             weapon_lengths: std::collections::HashMap::new(),
+            npc_figures: crate::npc_figures::NpcFigures::mannequin(),
         }
         .with_body_said()
     }
@@ -1726,14 +1774,14 @@ impl Playing {
         host.set_playing(character.playing_names());
         // A swing hits what it passes through, once each, through health.
         let rules = &self.world.ground.rules;
-        let around: Vec<crate::character::Struck> = self
-            .world
-            .dummies
-            .iter()
-            .map(|dummy| crate::character::Struck {
-                who: dummy.name,
-                feet: dummy.feet,
-                height: rules.standing_height,
+        // As of the last tick, less whoever the script has since killed
+        // or taken out.
+        let around: Vec<crate::character::Struck> = (self.world.standing.iter())
+            .filter(|body| host.health(body.who).is_some_and(|(now, _)| now > 0.0))
+            .map(|body| crate::character::Struck {
+                who: body.who,
+                feet: body.feet,
+                height: body.height,
                 radius: rules.radius,
             })
             .collect();
@@ -2240,6 +2288,8 @@ impl Game for Playing {
         }
         self.eye = self.world.player().eye_position();
         self.step_character(input, step);
+        // The NPCs breathe, fall and look at the player.
+        self.npc_figures.tick(&self.world, self.eye, step);
         // The weapon in the hands: the moments of its motion and its cases.
         let player = *self.world.player();
         let held = self.world.game.host().held_weapon(CharacterId::PLAYER);
@@ -2361,6 +2411,7 @@ impl Game for Playing {
             .is_some_and(|it| it.view == View::First);
         let eyes = first && (0..3).all(|i| (shot.position[i] - seen.eye[i]).abs() < 0.05);
         self.show_body(frame, shot.position, (seen.yaw, seen.pitch), eyes);
+        self.npc_figures.show(frame);
         self.show_water(frame, seen.eye);
         for tread in self.treads.drain(..) {
             frame.tread(tread);
