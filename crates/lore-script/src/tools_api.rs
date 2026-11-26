@@ -120,6 +120,12 @@ pub struct MoveSaid {
     pub dodge_seconds: f32,
     /// How far a dodge carries the player, in metres.
     pub dodge_distance: f32,
+    /// Metres between footsteps when walking. Sprinting and crouching
+    /// steps are spaced in the same proportion as the engine's own.
+    pub stride: f32,
+    /// What every step and landing is multiplied by in loudness: 1 is the
+    /// engine's own, 0 is silent.
+    pub step_loudness: f32,
 }
 
 /// What the player can do besides walk, jump and crouch: each is off
@@ -277,6 +283,8 @@ impl Default for MoveSaid {
             ladder_speed: 2.2,
             dodge_seconds: 0.35,
             dodge_distance: 3.2,
+            stride: 2.0,
+            step_loudness: 1.0,
         }
     }
 }
@@ -295,6 +303,8 @@ pub(crate) enum MoveNumber {
     Ladder,
     DodgeSeconds,
     DodgeDistance,
+    Stride,
+    StepLoudness,
 }
 
 impl MoveNumber {
@@ -369,6 +379,18 @@ impl MoveNumber {
                 "how far a dodge carries the player, in metres",
                 (0.2, 30.0),
             ),
+            Self::Stride => (
+                "setStride",
+                "game.player:setStride(1.5)",
+                "how many metres the player goes between footsteps when walking",
+                (0.1, 20.0),
+            ),
+            Self::StepLoudness => (
+                "setStepLoudness",
+                "game.player:setStepLoudness(0.5)",
+                "how loud every step and landing is: 1 as now, 0 silent, 2 twice as loud",
+                (0.0, 10.0),
+            ),
         }
     }
 
@@ -386,6 +408,8 @@ impl MoveNumber {
             Self::Ladder => said.ladder_speed,
             Self::DodgeSeconds => said.dodge_seconds,
             Self::DodgeDistance => said.dodge_distance,
+            Self::Stride => said.stride,
+            Self::StepLoudness => said.step_loudness,
         }
     }
 }
@@ -418,6 +442,8 @@ pub(crate) fn set_move(
         MoveNumber::Ladder => said.ladder_speed = number,
         MoveNumber::DodgeSeconds => said.dodge_seconds = number,
         MoveNumber::DodgeDistance => said.dodge_distance = number,
+        MoveNumber::Stride => said.stride = number,
+        MoveNumber::StepLoudness => said.step_loudness = number,
     }
     shared.tools.moves.set(said);
     Ok(())

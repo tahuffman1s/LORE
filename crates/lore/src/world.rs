@@ -1077,7 +1077,7 @@ impl Game for World {
         // below, what the weapon did.
         self.noises.clear();
         self.walking
-            .tick(player, self.tick, *tick, &mut self.noises);
+            .tick(player, self.tick, *tick, &said, &mut self.noises);
         // And what their feet did to the snow, if any lies.
         self.treads.clear();
         let landed = (self.noises.last())
@@ -1120,7 +1120,13 @@ impl Game for World {
                 .find(|noise| noise.tick == self.tick && noise.kind.is_footfall())
         {
             footfall.kind = crate::noise::NoiseKind::SmallSplash;
-            footfall.loudness = (footfall.loudness * 1.2).clamp(0.2, 1.0) * quiet;
+            // The script's own loudness for steps is kept on top of it, and
+            // silent steps stay silent.
+            let scale = said.step_loudness;
+            if scale > 0.0 {
+                footfall.loudness =
+                    ((footfall.loudness / scale * 1.2).clamp(0.2, 1.0) * quiet) * scale;
+            }
             footfall.pitch = pitch;
         }
         // Fluid that came down in this tick is heard from where it did.
@@ -1173,6 +1179,13 @@ impl Game for World {
                 0.0,
                 self.tick,
             ));
+        }
+        // The script hears each noise of the tick, in the order made; one
+        // it answers `false` to is kept in the list but not played.
+        for noise in &mut self.noises {
+            if !self.game.host_mut().noise_made(&noise.told()) {
+                noise.silenced = true;
+            }
         }
         self.game.tick(input, step);
         // The script may have put the player somewhere.
@@ -2334,8 +2347,9 @@ impl Game for Playing {
             if !fresh(&noise, now, tick_rate) {
                 continue;
             }
+            let tweak = self.world.game.host().sound_tweak(noise.sound_name());
             let sounds = self.world.game.sounds_mut();
-            if let Some(play) = noise::play(&noise, nth, sounds) {
+            if let Some(play) = noise::play(&noise, nth, sounds, tweak) {
                 frame.sound(SoundAsk::Once(play));
             }
         }

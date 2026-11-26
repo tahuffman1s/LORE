@@ -168,6 +168,16 @@ declare extern type Character with
     --- Example: print(game.player.gravity)
     gravity: number
 
+    --- Metres between the character's footsteps when walking: 2 until
+    --- `game.player:setStride` says otherwise.
+    --- Example: print(game.player.stride)
+    stride: number
+
+    --- What every step and landing of the character is multiplied by in
+    --- loudness: 1 until `game.player:setStepLoudness` says otherwise.
+    --- Example: print(game.player.stepLoudness)
+    stepLoudness: number
+
     --- The highest thing the character vaults, in metres above their
     --- feet: 1.1 until `game.player:setVaultHeight`. It counts once
     --- `game.player:setAbility("vault", true)` has been said.
@@ -368,6 +378,20 @@ declare extern type Character with
     --- feels floaty in a game, and 1.6 the Moon's.
     --- Example: game.player:setGravity(1.6)
     function setGravity(self, metresPerSecondSquared: number): ()
+
+    --- How many metres the player goes between footsteps when walking,
+    --- from 0.1 to 20. 2 if never set. Sprinting and crouching steps keep
+    --- the engine's own proportion to it (2.2/2 and 1.3/2), so a short
+    --- stride is a pattering one and a long stride a loping one.
+    --- Example: game.player:setStride(1.5)
+    function setStride(self, metres: number): ()
+
+    --- How loud every step and landing is, from 0 to 10. 1 if never set:
+    --- 0 makes steps silent, and nothing that listens hears them either
+    --- (their `loudness` is 0); 2 is twice as loud. To turn the sound down
+    --- and keep the noise, use `game.audio.setVolume("footstep", 0)`.
+    --- Example: game.player:setStepLoudness(0)
+    function setStepLoudness(self, loudness: number): ()
 
     --- Turns one of the player's abilities on or off. Each is off until a
     --- script turns it on, except "swim", which is on:
@@ -793,6 +817,30 @@ declare extern type Thing with
     --- Whether `who` is inside the thing's zone now.
     --- Example: if game.zone("Bridge"):has(game.player) then print("Still on it") end
     function has(self, who: Character): boolean
+end
+
+--- A noise the game made: what a `game.onNoise` function is handed.
+--- Example: game.onNoise(function(noise) if noise.byPlayer and noise.loudness > 0.5 then print("Heard " .. noise.sound) end end)
+declare extern type Noise with
+    --- The name it is played under before any `game.audio.replace`: "footstep",
+    --- "landing", "gunshot", "dry-fire", "reload", "explosion", "impact", or a
+    --- weapon's own `fireSound`.
+    --- Example: if noise.sound == "footstep" then print("a step") end
+    sound: string
+    --- Where it was made, in metres.
+    --- Example: print(noise.position.x, noise.position.z)
+    position: vector
+    --- How loud it was, from 0 up: a crouched step is a quarter of a
+    --- sprinting one, and a gunshot is 1. `game.player:setStepLoudness` scales steps.
+    --- Example: if noise.loudness > 0.5 then print("loud") end
+    loudness: number
+    --- How many metres away it can be heard.
+    --- Example: print(noise.heardWithin)
+    heardWithin: number
+    --- True for the player's own steps and weapon; false for what the
+    --- world makes: thunder, dripping, an explosion's blast, a bullet strike.
+    --- Example: if not noise.byPlayer then print("the world made a noise") end
+    byPlayer: boolean
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -2257,11 +2305,15 @@ declare game: {
         --- Example: fireSound = "twang"
         fireSound: string?,
         --- The sound played when a reload begins; "reload" if left out.
+        --- Example: reloadSound = "bow-draw"
         reloadSound: string?,
         --- The sound played when the trigger is pulled on an empty magazine;
         --- "dry-fire" if left out.
+        --- Example: emptySound = "string-snap"
         emptySound: string?,
-        --- How many metres away a shot can be heard; 150 if left out.
+        --- How many metres away a shot can be heard, above 0; 150 if left
+        --- out. A quiet weapon, like a bow, says less. It sets the `heardWithin`
+        --- of the shot's noise (see `game.onNoise`).
         --- Example: heardWithin = 20
         heardWithin: number?,
         --- The wait after a burst before the next one.
@@ -2387,6 +2439,17 @@ declare game: {
     --- decides what a hit means.
     --- Example: game.onWeaponHit(function(hit) if hit.victim then print(hit.shooter.name .. " hit " .. hit.victim.name .. " for " .. hit.damage) end end)
     onWeaponHit: (handler: (hit: WeaponHit) -> ()) -> (),
+
+    --- Calls `handler` with every noise the game makes, on the tick it is
+    --- made and in the order made: the player's steps and landings, their
+    --- weapon's shots, dry clicks and reloads, splashes, thunder, blasts
+    --- and bullet strikes. It is how a game lets guards hear. Return false
+    --- to stop the engine playing that noise; it is still made, so
+    --- anything else that listens still hears it. A noise that nothing
+    --- registered for costs nothing.
+    --- Example: game.onNoise(function(noise) if noise.sound == "footstep" then print("a step at", noise.position.x, noise.position.z) end end)
+    --- Example: game.onNoise(function(noise) if noise.sound == "thunder" then return false end end)
+    onNoise: (handler: (noise: Noise) -> boolean?) -> (),
 
     --- Calls `handler` when someone starts to reload, with who it is. This
     --- is not `game.onReload`, which is about the script file being saved.
@@ -3033,6 +3096,33 @@ declare game: {
         --- this is how it stops a looped sound it has lost.
         --- Example: game.after(60, function() game.audio.stopAll() end)
         stopAll: () -> (),
+
+        --- Sets how loud the engine plays every sound it plays by itself
+        --- under `name`: "footstep", "landing", "gunshot", "dry-fire",
+        --- "reload", "explosion", "impact", "splash", "thunder", or the name a
+        --- weapon gives its own `fireSound`. 1 is as now, 0 is off, up to 4.
+        --- Only what is played changes: the noise is still made, as loud as
+        --- before, and whatever listens to noises still hears it. A name
+        --- that is almost the name of a sound the game has is an error
+        --- naming it; any other name is accepted, for a sound that is not
+        --- a file yet. Not for sounds your script plays itself: give those
+        --- a `volume` option.
+        --- Example: game.audio.setVolume("footstep", 0.3)
+        setVolume: (name: string, volume: number) -> (),
+
+        --- How loud the engine plays the sounds it plays by itself under
+        --- `name`: 1 if `game.audio.setVolume` has never been used for it.
+        --- Example: print(game.audio.getVolume("gunshot"))
+        getVolume: (name: string) -> number,
+
+        --- Makes the engine play the sound `withName` wherever it would
+        --- play `name` by itself, such as for every footstep. `withName`
+        --- must be a sound the game has. `game.audio.replace(name, nil)`
+        --- goes back to the engine's own. Only what is played changes: the
+        --- noise keeps its own sound name.
+        --- Example: game.audio.replace("footstep", "boots-on-wood")
+        --- Example: game.audio.replace("footstep", nil)
+        replace: (name: string, withName: string?) -> (),
     },
 
     --- The HUD: text, bars and boxes drawn over the game, such as health, a

@@ -41,6 +41,7 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "weapon",
     "onWeaponFire",
     "onWeaponHit",
+    "onNoise",
     "onWeaponReload",
     "onWeaponSwitch",
     "onDamage",
@@ -101,6 +102,7 @@ pub(crate) struct Handlers {
     pub spawn: Vec<Function>,
     pub weapon_fire: Vec<Function>,
     pub weapon_hit: Vec<Function>,
+    pub noise: Vec<Function>,
     pub weapon_reload: Vec<Function>,
     pub weapon_switch: Vec<Function>,
     pub lightning: Vec<Function>,
@@ -334,7 +336,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     type List = fn(&mut Handlers) -> &mut Vec<Function>;
-    let events: [(&'static str, &'static str, List); 9] = [
+    let events: [(&'static str, &'static str, List); 10] = [
         ("onDamage", "game.onDamage(function(hurt) ... end)", |h| {
             &mut h.damage
         }),
@@ -356,6 +358,9 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
             "game.onWeaponHit(function(hit) ... end)",
             |h| &mut h.weapon_hit,
         ),
+        ("onNoise", "game.onNoise(function(noise) ... end)", |h| {
+            &mut h.noise
+        }),
         (
             "onWeaponReload",
             "game.onWeaponReload(function(shooter) ... end)",
@@ -921,8 +926,8 @@ mod tests {
     #[test]
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
-        use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 47] = [
+        use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
+        let groups: [(&str, &[&str]); 48] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -952,6 +957,7 @@ mod tests {
             ("game.weapon.", WEAPON_SETTINGS),
             ("game.weapon.projectile.", PROJECTILE_SETTINGS),
             ("WeaponHit.", HIT_FIELDS),
+            ("Noise.", NOISE_FIELDS),
             ("Timer:", crate::time_api::TIMER_METHODS),
             ("Tween.", crate::time_api::TWEEN_FIELDS),
             ("Tween:", crate::time_api::TWEEN_METHODS),

@@ -14,9 +14,17 @@ use mlua::{AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataMeth
 
 use crate::api::{Shared, describe, fail};
 use crate::error::closest;
+use crate::weapon_api::{LONGEST_SOUND_NAME, SoundName};
 
 /// Every function on `game.audio`.
-pub(crate) const AUDIO_FUNCTIONS: &[&str] = &["play", "playAt", "stopAll"];
+pub(crate) const AUDIO_FUNCTIONS: &[&str] = &[
+    "play",
+    "playAt",
+    "stopAll",
+    "setVolume",
+    "getVolume",
+    "replace",
+];
 
 /// Every function on a sound. The type definitions are tested against it.
 #[cfg(test)]
@@ -32,6 +40,69 @@ const MAX_LISTED: usize = 20;
 
 /// The slowest and fastest a sound can be played.
 const PITCH: (f32, f32) = (0.25, 4.0);
+
+/// How many sound names a script can turn down or swap. Far more than a
+/// game has sounds the engine plays by itself; the room is set aside once,
+/// so playing never sets memory aside.
+const MAX_TWEAKS: usize = 64;
+
+/// The loudest `game.audio.setVolume` can make a sound.
+const LOUDEST: f32 = 4.0;
+
+/// What a script did to a sound the engine plays by itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoundTweak {
+    /// How loud it is played: 1 as the engine would, 0 not at all.
+    pub volume: f32,
+    /// The sound played in its place, when the script said one.
+    pub replace: Option<SoundName>,
+}
+
+impl Default for SoundTweak {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            replace: None,
+        }
+    }
+}
+
+/// The sound names a script has turned down or swapped, set aside up front.
+#[derive(Debug)]
+struct Tweaks(Vec<(SoundName, SoundTweak)>);
+
+impl Default for Tweaks {
+    fn default() -> Self {
+        Self(Vec::with_capacity(MAX_TWEAKS))
+    }
+}
+
+impl Tweaks {
+    fn of(&self, name: &str) -> SoundTweak {
+        (self.0.iter())
+            .find(|(it, _)| it.as_str() == name)
+            .map_or_else(SoundTweak::default, |(_, tweak)| *tweak)
+    }
+
+    /// Changes what is said of `name` with `change`. Gives false when
+    /// there is no room for one more name.
+    fn change(&mut self, name: SoundName, change: impl FnOnce(&mut SoundTweak)) -> bool {
+        let at = match self.0.iter().position(|(it, _)| *it == name) {
+            Some(at) => at,
+            None if self.0.len() < MAX_TWEAKS => {
+                self.0.push((name, SoundTweak::default()));
+                self.0.len() - 1
+            }
+            None => return false,
+        };
+        change(&mut self.0[at].1);
+        // Back to the engine's own: nothing to remember.
+        if self.0[at].1 == SoundTweak::default() {
+            self.0.swap_remove(at);
+        }
+        true
+    }
+}
 
 /// One sound a script started. The engine stops it by this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,6 +154,8 @@ pub(crate) struct AudioState {
     names: RefCell<Option<Vec<String>>>,
     next: Cell<u64>,
     waiting: RefCell<VecDeque<AudioCommand>>,
+    /// What the script did to the sounds the engine plays by itself.
+    tweaks: RefCell<Tweaks>,
 }
 
 impl AudioState {
@@ -90,6 +163,12 @@ impl AudioState {
         names.sort();
         names.dedup();
         self.names.replace(Some(names));
+    }
+
+    /// What the script did to the sound the engine plays by itself under
+    /// `name`.
+    pub(crate) fn tweak(&self, name: &str) -> SoundTweak {
+        self.tweaks.borrow().of(name)
     }
 
     pub(crate) fn take(&self) -> Option<AudioCommand> {
@@ -257,7 +336,144 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             Ok(())
         })?,
     )?;
+    audio.set("setVolume", set_volume(lua, shared)?)?;
+    audio.set("getVolume", get_volume(lua, shared)?)?;
+    audio.set("replace", replace(lua, shared)?)?;
     Ok(audio)
+}
+
+/// `game.audio.setVolume(name, volume)`.
+fn set_volume(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, (name, volume): (Value, Value)| {
+        let naming = Naming {
+            function: "game.audio.setVolume",
+            example: &|sound| format!("game.audio.setVolume(\"{sound}\", 0.5)"),
+            strict: false,
+        };
+        let name = tweak_name(lua, &shared.audio, &naming, &name)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let shown = name.as_str();
+        let volume = match volume {
+            Value::Number(volume) => volume as f32,
+            Value::Integer(volume) => volume as f32,
+            other => {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.audio.setVolume needs a number for the volume, from 0 (off) to \
+                         {LOUDEST} (1 is as now), but it was given {}. Write it like this: \
+                         game.audio.setVolume(\"{shown}\", 0.5)",
+                        describe(&other)
+                    ),
+                ));
+            }
+        };
+        if !volume.is_finite() {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.audio.setVolume was given a volume that is infinite or not a number \
+                     (often from dividing by zero). Write it like this: \
+                     game.audio.setVolume(\"{shown}\", 0.5)"
+                ),
+            ));
+        }
+        let volume = volume.clamp(0.0, LOUDEST);
+        remember(lua, &shared.audio, &naming, name, |tweak| {
+            tweak.volume = volume;
+        })
+    })
+}
+
+/// `game.audio.getVolume(name)`.
+fn get_volume(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, name: Value| {
+        let naming = Naming {
+            function: "game.audio.getVolume",
+            example: &|sound| format!("game.audio.getVolume(\"{sound}\")"),
+            strict: false,
+        };
+        let name = tweak_name(lua, &shared.audio, &naming, &name)?;
+        // As it was written: 0.3 kept in 32 bits is 0.30000001192.
+        Ok((f64::from(shared.audio.tweak(name.as_str()).volume) * 1.0e5).round() / 1.0e5)
+    })
+}
+
+/// `game.audio.replace(name, withName)`.
+fn replace(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let shared = Rc::clone(shared);
+    lua.create_function(move |lua, (name, with): (Value, Value)| {
+        let naming = Naming {
+            function: "game.audio.replace",
+            example: &|sound| format!("game.audio.replace(\"footstep\", \"{sound}\")"),
+            strict: false,
+        };
+        let name = tweak_name(lua, &shared.audio, &naming, &name)?;
+        let with = match &with {
+            Value::Nil => None,
+            other => {
+                let strict = Naming {
+                    strict: true,
+                    ..naming
+                };
+                let with = sound_name(lua, &shared.audio, &strict, other)?;
+                Some(sound_name_inline(lua, &naming, &with)?)
+            }
+        };
+        remember(lua, &shared.audio, &naming, name, |tweak| {
+            tweak.replace = with;
+        })
+    })
+}
+
+/// Writes one change into the tweaks, or says there is no room.
+fn remember(
+    lua: &Lua,
+    audio: &AudioState,
+    naming: &Naming,
+    name: SoundName,
+    change: impl FnOnce(&mut SoundTweak),
+) -> mlua::Result<()> {
+    if audio.tweaks.borrow_mut().change(name, change) {
+        return Ok(());
+    }
+    Err(fail(
+        lua,
+        format!(
+            "{} has already been used with {MAX_TWEAKS} different names, the most it keeps. \
+             Set a name back to its own (volume 1, or replace with nil) to free its place.",
+            naming.function
+        ),
+    ))
+}
+
+/// The name of a sound the engine plays by itself, as a script wrote it.
+fn tweak_name(
+    lua: &Lua,
+    audio: &AudioState,
+    naming: &Naming,
+    value: &Value,
+) -> mlua::Result<SoundName> {
+    let name = sound_name(lua, audio, naming, value)?;
+    sound_name_inline(lua, naming, &name)
+}
+
+/// `name` as the name the engine holds, which is short.
+fn sound_name_inline(lua: &Lua, naming: &Naming, name: &str) -> mlua::Result<SoundName> {
+    SoundName::new(name).ok_or_else(|| {
+        fail(
+            lua,
+            format!(
+                "{} was given a sound name of {} characters, and a sound's name is at most \
+                 {LONGEST_SOUND_NAME}. Write it like this: {}",
+                naming.function,
+                name.len(),
+                (naming.example)("footstep")
+            ),
+        )
+    })
 }
 
 /// `game.audio.play(name, options)` or `game.audio.playAt(name, position,
@@ -278,7 +494,16 @@ fn function(lua: &Lua, shared: &Rc<Shared>, call: Call) -> mlua::Result<Function
                 ),
             ));
         }
-        let name = sound_name(lua, &shared.audio, call, &name)?;
+        let name = sound_name(
+            lua,
+            &shared.audio,
+            &Naming {
+                function,
+                example: &|sound| call.example(sound),
+                strict: true,
+            },
+            &name,
+        )?;
         let (position, options) = match call {
             Call::Play => {
                 if matches!(second, Value::Vector(_)) {
@@ -338,9 +563,26 @@ fn function(lua: &Lua, shared: &Rc<Shared>, call: Call) -> mlua::Result<Function
     })
 }
 
+/// How a function that takes a sound's name speaks of it.
+struct Naming<'a> {
+    /// The function, as a script calls it.
+    function: &'a str,
+    /// The call written out for a sound, for the end of an error.
+    example: &'a dyn Fn(&str) -> String,
+    /// Whether the name must be a sound the game has. When not, a name that
+    /// is no sound and not near the name of one is let through, because a
+    /// weapon may name a sound (`fireSound`) that is no file yet.
+    strict: bool,
+}
+
 /// The name of the sound to play, checked against the sounds the game has.
-fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua::Result<String> {
-    let function = call.name();
+fn sound_name(
+    lua: &Lua,
+    audio: &AudioState,
+    naming: &Naming,
+    value: &Value,
+) -> mlua::Result<String> {
+    let function = naming.function;
     let Value::String(name) = value else {
         return Err(fail(
             lua,
@@ -348,7 +590,7 @@ fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua:
                 "{function} needs the name of a sound in quotes, but it was given {}. \
                  Write it like this: {}",
                 describe(value),
-                call.example("gunshot")
+                (naming.example)("gunshot")
             ),
         ));
     };
@@ -385,6 +627,8 @@ fn sound_name(lua: &Lua, audio: &AudioState, call: Call, value: &Value) -> mlua:
         );
     } else if let Some(near) = closest(bare, names.iter().map(String::as_str)) {
         let _ = write!(message, " Did you mean \"{near}\"?");
+    } else if !naming.strict {
+        return Ok(name);
     } else {
         message.push_str(" The sounds are: ");
         for (index, name) in names.iter().take(MAX_LISTED).enumerate() {

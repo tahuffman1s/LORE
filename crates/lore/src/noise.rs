@@ -94,6 +94,21 @@ impl NoiseKind {
         )
     }
 
+    /// Whether the player made it, as against the world: thunder, dripping
+    /// fluid, a blast and a strike are the world's.
+    #[must_use]
+    pub const fn is_by_player(self) -> bool {
+        !matches!(
+            self,
+            Self::Patter
+                | Self::Pour
+                | Self::Explosion
+                | Self::Impact
+                | Self::Thunder
+                | Self::FarThunder
+        )
+    }
+
     /// Whether it is a foot coming down on the ground: a step or a landing.
     #[must_use]
     pub const fn is_footfall(self) -> bool {
@@ -174,6 +189,9 @@ pub struct Noise {
     /// The sound it is played with, when what made it named one (a weapon's
     /// `fireSound`). `None` plays the kind's own: [`NoiseKind::sound`].
     pub sound: Option<SoundName>,
+    /// Set when a script's `game.onNoise` function returned `false`: the
+    /// noise stays in the list, for anything that listens, but is not played.
+    pub silenced: bool,
 }
 
 impl Noise {
@@ -197,6 +215,19 @@ impl Noise {
             tick,
             range: kind.range(),
             sound: None,
+            silenced: false,
+        }
+    }
+
+    /// How a script's `game.onNoise` function is told of it.
+    #[must_use]
+    pub fn told(&self) -> lore_script::NoiseTold<'_> {
+        lore_script::NoiseTold {
+            sound: self.sound_name(),
+            position: self.position,
+            loudness: self.loudness,
+            heard_within: self.range.far,
+            by_player: self.kind.is_by_player(),
         }
     }
 
@@ -215,18 +246,19 @@ impl Noise {
 #[derive(Debug, Default)]
 pub(crate) struct Walking {
     feet: Footsteps,
-    settings: FootstepSettings,
 }
 
 impl Walking {
     /// Adds to `noises` the step or landing of the tick numbered `tick`,
     /// which has just moved `player`: call it every tick, after they have
-    /// moved. `step` is the length of a tick in seconds.
+    /// moved. `step` is the length of a tick in seconds, and `said` is what
+    /// the script set for the stride and the loudness of steps.
     pub(crate) fn tick(
         &mut self,
         player: &lore_physics::Player,
         tick: u32,
         step: f32,
+        said: &lore_script::MoveSaid,
         noises: &mut Vec<Noise>,
     ) {
         let [x, y, z] = player.velocity;
@@ -237,11 +269,22 @@ impl Walking {
             crouched: player.crouched,
             sprinting: player.sprinting,
         };
-        let (kind, loudness) = match self.feet.step(&self.settings, &feet, step) {
+        let usual = FootstepSettings::default();
+        // The sprinting and crouching strides keep the engine's proportion
+        // to the walking one.
+        let scale = said.stride / usual.walk_stride;
+        let settings = FootstepSettings {
+            walk_stride: said.stride,
+            sprint_stride: usual.sprint_stride * scale,
+            crouch_stride: usual.crouch_stride * scale,
+            ..usual
+        };
+        let (kind, loudness) = match self.feet.step(&settings, &feet, step) {
             Some(Footfall::Step { volume, .. }) => (NoiseKind::Footstep, volume),
             Some(Footfall::Landing { volume }) => (NoiseKind::Landing, volume),
             None => return,
         };
+        let loudness = loudness * said.step_loudness;
         noises.push(Noise::new(kind, player.position, loudness, 1.0, 0.0, tick));
     }
 }
@@ -250,10 +293,26 @@ impl Walking {
 /// made themself: equally in both ears. `nth` is its place among the
 /// noises of its tick, so two at once do not play the same take. `None`
 /// when the game has no sound of that name ready.
-pub(crate) fn play(noise: &Noise, nth: u32, sounds: &mut Sounds) -> Option<Play> {
+///
+/// `tweak` is what the script did to the sound the noise is played with
+/// (`game.audio.setVolume`, `game.audio.replace`): it changes what is
+/// played and nothing about the noise.
+pub(crate) fn play(
+    noise: &Noise,
+    nth: u32,
+    sounds: &mut Sounds,
+    tweak: lore_script::SoundTweak,
+) -> Option<Play> {
     let seed = noise.tick.wrapping_mul(31).wrapping_add(nth);
-    let mut play = sounds.take(noise.sound_name(), seed)?;
-    play.volume *= noise.loudness;
+    if noise.silenced || tweak.volume <= 0.0 {
+        return None;
+    }
+    let name = tweak
+        .replace
+        .as_ref()
+        .map_or_else(|| noise.sound_name(), lore_script::SoundName::as_str);
+    let mut play = sounds.take(name, seed)?;
+    play.volume *= noise.loudness * tweak.volume;
     if noise.pitch.is_finite() {
         play.pitch = (play.pitch * noise.pitch).clamp(0.25, 4.0);
     }
