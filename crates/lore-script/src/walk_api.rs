@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use lore_nav::{NoWay, Openings, Walkable};
+use lore_nav::{NoWay, Openings, Scratch, Walkable, Way};
 use mlua::{Lua, Table, Value};
 
 use crate::api::Shared;
@@ -31,6 +31,9 @@ pub(crate) struct WalkState {
     pub(crate) openings: RefCell<Openings>,
     /// What each door is called in the map, in the order of their gates.
     pub(crate) doors: RefCell<Vec<String>>,
+    /// Memory kept from one question to the next.
+    scratch: RefCell<Scratch>,
+    way: RefCell<Way>,
 }
 
 const CAN_EXAMPLE: &str =
@@ -91,9 +94,14 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
             let (from, to) = ends(lua, "game.canWalk", &from, &to, CAN_EXAMPLE)?;
             let walk = &state.walk;
             let ground = walk.ground.borrow();
-            Ok(ground
-                .as_ref()
-                .is_some_and(|g| g.walkable().can_reach(from, to, &walk.openings.borrow())))
+            Ok(ground.as_ref().is_some_and(|g| {
+                g.walkable().can_reach_with(
+                    from,
+                    to,
+                    &walk.openings.borrow(),
+                    &mut walk.scratch.borrow_mut(),
+                )
+            }))
         })?,
     )?;
     let state = Rc::clone(shared);
@@ -109,8 +117,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, game: &Table) -> mlua::Res
                     Value::String(lua.create_string("the game has no ground to walk on yet")?),
                 ));
             };
-            match ground.walkable().way(from, to, &walk.openings.borrow()) {
-                Ok(way) => {
+            let mut way = walk.way.borrow_mut();
+            let found = ground.walkable().way_into(
+                from,
+                to,
+                &walk.openings.borrow(),
+                &mut walk.scratch.borrow_mut(),
+                &mut way,
+            );
+            match found {
+                Ok(()) => {
                     let corners = lua.create_table_with_capacity(way.points.len(), 0)?;
                     for point in &way.points {
                         let [x, y, z] = point.point;

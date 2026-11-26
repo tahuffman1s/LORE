@@ -485,8 +485,31 @@ fn taken(built: &PolygonNavmesh, at: [u32; 2], tile_cells: u16, gates: &[GateId]
                 polygon.inner[slot] = next;
             }
         }
-        if polygon.count >= 3 {
-            polygons.push(polygon);
+        polygons.push(polygon);
+    }
+    // A polygon of fewer than three corners is none: what joins it is cut,
+    // and the rest are numbered again, so that each still points at its
+    // neighbours.
+    let kept: Vec<u16> = {
+        let mut next = 0u16;
+        polygons
+            .iter()
+            .map(|p| {
+                if p.count >= 3 {
+                    next += 1;
+                    next - 1
+                } else {
+                    NONE
+                }
+            })
+            .collect()
+    };
+    let mut polygons: Vec<RawPolygon> = polygons.into_iter().filter(|p| p.count >= 3).collect();
+    for polygon in &mut polygons {
+        for inner in &mut polygon.inner {
+            if *inner != NONE {
+                *inner = kept.get(usize::from(*inner)).copied().unwrap_or(NONE);
+            }
         }
     }
     TileMesh { corners, polygons }

@@ -271,8 +271,11 @@ impl Walkable {
             }
         }
         self.renumber();
-        self.problems
-            .retain(|old| !problems.iter().any(|new| new.near == old.near));
+        // What was wrong with a rebuilt tile before is said again or gone.
+        let rebuilt: Vec<[i32; 2]> = (chosen.iter())
+            .map(|&index| problem(&grid, index, String::new()).near)
+            .collect();
+        self.problems.retain(|old| !rebuilt.contains(&old.near));
         self.problems.extend(problems.iter().cloned());
         problems
     }
@@ -465,8 +468,12 @@ impl Walkable {
     // The parts the way finding uses.
 
     /// The number of a polygon in a count of every polygon.
+    /// A polygon of another ground, or of this one before it was rebuilt,
+    /// may be past the end: it is given a number past every polygon's.
     pub(crate) fn node(&self, poly: Poly) -> u32 {
-        self.starts[poly.tile as usize] + poly.index
+        self.starts
+            .get(poly.tile as usize)
+            .map_or(u32::MAX, |start| start.saturating_add(poly.index))
     }
 
     pub(crate) fn polygon(&self, poly: Poly) -> Option<&Polygon> {

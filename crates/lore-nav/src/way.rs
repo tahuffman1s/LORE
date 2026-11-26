@@ -87,6 +87,9 @@ pub struct Scratch {
     search: u32,
     open: BinaryHeap<Open>,
     corridor: Vec<(Poly, Came)>,
+    /// The edges of a stretch of corridor, and the corners through them.
+    portals: Vec<([f32; 3], [f32; 3])>,
+    corners: Vec<([f32; 3], usize)>,
 }
 
 /// How a polygon was entered in a search.
@@ -216,11 +219,22 @@ impl Walkable {
     /// says are open.
     #[must_use]
     pub fn can_reach(&self, from: [f32; 3], to: [f32; 3], open: &Openings) -> bool {
+        self.can_reach_with(from, to, open, &mut Scratch::default())
+    }
+
+    /// [`can_reach`](Self::can_reach), with memory kept from earlier
+    /// searches: once it is big enough, no memory is set aside.
+    pub fn can_reach_with(
+        &self,
+        from: [f32; 3],
+        to: [f32; 3],
+        open: &Openings,
+        scratch: &mut Scratch,
+    ) -> bool {
         let (Some(start), Some(end)) = (self.nearest(from), self.nearest(to)) else {
             return false;
         };
-        self.search(&start, &end, open, &mut Scratch::default())
-            .is_ok()
+        self.search(&start, &end, open, scratch).is_ok()
     }
 
     /// A* from `start`'s polygon to `end`'s. On success the polygons
@@ -259,6 +273,9 @@ impl Walkable {
         let reach =
             |scratch: &mut Scratch, node: u32, poly: Poly, cost: f32, at: [f32; 3], came: Came| {
                 let n = node as usize;
+                if n >= scratch.seen.len() {
+                    return;
+                }
                 if scratch.seen[n] == search && (scratch.closed[n] || scratch.cost[n] <= cost) {
                     return;
                 }
@@ -365,13 +382,20 @@ impl Walkable {
                 if !self.polygon(off.poly).is_some_and(|p| p.open(open)) {
                     continue;
                 }
-                let step = distance(here, on.point) * weight + distance(on.point, off.point);
+                let mut step = distance(here, on.point) * weight + distance(on.point, off.point);
+                let landing = self.node(off.poly);
+                let mut at = off.point;
+                // Into the goal, costed to the end's point, as an edge is.
+                if landing == goal {
+                    step += distance(off.point, end.point);
+                    at = end.point;
+                }
                 reach(
                     scratch,
-                    self.node(off.poly),
+                    landing,
                     off.poly,
                     cost + step,
-                    off.point,
+                    at,
                     Came::Link {
                         node,
                         poly,
@@ -388,7 +412,9 @@ impl Walkable {
 
     /// The corners of the shortest line from `start` to `end` through the
     /// polygons of `scratch.corridor`, into `way`.
-    fn pull_tight(&self, start: &Spot, end: &Spot, scratch: &Scratch, way: &mut Way) {
+    fn pull_tight(&self, start: &Spot, end: &Spot, scratch: &mut Scratch, way: &mut Way) {
+        let mut portals = std::mem::take(&mut scratch.portals);
+        let mut corners = std::mem::take(&mut scratch.corners);
         let corridor = &scratch.corridor;
         let area = |k: usize| {
             self.polygon(corridor[k].0)
@@ -412,7 +438,7 @@ impl Walkable {
             };
             // The edges crossed, each with its left and right end as seen
             // going through it, then the end itself.
-            let mut portals: Vec<([f32; 3], [f32; 3])> = Vec::with_capacity(last - begin + 2);
+            portals.clear();
             portals.push((from_point, from_point));
             for k in begin + 1..=last {
                 if let Came::Edge { ends, .. } = corridor[k].1 {
@@ -422,7 +448,7 @@ impl Walkable {
                 }
             }
             portals.push((to_point, to_point));
-            let corners = funnel(&portals);
+            funnel(&portals, &mut corners);
             // Each corner, then where the line from it to the next
             // crosses from one kind of ground to another.
             for pair in corners.windows(2) {
@@ -474,7 +500,6 @@ impl Walkable {
                 }
             }
         }
-        // Two corners at the same place are one.
         // Two corners at the same place are one, which goes on as the
         // later one does; but a link's start stays.
         way.points.dedup_by(|later, earlier| {
@@ -485,6 +510,8 @@ impl Walkable {
             }
             one
         });
+        scratch.portals = portals;
+        scratch.corners = corners;
     }
 }
 
@@ -539,10 +566,10 @@ fn same(a: [f32; 3], b: [f32; 3]) -> bool {
 /// The corners of the shortest line through `portals`, each with the
 /// portal it is at: the "simple stupid funnel". The first portal and the
 /// last are the start and the end, each a point.
-fn funnel(portals: &[([f32; 3], [f32; 3])]) -> Vec<([f32; 3], usize)> {
-    let mut corners = Vec::new();
+fn funnel(portals: &[([f32; 3], [f32; 3])], corners: &mut Vec<([f32; 3], usize)>) {
+    corners.clear();
     let Some(&(start, _)) = portals.first() else {
-        return corners;
+        return;
     };
     corners.push((start, 0));
     let (mut apex, mut left, mut right) = (start, start, start);
@@ -588,7 +615,6 @@ fn funnel(portals: &[([f32; 3], [f32; 3])]) -> Vec<([f32; 3], usize)> {
     if corners.last().is_none_or(|(c, _)| !same(*c, end)) {
         corners.push((end, last));
     }
-    corners
 }
 
 /// Where the line from `a` to `b` crosses the edge from `l` to `r`, seen
