@@ -157,6 +157,7 @@ mod output {
         pub(crate) fn set_volumes(&mut self, settings: &crate::settings::Settings) {
             self.voices.set_volume(settings.gain());
             (self.voices).set_group_volume(Group::Music, settings.music_gain());
+            (self.voices).set_group_volume(Group::Speech, settings.speech_gain());
             (self.voices).set_group_volume(Group::Effects, settings.effects_gain());
         }
 
@@ -344,6 +345,7 @@ impl Voices for LazySpeakers {
         match group {
             lore_audio::Group::Effects => self.volumes.effects = volume,
             lore_audio::Group::Music => self.volumes.music = volume,
+            lore_audio::Group::Speech => self.volumes.speech = volume,
         }
         if let Some(speakers) = &mut self.speakers {
             speakers.set_group_volume(group, volume);
@@ -371,6 +373,7 @@ struct Volumes {
     all: f32,
     effects: f32,
     music: f32,
+    speech: f32,
 }
 
 impl Default for Volumes {
@@ -379,6 +382,7 @@ impl Default for Volumes {
             all: 1.0,
             effects: 1.0,
             music: 1.0,
+            speech: 1.0,
         }
     }
 }
@@ -388,6 +392,7 @@ impl Volumes {
         speakers.set_volume(self.all);
         speakers.set_group_volume(lore_audio::Group::Effects, self.effects);
         speakers.set_group_volume(lore_audio::Group::Music, self.music);
+        speakers.set_group_volume(lore_audio::Group::Speech, self.speech);
     }
 }
 
