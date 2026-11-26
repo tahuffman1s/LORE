@@ -702,6 +702,18 @@ if false then
     for _, npc: Npc in game.npcs() do
         if npc.dead then npc:remove() end
     end
+    guard:goTo("Gate")
+    guard:goTo(vector.create(4, 0, -6), { within = 1, facing = 180 })
+    guard:goTo(game.player, { run = true })
+    guard:goTo(game.thing("Cellar door"))
+    cook:follow(game.player, { distance = 3, run = false })
+    cook:follow(guard)
+    cook:stop()
+    local going: (string | vector | Thing | Character)? = guard.destination
+    print(going)
+    guard:onArrive(function(npc: Npc, where) print(npc.name, where) end)
+    guard:onCannotReach(function(npc: Npc, why: string) print(npc.name, why) end)
+    game.thing("Cellar door"):onUse(function(door: Thing, who: Character) print(door.name, who.name) end)
 end
 game.showUsePrompt(true)
 local meant: (Thing | Npc)? = game.player.lookingAt

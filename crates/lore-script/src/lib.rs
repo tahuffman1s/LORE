@@ -84,7 +84,7 @@ pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use clock_api::WorldClock;
 pub use dice_api::{Dice, seed_new_games};
-pub use error::{OpenError, ScriptError};
+pub use error::{OpenError, ScriptError, closest};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
 pub use fonts::{
     FONTS_FOLDER, families_of as font_families_of, family_of as font_family_of, is_font_file,

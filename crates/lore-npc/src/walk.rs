@@ -39,8 +39,9 @@ const DOOR_REACH: f32 = 1.4;
 const TURN_SPEED: f32 = 5.0;
 
 /// How hard a walk pushes the stick, as a share of the controller's top
-/// walking speed: an unhurried walk.
-pub const STROLL: f32 = 0.4;
+/// walking speed (4.5 m/s): an unhurried walk of some 0.85 m/s, the pace
+/// of the mannequin's own walk, at which its feet stay planted.
+pub const STROLL: f32 = 0.19;
 
 /// How far a follower lets its leader get beyond the distance it keeps
 /// before it walks after them again, in metres.
@@ -741,7 +742,9 @@ impl Walk {
         // How hard it pushes: a walk or a run; a follower far behind runs.
         let behind = across(feet, goal.to) - goal.within;
         let run = goal.run || (goal.follow && behind > CATCH_UP);
-        let mut push = if run { 1.0 } else { STROLL };
+        // A follower more than a step behind walks briskly.
+        let brisk = goal.follow && behind > REJOIN;
+        let mut push = if run || brisk { 1.0 } else { STROLL };
         if self.next >= last && !goal.follow && !run {
             // Easing into the end, so it does not walk past it.
             push *= (to_corner / 1.2).clamp(0.5, 1.0);
@@ -893,7 +896,7 @@ impl Trouble {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
 
     use lore_nav::{Body, Openings, Walkable};
     use lore_physics::{Level, MoveSettings};

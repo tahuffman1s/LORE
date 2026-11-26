@@ -110,6 +110,14 @@ guard.useText = 5 -- wrong: the words are in quotes
 game.player:onUse(function() end) -- wrong: only an NPC is used; game.player is not one
 print(game.player.useText) -- wrong: only an NPC has useText
 game.player:remove() -- wrong: only an NPC can be removed
+guard.goTo("Gate") -- wrong: needs a colon, guard:goTo(...)
+guard:goTo(5) -- wrong: a place is named in quotes, or a vector, a thing or someone
+guard:goTo("Gate", { run = "fast" }) -- wrong: run is true or false
+guard:follow("Gate") -- wrong: follow takes someone; goTo walks to a place
+guard:follow(game.player, { distance = "near" }) -- wrong: a distance is a number in metres
+guard:onArrive("there") -- wrong: it takes a function
+guard:onCannotReach(print, 5) -- wrong: it takes one function
+game.player:goTo("Gate") -- wrong: only an NPC walks by itself; game.player is not one
 local who: Npc = game.player -- wrong: game.player is a Character, not an NPC
 print(who)
 
