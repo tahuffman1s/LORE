@@ -388,6 +388,24 @@ impl Sounds {
         Some(play.range(entry.range))
     }
 
+    /// How far the sound called `name` carries, as `request` asks it to:
+    /// its own range, stretched to the `range` a script gave. A name the
+    /// game has no sound for carries as most sounds do.
+    #[must_use]
+    pub(crate) fn range_of(&self, name: &str, range: Option<f32>) -> Range {
+        let own = self
+            .entries
+            .get(name)
+            .map_or_else(Range::default, |entry| entry.range);
+        match range {
+            Some(far) if own.far > 0.0 => Range {
+                near: own.near * far / own.far,
+                far,
+            },
+            _ => own,
+        }
+    }
+
     /// What to hand the speakers for `request`, or `None` when the game has
     /// no sound of that name ready.
     pub(crate) fn play(&mut self, request: &SoundRequest) -> Option<Play> {

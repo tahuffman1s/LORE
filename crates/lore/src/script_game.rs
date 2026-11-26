@@ -276,6 +276,17 @@ impl ScriptGame {
         &self.sounds
     }
 
+    /// Calls `see` with each sound the script played once at a place
+    /// since the last call, and how far it carries, for the NPCs to hear.
+    pub(crate) fn take_script_noises(
+        &mut self,
+        mut see: impl FnMut(&lore_script::ScriptNoise, lore_audio::Range),
+    ) {
+        let sounds = &self.sounds;
+        (self.host)
+            .take_script_noises(|noise| see(noise, sounds.range_of(&noise.sound, noise.range)));
+    }
+
     /// The sounds, to take one to play.
     pub(crate) fn sounds_mut(&mut self) -> &mut Sounds {
         &mut self.sounds

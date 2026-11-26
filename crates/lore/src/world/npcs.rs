@@ -13,7 +13,7 @@
 //! tick, NPCs in the order of their ids, so the same input gives the same
 //! NPCs. Each NPC is plain data: what a save will keep of it.
 
-use lore_npc::{Around, Mind, Upright};
+use lore_npc::{Around, Keenness, Mind, Senses, Upright};
 use lore_physics::{Level, MoveSettings, Player};
 use lore_script::{CharacterId, NpcAsk, ScriptHost};
 
@@ -33,6 +33,8 @@ pub struct Npc {
     /// Its health is gone: it lies where it fell, and is not walked into,
     /// shot, struck, used or looked at by the lock-on.
     pub down: bool,
+    /// What it sees and has lately heard (see `super::sensing`).
+    pub senses: Senses<CharacterId, crate::noise::Which>,
 }
 
 impl Npc {
@@ -99,7 +101,7 @@ fn stand(
 }
 
 /// How tall a body is now: crouched or standing.
-fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
+pub(super) fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
     if body.crouched {
         rules.crouched_height
     } else {
@@ -167,6 +169,9 @@ impl Npcs {
                         let feet = stand(level, rules, feet, || host.character_name(id));
                         npc.body = Player::at(feet, rules);
                         npc.mind = Mind::standing(facing);
+                        // Put somewhere new, it looks about afresh.
+                        npc.senses.forget();
+                        host.npc_blinded(id);
                     }
                 }
                 NpcAsk::Removed { id } => self.list.retain(|npc| npc.who != id),
@@ -196,6 +201,7 @@ impl Npcs {
                 body: Player::at(feet, rules),
                 mind: Mind::standing(facing),
                 down: false,
+                senses: Senses::new(Keenness::default(), Some(CharacterId::PLAYER)),
             },
         );
     }
@@ -299,6 +305,11 @@ impl Npcs {
     /// Every NPC, in the order of their ids.
     pub(crate) fn list(&self) -> &[Npc] {
         &self.list
+    }
+
+    /// Every NPC, in the order of their ids, to change.
+    pub(crate) fn list_mut(&mut self) -> &mut [Npc] {
+        &mut self.list
     }
 }
 

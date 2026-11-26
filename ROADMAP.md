@@ -23,6 +23,7 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 - One clock for the world and its sky: a game says how long a day lasts and what time it is, skips to a time to sleep or wait, counts the days, and hears each hour that passes with `game.clock.onHour` (#59)
 - An NPC in one line (`game.npc`), or placed in `map.toml`: a solid body that can be shot, struck, used and locked on to, falls at no health, stands idle and turns its head to the player (#52)
 - How hard the game is: one dial of named steps a game reads, scales its numbers by and can name its own, which the player turns at any time on the pause menu's Gameplay tab beside the assists "Game speed" and "Fall damage" (#63)
+- NPCs see and hear: a cone of sight along the body that walls, people in the way, distance, fog, crouching, stillness and the dark weaken (lamps light it again), the very noises the player hears with who made them, and `onSee`, `onLoseSight`, `onHear`, `canSee` and `inSight` for scripts (#55)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
 
@@ -82,7 +83,6 @@ One player in first or third person: move, look, use things, fight, hear and pau
 NPCs. They stand in the world, find their way with nothing placed by hand, see and hear, follow a readable list of rules, and can say why they did what they did. Then the ones a game is built around: enemies described as kinds, bosses with phases, enemies that fly, and companions who take orders and get back up.
 
 - NPCs walk to places: round corners, through doors, and past each other (#54)
-- NPCs see and hear: sight that walls block, and the very sounds the player hears (#55)
 - NPCs notice bit by bit: curious, searching, alarmed, and calm again (#56)
 - What an NPC does is a short list you can read: when this, do that (#57)
 - Ask any NPC why: one sentence for what it is doing, and what it would rather do (#58)
