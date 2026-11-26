@@ -272,6 +272,25 @@ impl NpcState {
         gone
     }
 
+    /// Whether an NPC is called `name`, in any capitals, and if so whether
+    /// it was placed in the map.
+    /// Those `passed` says to pass over are not counted.
+    fn named(
+        &self,
+        characters: &Characters,
+        name: &str,
+        passed: impl Fn(&Entry) -> bool,
+    ) -> Option<bool> {
+        (self.entries.borrow().iter())
+            .filter(|entry| !passed(entry))
+            .find_map(|entry| {
+                let (known, _) = characters.name_and_place(entry.id)?;
+                known
+                    .eq_ignore_ascii_case(name)
+                    .then(|| matches!(entry.from, Origin::Map { .. }))
+            })
+    }
+
     /// Whether `id` is an NPC still in the game.
     pub(crate) fn has(&self, id: CharacterId) -> bool {
         self.entries.borrow().iter().any(|entry| entry.id == id)
@@ -475,10 +494,34 @@ fn find(lua: &Lua, shared: &Rc<Shared>, wanted: &str) -> mlua::Result<AnyUserDat
     let named: Vec<(CharacterId, String)> = (shared.npcs.ids().into_iter())
         .filter_map(|id| Some((id, shared.characters.name_and_place(id)?.0)))
         .collect();
-    let found = (named.iter().find(|(_, name)| name == wanted))
-        .or_else(|| (named.iter()).find(|(_, name)| name.eq_ignore_ascii_case(wanted)));
-    if let Some((id, _)) = found {
-        return shared.handles.character(lua, *id);
+    let exact: Vec<CharacterId> = (named.iter())
+        .filter(|(_, name)| name == wanted)
+        .map(|(id, _)| *id)
+        .collect();
+    let found = if exact.is_empty() {
+        (named.iter())
+            .filter(|(_, name)| name.eq_ignore_ascii_case(wanted))
+            .map(|(id, _)| *id)
+            .collect()
+    } else {
+        exact
+    };
+    match found[..] {
+        [id] => return shared.handles.character(lua, id),
+        [] => {}
+        _ => {
+            // Only the map can place two with one name; a script cannot
+            // make them.
+            return Err(fail(
+                lua,
+                format!(
+                    "{} NPCs placed in the map are called \"{wanted}\", so game.npc cannot \
+                     tell which is meant. Give each its own name in the editor (or in \
+                     map.toml), such as \"{wanted} 2\".",
+                    found.len()
+                ),
+            ));
+        }
     }
     let mut message = format!("No NPC is called \"{wanted}\".");
     if named.is_empty() {
@@ -604,6 +647,19 @@ fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUser
             return shared.handles.character(lua, id);
         }
     }
+    // One name, one person: the name is how game.npc finds them again.
+    // As the file loads again after a save, the NPCs the version before
+    // made as its file loaded and this one has not found are passed over:
+    // they leave once it has loaded.
+    let loading = shared.loading.get();
+    let claimed: Vec<CharacterId> = version.loaded.borrow().iter().map(|l| l.id).collect();
+    let passed = |entry: &Entry| {
+        loading && matches!(entry.from, Origin::File { .. }) && !claimed.contains(&entry.id)
+    };
+    if let Some(from_map) = shared.npcs.named(&shared.characters, &name, passed) {
+        let why = name_taken(&shared.npcs, &shared.characters, &name, from_map, loading);
+        return Err(fail(lua, why));
+    }
     if shared.npcs.entries.borrow().len() >= MOST_NPCS {
         return Err(fail(
             lua,
@@ -638,6 +694,44 @@ fn make(lua: &Lua, shared: &Rc<Shared>, options: &Table) -> mlua::Result<AnyUser
         facing,
     });
     shared.handles.character(lua, id)
+}
+
+/// Why `game.npc { name = name }` cannot make an NPC when one already has
+/// that name (placed in the map, if `from_map`), and what to write instead.
+/// `loading`: the line runs as the file loads, not later in the game.
+fn name_taken(
+    npcs: &NpcState,
+    characters: &Characters,
+    name: &str,
+    from_map: bool,
+    loading: bool,
+) -> String {
+    let free = (2_u32..)
+        .map(|n| format!("{name} {n}"))
+        .find(|other| npcs.named(characters, other, |_| false).is_none())
+        .unwrap_or_else(|| format!("{name} 2"));
+    let mut message = format!("There is already an NPC called \"{name}\"");
+    if from_map {
+        message.push_str(", placed in the map");
+    }
+    message.push_str(", and each NPC has a name of its own: it is how game.npc finds them.");
+    if loading {
+        let _ = write!(
+            message,
+            " To find that one, write game.npc(\"{name}\"). To make another, give it its own \
+             name: game.npc {{ name = \"{free}\", at = \"Gate\" }}. To make many alike, number \
+             them: for i = 1, 5 do game.npc {{ name = \"{name} \" .. i, at = \"Gate\" }} end"
+        );
+    } else {
+        let _ = write!(
+            message,
+            " game.npc {{ ... }} makes a new person each time it runs, so in game.onTick it \
+             would make one every tick. Make each NPC once, at the top of the file, and find it \
+             later with game.npc(\"{name}\"). If a second one is really wanted, give it its own \
+             name: game.npc {{ name = \"{free}\", at = \"Gate\" }}"
+        );
+    }
+    message
 }
 
 /// Where `at` says to stand an NPC: a place in the map by its name, a

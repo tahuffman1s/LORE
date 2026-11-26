@@ -296,7 +296,7 @@ fn a_saved_script_keeps_its_npcs_moves_those_it_now_puts_elsewhere_and_lets_go_o
     let game = GameFolder::new(
         r#"game.npc { name = "Guard", at = "Gate" }
         game.npc { name = "Cook", at = "Gate" }
-        game.npc { name = "Guard", at = "Tower" }"#,
+        game.npc { name = "Guard 2", at = "Tower" }"#,
     );
     let mut host = game.open();
     assert_eq!(host.last_error(), None);
@@ -312,7 +312,7 @@ fn a_saved_script_keeps_its_npcs_moves_those_it_now_puts_elsewhere_and_lets_go_o
     // second guard's line is the same.
     game.write(
         r#"game.npc { name = "Guard", at = "Tower" }
-        game.npc { name = "Guard", at = "Tower" }"#,
+        game.npc { name = "Guard 2", at = "Tower" }"#,
     );
     host.reload().unwrap();
     let mut now = Vec::new();
@@ -435,5 +435,93 @@ fn a_map_saved_while_the_game_runs_moves_renames_and_takes_out_its_npcs() {
             .as_deref()
             .is_some_and(|said| said.contains("no longer in the world")),
         "{error:?}"
+    );
+}
+
+#[test]
+fn one_name_is_one_person_and_a_crowd_is_numbered() {
+    // Made in game.onTick, a second guard is a mistake that says what to
+    // write, not a new guard every tick.
+    let mut host = game(
+        r#"game.npc { name = "Guard", at = "Gate" }
+        game.onTick(function() game.npc { name = "Guard", at = "Gate" } end)"#,
+    );
+    assert_eq!(host.last_error(), None);
+    for _ in 0..120 {
+        host.tick(&InputFrame::default(), STEP);
+    }
+    let mut count = 0;
+    host.each_npc(|_| count += 1);
+    assert_eq!(count, 2, "the smith and one guard");
+    let error = host
+        .last_error()
+        .map(|error| error.message.clone())
+        .unwrap();
+    assert!(
+        error.contains("There is already an NPC called \"Guard\"")
+            && error.contains("in game.onTick it would make one every tick")
+            && error.contains("find it later with game.npc(\"Guard\")")
+            && error.contains("game.npc { name = \"Guard 2\", at = \"Gate\" }"),
+        "{error}"
+    );
+
+    // Twice in the file, in any capitals, says how to make a second or
+    // many.
+    let twice = load_error(
+        r#"game.npc { name = "Guard", at = "Gate" }
+        game.npc { name = "guard", at = "Tower" }"#,
+    );
+    assert!(
+        twice.contains("There is already an NPC called \"guard\"")
+            && twice.contains("\"guard 2\"")
+            && twice.contains("for i = 1, 5 do"),
+        "{twice}"
+    );
+    // The smith is placed in the map.
+    let smith = load_error(r#"game.npc { name = "Smith", at = "Gate" }"#);
+    assert!(
+        smith.contains("called \"Smith\", placed in the map"),
+        "{smith}"
+    );
+
+    // A crowd made in a loop, each numbered, is found one by one.
+    let host = game(
+        r#"for i = 1, 5 do game.npc { name = "Villager " .. i, at = "Gate" } end
+        print(#game.npcs(), game.npc("Villager 3").name)"#,
+    );
+    assert_eq!(host.last_error(), None);
+    assert_eq!(printed(), ["6 Villager 3"]);
+
+    // A removed NPC's name is free again.
+    let host = game(
+        r#"game.npc { name = "Guard", at = "Gate" }:remove()
+        print(game.npc { name = "Guard", at = "Gate" }.name)"#,
+    );
+    assert_eq!(host.last_error(), None);
+    assert_eq!(printed(), ["Guard"]);
+}
+
+#[test]
+fn two_npcs_placed_in_the_map_with_one_name_are_not_found_by_it() {
+    listen();
+    let mut both = placed();
+    let mut other = both.last().unwrap().clone();
+    other.id = "s2".to_owned();
+    both.push(other);
+    let host = ScriptHost::from_sources_with_placed(
+        [(ENTRY_SCRIPT.to_owned(), r#"game.npc("Smith")"#.to_owned())],
+        Vec::new(),
+        ActionMap::standard(),
+        Vec::new(),
+        both,
+    );
+    let error = host
+        .last_error()
+        .map(|error| error.message.clone())
+        .unwrap();
+    assert!(
+        error.contains("2 NPCs placed in the map are called \"Smith\"")
+            && error.contains("\"Smith 2\""),
+        "{error}"
     );
 }
