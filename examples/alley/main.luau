@@ -55,9 +55,14 @@ local pauseMenu = game.pauseMenu
 
 local drawHud = true
 
+-- Night falls at eight, whichever way the clock got there.
+game.clock.onHour(20, function()
+    print("Night falls over the alley.")
+end)
+
 -- The alley starts early in the afternoon, in fair weather.
 game.onStart(function()
-    game.sky.setHour(13)
+    game.clock.time = "13:00"
     -- The moon three times its real size, so its face shows in a narrow sky.
     game.sky.setMoonSize(3)
     game.weather.set("fair", 0)

@@ -541,6 +541,46 @@ impl Document {
         true
     }
 
+    /// Puts a detached `child` just before `before`, as a child of its
+    /// parent. Returns false and changes nothing if an id is stale, `before`
+    /// has no parent, or `child` is the root, `before` or already attached.
+    pub fn insert_before(&mut self, child: ElementId, before: ElementId) -> bool {
+        let Some(b) = self.get(before) else {
+            return false;
+        };
+        let (Some(parent), prev) = (b.parent, b.prev) else {
+            return false;
+        };
+        let Some(c) = self.get(child) else {
+            return false;
+        };
+        if child == self.root || child == before || c.parent.is_some() {
+            return false;
+        }
+        if let Some(c) = self.get_mut(child) {
+            c.parent = Some(parent);
+            c.prev = prev;
+            c.next = Some(before);
+        }
+        if let Some(n) = self.get_mut(before) {
+            n.prev = Some(child);
+        }
+        match prev {
+            Some(p) => {
+                if let Some(n) = self.get_mut(p) {
+                    n.next = Some(child);
+                }
+            }
+            None => {
+                if let Some(n) = self.get_mut(parent) {
+                    n.first_child = Some(child);
+                }
+            }
+        }
+        self.mark_dirty(parent, Dirty::ALL);
+        true
+    }
+
     /// Unlinks `id` from its parent but keeps it and its subtree alive.
     pub fn detach(&mut self, id: ElementId) -> bool {
         let Some(n) = self.get(id) else {

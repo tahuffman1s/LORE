@@ -233,6 +233,21 @@ pub fn open_with_settings(
             Err(problem) => log::warn!("{file} in the pack cannot be shown on the HUD: {problem}."),
         }
     }
+    // And every font file, as a game's `fonts` folder is read.
+    let font_files: Vec<String> = opened
+        .files()
+        .filter(|name| {
+            name.strip_prefix(lore_script::FONTS_FOLDER)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|rest| !rest.contains('/') && lore_script::is_font_file(rest))
+        })
+        .map(str::to_owned)
+        .collect();
+    let mut fonts = Vec::with_capacity(font_files.len());
+    for file in font_files {
+        let bytes = opened.read(&file)?;
+        fonts.push((format!("{file} in the pack"), bytes));
+    }
     // The map is read first: what is placed is the script's to find from
     // its first line.
     let map = if opened.contains(MAP_FILE) {
@@ -245,7 +260,8 @@ pub fn open_with_settings(
     } else {
         Map::default()
     };
-    let game = ScriptGame::from_pack_parts(scripts, images, map, actions, settings);
+    let game =
+        ScriptGame::from_pack_parts_with_fonts(scripts, images, fonts, map, actions, settings);
     // Nothing is played while a script loads, so the sounds can follow it.
     let sounds = Sounds::in_pack(&mut opened);
     for problem in sounds.problems() {
@@ -305,6 +321,37 @@ mod tests {
         let out = folder.join("Game.lpk");
         lore_pack::write(&out, "Zombie Night", &sources).unwrap();
         out
+    }
+
+    #[test]
+    fn a_packed_game_has_its_fonts() {
+        let folder = scratch("fonts");
+        let font = lore_render::Font::bundled_file();
+        let family = lore_script::font_family_of(font).unwrap();
+        let sources: Vec<Source> = [
+            (
+                "main.luau",
+                b"game.hud.text(\"x\", { fontFamily = \"Atkinson Hyperlegible Next\" })".as_slice(),
+            ),
+            ("fonts/atkinson.ttf", font),
+            ("fonts/notes.txt", b"not a font"),
+        ]
+        .iter()
+        .map(|(name, contents)| {
+            let path = folder.join(format!("source-{}", name.replace('/', "-")));
+            fs::write(&path, contents).unwrap();
+            Source {
+                name: (*name).to_owned(),
+                path,
+            }
+        })
+        .collect();
+        let out = folder.join("Game.lpk");
+        lore_pack::write(&out, "Zombie Night", &sources).unwrap();
+
+        let game = open(&out, &ActionMap::standard()).unwrap();
+        assert_eq!(game.game.host().hud_fonts(), [family]);
+        assert!(game.game.host().last_error().is_none());
     }
 
     #[test]

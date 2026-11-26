@@ -160,7 +160,7 @@ pub struct ScriptHost {
     /// The HUD images the running version knows.
     images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The font families of a game given as text, which has no folder to
-    /// look in: see [`with_hud_fonts`](Self::with_hud_fonts).
+    /// look in: see [`from_sources_with_fonts`](Self::from_sources_with_fonts).
     given_fonts: Rc<Vec<String>>,
     /// The font families the running version knows.
     fonts: Rc<Vec<String>>,
@@ -340,6 +340,7 @@ impl ScriptHost {
             settings,
             Vec::new(),
             placed,
+            Vec::new(),
         ))
     }
 
@@ -399,7 +400,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, Vec::new(), Vec::new())
+        Self::with_files(files, actions, settings, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -414,7 +415,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, Vec::new())
+        Self::with_files(files, actions, settings, images, Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -430,7 +431,25 @@ impl ScriptHost {
         placed: Vec<crate::Placed>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, placed)
+        Self::with_files(files, actions, settings, images, placed, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_placed`](Self::from_sources_with_placed) does,
+    /// with the font `families` it has (sorted): a packaged game's, read
+    /// from the font files in its pack, as a game on disk has them read
+    /// from its `fonts` folder.
+    #[must_use]
+    pub fn from_sources_with_fonts(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<crate::images::HudImageInfo>,
+        families: Vec<String>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        placed: Vec<crate::Placed>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings, images, placed, families)
     }
 
     /// The game's HUD images, by name, sorted, as the running script knows
@@ -451,14 +470,6 @@ impl ScriptHost {
         &self.fonts
     }
 
-    /// Gives a game run from text the font families it has: a packaged
-    /// game's, as a game on disk has them read from its `fonts` folder.
-    #[must_use]
-    pub fn with_hud_fonts(mut self, families: Vec<String>) -> Self {
-        self.given_fonts = Rc::new(families);
-        self
-    }
-
     /// A host running the `main.luau` in `files`.
     fn with_files(
         files: Files,
@@ -466,6 +477,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
         images: Vec<crate::images::HudImageInfo>,
         placed: Vec<crate::Placed>,
+        families: Vec<String>,
     ) -> Self {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
@@ -504,7 +516,7 @@ impl ScriptHost {
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
-            given_fonts: Rc::default(),
+            given_fonts: Rc::new(families),
             fonts: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
@@ -623,6 +635,11 @@ impl ScriptHost {
         self.run_screens(input);
         self.hurts_due();
         self.switches_due();
+        // Hours passed by the clock, or skipped by a timer, a menu or the
+        // start, are heard before the tick's rules read the hour.
+        if !stopped {
+            self.hours_due();
+        }
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
         self.hurts_due();
         self.switches_due();
@@ -1174,6 +1191,102 @@ impl ScriptHost {
     #[must_use]
     pub fn hour(&self) -> Option<f64> {
         self.weather.hour()
+    }
+
+    /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
+    /// half past one in the afternoon), or `None` while the game has never
+    /// said a time or a day length: such a game has no day and night.
+    ///
+    /// It is what `game.clock.hour` gives. The script's tick moves it on, so
+    /// the world reads, during its own tick, the hour the last tick left.
+    #[must_use]
+    pub fn time_of_day(&self) -> Option<f64> {
+        self.weather.day.time_of_day()
+    }
+
+    /// The time of day on the world's clock as a game writes it ("8:00"),
+    /// or `None` while the clock is unset: what `game.clock.time` gives.
+    #[must_use]
+    pub fn clock_text(&self) -> Option<String> {
+        self.weather.day.text()
+    }
+
+    /// The day it is on the world's clock, counted from 1 (`game.clock.day`),
+    /// or `None` while the clock is unset.
+    #[must_use]
+    pub fn day(&self) -> Option<u32> {
+        self.weather.day.day()
+    }
+
+    /// The world's clock as plain data, for a save to keep.
+    #[must_use]
+    pub fn world_clock(&self) -> crate::WorldClock {
+        self.weather.day.state()
+    }
+
+    /// Puts back a clock that [`world_clock`](Self::world_clock) gave. The
+    /// hours it had passed are not told to `game.clock.onHour` again.
+    pub fn restore_world_clock(&mut self, clock: crate::WorldClock) {
+        self.weather.day.restore(clock);
+    }
+
+    /// Calls every `game.clock.onHour` function once for each hour of a
+    /// day, from 0 to 23, as if a whole day passed, so that `lore check`
+    /// runs them. Gives how many there are.
+    pub fn pretend_hours(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().hour.len();
+        for hour in 0..24 {
+            self.tell_hour(hour);
+        }
+        count
+    }
+
+    /// Tells `game.clock.onHour` functions of each hour the clock has come
+    /// to since the last tick.
+    fn hours_due(&mut self) {
+        // Hours nobody can hear wait to be told.
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        // One hour at a time: a function told of one hour that sets the
+        // clock (back, or to a time it reads) stops the hours after it from
+        // being told as if they had passed. A day of hours at most a tick,
+        // so functions that keep skipping on cannot hold the tick forever.
+        for _ in 0..24 {
+            if self.paused {
+                break;
+            }
+            let Some(hour) = self.weather.day.next_due() else {
+                break;
+            };
+            self.tell_hour(hour);
+        }
+    }
+
+    /// Calls the `game.clock.onHour` functions that listen for `hour`, and
+    /// those that listen for every hour, in the order they were added.
+    fn tell_hour(&mut self, hour: u8) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        let count = shared.handlers.borrow().hour.len();
+        for index in 0..count {
+            let entry = shared.handlers.borrow().hour.get(index).cloned();
+            let Some((wanted, handler)) = entry else {
+                break;
+            };
+            if wanted.is_some_and(|wanted| wanted != hour) {
+                continue;
+            }
+            if !self.call(&shared, &handler, hour) {
+                break;
+            }
+        }
     }
 
     /// The weather as the script has said it and as it now is: on its way,

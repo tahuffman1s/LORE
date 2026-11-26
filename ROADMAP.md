@@ -20,6 +20,7 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 - One player, who is `game.player` to a script from its first line: no list of players, no joining or leaving, and a script that asks for them is told what to write instead. `lore check` tells a script of pretend shots at a training dummy and at a wall, and of the player dying (#280)
 - The standard controls are an adventure's: `use_item`, `next_item`, `previous_item`, `map` and `inventory`, and no `scoreboard` or `grenade` (#313, #317)
 - Walkable ground worked out from the level with nothing to place: doors that shut ways, `game.canWalk` and `game.findWay`, and `lore check` naming places that cannot be reached (#53)
+- One clock for the world and its sky: a game says how long a day lasts and what time it is, skips to a time to sleep or wait, counts the days, and hears each hour that passes with `game.clock.onHour` (#59)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
 
@@ -84,7 +85,6 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - NPCs notice bit by bit: curious, searching, alarmed, and calm again (#56)
 - What an NPC does is a short list you can read: when this, do that (#57)
 - Ask any NPC why: one sentence for what it is doing, and what it would rather do (#58)
-- The world has a clock: time of day that scripts read, set and speed up (#59)
 - NPCs have a day: where they are at each hour, written as a timetable (#60)
 - NPCs fight with the player's own weapons, and miss the way people do (#61)
 - NPCs use cover and go round, on cover the level already has (#62)

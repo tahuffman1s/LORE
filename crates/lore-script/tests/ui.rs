@@ -666,6 +666,88 @@ fn a_click_of_the_mouse_fires_the_handler_of_the_button_under_it() {
     assert!(printed().is_empty());
 }
 
+const SLIDER_SCRIPT: &str = "local main = game.ui.load(\"ui/main.html\")\n\
+    local over = game.ui.load(\"ui/over.html\")\n\
+    main:on(\"moved\", function(e) print(\"moved \" .. tostring(e.value)) end)\n\
+    main:on(\"clicked\", function(e) print(\"clicked \" .. e.element.id) end)\n\
+    game.onStart(function() main:show() end)\n\
+    game.onTick(function()\n\
+        if game.input.justPressed(\"menu_next_tab\") then over:show() end\n\
+        if game.input.justPressed(\"menu_back\") then over:hide() end\n\
+    end)\n";
+
+const SLIDER: &str = "<input id=\"r\" type=\"range\" min=\"0\" max=\"100\" step=\"1\" value=\"0\" onchange=\"moved\" onclick=\"clicked\">";
+
+fn slider_play() -> Play {
+    let mut play = Play::with_files(
+        SLIDER_SCRIPT,
+        SLIDER,
+        &[("ui/over.html", "<button>Over</button>")],
+    );
+    play.ticks(2);
+    play
+}
+
+fn mouse_at(play: &mut Play, x: f32) {
+    play.input.set_pointer(Some([x, 25.0]), [1920.0, 1080.0]);
+    play.tick();
+}
+
+#[test]
+fn a_slider_drag_ends_when_the_gamepad_takes_over() {
+    let mut play = slider_play();
+    play.input.press(MouseButton::MouseLeft);
+    mouse_at(&mut play, 100.0);
+    assert_eq!(printed(), ["moved 50"]);
+    mouse_at(&mut play, 150.0);
+    assert_eq!(printed(), ["moved 75"]);
+    // A touch of the pad, and the button comes up where nobody hears it.
+    play.input.press(GamepadButton::LeftBumper);
+    play.input.release(MouseButton::MouseLeft);
+    play.tick();
+    play.input.release(GamepadButton::LeftBumper);
+    // Back on the keyboard and mouse, with the button up.
+    play.input.press(Key::X);
+    mouse_at(&mut play, 20.0);
+    mouse_at(&mut play, 30.0);
+    let said = printed();
+    assert!(said.is_empty(), "a stuck drag moved the slider: {said:?}");
+}
+
+#[test]
+fn a_slider_drag_ends_when_another_screen_opens_on_top() {
+    let mut play = slider_play();
+    play.input.press(MouseButton::MouseLeft);
+    mouse_at(&mut play, 100.0);
+    assert_eq!(printed(), ["moved 50"]);
+    play.input.press(Key::E);
+    play.tick();
+    play.input.release(Key::E);
+    play.input.release(MouseButton::MouseLeft);
+    play.tick();
+    play.input.press(Key::Escape);
+    play.tick();
+    play.input.release(Key::Escape);
+    mouse_at(&mut play, 20.0);
+    mouse_at(&mut play, 30.0);
+    let said = printed();
+    assert!(said.is_empty(), "a stuck drag moved the slider: {said:?}");
+}
+
+#[test]
+fn a_press_and_release_on_a_slider_is_a_click_and_so_is_the_end_of_a_drag() {
+    let mut play = slider_play();
+    mouse_at(&mut play, 100.0);
+    play.tap(MouseButton::MouseLeft);
+    assert_eq!(printed(), ["moved 50", "clicked r"]);
+    play.input.press(MouseButton::MouseLeft);
+    play.tick();
+    mouse_at(&mut play, 150.0);
+    play.input.release(MouseButton::MouseLeft);
+    play.tick();
+    assert_eq!(printed(), ["moved 75", "clicked r"]);
+}
+
 #[test]
 fn b_hides_a_screen_over_another_but_never_the_last_one_and_a_back_handler_wins() {
     let script = "local under = game.ui.load(\"ui/main.html\")\n\
@@ -951,6 +1033,28 @@ fn fill_replaces_the_children_with_the_rows_html() {
         "{seen:?}"
     );
     assert!(!seen.contains(&"old".to_owned()), "{seen:?}");
+}
+
+#[test]
+fn before_adds_html_ahead_of_an_element() {
+    let script = "local main = game.ui.load(\"ui/main.html\")\n\
+        game.onStart(function()\n\
+            main:show()\n\
+            local last = main:find(\"#last\")\n\
+            last:before(\"<button>\" .. game.ui.escape(\"a<b\") .. \"</button><button>two</button>\")\n\
+            local names = {}\n\
+            for _, b in main:findAll(\"#list button\") do table.insert(names, b.text) end\n\
+            print(table.concat(names, \",\"))\n\
+            print(select(2, pcall(function() last:before(\"<blink>\") end)))\n\
+        end)\n";
+    let mut play = Play::new(
+        script,
+        "<div id=\"list\"><button>one</button><button id=\"last\">three</button></div>",
+    );
+    play.ticks(2);
+    let said = printed();
+    assert_eq!(said[0], "one,a<b,two,three", "{said:?}");
+    assert!(said[1].contains("element:before"), "{said:?}");
 }
 
 #[test]

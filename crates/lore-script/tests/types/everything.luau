@@ -306,6 +306,17 @@ end
 
 game.sky.setHour(18.5)
 game.sky.setDayLength(24)
+game.clock.dayLength = 20
+game.clock.time = "8:00"
+game.clock.hour = 6.5
+game.clock.skipTo("8:00")
+game.clock.skipTo(20)
+local clockText: string = game.clock.time or ""
+local hourNow: number = game.clock.hour or 12
+local dayNow: number = game.clock.day or 1
+print(clockText, hourNow, dayNow, game.clock.dayLength)
+game.clock.onHour(20, function(hour: number) print("Night falls at " .. hour) end)
+game.clock.onHour(function(hour) print("It is " .. hour .. " o'clock") end)
 game.sky.setLatitude(61)
 game.sky.setNorth(90)
 game.sky.setDate(2026, 3, 20)
@@ -990,6 +1001,7 @@ if play then
     print(play:hasClass("a"), play.id, play.tag, play.parent, play.style.color)
     play:setVar("--gold", "#ffd75e")
     play:append("<p>" .. game.ui.escape("Ann & Bea") .. "</p>")
+    play:before("<p>" .. game.ui.escape("Cy") .. "</p>")
     play:focus()
     local inner: Element? = play:find("p")
     local inners: { Element } = play:findAll("p")

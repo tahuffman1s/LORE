@@ -112,3 +112,7 @@ print(game.player.useText) -- wrong: only an NPC has useText
 game.player:remove() -- wrong: only an NPC can be removed
 local who: Npc = game.player -- wrong: game.player is a Character, not an NPC
 print(who)
+
+-- The clock's time is text, and its day is counted, not set.
+game.clock.onHour("eight", function() end) -- wrong: the hour is a number
+game.clock.time = true -- wrong: the time is text like "8:00"

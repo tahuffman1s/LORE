@@ -50,6 +50,7 @@ mod builtin;
 mod camera_api;
 pub use body_api::{AnimationAsk, BUILT_IN_HELD, BUILT_IN_MODELS, CameraView, HeldSaid};
 mod character_api;
+mod clock_api;
 mod dice_api;
 mod error;
 mod fluid_api;
@@ -81,10 +82,14 @@ mod weather_api;
 pub use audio::{AudioCommand, SoundId, SoundRequest, SoundTweak};
 pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
+pub use clock_api::WorldClock;
 pub use dice_api::{Dice, seed_new_games};
 pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
-pub use fonts::{FONTS_FOLDER, family_of as font_family_of, scan as scan_fonts};
+pub use fonts::{
+    FONTS_FOLDER, families_of as font_families_of, family_of as font_family_of, is_font_file,
+    scan as scan_fonts,
+};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
 pub use hud::{HudPiece, HudShape, HudStyle};
 pub use images::{HudImageInfo, IMAGES_FOLDER, png_size, scan as scan_images};

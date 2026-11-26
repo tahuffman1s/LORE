@@ -276,6 +276,33 @@ fn append_html_adds_boxes_hits_and_paints() {
 }
 
 #[test]
+fn insert_html_before_puts_new_siblings_ahead_of_the_element() {
+    let mut s = page(
+        "#list{display:flex;flex-direction:column} .row{height:20px}",
+        "<div id=list><button class=row id=first>one</button><button class=row id=last>three</button></div>",
+    );
+    let (list, last, first) = (el(&s, "list"), el(&s, "last"), el(&s, "first"));
+    let added = s
+        .insert_html_before(
+            last,
+            "<button class=row id=second>two</button><p class=row id=note>note</p>",
+        )
+        .unwrap();
+    assert_eq!(added.len(), 2);
+    let order: Vec<_> = s.document().children(list).collect();
+    assert_eq!(order, [first, added[0], added[1], last]);
+    assert!(rect(&mut s, "first").y < rect(&mut s, "second").y);
+    assert!(rect(&mut s, "note").y < rect(&mut s, "last").y);
+    // Before the first child, it becomes the first child.
+    let top = s.insert_html_before(first, "<p id=top>top</p>").unwrap();
+    assert_eq!(s.document().first_child(list), Some(top[0]));
+    // Nothing is added when the HTML is wrong, and nothing goes before the top.
+    assert!(s.insert_html_before(last, "<p><b").is_err());
+    assert_eq!(s.document().children(list).count(), 5);
+    assert!(s.insert_html_before(s.root(), "<p>x</p>").is_err());
+}
+
+#[test]
 fn append_html_to_a_select_picks_the_option() {
     let mut s = page("", "<select id=s><option>A</option></select>");
     let sel = el(&s, "s");

@@ -235,7 +235,17 @@ impl UiState {
             fonts: env.fonts,
             images: env.images,
         };
-        if let Some(top) = top_of(inner) {
+        let top = top_of(inner);
+        // A press (a slider being dragged) belongs to the screen on top: when
+        // another screen is on top, or this one is closed, it is over.
+        for entry in &mut inner.entries {
+            if Some(entry.id) != top
+                && let Some(page) = entry.page.as_mut()
+            {
+                page.pointer_cancel();
+            }
+        }
+        if let Some(top) = top {
             drive(inner, top, controls, &mut measurer, &mut out);
         }
         keyboard::keep_up(inner);
@@ -306,7 +316,10 @@ fn drive(
             page.frame(measurer);
         }
         let before = page.focused();
-        if !c.gamepad {
+        if c.gamepad {
+            // The gamepad took over: a drag with the mouse is over.
+            page.pointer_cancel();
+        } else {
             if let Some([x, y]) = c.pointer {
                 page.pointer_move(x, y);
             }

@@ -72,12 +72,11 @@ local function footing(): string
 end
 
 local function hour(): string
-    local now = game.sky.hour()
+    local now = game.clock.time
     if not now then
         return "the level's own light"
     end
-    local minutes = math.floor(now * 60 + 0.5) % 1440
-    return string.format("%02d:%02d", minutes // 60, minutes % 60)
+    return now .. ", day " .. (game.clock.day or 1)
 end
 
 local function falling(): string

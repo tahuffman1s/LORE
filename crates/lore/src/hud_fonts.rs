@@ -20,6 +20,9 @@ pub(crate) struct HudFonts {
     measuring: Font,
     /// The game's folder; a game given as text has none.
     folder: Option<PathBuf>,
+    /// The font files of a game played from its pack, by name: they are
+    /// read once and never change.
+    packed: Option<Vec<(String, Vec<u8>)>>,
     shown: Option<Vec<String>>,
     /// Each font file and when it was last changed, as handed over, so a
     /// font saved again is read again though its name is the same.
@@ -40,6 +43,7 @@ impl Default for HudFonts {
         Self {
             measuring: Font::bundled(),
             folder: None,
+            packed: None,
             shown: None,
             changed: Vec::new(),
             handed: false,
@@ -57,6 +61,15 @@ impl HudFonts {
         }
     }
 
+    /// The font files of a game played from its pack: `files` are each
+    /// file's name in the pack and its bytes.
+    pub(crate) fn in_pack(files: Vec<(String, Vec<u8>)>) -> Self {
+        Self {
+            packed: Some(files),
+            ..Self::default()
+        }
+    }
+
     /// A handle to measure text with, in the fonts handed over so far and
     /// whichever come later.
     pub(crate) fn measuring(&self) -> Font {
@@ -66,27 +79,37 @@ impl HudFonts {
     /// Hands the frame the fonts of the families the script now knows, if
     /// they are not the ones handed over last.
     pub(crate) fn follow(&mut self, host: &ScriptHost, frame: &mut Frame) {
-        let Some(folder) = self.folder.as_deref() else {
+        let now = host.hud_fonts();
+        let families = if let Some(files) = self.packed.as_deref() {
+            if self.shown.as_deref() == Some(now) {
+                return;
+            }
+            self.shown = Some(now.to_vec());
+            if now.is_empty() && !self.handed {
+                return;
+            }
+            group_families(files, now)
+        } else if let Some(folder) = self.folder.as_deref() {
+            if self.shown.as_deref() == Some(now) {
+                self.since_look += 1;
+                if self.since_look < LOOK_EVERY {
+                    return;
+                }
+                self.since_look = 0;
+                if font_files(folder) == self.changed {
+                    return;
+                }
+            }
+            self.changed = font_files(folder);
+            self.shown = Some(now.to_vec());
+            if now.is_empty() && !self.handed {
+                return;
+            }
+            read_families(&self.changed, now)
+        } else {
             return;
         };
-        let now = host.hud_fonts();
-        if self.shown.as_deref() == Some(now) {
-            self.since_look += 1;
-            if self.since_look < LOOK_EVERY {
-                return;
-            }
-            self.since_look = 0;
-            if font_files(folder) == self.changed {
-                return;
-            }
-        }
-        self.changed = font_files(folder);
-        self.shown = Some(now.to_vec());
-        if now.is_empty() && !self.handed {
-            return;
-        }
         self.handed = !now.is_empty();
-        let families = read_families(&self.changed, now);
         self.measuring.replace(&families);
         frame.set_hud_fonts(families);
     }
@@ -126,6 +149,23 @@ fn read_families(
     files: &[(PathBuf, Option<SystemTime>)],
     families: &[String],
 ) -> Vec<HudFontFamily> {
+    let mut named = Vec::with_capacity(files.len());
+    for (path, _) in files {
+        match std::fs::read(path) {
+            Ok(bytes) => named.push((path.display().to_string(), bytes)),
+            Err(error) => log::warn!(
+                "The font file {} cannot be read ({error}). Check that the file is \
+                 there and that you may open it.",
+                path.display()
+            ),
+        }
+    }
+    group_families(&named, families)
+}
+
+/// Groups font files, each a name to say in a warning and its bytes, by
+/// the family each says it belongs to, as [`read_families`] does.
+fn group_families(files: &[(String, Vec<u8>)], families: &[String]) -> Vec<HudFontFamily> {
     let mut out: Vec<HudFontFamily> = families
         .iter()
         .map(|name| HudFontFamily {
@@ -133,25 +173,14 @@ fn read_families(
             files: Vec::new(),
         })
         .collect();
-    for (path, _) in files {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                log::warn!(
-                    "The font file {} cannot be read ({error}). Check that the file is \
-                     there and that you may open it.",
-                    path.display()
-                );
-                continue;
-            }
-        };
-        let info = match font_file_info(&bytes) {
+    for (name, bytes) in files {
+        let info = match font_file_info(bytes) {
             Ok(info) => info,
             Err(problem) => {
                 log::warn!(
-                    "The font file {} cannot be used: {problem}. Replace it with a TrueType \
-                     (.ttf) or OpenType (.otf) file, or delete it.",
-                    path.display()
+                    "The font file {name} cannot be used: {problem}. A font must be a TrueType \
+                     (.ttf) or OpenType (.otf) file: fix {name} in the game's `fonts` folder, \
+                     and pack the game again if it is packed."
                 );
                 continue;
             }
@@ -161,7 +190,7 @@ fn read_families(
             .iter_mut()
             .find(|family| family.name.to_lowercase() == wanted)
         {
-            family.files.push(bytes);
+            family.files.push(bytes.clone());
         }
     }
     out
