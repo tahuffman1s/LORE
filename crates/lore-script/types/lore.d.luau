@@ -921,7 +921,9 @@ declare extern type Npc extends Character with
     --- place, 1.5 for someone); `facing` turns it on arriving (degrees left,
     --- as the map writes them; at a marker of type "place" it faces the way
     --- the marker does). A new `goTo` or `follow` takes the place of the
-    --- last. `onArrive` hears it get there, `onCannotReach` why it cannot.
+    --- last. `onArrive` hears it get there, `onCannotReach` why it cannot,
+    --- both in the game's tick. A walk under way goes on when the script is
+    --- saved and loads again.
     --- Example: guard:goTo("Gate")
     --- Example: guard:goTo(game.player, { run = true })
     --- Example: guard:goTo(vector.create(4, 0, -6), { within = 1, facing = 180 })
@@ -1115,7 +1117,7 @@ type NpcOptions = { name: string, at: string | vector | Thing, facing: number? }
 type GoOptions = { run: boolean?, within: number?, facing: number? }
 
 --- How an NPC follows someone (`npc:follow`): `distance` is how far
---- behind it keeps, in metres (3); `run` to run all the way.
+--- behind it keeps, in metres (3 unless said); `run` to run all the way.
 type FollowOptions = { distance: number?, run: boolean? }
 
 --- Where on the screen a piece of the HUD is pinned.

@@ -845,11 +845,10 @@ impl Trouble {
                                              on: it may have been put inside a wall or in the \
                                              air. Put it on a floor"
                 .to_owned(),
-            Self::NoWay(NoWay::EndOff) => format!(
-                "there is no floor a person can stand on within 2 m of {}. Choose a place on a \
-                 floor",
-                place(to)
-            ),
+            Self::NoWay(NoWay::EndOff) => "there is no floor a person can stand on within 2 m \
+                                           of it. Move the place onto a floor, or choose one \
+                                           that is on one"
+                .to_owned(),
             Self::NoWay(NoWay::Shut { gates, nearest, .. }) => {
                 let named: Vec<String> = gates
                     .iter()
@@ -861,12 +860,12 @@ impl Trouble {
                 let what = match named.as_slice() {
                     [] => "the way there is shut".to_owned(),
                     [one] => format!(
-                        "{one} is locked (its usable is false: set it to true to let people \
-                         through)"
+                        "{one} is locked (it has usable = false; set door.usable = true to let \
+                         people through)"
                     ),
                     [first @ .., last] => format!(
-                        "{} and {last} are locked (their usable is false: set it to true to let \
-                         people through)",
+                        "{} and {last} are locked (they have usable = false; set door.usable = \
+                         true to let people through)",
                         first.join(", ")
                     ),
                 };
@@ -874,7 +873,8 @@ impl Trouble {
             }
             Self::NoWay(NoWay::Apart { nearest }) => format!(
                 "nothing a person can walk joins where it stands to there: a slope steeper than \
-                 45°, a step higher than 0.4 m or a gap narrower than 0.7 m is in the way{}",
+                 45°, a step higher than 0.4 m or a gap narrower than 0.7 m is in the way{}. \
+                 Make a ramp or steps, widen the gap, or send it somewhere on the same ground",
                 short(*nearest)
             ),
             Self::Stuck { at, by } => {
@@ -885,11 +885,14 @@ impl Trouble {
                     None => "something is".to_owned(),
                 };
                 format!(
-                    "{who} in the way at {}, and it found no way round",
+                    "{who} in the way at {}, and it found no way round. Move whoever is in the \
+                     way, or send it somewhere else with goTo",
                     place(*at)
                 )
             }
-            Self::Gone => "whoever it was going to has left the world".to_owned(),
+            Self::Gone => "whoever it was going to has left the world. Give it somewhere else \
+                           to go with goTo"
+                .to_owned(),
         }
     }
 }
@@ -1231,8 +1234,8 @@ mod tests {
         });
         assert_eq!(
             locked.cause([0.0, 0.0, -6.0], door, npc),
-            "the door \"Cellar door\" is locked (its usable is false: set it to true to let people \
-             through) (the nearest it can get is 4 m short)"
+            "the door \"Cellar door\" is locked (it has usable = false; set door.usable = true to \
+             let people through) (the nearest it can get is 4 m short)"
         );
         let apart = Trouble::NoWay(NoWay::Apart {
             nearest: [0.0, 0.0, -9.5],
@@ -1240,7 +1243,7 @@ mod tests {
         assert!(
             apart
                 .cause([0.0, 0.0, -10.0], door, npc)
-                .ends_with("(the nearest it can get is 0.5 m short)")
+                .contains("(the nearest it can get is 0.5 m short). Make")
         );
         let stuck = Trouble::Stuck {
             at: [1.0, 0.0, -2.0],
@@ -1248,7 +1251,8 @@ mod tests {
         };
         assert_eq!(
             stuck.cause([0.0; 3], door, npc),
-            "Smith is in the way at (1.0, 0.0, -2.0), and it found no way round"
+            "Smith is in the way at (1.0, 0.0, -2.0), and it found no way round. Move whoever is \
+             in the way, or send it somewhere else with goTo"
         );
     }
 }

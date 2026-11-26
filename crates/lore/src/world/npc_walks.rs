@@ -251,7 +251,7 @@ fn a_locked_door_is_said_to_be_why_it_cannot_get_there() {
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(
         said[0].starts_with(
-            "Guard cannot reach (0.5, 0.0, -6.0): the door \"Cellar door\" is locked (its usable is false"
+            "Guard cannot reach (0.5, 0.0, -6.0): the door \"Cellar door\" is locked (it has usable = false"
         ),
         "{said:?}"
     );
@@ -476,7 +476,19 @@ fn a_hundred_walking_npcs_take_a_tick_in_a_known_time() {
         .iter()
         .filter(|npc| npc.mind.walk.walking())
         .count();
-    println!("100 NPCs, {walking} walking: {each:?} a tick");
+    // The same hundred standing, and nobody: what walking itself costs.
+    let timed = |script: &str| {
+        let mut world = starter(script, "");
+        run(&mut world, 30);
+        let started = std::time::Instant::now();
+        run(&mut world, ticks);
+        started.elapsed() / ticks
+    };
+    let standing = timed(
+        "for i = 0, 99 do game.npc { name = \"Stander \" .. i, at = vector.create(-12 + (i % 10) * 2.6, 0, -12 + (i // 10) * 2.6) } end",
+    );
+    let empty = timed("");
+    println!("100 NPCs, {walking} walking: {each:?} a tick; standing {standing:?}; none {empty:?}");
     assert!(walking > 50, "{walking}");
     // Generous: a debug build on a slow machine. `lore bench` will hold
     // the real number.

@@ -113,6 +113,8 @@ game.player:remove() -- wrong: only an NPC can be removed
 guard.goTo("Gate") -- wrong: needs a colon, guard:goTo(...)
 guard:goTo(5) -- wrong: a place is named in quotes, or a vector, a thing or someone
 guard:goTo("Gate", { run = "fast" }) -- wrong: run is true or false
+guard:goTo("Gate", { within = "near" }) -- wrong: within is a number of metres
+guard:goTo("Gate", { facing = "north" }) -- wrong: facing is a number of degrees
 guard:follow("Gate") -- wrong: follow takes someone; goTo walks to a place
 guard:follow(game.player, { distance = "near" }) -- wrong: a distance is a number in metres
 guard:onArrive("there") -- wrong: it takes a function
