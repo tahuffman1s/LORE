@@ -1,0 +1,13 @@
+[package]
+name = "lore-markup"
+description = "Game screens in a stated subset of HTML and CSS: parsing, styles, layout, animation and controller focus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+taffy = { version = "0.16", default-features = false, features = ["std", "flexbox", "block_layout", "calc", "content_size"] }
