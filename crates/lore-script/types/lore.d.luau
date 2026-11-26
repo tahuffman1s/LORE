@@ -2077,7 +2077,8 @@ declare extern type Element with
     --- Example: print(el.tag)
     tag: string
 
-    --- The element it is inside, or nil for one at the top of the page.
+    --- The element it is inside. What you write at the top of a page is
+    --- inside `body`, and `body` is inside `html`, which has no parent: nil.
     --- Example: local row = button.parent
     parent: Element?
 
@@ -2138,7 +2139,9 @@ declare extern type Element with
     function setAttribute(self, name: string, value: string | number | boolean): ()
 
     --- Answers what happens to this element: "click", "change", "input" or
-    --- "focus". It works whether or not the HTML names a function for it.
+    --- "focus". It works whether or not the HTML names a function for it,
+    --- and only this element is answered: another element that names the
+    --- same function in its HTML is not.
     --- Example: play:on("click", function(event) startGame() end)
     function on(self, kind: string, handler: (event: UiEvent) -> ()): ()
 

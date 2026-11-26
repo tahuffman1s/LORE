@@ -569,6 +569,11 @@ fn settings() -> Vec<lore_script::Setting> {
             SettingKind::Toggle,
             SettingValue::Toggle(false),
         ),
+        one(
+            "invert_look",
+            SettingKind::Toggle,
+            SettingValue::Toggle(false),
+        ),
     ]
 }
 
@@ -596,6 +601,26 @@ fn the_dpad_moves_focus_and_a_fires_the_handler_with_the_event() {
     play.pad(GamepadButton::DpadUp);
     play.pad(GamepadButton::GamepadSouth);
     assert_eq!(printed(), ["pickA click a nil true"]);
+}
+
+#[test]
+fn element_on_answers_only_that_element_even_when_the_html_names_a_handler() {
+    let html = "<button id=\"a\" onclick=\"pick\" autofocus>Alpha</button>\n\
+                <button id=\"b\" onclick=\"pick\">Beta</button>\n\
+                <button id=\"c\">Gamma</button>\n";
+    let script = "local main = game.ui.load(\"ui/main.html\")\n\
+        main:on(\"pick\", function(e) print(\"shared \" .. e.element.id) end)\n\
+        main:find(\"#a\"):on(\"click\", function(e) print(\"own \" .. e.element.id .. \" \" .. e.name) end)\n\
+        main:find(\"#c\"):on(\"click\", function(e) print(\"own \" .. e.element.id) end)\n\
+        game.onStart(function() main:show() end)\n";
+    let mut play = Play::new(script, html);
+    play.ticks(2);
+    play.pad(GamepadButton::GamepadSouth);
+    play.pad(GamepadButton::DpadDown);
+    play.pad(GamepadButton::GamepadSouth);
+    play.pad(GamepadButton::DpadDown);
+    play.pad(GamepadButton::GamepadSouth);
+    assert_eq!(printed(), ["own a pick", "shared b", "own c"]);
 }
 
 #[test]
@@ -881,7 +906,7 @@ fn the_style_proxy_takes_css_and_camel_case_names() {
             print(select(2, pcall(function() b.style.colour = \"red\" end)))\n\
             b:setVar(\"--gold\", \"#ffd75e\")\n\
             b:addClass(\"big\") b:toggleClass(\"x\")\n\
-            print(b.class, tostring(b:hasClass(\"x\")), b.tag, b.parent == nil)\n\
+            print(b.class, tostring(b:hasClass(\"x\")), b.tag, b.parent.tag == \"body\")\n\
             b.hidden = true\n\
             print(tostring(b.hidden), b:attribute(\"hidden\"))\n\
         end)\n";
@@ -1059,4 +1084,143 @@ fn a_failing_handler_is_on_the_panel_with_its_script_line() {
     assert!(error.message.contains("boom"), "{error:?}");
     printed();
     warned();
+}
+
+// ---- docs/game-ui.md: what the page shows is what works --------------------
+
+/// Every fenced block of the docs page, as (language, name, text).
+fn doc_blocks() -> Vec<(String, String, String)> {
+    let page = include_str!("../../../docs/game-ui.md");
+    let mut blocks = Vec::new();
+    let mut rest = page;
+    while let Some(start) = rest.find("\n```") {
+        let after = &rest[start + 4..];
+        let (info, body) = after.split_once('\n').unwrap();
+        let end = body.find("\n```").unwrap();
+        let mut words = info.split_whitespace();
+        let lang = words.next().unwrap_or_default().to_owned();
+        let name = words.next().unwrap_or_default().to_owned();
+        blocks.push((lang, name, format!("{}\n", &body[..end])));
+        rest = &body[end + 4..];
+    }
+    blocks
+}
+
+fn doc_block(lang: &str, name: &str) -> String {
+    doc_blocks()
+        .into_iter()
+        .find(|(l, n, _)| l == lang && n == name)
+        .unwrap_or_else(|| panic!("no ```{lang} {name} block in docs/game-ui.md"))
+        .2
+}
+
+#[test]
+fn every_html_and_css_sample_in_the_game_ui_page_parses() {
+    let mut seen = (0, 0, 0);
+    for (lang, name, text) in doc_blocks() {
+        match lang.as_str() {
+            "html" => {
+                lore_markup::Screen::parse(&name, &text).unwrap_or_else(|e| panic!("{name}: {e}"));
+                seen.0 += 1;
+            }
+            "css" => {
+                let mut page = lore_markup::Screen::parse(
+                    "t.html",
+                    "<link rel=\"stylesheet\" href=\"t.css\"><p>x</p>",
+                )
+                .unwrap();
+                page.add_stylesheet("t.css", &text)
+                    .unwrap_or_else(|e| panic!("{name}: {e}"));
+                seen.1 += 1;
+            }
+            // Nothing runs: the block only has to be Luau.
+            "lua" => {
+                let script = format!("local function sample()\n{text}\nend\n");
+                let host = ScriptHost::from_sources(
+                    [(ENTRY_SCRIPT.to_owned(), script)],
+                    ActionMap::standard(),
+                );
+                assert_eq!(host.last_error(), None, "{name}: {text}");
+                seen.2 += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(seen.0 >= 2 && seen.1 >= 1 && seen.2 >= 8, "{seen:?}");
+}
+
+#[test]
+fn the_smallest_game_in_the_page_shows_and_hides_its_screen() {
+    let html = doc_block("html", "ui/main.html");
+    let script = format!(
+        "{}\ngame.onStart(function() main:show() end)\n",
+        doc_block("lua", "first.luau")
+    );
+    // The page's script shows the screen itself, so leave out the page's
+    // own `main:show()` call for the start.
+    let script = script.replace("main:show()\n\ngame.onStart", "game.onStart");
+    let mut play = Play::with_files(
+        &script,
+        "",
+        &[
+            ("ui/main.html", &html),
+            (
+                "ui/main.css",
+                ".menu { width: 400px; } button { width: 200px; height: 50px; }",
+            ),
+        ],
+    );
+    play.ticks(2);
+    assert!(
+        play.texts().contains(&"My Game".to_owned()),
+        "{:?}",
+        play.texts()
+    );
+    play.pad(GamepadButton::GamepadSouth);
+    play.ticks(2);
+    assert!(!play.texts().contains(&"My Game".to_owned()));
+    assert_eq!(warned(), Vec::<String>::new());
+}
+
+#[test]
+fn the_complete_small_screen_in_the_page_works() {
+    let mut play = Play::with_files(
+        &doc_block("lua", "main.luau"),
+        "",
+        &[
+            ("ui/settings.html", &doc_block("html", "ui/settings.html")),
+            ("ui/settings.css", &doc_block("css", "ui/settings.css")),
+        ],
+    );
+    // The script first ran before the settings were handed over; that run's
+    // complaint is the test harness's, anything else is the page's.
+    let startup = warned();
+    assert!(
+        startup.iter().all(|line| line.contains("is not a setting")),
+        "{startup:?}"
+    );
+    play.ticks(2);
+    assert_eq!(play.set(), "gameplay");
+    play.tap(Key::F2);
+    play.ticks(2);
+    assert_eq!(play.set(), "menu");
+    let texts = play.texts();
+    for word in ["Settings", "Volume", "Invert look", "Done"] {
+        assert!(texts.contains(&word.to_owned()), "{word}: {texts:?}");
+    }
+    // The slider has focus and shows the setting; right is one step of 5.
+    play.pad(GamepadButton::DpadRight);
+    let mut changed = Vec::new();
+    play.host
+        .take_changed_settings(|name, value| changed.push((name.to_owned(), value.clone())));
+    assert_eq!(
+        changed,
+        [("volume".to_owned(), lore_script::SettingValue::Number(45.0))]
+    );
+    // B goes back: the page's "back" handler hides the screen.
+    play.tap(Key::Escape);
+    play.ticks(2);
+    assert_eq!(play.set(), "gameplay");
+    assert!(!play.texts().contains(&"Settings".to_owned()));
+    assert_eq!(warned(), Vec::<String>::new());
 }

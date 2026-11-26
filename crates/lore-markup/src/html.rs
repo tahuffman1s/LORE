@@ -168,6 +168,8 @@ struct Open {
     tag: Tag,
     line: u32,
     col: u32,
+    /// Made by the parser because the page left the tag out.
+    implicit: bool,
 }
 
 struct RawAttr {
@@ -382,6 +384,9 @@ impl<'a> Parser<'a> {
             }
         }
         self.flush_text()?;
+        while self.stack.last().is_some_and(|o| o.implicit) {
+            self.stack.pop();
+        }
         if let Some(open) = self.stack.last() {
             let name = open.tag.name();
             return Err(self.err(
@@ -426,6 +431,19 @@ impl<'a> Parser<'a> {
         let text = std::mem::take(&mut self.text);
         self.last_space = false;
         let blank = text.chars().all(is_ws);
+        if self.mode == Mode::Page {
+            let bare = self.context().is_none() && !self.seen_html;
+            let implicit_top = self
+                .stack
+                .last()
+                .is_some_and(|o| o.implicit && matches!(o.tag, Tag::Html | Tag::Head));
+            if blank && bare {
+                return Ok(());
+            }
+            if !blank && (bare || implicit_top) {
+                self.imply_structure_for_text(self.text_pos)?;
+            }
+        }
         let structural = match self.context() {
             Some(Tag::Html | Tag::Head | Tag::Select) => true,
             None => self.mode == Mode::Page && self.seen_html,
@@ -455,6 +473,76 @@ impl<'a> Parser<'a> {
         if self.doc.append_child(parent, node) {
             self.texts.push(node);
         }
+        Ok(())
+    }
+
+    /// A page may leave out `html`, `head` and `body`. Opens the ones a tag
+    /// needs, so the tree is the same as if they were written: `body`,
+    /// `html` and their rules apply to a page without the tags.
+    fn imply_structure(&mut self, tag: Tag, at: (u32, u32)) -> Result<(), MarkupError> {
+        if self.mode != Mode::Page || tag == Tag::Html {
+            return Ok(());
+        }
+        if self.context().is_none() && !self.seen_html {
+            self.open_implicit(Tag::Html, at)?;
+        }
+        let in_implicit =
+            |p: &Self, t: Tag| p.stack.last().is_some_and(|o| o.implicit && o.tag == t);
+        let head_content = matches!(tag, Tag::Title | Tag::Style | Tag::Link);
+        if in_implicit(self, Tag::Html) && !self.seen_head && !self.seen_body && head_content {
+            self.open_implicit(Tag::Head, at)?;
+        }
+        if in_implicit(self, Tag::Head) && !head_content {
+            self.stack.pop();
+        }
+        if in_implicit(self, Tag::Html)
+            && !self.seen_body
+            && !matches!(tag, Tag::Head | Tag::Body)
+            && !head_content
+        {
+            self.open_implicit(Tag::Body, at)?;
+        }
+        Ok(())
+    }
+
+    /// Text outside any tag starts the body.
+    fn imply_structure_for_text(&mut self, at: (u32, u32)) -> Result<(), MarkupError> {
+        if self.context().is_none() {
+            self.open_implicit(Tag::Html, at)?;
+        }
+        if self
+            .stack
+            .last()
+            .is_some_and(|o| o.implicit && o.tag == Tag::Head)
+        {
+            self.stack.pop();
+        }
+        if !self.seen_body && self.stack.last().is_some_and(|o| o.tag == Tag::Html) {
+            self.open_implicit(Tag::Body, at)?;
+        }
+        Ok(())
+    }
+
+    fn open_implicit(&mut self, tag: Tag, at: (u32, u32)) -> Result<(), MarkupError> {
+        let id = self.build_element(tag, &[], at)?;
+        let parent = self.current_parent();
+        if !self.doc.append_child(parent, id) {
+            self.doc.remove(id);
+            return Err(self.err(at, "this tag cannot be added here", "check the nesting"));
+        }
+        match tag {
+            Tag::Html => self.seen_html = true,
+            Tag::Head => self.seen_head = true,
+            Tag::Body => self.seen_body = true,
+            _ => {}
+        }
+        self.stack.push(Open {
+            id,
+            tag,
+            line: at.0,
+            col: at.1,
+            implicit: true,
+        });
         Ok(())
     }
 
@@ -668,7 +756,7 @@ impl<'a> Parser<'a> {
                 format!("remove `</{name}>`; write `<{name}>` or `<{name}/>` on its own"),
             ));
         }
-        let Some(top) = self.stack.last() else {
+        let Some(top) = self.stack.last().filter(|o| !o.implicit) else {
             return Err(self.err(
                 at,
                 format!("`</{name}>` closes a tag that was never opened"),
@@ -713,6 +801,7 @@ impl<'a> Parser<'a> {
                 name_help(&name, &Tag::NAMES),
             ));
         };
+        self.imply_structure(tag, at)?;
         self.check_placement(tag, at)?;
         let (attrs, self_closed) = self.attributes(at, &name)?;
         if self_closed && !tag.is_void() {
@@ -762,6 +851,7 @@ impl<'a> Parser<'a> {
                 tag,
                 line: at.0,
                 col: at.1,
+                implicit: false,
             }),
         }
         Ok(())

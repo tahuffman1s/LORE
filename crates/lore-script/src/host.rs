@@ -2627,11 +2627,23 @@ impl ScriptHost {
         for item in fired {
             let named = {
                 let handlers = shared.ui_handlers.borrow();
-                handlers
-                    .by_screen
-                    .get(&item.screen)
-                    .and_then(|screen| screen.get(&item.name))
-                    .cloned()
+                // What `element:on` gave this very element comes first.
+                let own = item
+                    .element
+                    .zip(item.kind.handler_index())
+                    .and_then(|((id, generation), kind)| {
+                        handlers
+                            .by_element
+                            .get(&(item.screen, id, generation, kind))
+                    })
+                    .cloned();
+                own.or_else(|| {
+                    handlers
+                        .by_screen
+                        .get(&item.screen)
+                        .and_then(|screen| screen.get(&item.name))
+                        .cloned()
+                })
             };
             // What the HTML names may also be a function the script wrote at
             // the top level. The engine's own names are `screen:on`'s alone.
@@ -2659,6 +2671,40 @@ impl ScriptHost {
                 break;
             }
         }
+    }
+
+    /// Reads every screen the script loaded for `lore check`: mistakes in
+    /// their files, controls a gamepad cannot reach, and handler names in
+    /// the HTML that neither `screen:on`, `element:on` nor a function in
+    /// the script answers.
+    pub fn check_screens(&self) -> crate::ScreensChecked {
+        let env = crate::ui::DrawEnv {
+            tools: &self.tools,
+            fonts: &self.fonts,
+            images: &self.images,
+        };
+        let running = self
+            .running
+            .as_ref()
+            .map(|version| (Rc::clone(&version.shared), version.vm.clone()));
+        self.ui
+            .check(&env, &|screen, name, (element, generation, kind)| {
+                let Some((shared, vm)) = &running else {
+                    return true;
+                };
+                let handlers = shared.ui_handlers.borrow();
+                handlers
+                    .by_element
+                    .contains_key(&(screen, element, generation, kind))
+                    || handlers
+                        .by_screen
+                        .get(&screen)
+                        .is_some_and(|names| names.contains_key(name))
+                    || matches!(
+                        vm.globals().get::<mlua::Value>(name),
+                        Ok(mlua::Value::Function(_))
+                    )
+            })
     }
 
     /// Nobody answers `item`: back takes the screen away if another is

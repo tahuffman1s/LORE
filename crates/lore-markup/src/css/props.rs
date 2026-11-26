@@ -394,12 +394,20 @@ pub fn property_names() -> Vec<&'static str> {
 
 /// The error for a property name that does not exist.
 pub(crate) fn unknown_property(file: &str, tok: &Token, name: &str) -> MarkupError {
+    let lower = name.to_ascii_lowercase();
+    let help = if lower == "float" || lower == "clear" {
+        "there is no float; use a `display: flex` row (or column) and place things with \
+         `justify-content`, `align-items`, `gap` or `margin-left: auto`"
+            .to_owned()
+    } else {
+        name_help(&lower, &property_names())
+    };
     MarkupError::new(
         file,
         tok.line,
         tok.column,
         format!("unknown property `{name}`"),
-        name_help(&name.to_ascii_lowercase(), &property_names()),
+        help,
     )
 }
 

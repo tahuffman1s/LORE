@@ -162,8 +162,10 @@ What it shows:
   `<style>` blocks (in page order), then the `style="..."` attribute.
   Inside one step, the more specific selector wins, and the later rule wins a tie.
   `!important` flips the steps round, as usual.
-- A page may leave out `<html>`, `<head>` and `<body>`. If it has them they
-  must be in that order, once each.
+- A page may leave out `<html>`, `<head>` and `<body>`. The engine adds the
+  ones you leave out, so `html` and `body` rules and custom properties set
+  on them work the same either way. If you write them they must be in that
+  order, once each.
 - The tags are lowercase and case matters. Every tag except `br`, `img`,
   `input` and `link` must be closed, and properly nested.
 

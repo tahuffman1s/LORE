@@ -104,6 +104,10 @@ pub(crate) type ScreenId = u32;
 pub(crate) struct UiHandlers {
     /// By screen, then the name an `onclick` attribute gives.
     pub by_screen: HashMap<ScreenId, HashMap<String, mlua::Function>>,
+    /// What `element:on` gave one element: by screen, element, the
+    /// generation of the screen's structure and the kind of handler (as
+    /// [`HandlerKind::index`]). Looked at before the screen's names.
+    pub by_element: HashMap<(ScreenId, ElementId, u32, usize), mlua::Function>,
     /// The number the next generated handler name is made with.
     pub next_name: u32,
 }
@@ -352,6 +356,96 @@ impl PageMeasure for Measurer<'_> {
             .find(|info| info.name == name)
             .map(|info| [info.size[0] as f32, info.size[1] as f32])
     }
+}
+
+/// What `lore check` found in the screens a script loaded.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScreensChecked {
+    /// How many screens the script loaded.
+    pub screens: usize,
+    /// Mistakes in their HTML or CSS, each as `file:line: what, help`.
+    /// These fail the check.
+    pub mistakes: Vec<String>,
+    /// Controls a gamepad cannot reach and names nobody answers, each with
+    /// its `file:line`.
+    pub warnings: Vec<String>,
+}
+
+/// Where a handler is written: the element, its screen's generation and the
+/// kind of handler (as `HandlerKind::index`).
+pub(crate) type HandlerSite = (ElementId, u32, usize);
+
+impl UiState {
+    /// Looks at every screen the script loaded: its mistakes, the controls
+    /// a gamepad cannot reach, and the handler names in its HTML that
+    /// `answered` says nobody answers. `answered(screen, name, element, kind)`
+    /// is told the screen, the name, the element, its screen's generation
+    /// and the kind of handler (as `HandlerKind::index`).
+    pub(crate) fn check(
+        &self,
+        env: &DrawEnv<'_>,
+        answered: &dyn Fn(ScreenId, &str, HandlerSite) -> bool,
+    ) -> ScreensChecked {
+        let mut found = ScreensChecked::default();
+        let mut inner = self.inner.borrow_mut();
+        for entry in inner.entries.iter_mut().filter(|entry| !entry.engine) {
+            found.screens += 1;
+            if let Some(error) = &entry.error {
+                found.mistakes.push(format_mistake(error));
+            }
+            let (id, generation, path) = (entry.id, entry.generation, entry.path.clone());
+            let Some(page) = &mut entry.page else {
+                continue;
+            };
+            let mut measure = Measurer {
+                tools: env.tools,
+                fonts: env.fonts,
+                images: env.images,
+            };
+            for control in page.unreachable_controls(&mut measure) {
+                found.warnings.push(format!(
+                    "{path}:{}:{}: {}",
+                    control.line, control.column, control.reason
+                ));
+            }
+            let doc = page.document();
+            for element in doc.descendants(doc.root()) {
+                let Some(node) = doc.get(element) else {
+                    continue;
+                };
+                for (kind, attribute) in ["onclick", "onchange", "oninput", "onfocus"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some(name) = node.handlers[kind].map(|atom| doc.resolve(atom)) else {
+                        continue;
+                    };
+                    if !answered(id, name, (element, generation, kind)) {
+                        found.warnings.push(format!(
+                            "{path}:{}:{}: {attribute}=\"{name}\" is written here, but nothing \
+                             answers \"{name}\". In your script write screen:on(\"{name}\", \
+                             function(event) ... end), or a function called {name}.",
+                            node.line, node.column
+                        ));
+                    }
+                }
+            }
+        }
+        found
+    }
+}
+
+/// A screen file's mistake as one block: where, what, and what to write.
+fn format_mistake(error: &ScriptError) -> String {
+    let mut text = match error.line {
+        Some(line) => format!("{}:{line}: {}", error.file, error.message),
+        None => format!("{}: {}", error.file, error.message),
+    };
+    if let Some(hint) = &error.hint {
+        text.push_str("\n  help: ");
+        text.push_str(hint);
+    }
+    text
 }
 
 /// The folder of `path`, with a `/` at the end, or nothing.

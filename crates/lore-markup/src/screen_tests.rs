@@ -714,3 +714,74 @@ fn a_whole_menu_at_two_sizes() {
     let f = s.frame(&mut TestMeasure);
     assert_eq!(f.hits.len(), 7);
 }
+
+// ---- a page without html, head and body behaves as if it had them ----------
+
+const BARE_CSS: &str = "body { padding: 20px; } html { --w: 50px; padding: 4px; } \
+#a { width: var(--w); height: 10px; }";
+
+fn bare_and_full(bare: &str) -> (Screen, Screen) {
+    let mut a = Screen::parse("t.html", bare).unwrap();
+    a.add_stylesheet("t.css", BARE_CSS).unwrap();
+    let html = format!(
+        "<html><head><link rel=\"stylesheet\" href=\"t.css\"></head><body>{}</body></html>",
+        bare.replace("<link rel=\"stylesheet\" href=\"t.css\">", "")
+    );
+    let mut b = Screen::parse("t.html", &html).unwrap();
+    b.add_stylesheet("t.css", BARE_CSS).unwrap();
+    (a, b)
+}
+
+#[test]
+fn a_page_without_html_head_body_gets_body_html_and_root_rules() {
+    let (mut a, mut b) =
+        bare_and_full("<link rel=\"stylesheet\" href=\"t.css\">\n<div id=\"a\">hi</div>");
+    let (ra, rb) = (rect(&mut a, "a"), rect(&mut b, "a"));
+    assert_rect(rb, 24.0, 24.0, 50.0, 10.0);
+    assert_rect(ra, rb.x, rb.y, rb.w, rb.h);
+}
+
+#[test]
+fn implicit_structure_has_html_head_and_body_elements() {
+    let s = Screen::parse(
+        "t.html",
+        "<style>p { color: red; }</style>\n<p id=\"a\">x</p>text",
+    )
+    .unwrap();
+    let doc = s.document();
+    let root = doc.root();
+    let html = doc.first_child(root).unwrap();
+    assert_eq!(doc.get(html).unwrap().tag(), Some(crate::dom::Tag::Html));
+    let kids: Vec<_> = doc
+        .children(html)
+        .map(|c| doc.get(c).unwrap().tag().unwrap())
+        .collect();
+    assert_eq!(kids, [crate::dom::Tag::Head, crate::dom::Tag::Body]);
+}
+
+#[test]
+fn implicit_structure_keeps_error_positions_and_unclosed_checks() {
+    let e = Screen::parse(
+        "t.html",
+        "<link rel=\"stylesheet\" href=\"a.css\">\n<div>\n  <b></b>",
+    )
+    .err()
+    .unwrap();
+    assert_eq!((e.line, e.column), (3, 4), "{e}");
+    let e = Screen::parse("t.html", "<div>\n<p>x</p>").err().unwrap();
+    assert_eq!((e.line, e.column), (1, 1), "{e}");
+    assert!(e.message.contains("`<div>` is never closed"), "{e}");
+    let e = Screen::parse("t.html", "<div></div></div>").err().unwrap();
+    assert!(e.message.contains("never opened"), "{e}");
+}
+
+#[test]
+fn explicit_body_after_a_bare_link_still_works() {
+    assert!(
+        Screen::parse(
+            "t.html",
+            "<link rel=\"stylesheet\" href=\"a.css\"><body><div></div></body>"
+        )
+        .is_ok()
+    );
+}

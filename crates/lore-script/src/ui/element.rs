@@ -754,33 +754,31 @@ fn on(lua: &Lua, this: &Value, kind: &Value, function: &Value) -> mlua::Result<(
     let shared = shared_of(lua)?;
     let written = shared
         .ui
-        .with_element(element, |page, id| {
-            page.handler(id, which).map(str::to_owned)
-        })
+        .with_element(element, |page, id| page.handler(id, which).is_some())
         .map_err(|why| problem(lua, &why))?;
-    let name = match written {
-        Some(name) => name,
-        None => {
-            let mut handlers = shared.ui_handlers.borrow_mut();
-            let number = handlers.next_name;
-            handlers.next_name += 1;
-            drop(handlers);
-            let name = format!("_ui_{number}_{kind}");
-            let set = shared
-                .ui
-                .with_element(element, |page, id| page.set_attribute(id, attribute, &name))
-                .map_err(|why| problem(lua, &why))?;
-            set.map_err(|e| markup_fail(lua, "element:on could not listen there", &e))?;
-            name
-        }
-    };
-    shared
-        .ui_handlers
-        .borrow_mut()
-        .by_screen
-        .entry(element.screen)
-        .or_default()
-        .insert(name, function.clone());
+    if !written {
+        // No attribute names a handler yet: write one nobody else uses, so
+        // the element fires. The function itself is kept for this element.
+        let mut handlers = shared.ui_handlers.borrow_mut();
+        let number = handlers.next_name;
+        handlers.next_name += 1;
+        drop(handlers);
+        let name = format!("_ui_{number}_{kind}");
+        let set = shared
+            .ui
+            .with_element(element, |page, id| page.set_attribute(id, attribute, &name))
+            .map_err(|why| problem(lua, &why))?;
+        set.map_err(|e| markup_fail(lua, "element:on could not listen there", &e))?;
+    }
+    shared.ui_handlers.borrow_mut().by_element.insert(
+        (
+            element.screen,
+            element.id,
+            element.generation,
+            which.index(),
+        ),
+        function.clone(),
+    );
     Ok(())
 }
 

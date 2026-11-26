@@ -773,6 +773,23 @@ fn check(folder: &Path) -> Result<(), String> {
              placed in the level. Fix it, then run `lore check` again."
         ));
     }
+    // The screens the script loaded: mistakes fail the check, the rest warn.
+    let screens = cli::check_ui(game.host());
+    for warning in &screens.warnings {
+        eprintln!("Warning: {warning}");
+    }
+    if !screens.mistakes.is_empty() {
+        for error in &screens.mistakes {
+            eprintln!("{error}");
+        }
+        let count = screens.mistakes.len();
+        return Err(format!(
+            "{count} {} in the game's screens (each is shown above). Fix {}, then run \
+             `lore check` again.",
+            if count == 1 { "mistake" } else { "mistakes" },
+            if count == 1 { "it" } else { "them" },
+        ));
+    }
     // Last, because a surface shader's material is looked up in the level.
     let shaders = cli::check_shaders(game.host(), folder, level.as_ref());
     for warning in &shaders.warnings {

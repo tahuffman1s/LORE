@@ -73,6 +73,17 @@ impl FiredKind {
         }
     }
 
+    /// Which handler attribute raises it, as `HandlerKind::index`.
+    pub(crate) fn handler_index(self) -> Option<usize> {
+        match self {
+            Self::Click => Some(0),
+            Self::Change => Some(1),
+            Self::Input => Some(2),
+            Self::Focus => Some(3),
+            _ => None,
+        }
+    }
+
     /// Whether the name is one the engine gives, which a script answers
     /// only with `screen:on`.
     pub(crate) fn is_special(self) -> bool {
