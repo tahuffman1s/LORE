@@ -1758,6 +1758,7 @@ impl ScriptHost {
             settings: kind.settings,
             model: kind.model,
             hold: kind.hold,
+            sounds: kind.sounds,
             state,
         })
     }
@@ -1780,6 +1781,7 @@ impl ScriptHost {
             settings: kind.settings,
             model: kind.model,
             hold: kind.hold,
+            sounds: kind.sounds,
             state,
         })
     }
@@ -1848,6 +1850,45 @@ impl ScriptHost {
             return;
         };
         self.call_all(|handlers| &handlers.weapon_hit, table);
+    }
+
+    /// Tells the script about a noise the game made: its `game.onNoise`
+    /// functions, in the order they were added. Gives false when one
+    /// of them returned `false`, which asks that the noise not be played;
+    /// true when none did, or when nothing listens. Nothing is built for the
+    /// script unless something listens.
+    pub fn noise_made(&mut self, noise: &crate::NoiseTold) -> bool {
+        let Some(version) = &self.running else {
+            return true;
+        };
+        if self.paused || version.shared.handlers.borrow().noise.is_empty() {
+            return true;
+        }
+        let shared = Rc::clone(&version.shared);
+        let Ok(table) = weapon_api::noise_table(&version.vm, noise) else {
+            return true;
+        };
+        let count = shared.handlers.borrow().noise.len();
+        let mut play = true;
+        for index in 0..count {
+            let handler = shared.handlers.borrow().noise.get(index).cloned();
+            let Some(handler) = handler else { break };
+            match self.call_for_value(&shared, &handler, table.clone()) {
+                Some(mlua::Value::Boolean(false)) => play = false,
+                Some(_) => {}
+                None if self.paused => break,
+                None => {}
+            }
+        }
+        play
+    }
+
+    /// What the script did to the sound the engine plays by itself under
+    /// `name` (`game.audio.setVolume`, `game.audio.replace`): the engine's
+    /// own until it does. It stays when the script is saved.
+    #[must_use]
+    pub fn sound_tweak(&self, name: &str) -> crate::SoundTweak {
+        self.audio.tweak(name)
     }
 
     /// Reloads the script if `main.luau` or a script it required was saved
@@ -2190,8 +2231,23 @@ impl ScriptHost {
     /// Gives false when the script has been paused and no more of it should
     /// be called.
     fn call(&mut self, shared: &Rc<Shared>, function: &Function, args: impl IntoLuaMulti) -> bool {
-        let Err(error) = within_time_limit(shared, || function.call::<()>(args)) else {
-            return true;
+        match self.call_for_value(shared, function, args) {
+            Some(_) => true,
+            None => !self.paused,
+        }
+    }
+
+    /// Calls one of the script's functions and gives what it returned, or
+    /// `None` when it failed (the error is reported as in [`call`](Self::call)).
+    fn call_for_value(
+        &mut self,
+        shared: &Rc<Shared>,
+        function: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Option<mlua::Value> {
+        let error = match within_time_limit(shared, || function.call::<mlua::Value>(args)) {
+            Ok(value) => return Some(value),
+            Err(error) => error,
         };
         let too_long = is_time_limit(&error);
         let error = {
@@ -2210,6 +2266,6 @@ impl ScriptHost {
         // Calling it again would freeze the game for the whole time limit
         // on every tick.
         self.paused = too_long;
-        !too_long
+        None
     }
 }

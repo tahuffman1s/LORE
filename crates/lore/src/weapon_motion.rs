@@ -613,6 +613,7 @@ mod tests {
             settings,
             model: None,
             hold: lore_script::HoldSaid::default(),
+            sounds: lore_script::WeaponSounds::default(),
             state: Weapon::new(&settings),
         }
     }

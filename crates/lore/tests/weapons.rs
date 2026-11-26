@@ -302,3 +302,120 @@ fn a_thrown_bomb_goes_off_on_its_fuse_and_catches_whoever_is_near() {
     );
     assert!(said[2].ends_with(" true"), "{said:#?}");
 }
+
+/// Runs `ticks` ticks and gives back every noise the world made.
+fn heard_over(world: &mut World, ticks: u32) -> Vec<lore::noise::Noise> {
+    let nothing = Input::new(ActionMap::standard());
+    let mut heard = Vec::new();
+    for _ in 0..ticks {
+        world.tick(nothing.frame(), STEP);
+        heard.extend_from_slice(world.noises());
+    }
+    heard
+}
+
+#[test]
+fn a_weapon_names_its_sounds_and_how_far_its_shot_is_heard() {
+    use lore::noise::NoiseKind;
+    let script = "game.weapon(\"bow\", { from = \"rifle\", fireSound = \"twang\", \
+        reloadSound = \"nock\", emptySound = \"creak\", heardWithin = 20, magazineSize = 1, \
+        reserve = 5, reloadTime = 0.5 })\n\
+        game.onSpawn(function() game.player:giveWeapon(\"bow\") end)";
+    let mut world = world(script);
+    play(&mut world, 40);
+    ask(&mut world, |asked| asked.fire = true);
+    let heard = heard_over(&mut world, 30);
+    let shot = heard
+        .iter()
+        .find(|noise| noise.kind == NoiseKind::Gunshot)
+        .unwrap();
+    assert_eq!(shot.sound_name(), "twang");
+    assert!((shot.range.far - 20.0).abs() < 1e-4, "{:?}", shot.range);
+    // Near scales in proportion to the engine's gunfire (4 of 150).
+    assert!((shot.range.near - 20.0 * 4.0 / 150.0).abs() < 1e-4);
+    let reload = heard
+        .iter()
+        .find(|noise| noise.kind == NoiseKind::Reload)
+        .unwrap();
+    assert_eq!(reload.sound_name(), "nock");
+    assert_eq!(reload.range, NoiseKind::Reload.range());
+}
+
+#[test]
+fn a_game_that_names_no_sounds_keeps_the_engines_own() {
+    use lore::noise::NoiseKind;
+    let mut world = world(TELLS_ALL);
+    play(&mut world, 40);
+    ask(&mut world, |asked| asked.fire = true);
+    let heard = heard_over(&mut world, 10);
+    let shot = heard
+        .iter()
+        .find(|noise| noise.kind == NoiseKind::Gunshot)
+        .unwrap();
+    assert_eq!(shot.sound_name(), "gunshot");
+    assert_eq!(shot.range, lore::audio::Range::GUNFIRE);
+}
+
+#[test]
+fn a_shotgun_blast_into_the_floor_makes_one_strike_noise() {
+    use lore::noise::NoiseKind;
+    let script = TELLS_ALL.replace("giveWeapon(\"rifle\")", "giveWeapon(\"shotgun\")");
+    let mut world = world(&script);
+    play(&mut world, 40);
+    ask(&mut world, |asked| {
+        asked.pitch = -0.4;
+        asked.fire = true;
+    });
+    let heard = heard_over(&mut world, 3);
+    let strikes = heard
+        .iter()
+        .filter(|noise| noise.kind == NoiseKind::Impact)
+        .count();
+    assert_eq!(strikes, 1, "{heard:?}");
+}
+
+#[test]
+fn a_bullet_striking_the_floor_and_a_bomb_going_off_are_heard_where_they_happened() {
+    use lore::noise::NoiseKind;
+    // Looking down at the floor a few metres ahead.
+    let mut world = world(TELLS_ALL);
+    play(&mut world, 40);
+    ask(&mut world, |asked| {
+        asked.pitch = -0.4;
+        asked.fire = true;
+    });
+    let heard = heard_over(&mut world, 3);
+    let strike = heard
+        .iter()
+        .find(|noise| noise.kind == NoiseKind::Impact)
+        .unwrap_or_else(|| panic!("{heard:?}"));
+    assert!(strike.position[1].abs() < 0.05, "{strike:?}");
+    assert!(
+        strike.position[2] < -1.0 && strike.position[2] > -10.0,
+        "{strike:?}"
+    );
+    assert_eq!(strike.sound_name(), "impact");
+
+    // A bomb goes off a second after it was thrown.
+    let script = TELLS_ALL.replace(
+        "game.onSpawn(function() game.player:giveWeapon(\"rifle\") end)",
+        "game.weapon(\"bomb\", { from = \"grenade\", raiseTime = 0, autoReload = false, \
+         projectile = { speed = 2, fuse = 1, blastRadius = 6 } })\n\
+         game.onSpawn(function() game.player:giveWeapon(\"bomb\") end)",
+    );
+    let mut bombing = self::world(&script);
+    let world = &mut bombing;
+    play(world, 30);
+    ask(world, |asked| asked.fire = true);
+    play(world, 10);
+    ask(world, |asked| asked.fire = false);
+    let heard = heard_over(world, 90);
+    let blasts: Vec<_> = heard
+        .iter()
+        .filter(|noise| noise.kind == NoiseKind::Explosion)
+        .collect();
+    assert_eq!(blasts.len(), 1, "{heard:?}");
+    assert!(blasts[0].kind.is_at_a_place());
+    assert!(blasts[0].position[2] < 0.0, "{:?}", blasts[0]);
+    assert_eq!(blasts[0].range.far, 300.0);
+}

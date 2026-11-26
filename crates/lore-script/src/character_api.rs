@@ -48,6 +48,8 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
     "swimSpeed",
     "jumpHeight",
     "gravity",
+    "stride",
+    "stepLoudness",
     "vaultHeight",
     "climbHeight",
     "ladderSpeed",
@@ -73,7 +75,7 @@ pub(crate) const CHARACTER_FIELDS: &[&str] = &[
 ];
 
 /// The numbers of how a character moves, by the field that reads each.
-const MOVE_NUMBERS: [(&str, MoveNumber); 11] = [
+const MOVE_NUMBERS: [(&str, MoveNumber); 13] = [
     ("dodgeSeconds", MoveNumber::DodgeSeconds),
     ("dodgeDistance", MoveNumber::DodgeDistance),
     ("vaultHeight", MoveNumber::Vault),
@@ -85,11 +87,13 @@ const MOVE_NUMBERS: [(&str, MoveNumber); 11] = [
     ("swimSpeed", MoveNumber::Swim),
     ("jumpHeight", MoveNumber::Jump),
     ("gravity", MoveNumber::Gravity),
+    ("stride", MoveNumber::Stride),
+    ("stepLoudness", MoveNumber::StepLoudness),
 ];
 
 /// The methods that set them, and what each does to someone, for the
 /// message when it is asked of anyone but the player.
-const MOVE_SETTERS: [(&str, MoveNumber, &str); 11] = [
+const MOVE_SETTERS: [(&str, MoveNumber, &str); 13] = [
     (
         "setDodgeSeconds",
         MoveNumber::DodgeSeconds,
@@ -125,6 +129,12 @@ const MOVE_SETTERS: [(&str, MoveNumber, &str); 11] = [
     ("setSwimSpeed", MoveNumber::Swim, "given a swimming speed"),
     ("setJumpHeight", MoveNumber::Jump, "given a jump height"),
     ("setGravity", MoveNumber::Gravity, "given a gravity"),
+    ("setStride", MoveNumber::Stride, "given a stride"),
+    (
+        "setStepLoudness",
+        MoveNumber::StepLoudness,
+        "given a step loudness",
+    ),
 ];
 
 /// What a character can be told to do.
@@ -144,6 +154,8 @@ pub(crate) const CHARACTER_METHODS: &[&str] = &[
     "setSwimSpeed",
     "setJumpHeight",
     "setGravity",
+    "setStride",
+    "setStepLoudness",
     "setVaultHeight",
     "setClimbHeight",
     "setLadderSpeed",

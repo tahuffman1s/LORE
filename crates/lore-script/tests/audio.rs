@@ -364,3 +364,74 @@ fn a_sound_in_the_world_is_moved_and_a_mistake_says_what_to_write() {
 fn asked_len(host: &mut ScriptHost) -> usize {
     std::iter::from_fn(|| host.take_sound()).count()
 }
+
+#[test]
+fn the_engines_own_sounds_can_be_turned_down_and_swapped() {
+    let mut host = started(
+        r#"print(game.audio.getVolume("footstep"))
+        game.audio.setVolume("footstep", 0.25)
+        game.audio.setVolume("twang", 9)
+        game.audio.replace("gunshot", "door")
+        game.audio.setVolume("gunshot", 0.5)"#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    // Playing is the engine's, so nothing is asked of it.
+    assert_eq!(asked(&mut host), []);
+    let tweak = |host: &ScriptHost, name| host.sound_tweak(name);
+    assert_eq!(tweak(&host, "footstep").volume, 0.25);
+    assert_eq!(tweak(&host, "footstep").replace, None);
+    // A name that is no file yet, such as a weapon's own, is let through,
+    // and the loudest is 4.
+    assert_eq!(tweak(&host, "twang").volume, 4.0);
+    let gunshot = tweak(&host, "gunshot");
+    assert_eq!(gunshot.volume, 0.5);
+    assert_eq!(
+        gunshot.replace.as_ref().map(|name| name.as_str()),
+        Some("door")
+    );
+    assert_eq!(tweak(&host, "reload"), lore_script::SoundTweak::default());
+
+    // Back to the engine's own forgets it.
+    let host = started(
+        r#"game.audio.replace("gunshot", "door")
+        game.audio.replace("gunshot", nil)
+        game.audio.setVolume("footstep", 0)
+        game.audio.setVolume("footstep", 1)
+        assert(game.audio.getVolume("footstep") == 1)"#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        host.sound_tweak("gunshot"),
+        lore_script::SoundTweak::default()
+    );
+    assert_eq!(
+        host.sound_tweak("footstep"),
+        lore_script::SoundTweak::default()
+    );
+}
+
+#[test]
+fn a_mistake_with_the_engines_own_sounds_says_what_to_write() {
+    let message = mistake(r#"game.audio.setVolume("gunshoot", 0.5)"#);
+    assert!(message.contains("Did you mean \"gunshot\""), "{message}");
+    let message = mistake(r#"game.audio.replace("footstep", "doorr")"#);
+    assert!(message.contains("Did you mean \"door\""), "{message}");
+    let message = mistake(r#"game.audio.setVolume("gunshot", "loud")"#);
+    assert!(
+        message.contains("game.audio.setVolume(\"gunshot\", 0.5)"),
+        "{message}"
+    );
+}
+
+#[test]
+fn set_volume_with_no_name_says_it_is_for_one_sound() {
+    let said = "game.audio.setVolume(name, volume) sets one sound's volume. Write it like \
+                this: game.audio.setVolume(\"footstep\", 0.5)";
+    for call in [
+        "game.audio.setVolume(0.5)",
+        "game.audio.setVolume()",
+        r#"game.audio.setVolume("footstep")"#,
+    ] {
+        assert_eq!(mistake(call), said, "{call}");
+    }
+}
