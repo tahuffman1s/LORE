@@ -54,6 +54,7 @@ pub(crate) const NPC_METHODS: &[&str] = &[
     "onLoseSight",
     "onHear",
     "canSee",
+    "inSight",
 ];
 
 /// What `game.npc { ... }` takes.
@@ -382,7 +383,7 @@ impl NpcState {
         match (at, seen) {
             (None, true) => in_view.push((npc, who)),
             (Some(at), false) => {
-                in_view.swap_remove(at);
+                in_view.remove(at);
             }
             _ => {}
         }
@@ -391,6 +392,26 @@ impl NpcState {
     /// Notes that the NPC `npc` sees nobody.
     pub(crate) fn blind(&self, npc: CharacterId) {
         self.in_view.borrow_mut().retain(|&(seer, _)| seer != npc);
+    }
+
+    /// The NPCs that see `who`, as the engine last told, in the order of
+    /// their ids.
+    pub(crate) fn seers_of(&self, who: CharacterId) -> Vec<CharacterId> {
+        let mut seers: Vec<CharacterId> = (self.in_view.borrow().iter())
+            .filter(|&&(_, seen)| seen == who)
+            .map(|&(npc, _)| npc)
+            .collect();
+        seers.sort_unstable();
+        seers
+    }
+
+    /// Whom the NPC `npc` sees, as the engine last told, in the order they
+    /// came into view.
+    pub(crate) fn seen_by(&self, npc: CharacterId) -> Vec<CharacterId> {
+        (self.in_view.borrow().iter())
+            .filter(|&&(seer, _)| seer == npc)
+            .map(|&(_, who)| who)
+            .collect()
     }
 
     /// Whether the NPC `npc` sees `who`, as the engine last told.
@@ -1143,10 +1164,46 @@ pub(crate) fn remove(lua: &Lua, id: CharacterId) -> mlua::Result<()> {
     let shared = shared_of(lua)?;
     only_npc(lua, &shared, id, "remove")?;
     crate::time_api::rules_only(lua, &shared, "npc:remove")?;
-    shared.npcs.forget(id);
-    shared.characters.remove(id);
-    shared.handles.forget(id);
-    shared.weapons.forget(id);
+    let told = tell_lost_before_leaving(lua, &shared, id);
+    // One of those functions may have taken it out already.
+    if shared.characters.has(id) {
+        shared.npcs.forget(id);
+        shared.characters.remove(id);
+        shared.handles.forget(id);
+        shared.weapons.forget(id);
+    }
+    told
+}
+
+/// Calls the `onLoseSight` functions of every NPC that sees `id`, which is
+/// about to be taken out of the world, while it can still be read: so each
+/// `onSee` has its `onLoseSight`. Each NPC is first noted as no longer
+/// seeing it, so a function that takes it out again tells nobody twice.
+fn tell_lost_before_leaving(lua: &Lua, shared: &Rc<Shared>, id: CharacterId) -> mlua::Result<()> {
+    let seers = shared.npcs.seers_of(id);
+    if seers.is_empty() {
+        return Ok(());
+    }
+    for &npc in &seers {
+        shared.npcs.set_in_view(npc, id, false);
+    }
+    let who = shared.handles.character(lua, id)?;
+    let [x, y, z] = shared.characters.position(id).unwrap_or_default();
+    let at = mlua::Vector::new(x, y, z);
+    for npc in seers {
+        let count = shared.handlers.borrow().npc_lost.len();
+        let was = shared.audio.by.replace(Some(npc));
+        for index in 0..count {
+            let handler = (shared.handlers.borrow().npc_lost.get(index))
+                .and_then(|(seer, handler)| (*seer == npc).then(|| handler.clone()));
+            let Some(handler) = handler else { continue };
+            if let Err(error) = handler.call::<()>((who.clone(), at)) {
+                shared.audio.by.set(was);
+                return Err(error);
+            }
+        }
+        shared.audio.by.set(was);
+    }
     Ok(())
 }
 
@@ -1257,15 +1314,32 @@ pub(crate) fn can_see(lua: &Lua, id: CharacterId, who: &Value) -> mlua::Result<b
     Ok(alive && shared.npcs.sees(id, who))
 }
 
-/// The functions to call when the NPC `id` senses something: `pick` says
-/// which event's.
-pub(crate) fn sense_handlers(
+/// Whether the NPC `id` has a function for what `pick` says: `onSee`,
+/// `onLoseSight` or `onHear`.
+pub(crate) fn has_sense_handler(
     shared: &Shared,
     id: CharacterId,
     pick: impl Fn(&crate::api::Handlers) -> &Vec<(CharacterId, Function)>,
-) -> Vec<Function> {
-    (pick(&shared.handlers.borrow()).iter())
-        .filter(|(known, _)| *known == id)
-        .map(|(_, handler)| handler.clone())
-        .collect()
+) -> bool {
+    (pick(&shared.handlers.borrow()).iter()).any(|(known, _)| *known == id)
+}
+
+/// `npc:inSight()`: everyone the NPC sees now, as of its last look, in the
+/// order they came into view; none once its health is gone.
+pub(crate) fn in_sight(lua: &Lua, id: CharacterId) -> mlua::Result<Table> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "inSight")?;
+    let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+    let seen = if alive {
+        shared.npcs.seen_by(id)
+    } else {
+        Vec::new()
+    };
+    let list = lua.create_table_with_capacity(seen.len(), 0)?;
+    for who in seen {
+        if shared.characters.has(who) {
+            list.raw_push(shared.handles.character(lua, who)?)?;
+        }
+    }
+    Ok(list)
 }

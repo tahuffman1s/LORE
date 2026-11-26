@@ -49,6 +49,10 @@ const POLL_EVERY: Duration = Duration::from_millis(100);
 /// so a script failing in new ways every tick cannot flood the log.
 const MAX_REPORTED: usize = 32;
 
+/// The most noises of one tick whose script table is kept for the NPCs
+/// that hear them; one past that is built afresh for each.
+const MOST_NOISE_TABLES: usize = 1024;
+
 const KEEPS_RUNNING: &str =
     "The game keeps running. Fix this and save the file: it reloads by itself.";
 const KEEPS_PREVIOUS: &str = "The game keeps running the last version that worked. \
@@ -2072,7 +2076,7 @@ impl ScriptHost {
             return;
         }
         self.npcs.set_in_view(npc, who, true);
-        self.tell_npc(npc, who, |handlers| &handlers.npc_saw, |_, _| Ok(None));
+        self.tell_npc(npc, who, |handlers| &handlers.npc_saw, None);
     }
 
     /// Tells the script `who` went out of the NPC `npc`'s view, last seen
@@ -2080,30 +2084,78 @@ impl ScriptHost {
     /// them and that place.
     pub fn npc_lost_sight(&mut self, npc: CharacterId, who: CharacterId, at: [f32; 3]) {
         self.npcs.set_in_view(npc, who, false);
-        let [x, y, z] = at;
-        self.tell_npc(
-            npc,
-            who,
-            |handlers| &handlers.npc_lost,
-            move |_, _| Ok(Some(mlua::Value::Vector(mlua::Vector::new(x, y, z)))),
-        );
+        self.tell_npc(npc, who, |handlers| &handlers.npc_lost, Some(at));
     }
 
-    /// Tells the script the NPC `npc` heard `noise`: its `onHear` functions
-    /// are called with the same table `game.onNoise` is handed.
-    pub fn npc_heard(&mut self, npc: CharacterId, noise: &crate::NoiseTold) {
+    /// Tells the script the NPC `npc` heard `noise`, the one at `nth` in the
+    /// tick's list of noises: its `onHear` functions are called with the
+    /// very table `game.onNoise` was handed for it, built once for every
+    /// NPC that heard it.
+    pub fn npc_heard(&mut self, npc: CharacterId, nth: usize, noise: &crate::NoiseTold) {
         let Some(version) = &self.running else { return };
         let shared = Rc::clone(&version.shared);
-        let handlers = crate::npc_api::sense_handlers(&shared, npc, |h| &h.npc_heard);
-        if handlers.is_empty() || !self.characters.has(npc) {
+        if !crate::npc_api::has_sense_handler(&shared, npc, |h| &h.npc_heard)
+            || !self.characters.has(npc)
+        {
             return;
         }
-        let Ok(table) = weapon_api::noise_table(&version.vm, &shared, noise) else {
+        let Some(table) = self.noise_table(&shared, nth, noise) else {
             return;
         };
+        self.call_npc_handlers(&shared, npc, |h| &h.npc_heard, table);
+    }
+
+    /// Forgets the tables the script was handed for the noises of the last
+    /// tick: call once a tick, before the first [`noise_made`](Self::noise_made).
+    pub fn start_noises(&mut self) {
+        if let Some(version) = &self.running {
+            version.shared.noise_tables.borrow_mut().clear();
+        }
+    }
+
+    /// The script's table for the noise at `nth` in the tick's list: the
+    /// one already built for it this tick, or a new one, kept for the rest.
+    fn noise_table(
+        &self,
+        shared: &Rc<Shared>,
+        nth: usize,
+        noise: &crate::NoiseTold,
+    ) -> Option<mlua::Table> {
+        let version = self.running.as_ref()?;
+        let mut tables = shared.noise_tables.borrow_mut();
+        if let Some(Some(table)) = tables.get(nth) {
+            return Some(table.clone());
+        }
+        let table = weapon_api::noise_table(&version.vm, shared, noise).ok()?;
+        if nth < MOST_NOISE_TABLES {
+            if tables.len() <= nth {
+                tables.resize(nth + 1, None);
+            }
+            tables[nth] = Some(table.clone());
+        }
+        Some(table)
+    }
+
+    /// Calls each function `pick` gives for the NPC `npc` with `args`, in
+    /// the order they were added, as that NPC (what one plays is its own).
+    /// The list is borrowed only to find the next one and nothing is
+    /// gathered first, so a function may add more while it runs: those are
+    /// first called on the next pass, so one that keeps adding cannot hold
+    /// up the tick. Functions are never taken out while a script runs.
+    fn call_npc_handlers(
+        &mut self,
+        shared: &Rc<Shared>,
+        npc: CharacterId,
+        pick: fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
+        args: impl IntoLuaMulti + Clone,
+    ) {
         let was = self.audio.by.replace(Some(npc));
-        for handler in handlers {
-            if self.paused || !self.call(&shared, &handler, table.clone()) {
+        let count = pick(&shared.handlers.borrow()).len();
+        for index in 0..count {
+            let handler = (pick(&shared.handlers.borrow()).get(index))
+                .and_then(|(id, handler)| (*id == npc).then(|| handler.clone()));
+            let Some(handler) = handler else { continue };
+            if self.paused || !self.call(shared, &handler, args.clone()) {
                 break;
             }
         }
@@ -2117,37 +2169,32 @@ impl ScriptHost {
     }
 
     /// Calls the functions `pick` gives for the NPC `npc` with the
-    /// character `who`, and what `more` adds after it.
+    /// character `who`, and `at` after it when there is one.
     fn tell_npc(
         &mut self,
         npc: CharacterId,
         who: CharacterId,
-        pick: impl Fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
-        more: impl Fn(&mlua::Lua, &Shared) -> mlua::Result<Option<mlua::Value>>,
+        pick: fn(&crate::api::Handlers) -> &Vec<(CharacterId, mlua::Function)>,
+        at: Option<[f32; 3]>,
     ) {
         let Some(version) = &self.running else { return };
         let shared = Rc::clone(&version.shared);
-        let handlers = crate::npc_api::sense_handlers(&shared, npc, pick);
-        if handlers.is_empty() || !self.characters.has(npc) || !self.characters.has(who) {
+        if !crate::npc_api::has_sense_handler(&shared, npc, pick)
+            || !self.characters.has(npc)
+            || !self.characters.has(who)
+        {
             return;
         }
         let Ok(seen) = shared.handles.character(&version.vm, who) else {
             return;
         };
-        let Ok(more) = more(&version.vm, &shared) else {
-            return;
-        };
-        let was = self.audio.by.replace(Some(npc));
-        for handler in handlers {
-            let called = match &more {
-                Some(more) => self.call(&shared, &handler, (seen.clone(), more.clone())),
-                None => self.call(&shared, &handler, seen.clone()),
-            };
-            if self.paused || !called {
-                break;
+        match at {
+            Some([x, y, z]) => {
+                let at = mlua::Vector::new(x, y, z);
+                self.call_npc_handlers(&shared, npc, pick, (seen, at));
             }
+            None => self.call_npc_handlers(&shared, npc, pick, seen),
         }
-        self.audio.by.set(was);
     }
 
     /// Tells each NPC with an `onSee`, `onLoseSight` or `onHear` function
@@ -2173,6 +2220,7 @@ impl ScriptHost {
             self.npc_saw(npc, player);
             self.npc_heard(
                 npc,
+                usize::MAX,
                 &crate::NoiseTold {
                     sound: "footstep",
                     position: at,
@@ -2581,11 +2629,22 @@ impl ScriptHost {
         let Some(version) = &self.running else {
             return true;
         };
+        // Its place in the tick's list, for an NPC that hears it to be
+        // handed the same table.
+        let nth = version.shared.noise_tables.borrow().len();
         if self.paused || version.shared.handlers.borrow().noise.is_empty() {
+            if nth < MOST_NOISE_TABLES {
+                version.shared.noise_tables.borrow_mut().push(None);
+            }
             return true;
         }
         let shared = Rc::clone(&version.shared);
-        let Ok(table) = weapon_api::noise_table(&version.vm, &version.shared, noise) else {
+        let Some(table) = self.noise_table(&shared, nth, noise) else {
+            // Its place is held all the same, so the next noise's is right.
+            let mut tables = shared.noise_tables.borrow_mut();
+            if tables.len() <= nth && nth < MOST_NOISE_TABLES {
+                tables.resize(nth + 1, None);
+            }
             return true;
         };
         let count = shared.handlers.borrow().noise.len();
@@ -2842,6 +2901,7 @@ impl ScriptHost {
             things: Rc::clone(&self.things),
             thing_uses: crate::thing_api::ThingUses::default(),
             npcs: Rc::clone(&self.npcs),
+            noise_tables: RefCell::new(Vec::new()),
             npc_version: crate::npc_api::NpcVersion::default(),
             thing_handles: RefCell::default(),
             audio: Rc::clone(&self.audio),

@@ -200,6 +200,13 @@ impl CharacterId {
     /// The player: the one character every game has, from before its
     /// script loads until it is closed. It is `game.player` to the script.
     pub const PLAYER: Self = Self(0);
+
+    /// The number itself: the order characters came into the world in,
+    /// the player's 0.
+    #[must_use]
+    pub const fn number(self) -> u32 {
+        self.0
+    }
 }
 
 /// One character as the script can read it.
@@ -897,6 +904,11 @@ impl UserData for CharacterRef {
             let this = npc_receiver(lua, &this, "canSee", "(game.player)")?;
             this.read(lua, "canSee")?;
             crate::npc_api::can_see(lua, this.0, &who)
+        });
+        methods.add_function("inSight", |lua, this: Value| {
+            let this = npc_receiver(lua, &this, "inSight", "()")?;
+            this.read(lua, "inSight")?;
+            crate::npc_api::in_sight(lua, this.0)
         });
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;

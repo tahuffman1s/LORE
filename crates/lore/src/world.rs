@@ -1340,7 +1340,10 @@ impl Game for World {
             ));
         }
         // The script hears each noise of the tick, in the order made; one
-        // it answers `false` to is kept in the list but not played.
+        // it answers `false` to is kept in the list but not played. The
+        // table it is handed for each is handed again to the NPCs that
+        // hear it.
+        self.game.host_mut().start_noises();
         for noise in &mut self.noises {
             if !self.game.host_mut().noise_made(&noise.told(&self.names)) {
                 noise.silenced = true;
