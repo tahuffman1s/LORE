@@ -3,7 +3,7 @@
 -- doing, read again for every picture. A small readout of the same can
 -- stay on screen while the menu is closed.
 
-local menu = require("./menu")
+local menu = game.menu
 local places = require("./places")
 local meter = require("./frame_meter")
 local fluids = require("./fluids")
@@ -154,7 +154,7 @@ for _, place in jumps do
     table.insert(
         rows,
         menu.button(place.name, {
-            press = function()
+            onPress = function()
                 if place.flying then
                     game.player:setMovement("fly")
                 end
@@ -166,7 +166,7 @@ for _, place in jumps do
         })
     )
 end
-table.insert(rows, menu.button("Clear all fluids", { press = fluids.clear }))
+table.insert(rows, menu.button("Clear all fluids", { onPress = fluids.clear }))
 for _, line in {
     menu.info("Position", { text = position }),
     menu.info("Speed", { text = speed }),

@@ -33,8 +33,8 @@
 --   Esc [Start]       the pause menu
 --
 -- Each part is a file beside this one: kinds.luau the fluids, gun.luau the
--- gun, lab.luau the machines and the panel. menu.luau and pause_menu.luau
--- are the pause menu every new game starts with.
+-- gun, lab.luau the machines and the panel. The pause menu
+-- is the engine's own (game.pauseMenu).
 
 -- What each of those actions is called here.
 local RESPAWN, WEATHER, CLEAR = "reload", "map", "inventory"
@@ -59,8 +59,8 @@ local keys = game.hud.text("", { at = "bottom", down = -6, size = 24, color = "#
 -- And one at the top that says what the weather was last set to.
 local sky = game.hud.text("", { at = "top right", right = -24, down = 24, size = 24, color = "#ffffffa0" })
 
--- The pause menu, made last so that it is drawn over everything else.
-local pauseMenu = require("./pause_menu")
+-- The pause menu is the engine's own: game.pauseMenu.
+local pauseMenu = game.pauseMenu
 
 -- The three weathers the weather button goes through. Rain raises pools of water, up to
 -- their brims; frost freezes what freezes.

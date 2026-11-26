@@ -35,6 +35,43 @@ const BUILTINS: [Builtin; 2] = [
 /// empty here because `game` cannot be changed once it is made.
 pub(crate) const GAME_TABLES: [&str; 2] = ["menu", "pauseMenu"];
 
+/// What the built-in menu kit puts on `game.menu`, the objects it hands back
+/// and `game.pauseMenu`, by name. They are written in Luau, so these lists
+/// are what the test that compares the type definitions with the real API
+/// has to go on.
+#[cfg(test)]
+pub(crate) const MENU_FUNCTIONS: &[&str] = &[
+    "button", "toggle", "slider", "choice", "info", "percent", "new", "tabs", "top", "anyOpen",
+    "style",
+];
+#[cfg(test)]
+pub(crate) const MENU_ROW_FIELDS: &[&str] = &["label", "value", "text", "onPress", "onChange"];
+#[cfg(test)]
+pub(crate) const MENU_FIELDS: &[&str] = &[
+    "title", "isOpen", "chosen", "backWord", "open", "close", "toggle", "remove",
+];
+#[cfg(test)]
+pub(crate) const MENU_TABS_FIELDS: &[&str] =
+    &["isOpen", "current", "open", "close", "toggle", "remove"];
+#[cfg(test)]
+pub(crate) const MENU_STYLE_FIELDS: &[&str] = &[
+    "back",
+    "chosen",
+    "words",
+    "chosenWords",
+    "quiet",
+    "on",
+    "off",
+    "bar",
+    "knob",
+    "accent",
+    "shadow",
+    "layer",
+];
+#[cfg(test)]
+pub(crate) const PAUSE_MENU_FIELDS: &[&str] =
+    &["enabled", "title", "open", "close", "isOpen", "addRow"];
+
 /// Makes the tables the built-ins fill in and puts them on `game`.
 pub(crate) fn make_tables(lua: &Lua, game: &Table) -> mlua::Result<()> {
     for name in GAME_TABLES {

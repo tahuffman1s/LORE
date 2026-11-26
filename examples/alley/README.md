@@ -70,8 +70,6 @@ Each part is a file of its own, `require`d by `main.luau`:
 
 | file | what is in it |
 |---|---|
-| `menu.luau` | menus of rows (sliders, choices, toggles, buttons, lines that tell) and a panel of tabs: copy it into your own game |
-| `pause_menu.luau` | the pause menu, with a settings screen built from `game.settings.list()`: the one `lore new` writes into every new game |
 | `weather_menu.luau` | the weather menu, a row for each thing `game.weather` and `game.sky` can say |
 | `debug_menu.luau` | the debug menu, and the readout it can leave on screen |
 | `shaders/` | `old_photo.wgsl` (a screen effect) and `glow_bands.wgsl` (a surface shader), each a short commented example of a game's own shader |

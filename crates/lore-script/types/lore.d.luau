@@ -1699,6 +1699,150 @@ export type Setting = {
     default: number | boolean | string,
 }
 
+--- One row of a menu, made by `game.menu.button`, `toggle`, `slider`, `choice`
+--- or `info`. It holds its own value: read and set `value`, `label` and `text`
+--- and the screen follows. Setting `value` from a script does not call
+--- `onChange`: that is for the player's changes.
+--- Example: local volume = game.menu.slider("Volume", { value = 0.8, format = game.menu.percent })
+export type MenuRow = {
+    --- The row's name, on the left. Set it to change the words on screen.
+    --- Example: row.label = "Volume (muted)"
+    label: string,
+
+    --- What a toggle (true or false), slider (a number) or choice (one of its
+    --- words) is now. With `get` the row reads it from there, and with `set`
+    --- setting it writes through. A button or an info line has none.
+    --- Example: volume.value = 0.5
+    value: any,
+
+    --- The words beside a button or an info line: words, or a function that
+    --- gives them, read again for every picture.
+    --- Example: status.text = function() return "Ready" end
+    text: string | (() -> string),
+
+    --- Adds a function called, on a tick, when the player presses a button.
+    --- Gives the row back.
+    --- Example: quit:onPress(function() game.quit() end)
+    onPress: (self: MenuRow, handler: () -> ()) -> MenuRow,
+
+    --- Adds a function called, on a tick, when the player changes a toggle,
+    --- slider or choice, and given the new value. Gives the row back.
+    --- Example: volume:onChange(function(value) print(value) end)
+    onChange: (self: MenuRow, handler: (value: any) -> ()) -> MenuRow,
+}
+
+--- A menu on the HUD: a title and its rows, made by `game.menu.new`. It hears
+--- the player and draws itself while it is open; nothing needs calling every
+--- tick.
+--- Example: local sound = game.menu.new("Sound", { game.menu.toggle("Music", { value = true }) })
+export type Menu = {
+    --- The words at the top (or on its tab). Set it to change them.
+    --- Example: sound.title = "Sound and music"
+    title: string,
+
+    --- True while it is open, with it in front if it is in tabs. Read only.
+    --- Example: if sound.isOpen then print("Listening") end
+    isOpen: boolean,
+
+    --- Which row is chosen, counting from 1. Set it to start on another row.
+    --- Example: sound.chosen = 2
+    chosen: number,
+
+    --- What the line of keys at the bottom calls going back: "close" for a
+    --- screen on its own, "back" over another. Set it for a word of your own.
+    --- Example: sound.backWord = "resume"
+    backWord: string?,
+
+    --- Opens it (with its tabs, if it is in some) on top of any other open
+    --- screen. The player's own controls wait while a menu is open.
+    --- Example: sound:open()
+    open: (self: Menu) -> (),
+
+    --- Closes it, and shows the screen below, or gives the player their
+    --- controls back.
+    --- Example: sound:close()
+    close: (self: Menu) -> (),
+
+    --- Opens it, or closes it if it is open in front: for the key that opens it.
+    --- Example: if game.input.justPressed("sound_menu") then sound:toggle() end
+    toggle: (self: Menu) -> (),
+
+    --- Takes it away for good, closing it first. Make a new one to have it back.
+    --- Example: sound:remove()
+    remove: (self: Menu) -> (),
+}
+
+--- Menus shown as tabs of one screen, made by `game.menu.tabs`.
+--- Example: local options = game.menu.tabs({ sound, video })
+export type MenuTabs = {
+    --- True while the tabs are open. Read only.
+    --- Example: if options.isOpen then hud.visible = false end
+    isOpen: boolean,
+
+    --- The menu in front. Read only.
+    --- Example: print(options.current.title)
+    current: Menu,
+
+    --- Opens the tabs with `shown` in front (the one in front now if left out).
+    --- Example: options:open(video)
+    open: (self: MenuTabs, shown: Menu?) -> (),
+
+    --- Closes the tabs.
+    --- Example: options:close()
+    close: (self: MenuTabs) -> (),
+
+    --- Opens the tabs, or closes them if they are open with `shown` in front.
+    --- Example: if game.input.justPressed("options") then options:toggle(sound) end
+    toggle: (self: MenuTabs, shown: Menu?) -> (),
+
+    --- Takes the tabs and all their menus away for good.
+    --- Example: options:remove()
+    remove: (self: MenuTabs) -> (),
+}
+
+--- How every menu looks: colours (names or hex codes, as the HUD takes them)
+--- and the HUD layer. Set before making menus.
+--- Example: game.menu.style.back = "#101830e0"
+export type MenuStyle = {
+    --- Behind the whole menu.
+    --- Example: game.menu.style.back = "#101830e0"
+    back: string,
+    --- Behind the chosen row and the tab in front.
+    --- Example: game.menu.style.chosen = "#ffffff2e"
+    chosen: string,
+    --- The words.
+    --- Example: game.menu.style.words = "white"
+    words: string,
+    --- The chosen row's words.
+    --- Example: game.menu.style.chosenWords = "#ffd25a"
+    chosenWords: string,
+    --- Tabs not shown, the line of keys, and rows that only tell.
+    --- Example: game.menu.style.quiet = "#ffffff99"
+    quiet: string,
+    --- A toggle that is on.
+    --- Example: game.menu.style.on = "#7ee08a"
+    on: string,
+    --- A toggle that is off.
+    --- Example: game.menu.style.off = "#ffffff80"
+    off: string,
+    --- A slider's bar, unless the row says its own `color`.
+    --- Example: game.menu.style.bar = "#6fa8ff"
+    bar: string,
+    --- A slider's knob.
+    --- Example: game.menu.style.knob = "white"
+    knob: string,
+    --- A line along the top and a mark by the chosen row; nil (off) unless set.
+    --- Example: game.menu.style.accent = "#ffd27a"
+    accent: string?,
+    --- A shadow behind each menu; nil (off) unless set.
+    --- Example: game.menu.style.shadow = "#00000066"
+    shadow: string?,
+    --- The HUD layer menus are drawn on: higher is over the game's own pieces
+    --- (layer 0 unless you say another). 100 unless set.
+    --- Example: game.menu.style.layer = 200
+    layer: number,
+}
+
 declare game: {
     --- The player: the one person playing. There from the first line of
     --- the script to the last, so it needs no waiting for and no looking up.
@@ -3356,6 +3500,113 @@ declare game: {
         --- Example: game.settings.reset()
         --- Example: game.settings.reset("field_of_view")
         reset: (() -> ()) & ((name: string) -> ()),
+    },
+
+    --- Menus: rows, menus and tabs that keys, a gamepad and the mouse all
+    --- work, drawn on the HUD. Make them once, at the top of the script, then
+    --- `open` them. One stack of open screens: the top one hears the player,
+    --- closing it shows the one below, and the pause menu is on it too.
+    --- Example: local sound = game.menu.new("Sound", { game.menu.toggle("Music", { value = true }) })
+    menu: {
+        --- A row that does something when pressed. Options: `onPress` and
+        --- `text`.
+        --- Example: game.menu.button("Lightning", { onPress = function() game.weather.strike(game.player.position) end })
+        button: (label: string, options: { onPress: (() -> ())?, text: (string | (() -> string))? }?) -> MenuRow,
+
+        --- An on or off row. Options: `value` (false), `onChange`, and `get`
+        --- and `set` for a value that lives elsewhere.
+        --- Example: game.menu.toggle("Subtitles", { value = true, onChange = function(on) print(on) end })
+        toggle: (label: string, options: { value: boolean?, onChange: ((boolean) -> ())?, get: (() -> boolean)?, set: ((boolean) -> ())? }?) -> MenuRow,
+
+        --- A number row with a bar to drag. Options: `min` (0), `max` (1),
+        --- `step` (a twentieth), `value` (min), `wraps` (false), `format`
+        --- (turns the number into words), `color`, `onChange`, `get`, `set`.
+        --- Example: game.menu.slider("Fog", { value = 0.2, format = game.menu.percent })
+        slider: (label: string, options: { min: number?, max: number?, step: number?, value: number?, wraps: boolean?, format: ((number) -> string)?, color: string?, onChange: ((number) -> ())?, get: (() -> number)?, set: ((number) -> ())? }?) -> MenuRow,
+
+        --- A row of a few words, gone through with left and right. `options`
+        --- is required. Others: `value` (the first), `wraps` (true), `format`,
+        --- `onChange`, `get`, `set`.
+        --- Example: game.menu.choice("Size", { options = { "small", "large" } })
+        choice: (label: string, options: { options: { string }, value: string?, wraps: boolean?, format: ((string) -> string)?, onChange: ((string) -> ())?, get: (() -> string)?, set: ((string) -> ())? }) -> MenuRow,
+
+        --- A line that only tells and cannot be chosen. `text` is words or a
+        --- function that gives them.
+        --- Example: game.menu.info("Speed", { text = function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end })
+        info: (label: string, options: { text: (string | (() -> string))? }?) -> MenuRow,
+
+        --- A share from 0 to 1 as a percentage, for a slider's `format`:
+        --- 0.25 is "25%".
+        --- Example: game.menu.slider("Rain", { format = game.menu.percent })
+        percent: (share: number) -> string,
+
+        --- Makes a menu from a title and rows, hidden until opened. Each row
+        --- belongs to one menu. `place` can say `right`, `down` (40 and 40,
+        --- pixels on a screen 1080 high) and `width` (820).
+        --- Example: local sound = game.menu.new("Sound", { music, volume }, { right = 40, down = 40, width = 640 })
+        new: (title: string, rows: { MenuRow }, place: { right: number?, down: number?, width: number? }?) -> Menu,
+
+        --- Shows menus as tabs of one screen, the first in front.
+        --- Example: local options = game.menu.tabs({ sound, video })
+        tabs: (menus: { Menu }) -> MenuTabs,
+
+        --- The open screen on top (the menu, or the tabs, as made), or nil.
+        --- Example: if game.menu.top() == sound then print("Sound is showing") end
+        top: () -> (Menu | MenuTabs)?,
+
+        --- True while any screen is open, the pause menu's too.
+        --- Example: crosshair.visible = not game.menu.anyOpen()
+        anyOpen: () -> boolean,
+
+        --- How menus look. Set before making menus.
+        --- Example: game.menu.style.accent = "#ffd27a"
+        style: MenuStyle,
+
+        --- The sounds menus make, as names of sounds (nil for none) and a volume.
+        --- Example: game.menu.sounds.move = nil
+        sounds: {
+            --- Played as the chosen row moves: "menu-move", or nil for none.
+            --- Example: game.menu.sounds.move = nil
+            move: string?,
+            --- Played when a row is pressed: "menu-choose", or nil for none.
+            --- Example: game.menu.sounds.choose = "ui/confirm"
+            choose: string?,
+            --- How loud, 0 to 1 (0.6).
+            --- Example: game.menu.sounds.volume = 0.3
+            volume: number,
+        },
+    },
+
+    --- The pause menu, the engine's own, on with nothing written: the
+    --- `pause` action (Escape, Start) stops the game and shows Resume,
+    --- Settings and Quit.
+    --- Example: game.pauseMenu.title = "Game paused"
+    pauseMenu: {
+        --- False turns the pause menu off (true). A game that makes its own
+        --- should say so at the top of the script.
+        --- Example: game.pauseMenu.enabled = false
+        enabled: boolean,
+
+        --- The words at the top of the first screen ("Paused").
+        --- Example: game.pauseMenu.title = "Game paused"
+        title: string,
+
+        --- Opens it at the first screen and pauses the game.
+        --- Example: game.pauseMenu.open()
+        open: () -> (),
+
+        --- Closes it and lets the game go on.
+        --- Example: game.pauseMenu.close()
+        close: () -> (),
+
+        --- True while it is open.
+        --- Example: if game.pauseMenu.isOpen() then crosshair.visible = false end
+        isOpen: () -> boolean,
+
+        --- Adds a row of the game's own to the first screen, above Quit. Add
+        --- rows at the top of the script, before it first opens.
+        --- Example: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
+        addRow: (row: MenuRow) -> (),
     },
 
     --- How fast this computer is drawing pictures. It is different on every

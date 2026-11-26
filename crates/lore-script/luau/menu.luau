@@ -1,64 +1,59 @@
 -- Menus on the HUD that keys, a gamepad and the mouse all work. The engine
 -- runs this file for every game before main.luau, and what it makes is
--- `game.menu` (written `menu` below).
+-- `game.menu` (written `menu` below). Nothing to copy, nothing to call
+-- every tick: make a menu, open it, and it hears the player and draws itself.
 --
--- A menu is a title and a list of rows. Each row is one of five kinds:
+-- A menu is a title and a list of rows. A row is one of five kinds:
 --
+--   menu.button  something that happens when it is pressed
+--   menu.toggle  on or off
 --   menu.slider  a number between two ends, with a bar to drag
 --   menu.choice  one of a few words, gone through with left and right
---   menu.toggle  on or off
---   menu.button  something that happens when it is pressed
 --   menu.info    a line that only tells, and cannot be chosen
 --
--- A row does not keep its own value: it reads it with `get` and changes it
--- with `set`, so it always shows what the game really is. A panel shows
--- one or more menus as tabs, opens and closes them, and frees the pointer
--- while it is open. Make it all once, at the top of the file, rows first,
--- then the menus, then the panel: a menu's rows are fixed when it is made.
+-- A row holds its own value. Give it `onChange` to hear the player change
+-- it, or `get` and `set` to show and change a value that lives elsewhere
+-- (a setting, say). It is a table you can read and set from a script:
+-- `row.label`, `row.value` and `row.text` change what the screen shows, and
+-- setting `row.value` does not call `onChange` (that is for the player).
 --
---     local volume = 0.8
---     local sound = menu.new("Sound", {
---         menu.slider("Volume", {
---             min = 0, max = 1, step = 0.1,
---             get = function() return volume end,
---             set = function(value) volume = value end,
---             format = menu.percent,
---         }),
---         menu.button("Quiet", { press = function() volume = 0 end }),
---     })
---     local panel = menu.panel({ sound })
+--     local music = menu.toggle("Music", { value = true, onChange = function(on) print(on) end })
+--     local volume = menu.slider("Volume", { value = 0.8, step = 0.1, format = menu.percent })
+--     volume:onChange(function(v) game.audio.play("click", { volume = v }) end)
+--     local quiet = menu.button("Quiet", { onPress = function() volume.value = 0 end })
 --
+--     local sound = menu.new("Sound", { music, volume, quiet })
 --     game.input.bind("sound_menu", { "F2", "GamepadSelect" })
 --     game.onTick(function()
---         if game.input.justPressed("sound_menu") then panel:toggle(sound) end
---         panel:update()
+--         if game.input.justPressed("sound_menu") then sound:toggle() end
 --     end)
---     game.onDraw(function() panel:draw() end)
 --
--- `panel:update()` hears the player and changes the game, so it goes in
--- game.onTick, which runs at the same pace on every computer. `panel:draw()`
--- only shows what is there, and reads the keys the player has bound, which
--- can only be read while drawing, so it goes in game.onDraw.
+-- Several menus can be tabs of one screen: `menu.tabs({ sound, video })`
+-- gives tabs with the same `open`, `close` and `toggle`, and `sound:open()`
+-- opens its tabs with `sound` in front.
 --
--- While the panel is open the game is in the engine's "menu" set of
--- actions (see game.input.useSet): the player's own controls wait, the
--- mouse is a pointer, and the menu hears the engine's "menu_move",
--- "menu_confirm", "menu_click", "menu_back", "menu_previous_tab" and
--- "menu_next_tab". An action the game made with game.input.bind, such as
--- "sound_menu" above, is heard in every set, so the same key closes it.
--- Closing the panel puts the game back in the set it was in when the
--- panel opened.
+-- Screens stack. Opening one puts it on top; only the top one hears the
+-- player (a button's `onPress` and a row's `onChange` are called on a tick,
+-- never while drawing); closing it shows the one below again; closing the
+-- last gives the player's own controls back, in the action set the game was
+-- in before the first opened. The pause menu is on the same stack, so a menu
+-- of yours can open over it. `menu.top()` is the screen on top (or nil) and
+-- `menu.anyOpen()` whether there is one.
 --
--- What the player does in it:
+-- What the player does in it (the engine's "menu" set of actions):
 --   choose a row:  up and down (arrow keys, W and S, the d-pad or the left
 --                  stick), or move the pointer over it
 --   change it:     left and right, the mouse wheel, or a click; press on a
 --                  slider's bar and drag
 --   press it:      Enter, Space, A on a gamepad, or a click
 --   change tab:    Q and E, the bumpers, or a click on the tab
---   close it:      Escape, or B on a gamepad
--- The chosen row moves only when the pointer moves, so the keys and the
--- mouse never fight over it: the keys go on from wherever the mouse left it.
+--   go back:       Escape, or B on a gamepad: closes the screen on top
+--   close all:     P, or Start on a gamepad
+-- An action the game made with game.input.bind, such as "sound_menu" above,
+-- is heard in every set, so the same key can close the menu it opened.
+--
+-- Look and sound: `menu.style` (colours, and the HUD layer) and
+-- `menu.sounds` below. Change them before making menus.
 
 local menu = game.menu
 
@@ -71,8 +66,7 @@ local LABEL_WIDE = 270 -- the room for a row's name; its value starts after it
 local BAR_WIDE = 210 -- a slider's bar, at the right of the row
 
 -- How the menus look. A game can change any of these before it makes its
--- menus (and before it requires pause_menu.luau, which makes its own), to
--- give every menu, the pause menu's too, a look of its own:
+-- menus, to give every menu, the pause menu's too, a look of its own:
 --
 --     game.menu.style.back = "#101830e0"
 --     game.menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
@@ -97,7 +91,6 @@ menu.style = {
     -- game's own pieces, which are on layer 0 unless a game says another.
     layer = 100,
 }
-local style = menu.style
 
 -- What a menu sounds like: a tick as the chosen row moves and a click
 -- when a row is pressed or changed. They are the engine's own starter
@@ -121,168 +114,533 @@ end
 -- Behind the rows that are not chosen: clear, but still under the pointer.
 local NOT_CHOSEN = "#00000000"
 
--- One row of a menu, as the functions below make it. The fields after
--- `color` are its HUD pieces, which `menu.new` makes.
-export type Row = {
+-- ------------------------------------------------------------------ rows
+
+-- Everything a row knows. The row a script holds is a table with nothing
+-- in it that answers for this (see `RowMeta` below), so `row.value = 3` can
+-- update the screen.
+type RowState = {
     kind: string,
     label: string,
+    value: any,
     get: (() -> any)?,
     set: ((any) -> ())?,
-    press: (() -> ())?,
     -- Turns the value of a slider or a choice into words.
     format: ((any) -> string)?,
     -- The words beside a button or an info line.
-    text: (() -> string)?,
+    text: any,
     min: number,
     max: number,
     step: number,
     wraps: boolean,
     options: { string },
     color: string?,
-    box: HudBox?,
-    name: HudText?, -- shows `label`
-    value: HudText?,
-    bar: HudBar?,
-    knob: HudBox?,
+    pressed: { () -> () },
+    changed: { (any) -> () },
+    -- The menu it is in, once it is in one.
+    owner: any,
+    box: any,
+    name: any, -- the HUD text that shows `label`
+    shown: any, -- the HUD text that shows the value
+    bar: any,
+    knob: any,
     -- All of the pieces above that the row has, for showing, hiding and
     -- asking which is under the pointer.
     pieces: { any },
 }
 
--- A row of `kind` with nothing yet to read, set or press: what each kind
--- below starts from.
-local function newRow(kind: string, label: string): Row
-    return { kind = kind, label = label, min = 0, max = 1, step = 1, wraps = false, options = {}, pieces = {} }
+local states: { [any]: RowState } = setmetatable({}, { __mode = "k" }) :: any
+
+-- The words a script may put in a row's table, for each kind of row.
+local ALLOWED: { [string]: { string } } = {
+    button = { "onPress", "text" },
+    toggle = { "value", "onChange", "get", "set" },
+    slider = { "min", "max", "step", "value", "wraps", "format", "color", "onChange", "get", "set" },
+    choice = { "options", "value", "wraps", "format", "onChange", "get", "set" },
+    info = { "text" },
+}
+
+-- Old or likely names, and what to write instead.
+local INSTEAD: { [string]: string } = {
+    press = "onPress",
+    onpress = "onPress",
+    change = "onChange",
+    changed = "onChange",
+    onchange = "onChange",
+    default = "value",
+    initial = "value",
+    choices = "options",
+    values = "options",
+    maximum = "max",
+    minimum = "min",
+}
+
+-- What the value of a row is: from `get` if it has one, else its own.
+local function current(s: RowState): any
+    local get = s.get
+    if get then
+        return get()
+    end
+    return s.value
+end
+
+-- Why `value` cannot be the value of the row, or nil if it can.
+local function valueProblem(s: RowState, value: any): string?
+    if s.kind == "toggle" and type(value) ~= "boolean" then
+        return string.format('"%s" is a toggle, so its value is true or false, not %s', s.label, type(value))
+    elseif s.kind == "slider" and type(value) ~= "number" then
+        return string.format('"%s" is a slider, so its value is a number, not %s', s.label, type(value))
+    elseif s.kind == "choice" and not table.find(s.options, value) then
+        return string.format('"%s" has no choice %s. Its choices are: %s', s.label, tostring(value), table.concat(s.options, ", "))
+    elseif s.kind == "button" or s.kind == "info" then
+        return string.format('"%s" is a %s and has no value. Set its text instead: row.text = "..."', s.label, s.kind)
+    end
+    return nil
+end
+
+-- Why the option `key` cannot be `value`, or nil.
+local function optionProblem(fname: string, key: string, value: any): string?
+    local kind = type(value)
+    local function must(...: string): string?
+        for _, want in { ... } do
+            if kind == want then
+                return nil
+            end
+        end
+        return string.format("%s: %s must be a %s, not %s", fname, key, table.concat({ ... }, " or a "), kind)
+    end
+    if key == "onPress" or key == "onChange" or key == "get" or key == "set" or key == "format" then
+        return must("function")
+    elseif key == "text" then
+        return must("string", "function")
+    elseif key == "min" or key == "max" or key == "step" then
+        return must("number")
+    elseif key == "wraps" then
+        return must("boolean")
+    elseif key == "color" then
+        return must("string")
+    end
+    return nil
+end
+
+-- Makes the state of a row of `kind`, from the options given. `fname` names
+-- the function the script called, for errors, which are raised three levels
+-- up: at the script's own line.
+local function build(fname: string, kind: string, label: any, given: any): RowState
+    if type(label) ~= "string" then
+        error(string.format('%s needs the row\'s name first, in quotes: %s("Name", { ... })', fname, fname), 4)
+    end
+    if given ~= nil and type(given) ~= "table" then
+        error(string.format('%s: after the name comes a table of options in braces, such as %s("%s", { ... })', fname, fname, label), 4)
+    end
+    local options: { [string]: any } = given or {}
+    local allowed = ALLOWED[kind]
+    for key, value in options do
+        if not table.find(allowed, key) then
+            local hint = INSTEAD[string.lower(tostring(key))]
+            error(
+                string.format(
+                    '%s: "%s" is not something a %s takes%s. It takes: %s',
+                    fname,
+                    tostring(key),
+                    kind,
+                    if hint and table.find(allowed, hint) then ", write " .. hint .. " instead" else "",
+                    table.concat(allowed, ", ")
+                ),
+                4
+            )
+        end
+        local problem = optionProblem(fname, key, value)
+        if problem then
+            error(problem, 4)
+        end
+    end
+    local s: RowState = {
+        kind = kind,
+        label = label,
+        value = nil,
+        get = options.get,
+        set = options.set,
+        format = options.format,
+        text = options.text,
+        min = 0,
+        max = 1,
+        step = 1,
+        wraps = false,
+        options = {},
+        color = options.color,
+        pressed = {},
+        changed = {},
+        owner = nil,
+        pieces = {},
+    }
+    if kind == "slider" then
+        s.min, s.max = options.min or 0, options.max or 1
+        if s.max <= s.min then
+            error(string.format('%s("%s"): max must be more than min (min is %g, max is %g)', fname, label, s.min, s.max), 4)
+        end
+        s.step = options.step or (s.max - s.min) / 20
+        if s.step <= 0 then
+            error(string.format('%s("%s"): step must be more than 0', fname, label), 4)
+        end
+        s.wraps = options.wraps or false
+        s.value = s.min
+    elseif kind == "choice" then
+        local words = options.options
+        if type(words) ~= "table" or #words == 0 then
+            error(
+                string.format('%s("%s") needs the words to choose between: %s("%s", { options = { "small", "large" } })', fname, label, fname, label),
+                4
+            )
+        end
+        for number, word in words do
+            if type(word) ~= "string" then
+                error(string.format('%s("%s"): options are words in quotes, and number %d is a %s', fname, label, number, type(word)), 4)
+            end
+        end
+        s.options = table.clone(words)
+        s.wraps = if options.wraps == nil then true else options.wraps
+        s.value = s.options[1]
+    elseif kind == "toggle" then
+        s.value = false
+    end
+    if options.value ~= nil then
+        local problem = valueProblem(s, options.value)
+        if problem then
+            error(fname .. ": " .. problem, 4)
+        end
+        s.value = options.value
+    end
+    local press, change = options.onPress, options.onChange
+    if press then
+        table.insert(s.pressed, press)
+    end
+    if change then
+        table.insert(s.changed, change)
+    end
+    return s
+end
+
+-- What the table a script holds answers for, and what it refuses.
+local RowMethods = {}
+local RowMeta = {}
+
+RowMeta.__index = function(self: any, key: any): any
+    local s = states[self]
+    if key == "label" then
+        return s.label
+    elseif key == "value" then
+        return current(s)
+    elseif key == "text" then
+        return s.text
+    end
+    return RowMethods[key]
+end
+
+RowMeta.__newindex = function(self: any, key: any, value: any)
+    local s = states[self]
+    if key == "label" then
+        if type(value) ~= "string" then
+            error(string.format('A row\'s label is words in quotes, not %s: row.label = "Volume"', type(value)), 2)
+        end
+        s.label = value
+        if s.name then
+            s.name.text = value
+        end
+    elseif key == "value" then
+        local problem = valueProblem(s, value)
+        if problem then
+            error(problem, 2)
+        end
+        if s.set then
+            s.set(value)
+        elseif s.get then
+            error(string.format('"%s" reads its value with get, so say how to write it too: give it a set', s.label), 2)
+        else
+            s.value = value
+        end
+    elseif key == "text" then
+        if s.kind ~= "button" and s.kind ~= "info" then
+            error(string.format('"%s" is a %s: only a button or an info line has text. Set row.value or row.label', s.label, s.kind), 2)
+        end
+        if type(value) ~= "string" and type(value) ~= "function" then
+            error('A row\'s text is words in quotes or a function that gives them: row.text = "Ready"', 2)
+        end
+        s.text = value
+    else
+        error(string.format('A row has label, value and text to set; "%s" is not one of them', tostring(key)), 2)
+    end
+end
+
+-- Adds a handler for the player pressing a button. Handlers are called in
+-- the order added, on a tick.
+-- Example: quit:onPress(function() game.quit() end)
+function RowMethods.onPress(self: any, handler: () -> ()): any
+    local s = states[self]
+    if s.kind ~= "button" then
+        error(string.format('"%s" is a %s, so it is changed, not pressed: use row:onChange(function(value) ... end)', s.label, s.kind), 2)
+    end
+    if type(handler) ~= "function" then
+        error("row:onPress needs a function: row:onPress(function() ... end)", 2)
+    end
+    table.insert(s.pressed, handler)
+    return self
+end
+
+-- Adds a handler for the player changing a toggle, slider or choice; it is
+-- told the new value. Changing `row.value` from a script does not call it.
+-- Example: volume:onChange(function(value) print(value) end)
+function RowMethods.onChange(self: any, handler: (any) -> ()): any
+    local s = states[self]
+    if s.kind == "button" or s.kind == "info" then
+        error(string.format('"%s" is a %s, so it has nothing to change: use row:onPress(function() ... end) on a button', s.label, s.kind), 2)
+    end
+    if type(handler) ~= "function" then
+        error("row:onChange needs a function: row:onChange(function(value) ... end)", 2)
+    end
+    table.insert(s.changed, handler)
+    return self
+end
+
+-- A row of `kind` that a script may hold.
+local function make(fname: string, kind: string, label: any, given: any): any
+    local state = build(fname, kind, label, given)
+    local row = setmetatable({}, RowMeta)
+    states[row] = state
+    return row
+end
+
+-- Something that happens when the row is pressed. `text`, if given, says
+-- more beside the name (words, or a function that gives them, read again
+-- for every picture).
+-- Example: menu.button("Lightning", { onPress = function() game.weather.strike(game.player.position) end })
+function menu.button(label: string, options: { onPress: (() -> ())?, text: (string | () -> string)? }?): any
+    local row = make("menu.button", "button", label, options)
+    return row
+end
+
+-- On or off. Starts off unless `value` says on. `get` and `set` show and
+-- change a value that lives elsewhere.
+-- Example: menu.toggle("Subtitles", { value = true, onChange = function(on) print(on) end })
+function menu.toggle(label: string, options: { value: boolean?, onChange: ((boolean) -> ())?, get: (() -> boolean)?, set: ((boolean) -> ())? }?): any
+    local row = make("menu.toggle", "toggle", label, options)
+    return row
 end
 
 -- A number between `min` and `max` (0 and 1 if left out), changed `step`
 -- at a time by a key (a twentieth of the way if left out) and set anywhere
 -- between by the bar. `wraps` makes it go round, as an hour or a compass
 -- does. `format` turns the number into the words beside the bar.
--- Example: menu.slider("Fog", { get = game.weather.fog, set = game.weather.setFog, format = menu.percent })
+-- Example: menu.slider("Fog", { value = 0.2, format = menu.percent, onChange = game.weather.setFog })
 function menu.slider(
     label: string,
-    settings: {
-        get: () -> number,
-        set: (number) -> (),
+    options: {
         min: number?,
         max: number?,
         step: number?,
+        value: number?,
         wraps: boolean?,
         format: ((number) -> string)?,
         color: string?,
-    }
-): Row
-    local row = newRow("slider", label)
-    row.get, row.set, row.format, row.color = settings.get, settings.set, settings.format, settings.color
-    row.min, row.max = settings.min or 0, settings.max or 1
-    row.step = settings.step or (row.max - row.min) / 20
-    row.wraps = settings.wraps or false
+        onChange: ((number) -> ())?,
+        get: (() -> number)?,
+        set: ((number) -> ())?,
+    }?
+): any
+    local row = make("menu.slider", "slider", label, options)
     return row
 end
 
--- One of a few words. `get` says which is in force now and `set` is given
--- the one the player moved to. Left and right go round them.
--- Example: menu.choice("Size", { options = { "small", "large" }, get = function() return size end, set = function(word) size = word end })
+-- One of a few words, gone through with left and right, round the ends
+-- unless `wraps` is false. Starts on `value`, or the first.
+-- Example: menu.choice("Size", { options = { "small", "large" }, onChange = function(word) print(word) end })
 function menu.choice(
     label: string,
-    settings: { options: { string }, get: () -> string, set: (string) -> (), format: ((string) -> string)? }
-): Row
-    local row = newRow("choice", label)
-    row.get, row.set, row.format, row.options = settings.get, settings.set, settings.format, settings.options
+    options: {
+        options: { string },
+        value: string?,
+        wraps: boolean?,
+        format: ((string) -> string)?,
+        onChange: ((string) -> ())?,
+        get: (() -> string)?,
+        set: ((string) -> ())?,
+    }
+): any
+    local row = make("menu.choice", "choice", label, options)
     return row
 end
 
--- On or off.
--- Example: menu.toggle("Subtitles", { get = function() return subtitles end, set = function(on) subtitles = on end })
-function menu.toggle(label: string, settings: { get: () -> boolean, set: (boolean) -> () }): Row
-    local row = newRow("toggle", label)
-    row.get, row.set = settings.get, settings.set
-    return row
-end
-
--- Something that happens when the row is pressed. `text`, if given, says
--- more beside the name, and can change as the game does.
--- Example: menu.button("Lightning", { press = function() game.weather.strike(game.player.position) end })
-function menu.button(label: string, settings: { press: () -> (), text: (() -> string)? }): Row
-    local row = newRow("button", label)
-    row.press, row.text = settings.press, settings.text
-    return row
-end
-
--- A line that tells something, such as where the player is. It is read
--- again for every picture while the menu is open, and cannot be chosen.
+-- A line that tells something, such as where the player is. `text` is
+-- words, or a function that gives them and is read again for every picture
+-- while the menu is open. It cannot be chosen.
 -- Example: menu.info("Speed", { text = function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end })
-function menu.info(label: string, settings: { text: () -> string }): Row
-    local row = newRow("info", label)
-    row.text = settings.text
+function menu.info(label: string, options: { text: (string | () -> string)? }?): any
+    local row = make("menu.info", "info", label, options)
     return row
 end
 
 -- A share from 0 to 1 as a percentage: 0.25 is "25%". For a slider's
 -- `format`.
--- Example: menu.slider("Rain", { get = game.weather.rain, set = game.weather.setRain, format = menu.percent })
+-- Example: menu.slider("Rain", { format = menu.percent })
 function menu.percent(share: number): string
     return string.format("%d%%", math.floor(share * 100 + 0.5))
 end
 
-local Menu = {}
-Menu.__index = Menu
+-- ----------------------------------------------------------------- menus
 
-export type Menu = typeof(setmetatable(
-    {} :: {
-        title: string,
-        rows: { Row },
-        chosen: number,
-        dragging: Row?,
-        right: number,
-        down: number,
-        width: number,
-        height: number,
-        back: HudBox,
-        -- Only with menu.style.shadow and menu.style.accent.
-        shadow: HudBox?,
-        accentLine: HudBox?,
-        marker: HudBox?,
-    },
-    Menu
-))
+type MenuState = {
+    title: string,
+    rows: { RowState },
+    chosen: number,
+    dragging: RowState?,
+    right: number,
+    down: number,
+    width: number,
+    height: number,
+    back: any,
+    -- Only with menu.style.shadow and menu.style.accent.
+    shadow: any,
+    accentLine: any,
+    marker: any,
+    -- The screen it is shown on: one made for it alone, or the tabs it is in.
+    tabs: any,
+    -- What the line of keys says "menu_back" does; nil for the kit's own word.
+    backWord: string?,
+    removed: boolean,
+    public: any,
+}
 
--- Makes a menu and its HUD pieces, hidden until a panel shows it. Its rows
--- are fixed from then on: a row added to the list afterwards is not shown.
--- Options, all of which can be left out: `right` and `down` (how far its
--- top left corner is from the top left of the screen: 40 and 40) and
--- `width` (820). It is as tall as its rows need.
--- Example: local sound = menu.new("Sound", { menu.toggle("Music", { get = musicOn, set = setMusic }) })
-function menu.new(title: string, rows: { Row }, options: { right: number?, down: number?, width: number? }?): Menu
-    local right = options and options.right or 40
-    local down = options and options.down or 40
-    local width = options and options.width or 820
+type TabsState = {
+    menus: { MenuState },
+    current: MenuState,
+    tabs: { any },
+    marks: { any },
+    keys: any,
+    -- True when made for one menu that was not put in tabs: it is the menu
+    -- itself that a script holds.
+    alone: boolean,
+    public: any,
+    lastX: number?,
+    lastY: number?,
+    -- False until the pointer has been seen once since the screen was shown.
+    pointerSeen: boolean,
+}
+
+local menus: { [any]: MenuState } = setmetatable({}, { __mode = "k" }) :: any
+local tabsOf: { [any]: TabsState } = setmetatable({}, { __mode = "k" }) :: any
+
+-- The screens that are open, the one on top last, and the set of actions
+-- the game was in when the first opened.
+local stack: { TabsState } = {}
+local returnTo = "gameplay"
+
+local function setVisible(m: MenuState, visible: boolean)
+    m.back.visible = visible
+    for _, piece in { m.shadow, m.accentLine, m.marker } :: { any } do
+        if piece then
+            piece.visible = visible
+        end
+    end
+    for _, row in m.rows do
+        for _, piece in row.pieces do
+            piece.visible = visible
+        end
+    end
+end
+
+-- Moves the chosen row `by` rows down (up when below 0), going round at the
+-- ends and over rows that only tell.
+local function move(m: MenuState, by: number)
+    local count = #m.rows
+    local way = if by < 0 then -1 else 1
+    local steps = math.abs(by)
+    local at = m.chosen
+    for _ = 1, count * (steps + 1) do
+        if steps == 0 and m.rows[at].kind ~= "info" then
+            break
+        end
+        at = (at - 1 + way) % count + 1
+        if m.rows[at].kind ~= "info" then
+            steps = math.max(steps - 1, 0)
+        end
+    end
+    m.chosen = at
+end
+
+local MenuMethods = {}
+local MenuMeta = {}
+
+-- Makes a menu and its HUD pieces, hidden until it is opened. Its rows are
+-- fixed from then on: a row added to the list afterwards is not shown.
+-- `place` can say `right` and `down` (how far its top left corner is from
+-- the top left of the screen: 40 and 40) and `width` (820). It is as tall as
+-- its rows need.
+-- Example: local sound = menu.new("Sound", { menu.toggle("Music", { value = true }) })
+function menu.new(title: string, rows: { any }, place: { right: number?, down: number?, width: number? }?): any
+    if type(title) ~= "string" then
+        error('menu.new needs a title first, in quotes: menu.new("Sound", { rows })', 2)
+    end
+    if type(rows) ~= "table" or #rows == 0 then
+        error(string.format('menu.new("%s") needs a list of rows: menu.new("%s", { menu.button("Go", { onPress = go }) })', title, title), 2)
+    end
+    if place ~= nil and type(place) ~= "table" then
+        error("menu.new: the place is a table: { right = 40, down = 40, width = 820 }", 2)
+    end
+    for key, value in place or {} do
+        if (key ~= "right" and key ~= "down" and key ~= "width") or type(value) ~= "number" then
+            error(string.format('menu.new: the place takes numbers called right, down and width; "%s" is not one', tostring(key)), 2)
+        end
+    end
+    local inside: { RowState } = {}
+    for number, row in rows do
+        local s = states[row]
+        if not s then
+            error(
+                string.format(
+                    'menu.new("%s"): row %d was not made by menu.button, menu.toggle, menu.slider, menu.choice or menu.info',
+                    title,
+                    number
+                ),
+                2
+            )
+        elseif s.owner then
+            error(string.format('menu.new("%s"): the row "%s" is already in a menu; make another for this one', title, s.label), 2)
+        end
+        table.insert(inside, s)
+    end
+    local style = menu.style
+    local right = place and place.right or 40
+    local down = place and place.down or 40
+    local width = place and place.width or 820
     local height = TOP + #rows * ROW + FOOT
     -- Made before the menu's own back, so it is drawn under it.
     local shadow = if style.shadow
         then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow, layer = style.layer })
         else nil
-    local self = setmetatable({
+    local m: MenuState = {
         title = title,
-        rows = rows,
+        rows = inside,
         chosen = 1,
-        dragging = nil :: Row?,
+        dragging = nil,
         right = right,
         down = down,
         width = width,
         height = height,
         back = game.hud.box({ right = right, down = down, width = width, height = height, color = style.back, layer = style.layer }),
         shadow = shadow,
-        accentLine = nil :: HudBox?,
-        marker = nil :: HudBox?,
-    }, Menu)
+        accentLine = nil,
+        marker = nil,
+        tabs = nil,
+        backWord = nil,
+        removed = false,
+        public = nil,
+    }
     if style.accent then
-        self.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent, layer = style.layer })
-        self.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent, layer = style.layer })
+        m.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent, layer = style.layer })
+        m.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent, layer = style.layer })
     end
-    self.back.visible = false
-    for number, row in rows do
+    for number, row in inside do
+        row.owner = m
         local top = down + TOP + (number - 1) * ROW
         local left = right + 12
         -- The box behind the row shows which is chosen, and catches the
@@ -291,41 +649,390 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
             row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN, layer = style.layer })
         end
         row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
-        row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
+        row.shown = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
         if row.kind == "slider" then
             local barLeft = right + width - 24 - BAR_WIDE
             row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or style.bar, layer = style.layer })
             row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = style.knob, layer = style.layer })
         end
         row.pieces = {}
-        for _, piece in { row.box or false, row.name, row.value, row.bar or false, row.knob or false } :: { any } do
+        for _, piece in { row.box or false, row.name, row.shown, row.bar or false, row.knob or false } :: { any } do
             if piece then
                 table.insert(row.pieces, piece)
             end
         end
     end
-    self:setVisible(false)
+    setVisible(m, false)
     -- Start on the first row that can be chosen.
-    self:move(0)
-    return self
+    move(m, 0)
+    local public = setmetatable({}, MenuMeta)
+    m.public = public
+    menus[public] = m
+    return public
 end
 
-function Menu.setVisible(self: Menu, visible: boolean)
-    self.back.visible = visible
-    for _, piece in { self.shadow, self.accentLine, self.marker } :: { HudBox? } do
-        if piece then
-            piece.visible = visible
-        end
+-- ------------------------------------------------------------------ tabs
+
+-- Shows the pieces of `ts` and its front menu, or hides all of them.
+local function showScreen(ts: TabsState, on: boolean)
+    for number, each in ts.menus do
+        setVisible(each, on and each == ts.current)
+        ts.tabs[number].visible = on
+        ts.marks[number].visible = on
     end
-    for _, row in self.rows do
-        for _, piece in row.pieces do
-            piece.visible = visible
+    ts.keys.visible = on
+    if on then
+        local front = ts.current
+        ts.keys.down = front.down + front.height - FOOT + 12
+    end
+end
+
+-- Makes the pieces that show `list` as tabs, hidden. They are made after the
+-- menus' own, so the tabs are drawn over them.
+local function makeTabs(list: { MenuState }, alone: boolean): TabsState
+    local style = menu.style
+    local first = list[1]
+    local tabs, marks = {}, {}
+    local across = first.right + 12
+    for number, each in list do
+        -- A tab is as wide as its title, near enough.
+        local wide = #each.title * 15 + 36
+        marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN, layer = style.layer })
+        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet, layer = style.layer })
+        across += wide + 8
+    end
+    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet, layer = style.layer })
+    local ts: TabsState = {
+        menus = list,
+        current = first,
+        tabs = tabs,
+        marks = marks,
+        keys = keys,
+        alone = alone,
+        public = nil,
+        lastX = nil,
+        lastY = nil,
+        pointerSeen = false,
+    }
+    for _, each in list do
+        each.tabs = ts
+    end
+    showScreen(ts, false)
+    return ts
+end
+
+-- Takes the tab pieces of `ts` away.
+local function removeTabPieces(ts: TabsState)
+    for number in ts.menus do
+        ts.tabs[number]:remove()
+        ts.marks[number]:remove()
+    end
+    ts.keys:remove()
+end
+
+-- The screen that shows `m` when it is opened: its tabs, or one made for
+-- it alone the first time.
+local function screenOf(m: MenuState): TabsState
+    if m.removed then
+        error(string.format('The menu "%s" was removed with menu:remove(), so it cannot be used again. Make it again with menu.new', m.title), 3)
+    end
+    local ts = m.tabs
+    if not ts then
+        ts = makeTabs({ m }, true)
+        ts.public = m.public
+    end
+    return ts
+end
+
+-- Puts `ts` on top of the stack with `shown` in front, showing only it.
+local function push(ts: TabsState, shown: MenuState)
+    local wasEmpty = #stack == 0
+    local top = stack[#stack]
+    if top and top ~= ts then
+        showScreen(top, false)
+    end
+    local at = table.find(stack, ts)
+    if at then
+        table.remove(stack, at)
+    end
+    if wasEmpty then
+        returnTo = game.input.currentSet()
+    end
+    table.insert(stack, ts)
+    ts.current = shown
+    ts.pointerSeen = false
+    game.input.useSet("menu")
+    showScreen(ts, true)
+end
+
+-- Takes `ts` off the stack, wherever it is, and gives the screen below it
+-- back, or the player's own controls if it was the last.
+local function pop(ts: TabsState)
+    local at = table.find(stack, ts)
+    if not at then
+        return
+    end
+    table.remove(stack, at)
+    ts.current.dragging = nil
+    showScreen(ts, false)
+    if at > #stack then
+        local below = stack[#stack]
+        if below then
+            below.pointerSeen = false
+            showScreen(below, true)
+        else
+            game.input.useSet(returnTo)
         end
     end
 end
+
+-- Closes every open screen at once.
+local function popAll()
+    if #stack == 0 then
+        return
+    end
+    for _, ts in stack do
+        ts.current.dragging = nil
+        showScreen(ts, false)
+    end
+    table.clear(stack)
+    game.input.useSet(returnTo)
+end
+
+-- True while the menu is on a screen that is open with it in front.
+local function isIn(m: MenuState): boolean
+    local ts = m.tabs
+    return ts ~= nil and table.find(stack, ts) ~= nil and ts.current == m
+end
+
+-- Opens the menu (and its tabs, if it is in some) with it in front. Frees
+-- the pointer, and leaves the player's own controls waiting.
+-- Example: sound:open()
+function MenuMethods.open(self: any)
+    local m = menus[self]
+    push(screenOf(m), m)
+end
+
+-- Closes the menu's screen (all its tabs), if it is open, and gives back
+-- the screen below, or the player's controls.
+-- Example: sound:close()
+function MenuMethods.close(self: any)
+    local m = menus[self]
+    if m.tabs then
+        pop(m.tabs)
+    end
+end
+
+-- Opens the menu, or closes it if it is already in front: for the key that
+-- opens a menu.
+-- Example: if game.input.justPressed("sound_menu") then sound:toggle() end
+function MenuMethods.toggle(self: any)
+    local m = menus[self]
+    if isIn(m) then
+        pop(m.tabs)
+    else
+        push(screenOf(m), m)
+    end
+end
+
+-- Takes the menu away for good: closes it and frees its HUD pieces. A menu
+-- in tabs goes with `tabs:remove()` instead.
+-- Example: sound:remove()
+function MenuMethods.remove(self: any)
+    local m = menus[self]
+    if m.removed then
+        return
+    end
+    local ts = m.tabs
+    if ts and not ts.alone then
+        error(string.format('The menu "%s" is in tabs, so it goes with them: tabs:remove()', m.title), 2)
+    end
+    if ts then
+        pop(ts)
+        removeTabPieces(ts)
+        m.tabs = nil
+    end
+    m.removed = true
+    m.back:remove()
+    for _, piece in { m.shadow, m.accentLine, m.marker } :: { any } do
+        if piece then
+            piece:remove()
+        end
+    end
+    for _, row in m.rows do
+        for _, piece in row.pieces do
+            piece:remove()
+        end
+        row.pieces = {}
+        row.name, row.shown, row.box, row.bar, row.knob = nil, nil, nil, nil, nil
+        row.owner = nil
+    end
+end
+
+MenuMeta.__index = function(self: any, key: any): any
+    local m = menus[self]
+    if key == "title" then
+        return m.title
+    elseif key == "isOpen" then
+        return isIn(m)
+    elseif key == "chosen" then
+        return m.chosen
+    elseif key == "backWord" then
+        return m.backWord
+    end
+    return MenuMethods[key]
+end
+
+MenuMeta.__newindex = function(self: any, key: any, value: any)
+    local m = menus[self]
+    if key == "title" then
+        if type(value) ~= "string" then
+            error('A menu\'s title is words in quotes: menu.title = "Sound"', 2)
+        end
+        m.title = value
+        local ts = m.tabs
+        if ts then
+            local number = table.find(ts.menus, m)
+            if number then
+                ts.tabs[number].text = value
+            end
+        end
+    elseif key == "chosen" then
+        if type(value) ~= "number" or value < 1 or value > #m.rows then
+            error(string.format("menu.chosen is the number of a row, from 1 to %d", #m.rows), 2)
+        end
+        m.chosen = math.floor(value)
+        move(m, 0)
+    elseif key == "backWord" then
+        if value ~= nil and type(value) ~= "string" then
+            error('menu.backWord is a word in quotes, such as "resume", or nil', 2)
+        end
+        m.backWord = value
+    else
+        error(string.format('A menu has a title, chosen and backWord to set; "%s" is not one of them', tostring(key)), 2)
+    end
+end
+
+local TabsMethods = {}
+local TabsMeta = {}
+
+-- Shows `list` as tabs of one screen, the first in front, hidden until it
+-- is opened. Make the menus first. With one menu its title is shown alone.
+-- Example: local options = menu.tabs({ sound, video })
+function menu.tabs(list: { any }): any
+    if type(list) ~= "table" or #list == 0 then
+        error("menu.tabs needs the menus to show as tabs: menu.tabs({ sound, video })", 2)
+    end
+    local inside: { MenuState } = {}
+    for number, each in list do
+        local m = menus[each]
+        if not m then
+            error(string.format("menu.tabs: number %d is not a menu made with menu.new", number), 2)
+        elseif m.removed then
+            error(string.format('menu.tabs: the menu "%s" was removed', m.title), 2)
+        elseif m.tabs and not m.tabs.alone then
+            error(string.format('menu.tabs: the menu "%s" is already in other tabs', m.title), 2)
+        end
+        table.insert(inside, m)
+    end
+    for _, m in inside do
+        local alone = m.tabs
+        if alone then
+            -- Opened by itself before it was put in tabs.
+            pop(alone)
+            removeTabPieces(alone)
+            m.tabs = nil
+        end
+    end
+    local ts = makeTabs(inside, false)
+    local public = setmetatable({}, TabsMeta)
+    ts.public = public
+    tabsOf[public] = ts
+    return public
+end
+
+-- The menu of `ts` that a script named, or its front one if it named none.
+local function shownIn(ts: TabsState, named: any, fname: string): MenuState
+    if named == nil then
+        return ts.current
+    end
+    local m = menus[named]
+    if not m or m.tabs ~= ts then
+        error(string.format("%s needs one of the tabs' own menus, or nothing", fname), 3)
+    end
+    return m
+end
+
+-- Opens the tabs with `shown` in front (one of them; the one in front now
+-- if left out).
+-- Example: options:open(video)
+function TabsMethods.open(self: any, shown: any?)
+    local ts = tabsOf[self]
+    push(ts, shownIn(ts, shown, "tabs:open"))
+end
+
+-- Closes the tabs.
+-- Example: options:close()
+function TabsMethods.close(self: any)
+    pop(tabsOf[self])
+end
+
+-- Opens the tabs, or closes them if they are open with `shown` in front.
+-- Example: if game.input.justPressed("sound_menu") then options:toggle(sound) end
+function TabsMethods.toggle(self: any, shown: any?)
+    local ts = tabsOf[self]
+    local m = shownIn(ts, shown, "tabs:toggle")
+    if table.find(stack, ts) and ts.current == m then
+        pop(ts)
+    else
+        push(ts, m)
+    end
+end
+
+-- Takes the tabs and every menu in them away for good.
+-- Example: options:remove()
+function TabsMethods.remove(self: any)
+    local ts = tabsOf[self]
+    pop(ts)
+    removeTabPieces(ts)
+    for _, m in ts.menus do
+        m.tabs = nil
+        MenuMethods.remove(m.public)
+    end
+end
+
+TabsMeta.__index = function(self: any, key: any): any
+    local ts = tabsOf[self]
+    if key == "isOpen" then
+        return table.find(stack, ts) ~= nil
+    elseif key == "current" then
+        return ts.current.public
+    end
+    return TabsMethods[key]
+end
+
+TabsMeta.__newindex = function(_self: any, key: any, _value: any)
+    error(string.format('Tabs have nothing to set ("%s"): open and close them with tabs:open() and tabs:close()', tostring(key)), 2)
+end
+
+-- The screen on top, the menu or the tabs the script made, or nil when
+-- nothing is open.
+-- Example: if menu.top() == sound then print("Sound is showing") end
+function menu.top(): any
+    local ts = stack[#stack]
+    return if ts then ts.public else nil
+end
+
+-- True while any screen is open: the game's own or the pause menu's.
+-- Example: crosshair.visible = not menu.anyOpen()
+function menu.anyOpen(): boolean
+    return #stack > 0
+end
+
+-- -------------------------------------------------------------- hearing
 
 -- True while the pointer is anywhere on the row.
-local function hovered(row: Row): boolean
+local function hovered(row: RowState): boolean
     for _, piece in row.pieces do
         if piece.hovered then
             return true
@@ -334,33 +1041,25 @@ local function hovered(row: Row): boolean
     return false
 end
 
--- Moves the chosen row `by` rows down (up when below 0), going round at the
--- ends and over rows that only tell.
-function Menu.move(self: Menu, by: number)
-    local count = #self.rows
-    local way = if by < 0 then -1 else 1
-    local steps = math.abs(by)
-    local at = self.chosen
-    for _ = 1, count * (steps + 1) do
-        if steps == 0 and self.rows[at].kind ~= "info" then
-            break
-        end
-        at = (at - 1 + way) % count + 1
-        if self.rows[at].kind ~= "info" then
-            steps = math.max(steps - 1, 0)
-        end
+-- Takes `value` into a row the player changed and tells the handlers. A row
+-- that reads its value with get and has no set cannot be changed.
+local function commit(s: RowState, value: any)
+    if s.set then
+        s.set(value)
+    elseif s.get then
+        return
+    else
+        s.value = value
     end
-    self.chosen = at
+    for _, handler in s.changed do
+        handler(value)
+    end
 end
 
 -- Sets a slider, held between its ends, or taken round them if it wraps
 -- and `goRound` is true (a key goes round; a drag stops at the end).
-local function setSlider(row: Row, value: number, goRound: boolean)
-    local set = row.set
+local function setSlider(row: RowState, value: number, goRound: boolean)
     local span = row.max - row.min
-    if not set or span <= 0 then
-        return
-    end
     if row.wraps and goRound then
         value = row.min + (value - row.min) % span
     elseif row.wraps then
@@ -369,30 +1068,34 @@ local function setSlider(row: Row, value: number, goRound: boolean)
     else
         value = math.clamp(value, row.min, row.max)
     end
-    set(value)
+    if value ~= current(row) then
+        commit(row, value)
+    end
 end
 
 -- Changes a row one step: `way` is 1 for right and -1 for left.
-local function change(row: Row, way: number)
-    local get, set = row.get, row.set
-    if not get or not set then
-        return
-    end
+local function change(row: RowState, way: number)
     if row.kind == "slider" then
-        local steps = math.floor((get() - row.min) / row.step + 0.5) + way
+        local steps = math.floor((current(row) - row.min) / row.step + 0.5) + way
         setSlider(row, row.min + steps * row.step, true)
     elseif row.kind == "choice" then
-        local now = table.find(row.options, get()) or 1
-        set(row.options[(now - 1 + way) % #row.options + 1])
+        local count = #row.options
+        local now = table.find(row.options, current(row)) or 1
+        local to = if row.wraps then (now - 1 + way) % count + 1 else math.clamp(now + way, 1, count)
+        if to ~= now then
+            commit(row, row.options[to])
+        end
     elseif row.kind == "toggle" then
-        set(not get())
+        commit(row, not current(row))
     end
 end
 
 -- What Enter or a click does to a row.
-local function press(row: Row)
-    if row.kind == "button" and row.press then
-        row.press()
+local function press(row: RowState)
+    if row.kind == "button" then
+        for _, handler in row.pressed do
+            handler()
+        end
     elseif row.kind == "choice" or row.kind == "toggle" then
         change(row, 1)
     end
@@ -400,16 +1103,15 @@ end
 
 -- What a row's value says: its own `format` or `text`, or plain words
 -- for its kind.
-local function words(row: Row): string
+local function words(row: RowState): string
     if row.kind == "info" or row.kind == "button" then
         local text = row.text
-        return if text then text() else ""
+        if type(text) == "function" then
+            return text()
+        end
+        return text or ""
     end
-    local get = row.get
-    if not get then
-        return ""
-    end
-    local now = get()
+    local now = current(row)
     if row.kind == "toggle" then
         return if now then "on" else "off"
     end
@@ -423,34 +1125,33 @@ local function words(row: Row): string
     return said
 end
 
--- Hears the player: the panel calls it every tick while this menu is in
--- front, with whether the pointer moved since the last tick.
-function Menu.update(self: Menu, pointerMoved: boolean)
+-- Hears the player for a menu in front, with whether the pointer moved
+-- since the last tick.
+local function hearMenu(m: MenuState, pointerMoved: boolean)
     -- A choice's words are set here too, not only while drawing, so that
     -- a click can tell its "<" from its ">".
-    for _, row in self.rows do
-        local value = row.value
-        if row.kind == "choice" and value then
-            value.text = words(row)
+    for _, row in m.rows do
+        if row.kind == "choice" and row.shown then
+            row.shown.text = words(row)
         end
     end
     local x, y = game.input.stepped("menu_move")
     if y ~= 0 then
-        local was = self.chosen
-        self:move(-y)
-        if self.chosen ~= was then
+        local was = m.chosen
+        move(m, -y)
+        if m.chosen ~= was then
             sound(menu.sounds.move)
         end
     end
     -- The pointer chooses the row it moves onto.
     if pointerMoved then
-        for number, row in self.rows do
+        for number, row in m.rows do
             if row.kind ~= "info" and hovered(row) then
-                self.chosen = number
+                m.chosen = number
             end
         end
     end
-    local row = self.rows[self.chosen]
+    local row = m.rows[m.chosen]
     if x ~= 0 and row.kind ~= "button" and row.kind ~= "info" then
         change(row, x)
         sound(menu.sounds.move)
@@ -466,17 +1167,21 @@ function Menu.update(self: Menu, pointerMoved: boolean)
         press(row)
     end
     if game.input.justPressed("menu_click") then
-        for number, clicked in self.rows do
+        for number, clicked in m.rows do
+            -- A press may have removed the menu.
+            if m.removed then
+                return
+            end
             if clicked.kind ~= "info" and hovered(clicked) then
-                self.chosen = number
-                local bar, value = clicked.bar, clicked.value
+                m.chosen = number
+                local bar, shown = clicked.bar, clicked.shown
                 local along = if bar then bar:pointerAt() else -1
                 if bar and along >= -0.03 and along <= 1.03 then
                     -- Anywhere over the bar or its knob starts a drag.
-                    self.dragging = clicked
-                elseif clicked.kind == "choice" and value and value.hovered then
+                    m.dragging = clicked
+                elseif clicked.kind == "choice" and shown and shown.hovered then
                     -- The left half of "< word >" goes back, the right on.
-                    local across = value:pointerAt()
+                    local across = shown:pointerAt()
                     change(clicked, if across < 0.5 then -1 else 1)
                     sound(menu.sounds.choose)
                 else
@@ -488,223 +1193,124 @@ function Menu.update(self: Menu, pointerMoved: boolean)
     end
     -- A press on a slider's bar sets it from where the pointer is along the
     -- bar, for as long as the button is held.
-    local dragging = self.dragging
+    local dragging = m.dragging
     if dragging and dragging.bar and game.input.pressed("menu_click") then
         local across = math.clamp(dragging.bar:pointerAt(), 0, 1)
         local value = dragging.min + across * (dragging.max - dragging.min)
         setSlider(dragging, dragging.min + math.floor((value - dragging.min) / dragging.step + 0.5) * dragging.step, false)
     else
-        self.dragging = nil
+        m.dragging = nil
     end
 end
 
--- Shows what each row is now. Call it from game.onDraw while the menu is
--- shown.
-function Menu.draw(self: Menu)
-    for number, row in self.rows do
-        local chosen = number == self.chosen
-        local box, name, value = row.box, row.name, row.value
+-- Hears the player for the screen on top.
+local function hear(ts: TabsState)
+    if game.input.justPressed("menu_close") then
+        popAll()
+        return
+    end
+    if game.input.justPressed("menu_back") then
+        pop(ts)
+        return
+    end
+    local count = #ts.menus
+    if count > 1 then
+        local at = table.find(ts.menus, ts.current) or 1
+        local turn = 0
+        if game.input.justPressed("menu_previous_tab") then
+            turn = -1
+        elseif game.input.justPressed("menu_next_tab") then
+            turn = 1
+        end
+        if game.input.justPressed("menu_click") then
+            for number in ts.menus do
+                if ts.tabs[number].hovered or ts.marks[number].hovered then
+                    turn = number - at
+                end
+            end
+        end
+        if turn ~= 0 then
+            sound(menu.sounds.move)
+            push(ts, ts.menus[(at - 1 + turn) % count + 1])
+            return
+        end
+    end
+    -- Where the pointer rests when the screen opens chooses nothing: only
+    -- moving it does.
+    local x, y = game.input.pointer()
+    local moved = ts.pointerSeen and x ~= nil and (x ~= ts.lastX or y ~= ts.lastY)
+    ts.pointerSeen = ts.pointerSeen or x ~= nil
+    ts.lastX, ts.lastY = x, y
+    hearMenu(ts.current, moved)
+end
+
+-- Shows what each row of a menu is now.
+local function drawMenu(m: MenuState)
+    local style = menu.style
+    for number, row in m.rows do
+        local chosen = number == m.chosen
+        local box, name, shown = row.box, row.name, row.shown
         if box then
             box.color = if chosen then style.chosen else NOT_CHOSEN
         end
-        local marker = self.marker
+        local marker = m.marker
         if chosen and marker then
-            marker.down = self.down + TOP + (number - 1) * ROW
+            marker.down = m.down + TOP + (number - 1) * ROW
         end
-        if name and value then
+        if name and shown then
             name.color = if chosen then style.chosenWords elseif row.kind == "info" then style.quiet else style.words
-            value.text = words(row)
-            value.color = if row.kind == "toggle" and row.get and not row.get() then style.off
+            shown.text = words(row)
+            shown.color = if row.kind == "toggle" and not current(row) then style.off
                 elseif row.kind == "toggle" then style.on
                 else style.words
         end
-        local bar, knob, get = row.bar, row.knob, row.get
-        if bar and knob and get then
-            local share = math.clamp((get() - row.min) / math.max(row.max - row.min, 1e-6), 0, 1)
+        local bar, knob = row.bar, row.knob
+        if bar and knob then
+            local share = math.clamp((current(row) - row.min) / math.max(row.max - row.min, 1e-6), 0, 1)
             bar.value = share
-            knob.right = self.right + self.width - 24 - BAR_WIDE + share * BAR_WIDE - 4
+            knob.right = m.right + m.width - 24 - BAR_WIDE + share * BAR_WIDE - 4
         end
     end
 end
 
-local Panel = {}
-Panel.__index = Panel
-
-export type Panel = typeof(setmetatable(
-    {} :: {
-        menus: { Menu },
-        current: Menu,
-        -- True while the panel is open: read it, and open and close the
-        -- panel with its functions.
-        isOpen: boolean,
-        tabs: { HudText },
-        marks: { HudBox },
-        keys: HudText,
-        -- The set of actions the game was in when the panel opened.
-        returnTo: string,
-        -- What the line of keys says "menu_back" does: "close", unless the
-        -- game sets another word, such as "back" for a screen within a menu.
-        backWord: string,
-        lastX: number?,
-        lastY: number?,
-        -- False until the pointer has been seen once since the panel opened.
-        pointerSeen: boolean,
-    },
-    Panel
-))
-
--- Shows the pieces of `shown` and of the tabs, or of nothing.
-local function showPieces(self: Panel, shown: Menu?)
-    for number, each in self.menus do
-        -- rawequal: two menus are the same menu or they are not, and the
-        -- type checker cannot compare a menu with one that may be nil.
-        each:setVisible(rawequal(each, shown))
-        self.tabs[number].visible = shown ~= nil
-        self.marks[number].visible = shown ~= nil
+-- Shows the screen on top, and the keys that work it as the player has them
+-- bound.
+local function draw(ts: TabsState)
+    local style = menu.style
+    for number, each in ts.menus do
+        local front = each == ts.current
+        ts.tabs[number].color = if front then style.words else style.quiet
+        ts.marks[number].color = if front and #ts.menus > 1 then style.chosen else NOT_CHOSEN
     end
-    self.keys.visible = shown ~= nil
-    if shown then
-        self.keys.down = shown.down + shown.height - FOOT + 12
-    end
-end
-
--- Shows `menus` as tabs of one panel, the first in front, hidden until it
--- is opened. With one menu its title is shown alone. Make the menus before
--- the panel: what is made later is drawn on top, and the tabs go over the
--- menus.
--- Example: local panel = menu.panel({ sound, video })
-function menu.panel(menus: { Menu }): Panel
-    local first = menus[1]
-    local tabs, marks = {}, {}
-    local across = first.right + 12
-    for number, each in menus do
-        -- A tab is as wide as its title, near enough.
-        local wide = #each.title * 15 + 36
-        marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN, layer = style.layer })
-        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet, layer = style.layer })
-        across += wide + 8
-    end
-    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet, layer = style.layer })
-    local self = setmetatable({
-        menus = menus,
-        current = first,
-        isOpen = false,
-        tabs = tabs,
-        marks = marks,
-        keys = keys,
-        returnTo = "gameplay",
-        backWord = "close",
-        lastX = nil :: number?,
-        lastY = nil :: number?,
-        pointerSeen = false,
-    }, Panel)
-    showPieces(self, nil)
-    return self
-end
-
--- Opens the panel with `shown` in front (it must be one of its menus),
--- frees the pointer, and leaves the player's own controls waiting.
--- Example: panel:open(sound)
-function Panel.open(self: Panel, shown: Menu)
-    if not self.isOpen then
-        self.returnTo = game.input.currentSet()
-    end
-    self.current = shown
-    self.isOpen = true
-    self.pointerSeen = false
-    game.input.useSet("menu")
-    showPieces(self, shown)
-end
-
--- Closes the panel and puts the game back in the set of actions it was in
--- when the panel opened: from "gameplay", that gives the mouse back to
--- looking round and the player their own controls.
--- Example: panel:close()
-function Panel.close(self: Panel)
-    if not self.isOpen then
-        return
-    end
-    self.isOpen = false
-    self.current.dragging = nil
-    game.input.useSet(self.returnTo)
-    showPieces(self, nil)
-end
-
--- Opens the panel at `shown`, or closes it if `shown` is already in
--- front: for the key that opens a menu. With another tab in front, it
--- goes to `shown`.
--- Example: if game.input.justPressed("sound_menu") then panel:toggle(sound) end
-function Panel.toggle(self: Panel, shown: Menu)
-    if self.isOpen and self.current == shown then
-        self:close()
-    else
-        self:open(shown)
-    end
-end
-
--- Hears the player while the panel is open. Call it every tick from
--- game.onTick.
-function Panel.update(self: Panel)
-    if not self.isOpen then
-        return
-    end
-    if game.input.justPressed("menu_back") or game.input.justPressed("menu_close") then
-        self:close()
-        return
-    end
-    local count = #self.menus
-    local at = table.find(self.menus, self.current) or 1
-    local turn = 0
-    if game.input.justPressed("menu_previous_tab") then
-        turn = -1
-    elseif game.input.justPressed("menu_next_tab") then
-        turn = 1
-    end
-    if game.input.justPressed("menu_click") then
-        for number in self.menus do
-            if self.tabs[number].hovered or self.marks[number].hovered then
-                turn = number - at
-            end
-        end
-    end
-    if turn ~= 0 then
-        sound(menu.sounds.move)
-        self:open(self.menus[(at - 1 + turn) % count + 1])
-        return
-    end
-    -- Where the pointer rests when the panel opens chooses nothing: only
-    -- moving it does.
-    local x, y = game.input.pointer()
-    local moved = self.pointerSeen and x ~= nil and (x ~= self.lastX or y ~= self.lastY)
-    self.pointerSeen = self.pointerSeen or x ~= nil
-    self.lastX, self.lastY = x, y
-    self.current:update(moved)
-end
-
--- Shows what the menu in front says now, and the keys that work it as the
--- player has them bound. Call it from game.onDraw.
-function Panel.draw(self: Panel)
-    if not self.isOpen then
-        return
-    end
-    for number, each in self.menus do
-        local front = rawequal(each, self.current)
-        self.tabs[number].color = if front then style.words else style.quiet
-        self.marks[number].color = if front and #self.menus > 1 then style.chosen else NOT_CHOSEN
-    end
-    self.current:draw()
+    drawMenu(ts.current)
     local label = game.input.label
-    local tabs = if #self.menus > 1
+    local tabs = if #ts.menus > 1
         then string.format("   %s %s tabs", label("menu_previous_tab"), label("menu_next_tab"))
         else ""
-    self.keys.text = string.format(
+    ts.keys.text = string.format(
         "%s choose and change   %s press%s   %s %s",
         label("menu_move"),
         label("menu_confirm"),
         tabs,
         label("menu_back"),
-        self.backWord
+        ts.current.backWord or (if #stack > 1 then "back" else "close")
     )
 end
+
+-- The kit hears the player and draws by itself, for as long as a screen is
+-- open: a script has nothing to call.
+game.onTick(function()
+    local ts = stack[#stack]
+    if ts then
+        hear(ts)
+    end
+end)
+
+game.onDraw(function()
+    local ts = stack[#stack]
+    if ts then
+        draw(ts)
+    end
+end)
 
 return menu

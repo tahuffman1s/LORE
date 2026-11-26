@@ -754,3 +754,58 @@ game.onTick(function()
     print(held)
 end)
 game.weapon("carbine", { from = "rifle", hands = "two", support = vector.create(0, -0.03, -0.2), action = "bolt", ejects = true, ejectAt = vector.create(0.02, 0.05, -0.1) })
+
+-- Menus: rows that hold their value, menus, tabs, the stack and the pause menu.
+local music: MenuRow = game.menu.toggle("Music", { value = true, onChange = function(on: boolean) print(on) end })
+local loudness: MenuRow = game.menu.slider("Volume", {
+    min = 0, max = 1, step = 0.1, value = 0.8, wraps = false, color = "#6fa8ff",
+    format = game.menu.percent, onChange = function(v: number) print(v) end,
+})
+local lamp: boolean = false
+local linked: MenuRow = game.menu.toggle("Lamp", { get = function() return lamp end, set = function(on: boolean) lamp = on end })
+local size: MenuRow = game.menu.choice("Size", { options = { "small", "large" }, value = "large", wraps = true, format = string.upper })
+local reading: MenuRow = game.menu.slider("Fog", { get = function() return 0.5 end, set = function(v: number) print(v) end })
+local quiet: MenuRow = game.menu.button("Quiet", { onPress = function() loudness.value = 0 end, text = "now" })
+local speed: MenuRow = game.menu.info("Speed", { text = function() return "fast" end })
+quiet:onPress(function() print("pressed") end):onChange(function(value: any) print(value) end)
+loudness:onChange(function(value: any) print(value) end)
+loudness.label = "Loudness"
+local shown: string = loudness.label .. tostring(loudness.value)
+speed.text = "slow"
+local words: string | (() -> string) = speed.text
+local sound: Menu = game.menu.new("Sound", { music, loudness, linked, size, reading, quiet, speed }, { right = 40, down = 40, width = 640 })
+local video: Menu = game.menu.new("Video", { game.menu.button("Go") })
+local options: MenuTabs = game.menu.tabs({ sound, video })
+sound.title = "Sound and music"
+sound.chosen = 2
+sound.backWord = "close"
+options:open(video)
+options:open()
+options:toggle(sound)
+options:toggle()
+options:close()
+options:remove()
+local lonely: Menu = game.menu.new("Lonely", { game.menu.info("Hello", { text = "hi" }) })
+lonely:open()
+lonely:toggle()
+lonely:close()
+print(lonely.isOpen, lonely.title, lonely.chosen, lonely.backWord, options.isOpen, options.current.title)
+lonely:remove()
+local top: (Menu | MenuTabs)? = game.menu.top()
+local anyOpen: boolean = game.menu.anyOpen()
+local look: MenuStyle = game.menu.style
+look.back, look.chosen, look.words, look.chosenWords, look.quiet = "black", "white", "white", "yellow", "gray"
+look.on, look.off, look.bar, look.knob = "green", "gray", "blue", "white"
+look.accent, look.shadow, look.layer = "gold", nil, 150
+game.menu.sounds.move = nil
+game.menu.sounds.choose = "ui/confirm"
+game.menu.sounds.volume = 0.3
+print(top, anyOpen, shown, words)
+
+game.pauseMenu.enabled = true
+game.pauseMenu.title = "Game paused"
+game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = function() print("click") end }))
+game.pauseMenu.open()
+game.pauseMenu.close()
+local pausedByMenu: boolean = game.pauseMenu.isOpen()
+print(game.pauseMenu.title, pausedByMenu)

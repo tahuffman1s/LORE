@@ -926,7 +926,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 47] = [
+        let groups: [(&str, &[&str]); 54] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -974,6 +974,13 @@ mod tests {
             ("Lamp:", &["remove"]),
             ("game.shaders.", crate::shader_api::SHADERS_FUNCTIONS),
             ("Shader:", crate::shader_api::SHADER_METHODS),
+            ("MenuRow.", crate::builtin::MENU_ROW_FIELDS),
+            ("Menu.", crate::builtin::MENU_FIELDS),
+            ("MenuTabs.", crate::builtin::MENU_TABS_FIELDS),
+            ("MenuStyle.", crate::builtin::MENU_STYLE_FIELDS),
+            ("game.menu.", crate::builtin::MENU_FUNCTIONS),
+            ("game.menu.sounds.", &["choose", "move", "volume"]),
+            ("game.pauseMenu.", crate::builtin::PAUSE_MENU_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

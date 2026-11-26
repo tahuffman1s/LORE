@@ -872,3 +872,199 @@ fn pause_menu_enabled_false_turns_it_off_and_closes_it() {
     played.tap(Key::Escape);
     assert!(!played.shows("Resume") && !played.host().paused());
 }
+
+/// A game that makes a menu of its own with `game.menu`: five rows that
+/// each say on screen what the player did to them. F6 or Select opens it.
+const SCRIPT_MENU: &str = r#"
+    game.input.bind("sound", { "F6", "GamepadSelect" })
+    local told = game.hud.text("none", { at = "bottom" })
+    local presses, changes = 0, 0
+    local quiet = game.menu.button("Quiet", { onPress = function()
+        presses += 1
+        -- A rule: it is an error from a draw, so this shows it ran on a tick.
+        game.settings.set("volume", 50)
+        told.text = "pressed " .. presses
+    end })
+    local volume = game.menu.slider("Volume", {
+        step = 0.1,
+        format = game.menu.percent,
+        onChange = function(v) changes += 1 told.text = string.format("volume %g", v) end,
+    })
+    local music = game.menu.toggle("Music", {
+        onChange = function(on) changes += 1 told.text = "music " .. tostring(on) end,
+    })
+    local mode = game.menu.choice("Mode", { options = { "a", "b", "c" } })
+    mode:onChange(function(word) changes += 1 told.text = "mode " .. word end)
+    local tidy = game.menu.button("Tidy", { onPress = function()
+        volume.value = 0.5
+        volume.label = "Loudness"
+        told.text = "changes " .. changes
+    end })
+    local sound = game.menu.new("Sound", { quiet, volume, music, mode, tidy })
+    game.onTick(function()
+        if game.input.justPressed("sound") then sound:toggle() end
+    end)
+"#;
+
+#[test]
+fn a_script_menu_opens_and_a_press_runs_on_a_tick() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    assert!(!played.shows("Quiet"));
+    played.tap(Key::F6);
+    assert_eq!(played.set(), "menu");
+    for words in ["Sound", "Quiet", "Volume", "Music", "Mode", "Tidy"] {
+        assert!(played.shows(words), "{:?}", played.words());
+    }
+    assert!(
+        !played.host().paused(),
+        "a menu of the game's own pauses nothing"
+    );
+    played.tap(Key::Enter);
+    assert!(played.shows("pressed 1"), "{:?}", played.words());
+    assert!(
+        played.changes > 0,
+        "onPress ran in a tick and changed a setting"
+    );
+    // The key that opened it closes it again, and so does Escape.
+    played.tap(Key::F6);
+    assert_eq!(played.set(), "gameplay");
+    assert!(!played.shows("Quiet"));
+    played.tap(Key::F6);
+    played.tap(Key::Escape);
+    assert_eq!(played.set(), "gameplay");
+}
+
+#[test]
+fn a_change_tells_onchange_the_new_value_and_a_script_setting_the_value_does_not() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    played.tap(Key::F6);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    assert!(played.shows("volume 0.1"), "{:?}", played.words());
+    assert_eq!(played.value_of("Volume"), "10%");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert!(played.shows("music true"), "{:?}", played.words());
+    assert_eq!(played.value_of("Music"), "on");
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowRight);
+    assert!(played.shows("mode b"), "{:?}", played.words());
+    assert_eq!(played.value_of("Mode"), "<  b  >");
+    // The button sets the slider's value and label from the script: the
+    // screen follows, and onChange is not called (still three changes).
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert!(played.shows("changes 3"), "{:?}", played.words());
+    assert!(played.shows("Loudness") && !played.shows("Volume"));
+    assert_eq!(played.value_of("Loudness"), "50%");
+}
+
+#[test]
+fn a_script_menu_works_with_keys_a_gamepad_and_the_mouse() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    // A gamepad: Select opens it, the d-pad moves and changes, A presses
+    // and B goes back.
+    played.tap(GamepadButton::GamepadSelect);
+    assert_eq!(played.set(), "menu");
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::DpadRight);
+    assert!(played.shows("volume 0.1"), "{:?}", played.words());
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.shows("pressed 1"), "{:?}", played.words());
+    played.tap(GamepadButton::GamepadEast);
+    assert_eq!(played.set(), "gameplay");
+    // The mouse: a click presses a button and turns a toggle over.
+    played.tap(Key::F6);
+    played.click("Quiet");
+    assert!(played.shows("pressed 2"), "{:?}", played.words());
+    played.click("Music");
+    assert!(played.shows("music true"), "{:?}", played.words());
+    played.click("Music");
+    assert!(played.shows("music false"), "{:?}", played.words());
+}
+
+#[test]
+fn a_script_menu_opened_over_the_pause_menu_stacks_and_only_the_top_hears() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    played.tap(Key::Escape);
+    assert!(played.host().paused() && played.shows("Resume"));
+    // The game's key opens its menu over the pause menu, which waits under.
+    played.tap(Key::F6);
+    assert!(
+        played.shows("Quiet") && !played.shows("Resume"),
+        "{:?}",
+        played.words()
+    );
+    assert_eq!(played.set(), "menu");
+    // Enter goes to the menu on top: it presses Quiet, not Resume.
+    played.tap(Key::Enter);
+    assert!(played.shows("pressed 1") && played.host().paused());
+    // Escape closes only the top menu and the pause menu is back as it was.
+    played.tap(Key::Escape);
+    assert!(
+        played.shows("Resume") && !played.shows("Quiet"),
+        "{:?}",
+        played.words()
+    );
+    assert!(played.host().paused());
+    assert_eq!(played.set(), "menu");
+    // Escape again closes the pause menu, and the game is as it was.
+    played.tap(Key::Escape);
+    assert!(!played.host().paused());
+    assert_eq!(played.set(), "gameplay");
+    assert!(!played.shows("Resume") && !played.shows("Quiet"));
+}
+
+#[test]
+fn start_closes_every_open_screen_at_once() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    played.tap(Key::Escape);
+    played.tap(Key::F6);
+    played.tap(GamepadButton::GamepadStart);
+    assert!(
+        !played.shows("Quiet") && !played.shows("Resume"),
+        "{:?}",
+        played.words()
+    );
+    assert!(!played.host().paused());
+    assert_eq!(played.set(), "gameplay");
+}
+
+#[test]
+fn the_pause_menu_takes_a_title_and_a_row_of_the_games_own() {
+    let main = r#"
+        game.pauseMenu.title = "Game paused"
+        game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = function()
+            game.pauseMenu.close()
+        end }))
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    for words in ["Game paused", "Resume", "Settings", "Photo mode", "Quit"] {
+        assert!(played.shows(words), "{:?}", played.words());
+    }
+    // The row is above Quit: two down from Resume.
+    played.tap(Key::ArrowDown);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert!(!played.host().paused() && !played.shows("Resume"));
+}
+
+#[test]
+fn a_menu_asked_for_wrongly_says_what_to_write() {
+    let main = r#"
+        local ok, message = pcall(game.menu.choice, "Size", {})
+        assert(not ok and string.find(message, "options"), message)
+        local ok2, message2 = pcall(game.menu.button, "Go", { press = function() end })
+        assert(not ok2 and string.find(message2, "onPress"), message2)
+        local ok3, message3 = pcall(game.menu.new, "Empty", {})
+        assert(not ok3 and string.find(message3, "rows"), message3)
+        local row = game.menu.toggle("On")
+        local ok4, message4 = pcall(function() row.value = 3 end)
+        assert(not ok4 and string.find(message4, "true or false"), message4)
+        local ok5, message5 = pcall(row.onPress, row, function() end)
+        assert(not ok5 and string.find(message5, "onChange"), message5)
+    "#;
+    Played::with_main(main, Settings::default());
+}

@@ -3,9 +3,15 @@
 -- written, and is `game.pauseMenu`:
 --
 --     game.pauseMenu.enabled = false  -- no pause menu: the game makes its own
+--     game.pauseMenu.title = "Game paused"
+--     game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
 --     game.pauseMenu.open()
 --     game.pauseMenu.close()
 --     if game.pauseMenu.isOpen() then ... end
+--
+-- `addRow` puts a row of the game's own (made with game.menu) on the first
+-- screen, above Quit. Add rows at the top of main.luau, before the menu first
+-- opens; adding one later rebuilds the menu the next time it opens.
 --
 -- A game that carries its own pause_menu.luau (an older game, made when
 -- `lore new` copied it in) turns this one off by requiring it.
@@ -21,20 +27,53 @@
 -- by this menu or by anything else, starts with
 --     if game.paused() then return end
 --
--- What the player does in it is what menu.luau says: up and down choose,
+-- What the player does in it is what game.menu does: up and down choose,
 -- left and right change, Enter or A presses, Escape or B goes back one
 -- screen, and Start or P closes the menu from anywhere.
 --
 -- The menu's screens are built the first time it opens, so a game that
 -- never opens it, or turns it off, pays nothing for it.
 
-local menu = game.menu
-type Panel = any
-type Menu = any
-type Row = any
-type Setting = any
 
+local menu = game.menu
 local pauseMenu = game.pauseMenu
+
+-- The shapes of what the menu kit hands back, as far as this file uses them.
+type Row = {
+    label: string,
+    value: any,
+    text: (string | () -> string)?,
+    onPress: (self: Row, handler: () -> ()) -> Row,
+    onChange: (self: Row, handler: (any) -> ()) -> Row,
+}
+type Menu = {
+    title: string,
+    isOpen: boolean,
+    chosen: number,
+    backWord: string?,
+    open: (self: Menu) -> (),
+    close: (self: Menu) -> (),
+    toggle: (self: Menu) -> (),
+    remove: (self: Menu) -> (),
+}
+type Tabs = {
+    isOpen: boolean,
+    current: Menu,
+    open: (self: Tabs, shown: Menu?) -> (),
+    close: (self: Tabs) -> (),
+    toggle: (self: Tabs, shown: Menu?) -> (),
+    remove: (self: Tabs) -> (),
+}
+type Setting = {
+    name: string,
+    label: string,
+    group: string,
+    kind: string,
+    min: number?,
+    max: number?,
+    step: number?,
+    options: { string }?,
+}
 
 -- Where the menu is, in pixels on a screen 1080 high.
 local PLACE: { right: number?, down: number?, width: number? } = { right = 40, down = 40, width = 820 }
@@ -48,30 +87,34 @@ local RUMBLE_SAMPLE = { 0.6, 0.6, 0.15 }
 -- pause_menu.luau has it turned off by the engine.
 pauseMenu.enabled = true
 
--- The game is dimmed behind the menu, on the same layer as the menu so it
--- is under the menu and over the game. Far bigger than any screen, so it
--- covers every one.
+-- The words at the top of the first screen. Set before or after the menu
+-- opens: `game.pauseMenu.title = "Game paused"`.
+local title = "Paused"
+
+-- Rows the game adds with addRow, shown above Quit.
+local extraRows: { Row } = {}
+
+-- The game is dimmed behind the menu, a layer under the menus so a menu of
+-- the game's own that opens over this one is not dimmed too, and over the
+-- game's own pieces. Far bigger than any screen, so it covers every one.
 local dim: HudBox? = nil
 
--- The screen in front, or nil while the game is being played.
-local front: Panel? = nil
--- Whether closing the menu lets the game go on: not if something else had
--- paused it before the menu opened.
+-- Whether the menu is open, and whether closing it lets the game go on:
+-- not if something else had paused it before the menu opened.
+local open = false
 local resumes = true
 
--- The three screens, each a panel of its own. They are built the first
--- time the menu opens, because the game's own scripts have run by then.
-local topPanel: Panel?, settingsPanel: Panel?, quitPanel: Panel?
-local top: Menu?, settings: { Menu }, quit: Menu?
+-- Whether the game has a "pause" action to open the menu with. Asked once:
+-- a game's actions are all made when its script is first read.
+local canPause: boolean? = nil
 
--- Puts `panel` in front, showing `shown`, in place of the screen that was.
-local function show(panel: Panel, shown: Menu)
-    if front then
-        front:close()
-    end
-    front = panel
-    panel:open(shown)
-end
+-- The screens, built the first time the menu opens, because the game's own
+-- scripts have run by then.
+local built = false
+local first: Menu?
+local settings: Tabs?
+local settingsStart: Menu?
+local quit: Menu?
 
 -- How the frame rate limit reads in its row: 0 is no limit at all.
 local function limitWords(limit: number): string
@@ -102,31 +145,41 @@ end
 
 -- Makes the screens, once.
 local function build()
-    if topPanel then
+    if built then
         return
     end
-    dim = game.hud.box({ at = "center", width = 8000, height = 4000, color = "#00000099", layer = menu.style.layer })
+    built = true
+    dim = game.hud.box({ at = "center", width = 8000, height = 4000, color = "#00000099", layer = menu.style.layer - 1 })
     dim.visible = false
 
     -- The first screen.
-    local first = menu.new("Paused", {
-        menu.button("Resume", { press = pauseMenu.close }),
+    local rows: { Row } = {
+        menu.button("Resume", { onPress = pauseMenu.close }),
         menu.button("Settings", {
-            press = function()
-                if settingsPanel then
-                    show(settingsPanel, settings[1])
+            onPress = function()
+                if settings then
+                    settings:open(settingsStart)
                 end
             end,
         }),
+    }
+    for _, row in extraRows do
+        table.insert(rows, row)
+    end
+    table.insert(
+        rows,
         menu.button("Quit", {
-            press = function()
-                -- The safe answer is the one the player starts on.
-                quit.chosen = 1
-                show(quitPanel, quit)
+            onPress = function()
+                if quit then
+                    -- The safe answer is the one the player starts on.
+                    quit.chosen = 1
+                    quit:open()
+                end
             end,
-        }),
-    }, PLACE)
-    top = first
+        })
+    )
+    first = menu.new(title, rows, PLACE)
+    first.backWord = "resume"
 
     -- The settings screen: one tab for each heading the settings come
     -- under, in the order the engine lists them.
@@ -139,57 +192,103 @@ local function build()
         end
         table.insert(rowsUnder[setting.group], rowFor(setting))
     end
-    settings = {}
+    local pages: { Menu } = {}
     for _, heading in headings do
-        local rows = rowsUnder[heading]
-        table.insert(rows, menu.button("Reset all to defaults", { press = function() game.settings.reset() end }))
-        table.insert(rows, menu.button("Back", { press = function() show(topPanel, top) end }))
-        table.insert(settings, menu.new(heading, rows, PLACE))
+        local under = rowsUnder[heading]
+        table.insert(under, menu.button("Reset all to defaults", { onPress = function() game.settings.reset() end }))
+        table.insert(under, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
+        table.insert(pages, menu.new(heading, under, PLACE))
     end
 
     -- The screen that asks before the game is left.
-    quit = menu.new("Quit the game?", {
-        menu.button("Keep playing", { press = function() show(topPanel, top) end }),
-        menu.button("Quit", { press = game.quit }),
+    local ask = menu.new("Quit the game?", {
+        menu.button("Keep playing", { onPress = function() if quit then quit:close() end end }),
+        menu.button("Quit", { onPress = game.quit }),
     }, PLACE)
+    quit = ask
 
-    topPanel = menu.panel({ first })
-    topPanel.backWord = "resume"
-    quitPanel = menu.panel({ quit })
-    quitPanel.backWord = "back"
     -- A game started with no settings has nothing to put on that screen.
-    if #settings > 0 then
-        local panel = menu.panel(settings)
-        panel.backWord = "back"
-        settingsPanel = panel
+    if #pages > 0 then
+        settings = menu.tabs(pages)
+        settingsStart = pages[1]
     end
+end
+
+-- Takes the screens away again, so that the next opening builds them anew.
+local function teardown()
+    if not built then
+        return
+    end
+    built = false
+    if first then
+        first:remove()
+    end
+    if settings then
+        settings:remove()
+    end
+    if quit then
+        quit:remove()
+    end
+    if dim then
+        dim:remove()
+    end
+    first, settings, settingsStart, quit, dim = nil, nil, nil, nil, nil
+end
+
+-- Adds a row of the game's own to the first screen, above Quit.
+-- Example: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))
+function pauseMenu.addRow(row: Row)
+    if type(row) ~= "table" or row.label == nil then
+        error('game.pauseMenu.addRow needs a row made with game.menu: game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = photo }))', 2)
+    end
+    if open then
+        error("game.pauseMenu.addRow: the pause menu is open now. Add rows at the top of main.luau, before it opens", 2)
+    end
+    table.insert(extraRows, row)
+    -- Built already: build it again, with the row, the next time it opens.
+    teardown()
 end
 
 -- Opens the menu at its first screen and pauses the game.
 -- Example: game.pauseMenu.open()
 function pauseMenu.open()
-    if front then
+    if open then
         return
     end
     build()
+    open = true
     resumes = not game.paused()
     game.pause()
     -- A rumble that was playing would shake a hand that is now reading.
     game.input.rumble(0, 0)
-    dim.visible = true
-    top.chosen = 1
-    show(topPanel, top)
+    if dim then
+        dim.visible = true
+    end
+    if first then
+        first.chosen = 1
+        first:open()
+    end
 end
 
 -- Closes the menu, whichever screen is in front, and lets the game go on.
 -- Example: game.pauseMenu.close()
 function pauseMenu.close()
-    if not front then
+    if not open then
         return
     end
-    front:close()
-    front = nil
-    dim.visible = false
+    open = false
+    if first then
+        first:close()
+    end
+    if settings then
+        settings:close()
+    end
+    if quit then
+        quit:close()
+    end
+    if dim then
+        dim.visible = false
+    end
     if resumes then
         game.resume()
     end
@@ -198,8 +297,32 @@ end
 -- True while the menu is open.
 -- Example: if game.pauseMenu.isOpen() then crosshair.visible = false end
 function pauseMenu.isOpen(): boolean
-    return front ~= nil
+    return open
 end
+
+-- `game.pauseMenu.title` is read and set like a field, and changes the
+-- first screen at once if it is built.
+setmetatable(pauseMenu, {
+    __index = function(_, key)
+        if key == "title" then
+            return title
+        end
+        return nil
+    end,
+    __newindex = function(self, key, value)
+        if key == "title" then
+            if type(value) ~= "string" then
+                error('game.pauseMenu.title is words in quotes: game.pauseMenu.title = "Paused"', 2)
+            end
+            title = value
+            if first then
+                first.title = value
+            end
+        else
+            rawset(self, key, value)
+        end
+    end,
+})
 
 game.onTick(function()
     if not pauseMenu.enabled then
@@ -207,36 +330,22 @@ game.onTick(function()
         pauseMenu.close()
         return
     end
-    local shown = front
-    if not shown then
+    if not open then
         -- A game with no "pause" action (no standard controls) has no
         -- way to open the menu but game.pauseMenu.open(), and is not
         -- told off for it.
-        local known, pressed = pcall(game.input.justPressed, "pause")
-        if known and pressed then
+        if canPause == nil then
+            canPause = (pcall(game.input.justPressed, "pause"))
+        end
+        if canPause and game.input.justPressed("pause") then
             pauseMenu.open()
         end
         return
     end
-    if game.input.justPressed("menu_close") then
+    -- The first screen is closed when the player went back from it, or
+    -- closed everything with Start: either way the menu is done.
+    if first and not first.isOpen then
         pauseMenu.close()
-        return
-    end
-    shown:update()
-    -- "menu_back" closed the screen in front: from the first screen that
-    -- closes the menu, and from the others it goes back to the first.
-    if front == shown and not shown.isOpen then
-        if shown == topPanel then
-            pauseMenu.close()
-        else
-            show(topPanel, top)
-        end
-    end
-end)
-
-game.onDraw(function()
-    if front then
-        front:draw()
     end
 end)
 
