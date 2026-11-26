@@ -2087,6 +2087,7 @@ impl ScriptHost {
             api::install(&lua, shared)?;
             lua.sandbox(true)?;
             limit::install(&lua, shared)?;
+            crate::builtin::run(&lua, shared)?;
             let chunk = lua.load(&source).set_name(format!("@{}", self.file));
             let result = within_time_limit(shared, || chunk.exec());
             shared.loading.set(false);

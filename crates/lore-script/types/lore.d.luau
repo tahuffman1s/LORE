@@ -928,6 +928,11 @@ declare extern type HudText with
     --- while hidden.
     --- Example: ammo.visible = game.player.weapon ~= nil
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: ammo.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -988,6 +993,11 @@ declare extern type HudBar with
     --- False hides it until it is set to true again.
     --- Example: health.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: health.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -1052,6 +1062,11 @@ declare extern type HudBox with
     --- False hides it until it is set to true again.
     --- Example: dot.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: dot.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up). Set them to move it; in
@@ -1102,6 +1117,11 @@ declare extern type HudLine with
     --- False hides it until it is set to true again.
     --- Example: line.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: line.layer = 10
+    layer: number
 
     --- Where it starts, right of and below where it is pinned, in pixels
     --- on a screen 1080 high (below 0 is left or up).
@@ -1152,6 +1172,11 @@ declare extern type HudImage with
     --- False hides it until it is set to true again.
     --- Example: compass.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: compass.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up).
@@ -1195,6 +1220,11 @@ declare extern type HudGraph with
     --- False hides it until it is set to true again.
     --- Example: graph.visible = false
     visible: boolean
+    --- Which pieces this is drawn over. A higher layer is drawn on top of a
+    --- lower one, wherever each was made; pieces on the same layer are drawn
+    --- in the order they were made. A whole number, 0 unless you say another.
+    --- Example: graph.layer = 10
+    layer: number
 
     --- How far it sits right of and below where it is pinned, in pixels on
     --- a screen 1080 high (below 0 is left or up).

@@ -187,7 +187,7 @@ local card = game.hud.box({ width = 300, height = 80, corner = 12, rotation = 5 
 card.width, card.height, card.corner, card.rotation = 320, 90, 14, 0
 local line: HudLine = game.hud.line({ at = "center", right = -40, toRight = 40, toDown = 10, thickness = 2, color = "white" })
 line.toRight, line.toDown, line.thickness = 60, 0, 3
-local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, rotation = 15, color = "#ffffffc0" })
+local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, rotation = 15, color = "#ffffffc0", layer = 3 })
 picture.width, picture.height, picture.rotation = 140, 140, 30
 game.hud.box()
 
@@ -198,6 +198,8 @@ game.onDraw(function()
     local words: string = ammo.text .. ammo.color
     ammo.visible = not ammo.visible
     dot.visible = health.visible
+    dot.layer = ammo.layer + 1
+    health.layer, picture.layer = 5, 6
     dot.color = "green"
     dot.right = shown.value
     dot.down = dot.right + health.down - ammo.right

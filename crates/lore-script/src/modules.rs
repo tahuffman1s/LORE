@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use std::{fs, io};
 
-use mlua::{Lua, MultiValue, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::api::{self, Shared, describe, fail};
 use crate::error::closest;
@@ -514,6 +514,21 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     lua.globals().set("require", require)
 }
 
+/// The script an older game carries to make its own pause menu.
+const OWN_PAUSE_MENU: &str = "pause_menu.luau";
+
+/// Sets `game.pauseMenu.enabled = false`, the engine's own pause menu's
+/// off switch. Nothing happens if the built-in is not there.
+fn turn_off_pause_menu(lua: &Lua) {
+    let menu = lua
+        .globals()
+        .get::<Table>("game")
+        .and_then(|game| game.get::<Table>("pauseMenu"));
+    if let Ok(menu) = menu {
+        let _ = menu.set("enabled", false);
+    }
+}
+
 /// `require("./weapons")`: runs another of the game's scripts, once, and
 /// gives back what it returned.
 fn require(lua: &Lua, shared: &Shared, asked: &Value) -> mlua::Result<Value> {
@@ -543,6 +558,11 @@ fn require(lua: &Lua, shared: &Shared, asked: &Value) -> mlua::Result<Value> {
         .filter(|file| modules.sources.borrow().contains_key(file))
         .unwrap_or_else(|| ENTRY_SCRIPT.to_owned());
     let name = resolve(&from, &path).map_err(|message| fail(lua, message))?;
+    // A game with its own pause_menu.luau (made when `lore new` copied it
+    // in) has its own pause menu, so the engine's steps aside.
+    if name == OWN_PAUSE_MENU {
+        turn_off_pause_menu(lua);
+    }
 
     match modules.required.borrow().get(&name) {
         Some(Module::Ready(value)) => return Ok(value.clone()),

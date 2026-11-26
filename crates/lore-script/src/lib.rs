@@ -46,6 +46,7 @@
 mod api;
 mod audio;
 mod body_api;
+mod builtin;
 mod camera_api;
 pub use body_api::{AnimationAsk, BUILT_IN_HELD, BUILT_IN_MODELS, CameraView, HeldSaid};
 mod character_api;

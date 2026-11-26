@@ -1,5 +1,5 @@
-//! The pause and settings menus a game has from `lore new`, which are the
-//! game's own script (`pause_menu.luau`, made of `menu.luau`): each is
+//! The pause and settings menus every game has from the engine
+//! (`game.pauseMenu`, made of `game.menu`): each is
 //! played the way the window plays a game, with input in, the action set
 //! switched when the script asks, and what the script asks of the frame
 //! taken from it.
@@ -14,8 +14,6 @@ use crate::world::World;
 const STEP: f32 = 1.0 / 60.0;
 
 const MAIN: &str = include_str!("../../template/main.luau");
-const PAUSE_MENU: &str = include_str!("../../template/pause_menu.luau");
-const MENU_KIT: &str = include_str!("../../template/menu.luau");
 
 /// One text the game drew: its words and where its top-left corner is.
 type Words = (String, [f32; 2]);
@@ -47,12 +45,7 @@ impl Played {
     /// `in_force`: as the editor played a game before it said them, or as
     /// a game opened before the player's file was read is played.
     fn opened_with(main: &str, opened: Settings, in_force: Settings) -> Self {
-        let scripts = [
-            ("main.luau", main),
-            ("pause_menu.luau", PAUSE_MENU),
-            ("menu.luau", MENU_KIT),
-        ]
-        .map(|(name, text)| (name.to_owned(), text.to_owned()));
+        let scripts = [("main.luau".to_owned(), main.to_owned())];
         let game = ScriptGame::from_sources_with_settings(scripts, &ActionMap::standard(), opened);
         Self::of(game, in_force, true)
     }
@@ -326,7 +319,7 @@ fn the_menu_starts_with_the_settings_the_player_has() {
         upscaling: lore_render::Upscaling::Performance,
         ..Settings::default()
     };
-    let main = "print(game.settings.get(\"volume\"))\nrequire(\"./pause_menu\")\n";
+    let main = "print(game.settings.get(\"volume\"))\n";
     let mut played = Played::with_main(main, theirs);
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
@@ -515,7 +508,7 @@ fn the_menu_goes_back_to_the_action_set_and_the_pause_the_game_had() {
     let main = r#"
         game.input.bind("shop", { "F3" })
         game.input.bind("help", { "F4" })
-        local pauseMenu = require("./pause_menu")
+        local pauseMenu = game.pauseMenu
         game.onTick(function()
             if game.input.justPressed("shop") then
                 game.input.useSet("menu")
@@ -797,4 +790,85 @@ fn the_planetarium_planets_tab_says_where_each_is_and_turns_to_it() {
         "{:?}",
         played.words()
     );
+}
+
+#[test]
+fn a_game_that_is_only_main_luau_has_the_pause_menu_from_the_engine() {
+    let mut played = Played::with_main("game.onTick(function() end)", Settings::default());
+    assert!(played.words().is_empty());
+    played.tap(Key::Escape);
+    assert!(played.host().paused() && played.shows("Resume"));
+    assert!(played.shows("Paused"), "{:?}", played.words());
+    played.tap(Key::Escape);
+    assert!(!played.host().paused() && !played.shows("Resume"));
+}
+
+#[test]
+fn the_pause_menu_is_drawn_over_the_pieces_the_game_makes_after_it() {
+    // A game's own HUD, made after the engine's menu was set up and on a
+    // layer of its own, is still under the pause menu.
+    let main = r#"
+        local over = game.hud.box({ width = 8000, height = 4000, layer = 50 })
+        over.color = "red"
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    assert!(played.shows("Resume"));
+    let mut layers = Vec::new();
+    played
+        .host()
+        .each_hud_piece(|_, piece| layers.push((piece.layer, piece.visible)));
+    let shown: Vec<i32> = layers
+        .iter()
+        .filter(|(_, visible)| *visible)
+        .map(|(layer, _)| *layer)
+        .collect();
+    assert!(shown.windows(2).all(|pair| pair[0] <= pair[1]), "{shown:?}");
+    assert_eq!(shown.first(), Some(&50));
+    assert_eq!(shown.last(), Some(&100));
+}
+
+#[test]
+fn a_game_with_its_own_pause_menu_gets_only_that_one() {
+    // The game's own pause_menu.luau, as an older game carries it: it makes
+    // a line of its own, and the engine's pause menu steps aside.
+    let scripts = [
+        (
+            "main.luau".to_owned(),
+            "require('./pause_menu')\nassert(game.pauseMenu.enabled == false)".to_owned(),
+        ),
+        (
+            "pause_menu.luau".to_owned(),
+            "game.hud.text('Our own pause menu', { at = 'center' })".to_owned(),
+        ),
+    ];
+    let game = ScriptGame::from_sources_with_settings(
+        scripts,
+        &ActionMap::standard(),
+        Settings::default(),
+    );
+    let mut played = Played::of(game, Settings::default(), true);
+    assert!(played.shows("Our own pause menu"), "{:?}", played.words());
+    played.tap(Key::Escape);
+    assert!(!played.host().paused());
+    assert!(!played.shows("Resume") && !played.shows("Paused"));
+}
+
+#[test]
+fn pause_menu_enabled_false_turns_it_off_and_closes_it() {
+    let main = r#"
+        game.input.bind("off", { "F5" })
+        game.onTick(function()
+            if game.input.justPressed("off") then
+                game.pauseMenu.enabled = false
+            end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    assert!(played.shows("Resume"));
+    played.tap(Key::F5);
+    assert!(!played.shows("Resume") && !played.host().paused());
+    played.tap(Key::Escape);
+    assert!(!played.shows("Resume") && !played.host().paused());
 }

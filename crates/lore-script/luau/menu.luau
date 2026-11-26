@@ -1,5 +1,6 @@
--- Menus on the HUD that keys, a gamepad and the mouse all work: copy this
--- file into your own game to have menus like the alley's.
+-- Menus on the HUD that keys, a gamepad and the mouse all work. The engine
+-- runs this file for every game before main.luau, and what it makes is
+-- `game.menu` (written `menu` below).
 --
 -- A menu is a title and a list of rows. Each row is one of five kinds:
 --
@@ -15,7 +16,6 @@
 -- while it is open. Make it all once, at the top of the file, rows first,
 -- then the menus, then the panel: a menu's rows are fixed when it is made.
 --
---     local menu = require("./menu")
 --     local volume = 0.8
 --     local sound = menu.new("Sound", {
 --         menu.slider("Volume", {
@@ -60,7 +60,7 @@
 -- The chosen row moves only when the pointer moves, so the keys and the
 -- mouse never fight over it: the keys go on from wherever the mouse left it.
 
-local menu = {}
+local menu = game.menu
 
 -- Sizes, in pixels on a screen 1080 high.
 local TOP = 64 -- the tabs, above the rows
@@ -74,10 +74,9 @@ local BAR_WIDE = 210 -- a slider's bar, at the right of the row
 -- menus (and before it requires pause_menu.luau, which makes its own), to
 -- give every menu, the pause menu's too, a look of its own:
 --
---     local menu = require("./menu")
---     menu.style.back = "#101830e0"
---     menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
---     menu.style.shadow = "#00000066" -- a shadow behind each menu
+--     game.menu.style.back = "#101830e0"
+--     game.menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
+--     game.menu.style.shadow = "#00000066" -- a shadow behind each menu
 --
 -- Colours are names or hex codes, as the HUD takes them. `accent` and
 -- `shadow` are off (nil) unless a game says them; each costs a few HUD
@@ -94,6 +93,9 @@ menu.style = {
     knob = "white",
     accent = nil :: string?,
     shadow = nil :: string?,
+    -- Which HUD layer the menus are drawn on: higher is on top of the
+    -- game's own pieces, which are on layer 0 unless a game says another.
+    layer = 100,
 }
 local style = menu.style
 
@@ -259,7 +261,7 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
     local height = TOP + #rows * ROW + FOOT
     -- Made before the menu's own back, so it is drawn under it.
     local shadow = if style.shadow
-        then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow })
+        then game.hud.box({ right = right + 6, down = down + 8, width = width, height = height, color = style.shadow, layer = style.layer })
         else nil
     local self = setmetatable({
         title = title,
@@ -270,14 +272,14 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         down = down,
         width = width,
         height = height,
-        back = game.hud.box({ right = right, down = down, width = width, height = height, color = style.back }),
+        back = game.hud.box({ right = right, down = down, width = width, height = height, color = style.back, layer = style.layer }),
         shadow = shadow,
         accentLine = nil :: HudBox?,
         marker = nil :: HudBox?,
     }, Menu)
     if style.accent then
-        self.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent })
-        self.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent })
+        self.accentLine = game.hud.box({ right = right, down = down, width = width, height = 3, color = style.accent, layer = style.layer })
+        self.marker = game.hud.box({ right = right + 12, down = down + TOP, width = 4, height = ROW - 2, color = style.accent, layer = style.layer })
     end
     self.back.visible = false
     for number, row in rows do
@@ -286,14 +288,14 @@ function menu.new(title: string, rows: { Row }, options: { right: number?, down:
         -- The box behind the row shows which is chosen, and catches the
         -- pointer anywhere along the row.
         if row.kind ~= "info" then
-            row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN })
+            row.box = game.hud.box({ right = left, down = top, width = width - 24, height = ROW - 2, color = NOT_CHOSEN, layer = style.layer })
         end
-        row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = style.words })
-        row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words })
+        row.name = game.hud.text(row.label, { right = left + 14, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
+        row.value = game.hud.text("", { right = left + 14 + LABEL_WIDE, down = top + 2, size = TEXT, color = style.words, layer = style.layer })
         if row.kind == "slider" then
             local barLeft = right + width - 24 - BAR_WIDE
-            row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or style.bar })
-            row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = style.knob })
+            row.bar = game.hud.bar(0, { right = barLeft, down = top + 11, width = BAR_WIDE, height = 12, color = row.color or style.bar, layer = style.layer })
+            row.knob = game.hud.box({ right = barLeft, down = top + 4, width = 8, height = 26, color = style.knob, layer = style.layer })
         end
         row.pieces = {}
         for _, piece in { row.box or false, row.name, row.value, row.bar or false, row.knob or false } :: { any } do
@@ -578,11 +580,11 @@ function menu.panel(menus: { Menu }): Panel
     for number, each in menus do
         -- A tab is as wide as its title, near enough.
         local wide = #each.title * 15 + 36
-        marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN })
-        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet })
+        marks[number] = game.hud.box({ right = across, down = first.down + 12, width = wide, height = 42, color = NOT_CHOSEN, layer = style.layer })
+        tabs[number] = game.hud.text(each.title, { right = across + 18, down = first.down + 16, size = 30, color = style.quiet, layer = style.layer })
         across += wide + 8
     end
-    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet })
+    local keys = game.hud.text("", { right = first.right + 26, down = first.down + first.height - FOOT + 12, size = 24, color = style.quiet, layer = style.layer })
     local self = setmetatable({
         menus = menus,
         current = first,

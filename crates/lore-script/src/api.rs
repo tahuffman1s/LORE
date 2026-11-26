@@ -497,12 +497,16 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("hud");
     members.push("input");
     members.push("lamps");
+    for name in crate::builtin::GAME_TABLES {
+        members.push(name);
+    }
     members.push("lighting");
     members.push("look");
     members.push("settings");
     members.push("shaders");
     members.push("sky");
     members.push("weather");
+    crate::builtin::make_tables(lua, &game)?;
     strict(lua, &game, "game", &members)?;
     globals.set("game", game)?;
 
