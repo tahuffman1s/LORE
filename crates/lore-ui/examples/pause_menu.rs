@@ -52,6 +52,18 @@ fn main() -> Result<(), UiError> {
             } => {
                 println!("turned {w:5.0} x {h:<5.0} at {x:6.0}, {y:<6.0} by {angle:.2}");
             }
+            Draw::Box {
+                position: [x, y],
+                size: [w, h],
+                ..
+            }
+            | Draw::Shadow {
+                position: [x, y],
+                size: [w, h],
+                ..
+            } => {
+                println!("styled {w:5.0} x {h:<5.0} at {x:6.0}, {y:<6.0}");
+            }
         }
     }
     Ok(())

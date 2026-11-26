@@ -709,6 +709,17 @@ impl Headless {
         self.overlay.set_images(images);
     }
 
+    /// Gives the HUD the game's fonts: family `n` of a [`FontFace`](lore_ui::FontFace)
+    /// is the `n`th of `families` (0 is the engine's own font). Which face
+    /// of a family draws text is chosen by weight and slant as the web
+    /// does; a weight or slant no face has is made up from the nearest one,
+    /// and a character a face lacks is drawn in the engine's font. Every
+    /// letter drawn so far is forgotten, so replacing the fonts shows at
+    /// once. A file that cannot be read is left out with a warning.
+    pub fn set_hud_fonts(&mut self, families: &[crate::HudFontFamily]) {
+        self.overlay.set_fonts(families);
+    }
+
     /// Draws the editor's panels over every frame from now on, as
     /// [`Renderer::set_panels`](crate::Renderer::set_panels) does.
     #[cfg(feature = "panels")]
@@ -3439,6 +3450,69 @@ mod tests {
             red > 150 && green < 90 && blue < 90,
             "in the picture: {red} {green} {blue}"
         );
+        drop(headless);
+        assert_eq!(validation_errors(), 0);
+    }
+
+    #[test]
+    fn a_picture_fill_keeps_its_edges_and_stretches_its_middle_inside_round_corners() {
+        use lore_ui::{Color, Draw, DrawBuffer, Fill, Transform};
+        const SIZE: [usize; 2] = [192, 108];
+        let Some(mut headless) = headless(192, 108) else {
+            return;
+        };
+        headless.gpu().require_validation();
+        headless.set_hour(Some(0.0));
+        // Six pixels across: two red, two green, two blue, in every row.
+        let row = [
+            255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255,
+        ]
+        .into_iter()
+        .chain([0, 0, 255, 255, 0, 0, 255, 255]);
+        headless.set_hud_images(&[crate::HudImage {
+            size: [6, 2],
+            rgba: row.collect::<Vec<u8>>().repeat(2),
+        }]);
+        let mut buffer = DrawBuffer::default();
+        buffer.push(Draw::Box {
+            position: [10.0, 40.0],
+            size: [120.0, 20.0],
+            radii: [10.0, 0.0, 0.0, 10.0],
+            fill: Fill::Image {
+                image: 0,
+                tint: Color::WHITE,
+                slice: Some([0.0, 2.0, 0.0, 2.0]),
+                slice_scale: 4.0,
+            },
+            border_widths: [0.0; 4],
+            border_color: Color::WHITE,
+            transform: Transform::IDENTITY,
+            clip: None,
+        });
+        headless.set_ui(buffer.draw());
+        let picture = headless.screenshot(&Camera::default()).unwrap();
+        // Eight pixels of red on the left, eight of blue on the right, and
+        // the green stretched between.
+        let [red, green, blue] = pixel(&picture, SIZE[0], 14, 50);
+        assert!(
+            red > 200 && green < 40 && blue < 40,
+            "left: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 70, 50);
+        assert!(
+            green > 200 && red < 40 && blue < 40,
+            "middle: {red} {green} {blue}"
+        );
+        let [red, green, blue] = pixel(&picture, SIZE[0], 126, 50);
+        assert!(
+            blue > 200 && red < 40 && green < 40,
+            "right: {red} {green} {blue}"
+        );
+        // The round top-left corner is cut; the square top-right one is not.
+        let [red, ..] = pixel(&picture, SIZE[0], 11, 41);
+        assert!(red < 60, "the round corner is square: {red}");
+        let [.., blue] = pixel(&picture, SIZE[0], 128, 41);
+        assert!(blue > 200, "the square corner is cut: {blue}");
         drop(headless);
         assert_eq!(validation_errors(), 0);
     }

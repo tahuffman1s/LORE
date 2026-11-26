@@ -3,7 +3,9 @@
 use crate::build::{ScreenBuilder, index, snap};
 use crate::draw::{Command, DrawList, Painter};
 use crate::error::UiError;
+use crate::fill::Stop;
 use crate::focus;
+use crate::hud_style::HudStyle;
 use crate::input::{Direction, InputMode, Repeater, UiInput, held_direction};
 use crate::layout::{measure_screen, place_hud, place_screen, safe_area, slider_track, tab_width};
 use crate::node::{Anchor, Kind, NONE, Node, Rect, Screen, ScreenId, WidgetId};
@@ -146,6 +148,7 @@ pub struct Ui {
     events: Vec<UiEvent>,
     commands: Vec<Command>,
     draw_text: String,
+    draw_stops: Vec<Stop>,
     /// Real pixels per reference pixel.
     scale: f32,
     /// The screen in reference pixels.
@@ -184,6 +187,7 @@ impl Ui {
             events: Vec::with_capacity(MOST_EVENTS),
             commands: Vec::new(),
             draw_text: String::new(),
+            draw_stops: Vec::new(),
             scale: 1.0,
             size: [1920.0, REFERENCE_HEIGHT],
         }
@@ -684,6 +688,37 @@ impl Ui {
         }
     }
 
+    /// Sets how a HUD piece looks beyond its colour and place, or `None`
+    /// to draw it plainly. A style is copied in place, so changing it
+    /// every frame costs no memory once the piece has one.
+    ///
+    /// # Errors
+    ///
+    /// If the widget is not from this `Ui`, or is not a HUD piece.
+    pub fn set_style(&mut self, widget: WidgetId, style: Option<&HudStyle>) -> Result<(), UiError> {
+        let node = self.node(widget)?;
+        match &node.kind {
+            Kind::HudText { .. }
+            | Kind::HudBar { .. }
+            | Kind::HudRect { .. }
+            | Kind::HudImage { .. } => {}
+            other => {
+                return Err(UiError::WrongKind {
+                    expected: "HUD piece",
+                    found: other.name(),
+                });
+            }
+        }
+        match (&mut node.style, style) {
+            (Some(held), Some(new)) => **held = *new,
+            (held, Some(new)) => *held = Some(Box::new(*new)),
+            // A piece that goes back to plain keeps its memory out of the
+            // way: it is rare, and asking again is not a per-frame cost.
+            (held, None) => *held = None,
+        }
+        Ok(())
+    }
+
     /// Changes how full a HUD bar is, from 0 to 1.
     ///
     /// # Errors
@@ -826,6 +861,7 @@ impl Ui {
         DrawList {
             commands: &self.commands,
             text: &self.draw_text,
+            stops: &self.draw_stops,
         }
     }
 
@@ -1317,17 +1353,19 @@ impl Ui {
     fn paint(&mut self) {
         self.commands.clear();
         self.draw_text.clear();
+        self.draw_stops.clear();
         let clip = self.clip();
         let mut painter = Painter {
             commands: &mut self.commands,
             text: &mut self.draw_text,
+            stops: &mut self.draw_stops,
             scale: self.scale,
             clip: None,
         };
         for &piece in &self.hud {
             let node = &self.nodes[piece as usize];
             if node.visible {
-                paint::hud(node, &self.theme, &mut painter);
+                paint::hud(node, &self.nodes, &self.theme, &mut painter);
             }
         }
 

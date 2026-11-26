@@ -1658,6 +1658,7 @@ dependencies = [
  "lore-sky",
  "lore-ui",
  "raw-window-handle",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -1673,6 +1674,7 @@ dependencies = [
  "lore-ui",
  "lore-weapons",
  "mlua",
+ "ttf-parser",
 ]
 
 [[package]]

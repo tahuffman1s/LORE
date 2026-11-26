@@ -144,6 +144,8 @@ pub struct Frame {
     moon_size: Option<f32>,
     /// The game's HUD images, if they changed this frame.
     hud_images: Option<Vec<lore_render::HudImage>>,
+    /// The game's HUD font families, if they changed this frame.
+    hud_fonts: Option<Vec<lore_render::HudFontFamily>>,
     /// Whether dark ground is drawn below the horizon, if the game said it
     /// this frame.
     ground: Option<bool>,
@@ -309,6 +311,7 @@ impl Frame {
             sky_place: None,
             moon_size: None,
             hud_images: None,
+            hud_fonts: None,
             ground: None,
             moon_tint: None,
             milky_way: None,
@@ -1103,6 +1106,18 @@ impl Frame {
         self.hud_images = Some(images);
     }
 
+    /// Hands over the game's font families: family `n` of a text piece's
+    /// face is the `n`th (0 is the engine's own font). Said when they
+    /// change, not every frame.
+    pub fn set_hud_fonts(&mut self, families: Vec<lore_render::HudFontFamily>) {
+        self.hud_fonts = Some(families);
+    }
+
+    /// The game's HUD font families, if they changed this frame.
+    pub(crate) fn take_hud_fonts(&mut self) -> Option<Vec<lore_render::HudFontFamily>> {
+        self.hud_fonts.take()
+    }
+
     /// The game's HUD images, if they changed this frame.
     pub(crate) fn take_hud_images(&mut self) -> Option<Vec<lore_render::HudImage>> {
         self.hud_images.take()
@@ -1576,7 +1591,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }

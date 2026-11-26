@@ -20,6 +20,8 @@ lore-shader = { path = "../lore-shader" }
 lore-sky = { path = "../lore-sky" }
 libm = "0.2"
 log = "0.4"
+# Reads the family name of a font file in the game's `fonts` folder. MIT or Apache-2.0.
+ttf-parser = "0.25"
 mlua = { version = "0.12", features = ["luau"] }
 
 [lints]

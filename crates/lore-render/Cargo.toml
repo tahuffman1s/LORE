@@ -26,6 +26,8 @@ lore-shader = { path = "../lore-shader" }
 lore-sky = { path = "../lore-sky" }
 # Turns the font's outlines into pixels for HUD and menu text. Pure Rust.
 fontdue = { version = "0.9", default-features = false, features = ["std"] }
+# Reads a font file's family, weight and slant. The version fontdue uses. MIT or Apache-2.0.
+ttf-parser = "0.25"
 # FSR 3.1 upscaling, built from source.
 lore-fsr = { path = "../lore-fsr" }
 # The editor's panels (the `panels` feature). Without egui's own fonts: the

@@ -1,9 +1,11 @@
 //! Turning placed widgets into boxes and text.
 
 use crate::draw::Painter;
+use crate::fill::{Clip, Fill, Stop, Transform};
+use crate::hud_style::{HudStyle, MOST_STOPS};
 use crate::layout::{slider_track, tab_width, text_size};
 use crate::node::{Kind, Node, Rect};
-use crate::theme::{TextMeasure, Theme};
+use crate::theme::{Color, TextMeasure, Theme};
 use crate::ui::Names;
 
 /// How a widget is shown this frame.
@@ -15,45 +17,328 @@ pub(crate) struct Look {
     pub outlined: bool,
 }
 
-pub(crate) fn hud(node: &Node, theme: &Theme, painter: &mut Painter<'_>) {
+/// `color` as solid as `opacity` leaves it.
+fn faded(color: Color, opacity: f32) -> Color {
+    Color {
+        a: color.a * opacity,
+        ..color
+    }
+}
+
+/// How the style moves a piece whose box is `rect`: scaled and turned about
+/// its origin, after the piece's own turn `base_angle` about its middle.
+fn transform_of(style: &HudStyle, rect: Rect, base_angle: f32) -> Transform {
+    let middle = [rect.x + rect.w / 2.0, rect.y + rect.h / 2.0];
+    let base = if base_angle == 0.0 {
+        Transform::IDENTITY
+    } else {
+        Transform::about(middle, 1.0, base_angle)
+    };
+    if !style.is_moved() {
+        return base;
+    }
+    let origin = base.apply([
+        rect.x + style.origin[0] * rect.w,
+        rect.y + style.origin[1] * rect.h,
+    ]);
+    base.then(Transform::about(
+        origin,
+        style.scale,
+        style.rotation.to_radians(),
+    ))
+}
+
+/// `radii` kept to what a box `w` by `h` can have: no more than half its
+/// shorter side.
+fn fitted(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
+    let most = (w.min(h) / 2.0).max(0.0);
+    radii.map(|radius| radius.clamp(0.0, most))
+}
+
+/// Where the piece `style` is cut to is on the screen now: its box, moved
+/// by its own scale and turn, and rounded as it is. A turned piece cuts to
+/// the straight box round it. A piece that is hidden cuts everything off.
+fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
+    let target = nodes.get(style.clip?.0 as usize)?;
+    let rect = target.rect;
+    if !target.visible {
+        return Some(Clip {
+            position: [rect.x, rect.y],
+            size: [0.0; 2],
+            radii: [0.0; 4],
+        });
+    }
+    let own = target.style.as_deref();
+    let angle = match target.kind {
+        Kind::HudRect { angle, .. } | Kind::HudImage { angle, .. } => angle,
+        _ => 0.0,
+    };
+    let transform = own.map_or_else(
+        || transform_of(&HudStyle::default(), rect, angle),
+        |own| transform_of(own, rect, angle),
+    );
+    let corners = [
+        [rect.x, rect.y],
+        [rect.right(), rect.y],
+        [rect.right(), rect.bottom()],
+        [rect.x, rect.bottom()],
+    ]
+    .map(|corner| transform.apply(corner));
+    let (mut low, mut high) = (corners[0], corners[0]);
+    for corner in corners {
+        low = [low[0].min(corner[0]), low[1].min(corner[1])];
+        high = [high[0].max(corner[0]), high[1].max(corner[1])];
+    }
+    let size = [high[0] - low[0], high[1] - low[1]];
+    let scale = own.map_or(1.0, |own| own.scale);
+    let radii = own
+        .map_or([0.0; 4], |own| own.radii)
+        .map(|radius| radius * scale);
+    Some(Clip {
+        position: low,
+        size,
+        radii: fitted(radii, size[0], size[1]),
+    })
+}
+
+/// A piece of the HUD, drawn the plain way when its style asks for nothing
+/// the plain way cannot do, else with the styled boxes and text.
+pub(crate) fn hud(node: &Node, nodes: &[Node], theme: &Theme, painter: &mut Painter<'_>) {
     let rect = node.rect;
+    let style = node.style.as_deref();
+    let plain = style.is_none_or(HudStyle::is_plain);
     match &node.kind {
         Kind::HudText { size, color, .. } => {
-            painter.text([rect.x, rect.y], text_size(*size), *color, &node.text);
+            let moved = style.is_some_and(HudStyle::is_moved);
+            match style {
+                Some(style) if !plain || moved => {
+                    styled_text(node, style, nodes, *size, *color, painter)
+                }
+                _ => painter.text([rect.x, rect.y], text_size(*size), *color, &node.text),
+            }
         }
         Kind::HudBar {
             fraction, color, ..
-        } => {
-            painter.rect(rect, theme.track, 0.0);
-            painter.rect(
-                Rect {
-                    w: rect.w * fraction,
-                    ..rect
-                },
-                *color,
-                0.0,
-            );
-        }
+        } => match style {
+            Some(style) if !plain || style.is_moved() => {
+                let transform = transform_of(style, rect, 0.0);
+                let clip = clip_of(style, nodes);
+                let opacity = style.opacity;
+                painter.styled_box(
+                    rect,
+                    [0.0; 4],
+                    Fill::Color(faded(theme.track, opacity)),
+                    [0.0; 4],
+                    Color::BLACK,
+                    transform,
+                    clip,
+                );
+                painter.styled_box(
+                    Rect {
+                        w: rect.w * fraction,
+                        ..rect
+                    },
+                    [0.0; 4],
+                    Fill::Color(faded(*color, opacity)),
+                    [0.0; 4],
+                    Color::BLACK,
+                    transform,
+                    clip,
+                );
+            }
+            _ => {
+                painter.rect(rect, theme.track, 0.0);
+                painter.rect(
+                    Rect {
+                        w: rect.w * fraction,
+                        ..rect
+                    },
+                    *color,
+                    0.0,
+                );
+            }
+        },
         Kind::HudRect {
             color,
             corner,
             angle,
             ..
-        } => {
-            if *angle == 0.0 {
-                painter.rect(rect, *color, *corner);
-            } else {
-                painter.turned(rect, *angle, *color, *corner, None);
+        } => match style {
+            Some(style) if !plain || !style.turns_about_middle() || !style.round_alike() => {
+                styled_box(node, style, nodes, *color, *angle, painter);
             }
-        }
+            Some(style) => {
+                let angle = angle + style.rotation.to_radians();
+                let corner = style.radii[0];
+                if angle == 0.0 {
+                    painter.rect(rect, *color, corner);
+                } else {
+                    painter.turned(rect, angle, *color, corner, None);
+                }
+            }
+            None => {
+                if *angle == 0.0 {
+                    painter.rect(rect, *color, *corner);
+                } else {
+                    painter.turned(rect, *angle, *color, *corner, None);
+                }
+            }
+        },
         Kind::HudImage {
             color,
             image,
             angle,
             ..
-        } => painter.turned(rect, *angle, *color, 0.0, Some(*image)),
+        } => match style {
+            Some(style)
+                if !plain
+                    || !style.turns_about_middle()
+                    || style.radii.iter().any(|radius| *radius != 0.0) =>
+            {
+                styled_box(node, style, nodes, *color, *angle, painter);
+            }
+            Some(style) => {
+                let angle = angle + style.rotation.to_radians();
+                painter.turned(rect, angle, *color, 0.0, Some(*image));
+            }
+            None => painter.turned(rect, *angle, *color, 0.0, Some(*image)),
+        },
         _ => {}
     }
+}
+
+/// A HUD rectangle or image drawn with everything its style can ask for.
+fn styled_box(
+    node: &Node,
+    style: &HudStyle,
+    nodes: &[Node],
+    color: Color,
+    angle: f32,
+    painter: &mut Painter<'_>,
+) {
+    let rect = node.rect;
+    let opacity = style.opacity;
+    let transform = transform_of(style, rect, angle);
+    let clip = clip_of(style, nodes);
+    let radii = fitted(style.radii, rect.w, rect.h);
+    if let Some(shadow) = style.shadow.filter(|shadow| !shadow.inset) {
+        painter.shadow(
+            rect,
+            radii,
+            faded(shadow.color, opacity),
+            [shadow.right, shadow.down],
+            shadow.blur,
+            shadow.spread,
+            false,
+            transform,
+            clip,
+        );
+    }
+    // A picture on a box, or a picture piece, is the fill, tinted.
+    let picture = match &node.kind {
+        Kind::HudImage { image, .. } => Some(*image),
+        _ => style.image,
+    };
+    let mut stops = [Stop {
+        color: Color::BLACK,
+        at: 0.0,
+    }; MOST_STOPS];
+    let fill = match (picture, &style.gradient) {
+        (Some(image), _) => Fill::Image {
+            image,
+            tint: faded(color, opacity),
+            slice: style.slice,
+            slice_scale: painter.scale,
+        },
+        (None, Some(gradient)) => {
+            let count = gradient.stops().len();
+            for (kept, stop) in stops.iter_mut().zip(gradient.stops()) {
+                *kept = Stop {
+                    color: faded(stop.color, opacity),
+                    at: stop.at,
+                };
+            }
+            let stops = &stops[..count];
+            if gradient.radial {
+                // As far as the farthest corner, in an ellipse the shape
+                // of the box.
+                let [cx, cy] = gradient.center;
+                let reach = |at: f32| at.max(1.0 - at) * std::f32::consts::SQRT_2;
+                Fill::Radial {
+                    center: gradient.center,
+                    radius: [reach(cx), reach(cy)],
+                    stops,
+                }
+            } else {
+                Fill::Linear {
+                    angle: gradient.angle,
+                    stops,
+                }
+            }
+        }
+        (None, None) => Fill::Color(faded(color, opacity)),
+    };
+    painter.styled_box(
+        rect,
+        radii,
+        fill,
+        style.border_widths,
+        faded(style.border_color, opacity),
+        transform,
+        clip,
+    );
+    if let Some(shadow) = style.shadow.filter(|shadow| shadow.inset) {
+        painter.shadow(
+            rect,
+            radii,
+            faded(shadow.color, opacity),
+            [shadow.right, shadow.down],
+            shadow.blur,
+            shadow.spread,
+            true,
+            transform,
+            clip,
+        );
+    }
+}
+
+/// A HUD text drawn with its face, spacing, shadow, fade, scale and turn.
+fn styled_text(
+    node: &Node,
+    style: &HudStyle,
+    nodes: &[Node],
+    size: f32,
+    color: Color,
+    painter: &mut Painter<'_>,
+) {
+    let rect = node.rect;
+    let size = text_size(size);
+    let transform = transform_of(style, rect, 0.0);
+    let clip = clip_of(style, nodes);
+    if let Some(shadow) = style.text_shadow {
+        painter.styled_text(
+            [rect.x + shadow.right, rect.y + shadow.down],
+            size,
+            faded(shadow.color, style.opacity),
+            &node.text,
+            style.font,
+            style.letter_spacing,
+            shadow.blur,
+            transform,
+            clip,
+        );
+    }
+    painter.styled_text(
+        [rect.x, rect.y],
+        size,
+        faded(color, style.opacity),
+        &node.text,
+        style.font,
+        style.letter_spacing,
+        0.0,
+        transform,
+        clip,
+    );
 }
 
 /// Draws one widget. A widget that is `cut` by the edge of a screen that

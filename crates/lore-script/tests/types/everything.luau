@@ -206,6 +206,40 @@ local picture: HudImage = game.hud.image("compass", { at = "top", width = 120, r
 picture.width, picture.height, picture.rotation = 140, 140, 30
 game.hud.box()
 
+-- Styles: every piece fades, scales, turns and can be cut to a box; text has
+-- a face and a shadow; boxes have borders, gradients, pictures and shadows.
+local panel: HudBox = game.hud.box({
+    width = 300, height = 120, opacity = 0.9, scale = 1, rotation = 2, transformOrigin = "top left",
+    borderRadius = { 16, 16, 0, 0 }, borderWidth = { 1, 2, 3, 4 }, borderColor = "#c8a050",
+    gradient = { colors = { "#3a2a10", "#120c04" }, angle = 180, stops = { 0, 1 } },
+    boxShadow = { right = 0, down = 4, blur = 12, spread = 0, color = "#000a", inset = false },
+})
+local title: HudText = game.hud.text("Quest", {
+    clipTo = panel, fontFamily = "Cinzel", fontWeight = "bold", fontStyle = "italic",
+    letterSpacing = 2, textShadow = { right = 2, down = 2, blur = 4, color = "black" },
+})
+panel.opacity, panel.scale, panel.rotation, panel.transformOrigin, panel.clipTo = 1, 1.1, 0, "center", nil
+panel.borderRadius, panel.borderWidth, panel.borderColor = 12, 2, "red"
+panel.gradient = { colors = { "red", "blue", "green" }, radial = true, center = { 0.5, 0.5 } }
+panel.image, panel.slice, panel.boxShadow = "parchment", { 8, 8, 8, 8 }, nil
+title.fontFamily, title.fontWeight, title.fontStyle, title.letterSpacing, title.textShadow = nil, 700, "normal", 0, nil
+title.opacity, title.scale, title.rotation, title.transformOrigin, title.clipTo = 1, 1, 0, "center", panel
+local fontName: string? = title.fontFamily
+local weight: number | string = title.fontWeight
+local shade: HudTextShadow? = title.textShadow
+local radii: number | { number } = panel.borderRadius
+local fill: HudGradient? = panel.gradient
+local cutTo: HudBox | HudImage | nil = title.clipTo
+local barFaded: HudBar = game.hud.bar(1, { opacity = 0.5, scale = 2, rotation = 0, transformOrigin = "left", clipTo = panel })
+barFaded.opacity, barFaded.scale, barFaded.rotation, barFaded.transformOrigin, barFaded.clipTo = 1, 1, 0, "center", nil
+local lineFaded: HudLine = game.hud.line({ opacity = 0.5, scale = 1, rotation = 10, transformOrigin = "top", clipTo = panel })
+lineFaded.opacity, lineFaded.scale, lineFaded.rotation, lineFaded.transformOrigin, lineFaded.clipTo = 1, 1, 0, "center", nil
+local framed: HudImage = game.hud.image("compass", { opacity = 0.8, scale = 1, transformOrigin = "center", clipTo = panel, borderRadius = 24, slice = 12, boxShadow = { down = 4, blur = 8 } })
+framed.opacity, framed.scale, framed.rotation, framed.transformOrigin, framed.clipTo = 1, 1, 0, "center", nil
+framed.borderRadius, framed.slice, framed.boxShadow = { 1, 2, 3, 4 }, nil, nil
+print(fontName, weight, shade, radii, fill, cutTo, panel.borderWidth, panel.borderColor, panel.image, panel.slice, panel.boxShadow, panel.corner)
+print(title.fontStyle, title.letterSpacing, framed.slice, framed.boxShadow, framed.borderRadius)
+
 game.onDraw(function()
     health.value = shown.value / 100
     health.color = if health.value < 0.25 then "red" else "green"
@@ -409,6 +443,7 @@ game.onDraw(function()
         slider.value = math.clamp(slider:pointerAt(), 0, 1)
     end
     local across: number, down: number = graph:pointerAt()
+    slider:animate({ opacity = 0.5, color = "red", value = 1 }, { seconds = 0.5, ease = "ease-out", delay = 0.1, onDone = function() slider:animate({ opacity = 1 }) end })
     graph.visible = not plain.hovered and not plain.pressed
     print(across, down, fps.hovered, fps.pressed, hint.pressed)
 end)

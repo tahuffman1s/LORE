@@ -159,6 +159,11 @@ pub struct ScriptHost {
     given_images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The HUD images the running version knows.
     images: Rc<Vec<crate::images::HudImageInfo>>,
+    /// The font families of a game given as text, which has no folder to
+    /// look in: see [`with_hud_fonts`](Self::with_hud_fonts).
+    given_fonts: Rc<Vec<String>>,
+    /// The font families the running version knows.
+    fonts: Rc<Vec<String>>,
     /// The kinds of weapon in effect and who holds which. Kept here so a
     /// save empties nobody's hands.
     weapons: Rc<WeaponState>,
@@ -424,6 +429,23 @@ impl ScriptHost {
         &self.images
     }
 
+    /// The font families of the game, sorted, as the running script knows
+    /// them: the `n`th (counting from 1; 0 is the engine's own font) is what
+    /// a text piece with family `n` is drawn in. For a game on disk they are
+    /// read again from its `fonts` folder each time the script is.
+    #[must_use]
+    pub fn hud_fonts(&self) -> &[String] {
+        &self.fonts
+    }
+
+    /// Gives a game run from text the font families it has: a packaged
+    /// game's, as a game on disk has them read from its `fonts` folder.
+    #[must_use]
+    pub fn with_hud_fonts(mut self, families: Vec<String>) -> Self {
+        self.given_fonts = Rc::new(families);
+        self
+    }
+
     /// A host running the `main.luau` in `files`.
     fn with_files(
         files: Files,
@@ -460,6 +482,8 @@ impl ScriptHost {
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
+            given_fonts: Rc::default(),
+            fonts: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
             dice: Rc::default(),
@@ -570,6 +594,8 @@ impl ScriptHost {
         if !stopped {
             self.run_timers();
         }
+        // Menus open while the game is paused and need to move.
+        self.run_animations();
         self.hurts_due();
         self.switches_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
@@ -2275,6 +2301,10 @@ impl ScriptHost {
             Files::Folder(folder) => Rc::new(crate::images::scan(folder)),
             Files::Memory(_) => Rc::clone(&self.given_images),
         };
+        self.fonts = match self.files.as_ref() {
+            Files::Folder(folder) => Rc::new(crate::fonts::scan(folder)),
+            Files::Memory(_) => Rc::clone(&self.given_fonts),
+        };
         let shared = Rc::new(Shared {
             // Each version makes its own map from the opening one, so a
             // version that fails to load leaves the running one's alone.
@@ -2307,6 +2337,7 @@ impl ScriptHost {
             audio: Rc::clone(&self.audio),
             hud: HudState::default(),
             images: Rc::clone(&self.images),
+            fonts: Rc::clone(&self.fonts),
             modules: Modules::new(Rc::clone(&self.files)),
             kept: Kept::default(),
             store: Rc::clone(&self.kept),
@@ -2433,6 +2464,27 @@ impl ScriptHost {
             }
         }
         shared.timers.borrow_mut().retain(|timer| !timer.finished);
+    }
+
+    /// Moves the HUD animations on one tick, then calls the `onDone`
+    /// functions of those that finished, oldest first. They run every tick
+    /// the script is running, also while the game is paused or its time is
+    /// stopped, so a menu can move; each tick counts, so it is the same on
+    /// every run.
+    fn run_animations(&mut self) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        shared.hud.step_animations(self.clock.rate());
+        // The HUD is not borrowed here, so the function may start more
+        // animations or remove pieces.
+        while let Some(function) = shared.hud.next_done() {
+            if !self.call(&shared, &function, ()) {
+                return;
+            }
+        }
     }
 
     /// Calls one of the script's functions and reports it if it fails.

@@ -3,6 +3,7 @@
 //! All of this is in "reference pixels": pixels on a screen 1080 high.
 //! The draw list is scaled to real pixels at the very end.
 
+use crate::fill::FontFace;
 use crate::node::{Anchor, Kind, NONE, Node, Rect, children};
 use crate::theme::{SMALLEST_TEXT, TextMeasure, Theme};
 
@@ -222,6 +223,23 @@ pub fn hud_text_size(text: &str, height: f32, measure: &dyn TextMeasure) -> [f32
     [measure.width(text, height), height]
 }
 
+/// Like [`hud_text_size`], for text drawn in `font` with `letter_spacing`
+/// added after every character.
+#[must_use]
+pub fn hud_text_size_styled(
+    text: &str,
+    height: f32,
+    font: FontFace,
+    letter_spacing: f32,
+    measure: &dyn TextMeasure,
+) -> [f32; 2] {
+    let height = text_size(height);
+    [
+        measure.width_styled(text, height, font, letter_spacing),
+        height,
+    ]
+}
+
 /// Where a HUD piece of `size` pinned at `anchor` and moved by `offset` sits
 /// on a screen of `screen`, as `[x, y, width, height]`, all in UI units
 /// (pixels on a screen 1080 high). It stays inside the default theme's safe
@@ -305,7 +323,15 @@ pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) 
             size,
             ..
         } => {
-            node.size = hud_text_size(&node.text, *size, measure);
+            let height = text_size(*size);
+            node.size = match node.style.as_deref() {
+                // Wide or spaced letters take the room they really do.
+                Some(style) => [
+                    measure.width_styled(&node.text, height, style.font, style.letter_spacing),
+                    height,
+                ],
+                None => hud_text_size(&node.text, *size, measure),
+            };
             (*anchor, *offset)
         }
         Kind::HudBar { anchor, offset, .. }

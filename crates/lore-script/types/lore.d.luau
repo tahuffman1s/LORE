@@ -955,6 +955,47 @@ end
 --- Where on the screen a piece of the HUD is pinned.
 type HudPlace = "top left" | "top" | "top right" | "left" | "center" | "right" | "bottom left" | "bottom" | "bottom right"
 
+--- A font weight: a number from 100 to 900, or "normal" (400) or "bold"
+--- (700). Writing takes any of these; reading always gives the number.
+type HudFontWeight = number | "normal" | "bold"
+
+--- A font style: "normal" or "italic".
+type HudFontStyle = "normal" | "italic"
+
+--- A shadow under a HUD text. `right` and `down` say how far it falls in
+--- pixels on a screen 1080 high, `blur` how soft its edge is (0 is sharp;
+--- at least 0). Left out: `right` 0, `down` 0, `blur` 0, `color` "black".
+--- Example: ammo.textShadow = { right = 2, down = 2, blur = 4, color = "black" }
+type HudTextShadow = { right: number?, down: number?, blur: number?, color: string? }
+
+--- A shadow of a HUD box or image. `inset` puts it inside the piece, as if
+--- pressed in; `spread` makes it bigger than the piece on every side.
+--- Left out: `right` 0, `down` 0, `blur` 0 (at least 0), `spread` 0,
+--- `inset` false, `color` "black".
+--- Example: panel.boxShadow = { right = 0, down = 4, blur = 12, spread = 0, color = "#000a", inset = false }
+type HudBoxShadow = { right: number?, down: number?, blur: number?, spread: number?, color: string?, inset: boolean? }
+
+--- Colours that run across a box, in place of its colour: 2 to 8 `colors`.
+--- `angle` is in degrees (0 runs up, 90 right, 180, the usual, down);
+--- `stops` puts each colour at a place from 0 to 1, else they are spaced
+--- evenly. `radial = true` runs outwards from `center` (a share of the box,
+--- `{ 0.5, 0.5 }` its middle) instead.
+--- Example: panel.gradient = { colors = { "#3a2a10", "#120c04" }, angle = 180 }
+type HudGradient = { colors: { string }, angle: number?, stops: { number }?, radial: boolean?, center: { number }? }
+
+--- What `piece:animate` moves a piece to: any of the number fields the
+--- piece has (a text has no `width`; a bar has `value`; a line has
+--- `toRight`, `toDown` and `thickness`) and the colours `color` and
+--- `borderColor`. `borderRadius` and `borderWidth` take one number.
+--- Example: health:animate({ opacity = 0.4, color = "red" }, { seconds = 0.5 })
+type HudAnimateGoals = { right: number?, down: number?, width: number?, height: number?, opacity: number?, scale: number?, rotation: number?, borderRadius: number?, borderWidth: number?, letterSpacing: number?, value: number?, thickness: number?, toRight: number?, toDown: number?, color: string?, borderColor: string? }
+
+--- How `piece:animate` runs: `seconds` it takes (0.3 if not said), `ease`
+--- its shape ("ease" if not said), `delay` seconds before it starts, and
+--- `onDone`, called once when every field has arrived.
+--- Example: panel:animate({ right = 0 }, { seconds = 0.4, ease = "ease-out", delay = 0.1, onDone = function() print("In") end })
+type HudAnimateOptions = { seconds: number?, ease: ("linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out")?, delay: number?, onDone: (() -> ())? }
+
 --- Text on the HUD: what `game.hud.text` gives. Keep it to change it later.
 --- Example: local ammo = game.hud.text("30 / 90", { at = "bottom right" })
 declare extern type HudText with
@@ -1012,6 +1053,64 @@ declare extern type HudText with
     --- Example: if ammo.pressed then ammo.color = "red" end
     pressed: boolean
 
+    --- How solid the piece is, from 0 (see-through) to 1 (solid, the
+    --- usual), held to that range. It is multiplied into every colour the
+    --- piece draws.
+    --- Example: ammo.opacity = 0.5
+    opacity: number
+
+    --- How many times bigger it is drawn, about `transformOrigin`: 1 is as
+    --- it is, 2 twice as big. Held between -50 and 50. Where it is pinned, and where the pointer
+    --- finds it for `hovered`, is where it would be unscaled.
+    --- Example: ammo.scale = 1.2
+    scale: number
+
+    --- How far it is turned about `transformOrigin`, in degrees clockwise.
+    --- Where it is pinned, and where the pointer finds it for `hovered`, is
+    --- where it would be unturned.
+    --- Example: ammo.rotation = 45
+    rotation: number
+
+    --- The point it is scaled and turned about: a place as `at` takes, such
+    --- as "top left". "center" if left out.
+    --- Example: ammo.transformOrigin = "bottom"
+    transformOrigin: HudPlace
+
+    --- Another piece, a box or image: this one is drawn only inside that
+    --- piece's shape as it is on the screen now, with its rounded corners.
+    --- nil, the usual, draws it whole. A box that is turned cuts to the
+    --- straight box round it.
+    --- Example: ammo.clipTo = panel
+    clipTo: HudBox | HudImage | nil
+
+    --- The font family to draw in: the name of a family among the fonts in
+    --- the game's `fonts` folder (.ttf or .otf files), whatever its
+    --- capitals. nil, the usual, is the engine's own font. A name no font
+    --- has is a mistake that says the nearest.
+    --- Example: ammo.fontFamily = "Cinzel"
+    fontFamily: string?
+
+    --- How heavy the letters are, from 100 (thin) to 900 (black), held to
+    --- that range; you can write "normal" (400) or "bold" (700) too, but
+    --- reading it always gives a number.
+    --- The nearest weight the family has is used; for a heavy one the family
+    --- lacks, the letters are thickened.
+    --- Example: ammo.fontWeight = "bold"
+    fontWeight: HudFontWeight
+
+    --- "normal" (the usual) or "italic". A family with no italic is leaned.
+    --- Example: ammo.fontStyle = "italic"
+    fontStyle: HudFontStyle
+
+    --- Space after every letter, in pixels on a screen 1080 high; below 0
+    --- draws them closer. 0 is the usual; held between -200 and 200.
+    --- Example: ammo.letterSpacing = 2
+    letterSpacing: number
+
+    --- A soft copy of the words drawn under them, or nil for none.
+    --- Example: ammo.textShadow = { right = 2, down = 2, blur = 4, color = "black" }
+    textShadow: HudTextShadow?
+
     --- Takes it off the HUD for good. To hide it for a while, set
     --- `visible` instead.
     --- Example: ammo:remove()
@@ -1023,6 +1122,14 @@ declare extern type HudText with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = ammo:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A bar on the HUD, such as health: what `game.hud.bar` gives.
@@ -1077,6 +1184,36 @@ declare extern type HudBar with
     --- Example: if bar.pressed then volume = math.clamp(bar:pointerAt(), 0, 1); bar.value = volume end
     pressed: boolean
 
+    --- How solid the piece is, from 0 (see-through) to 1 (solid, the
+    --- usual), held to that range. It is multiplied into every colour the
+    --- piece draws.
+    --- Example: bar.opacity = 0.5
+    opacity: number
+
+    --- How many times bigger it is drawn, about `transformOrigin`: 1 is as
+    --- it is, 2 twice as big. Held between -50 and 50. Where it is pinned, and where the pointer
+    --- finds it for `hovered`, is where it would be unscaled.
+    --- Example: bar.scale = 1.2
+    scale: number
+
+    --- How far it is turned about `transformOrigin`, in degrees clockwise.
+    --- Where it is pinned, and where the pointer finds it for `hovered`, is
+    --- where it would be unturned.
+    --- Example: bar.rotation = 45
+    rotation: number
+
+    --- The point it is scaled and turned about: a place as `at` takes, such
+    --- as "top left". "center" if left out.
+    --- Example: bar.transformOrigin = "bottom"
+    transformOrigin: HudPlace
+
+    --- Another piece, a box or image: this one is drawn only inside that
+    --- piece's shape as it is on the screen now, with its rounded corners.
+    --- nil, the usual, draws it whole. A box that is turned cuts to the
+    --- straight box round it.
+    --- Example: bar.clipTo = panel
+    clipTo: HudBox | HudImage | nil
+
     --- Takes it off the HUD for good.
     --- Example: health:remove()
     function remove(self): ()
@@ -1087,6 +1224,14 @@ declare extern type HudBar with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: if bar.pressed then volume = math.clamp(bar:pointerAt(), 0, 1); bar.value = volume end
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A plain box on the HUD, such as a crosshair dot or a panel behind text:
@@ -1103,13 +1248,14 @@ declare extern type HudBox with
     height: number
 
     --- How round its corners are, in pixels on a screen 1080 high: 0 is
-    --- square, half its height a pill.
+    --- square, half its height a pill. Held between 0 and 8000. Read back as
+    --- `borderRadius` is.
     --- Example: panel.corner = 12
     corner: number
 
-    --- How far it is turned about its middle, in degrees clockwise. Where
-    --- it is pinned is where it would be unturned, and the pointer finds it
-    --- there too.
+    --- How far it is turned about `transformOrigin` (the middle unless set),
+    --- in degrees clockwise. Where it is pinned is where it would be unturned,
+    --- and the pointer finds it there too.
     --- Example: needle.rotation = 45
     rotation: number
 
@@ -1146,6 +1292,68 @@ declare extern type HudBox with
     --- Example: if dot.pressed then dot.color = "red" end
     pressed: boolean
 
+    --- How solid the piece is, from 0 (see-through) to 1 (solid, the
+    --- usual), held to that range. It is multiplied into every colour the
+    --- piece draws.
+    --- Example: dot.opacity = 0.5
+    opacity: number
+
+    --- How many times bigger it is drawn, about `transformOrigin`: 1 is as
+    --- it is, 2 twice as big. Held between -50 and 50. Where it is pinned, and where the pointer
+    --- finds it for `hovered`, is where it would be unscaled.
+    --- Example: dot.scale = 1.2
+    scale: number
+
+    --- The point it is scaled and turned about: a place as `at` takes, such
+    --- as "top left". "center" if left out.
+    --- Example: dot.transformOrigin = "bottom"
+    transformOrigin: HudPlace
+
+    --- Another piece, a box or image: this one is drawn only inside that
+    --- piece's shape as it is on the screen now, with its rounded corners.
+    --- nil, the usual, draws it whole. A box that is turned cuts to the
+    --- straight box round it.
+    --- Example: dot.clipTo = panel
+    clipTo: HudBox | HudImage | nil
+
+    --- How round each corner is, in pixels on a screen 1080 high: one
+    --- number for all four, or a list of four (top left, top right, bottom
+    --- right, bottom left), at least 0. `corner` is the same field. It is
+    --- read back as it was written.
+    --- Example: dot.borderRadius = { 16, 16, 0, 0 }
+    borderRadius: number | { number }
+
+    --- How thick the border is, in pixels on a screen 1080 high: one number
+    --- for every side, or a list of four (top, right, bottom, left), at
+    --- least 0. 0, the usual, draws no border.
+    --- Example: dot.borderWidth = 2
+    borderWidth: number | { number }
+
+    --- The border's colour, a name or hex code as for `color`.
+    --- Example: dot.borderColor = "#c8a050"
+    borderColor: string
+
+    --- Colours across the box in place of its colour, or nil for the flat
+    --- colour.
+    --- Example: dot.gradient = { colors = { "#3a2a10", "#120c04" }, angle = 180 }
+    gradient: HudGradient?
+
+    --- The name of a picture in the game's `images` folder drawn over the
+    --- box in its rounded shape, tinted by `color`, in place of the fill.
+    --- nil draws the colour or gradient.
+    --- Example: dot.image = "parchment"
+    image: string?
+
+    --- For a picture, how far in from each edge is kept as it is while the
+    --- middle stretches: one number, or a list of four (top, right, bottom,
+    --- left), in the picture's own pixels. nil stretches the whole picture.
+    --- Example: dot.slice = 12
+    slice: (number | { number })?
+
+    --- A soft shadow of the box, or nil for none.
+    --- Example: dot.boxShadow = { right = 0, down = 4, blur = 12, color = "#000a" }
+    boxShadow: HudBoxShadow?
+
     --- Takes it off the HUD for good.
     --- Example: dot:remove()
     function remove(self): ()
@@ -1156,6 +1364,14 @@ declare extern type HudBox with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = dot:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A straight line on the HUD, such as a line between two stars of a
@@ -1202,6 +1418,36 @@ declare extern type HudLine with
     --- Example: if line.pressed then line.color = "red" end
     pressed: boolean
 
+    --- How solid the piece is, from 0 (see-through) to 1 (solid, the
+    --- usual), held to that range. It is multiplied into every colour the
+    --- piece draws.
+    --- Example: line.opacity = 0.5
+    opacity: number
+
+    --- How many times bigger it is drawn, about `transformOrigin`: 1 is as
+    --- it is, 2 twice as big. Held between -50 and 50. Where it is pinned, and where the pointer
+    --- finds it for `hovered`, is where it would be unscaled.
+    --- Example: line.scale = 1.2
+    scale: number
+
+    --- How far it is turned about `transformOrigin`, in degrees clockwise.
+    --- Where it is pinned, and where the pointer finds it for `hovered`, is
+    --- where it would be unturned.
+    --- Example: line.rotation = 45
+    rotation: number
+
+    --- The point it is scaled and turned about: a place as `at` takes, such
+    --- as "top left". "center" if left out.
+    --- Example: line.transformOrigin = "bottom"
+    transformOrigin: HudPlace
+
+    --- Another piece, a box or image: this one is drawn only inside that
+    --- piece's shape as it is on the screen now, with its rounded corners.
+    --- nil, the usual, draws it whole. A box that is turned cuts to the
+    --- straight box round it.
+    --- Example: line.clipTo = panel
+    clipTo: HudBox | HudImage | nil
+
     --- Takes it off the HUD for good.
     --- Example: line:remove()
     function remove(self): ()
@@ -1210,6 +1456,14 @@ declare extern type HudLine with
     --- HudText's `pointerAt`.
     --- Example: local across, down = line:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- One of the game's pictures on the HUD: what `game.hud.image` gives.
@@ -1243,7 +1497,8 @@ declare extern type HudImage with
     width: number
     height: number
 
-    --- How far it is turned about its middle, in degrees clockwise.
+    --- How far it is turned about `transformOrigin` (the middle unless
+    --- set), in degrees clockwise.
     --- Example: compass.rotation = -game.player.aim.x * 90
     rotation: number
 
@@ -1256,6 +1511,46 @@ declare extern type HudImage with
     --- Example: if compass.pressed then print("compass!") end
     pressed: boolean
 
+    --- How solid the piece is, from 0 (see-through) to 1 (solid, the
+    --- usual), held to that range. It is multiplied into every colour the
+    --- piece draws.
+    --- Example: compass.opacity = 0.5
+    opacity: number
+
+    --- How many times bigger it is drawn, about `transformOrigin`: 1 is as
+    --- it is, 2 twice as big. Held between -50 and 50. Where it is pinned, and where the pointer
+    --- finds it for `hovered`, is where it would be unscaled.
+    --- Example: compass.scale = 1.2
+    scale: number
+
+    --- The point it is scaled and turned about: a place as `at` takes, such
+    --- as "top left". "center" if left out.
+    --- Example: compass.transformOrigin = "bottom"
+    transformOrigin: HudPlace
+
+    --- Another piece, a box or image: this one is drawn only inside that
+    --- piece's shape as it is on the screen now, with its rounded corners.
+    --- nil, the usual, draws it whole. A box that is turned cuts to the
+    --- straight box round it.
+    --- Example: compass.clipTo = panel
+    clipTo: HudBox | HudImage | nil
+
+    --- How round each corner of the picture is, in pixels on a screen 1080
+    --- high: one number, or a list of four (top left, top right, bottom
+    --- right, bottom left).
+    --- Example: compass.borderRadius = 24
+    borderRadius: number | { number }
+
+    --- How far in from each edge is kept as it is while the middle
+    --- stretches: one number, or a list of four (top, right, bottom, left),
+    --- in the picture's own pixels. nil stretches the whole picture.
+    --- Example: compass.slice = 12
+    slice: (number | { number })?
+
+    --- A soft shadow of the picture, or nil for none.
+    --- Example: compass.boxShadow = { down = 4, blur = 12, color = "#000a" }
+    boxShadow: HudBoxShadow?
+
     --- Takes it off the HUD for good.
     --- Example: compass:remove()
     function remove(self): ()
@@ -1264,6 +1559,14 @@ declare extern type HudImage with
     --- `pointerAt`.
     --- Example: local across, down = compass:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A graph of how long the last pictures took to draw, against lines at 60
@@ -1313,6 +1616,14 @@ declare extern type HudGraph with
     --- clamp it with math.clamp. It is 0, 0 when there is no pointer.
     --- Example: local across, down = graph:pointerAt()
     function pointerAt(self): (number, number)
+
+    --- Moves numbers and colours of the piece to new values over a few
+    --- seconds of the game's time, from where they are now. Asking for a
+    --- field that is already moving takes it over without a jump. Taking
+    --- the piece off with `remove` ends its animations without `onDone`.
+    --- It keeps moving while the game is paused, so a menu can slide in.
+    --- Example: ammo:animate({ opacity = 0 }, { seconds = 0.5, ease = "ease-out" })
+    function animate(self, goals: HudAnimateGoals, options: HudAnimateOptions?): ()
 end
 
 --- A kind of fluid: what `game.fluid` gives. Every setting can be read and
@@ -3402,6 +3713,8 @@ declare game: {
     --- grows and shrinks, make as many pieces as it can have and hide the
     --- ones not in use; a HUD holds up to 4096 pieces.
     ---
+    --- Example: local panel = game.hud.box({ at = "center", width = 360, height = 120, color = "#0a1022", borderRadius = 14, borderWidth = 2, borderColor = "#c8a050", boxShadow = { down = 6, blur = 16, color = "#000a" } }); local title = game.hud.text("Paused", { at = "center", down = -30, fontWeight = "bold" })
+    ---
     --- Every piece takes these options, all of which can be left out:
     ---   at: where on the screen it is pinned: "top left" (the default),
     ---     "top", "top right", "left", "center", "right", "bottom left",
@@ -3416,6 +3729,12 @@ declare game: {
     ---   color: a name ("white", the default, "black", "gray", "red",
     ---     "orange", "yellow", "green", "blue", "purple", "pink") or a hex
     ---     code such as "#ff8800" ("#ff880080" is half see-through).
+    ---   Every piece also takes, as options, the style fields it has to
+    ---     change later: opacity, scale, rotation, transformOrigin and clipTo
+    ---     on all; fontFamily, fontWeight, fontStyle, letterSpacing and
+    ---     textShadow on text; borderRadius, borderWidth, borderColor,
+    ---     gradient, image, slice and boxShadow on a box; borderRadius, slice
+    ---     and boxShadow on an image. A leftover `nil` means the usual.
     --- A piece made later is drawn on top of one made before. The HUD keeps
     --- clear of the very edge of the screen, which televisions cut off, and
     --- grows with the size the player chose (the "ui_size" setting).
@@ -3425,25 +3744,25 @@ declare game: {
         ---     28 if left out; never drawn smaller than 24, so it can be read.
         --- Example: local ammo = game.hud.text("30 / 90", { at = "bottom right" })
         --- Example: local title = game.hud.text("Welcome", { at = "top", down = 40, size = 64, color = "yellow" })
-        text: (text: string | number, options: { at: HudPlace?, right: number?, down: number?, size: number?, color: string? }?) -> HudText,
+        text: (text: string | number, options: { at: HudPlace?, right: number?, down: number?, size: number?, color: string?, opacity: number?, scale: number?, transformOrigin: HudPlace?, clipTo: HudBox | HudImage?, rotation: number?, fontFamily: string?, fontWeight: HudFontWeight?, fontStyle: HudFontStyle?, letterSpacing: number?, textShadow: HudTextShadow? }?) -> HudText,
 
         --- Puts a bar on the HUD that is `value` full, from 0 (empty) to 1
         --- (full). Its own options:
         ---   width, height: its size when full, in pixels on a screen 1080
         ---     high. 300 by 24 if left out.
         --- Example: local health = game.hud.bar(1, { at = "bottom left", color = "red" })
-        bar: (value: number, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string? }?) -> HudBar,
+        bar: (value: number, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, color: string?, opacity: number?, scale: number?, transformOrigin: HudPlace?, clipTo: HudBox | HudImage?, rotation: number? }?) -> HudBar,
 
         --- Puts a plain box on the HUD. Its own options:
         ---   width, height: its size in pixels on a screen 1080 high. 100
         ---     by 100 if left out.
         ---   corner: how round its corners are, in the same pixels. 0 if
         ---     left out.
-        ---   rotation: how far it is turned about its middle, in degrees
-        ---     clockwise. 0 if left out.
+        ---   rotation: how far it is turned about `transformOrigin` (the
+        ---     middle unless set), in degrees clockwise. 0 if left out.
         --- Example: local dot = game.hud.box({ at = "center", width = 6, height = 6 })
         --- Example: local card = game.hud.box({ width = 400, height = 120, corner = 14, color = "#0a1022c8" })
-        box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, corner: number?, rotation: number?, color: string? }?) -> HudBox,
+        box: (options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, corner: number?, rotation: number?, color: string?, opacity: number?, scale: number?, transformOrigin: HudPlace?, clipTo: HudBox | HudImage?, borderRadius: (number | { number })?, borderWidth: (number | { number })?, borderColor: string?, gradient: HudGradient?, image: string?, slice: (number | { number })?, boxShadow: HudBoxShadow? }?) -> HudBox,
 
         --- How much room the HUD has: the width and height of the part of
         --- the screen pieces are laid out in, in pixels on a screen 1080
@@ -3472,7 +3791,7 @@ declare game: {
         ---   thickness: how thick it is, in pixels on a screen 1080 high. 2
         ---     if left out.
         --- Example: local line = game.hud.line({ at = "center", right = -60, toRight = 60, thickness = 2 })
-        line: (options: { at: HudPlace?, right: number?, down: number?, toRight: number?, toDown: number?, thickness: number?, color: string? }?) -> HudLine,
+        line: (options: { at: HudPlace?, right: number?, down: number?, toRight: number?, toDown: number?, thickness: number?, color: string?, opacity: number?, scale: number?, transformOrigin: HudPlace?, clipTo: HudBox | HudImage?, rotation: number? }?) -> HudLine,
 
         --- Puts one of the game's pictures on the HUD: a PNG file in the
         --- game's `images` folder, by its name there without `.png`
@@ -3481,12 +3800,12 @@ declare game: {
         ---   width, height: its size in pixels on a screen 1080 high. As
         ---     big as the picture is if both are left out; with only one,
         ---     the other keeps the picture's shape.
-        ---   rotation: how far it is turned about its middle, in degrees
-        ---     clockwise. 0 if left out.
+        ---   rotation: how far it is turned about `transformOrigin` (the
+        ---     middle unless set), in degrees clockwise. 0 if left out.
         ---   color: what it is tinted with; "white", the usual, shows it as
         ---     it is, and "#ffffff80" half see-through.
         --- Example: local compass = game.hud.image("compass", { at = "top", width = 200 })
-        image: (name: string, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, rotation: number?, color: string? }?) -> HudImage,
+        image: (name: string, options: { at: HudPlace?, right: number?, down: number?, width: number?, height: number?, rotation: number?, color: string?, opacity: number?, scale: number?, transformOrigin: HudPlace?, clipTo: HudBox | HudImage?, borderRadius: (number | { number })?, slice: (number | { number })?, boxShadow: HudBoxShadow? }?) -> HudImage,
 
         --- Puts a graph of the last frame times on the HUD, drawn against
         --- lines at 60 and 30 frames a second. Its own options:
