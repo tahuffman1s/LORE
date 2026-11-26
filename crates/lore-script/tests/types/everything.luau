@@ -928,3 +928,16 @@ game.input.onControlsChanged(function(change)
         print(change.file, change.line or 0, change.problem)
     end
 end)
+
+local screen: Screen = game.ui.load("ui/main.html")
+local pausing: Screen = game.ui.load("ui/pause.html", { pauses = true })
+screen:show()
+screen:hide()
+screen:toggle()
+screen.visible = true
+screen.pauses = false
+print(screen.file, screen.visible, screen.pauses, game.ui.anyOpen())
+game.ui.reduceMotion = true
+local reduced: boolean = game.ui.reduceMotion
+pausing:remove()
+print(reduced)

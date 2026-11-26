@@ -746,6 +746,11 @@ impl Tools {
         self.style.set(style);
     }
 
+    /// Reads with the engine's text measurer.
+    pub(crate) fn with_measure<R>(&self, read: impl FnOnce(&dyn TextMeasure) -> R) -> R {
+        read(&**self.measure.borrow())
+    }
+
     pub fn set_measure(&self, measure: Box<dyn TextMeasure>) {
         *self.measure.borrow_mut() = measure;
     }

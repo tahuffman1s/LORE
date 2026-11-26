@@ -72,6 +72,7 @@ mod thing_api;
 mod time_api;
 mod tools_api;
 mod typing_api;
+mod ui;
 mod weapon_api;
 mod weather_api;
 

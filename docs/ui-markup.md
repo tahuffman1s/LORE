@@ -177,6 +177,7 @@ What it shows:
 | `link` | Names a stylesheet. Void (no closing tag). | `rel` (must be `stylesheet`, required), `href` (required) |
 | `div` | A box. | none |
 | `span`, `label` | Text that flows inside its parent. Not a box (see [Defaults](#defaults-to-know)). | `label`: `for` (read, not used yet) |
+| `kbd` | A box showing the key or button for an action (a key cap: padding, radius, faint fill). Its text is filled in by the game for the device in use; style it as a key cap. | `action` (the action's name, required) |
 | `p` | A paragraph, with space above and below. | none |
 | `h1`, `h2`, `h3` | Headings: bold, 2em, 1.5em, 1.17em. | none |
 | `br` | A line break. Void. | none |

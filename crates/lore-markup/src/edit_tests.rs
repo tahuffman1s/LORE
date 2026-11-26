@@ -510,3 +510,52 @@ fn a_keyframe_can_set_the_timing_of_its_interval() {
     ticks(&mut s, 40);
     assert!(near(opacity(&s, "x"), 1.0));
 }
+
+#[test]
+fn kbd_is_a_box_and_needs_an_action() {
+    let mut s = page(
+        "",
+        r#"<p>Press <kbd id="k" action="menu_confirm"></kbd> now</p>"#,
+    );
+    let k = el(&s, "k");
+    assert_eq!(s.document().get(k).and_then(|n| n.tag()), Some(Tag::Kbd));
+    assert_eq!(s.attribute(k, "action").as_deref(), Some("menu_confirm"));
+    assert!(s.set_text(k, "Enter"));
+    s.frame(&mut M);
+    assert_eq!(s.text(k), "Enter");
+    // A box with its own padding.
+    assert!(rect(&mut s, "k").w > 0.0);
+
+    let err = crate::parse("t.html", "<kbd></kbd>").err().unwrap();
+    assert!(err.message.contains("needs an `action`"), "{err}");
+    let err = crate::parse("t.html", r#"<kbd action="a" id="x" foo="b"></kbd>"#)
+        .err()
+        .unwrap();
+    assert!(err.message.contains("foo"), "{err}");
+    let err = crate::parse("t.html", r#"<span action="a"></span>"#)
+        .err()
+        .unwrap();
+    assert!(err.message.contains("action"), "{err}");
+}
+
+#[test]
+fn text_and_spans_in_a_flex_row_become_one_item() {
+    let mut s = page(
+        ".hints { display: flex; gap: 10px; font-size: 20px; }",
+        r#"<div class="hints" id="h"><kbd id="k" action="a">Enter</kbd> choose <span>back</span></div>"#,
+    );
+    let k = rect(&mut s, "k");
+    let f = s.frame(&mut M);
+    let runs: Vec<[f32; 2]> = f
+        .paints
+        .iter()
+        .filter_map(|p| match p {
+            crate::paint::Paint::Text { origin, run, .. } if f.str(run).contains("choose") => {
+                Some(*origin)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs.len(), 1, "text and span share one run item");
+    assert!(runs[0][0] >= k.x + k.w, "run sits right of the kbd box");
+}

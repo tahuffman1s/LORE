@@ -250,6 +250,11 @@ pub(crate) struct Shared {
     /// The player's settings as the script reads and changes them. They
     /// outlive this version of the script.
     pub settings: Rc<SettingsState>,
+    /// The screens of `game.ui`. They outlive this version of the script.
+    pub ui: Rc<crate::ui::UiState>,
+    /// The functions of this version that answer a screen's events.
+    #[allow(dead_code, reason = "events are answered by a later part of game.ui")]
+    pub ui_handlers: RefCell<crate::ui::UiHandlers>,
     /// Whether the engine shows its own notice when the player's controls are
     /// read again: `game.input.showControlsNotice`. It outlives this version
     /// of the script.
@@ -522,6 +527,8 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     strict(lua, &settings, "game.settings", SETTINGS_FUNCTIONS)?;
     game.set("settings", settings)?;
 
+    game.set("ui", crate::ui::api::table(lua, shared)?)?;
+
     let mut members = GAME_FUNCTIONS.to_vec();
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
@@ -539,6 +546,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("settings");
     members.push("shaders");
     members.push("sky");
+    members.push("ui");
     members.push("weather");
     crate::builtin::make_tables(lua, &game)?;
     strict(lua, &game, "game", &members)?;
@@ -969,7 +977,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 57] = [
+        let groups: [(&str, &[&str]); 60] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1027,6 +1035,9 @@ mod tests {
             ("game.menu.", crate::builtin::MENU_FUNCTIONS),
             ("game.menu.sounds.", &["choose", "move", "volume"]),
             ("game.pauseMenu.", crate::builtin::PAUSE_MENU_FIELDS),
+            ("game.ui.", crate::ui::UI_FUNCTIONS),
+            ("Screen:", crate::ui::SCREEN_METHODS),
+            ("Screen.", crate::ui::SCREEN_FIELDS),
         ];
         let mut real: Vec<String> = groups
             .iter()

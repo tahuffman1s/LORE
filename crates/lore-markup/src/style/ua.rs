@@ -18,6 +18,12 @@ button, input, select {
   background-color: rgba(255, 255, 255, 0.12);
   color: #ffffff;
 }
+kbd {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.18);
+  text-align: center;
+}
 button { text-align: center; cursor: pointer; }
 select { cursor: pointer; }
 input { cursor: text; }

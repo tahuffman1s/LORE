@@ -2023,6 +2023,46 @@ declare extern type Shader with
     function remove(self): ()
 end
 
+--- A screen written in HTML and CSS: what `game.ui.load` gives. It is
+--- loaded once, so keep it in a local at the top of the file; it keeps what
+--- it shows when the script is saved, and the HTML and CSS files it is made
+--- of load again when they are saved. A screen that is not showing is not
+--- drawn.
+--- Example: local main = game.ui.load("ui/main.html")
+declare extern type Screen with
+    --- Shows the screen on top of the others.
+    --- Example: main:show()
+    function show(self): ()
+
+    --- Stops showing the screen, wherever it is in the stack.
+    --- Example: main:hide()
+    function hide(self): ()
+
+    --- Shows the screen if it is hidden, and hides it if it is showing.
+    --- Example: main:toggle()
+    function toggle(self): ()
+
+    --- Takes the screen away: it is not drawn, and is gone until
+    --- `game.ui.load` asks for it again.
+    --- Example: main:remove()
+    function remove(self): ()
+
+    --- Whether the screen is showing. It can be set: `main.visible = true`
+    --- is `main:show()`.
+    --- Example: if main.visible then main:hide() end
+    visible: boolean
+
+    --- The file the screen was loaded from, such as "ui/main.html". It
+    --- cannot be changed.
+    --- Example: print(main.file)
+    file: string
+
+    --- Whether showing the screen pauses the game. It starts as the
+    --- `pauses` option of `game.ui.load` says, false if there was none.
+    --- Example: main.pauses = true
+    pauses: boolean
+end
+
 --- What `game.input.onControlsChanged` is handed when the player's controls
 --- file was read again, or could not be.
 --- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
@@ -4450,5 +4490,32 @@ declare game: {
         --- lists those.
         --- Example: game.fluids.onPoolFormed(function(pool) print("A new pool of " .. pool.fluid.name) end)
         onPoolFormed: (handler: (pool: Pool) -> ()) -> (),
+    },
+
+    --- Screens written in HTML and CSS: a main menu, an inventory, a
+    --- dialogue box. The files sit in the game's folder, usually under
+    --- `ui`; the page says what is on the screen, its stylesheet says how it
+    --- looks, and the script says what happens. See the page on screens.
+    ui: {
+        --- Reads the screen in an .html file of the game's folder, and the
+        --- stylesheets it links, and gives it, hidden. Asking again for the
+        --- same file gives the same screen. With `pauses` the game is
+        --- paused while the screen is showing. A file with a mistake still
+        --- gives a screen, which draws nothing until the file is fixed and
+        --- saved; the mistake, with its file and line, is on the error
+        --- panel.
+        --- Example: local main = game.ui.load("ui/main.html")
+        --- Example: local pause = game.ui.load("ui/pause.html", { pauses = true })
+        load: (path: string, options: { pauses: boolean? }?) -> Screen,
+
+        --- Whether a screen the player can move around in (it has a button
+        --- or another control) is showing.
+        --- Example: if game.ui.anyOpen() then return end
+        anyOpen: () -> boolean,
+
+        --- Whether movement in screens is left out: things that fade or
+        --- slide jump to where they end. For players who ask for it.
+        --- Example: game.ui.reduceMotion = true
+        reduceMotion: boolean,
     },
 }

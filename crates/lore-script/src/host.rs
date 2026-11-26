@@ -199,6 +199,10 @@ pub struct ScriptHost {
     /// The player's settings, as the engine handed them over and as the
     /// script has changed them since. Kept here so a save loses no change.
     settings: Rc<SettingsState>,
+    /// The screens of `game.ui`, which outlive a reload too.
+    ui: Rc<crate::ui::UiState>,
+    /// The mistake in a screen's files that is on `last_error` now.
+    ui_error: Option<ScriptError>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -459,6 +463,8 @@ impl ScriptHost {
         things.set_placed(placed);
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
+            ui: Rc::new(crate::ui::UiState::new(Rc::clone(&files))),
+            ui_error: None,
             files,
             file: ENTRY_SCRIPT.to_owned(),
             base: actions.clone(),
@@ -596,6 +602,7 @@ impl ScriptHost {
         }
         // Menus open while the game is paused and need to move.
         self.run_animations();
+        self.run_screens();
         self.hurts_due();
         self.switches_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
@@ -2131,6 +2138,10 @@ impl ScriptHost {
         self.next_poll = now + POLL_EVERY;
         // The shader files, which a save changes without loading the script.
         self.shaders.poll();
+        // The screens' HTML and CSS, which a save changes the same way.
+        if self.ui.poll() {
+            self.sync_ui_error();
+        }
         // A script required for the first time while the game runs.
         if let Some(version) = &self.running {
             let touched = version.shared.modules.take_touched();
@@ -2258,10 +2269,13 @@ impl ScriptHost {
                 self.paused = false;
                 self.last_error = None;
                 self.reported.clear();
+                self.ui.finish_run(true);
+                self.sync_ui_error();
                 Ok(())
             }
             Err(error) => {
                 self.shaders.restore(before);
+                self.ui.finish_run(false);
                 Err(self.failed_to_load(error))
             }
         }
@@ -2297,6 +2311,7 @@ impl ScriptHost {
     /// Starts a fresh VM and runs the game's `main.luau` in it. Also gives
     /// the files that were looked for, whether or not it worked.
     fn build(&mut self) -> (Touched, Result<Version, ScriptError>) {
+        self.ui.begin_run();
         self.images = match self.files.as_ref() {
             Files::Folder(folder) => Rc::new(crate::images::scan(folder)),
             Files::Memory(_) => Rc::clone(&self.given_images),
@@ -2343,6 +2358,8 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            ui: Rc::clone(&self.ui),
+            ui_handlers: RefCell::default(),
             controls_notice: Rc::clone(&self.controls_notice),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
@@ -2485,6 +2502,43 @@ impl ScriptHost {
                 return;
             }
         }
+    }
+
+    /// Moves every showing screen of `game.ui` on by one tick. The ticks run
+    /// while the game is paused too, so a menu moves.
+    fn run_screens(&self) {
+        let actions = self.actions.borrow();
+        self.ui
+            .tick(self.clock.rate(), |name| self.tools.label(&actions, name));
+    }
+
+    /// Puts the mistake in a screen's files, if there is one, where script
+    /// errors are shown, and takes it away when it is fixed. A script's own
+    /// mistake is not covered by it.
+    fn sync_ui_error(&mut self) {
+        let now = self.ui.first_error();
+        let was = self.ui_error.take();
+        let ours = match (&self.last_error, &was) {
+            (None, _) => true,
+            (Some(shown), Some(ours)) => shown == ours,
+            (Some(_), None) => false,
+        };
+        if ours {
+            self.last_error.clone_from(&now);
+            self.ui_error = now;
+        }
+    }
+
+    /// Draws the screens of `game.ui` that are showing into `out`, bottom to
+    /// top, for a window `screen_px` pixels across and down, with the
+    /// player's `ui_scale`. Call it after the HUD is drawn.
+    pub fn draw_screens(&self, out: &mut lore_ui::DrawBuffer, screen_px: [f32; 2], ui_scale: f32) {
+        let env = crate::ui::DrawEnv {
+            tools: &self.tools,
+            fonts: &self.fonts,
+            images: &self.images,
+        };
+        self.ui.draw(&env, out, screen_px, ui_scale);
     }
 
     /// Calls one of the script's functions and reports it if it fails.

@@ -722,6 +722,16 @@ impl Game for ScriptGame {
         self.hud.show(&mut self.host, frame);
         // Over the game's own HUD, under any error.
         self.use_prompt.show(&self.host, frame);
+        // The game's screens, written in HTML and CSS: over the HUD, under any
+        // error.
+        let [across, down] = frame.screen_size();
+        let ui_scale = frame.ui_scale();
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "a window is far smaller than 2^24"
+        )]
+        self.host
+            .draw_screens(frame.ui_buffer(), [across as f32, down as f32], ui_scale);
         // Last, so it is on top of anything the game draws.
         if let Some(errors) = &mut self.errors {
             errors.show(self.host.last_error(), frame);

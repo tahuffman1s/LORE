@@ -62,6 +62,7 @@ const FULL: &str = r#"<!DOCTYPE html>
   <input name="n">
   <select name="s"><option value="1">One</option><option>Two</option></select>
   <progress value="1" max="2"></progress>
+  <kbd action="menu_confirm"></kbd>
   </div>
 </body>
 </html>
@@ -92,7 +93,7 @@ fn nesting_and_text() {
     assert_eq!(
         kids(doc, a),
         [
-            "h1", "h2", "h3", "p", "img", "button", "input", "select", "progress"
+            "h1", "h2", "h3", "p", "img", "button", "input", "select", "progress", "kbd"
         ]
     );
     let para = doc.children(a).nth(3).unwrap();

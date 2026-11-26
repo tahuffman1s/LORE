@@ -219,6 +219,7 @@ fn tag_attrs(tag: Tag) -> &'static [&'static str] {
         Tag::Select => &["name"],
         Tag::Option => &["value", "selected"],
         Tag::Label => &["for"],
+        Tag::Kbd => &["action"],
         Tag::Progress => &["value", "max"],
         Tag::Link => &["rel", "href"],
         _ => &[],
@@ -1334,6 +1335,16 @@ impl<'a> Parser<'a> {
                     at,
                     "`<img>` needs a `src`",
                     "write the picture's name, like <img src=\"logo\">",
+                ));
+            }
+            Tag::Kbd
+                if find("action")
+                    .is_none_or(|a| a.value.as_deref().is_none_or(|v| v.trim().is_empty())) =>
+            {
+                return Err(self.err(
+                    at,
+                    "`<kbd>` needs an `action`",
+                    "write the action whose key it shows, like <kbd action=\"menu_confirm\"></kbd>",
                 ));
             }
             Tag::Link => {
