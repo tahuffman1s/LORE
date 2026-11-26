@@ -1061,6 +1061,13 @@ impl ScriptHost {
         self.body.blocking()
     }
 
+    /// What a character is called, or `None` for one that is not in the
+    /// world.
+    #[must_use]
+    pub fn character_name(&self, id: CharacterId) -> Option<String> {
+        self.characters.name_and_place(id).map(|(name, _)| name)
+    }
+
     /// Where a character's feet are, or `None` for one not in the world.
     #[must_use]
     pub fn character_position(&self, id: CharacterId) -> Option<[f32; 3]> {

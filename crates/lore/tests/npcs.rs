@@ -17,6 +17,8 @@ const STEP: f32 = 1.0 / 60.0;
 thread_local! {
     /// What scripts on this test's thread printed.
     static PRINTED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// What the engine warned of on this test's thread.
+    static WARNED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Collects `print` output per thread, so tests can run side by side.
@@ -30,6 +32,8 @@ impl log::Log for Capture {
     fn log(&self, record: &log::Record<'_>) {
         if record.target() == "script" {
             PRINTED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
+        } else if record.level() == log::Level::Warn {
+            WARNED.with_borrow_mut(|lines| lines.push(record.args().to_string()));
         }
     }
 
@@ -38,6 +42,10 @@ impl log::Log for Capture {
 
 fn printed() -> Vec<String> {
     PRINTED.with_borrow_mut(std::mem::take)
+}
+
+fn warned() -> Vec<String> {
+    WARNED.with_borrow_mut(std::mem::take)
 }
 
 /// One place to start in the middle of the flat floor, facing -Z, a gate
@@ -106,12 +114,42 @@ fn an_npc_made_in_one_line_stands_on_the_floor_at_its_place() {
 }
 
 #[test]
-fn an_npc_dropped_in_the_air_falls_to_the_floor() {
-    let mut world = world(r#"game.npc { name = "Guard", at = vector.create(0, 3, -5) }"#);
-    play(&mut world, 120);
+fn an_npc_put_in_the_air_is_stood_on_the_floor_beneath_it() {
+    let mut world = world(
+        r#"game.npc { name = "Guard", at = vector.create(0, 3, -5) }
+        local made = false
+        game.onTick(function()
+            if not made then
+                made = true
+                game.npc { name = "Cook", at = vector.create(2, 7, -5) }
+            end
+        end)"#,
+    );
+    // There from the first tick, not falling to it.
+    assert_eq!(world.npcs()[1].body.position, [0.0, 0.0, -5.0]);
+    play(&mut world, 2);
+    let cook = world.npcs()[2].clone();
+    assert!(cook.body.position[1].abs() < 0.05, "{:?}", cook.body);
+    play(&mut world, 10);
     let guard = world.npcs()[1].clone();
     assert!(guard.body.grounded, "{:?}", guard.body);
     assert!(guard.body.position[1].abs() < 0.05, "{:?}", guard.body);
+}
+
+#[test]
+fn an_npc_put_with_no_floor_beneath_it_says_so_once() {
+    warned();
+    let mut world = world(r#"game.npc { name = "Guard", at = vector.create(5000, 3, 0) }"#);
+    play(&mut world, 30);
+    let said: Vec<String> = (warned().into_iter())
+        .filter(|line| line.contains("\"Guard\""))
+        .collect();
+    assert_eq!(said.len(), 1, "{said:#?}");
+    assert!(
+        said[0].contains("(5000.0, 3.0, 0.0) with no floor beneath it")
+            && said[0].contains("Change its `at`"),
+        "{said:#?}"
+    );
 }
 
 #[test]

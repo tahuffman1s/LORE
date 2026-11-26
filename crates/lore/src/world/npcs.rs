@@ -59,6 +59,45 @@ impl Npc {
     }
 }
 
+/// Where the feet go of an NPC put with its feet at `feet` in `level`: on
+/// the floor beneath, if it was put in the air (or a little into the
+/// floor). One put inside the level's solid shapes, or with no floor
+/// beneath it, stays where it was put and the log says so, naming it
+/// (`name`) and the place, and what to change.
+fn stand(
+    level: &Level,
+    rules: &MoveSettings,
+    feet: [f32; 3],
+    name: impl FnOnce() -> Option<String>,
+) -> [f32; 3] {
+    let [x, y, z] = feet;
+    // From a little above the feet, so one put just into the floor is
+    // stood on top of it.
+    let lift = rules.step_height.max(0.05);
+    let inside = level.inside([x, y + lift, z]);
+    let floor = (!inside)
+        .then(|| level.raycast([x, y + lift, z], [0.0, -1.0, 0.0], f32::MAX))
+        .flatten();
+    if let Some(floor) = floor {
+        return [x, floor.point[1], z];
+    }
+    let name = name().unwrap_or_else(|| "someone".to_owned());
+    if inside {
+        log::warn!(
+            "The NPC \"{name}\" is put at ({x:.1}, {y:.1}, {z:.1}), inside the level's solid \
+             shapes, where it cannot stand. Change its `at` (in game.npc, or its place in the \
+             map) to a spot just above a floor."
+        );
+    } else {
+        log::warn!(
+            "The NPC \"{name}\" is put at ({x:.1}, {y:.1}, {z:.1}) with no floor beneath it, so \
+             it would fall for ever. Change its `at` (in game.npc, or its place in the map) to a \
+             spot just above a floor, or put a floor under it."
+        );
+    }
+    feet
+}
+
 /// How tall a body is now: crouched or standing.
 fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
     if body.crouched {
@@ -89,25 +128,43 @@ pub(crate) struct Tick<'a> {
 }
 
 impl Npcs {
-    /// A body for every NPC `host` has, standing where it says, with
-    /// weapon numbers from `next_target` on. What the host had asked
+    /// A body for every NPC `host` has, standing where it says on `level`,
+    /// with weapon numbers from `next_target` on. What the host had asked
     /// before is then no longer news.
-    pub(crate) fn of(host: &mut ScriptHost, rules: &MoveSettings, next_target: &mut u32) -> Self {
+    pub(crate) fn of(
+        host: &mut ScriptHost,
+        level: &Level,
+        rules: &MoveSettings,
+        next_target: &mut u32,
+    ) -> Self {
         let _ = host.take_npc_asks();
+        let mut told = Vec::new();
+        host.each_npc(|npc| told.push(npc));
         let mut npcs = Self::default();
-        host.each_npc(|told| {
-            npcs.add(told.id, told.feet, told.facing, rules, next_target);
-        });
+        for npc in told {
+            let feet = stand(level, rules, npc.feet, || host.character_name(npc.id));
+            npcs.add(npc.id, feet, npc.facing, rules, next_target);
+        }
         npcs
     }
 
     /// Does what the host's scripts asked of the NPCs since the last tick.
-    pub(crate) fn hear(&mut self, host: &mut ScriptHost, rules: &MoveSettings, next: &mut u32) {
+    pub(crate) fn hear(
+        &mut self,
+        host: &mut ScriptHost,
+        level: &Level,
+        rules: &MoveSettings,
+        next: &mut u32,
+    ) {
         for ask in host.take_npc_asks() {
             match ask {
-                NpcAsk::Made { id, feet, facing } => self.add(id, feet, facing, rules, next),
+                NpcAsk::Made { id, feet, facing } => {
+                    let feet = stand(level, rules, feet, || host.character_name(id));
+                    self.add(id, feet, facing, rules, next);
+                }
                 NpcAsk::Put { id, feet, facing } => {
                     if let Some(npc) = self.list.iter_mut().find(|npc| npc.who == id) {
+                        let feet = stand(level, rules, feet, || host.character_name(id));
                         npc.body = Player::at(feet, rules);
                         npc.mind = Mind::standing(facing);
                     }
@@ -263,7 +320,7 @@ mod tests {
             "game.npc { name = \"Guard\", at = vector.create(0, 0, 0) }",
             lore_input::ActionMap::standard(),
         );
-        let npcs = Npcs::of(&mut host, &rules, &mut 1);
+        let npcs = Npcs::of(&mut host, &floor(), &rules, &mut 1);
         let mut player = Player::at([0.3, 0.0, 0.0], &rules);
         player.velocity = [-4.0, 0.0, 0.0];
         npcs.keep_out(&mut player, &rules, &floor());
@@ -285,12 +342,12 @@ mod tests {
              local b = game.npc { name = \"B\", at = vector.create(2, 0, 0) }",
             lore_input::ActionMap::standard(),
         );
-        npcs.hear(&mut host, &rules, &mut next);
+        npcs.hear(&mut host, &floor(), &rules, &mut next);
         let order: Vec<u32> = npcs.list().iter().map(|npc| npc.target).collect();
         assert_eq!(order, vec![1, 2]);
         assert!(npcs.list()[0].who < npcs.list()[1].who);
         // Told twice, still one body each.
-        let again = Npcs::of(&mut host, &rules, &mut next);
+        let again = Npcs::of(&mut host, &floor(), &rules, &mut next);
         assert_eq!(again.list().len(), 2);
     }
 }

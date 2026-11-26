@@ -264,7 +264,12 @@ impl World {
         // Every NPC the game has stands in the world from its first tick,
         // however the world was made.
         let mut next_target = 1;
-        let npcs = npcs::Npcs::of(game.host_mut(), &ground.rules, &mut next_target);
+        let npcs = npcs::Npcs::of(
+            game.host_mut(),
+            &ground.level,
+            &ground.rules,
+            &mut next_target,
+        );
         npcs.tell(game.host_mut());
         let mut world = Self {
             game,
@@ -790,6 +795,7 @@ impl Game for World {
         // The NPCs the script made, moved or took out in its last tick.
         (self.npcs).hear(
             self.game.host_mut(),
+            &self.ground.level,
             &self.ground.rules,
             &mut self.next_target,
         );
