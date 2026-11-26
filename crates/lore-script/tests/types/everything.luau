@@ -693,7 +693,7 @@ if false then
     end
 end
 game.showUsePrompt(true)
-local meant: Thing? = game.player.lookingAt
+local meant: (Thing | Npc)? = game.player.lookingAt
 print(meant, game.player.useProgress)
 game.player:hold("sword")
 game.player:hold("torch", { hand = "left" })

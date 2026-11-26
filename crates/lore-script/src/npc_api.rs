@@ -882,7 +882,10 @@ pub(crate) fn get(lua: &Lua, id: CharacterId, field: &str) -> mlua::Result<Value
         "useText" => Value::String(lua.create_string(used.text)?),
         "useReach" => Value::Number(f64::from(used.reach)),
         "useSeconds" => Value::Number(f64::from(used.seconds)),
-        "usable" => Value::Boolean(used.usable && used.handled),
+        "usable" => {
+            let alive = (shared.characters.health(id)).is_some_and(|(now, _)| now > 0.0);
+            Value::Boolean(used.usable && used.handled && alive)
+        }
         "lookDistance" => Value::Number(f64::from(look)),
         _ => Value::Nil,
     })

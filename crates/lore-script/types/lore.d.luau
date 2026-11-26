@@ -2819,7 +2819,7 @@ declare game: {
     --- that lists the NPCs there are (`lore check` reports it).
     --- Example: local guard = game.npc { name = "Guard", at = "Gate" }
     --- Example: local smith = game.npc("Smith")
-    npc: ((name: string) -> Npc) & ((options: NpcOptions) -> Npc),
+    npc: (nameOrOptions: string | NpcOptions) -> Npc,
 
     --- Every NPC in the game, in the order they came into it: those placed
     --- in the map, then those the script made.

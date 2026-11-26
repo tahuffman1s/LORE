@@ -525,3 +525,25 @@ fn two_npcs_placed_in_the_map_with_one_name_are_not_found_by_it() {
         "{error}"
     );
 }
+
+#[test]
+fn an_npc_is_not_usable_once_it_is_dead_and_is_again_when_stood_up() {
+    let mut host = game(
+        r#"local guard = game.npc { name = "Guard", at = "Gate" }
+        guard:onUse(function() end)
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            print(guard.usable, guard.dead)
+            if ticks == 2 then guard:setHealth(50) end
+        end)"#,
+    );
+    assert_eq!(host.last_error(), None);
+    let mut ids = Vec::new();
+    host.each_npc(|npc| ids.push(npc.id));
+    host.tick(&InputFrame::default(), STEP);
+    host.damage(ids[1], 500.0, None, "fall");
+    host.tick(&InputFrame::default(), STEP);
+    host.tick(&InputFrame::default(), STEP);
+    assert_eq!(printed(), ["true false", "false true", "true false"]);
+}

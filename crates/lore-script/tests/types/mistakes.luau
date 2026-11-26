@@ -91,3 +91,23 @@ game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's nam
 game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes
 game.input.showControlsNotice("off") -- wrong: it takes true or false
 game.input.onControlsChanged(5) -- wrong: it takes a function
+
+-- NPCs. Writing to what an NPC only reads (`guard.position = ...`,
+-- `guard.name = "Bob"`) is not here: the old type solver an editor uses
+-- by default has no read-only fields. The engine catches it when the
+-- script runs ("change `at` there and save").
+local guard = game.npc { name = "Guard", at = "Gate" }
+game.npc { name = "Cook" } -- wrong: it needs `at`, where the NPC stands
+game.npc { name = "Cook", at = 5 } -- wrong: a place is named in quotes, or a vector
+game.npc { name = 5, at = "Gate" } -- wrong: a name is in quotes
+game.npc(5) -- wrong: an NPC is found by its name, in quotes
+guard.onUse(function() end) -- wrong: needs a colon, guard:onUse(...)
+guard:onUse("hello") -- wrong: it takes a function
+guard.usable = "yes" -- wrong: usable is true or false
+guard.lookDistance = "near" -- wrong: a distance is a number in metres
+guard.useText = 5 -- wrong: the words are in quotes
+game.player:onUse(function() end) -- wrong: only an NPC is used; game.player is not one
+print(game.player.useText) -- wrong: only an NPC has useText
+game.player:remove() -- wrong: only an NPC can be removed
+local who: Npc = game.player -- wrong: game.player is a Character, not an NPC
+print(who)
