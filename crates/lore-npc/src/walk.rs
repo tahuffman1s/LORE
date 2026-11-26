@@ -559,6 +559,12 @@ impl Walk {
         self.door = None;
     }
 
+    /// Forgets who was in its way: the NPCs were numbered afresh.
+    pub fn forget_blocker(&mut self) {
+        self.blocker = None;
+        self.stuck_by = None;
+    }
+
     /// Finds its way again: a door it wanted opened may not be.
     pub fn find_again(&mut self) {
         if self.goal.is_some() {
@@ -657,12 +663,11 @@ impl Walk {
         let last = self.way.points.len().saturating_sub(1);
         let way_end = self.way.points.last().map_or(goal.to, |end| end.point);
         let at_end = self.next >= last && across(feet, way_end) <= WAY_END;
-        if there || (at_end && !goal.moves) {
+        // At the end of a way to someone who has not moved on since it was
+        // found: as near them as the ground goes (they stand on a crate).
+        let moved_on = goal.moves && across(self.planned_to, goal.to) > MOVED;
+        if there || (at_end && !moved_on) {
             return self.arrive(goal, face_goal);
-        }
-        if at_end {
-            // Whoever is followed has moved on from where the way ends.
-            self.again = true;
         }
         // Whoever is followed has moved on a good way: a new way, now and
         // then, and the old one walked meanwhile.
@@ -689,25 +694,14 @@ impl Walk {
         let to_corner = across(feet, corner.point);
         let wanted = toward(feet, corner.point).or_else(|| toward(feet, goal.to));
         self.doorway = matches!(on, Leg::Gate(_));
-        // A door it holds for while it opens.
-        if tick < self.hold_until {
-            self.best_at = tick;
-            return standing(wanted.map(yaw_along));
-        }
-        // A shut door on the way, or in it: it stops before it, out of its
-        // swing, and wants it opened.
-        let shut = |leg: Leg| match leg {
-            Leg::Gate(gate) if !around.openings.gate_open(gate) => Some(gate),
-            _ => None,
-        };
-        let door = shut(on).or_else(|| shut(corner.leg).filter(|_| to_corner < DOOR_REACH));
-        if let Some(door) = door {
-            self.door = Some(door);
-            return standing(wanted.map(yaw_along));
-        }
         // No progress for a while: the way again, then give up.
         let left = self.left(feet);
         if left < self.best - PROGRESS {
+            // Real progress, not the first measure of a way just found,
+            // forgives the stalls before it.
+            if self.best.is_finite() {
+                self.tries = 0;
+            }
             self.best = left;
             self.best_at = tick;
             self.stuck_by = None;
@@ -731,6 +725,23 @@ impl Walk {
             self.again = true;
             self.best = left;
             self.best_at = tick;
+        }
+        // A door it holds for while it opens.
+        // Its wait counts toward getting nowhere, so a door that never
+        // opens is given up on.
+        if tick < self.hold_until {
+            return standing(wanted.map(yaw_along));
+        }
+        // A shut door on the way, or in it: it stops before it, out of its
+        // swing, and wants it opened.
+        let shut = |leg: Leg| match leg {
+            Leg::Gate(gate) if !around.openings.gate_open(gate) => Some(gate),
+            _ => None,
+        };
+        let door = shut(on).or_else(|| shut(corner.leg).filter(|_| to_corner < DOOR_REACH));
+        if let Some(door) = door {
+            self.door = Some(door);
+            return standing(wanted.map(yaw_along));
         }
         let Some(wanted) = wanted else {
             return standing(None);

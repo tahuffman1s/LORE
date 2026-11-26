@@ -40,8 +40,24 @@ impl log::Log for Capture {
     fn flush(&self) {}
 }
 
+thread_local! {
+    /// Held for the rest of the test, so `lore check`'s pacing, which
+    /// turns the log off, does not run meanwhile.
+    static QUIET_HELD: RefCell<Option<std::sync::MutexGuard<'static, ()>>> =
+        const { RefCell::new(None) };
+}
+
 /// Starts collecting what is printed on this thread, afresh.
 fn capture() {
+    QUIET_HELD.with_borrow_mut(|held| {
+        if held.is_none() {
+            *held = Some(
+                crate::cli::LOG_QUIET
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
+    });
     let _ = log::set_logger(&Capture);
     log::set_max_level(log::LevelFilter::Info);
     PRINTED.with_borrow_mut(Vec::clear);
@@ -493,4 +509,46 @@ fn a_hundred_walking_npcs_take_a_tick_in_a_known_time() {
     // Generous: a debug build on a slow machine. `lore bench` will hold
     // the real number.
     assert!(each < std::time::Duration::from_millis(40), "{each:?}");
+}
+
+#[test]
+fn a_walk_ended_by_the_world_is_forgotten_by_the_script() {
+    let mut world = starter(
+        r#"
+        local guard = game.npc { name = "Guard", at = vector.create(1.8, 0, 5.5) }
+        local friend = game.npc { name = "Friend", at = vector.create(-2, 0, 8) }
+        guard:goTo(vector.create(13, 0, -13))
+        friend:follow(guard)
+        friend:onCannotReach(function(_, why) print(why) end)
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 30 then
+                assert(guard.destination ~= nil and friend.destination == guard)
+                guard:setHealth(0)
+            elseif ticks == 32 then
+                assert(guard.destination == nil, "down, it walks nowhere")
+                guard:remove()
+            elseif ticks == 34 then
+                assert(friend.destination == nil, "whoever it followed left")
+                print("checked")
+            end
+        end)
+        "#,
+        "",
+    );
+    run(&mut world, 40);
+    assert_eq!(world.game.host().last_error(), None);
+    let said = printed(&world);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[0].starts_with("Friend cannot reach "), "{said:?}");
+    assert!(said[0].contains("has left the world"), "{said:?}");
+    assert_eq!(said[1], "checked");
+    // A world made again does not send them off again.
+    assert!(
+        world
+            .npcs()
+            .iter()
+            .all(|npc| npc.mind.walk.goal().is_none())
+    );
 }

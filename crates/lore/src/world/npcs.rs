@@ -173,6 +173,9 @@ pub(crate) struct Npcs {
     /// The shut doors NPCs stand before this tick, wanting them opened:
     /// who, and which.
     doors: Vec<(CharacterId, GateId)>,
+    /// The NPCs whose walk the world ended this tick without news (they
+    /// went down): the host forgets where they were going.
+    stopped: Vec<CharacterId>,
 }
 
 /// What the world says of a tick to the NPCs' minds.
@@ -227,7 +230,10 @@ impl Npcs {
         player: [f32; 3],
         next: &mut u32,
     ) {
+        let before = self.list.len();
+        let mut changed = false;
         for ask in host.take_npc_asks() {
+            changed |= matches!(ask, NpcAsk::Removed { .. });
             match ask {
                 NpcAsk::Made { id, feet, facing } => {
                     let feet = stand(level, rules, feet, || host.character_name(id));
@@ -245,6 +251,13 @@ impl Npcs {
                 NpcAsk::Removed { id } => self.list.retain(|npc| npc.who != id),
                 NpcAsk::Walk { id, walk } => self.walk(host, id, walk, player),
                 NpcAsk::Stop { id } => self.stop(id),
+            }
+        }
+        // Who was in whose way is kept by place in the list, which has
+        // changed.
+        if changed || self.list.len() != before {
+            for npc in &mut self.list {
+                npc.mind.walk.forget_blocker();
             }
         }
     }
@@ -384,7 +397,10 @@ impl Npcs {
         for (me, npc) in self.list.iter_mut().enumerate() {
             npc.down = host.health(npc.who).is_none_or(|(now, _)| now <= 0.0);
             let asked = if npc.down {
-                npc.mind.walk.stop();
+                if npc.mind.walk.goal().is_some() {
+                    npc.mind.walk.stop();
+                    self.stopped.push(npc.who);
+                }
                 npc.chasing = None;
                 lore_physics::MoveInput {
                     yaw: npc.mind.facing,
@@ -502,10 +518,11 @@ impl Npcs {
         let wait = tick.saturating_add(ticks(DOOR_WAIT, dt));
         for at in 0..self.doors.len() {
             let (who, gate) = self.doors[at];
-            let Some(id) = things.door_ids().nth(gate.0 as usize).map(str::to_owned) else {
+            let Ok(npc) = self.list.binary_search_by(|npc| npc.who.cmp(&who)) else {
                 continue;
             };
-            let Ok(npc) = self.list.binary_search_by(|npc| npc.who.cmp(&who)) else {
+            let Some(id) = things.door_ids().nth(gate.0 as usize).map(str::to_owned) else {
+                self.list[npc].mind.walk.find_again();
                 continue;
             };
             let walk = &mut self.list[npc].mind.walk;
@@ -527,6 +544,9 @@ impl Npcs {
     /// got where they were going (`npc:onArrive`) and who cannot, and why
     /// (`npc:onCannotReach`).
     pub(crate) fn tell_news(&mut self, host: &mut ScriptHost) {
+        for who in self.stopped.drain(..) {
+            host.npc_stopped(who);
+        }
         for at in 0..self.list.len() {
             let Some(news) = self.list[at].mind.walk.take_news() else {
                 continue;
@@ -541,7 +561,8 @@ impl Npcs {
                         |gate| host.door_name(gate.0),
                         |other| list.get(other).and_then(|npc| host.character_name(npc.who)),
                     );
-                    host.npc_cannot_reach(who, &cause);
+                    let ends = self.list[at].mind.walk.goal().is_none();
+                    host.npc_cannot_reach(who, &cause, ends);
                 }
             }
         }

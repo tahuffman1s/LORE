@@ -2040,6 +2040,7 @@ impl ScriptHost {
     /// (`npc:onArrive`). One that was following someone goes on following.
     pub fn npc_arrived(&mut self, id: CharacterId) {
         let Some(version) = &self.running else {
+            self.npcs.stand(id);
             return;
         };
         let shared = Rc::clone(&version.shared);
@@ -2062,12 +2063,19 @@ impl ScriptHost {
     /// `npc:onCannotReach` functions are called with the whole sentence,
     /// or with none the log says it. A walk to a place ends; one that
     /// follows someone goes on, and tries again.
-    pub fn npc_cannot_reach(&mut self, id: CharacterId, cause: &str) {
+    ///
+    /// `ends`: the world ended the walk (a follower whose leader left
+    /// the world, as well as every walk to a place), so it is forgotten.
+    pub fn npc_cannot_reach(&mut self, id: CharacterId, cause: &str, ends: bool) {
         let Some(version) = &self.running else {
+            self.npcs.stand(id);
             return;
         };
         let shared = Rc::clone(&version.shared);
         let said = crate::npc_api::cannot_reach(&shared, id, cause);
+        if ends {
+            self.npcs.stand(id);
+        }
         let handlers = crate::npc_api::walk_handlers(&shared, id, false);
         if handlers.is_empty() {
             log::warn!(
@@ -2089,6 +2097,12 @@ impl ScriptHost {
         }
     }
 
+    /// Says the world stopped the NPC `id` walking with nothing to tell
+    /// (its health is gone): where it was going is forgotten.
+    pub fn npc_stopped(&mut self, id: CharacterId) {
+        self.npcs.stand(id);
+    }
+
     /// Tells the script that each NPC it listens to arrived where it was
     /// walking, and could not reach it, though nothing walked: for `lore
     /// check`, so those functions are run. Says how many NPCs.
@@ -2107,6 +2121,7 @@ impl ScriptHost {
                 *id,
                 "something is in the way at (0.0, 0.0, 0.0), and it found no way round (this is \
                  lore check pretending)",
+                false,
             );
         }
         arrive.len() + unreached.iter().filter(|id| !arrive.contains(id)).count()

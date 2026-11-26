@@ -101,6 +101,11 @@ pub const CHECK_SEED: u64 = 1;
 /// two ticks) and as a fast one does (several).
 const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
 
+/// Held by [`paced`], which turns the log off while it runs, and by tests
+/// that read the log, so the two never run at once.
+#[cfg(test)]
+pub(crate) static LOG_QUIET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Plays the start of a game four times with no window and says whether
 /// its rules depend on how often a picture is drawn: with one picture
 /// after every tick, the same again, with pictures at an uneven pace, and
@@ -119,6 +124,11 @@ const UNEVEN_PICTURES: [u32; 7] = [0, 3, 1, 0, 0, 7, 2];
 /// after it included. The caller gives every run the same dice
 /// ([`CHECK_SEED`]), so a game that rolls them is judged like any other.
 pub fn paced(mut open: impl FnMut() -> Option<ScriptGame>, actions: &ActionMap) -> Option<Paced> {
+    // Tests that read the log wait while this keeps it quiet.
+    #[cfg(test)]
+    let _quiet_log = LOG_QUIET
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     /// Makes the log as loud again as it was, however this ends.
     struct Quiet(log::LevelFilter);
     impl Drop for Quiet {
