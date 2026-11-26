@@ -27,6 +27,6 @@ pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
 pub use senses::{
     CLEARLY, HEARD_FROM, Heard, KEEP_LOST, Keenness, LOOK_EVERY, LOST_BELOW, Looker, MOST_HEARD,
-    MOST_SIGHTED, NIGHT, SEEN_FROM, Seeable, Sensed, Senses, Sight, Sighting, Sound, THROUGH_WALL, arriving, daylight,
-    haze, lamp_lux, light_helps, lit, seen_openly, showing,
+    MOST_SIGHTED, NIGHT, SEEN_FROM, Seeable, Sensed, Senses, Sight, Sighting, Sound, THROUGH_WALL,
+    arriving, daylight, haze, lamp_lux, light_helps, lit, seen_openly, showing,
 };

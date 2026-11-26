@@ -34,7 +34,7 @@ pub struct Npc {
     /// shot, struck, used or looked at by the lock-on.
     pub down: bool,
     /// What it sees and has lately heard (see `super::sensing`).
-    pub senses: Senses<CharacterId>,
+    pub senses: Senses<CharacterId, crate::noise::Which>,
 }
 
 impl Npc {
@@ -201,7 +201,7 @@ impl Npcs {
                 body: Player::at(feet, rules),
                 mind: Mind::standing(facing),
                 down: false,
-                senses: Senses::new(Keenness::default()),
+                senses: Senses::new(Keenness::default(), Some(CharacterId::PLAYER)),
             },
         );
     }

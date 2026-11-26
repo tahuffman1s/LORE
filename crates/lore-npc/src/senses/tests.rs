@@ -202,7 +202,10 @@ fn it_does_not_see_itself_and_a_body_is_seen_as_one() {
         look(&mut senses, &clear, 1, &[myself, body]),
         [Sensed::Saw(3)]
     );
-    assert_eq!(senses.sighting(3).map(|seen| seen.down_since), Some(Some(1)));
+    assert_eq!(
+        senses.sighting(3).map(|seen| seen.down_since),
+        Some(Some(1))
+    );
 }
 
 #[test]
@@ -335,7 +338,8 @@ fn it_keeps_the_newest_noise_of_each_maker() {
         let sound = [shot([0.0, 1.7, -(tick as f32)], Some(tick % 2 + 2))];
         senses.listen(&me(), &clear, tick, &sound, &mut rays, |_| {});
     }
-    let kept: Vec<(u32, Option<u32>)> = senses.heard().map(|heard| (heard.tick, heard.by)).collect();
+    let kept: Vec<(u32, Option<u32>)> =
+        senses.heard().map(|heard| (heard.tick, heard.by)).collect();
     assert_eq!(kept, [(6, Some(2)), (5, Some(3))]);
     senses.forget();
     assert_eq!(senses.heard().count(), 0);
@@ -385,7 +389,11 @@ fn a_crowd_does_not_hide_the_player_nor_churn() {
         for column in 0..3 {
             let still = Seeable {
                 speed: 0.0,
-                ..person(10 + row * 3 + column, column as f32 * 3.0 - 3.0, -6.0 - row as f32 * 2.0)
+                ..person(
+                    10 + row * 3 + column,
+                    column as f32 * 3.0 - 3.0,
+                    -6.0 - row as f32 * 2.0,
+                )
             };
             seeable.push(still);
         }
@@ -407,7 +415,9 @@ fn a_crowd_does_not_hide_the_player_nor_churn() {
         let told = look_once(&mut senses, &clear, 300 + step * LOOK_EVERY, &seeable);
         assert!(senses.sees(0), "step {step}: {told:?}");
         assert!(
-            !told.iter().any(|sensed| matches!(sensed, Sensed::Lost { who: 0, .. })),
+            !told
+                .iter()
+                .any(|sensed| matches!(sensed, Sensed::Lost { who: 0, .. })),
             "step {step}: {told:?}"
         );
     }
@@ -431,7 +441,10 @@ fn twenty_in_view_keep_the_player_and_do_not_take_turns() {
     assert_eq!(senses.in_view().count(), MOST_SIGHTED);
     // Standing still: nothing changes.
     for look in 1..10 {
-        assert_eq!(look_once(&mut senses, &clear, 1 + look * LOOK_EVERY, &seeable), []);
+        assert_eq!(
+            look_once(&mut senses, &clear, 1 + look * LOOK_EVERY, &seeable),
+            []
+        );
     }
     // Everyone drifts sideways, the player too: the player stays in view,
     // and nobody comes and goes on every look.
@@ -513,7 +526,9 @@ fn going_down_in_view_is_kept_with_its_tick() {
     // Still in view, as a body: nothing told, the tick kept.
     assert_eq!(look_once(&mut senses, &clear, 13, &them), []);
     assert_eq!(look_once(&mut senses, &clear, 25, &them), []);
-    let seen = senses.sighting(2).map(|seen| (seen.in_view, seen.down_since));
+    let seen = senses
+        .sighting(2)
+        .map(|seen| (seen.in_view, seen.down_since));
     assert_eq!(seen, Some((true, Some(13))));
 }
 
@@ -584,7 +599,14 @@ fn the_world_s_own_sounds_are_kept_untold_and_never_push_out_a_person_s() {
     assert!(senses.heard().all(|heard| !heard.of_world));
     // Nor do others crowding in push out the player's.
     for (tick, by) in (62..72).zip(4..) {
-        senses.listen(&me(), &clear, tick, &[shot([0.0, 1.7, -9.0], Some(by))], &mut rays, |_| {});
+        senses.listen(
+            &me(),
+            &clear,
+            tick,
+            &[shot([0.0, 1.7, -9.0], Some(by))],
+            &mut rays,
+            |_| {},
+        );
     }
     assert_eq!(senses.heard_from(0).map(|heard| heard.tick), Some(1));
     assert_eq!(senses.last_heard().map(|heard| heard.by), Some(Some(13)));
@@ -592,6 +614,9 @@ fn the_world_s_own_sounds_are_kept_untold_and_never_push_out_a_person_s() {
     let mut senses = Senses::new(Keenness::default(), Some(0));
     senses.listen(&me(), &clear, 1, &sounds[..1], &mut rays, |_| {});
     senses.listen(&me(), &clear, 2, &[thunder], &mut rays, |_| {});
-    assert_eq!(senses.heard().next().map(|heard| heard.of_world), Some(true));
+    assert_eq!(
+        senses.heard().next().map(|heard| heard.of_world),
+        Some(true)
+    );
     assert_eq!(senses.last_heard().map(|heard| heard.by), Some(Some(0)));
 }

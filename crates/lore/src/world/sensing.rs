@@ -8,8 +8,9 @@
 //! each tells its news in order, so the same input tells the same events on
 //! the same ticks.
 //!
-//! An NPC looks once every [`LOOK_EVERY`] ticks, the crowd taking turns
-//! ([`Senses::looks_on`]); it listens every tick, since a noise lasts one.
+//! An NPC looks once every [`LOOK_EVERY`] ticks, the crowd taking turns by
+//! id ([`Senses::looks_on`]); it listens every tick, since a noise lasts
+//! one.
 //! Who is out of reach or out of the cone costs no ray; one who may be
 //! seen costs three, one at each of head, chest and knees.
 
@@ -18,7 +19,7 @@ use lore_physics::{Level, MoveSettings, Player};
 use lore_script::{CharacterId, ScriptHost};
 
 use super::npcs::{Npc, Npcs, height_of};
-use crate::noise::{Names, Noise};
+use crate::noise::{Names, Noise, Which};
 
 /// How tall a body lying on the ground is, in metres, to be seen.
 const LYING: f32 = 0.4;
@@ -32,7 +33,7 @@ pub(crate) struct Sensing {
     /// tick; `NaN` until then.
     lights: Vec<f32>,
     /// The noises of the tick as the NPCs hear them, one for each noise.
-    sounds: Vec<Sound<CharacterId>>,
+    sounds: Vec<Sound<CharacterId, Which>>,
     /// What each NPC sensed this tick, in order, to tell the script.
     told: Vec<(CharacterId, Sensed<CharacterId>)>,
     /// How many rays were cast at the level in the newest tick.
@@ -74,7 +75,7 @@ impl Sensing {
         let open = daylight(host.time_of_day(), world.weather.cloud_cover);
         let (lights, told, rays) = (&mut self.lights, &mut self.told, &mut self.rays);
         told.clear();
-        for (nth, npc) in npcs.list_mut().iter_mut().enumerate() {
+        for npc in npcs.list_mut() {
             let who = npc.who;
             // Taken out by the script this tick: its body goes next tick.
             if !host.is_npc(who) {
@@ -101,8 +102,7 @@ impl Sensing {
                 eyes: npc.eyes(),
                 facing: npc.facing(),
             };
-            let nth = u32::try_from(nth).unwrap_or(u32::MAX);
-            if npc.senses.looks_on(world.tick, nth) {
+            if npc.senses.looks_on(world.tick, who.number()) {
                 let light = |target: usize| light_at(lights, &sight, target, open, host);
                 npc.senses
                     .look(&me, &sight, light, rays, |sensed| told.push((who, sensed)));
@@ -118,7 +118,7 @@ impl Sensing {
                 Sensed::Lost { who, at } => host.npc_lost_sight(npc, who, at),
                 Sensed::Heard(nth) => {
                     if let Some(noise) = world.noises.get(nth) {
-                        host.npc_heard(npc, &noise.told(world.names));
+                        host.npc_heard(npc, nth, &noise.told(world.names));
                     }
                 }
             }
@@ -135,8 +135,11 @@ impl Sensing {
         self.seeable.clear();
         self.seeable
             .push(seeable(CharacterId::PLAYER, player, rules, player_down));
+        // One the script took out this tick is gone already: its body
+        // goes next tick.
         (self.seeable).extend(
-            npcs.iter()
+            (npcs.iter())
+                .filter(|npc| host.is_npc(npc.who))
                 .map(|npc| seeable(npc.who, &npc.body, rules, npc.down)),
         );
         self.lights.clear();
@@ -151,6 +154,12 @@ impl Sensing {
             near: noise.range.near,
             far: noise.range.far,
             by: noise.by,
+            what: Which {
+                kind: noise.kind,
+                sound: noise.sound,
+            },
+            of_world: noise.kind.is_of_the_world(),
+            weapon: noise.weapon.is_some() || noise.kind.is_of_a_weapon(),
         }));
     }
 }

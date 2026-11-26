@@ -869,7 +869,9 @@ pub fn seen_openly<W>(me: &Looker<W>, keen: &Keenness, target: &Seeable<W>, haze
     } else {
         1.0 - 0.5 * aside / half
     };
-    if keen.width < 360.0 && libm::fabsf(libm::atan2f(to[1], flat)) > LOOKS_UP_AND_DOWN && away >= 0.3
+    if keen.width < 360.0
+        && libm::fabsf(libm::atan2f(to[1], flat)) > LOOKS_UP_AND_DOWN
+        && away >= 0.3
     {
         return 0.0;
     }
