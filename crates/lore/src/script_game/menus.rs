@@ -32,6 +32,8 @@ struct Played {
     drawn: Vec<Words>,
     /// Whether a mistake in the game's script fails the test.
     strict: bool,
+    /// The device the game was last told the player is using.
+    device: lore_input::Device,
 }
 
 impl Played {
@@ -75,6 +77,7 @@ impl Played {
             closed: false,
             drawn: Vec::new(),
             strict,
+            device: lore_input::Device::KeyboardAndMouse,
         };
         played.step();
         played
@@ -83,8 +86,19 @@ impl Played {
     /// One tick and the frame after it, which says the settings in force,
     /// as the window does.
     fn step(&mut self) {
+        let device = self.input.last_device();
+        let style = lore_input::GamepadStyle::default();
+        if device != self.device {
+            // The window draws a frame between a press and the tick that
+            // hears it, so the game knows the device by then.
+            self.world
+                .frame(&mut Frame::new(0.0).with_device(device, style));
+            self.device = device;
+        }
         self.world.tick(self.input.tick(), STEP);
-        let mut frame = Frame::new(1.0).with_settings(self.settings);
+        let mut frame = Frame::new(1.0)
+            .with_settings(self.settings)
+            .with_device(device, style);
         self.world.frame(&mut frame);
         if self.strict {
             assert_eq!(self.host().last_error(), None);
@@ -1443,4 +1457,170 @@ fn leaving_the_menu_while_typing_stops_typing_and_puts_the_old_text_back() {
     played.tap(Key::F6);
     assert_eq!(played.set(), "menu", "keys drive actions again");
     assert_eq!(played.value_of("Name"), "Your name", "the old text is back");
+}
+
+impl Played {
+    /// A text box game with its menu open and its box pressed with a gamepad:
+    /// the on-screen keyboard is up, with "a" chosen.
+    fn on_screen_keyboard() -> Self {
+        let mut played = Played::with_main(TEXT_BOX, Settings::default());
+        played.tap(Key::F6);
+        played.tap(GamepadButton::GamepadSouth);
+        assert!(played.shows("Space"), "{:?}", played.words());
+        assert!(
+            !played.input.is_typing(),
+            "a gamepad has no keyboard to type"
+        );
+        played
+    }
+
+    /// The words of the box now, without the caret.
+    fn box_text(&self) -> String {
+        self.value_of("Name").trim_end_matches('|').to_owned()
+    }
+}
+
+#[test]
+fn a_gamepad_pressing_a_text_box_opens_the_on_screen_keyboard() {
+    let played = Played::on_screen_keyboard();
+    for words in ["Shift", "Back", "Done", "q", "1", "m"] {
+        assert!(played.shows(words), "{words}: {:?}", played.words());
+    }
+    assert!(played.shows("none c0 typing"), "{:?}", played.words());
+    assert!(
+        played.words().iter().any(|w| w.starts_with("A ")
+            && w.contains("type")
+            && w.contains("erase")
+            && w.contains("done")),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn the_d_pad_walks_to_letters_and_a_types_them() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::DpadRight);
+    played.tap(GamepadButton::DpadRight);
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::DpadLeft);
+    played.tap(GamepadButton::DpadLeft);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "ada");
+    assert!(played.shows("none c3 typing"), "{:?}", played.words());
+    // Up and down stop at the edges and land on the nearest key.
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "ada1", "q then 1, and no further");
+}
+
+#[test]
+fn x_erases_and_y_types_a_space() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::GamepadWest);
+    assert_eq!(played.box_text(), "a");
+    played.tap(GamepadButton::GamepadNorth);
+    assert_eq!(played.box_text(), "a ");
+    played.tap(GamepadButton::GamepadWest);
+    played.tap(GamepadButton::GamepadWest);
+    played.tap(GamepadButton::GamepadWest);
+    assert_eq!(
+        played.box_text(),
+        "",
+        "nothing left to erase is not a mistake"
+    );
+}
+
+#[test]
+fn a_bumper_or_the_shift_key_turns_capitals_on_and_off() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::RightBumper);
+    assert!(played.shows("A"), "{:?}", played.words());
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::LeftBumper);
+    assert!(played.shows("a"));
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "Aa");
+    // The Shift key is the bottom row's first: two down from "a".
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::DpadDown);
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "AaA");
+}
+
+#[test]
+fn start_finishes_and_b_puts_the_old_text_back() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::GamepadStart);
+    assert!(!played.shows("Space"), "closed");
+    assert_eq!(played.value_of("Name"), "aa");
+    assert!(played.shows("done aa c2"), "{:?}", played.words());
+    assert_eq!(played.set(), "menu", "Start was Done, not the menu's close");
+
+    // Again: B cancels, and finishes nothing.
+    played.tap(GamepadButton::GamepadSouth);
+    assert!(played.shows("Space"));
+    played.tap(GamepadButton::GamepadSouth);
+    played.tap(GamepadButton::GamepadEast);
+    assert!(!played.shows("Space"));
+    assert_eq!(played.value_of("Name"), "aa");
+    assert!(played.shows("done aa c4"), "{:?}", played.words());
+    assert_eq!(played.set(), "menu", "B closed the keyboard, not the menu");
+}
+
+#[test]
+fn left_and_right_wrap_along_a_row_and_max_length_holds() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::DpadLeft);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "l", "the home row wraps from a to l");
+    played.tap(GamepadButton::DpadRight);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text(), "la");
+    for _ in 0..6 {
+        played.tap(GamepadButton::GamepadSouth);
+    }
+    assert_eq!(played.box_text(), "laaaa", "the box takes five");
+    played.tap(GamepadButton::GamepadNorth);
+    assert_eq!(played.box_text(), "laaaa");
+}
+
+#[test]
+fn the_pointer_clicks_keys_and_the_menu_below_hears_nothing() {
+    let mut played = Played::on_screen_keyboard();
+    played.click("q");
+    assert_eq!(played.box_text(), "q");
+    played.click("Back");
+    assert_eq!(played.box_text(), "");
+    // Up would move the menu's chosen row; here it walks the keys.
+    played.tap(GamepadButton::DpadUp);
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.box_text().chars().count(), 1);
+    played.click("Done");
+    assert!(!played.shows("Space"));
+}
+
+#[test]
+fn enter_on_a_text_box_with_a_keyboard_still_types_on_the_keyboard() {
+    let mut played = Played::on_screen_keyboard();
+    played.tap(GamepadButton::GamepadEast);
+    assert!(!played.shows("Space"));
+    played.tap(Key::Enter);
+    assert!(played.input.is_typing(), "{:?}", played.words());
+    assert!(
+        !played.shows("Space"),
+        "no on-screen keyboard for a keyboard"
+    );
+    played.type_text("hi\n");
+    assert_eq!(played.value_of("Name"), "hi");
 }

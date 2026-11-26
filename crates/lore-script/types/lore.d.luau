@@ -3362,7 +3362,9 @@ declare game: {
     --- the actions above all read as let go, and the menu's own are heard
     --- instead: "menu_move", "menu_confirm", "menu_click", "menu_back"
     --- (Escape, or B), "menu_previous_tab", "menu_next_tab" and
-    --- "menu_close" (P, or Start).
+    --- "menu_close" (P, or Start), "menu_erase" (Backspace, or X: takes a
+    --- letter off in the on-screen keyboard) and "menu_space" (Tab, or Y:
+    --- types a space there).
     input: {
         --- True while the action is held down, or its stick is off centre.
         --- Example: if game.input.pressed("sprint") then speed = 8 end
@@ -3602,7 +3604,13 @@ declare game: {
         --- old text. `value` is the text ("" if left out), `placeholder` is
         --- dimmed while it is empty, `maxLength` the most characters.
         --- `onChange` hears each change. A gamepad opens an on-screen
-        --- keyboard instead.
+        --- keyboard instead, made by the menu kit with nothing to write: a
+        --- grid of keys walked with the d-pad or stick, A types the key,
+        --- X erases, Y types a space, a bumper or the Shift key turns
+        --- capitals on and off, Start is Done (`onFinish`) and B puts the
+        --- old text back. The pointer can click its keys. Letters typed
+        --- on a real keyboard in the meantime go in too, if the game asked
+        --- for them with `game.input.startTyping`.
         --- Example: game.menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
         textBox: (label: string, options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())? }?) -> MenuRow,
 

@@ -20,6 +20,8 @@
 -- A text box takes words typed on the keyboard: press it, type, Enter to
 -- finish or Escape to put back what was there:
 -- `menu.textBox("Name", { placeholder = "Your name", onFinish = function(text) print(text) end })`
+-- A gamepad pressing a text box gets an on-screen keyboard instead (d-pad walks,
+-- A types, X erases, Y spaces, a bumper is Shift, Start is done, B cancels).
 -- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
 -- Change them before making menus: they apply to menus made afterwards.
 -- The player: arrows, d-pad or pointer choose; Enter, A or a click press;
@@ -333,8 +335,10 @@ end
 -- The text box being typed into, if one is (only one at a time), and what
 -- starts and ends it. They are made below, where a row's value can change.
 local typingRow: RowState? = nil
-local beginTyping: (RowState) -> ()
+local beginTyping: (RowState, boolean?) -> ()
 local endTyping: (RowState, boolean) -> ()
+-- True while the on-screen keyboard is the way the typing row is typed into.
+local keyboardOn = false
 -- Ticks heard so far, for the caret to blink by: the same on every run.
 local ticks = 0
 
@@ -1202,10 +1206,164 @@ local function change(row: RowState, way: number)
     end
 end
 
--- The on-screen keyboard, for a gamepad pressing a text box. Not made yet:
--- until it is, a gamepad cannot type into a box.
+-- ------------------------------------------------------ on-screen keyboard
+
+-- A gamepad has no keys to type with, so pressing a text box with one opens
+-- this keyboard: HUD pieces one layer above the menus, made the first time it
+-- is needed and shown again after that. A game writes nothing for it.
+local KEY_W = 72 -- a letter's key
+local KEY_GAP = 6
+local KEY_H = 52
+local KEY_ROW = 58 -- from one row of keys to the next
+local KEYS_LEFT = 30 -- the room at the left of the panel
+local KEYBOARD_W = 840
+local KEYBOARD_H = 430
+local KEYBOARD_DOWN = 610 -- from the top of a screen 1080 high
+local LETTERS = { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-'." }
+local KEY_COLOR = "#ffffff1a"
+
+type Key = { kind: string, char: string, left: number, width: number, box: any, face: any }
+type Keyboard = {
+    rows: { { Key } },
+    pieces: { any },
+    text: any,
+    hints: any,
+    -- The key chosen, and whether capitals are on.
+    row: number,
+    column: number,
+    caps: boolean,
+    lastX: number?,
+    lastY: number?,
+}
+local osk: Keyboard? = nil
+
+-- A key's face: its letter, in capitals when they are on.
+local function faceOf(k: Key, caps: boolean): string
+    if k.kind == "letter" and caps then
+        return string.upper(k.char)
+    end
+    return k.char
+end
+
+-- Puts a key's words in the middle of the key.
+local function centreFace(k: Key)
+    k.face.right = k.left + (k.width - k.face.width) / 2
+end
+
+-- Makes the keyboard's pieces, hidden. A key's `left` is from the left of the
+-- screen, like the pieces' own.
+local function buildKeyboard(): Keyboard
+    local made = osk
+    if made then
+        return made
+    end
+    local style = menu.style
+    local layer = style.layer + 1
+    local left = (1920 - KEYBOARD_W) // 2
+    local top = KEYBOARD_DOWN
+    local pieces: { any } = {}
+    local function add(piece: any): any
+        table.insert(pieces, piece)
+        return piece
+    end
+    add(game.hud.box({ right = left, down = top, width = KEYBOARD_W, height = KEYBOARD_H, color = style.back, layer = layer }))
+    local text = add(game.hud.text("", { right = left + KEYS_LEFT, down = top + 14, size = 30, color = style.words, layer = layer }))
+    local hints = add(game.hud.text("", { right = left + KEYS_LEFT, down = top + KEYBOARD_H - 36, size = 22, color = style.quiet, layer = layer }))
+    local rows: { { Key } } = {}
+    local function makeKey(row: number, kind: string, char: string, across: number, width: number)
+        local down = top + 64 + (row - 1) * KEY_ROW
+        local box = add(game.hud.box({ right = left + across, down = down, width = width, height = KEY_H, color = KEY_COLOR, layer = layer }))
+        local face = add(game.hud.text(char, { right = left + across, down = down + 10, size = TEXT, color = style.words, layer = layer }))
+        local k: Key = { kind = kind, char = char, left = left + across, width = width, box = box, face = face }
+        centreFace(k)
+        table.insert(rows[row], k)
+    end
+    for number, line in LETTERS do
+        rows[number] = {}
+        -- The home row starts half a key in, as on a keyboard.
+        local across = KEYS_LEFT + if number == 3 then (KEY_W + KEY_GAP) // 2 else 0
+        for char in string.gmatch(line, ".") do
+            makeKey(number, "letter", char, across, KEY_W)
+            across += KEY_W + KEY_GAP
+        end
+    end
+    rows[5] = {}
+    local across = KEYS_LEFT
+    for _, wide in { { "shift", "Shift", 160 }, { "space", "Space", 300 }, { "back", "Back", 150 }, { "done", "Done", 150 } } :: { { any } } do
+        makeKey(5, wide[1], wide[2], across, wide[3])
+        across += wide[3] + KEY_GAP
+    end
+    for _, piece in pieces do
+        piece.visible = false
+    end
+    local keyboard: Keyboard = { rows = rows, pieces = pieces, text = text, hints = hints, row = 3, column = 1, caps = false }
+    osk = keyboard
+    return keyboard
+end
+
+-- Shows the keyboard with small letters and "a" chosen.
+local function showKeyboard()
+    local board = buildKeyboard()
+    board.row, board.column, board.caps = 3, 1, false
+    board.lastX, board.lastY = nil, nil
+    for _, line in board.rows do
+        for _, k in line do
+            k.face.text = faceOf(k, false)
+            centreFace(k)
+        end
+    end
+    for _, piece in board.pieces do
+        piece.visible = true
+    end
+    keyboardOn = true
+end
+
+local function hideKeyboard()
+    keyboardOn = false
+    local board = osk
+    if board then
+        for _, piece in board.pieces do
+            piece.visible = false
+        end
+    end
+end
+
+-- Takes one more letter into a text box, if it has room, and tells onChange.
+local function addLetter(s: RowState, char: string)
+    local text: string = s.value
+    if s.maxLength and (utf8.len(text) :: number) >= s.maxLength then
+        return
+    end
+    s.value = text .. char
+    s.blink = ticks
+    for _, handler in s.changed do
+        handler(s.value)
+    end
+end
+
+-- Takes the last letter off a text box, if it has one, and tells onChange.
+local function eraseLetter(s: RowState)
+    local text: string = s.value
+    local last = utf8.offset(text, -1)
+    if last then
+        s.value = string.sub(text, 1, last - 1)
+        s.blink = ticks
+        for _, handler in s.changed do
+            handler(s.value)
+        end
+    end
+end
+
+-- Stops typing and keeps the text, and tells whoever hears it finished.
+local function finishTyping(s: RowState)
+    endTyping(s, false)
+    for _, handler in s.finished do
+        handler(s.value)
+    end
+end
+
 local function openKeyboard(row: RowState)
-    local _ = row
+    beginTyping(row, true)
 end
 
 -- What Enter or a click does to a row.
@@ -1257,7 +1415,7 @@ local function words(row: RowState): string
 end
 
 -- Starts typing into a text box. The menu it is in must be open and in front.
-beginTyping = function(s: RowState)
+beginTyping = function(s: RowState, onScreen: boolean?)
     local owner = s.owner
     local ts = if owner then owner.tabs else nil
     if not ts or stack[#stack] ~= ts or ts.current ~= owner then
@@ -1274,7 +1432,12 @@ beginTyping = function(s: RowState)
     s.before = s.value
     s.blink = ticks
     typingRow = s
-    game.input.startTyping()
+    if onScreen then
+        -- A gamepad types by the keyboard on the screen, not a real one.
+        showKeyboard()
+    else
+        game.input.startTyping()
+    end
 end
 
 -- Stops typing. With `cancel` the text from before typing began is put back
@@ -1286,6 +1449,7 @@ endTyping = function(s: RowState, cancel: boolean)
     typingRow = nil
     s.typing = false
     game.input.stopTyping()
+    hideKeyboard()
     if cancel and s.value ~= s.before then
         s.value = s.before
         for _, handler in s.changed do
@@ -1295,56 +1459,174 @@ endTyping = function(s: RowState, cancel: boolean)
 end
 
 -- Takes typed text into the box: letters in at the end, "\8" takes one
--- off, "\n" finishes and "\27" puts the old text back.
-local function hearTyping(ts: TabsState, s: RowState)
-    local function stillTyping(): boolean
-        return typingRow == s and stack[#stack] == ts
-    end
+-- off, "\n" finishes and "\27" puts the old text back. True once it has
+-- ended the typing.
+local function hearTyped(ts: TabsState, s: RowState): boolean
     for _, code in utf8.codes(game.input.typed()) do
-        local text: string = s.value
         if code == 10 then
-            endTyping(s, false)
-            for _, handler in s.finished do
-                handler(s.value)
-            end
-            return
+            finishTyping(s)
+            return true
         elseif code == 27 then
             endTyping(s, true)
-            return
+            return true
         elseif code == 8 then
-            local last = utf8.offset(text, -1)
-            if last then
-                s.value = string.sub(text, 1, last - 1)
-                s.blink = ticks
-                for _, handler in s.changed do
-                    handler(s.value)
-                end
-            end
-        elseif code >= 32 and code ~= 127 and (not s.maxLength or (utf8.len(text) :: number) < s.maxLength) then
-            s.value = text .. utf8.char(code)
-            s.blink = ticks
-            for _, handler in s.changed do
-                handler(s.value)
-            end
+            eraseLetter(s)
+        elseif code >= 32 and code ~= 127 then
+            addLetter(s, utf8.char(code))
         end
-        if not stillTyping() then
-            return
+        if typingRow ~= s or stack[#stack] ~= ts then
+            return true
         end
+    end
+    return false
+end
+
+local function hearTyping(ts: TabsState, s: RowState)
+    if hearTyped(ts, s) then
+        return
     end
     -- A gamepad button, or the pointer, can still end it.
     if game.input.justPressed("menu_confirm") then
-        endTyping(s, false)
-        for _, handler in s.finished do
-            handler(s.value)
-        end
+        finishTyping(s)
     elseif game.input.justPressed("menu_back") then
         endTyping(s, true)
     elseif game.input.justPressed("menu_click") and not hovered(s) then
-        endTyping(s, false)
-        for _, handler in s.finished do
-            handler(s.value)
+        finishTyping(s)
+    end
+end
+
+-- What pressing a key of the on-screen keyboard does.
+local function pressKey(s: RowState, board: Keyboard, k: Key)
+    if k.kind == "letter" then
+        addLetter(s, faceOf(k, board.caps))
+    elseif k.kind == "space" then
+        addLetter(s, " ")
+    elseif k.kind == "back" then
+        eraseLetter(s)
+    elseif k.kind == "shift" then
+        board.caps = not board.caps
+        for _, line in board.rows do
+            for _, other in line do
+                other.face.text = faceOf(other, board.caps)
+                centreFace(other)
+            end
+        end
+    elseif k.kind == "done" then
+        finishTyping(s)
+    end
+end
+
+-- Walks the on-screen keyboard and types with it. Letters typed on a real
+-- keyboard go in too, when a script has asked for them with
+-- game.input.startTyping; otherwise a real keyboard drives the keys as it
+-- drives a menu (arrows move, Enter presses, Backspace erases).
+local function hearKeyboard(ts: TabsState, s: RowState)
+    local board = buildKeyboard()
+    if hearTyped(ts, s) then
+        return
+    end
+    local function live(): boolean
+        return typingRow == s and stack[#stack] == ts
+    end
+    if game.input.justPressed("menu_close") then
+        finishTyping(s)
+        return
+    elseif game.input.justPressed("menu_back") then
+        endTyping(s, true)
+        return
+    end
+    local rows = board.rows
+    local x, y = game.input.stepped("menu_move")
+    local was = board.row * 100 + board.column
+    if x ~= 0 then
+        board.column = (board.column - 1 + x) % #rows[board.row] + 1
+    end
+    if y ~= 0 and board.row - y >= 1 and board.row - y <= #rows then
+        -- Up and down stop at the edges and land on the key nearest across.
+        local here = rows[board.row][board.column]
+        local across = here.left + here.width / 2
+        board.row -= y
+        local best, gap = 1, math.huge
+        for number, k in rows[board.row] do
+            local apart = math.abs(k.left + k.width / 2 - across)
+            if apart < gap then
+                best, gap = number, apart
+            end
+        end
+        board.column = best
+    end
+    -- The pointer chooses the key it moves onto.
+    local px, py = game.input.pointer()
+    if px ~= nil and board.lastX ~= nil and (px ~= board.lastX or py ~= board.lastY) then
+        for r, line in rows do
+            for c, k in line do
+                if k.box.hovered then
+                    board.row, board.column = r, c
+                end
+            end
         end
     end
+    board.lastX, board.lastY = px, py
+    if board.row * 100 + board.column ~= was then
+        sound(menu.sounds.move)
+    end
+    if game.input.justPressed("menu_erase") then
+        sound(menu.sounds.choose)
+        eraseLetter(s)
+    elseif game.input.justPressed("menu_space") then
+        sound(menu.sounds.choose)
+        addLetter(s, " ")
+    elseif game.input.justPressed("menu_previous_tab") or game.input.justPressed("menu_next_tab") then
+        sound(menu.sounds.move)
+        -- The bumpers are the Shift key without walking to it.
+        pressKey(s, board, rows[5][1])
+    elseif game.input.justPressed("menu_confirm") then
+        sound(menu.sounds.choose)
+        pressKey(s, board, rows[board.row][board.column])
+    elseif game.input.justPressed("menu_click") then
+        for r, line in rows do
+            for c, k in line do
+                if live() and k.box.hovered then
+                    board.row, board.column = r, c
+                    sound(menu.sounds.choose)
+                    pressKey(s, board, k)
+                end
+            end
+        end
+    end
+end
+
+-- Shows the on-screen keyboard: the words so far with the caret, the chosen
+-- key, and the buttons that work it as the player has them bound.
+local function drawKeyboard(s: RowState)
+    local board = buildKeyboard()
+    local style = menu.style
+    local shown = words(s)
+    local count = utf8.len(shown) or 0
+    if count > 40 then
+        shown = "…" .. string.sub(shown, utf8.offset(shown, count - 38) or 1)
+    end
+    board.text.text = shown
+    for r, line in board.rows do
+        for c, k in line do
+            local chosen = r == board.row and c == board.column
+            k.box.color = if chosen then style.chosen else KEY_COLOR
+            k.face.color = if chosen then style.chosenWords
+                elseif k.kind == "shift" and board.caps then style.on
+                else style.words
+        end
+    end
+    local label = game.input.label
+    board.hints.text = string.format(
+        "%s type   %s erase   %s space   %s %s caps   %s done   %s cancel",
+        label("menu_confirm"),
+        label("menu_erase"),
+        label("menu_space"),
+        label("menu_previous_tab"),
+        label("menu_next_tab"),
+        label("menu_close"),
+        label("menu_back")
+    )
 end
 
 -- Hears the player for a menu in front, with whether the pointer moved
@@ -1442,7 +1724,11 @@ local function hear(ts: TabsState)
     -- no tab is changed until it is done.
     local typing = typingRow
     if typing and typing.owner.tabs == ts then
-        hearTyping(ts, typing)
+        if keyboardOn then
+            hearKeyboard(ts, typing)
+        else
+            hearTyping(ts, typing)
+        end
         return
     end
     if game.input.justPressed("menu_close") then
@@ -1530,7 +1816,12 @@ local function draw(ts: TabsState)
         else ""
     local typing = typingRow
     if typing and typing.owner.tabs == ts then
-        ts.keys.text = "type   Enter done   Escape put the old words back"
+        if keyboardOn then
+            ts.keys.text = ""
+            drawKeyboard(typing)
+        else
+            ts.keys.text = "type   Enter done   Escape put the old words back"
+        end
         return
     end
     ts.keys.text = string.format(
