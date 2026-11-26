@@ -2115,3 +2115,390 @@ mod styled_drawing {
         assert_eq!(FontFace::default().weight, 400);
     }
 }
+
+mod hud_styles {
+    use crate::{
+        Anchor, BoxShadow, Clip, Color, Draw, Fill, FontFace, Gradient, HudStyle, Stop, TextShadow,
+        Ui, UiInput,
+    };
+
+    const SCREEN: [u32; 2] = [1920, 1080];
+
+    fn drawn(ui: &mut Ui) -> Vec<String> {
+        ui.update(&UiInput::default(), 1.0 / 60.0, SCREEN);
+        ui.draw().iter().map(|draw| format!("{draw:?}")).collect()
+    }
+
+    fn draws(ui: &mut Ui) -> Vec<Draw<'_>> {
+        ui.update(&UiInput::default(), 1.0 / 60.0, SCREEN);
+        ui.draw().iter().collect()
+    }
+
+    /// A box 100 by 50 pinned at the top left, with `style`.
+    fn boxed(style: HudStyle) -> Ui {
+        let mut ui = Ui::default();
+        let widget = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [100.0, 50.0], Color::WHITE);
+        ui.set_style(widget, Some(&style)).unwrap();
+        ui
+    }
+
+    #[test]
+    fn a_piece_with_no_style_or_a_default_style_is_drawn_the_plain_way() {
+        let mut plain = Ui::default();
+        plain.hud_rect(Anchor::TopLeft, [0.0, 0.0], [100.0, 50.0], Color::WHITE);
+        let before = drawn(&mut plain);
+        assert!(before[0].starts_with("Rect"), "{before:?}");
+        let mut styled = boxed(HudStyle::default());
+        assert_eq!(drawn(&mut styled), before);
+        // Only rounded corners and a turn: still the plain boxes.
+        let mut turned = boxed(HudStyle {
+            radii: [6.0; 4],
+            rotation: 30.0,
+            ..HudStyle::default()
+        });
+        let turned = drawn(&mut turned);
+        assert!(turned[0].starts_with("Turned"), "{turned:?}");
+        let mut text = Ui::default();
+        let words = text.hud_text(Anchor::TopLeft, [0.0, 0.0], 30.0, "hi");
+        let plain_text = drawn(&mut text);
+        text.set_style(words, Some(&HudStyle::default())).unwrap();
+        assert_eq!(drawn(&mut text), plain_text);
+        assert!(plain_text[0].starts_with("Text"));
+    }
+
+    #[test]
+    fn a_styled_box_has_its_radii_border_and_faded_colours() {
+        let mut ui = boxed(HudStyle {
+            opacity: 0.5,
+            radii: [1.0, 2.0, 3.0, 4.0],
+            border_widths: [1.0, 2.0, 3.0, 4.0],
+            border_color: Color::rgb(1.0, 0.0, 0.0),
+            ..HudStyle::default()
+        });
+        let all = draws(&mut ui);
+        assert_eq!(all.len(), 1);
+        let Draw::Box {
+            size,
+            radii,
+            fill,
+            border_widths,
+            border_color,
+            clip,
+            ..
+        } = all[0]
+        else {
+            panic!("{all:?}")
+        };
+        assert_eq!(size, [100.0, 50.0]);
+        assert_eq!(radii, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(border_widths, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(border_color.a, 0.5);
+        assert_eq!(fill, Fill::Color(Color::rgba(1.0, 1.0, 1.0, 0.5)));
+        assert_eq!(clip, None);
+    }
+
+    #[test]
+    fn a_gradient_fills_with_its_stops_faded() {
+        let stops = [
+            Stop {
+                color: Color::rgb(1.0, 0.0, 0.0),
+                at: 0.0,
+            },
+            Stop {
+                color: Color::rgb(0.0, 0.0, 1.0),
+                at: 1.0,
+            },
+        ];
+        let mut ui = boxed(HudStyle {
+            opacity: 0.5,
+            gradient: Some(Gradient::new(&stops, 90.0, false, [0.5, 0.5])),
+            ..HudStyle::default()
+        });
+        let all = draws(&mut ui);
+        let Draw::Box {
+            fill: Fill::Linear { angle, stops },
+            ..
+        } = all[0]
+        else {
+            panic!("{all:?}")
+        };
+        assert_eq!(angle, 90.0);
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[1].color, Color::rgba(0.0, 0.0, 1.0, 0.5));
+        // A radial one reaches the farthest corner.
+        let mut ui = boxed(HudStyle {
+            gradient: Some(Gradient::new(stops, 0.0, true, [0.0, 0.5])),
+            ..HudStyle::default()
+        });
+        let all = draws(&mut ui);
+        let Draw::Box {
+            fill: Fill::Radial { radius, center, .. },
+            ..
+        } = all[0]
+        else {
+            panic!("{all:?}")
+        };
+        assert_eq!(center, [0.0, 0.5]);
+        assert!((radius[0] - std::f32::consts::SQRT_2).abs() < 1e-5);
+        assert!((radius[1] - std::f32::consts::SQRT_2 * 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shadows_are_drawn_under_the_box_and_inside_shadows_over_it() {
+        let shadow = |inset| BoxShadow {
+            right: 1.0,
+            down: 4.0,
+            blur: 12.0,
+            spread: 2.0,
+            color: Color::rgb(0.0, 0.0, 0.0),
+            inset,
+        };
+        let mut ui = boxed(HudStyle {
+            shadow: Some(shadow(false)),
+            ..HudStyle::default()
+        });
+        let all = draws(&mut ui);
+        assert!(
+            matches!(all[0], Draw::Shadow { inset: false, .. }),
+            "{all:?}"
+        );
+        assert!(matches!(all[1], Draw::Box { .. }));
+        let Draw::Shadow {
+            offset,
+            blur,
+            spread,
+            ..
+        } = all[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!((offset, blur, spread), ([1.0, 4.0], 12.0, 2.0));
+        let mut ui = boxed(HudStyle {
+            shadow: Some(shadow(true)),
+            ..HudStyle::default()
+        });
+        let all = draws(&mut ui);
+        assert!(matches!(all[0], Draw::Box { .. }), "{all:?}");
+        assert!(matches!(all[1], Draw::Shadow { inset: true, .. }));
+    }
+
+    #[test]
+    fn scale_and_turn_are_about_the_origin_of_the_unmoved_box() {
+        let moved = |style: HudStyle| {
+            let mut ui = boxed(style);
+            let all = draws(&mut ui);
+            let Draw::Box {
+                position,
+                transform,
+                ..
+            } = all[0]
+            else {
+                panic!("{all:?}")
+            };
+            // Points of the box, as its own offsets from its corner.
+            move |across: f32, down: f32| {
+                let [x, y] = transform.apply([position[0] + across, position[1] + down]);
+                [x - position[0], y - position[1]]
+            }
+        };
+        let near = |got: [f32; 2], want: [f32; 2]| {
+            assert!(
+                (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+                "{got:?} is not {want:?}"
+            );
+        };
+        // About the middle: the middle stays put and the corner doubles out.
+        let doubled = moved(HudStyle {
+            scale: 2.0,
+            ..HudStyle::default()
+        });
+        near(doubled(50.0, 25.0), [50.0, 25.0]);
+        near(doubled(100.0, 50.0), [150.0, 75.0]);
+        // About the top left: that corner stays.
+        let doubled = moved(HudStyle {
+            scale: 2.0,
+            origin: [0.0, 0.0],
+            ..HudStyle::default()
+        });
+        near(doubled(0.0, 0.0), [0.0, 0.0]);
+        near(doubled(100.0, 50.0), [200.0, 100.0]);
+        // A quarter turn about the bottom right: that corner stays, and
+        // the bottom left goes up.
+        let turned = moved(HudStyle {
+            rotation: 90.0,
+            origin: [1.0, 1.0],
+            ..HudStyle::default()
+        });
+        near(turned(100.0, 50.0), [100.0, 50.0]);
+        near(turned(0.0, 50.0), [100.0, -50.0]);
+    }
+
+    #[test]
+    fn text_with_a_shadow_draws_a_blurred_copy_under_it_and_fades_both() {
+        let mut ui = Ui::default();
+        let words = ui.hud_text(Anchor::TopLeft, [0.0, 0.0], 30.0, "hi");
+        ui.set_style(
+            words,
+            Some(&HudStyle {
+                opacity: 0.5,
+                font: FontFace {
+                    family: 2,
+                    weight: 700,
+                    italic: true,
+                },
+                letter_spacing: 3.0,
+                text_shadow: Some(TextShadow {
+                    right: 2.0,
+                    down: 3.0,
+                    blur: 4.0,
+                    color: Color::BLACK,
+                }),
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let all = draws(&mut ui);
+        assert_eq!(all.len(), 2, "{all:?}");
+        let (
+            Draw::Text {
+                position: under,
+                blur: soft,
+                color: dark,
+                ..
+            },
+            Draw::Text {
+                position: over,
+                blur: sharp,
+                color,
+                font,
+                letter_spacing,
+                ..
+            },
+        ) = (all[0], all[1])
+        else {
+            panic!("{all:?}")
+        };
+        assert_eq!([under[0] - over[0], under[1] - over[1]], [2.0, 3.0]);
+        assert_eq!((soft, sharp), (4.0, 0.0));
+        assert_eq!((dark.a, color.a), (0.5, 0.5));
+        assert_eq!(font.family, 2);
+        assert_eq!(letter_spacing, 3.0);
+    }
+
+    #[test]
+    fn spaced_text_is_laid_out_at_its_real_width() {
+        let place = |spacing: f32| {
+            let mut ui = Ui::default();
+            let words = ui.hud_text(Anchor::TopRight, [0.0, 0.0], 20.0, "abcd");
+            ui.set_style(
+                words,
+                Some(&HudStyle {
+                    letter_spacing: spacing,
+                    ..HudStyle::default()
+                }),
+            )
+            .unwrap();
+            let all = draws(&mut ui);
+            let Draw::Text { position, .. } = all[0] else {
+                panic!("{all:?}")
+            };
+            position[0]
+        };
+        // Four letters, each 5 further apart: 20 wider, so 20 further left.
+        assert!((place(0.0) - place(5.0) - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_piece_cut_to_a_box_is_drawn_inside_its_rounded_shape() {
+        let mut ui = Ui::default();
+        let panel = ui.hud_rect(Anchor::TopLeft, [10.0, 20.0], [100.0, 50.0], Color::WHITE);
+        ui.set_style(
+            panel,
+            Some(&HudStyle {
+                radii: [8.0, 8.0, 0.0, 0.0],
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let words = ui.hud_text(Anchor::TopLeft, [0.0, 0.0], 30.0, "hello");
+        ui.set_style(
+            words,
+            Some(&HudStyle {
+                clip: Some(panel),
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let all = draws(&mut ui);
+        let Draw::Text { clip, .. } = all[1] else {
+            panic!("{all:?}")
+        };
+        // The clip is the box where it is drawn.
+        let Draw::Box { position, .. } = all[0] else {
+            panic!("{all:?}")
+        };
+        assert_eq!(
+            clip,
+            Some(Clip {
+                position,
+                size: [100.0, 50.0],
+                radii: [8.0, 8.0, 0.0, 0.0],
+            })
+        );
+        // A hidden box cuts everything off.
+        ui.set_shown(panel, false).unwrap();
+        let all = draws(&mut ui);
+        let Draw::Text { clip, .. } = all[0] else {
+            panic!("{all:?}")
+        };
+        assert_eq!(clip.map(|clip| clip.size), Some([0.0, 0.0]));
+    }
+
+    #[test]
+    fn a_scaled_clip_box_cuts_to_the_scaled_shape() {
+        let mut ui = Ui::default();
+        let panel = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [100.0, 50.0], Color::WHITE);
+        ui.set_style(
+            panel,
+            Some(&HudStyle {
+                scale: 2.0,
+                origin: [0.0, 0.0],
+                radii: [10.0; 4],
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let bar = ui.hud_bar(Anchor::TopLeft, [0.0, 0.0], [40.0, 10.0], Color::WHITE, 1.0);
+        ui.set_style(
+            bar,
+            Some(&HudStyle {
+                clip: Some(panel),
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let all = draws(&mut ui);
+        let Draw::Box { clip, .. } = all[all.len() - 1] else {
+            panic!("{all:?}")
+        };
+        let clip = clip.unwrap();
+        assert_eq!(clip.size, [200.0, 100.0]);
+        assert_eq!(clip.radii, [20.0; 4]);
+    }
+
+    #[test]
+    fn a_style_is_set_only_on_a_hud_piece_and_in_place() {
+        let mut ui = Ui::default();
+        ui.add_screen("Menu", |screen| {
+            screen.label("hello");
+        })
+        .unwrap();
+        let ok = ui.hud_rect(Anchor::Top, [0.0, 0.0], [1.0, 1.0], Color::WHITE);
+        assert!(ui.set_style(ok, Some(&HudStyle::default())).is_ok());
+        assert!(ui.set_style(ok, None).is_ok());
+        assert!(
+            ui.set_style(crate::WidgetId(0), Some(&HudStyle::default()))
+                .is_err()
+        );
+    }
+}

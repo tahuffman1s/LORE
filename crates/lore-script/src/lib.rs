@@ -83,7 +83,7 @@ pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
 pub use fonts::{FONTS_FOLDER, family_of as font_family_of, scan as scan_fonts};
 pub use host::{ENTRY_SCRIPT, ScriptHost};
-pub use hud::{HudPiece, HudShape};
+pub use hud::{HudPiece, HudShape, HudStyle};
 pub use images::{HudImageInfo, IMAGES_FOLDER, png_size, scan as scan_images};
 pub use lamp_api::{LampBeam, LampLight};
 pub use lighting_api::{EyeSaid, OcclusionSaid};

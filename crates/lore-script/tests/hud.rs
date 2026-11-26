@@ -68,6 +68,7 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
     assert_eq!(
         pieces[0],
         HudPiece {
+            id: 0,
             shape: HudShape::Text {
                 text: "Hello".to_owned(),
                 size: 28.0
@@ -77,11 +78,13 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             color: Color::WHITE,
             visible: true,
             layer: 0,
+            style: None,
         }
     );
     assert_eq!(
         pieces[1],
         HudPiece {
+            id: 1,
             shape: HudShape::Text {
                 text: "30".to_owned(),
                 size: 48.0
@@ -91,6 +94,7 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             color: Color::rgb(1.0, 136.0 / 255.0, 0.0),
             visible: true,
             layer: 0,
+            style: None,
         }
     );
     assert_eq!(
@@ -109,22 +113,13 @@ fn pieces_are_handed_over_as_written_in_the_order_they_were_made() {
             size: [300.0, 24.0]
         }
     );
-    assert_eq!(
-        pieces[4].shape,
-        HudShape::Box {
-            size: [6.0, 6.0],
-            corner: 0.0,
-            rotation: 0.0
-        }
-    );
+    assert_eq!(pieces[4].shape, HudShape::Box { size: [6.0, 6.0] });
     assert_eq!(pieces[4].anchor, Anchor::Center);
     assert_eq!(pieces[4].color, Color::rgba(0.0, 0.0, 0.0, 128.0 / 255.0));
     assert_eq!(
         pieces[5].shape,
         HudShape::Box {
-            size: [100.0, 100.0],
-            corner: 0.0,
-            rotation: 0.0
+            size: [100.0, 100.0]
         }
     );
     assert_eq!(pieces.len(), 6);
@@ -440,7 +435,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ),
         (
             "ammo.value = 1",
-            "A HUD text has nothing called `value`. It has: text, color, visible, layer, right, down, width, height, hovered, pressed, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
+            "A HUD text has nothing called `value`. It has: text, color, visible, layer, right, down, width, height, hovered, pressed, opacity, scale, rotation, transformOrigin, clipTo, fontFamily, fontWeight, fontStyle, letterSpacing, textShadow, ammo:pointerAt() says where the pointer is across it, and ammo:remove() takes it off the screen. Only a bar has a value",
         ),
         (
             "ammo.txt = 1",
@@ -473,7 +468,7 @@ fn mistakes_in_changing_a_piece_say_what_to_write() {
         ("ammo.color = \"bleu\"", "Did you mean \"blue\"?"),
         (
             "health.text = \"Health\"",
-            "A HUD bar has nothing called `text`. It has: value, color, visible, layer, right, down, width, height, hovered, pressed, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
+            "A HUD bar has nothing called `text`. It has: value, color, visible, layer, right, down, width, height, hovered, pressed, opacity, scale, rotation, transformOrigin, clipTo, health:pointerAt() says where the pointer is across it, and health:remove() takes it off the screen. For words beside it, make a text",
         ),
         (
             "health.value = \"full\"",
@@ -567,14 +562,11 @@ fn a_box_can_be_resized_rounded_and_turned() {
     );
     tick(&mut host);
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
-    assert_eq!(
-        pieces(&host)[0].shape,
-        HudShape::Box {
-            size: [80.0, 20.0],
-            corner: 6.0,
-            rotation: 90.0
-        }
-    );
+    let piece = &pieces(&host)[0];
+    assert_eq!(piece.shape, HudShape::Box { size: [80.0, 20.0] });
+    let look = piece.style.as_ref().unwrap().look;
+    assert_eq!(look.radii, [6.0; 4]);
+    assert_eq!(look.rotation, 90.0);
 }
 
 #[test]
@@ -613,15 +605,14 @@ fn an_image_is_named_by_its_file_and_keeps_its_shape_when_one_side_is_said() {
         HudShape::Image {
             image: 1,
             size: [50.0, 25.0],
-            rotation: 10.0
         }
     );
+    assert_eq!(made[0].style.as_ref().unwrap().look.rotation, 10.0);
     assert_eq!(
         made[1].shape,
         HudShape::Image {
             image: 0,
             size: [200.0, 100.0],
-            rotation: 0.0
         }
     );
 
@@ -666,4 +657,262 @@ fn the_hud_says_how_much_room_it_has() {
         "#,
     );
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
+}
+
+// ---- Styles ----------------------------------------------------------
+
+/// What `say` collects: the script's first piece is a text it writes to.
+const SAY: &str = r##"
+local __out = game.hud.text("")
+local function say(...)
+    local parts = {}
+    for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+    local line = table.concat(parts, ",")
+    __out.text = __out.text == "" and line or (__out.text .. "|" .. line)
+end
+"##;
+
+/// A game running `script` after `SAY`, which has no mistake in it.
+fn saying(script: &str) -> ScriptHost {
+    running(&format!("{SAY}{script}"))
+}
+
+/// What the script said so far, one entry for each `say`.
+fn said(host: &ScriptHost) -> Vec<String> {
+    text(&pieces(host)[0])
+        .split('|')
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Runs `script` for one tick and gives what it said.
+fn printed(script: &str) -> Vec<String> {
+    let mut host = saying(script);
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    said(&host)
+}
+
+/// The mistake `script` makes on its first tick, or while it loads.
+fn fail_with(script: &str) -> String {
+    let mut host = host(script);
+    tick(&mut host);
+    host.last_error().expect("a mistake").to_string()
+}
+
+/// A game on disk with a font in its `fonts` folder, running `script`.
+fn with_fonts(script: &str) -> ScriptHost {
+    let folder = std::env::temp_dir().join(format!(
+        "lore-hud-fonts-{}-{}",
+        std::process::id(),
+        script.len()
+    ));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(folder.join("fonts")).unwrap();
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../lore-render/fonts/AtkinsonHyperlegibleNext-Regular.ttf"
+        ),
+        folder.join("fonts/atkinson.ttf"),
+    )
+    .unwrap();
+    std::fs::write(folder.join("main.luau"), format!("{SAY}{script}")).unwrap();
+    ScriptHost::open(&folder, ActionMap::standard()).unwrap()
+}
+
+#[test]
+fn a_plain_piece_has_no_style_and_every_style_field_has_its_default() {
+    let mut host = saying(
+        r#"
+        local ammo = game.hud.text("30")
+        game.onTick(function()
+            say(ammo.opacity, ammo.scale, ammo.rotation, ammo.transformOrigin)
+            say(ammo.fontFamily, ammo.fontWeight, ammo.fontStyle, ammo.letterSpacing, ammo.textShadow)
+            say(ammo.clipTo)
+        end)
+        "#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert!(pieces(&host)[1].style.is_none());
+    assert_eq!(said(&host), ["1,1,0,center", "nil,400,normal,0,nil", "nil"]);
+}
+
+#[test]
+fn every_style_field_is_set_when_made_and_later_and_read_back() {
+    let log = printed(
+        r##"
+        local box = game.hud.box({
+            opacity = 0.5, scale = 1.5, rotation = 30, transformOrigin = "top left",
+            borderRadius = { 1, 2, 3, 4 }, borderWidth = 2, borderColor = "red",
+            gradient = { colors = { "#3a2a10", "#120c04" }, angle = 90, stops = { 0, 0.5 } },
+            slice = { 1, 2, 3, 4 },
+            boxShadow = { right = 1, down = 4, blur = 12, spread = 2, color = "#000a", inset = true },
+        })
+        say(box.opacity, box.scale, box.rotation, box.transformOrigin)
+        say(#box.borderRadius, box.borderRadius[3], box.borderWidth, box.borderColor)
+        say(box.gradient.colors[1], box.gradient.angle, box.gradient.stops[2], box.gradient.radial)
+        say(box.slice[4], box.boxShadow.down, box.boxShadow.color, box.boxShadow.inset)
+        box.opacity = 0.25
+        box.borderRadius = 6
+        box.borderWidth = { 1, 2, 3, 4 }
+        box.gradient = { colors = { "red", "blue", "green" }, radial = true, center = { 0.25, 0.75 } }
+        box.boxShadow = nil
+        say(box.opacity, box.borderRadius, box.corner, box.borderWidth[2])
+        say(#box.gradient.colors, box.gradient.radial, box.gradient.center[2], box.gradient.stops[2], box.boxShadow)
+        local text = game.hud.text("Hi", {
+            fontWeight = "bold", fontStyle = "italic", letterSpacing = -1,
+            textShadow = { right = 2, down = 3, blur = 4, color = "black" },
+        })
+        say(text.fontWeight, text.fontStyle, text.letterSpacing, text.textShadow.down, text.textShadow.color)
+        text.fontWeight = 300
+        say(text.fontWeight)
+        "##,
+    );
+    assert_eq!(log[0], "0.5,1.5,30,top left");
+    assert_eq!(log[1], "4,3,2,red");
+    assert_eq!(log[2], "#3a2a10,90,0.5,nil");
+    assert_eq!(log[3], "4,4,#000a,true");
+    assert_eq!(log[4], "0.25,6,6,2");
+    assert_eq!(log[5], "3,true,0.75,0.5,nil");
+    assert_eq!(log[6], "700,italic,-1,3,black");
+    assert_eq!(log[7], "300");
+}
+
+#[test]
+fn nil_puts_a_style_field_back_to_its_default() {
+    let mut host = saying(
+        r#"
+        local box = game.hud.box({ opacity = 0.5, scale = 2, rotation = 10, borderWidth = 3,
+            borderColor = "red", transformOrigin = "bottom right", boxShadow = { blur = 4 } })
+        game.onTick(function()
+            box.opacity = nil box.scale = nil box.rotation = nil box.borderWidth = nil
+            box.borderColor = nil box.transformOrigin = nil box.boxShadow = nil
+        end)
+        "#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let look = pieces(&host)[1].style.as_ref().unwrap().look;
+    assert_eq!(look, lore_ui::HudStyle::default());
+}
+
+#[test]
+fn a_style_change_marks_the_piece_changed_once() {
+    let mut host = running(
+        r#"
+        local ammo = game.hud.text("30")
+        game.onTick(function() ammo.opacity = 0.5 end)
+        "#,
+    );
+    host.take_hud_changes(|_, _| {});
+    tick(&mut host);
+    let mut changed = 0;
+    host.take_hud_changes(|_, _| changed += 1);
+    assert_eq!(changed, 1);
+    tick(&mut host);
+    host.take_hud_changes(|_, _| changed += 1);
+    assert_eq!(changed, 1, "the same value is no change");
+}
+
+#[test]
+fn corner_is_borderradius() {
+    let log = printed(
+        r#"
+        local a = game.hud.box({ corner = 5 })
+        local b = game.hud.box({ borderRadius = 7 })
+        a.borderRadius = 9
+        b.corner = 3
+        say(a.corner, a.borderRadius, b.corner, b.borderRadius)
+        "#,
+    );
+    assert_eq!(log[0], "9,9,3,3");
+}
+
+#[test]
+fn a_piece_is_cut_to_a_box_and_clip_reads_back_the_box() {
+    let log = printed(
+        r#"
+        local panel = game.hud.box({ width = 100, height = 50 })
+        local label = game.hud.text("Hi", { clipTo = panel })
+        say(label.clipTo ~= nil, label.clipTo.width)
+        label.clipTo = nil
+        say(label.clipTo)
+        "#,
+    );
+    assert_eq!(log, ["true,100", "nil"]);
+}
+
+#[test]
+fn style_mistakes_name_the_nearest_field_and_what_to_write() {
+    let error = fail_with(r#"local t = game.hud.text("x") t.opacty = 1"#);
+    assert!(error.contains("`opacity`"), "{error}");
+    let error = fail_with(r#"game.hud.box({ boxShadows = {} })"#);
+    assert!(error.contains("`boxShadow`"), "{error}");
+    let error = fail_with(r#"local t = game.hud.text("x") t.opacity = "half""#);
+    assert!(
+        error.contains("needs a number") && error.contains("ammo.opacity = 0.5"),
+        "{error}"
+    );
+    let error = fail_with(r#"local b = game.hud.box() b.borderWidth = { 1, 2 }"#);
+    assert!(error.contains("list of 4"), "{error}");
+    let error = fail_with(r#"local b = game.hud.box() b.gradient = { colors = { "red" } }"#);
+    assert!(error.contains("2 to 8 colours"), "{error}");
+    let error = fail_with(r#"local b = game.hud.box() b.gradient = { colour = {} }"#);
+    assert!(error.contains("`colors`"), "{error}");
+    let error = fail_with(r#"local b = game.hud.box() b.boxShadow = { blurr = 2 }"#);
+    assert!(error.contains("`blur`"), "{error}");
+    let error = fail_with(r#"local b = game.hud.box() b.transformOrigin = "upper left""#);
+    assert!(error.contains("place"), "{error}");
+    let error = fail_with(r#"local t = game.hud.text("x") t.fontWeight = "heavy""#);
+    assert!(error.contains("\"bold\""), "{error}");
+    let error = fail_with(r#"local t = game.hud.text("x") t.fontStyle = "slanted""#);
+    assert!(error.contains("\"italic\""), "{error}");
+    let error = fail_with(r#"local t = game.hud.text("x") t.borderWidth = 1"#);
+    assert!(error.contains("nothing called `borderWidth`"), "{error}");
+}
+
+#[test]
+fn a_bad_clip_target_is_explained() {
+    let error = fail_with(r#"local t = game.hud.text("x") t.clipTo = t"#);
+    assert!(error.contains("itself"), "{error}");
+    let error =
+        fail_with(r#"local a = game.hud.text("x") local t = game.hud.text("y", { clipTo = a })"#);
+    assert!(error.contains("not a box or image"), "{error}");
+    let error = fail_with(
+        r#"local a = game.hud.box() a:remove() local t = game.hud.text("y") t.clipTo = a"#,
+    );
+    assert!(error.contains("remove"), "{error}");
+}
+
+#[test]
+fn an_unknown_font_family_names_the_fonts_folder_and_the_closest_family() {
+    let error = fail_with(r#"local t = game.hud.text("x") t.fontFamily = "Cinzel""#);
+    assert!(
+        error.contains("no font family called \"Cinzel\"") && error.contains("folder called fonts"),
+        "{error}"
+    );
+    let host =
+        with_fonts(r#"local t = game.hud.text("x", { fontFamily = "atkinson hyperlegible nex" })"#);
+    let error = host.last_error().expect("unknown family").to_string();
+    assert!(
+        error.contains("Did you mean \"Atkinson Hyperlegible Next\"?"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_known_font_family_is_found_whatever_its_capitals_and_reads_back_as_the_folder_has_it() {
+    let mut host = with_fonts(
+        r#"
+        local t = game.hud.text("x", { fontFamily = "ATKINSON hyperlegible next" })
+        game.onTick(function() say(t.fontFamily) t.fontFamily = nil say(t.fontFamily) end)
+        "#,
+    );
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(pieces(&host)[1].style.as_ref().unwrap().look.font.family, 1);
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(said(&host), ["Atkinson Hyperlegible Next", "nil"]);
 }

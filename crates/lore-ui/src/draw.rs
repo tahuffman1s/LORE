@@ -644,10 +644,6 @@ impl Painter<'_> {
     /// pixels, as for every painter call; the transform's moving part is
     /// too. The painter's own clip is not applied: a styled box is cut by
     /// the `clip` it is given, in reference pixels.
-    #[allow(
-        dead_code,
-        reason = "the script's HUD will draw styled boxes through this"
-    )]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn styled_box(
         &mut self,
@@ -677,7 +673,6 @@ impl Painter<'_> {
     }
 
     /// A soft shadow of the box `rect`, in reference pixels.
-    #[allow(dead_code, reason = "the script's HUD will draw shadows through this")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn shadow(
         &mut self,
@@ -711,10 +706,6 @@ impl Painter<'_> {
 
     /// One line of text with a face, letter spacing, blur, transform and
     /// clip. Sizes and the transform's moving part are in reference pixels.
-    #[allow(
-        dead_code,
-        reason = "the script's HUD will draw styled text through this"
-    )]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn styled_text(
         &mut self,

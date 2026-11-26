@@ -305,7 +305,15 @@ pub(crate) fn place_hud(node: &mut Node, safe: Rect, measure: &dyn TextMeasure) 
             size,
             ..
         } => {
-            node.size = hud_text_size(&node.text, *size, measure);
+            let height = text_size(*size);
+            node.size = match node.style.as_deref() {
+                // Wide or spaced letters take the room they really do.
+                Some(style) => [
+                    measure.width_styled(&node.text, height, style.font, style.letter_spacing),
+                    height,
+                ],
+                None => hud_text_size(&node.text, *size, measure),
+            };
             (*anchor, *offset)
         }
         Kind::HudBar { anchor, offset, .. }

@@ -1,5 +1,6 @@
 //! The widgets themselves: one flat list, linked into trees.
 
+use crate::hud_style::HudStyle;
 use crate::theme::Color;
 
 /// "No widget", for the links between nodes.
@@ -211,6 +212,8 @@ pub(crate) struct Node {
     /// Where each direction goes when the author said so, indexed by
     /// `Direction::index`.
     pub neighbors: [u32; 4],
+    /// How a HUD piece looks beyond its colour; `None` draws it plainly.
+    pub style: Option<Box<HudStyle>>,
 }
 
 impl Node {
@@ -225,6 +228,7 @@ impl Node {
             rect: Rect::default(),
             visible: true,
             neighbors: [NONE; 4],
+            style: None,
         }
     }
 

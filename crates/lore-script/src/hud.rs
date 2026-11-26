@@ -17,7 +17,12 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use lore_ui::{Anchor, Color};
+
+mod style;
+
 use mlua::{AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value};
+pub use style::HudStyle;
+use style::StyleText;
 
 use crate::api::{Shared, describe, fail};
 use crate::error::closest;
@@ -37,14 +42,67 @@ pub(crate) const HUD_FUNCTIONS: &[&str] = &[
 /// What can be read and set on each kind of piece, and the one function
 /// they all have. The type definitions are tested against these.
 pub(crate) const TEXT_FIELDS: &[&str] = &[
-    "text", "color", "visible", "layer", "right", "down", "width", "height", "hovered", "pressed",
+    "text",
+    "color",
+    "visible",
+    "layer",
+    "right",
+    "down",
+    "width",
+    "height",
+    "hovered",
+    "pressed",
+    "opacity",
+    "scale",
+    "rotation",
+    "transformOrigin",
+    "clipTo",
+    "fontFamily",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "textShadow",
 ];
 pub(crate) const BAR_FIELDS: &[&str] = &[
-    "value", "color", "visible", "layer", "right", "down", "width", "height", "hovered", "pressed",
+    "value",
+    "color",
+    "visible",
+    "layer",
+    "right",
+    "down",
+    "width",
+    "height",
+    "hovered",
+    "pressed",
+    "opacity",
+    "scale",
+    "rotation",
+    "transformOrigin",
+    "clipTo",
 ];
 pub(crate) const BOX_FIELDS: &[&str] = &[
-    "color", "visible", "layer", "right", "down", "width", "height", "corner", "rotation",
-    "hovered", "pressed",
+    "color",
+    "visible",
+    "layer",
+    "right",
+    "down",
+    "width",
+    "height",
+    "corner",
+    "rotation",
+    "hovered",
+    "pressed",
+    "opacity",
+    "scale",
+    "transformOrigin",
+    "clipTo",
+    "borderRadius",
+    "borderWidth",
+    "borderColor",
+    "gradient",
+    "image",
+    "slice",
+    "boxShadow",
 ];
 pub(crate) const LINE_FIELDS: &[&str] = &[
     "color",
@@ -57,10 +115,30 @@ pub(crate) const LINE_FIELDS: &[&str] = &[
     "thickness",
     "hovered",
     "pressed",
+    "opacity",
+    "scale",
+    "rotation",
+    "transformOrigin",
+    "clipTo",
 ];
 pub(crate) const IMAGE_FIELDS: &[&str] = &[
-    "color", "visible", "layer", "right", "down", "width", "height", "rotation", "hovered",
+    "color",
+    "visible",
+    "layer",
+    "right",
+    "down",
+    "width",
+    "height",
+    "rotation",
+    "hovered",
     "pressed",
+    "opacity",
+    "scale",
+    "transformOrigin",
+    "clipTo",
+    "borderRadius",
+    "slice",
+    "boxShadow",
 ];
 pub(crate) const GRAPH_FIELDS: &[&str] =
     &["visible", "layer", "right", "down", "hovered", "pressed"];
@@ -146,10 +224,6 @@ pub enum HudShape {
     Box {
         /// The box's `[width, height]`.
         size: [f32; 2],
-        /// How round its corners are, in pixels on a screen 1080 high.
-        corner: f32,
-        /// How far it is turned about its middle, in degrees clockwise.
-        rotation: f32,
     },
     /// A straight line from the piece's offset to `to`, both measured from
     /// the point it is pinned to.
@@ -165,8 +239,6 @@ pub enum HudShape {
         image: u32,
         /// Its `[width, height]` on the screen.
         size: [f32; 2],
-        /// How far it is turned about its middle, in degrees clockwise.
-        rotation: f32,
     },
     /// A graph of the last frame times, drawn against lines at 60 and 30
     /// frames a second. The engine fills it in itself.
@@ -181,6 +253,8 @@ pub enum HudShape {
 /// One piece of the HUD a script made with `game.hud`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HudPiece {
+    /// The id the HUD knows it by: what another piece's `clip_to` names.
+    pub id: u64,
     /// What it is.
     pub shape: HudShape,
     /// Where on the screen it is pinned.
@@ -195,6 +269,9 @@ pub struct HudPiece {
     /// Which pieces it is drawn over: higher is on top, and pieces of the
     /// same layer are drawn in the order they were made.
     pub layer: i32,
+    /// How it looks beyond its colour and place. `None` for a piece that
+    /// was never given a style, which is drawn the plain way.
+    pub style: Option<Box<HudStyle>>,
 }
 
 /// Which kind of piece a script holds, and the function that makes it.
@@ -259,10 +336,59 @@ impl Kind {
 
     fn options(self) -> &'static [&'static str] {
         match self {
-            Self::Text => &["at", "right", "down", "size", "color", "layer"],
-            Self::Bar => &["at", "right", "down", "width", "height", "color", "layer"],
+            Self::Text => &[
+                "at",
+                "right",
+                "down",
+                "size",
+                "color",
+                "layer",
+                "opacity",
+                "scale",
+                "rotation",
+                "transformOrigin",
+                "clipTo",
+                "fontFamily",
+                "fontWeight",
+                "fontStyle",
+                "letterSpacing",
+                "textShadow",
+            ],
+            Self::Bar => &[
+                "at",
+                "right",
+                "down",
+                "width",
+                "height",
+                "color",
+                "layer",
+                "opacity",
+                "scale",
+                "rotation",
+                "transformOrigin",
+                "clipTo",
+            ],
             Self::Box => &[
-                "at", "right", "down", "width", "height", "corner", "rotation", "color", "layer",
+                "at",
+                "right",
+                "down",
+                "width",
+                "height",
+                "corner",
+                "rotation",
+                "color",
+                "layer",
+                "opacity",
+                "scale",
+                "transformOrigin",
+                "clipTo",
+                "borderRadius",
+                "borderWidth",
+                "borderColor",
+                "gradient",
+                "image",
+                "slice",
+                "boxShadow",
             ],
             Self::Graph => &["at", "right", "down", "width", "height", "frames", "layer"],
             Self::Line => &[
@@ -274,9 +400,28 @@ impl Kind {
                 "thickness",
                 "color",
                 "layer",
+                "opacity",
+                "scale",
+                "rotation",
+                "transformOrigin",
+                "clipTo",
             ],
             Self::Image => &[
-                "at", "right", "down", "width", "height", "rotation", "color", "layer",
+                "at",
+                "right",
+                "down",
+                "width",
+                "height",
+                "rotation",
+                "color",
+                "layer",
+                "opacity",
+                "scale",
+                "transformOrigin",
+                "clipTo",
+                "borderRadius",
+                "slice",
+                "boxShadow",
             ],
         }
     }
@@ -309,6 +454,8 @@ struct Entry {
     piece: HudPiece,
     /// The colour as the script wrote it, to read back.
     color: String,
+    /// The words written for a style, to read back. Kept only with a style.
+    texts: Option<Box<StyleText>>,
     /// Whether it has changed since whoever draws it last looked.
     changed: bool,
     /// What the rules last left of the piece, for finding where the pointer
@@ -351,6 +498,149 @@ impl Ruled {
 }
 
 impl Entry {
+    /// Keeps a checked style field, making a style for the piece if it
+    /// had none and the field is not its default. Says whether the piece
+    /// changed.
+    fn style(&mut self, parsed: style::Parsed) -> bool {
+        if let Some(held) = self.piece.style.as_deref_mut() {
+            let texts = self.texts.get_or_insert_with(Box::default);
+            return style::apply(held, texts, parsed);
+        }
+        let (mut fresh, mut texts) = (HudStyle::default(), StyleText::default());
+        let changed = style::apply(&mut fresh, &mut texts, parsed);
+        if fresh != HudStyle::default() || texts.is_listed() {
+            self.piece.style = Some(Box::new(fresh));
+            self.texts = Some(Box::new(texts));
+        }
+        changed
+    }
+
+    /// The number in the field `field`, for the fields a number can be
+    /// animated in: `None` for any other, or one this piece lacks.
+    #[allow(dead_code, reason = "piece:animate reads the number it starts from")]
+    fn number(&self, field: &str) -> Option<f32> {
+        let look = self
+            .piece
+            .style
+            .as_deref()
+            .copied()
+            .unwrap_or_default()
+            .look;
+        Some(match (field, &self.piece.shape) {
+            ("opacity", _) => look.opacity,
+            ("scale", _) => look.scale,
+            ("rotation", _) => look.rotation,
+            ("letterSpacing", HudShape::Text { .. }) => look.letter_spacing,
+            ("borderRadius", HudShape::Box { .. } | HudShape::Image { .. }) => look.radii[0],
+            ("borderWidth", HudShape::Box { .. }) => look.border_widths[0],
+            ("right", _) => self.piece.offset[0],
+            ("down", _) => self.piece.offset[1],
+            (
+                "width" | "height",
+                HudShape::Bar { size, .. }
+                | HudShape::Box { size, .. }
+                | HudShape::Image { size, .. },
+            ) => size[usize::from(field == "height")],
+            ("value", HudShape::Bar { value, .. }) => *value,
+            ("thickness", HudShape::Line { thickness, .. }) => *thickness,
+            ("toRight" | "toDown", HudShape::Line { to, .. }) => to[usize::from(field == "toDown")],
+            _ => return None,
+        })
+    }
+
+    /// Sets the number in the field `field`, held to what the field can
+    /// be, as setting it from a script does. Says whether the piece
+    /// changed; a field this piece lacks is left alone.
+    #[allow(dead_code, reason = "piece:animate steps numbers through this")]
+    fn set_number(&mut self, field: &str, value: f32) -> bool {
+        if !value.is_finite() || self.number(field).is_none() {
+            return false;
+        }
+        let sides = |value: f32| Some(([value.clamp(0.0, FURTHEST); 4], false));
+        match field {
+            "opacity" => self.style(style::Parsed::Opacity(value.clamp(0.0, 1.0))),
+            "scale" => self.style(style::Parsed::Scale(value.clamp(-50.0, 50.0))),
+            "rotation" => self.style(style::Parsed::Rotation(value)),
+            "letterSpacing" => self.style(style::Parsed::Spacing(value.clamp(-200.0, 200.0))),
+            "borderRadius" => self.style(style::Parsed::Radius(sides(value))),
+            "borderWidth" => self.style(style::Parsed::BorderWidth(sides(value))),
+            "right" | "down" => {
+                let axis = usize::from(field == "down");
+                let new = value.clamp(-FURTHEST, FURTHEST);
+                let changed = self.piece.offset[axis] != new;
+                self.piece.offset[axis] = new;
+                changed
+            }
+            _ => match &mut self.piece.shape {
+                HudShape::Bar { size, .. }
+                | HudShape::Box { size, .. }
+                | HudShape::Image { size, .. }
+                    if field == "width" || field == "height" =>
+                {
+                    let axis = usize::from(field == "height");
+                    let new = value.clamp(0.0, FURTHEST);
+                    let changed = size[axis] != new;
+                    size[axis] = new;
+                    changed
+                }
+                HudShape::Bar { value: held, .. } => {
+                    let new = value.clamp(0.0, 1.0);
+                    let changed = *held != new;
+                    *held = new;
+                    changed
+                }
+                HudShape::Line { to, thickness } => {
+                    let (slot, new) = match field {
+                        "thickness" => (thickness, value.clamp(0.0, FURTHEST)),
+                        _ => (
+                            &mut to[usize::from(field == "toDown")],
+                            value.clamp(-FURTHEST, FURTHEST),
+                        ),
+                    };
+                    let changed = *slot != new;
+                    *slot = new;
+                    changed
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Sets a colour field, `color` or `borderColor`. The colour is read
+    /// back as a hex code, as it was not written as text.
+    #[allow(dead_code, reason = "piece:animate steps colours through this")]
+    fn set_color(&mut self, field: &str, color: Color) -> bool {
+        match field {
+            "color" if !matches!(self.piece.shape, HudShape::Graph { .. }) => {
+                let changed = self.piece.color != color;
+                self.piece.color = color;
+                self.color.clear();
+                changed
+            }
+            "borderColor" if matches!(self.piece.shape, HudShape::Box { .. }) => {
+                self.style(style::Parsed::BorderColor(Some((color, String::new()))))
+            }
+            _ => false,
+        }
+    }
+
+    /// The colour in a colour field, `color` or `borderColor`.
+    #[allow(dead_code, reason = "piece:animate reads the colour it starts from")]
+    fn colour(&self, field: &str) -> Option<Color> {
+        match field {
+            "color" if !matches!(self.piece.shape, HudShape::Graph { .. }) => {
+                Some(self.piece.color)
+            }
+            "borderColor" if matches!(self.piece.shape, HudShape::Box { .. }) => Some(
+                self.piece
+                    .style
+                    .as_deref()
+                    .map_or(Color::BLACK, |held| held.look.border_color),
+            ),
+            _ => None,
+        }
+    }
+
     /// Notes the piece as the rules left it, unless a picture is being
     /// drawn.
     fn settle(&mut self, shared: &Shared) {
@@ -433,18 +723,25 @@ impl HudState {
 
     /// Adds a piece and gives the id it is known by, or `None` when the
     /// HUD is full.
-    fn add(&self, piece: HudPiece, color: String) -> Option<u64> {
+    fn add(
+        &self,
+        mut piece: HudPiece,
+        color: String,
+        texts: Option<Box<StyleText>>,
+    ) -> Option<u64> {
         let mut pieces = self.pieces.borrow_mut();
         if pieces.len() >= MAX_PIECES {
             return None;
         }
         let id = self.next.get();
         self.next.set(id + 1);
+        piece.id = id;
         pieces.push(Entry {
             id,
             ruled: Ruled::of(&piece),
             piece,
             color,
+            texts,
             changed: false,
         });
         self.bump_layout();
@@ -461,6 +758,20 @@ impl HudState {
             }
             self.bump_layout();
         }
+    }
+
+    /// What kind of piece `id` is, or `None` once it is removed.
+    fn kind_of(&self, id: u64) -> Option<Kind> {
+        let pieces = self.pieces.borrow();
+        let place = pieces.binary_search_by_key(&id, |entry| entry.id).ok()?;
+        Some(match pieces[place].piece.shape {
+            HudShape::Text { .. } => Kind::Text,
+            HudShape::Bar { .. } => Kind::Bar,
+            HudShape::Box { .. } => Kind::Box,
+            HudShape::Line { .. } => Kind::Line,
+            HudShape::Image { .. } => Kind::Image,
+            HudShape::Graph { .. } => Kind::Graph,
+        })
     }
 
     /// Reads or changes the piece known by `id`; `None` once it is removed.
@@ -617,6 +928,18 @@ impl UserData for PieceRef {
                     return Err(no_such_field(lua, kind, &key));
                 }
                 let shared = hud_of(lua)?;
+                if key == "clipTo" {
+                    let target = shared
+                        .hud
+                        .with(id, |entry| {
+                            (
+                                entry.piece.style.as_deref().and_then(|held| held.clip_to),
+                                false,
+                            )
+                        })
+                        .ok_or_else(|| removed(lua, kind))?;
+                    return style::read_clip(lua, target);
+                }
                 let read = shared.hud.with(id, |entry| {
                     let value = match (key.as_str(), &entry.piece.shape) {
                         ("text", HudShape::Text { text, .. }) => {
@@ -639,19 +962,15 @@ impl UserData for PieceRef {
                             | HudShape::Box { size, .. }
                             | HudShape::Image { size, .. },
                         ) => Ok(Value::Number(f64::from(size[usize::from(key == "height")]))),
-                        ("corner", HudShape::Box { corner, .. }) => {
-                            Ok(Value::Number(f64::from(*corner)))
-                        }
-                        (
-                            "rotation",
-                            HudShape::Box { rotation, .. } | HudShape::Image { rotation, .. },
-                        ) => Ok(Value::Number(f64::from(*rotation))),
                         ("toRight" | "toDown", HudShape::Line { to, .. }) => {
                             Ok(Value::Number(f64::from(to[usize::from(key == "toDown")])))
                         }
                         ("thickness", HudShape::Line { thickness, .. }) => {
                             Ok(Value::Number(f64::from(*thickness)))
                         }
+                        ("color", _) if entry.color.is_empty() => lua
+                            .create_string(style::hex(entry.piece.color))
+                            .map(Value::String),
                         ("color", _) => lua.create_string(&entry.color).map(Value::String),
                         ("visible", _) => Ok(Value::Boolean(entry.piece.visible)),
                         ("layer", _) => Ok(Value::Number(f64::from(entry.piece.layer))),
@@ -663,6 +982,14 @@ impl UserData for PieceRef {
                         ("pressed", _) => Ok(Value::Boolean(
                             entry.ruled.visible && shared.hud.pressed.get() == Some(entry.id),
                         )),
+                        (key, _) if style::has(kind, key) => style::read(
+                            lua,
+                            &shared,
+                            entry.piece.style.as_deref(),
+                            entry.texts.as_deref(),
+                            key,
+                        )
+                        .unwrap_or(Ok(Value::Nil)),
                         _ => Ok(Value::Nil),
                     };
                     (value, false)
@@ -845,28 +1172,6 @@ impl UserData for PieceRef {
                             _ => ((), false),
                         })
                     }
-                    "corner" if kind == Kind::Box => {
-                        let new = field_number(lua, kind, &key, &value, "8")?.clamp(0.0, FURTHEST);
-                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
-                            HudShape::Box { corner, .. } if *corner != new => {
-                                *corner = new;
-                                ((), true)
-                            }
-                            _ => ((), false),
-                        })
-                    }
-                    "rotation" if matches!(kind, Kind::Box | Kind::Image) => {
-                        let new = field_number(lua, kind, &key, &value, "45")?;
-                        shared.hud.with(id, |entry| match &mut entry.piece.shape {
-                            HudShape::Box { rotation, .. } | HudShape::Image { rotation, .. }
-                                if *rotation != new =>
-                            {
-                                *rotation = new;
-                                ((), true)
-                            }
-                            _ => ((), false),
-                        })
-                    }
                     "toRight" | "toDown" if kind == Kind::Line => {
                         let new = field_number(lua, kind, &key, &value, "120")?
                             .clamp(-FURTHEST, FURTHEST);
@@ -890,6 +1195,17 @@ impl UserData for PieceRef {
                             }
                             _ => ((), false),
                         })
+                    }
+                    key if style::has(kind, key) => {
+                        let ctx = style::Ctx {
+                            lua,
+                            shared: &shared,
+                            kind,
+                            own: Some(id),
+                            options: false,
+                        };
+                        let parsed = style::parse(&ctx, key, &value)?;
+                        shared.hud.with(id, |entry| ((), entry.style(parsed)))
                     }
                     _ => return Err(no_such_field(lua, kind, &key)),
                 };
@@ -1251,7 +1567,15 @@ pub(crate) fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Co
     };
     let written = written.to_string_lossy();
     let name = written.trim().to_lowercase();
-    if let Some(digits) = name.strip_prefix('#') {
+    if let Some(short) = name.strip_prefix('#') {
+        // "#f80" is "#ff8800" and "#f80a" is "#ff8800aa".
+        let widened: String;
+        let digits = if matches!(short.len(), 3 | 4) && short.is_ascii() {
+            widened = short.chars().flat_map(|digit| [digit, digit]).collect();
+            widened.as_str()
+        } else {
+            short
+        };
         let parsed = match digits.len() {
             6 => u32::from_str_radix(digits, 16).ok().map(|rgb| (rgb, 0xff)),
             8 => u32::from_str_radix(digits, 16)
@@ -1268,7 +1592,7 @@ pub(crate) fn color_of(lua: &Lua, what: &str, value: &Value) -> mlua::Result<(Co
                     "{what} was given \"{written}\", which is not a hex colour. A hex \
                      colour is # and six digits from 0 to 9 and a to f, two each for red, \
                      green and blue: \"#ff8800\" is orange. Two more make it see-through: \
-                     \"#00000080\" is half-solid black."
+                     \"#00000080\" is half-solid black. Three digits work too: \"#f80\"."
                 ),
             ));
         };
@@ -1366,9 +1690,11 @@ struct Options {
     /// Whether `width` and `height` were said, for an image that keeps its
     /// shape when only one is.
     said: [bool; 2],
-    /// A box's corners and a box's or image's turn, in degrees.
-    corner: f32,
-    rotation: f32,
+    /// The style the options asked for, and the words written for it.
+    look: HudStyle,
+    texts: StyleText,
+    /// Whether any style option was given.
+    styled: bool,
     /// A line's other end and thickness.
     to: [f32; 2],
     thickness: f32,
@@ -1376,7 +1702,7 @@ struct Options {
 }
 
 /// Reads the table of options for a new piece of `kind`.
-fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options> {
+fn read_options(lua: &Lua, shared: &Shared, kind: Kind, options: &Value) -> mlua::Result<Options> {
     let function = kind.function();
     let mut read = Options {
         anchor: Anchor::TopLeft,
@@ -1392,8 +1718,9 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
         color_text: "white".to_owned(),
         frames: GRAPH_FRAMES,
         said: [false; 2],
-        corner: 0.0,
-        rotation: 0.0,
+        look: HudStyle::default(),
+        texts: StyleText::default(),
+        styled: false,
         to: LINE_TO,
         thickness: LINE_THICKNESS,
         layer: 0,
@@ -1477,16 +1804,6 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
                 read.size[usize::from(key == "height")] = side.min(FURTHEST);
                 read.said[usize::from(key == "height")] = true;
             }
-            "corner" if kind == Kind::Box => {
-                read.corner = number(&format!("how round the corners are {PIXELS}"), "8")?
-                    .clamp(0.0, FURTHEST);
-            }
-            "rotation" if matches!(kind, Kind::Box | Kind::Image) => {
-                read.rotation = number(
-                    "how far it is turned about its middle, in degrees clockwise",
-                    "45",
-                )?;
-            }
             "toRight" | "toDown" if kind == Kind::Line => {
                 read.to[usize::from(key == "toDown")] = number(
                     &format!("where the line's other end is from `at`, {PIXELS}"),
@@ -1528,6 +1845,18 @@ fn read_options(lua: &Lua, kind: Kind, options: &Value) -> mlua::Result<Options>
             "color" if kind != Kind::Graph => {
                 (read.color, read.color_text) =
                     color_of(lua, &format!("{function}'s `color`"), &value)?;
+            }
+            key if style::has(kind, key) => {
+                let ctx = style::Ctx {
+                    lua,
+                    shared,
+                    kind,
+                    own: None,
+                    options: true,
+                };
+                let parsed = style::parse(&ctx, key, &value)?;
+                style::apply(&mut read.look, &mut read.texts, parsed);
+                read.styled = true;
             }
             "width" | "height" | "size" if kind == Kind::Line => {
                 return Err(fail(
@@ -1690,7 +2019,6 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 HudShape::Image {
                     image,
                     size: [0.0; 2],
-                    rotation: 0.0,
                 }
             }
             Kind::Box | Kind::Graph | Kind::Line => {
@@ -1713,15 +2041,11 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                         to: LINE_TO,
                         thickness: LINE_THICKNESS,
                     },
-                    _ => HudShape::Box {
-                        size: [0.0; 2],
-                        corner: 0.0,
-                        rotation: 0.0,
-                    },
+                    _ => HudShape::Box { size: [0.0; 2] },
                 }
             }
         };
-        let read = read_options(lua, kind, &options)?;
+        let read = read_options(lua, &shared, kind, &options)?;
         let shape = match shape {
             HudShape::Text { text, .. } => HudShape::Text {
                 text,
@@ -1731,11 +2055,7 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                 value,
                 size: read.size,
             },
-            HudShape::Box { .. } => HudShape::Box {
-                size: read.size,
-                corner: read.corner,
-                rotation: read.rotation,
-            },
+            HudShape::Box { .. } => HudShape::Box { size: read.size },
             HudShape::Graph { .. } => HudShape::Graph {
                 size: read.size,
                 frames: read.frames,
@@ -1757,22 +2077,26 @@ fn function(lua: &Lua, shared: &Rc<Shared>, kind: Kind) -> mlua::Result<Function
                     [false, true] => [read.size[1] * own[0] / own[1], read.size[1]],
                     [false, false] => own,
                 };
-                HudShape::Image {
-                    image,
-                    size,
-                    rotation: read.rotation,
-                }
+                HudShape::Image { image, size }
             }
         };
+        // A piece is given a style only if its options asked for one.
+        let (style, texts) = if read.styled {
+            (Some(Box::new(read.look)), Some(Box::new(read.texts)))
+        } else {
+            (None, None)
+        };
         let piece = HudPiece {
+            id: 0,
             shape,
             anchor: read.anchor,
             offset: read.offset,
             color: read.color,
             visible: true,
             layer: read.layer,
+            style,
         };
-        let Some(id) = shared.hud.add(piece, read.color_text) else {
+        let Some(id) = shared.hud.add(piece, read.color_text, texts) else {
             return Err(fail(
                 lua,
                 format!(
@@ -1836,16 +2160,14 @@ mod layer_tests {
 
     fn piece(layer: i32) -> HudPiece {
         HudPiece {
-            shape: HudShape::Box {
-                size: [1.0, 1.0],
-                corner: 0.0,
-                rotation: 0.0,
-            },
+            id: 0,
+            shape: HudShape::Box { size: [1.0, 1.0] },
             anchor: Anchor::TopLeft,
             offset: [0.0; 2],
             color: Color::WHITE,
             visible: true,
             layer,
+            style: None,
         }
     }
 
@@ -1859,7 +2181,7 @@ mod layer_tests {
     fn higher_layers_are_drawn_last_and_equal_layers_keep_made_order() {
         let state = HudState::default();
         for layer in [5, 0, 5, -1, 0] {
-            state.add(piece(layer), String::new()).unwrap();
+            state.add(piece(layer), String::new(), None).unwrap();
         }
         assert_eq!(drawn(&state), [-1, 0, 0, 5, 5]);
         // Equal layers: the earlier made is first.
@@ -1874,10 +2196,10 @@ mod layer_tests {
     #[test]
     fn the_order_follows_a_piece_made_removed_or_moved() {
         let state = HudState::default();
-        let low = state.add(piece(0), String::new()).unwrap();
-        let high = state.add(piece(10), String::new()).unwrap();
+        let low = state.add(piece(0), String::new(), None).unwrap();
+        let high = state.add(piece(10), String::new(), None).unwrap();
         assert_eq!(drawn(&state), [0, 10]);
-        state.add(piece(5), String::new()).unwrap();
+        state.add(piece(5), String::new(), None).unwrap();
         assert_eq!(drawn(&state), [0, 5, 10]);
         state.with(low, |entry| {
             entry.piece.layer = 20;
@@ -1892,8 +2214,8 @@ mod layer_tests {
     #[test]
     fn changes_are_reported_at_the_place_each_piece_is_drawn() {
         let state = HudState::default();
-        let first = state.add(piece(9), String::new()).unwrap();
-        state.add(piece(0), String::new()).unwrap();
+        let first = state.add(piece(9), String::new(), None).unwrap();
+        state.add(piece(0), String::new(), None).unwrap();
         state.with(first, |entry| {
             entry.piece.visible = false;
             ((), true)
@@ -1901,5 +2223,49 @@ mod layer_tests {
         let mut seen = Vec::new();
         state.take_changes(|rank, piece| seen.push((rank, piece.layer)));
         assert_eq!(seen, [(1, 9)]);
+    }
+
+    #[test]
+    fn a_number_or_colour_field_is_set_by_name_the_way_an_animation_does() {
+        let state = HudState::default();
+        let id = state.add(piece(0), String::new(), None).unwrap();
+        let set = |field: &str, value: f32| {
+            state
+                .with(id, |entry| {
+                    let changed = entry.set_number(field, value);
+                    ((changed, entry.number(field)), changed)
+                })
+                .unwrap()
+        };
+        assert_eq!(set("opacity", 0.5), (true, Some(0.5)));
+        assert_eq!(set("opacity", 0.5), (false, Some(0.5)));
+        assert_eq!(
+            set("opacity", 3.0),
+            (true, Some(1.0)),
+            "held to what it can be"
+        );
+        assert_eq!(set("borderRadius", 6.0), (true, Some(6.0)));
+        assert_eq!(set("width", 40.0), (true, Some(40.0)));
+        assert_eq!(set("right", 5.0), (true, Some(5.0)));
+        assert_eq!(
+            set("letterSpacing", 2.0),
+            (false, None),
+            "a box has no letters"
+        );
+        assert!(!set("opacity", f32::NAN).0);
+        let changed = state
+            .with(id, |entry| {
+                let changed = entry.set_color("borderColor", Color::rgb(1.0, 0.0, 0.0));
+                ((changed, entry.colour("borderColor")), changed)
+            })
+            .unwrap();
+        assert_eq!(changed, (true, Some(Color::rgb(1.0, 0.0, 0.0))));
+        let mut seen = 0;
+        state.take_changes(|_, piece| {
+            seen += 1;
+            assert_eq!(piece.style.as_ref().unwrap().look.opacity, 1.0);
+            assert_eq!(piece.style.as_ref().unwrap().look.radii, [6.0; 4]);
+        });
+        assert_eq!(seen, 1);
     }
 }
