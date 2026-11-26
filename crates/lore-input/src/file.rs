@@ -820,6 +820,54 @@ mod tests {
     }
 
     #[test]
+    fn a_games_own_axis_actions_read_back_and_keep_their_kind() {
+        let mut defaults = game_map();
+        defaults
+            .own_action("ride", ActionKind::Axis2D, ["WASD", "LeftStick"])
+            .unwrap();
+        defaults
+            .own_action("steer", ActionKind::Axis1D, ["A/D", "LeftStickX"])
+            .unwrap();
+        let mut map = defaults.clone();
+        let ride = map.action("ride").unwrap();
+        map.set_bindings(
+            ride,
+            ["ArrowKeys", "RightStick"].map(|text| text.parse().unwrap()),
+        )
+        .unwrap();
+
+        let text = map.write_bindings(&defaults);
+        assert!(
+            text.contains("\nride = [\"ArrowKeys\", \"RightStick\"]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n# steer = [\"A/D\", \"LeftStickX\"]\n"),
+            "{text}"
+        );
+        let mut read = defaults.clone();
+        assert_eq!(read.read_bindings(&text), Ok(Vec::new()));
+        assert_eq!(read, map);
+
+        // A player's file may rebind an axis only with the same kind.
+        let mut read = defaults.clone();
+        let problems = read
+            .read_bindings(
+                "[game_bindings]\nride = [\"Space\", \"GamepadSouth\"]\nsteer = [\"WASD\"]\n",
+            )
+            .unwrap();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems[0]
+                .to_string()
+                .contains("is a 2D axis (a direction), but \"Space\""),
+            "{}",
+            problems[0]
+        );
+        assert_eq!(read, defaults);
+    }
+
+    #[test]
     fn a_games_own_file_has_its_actions_and_reads_back_with_standard_overrides() {
         let defaults = game_map();
         let text = defaults.write_game_bindings(&defaults).unwrap();

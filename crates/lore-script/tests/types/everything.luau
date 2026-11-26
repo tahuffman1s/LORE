@@ -337,6 +337,10 @@ end)
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
 game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.bind("ride", { "WASD", "LeftStick" })
+game.input.bind("steer", { "A/D", "LeftStickX" })
+local rideX, rideY = game.input.axis("ride")
+local steerX, steerY = game.input.axis("steer")
 game.input.addSet("riding", { mouse = "look" })
 game.input.addSet("shop", { mouse = "pointer" })
 game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })

@@ -1091,23 +1091,44 @@ pub(crate) const SWITCH_VIEW: &str = "switch_view";
 /// (`GamepadSelect` is `switch_view`).
 const FREE_GAMEPAD_BUTTON: &str = "LeftBumper";
 
-/// Checks what a script gave `game.input.bind` as bindings: buttons, spelt
-/// right.
-fn check_bindings(name: &str, bindings: &[String]) -> Result<(), MapError> {
+/// How a binding is told apart in an error: what it does.
+const fn moves(kind: ActionKind) -> &'static str {
+    match kind {
+        ActionKind::Button => "is a button",
+        ActionKind::Axis1D => "moves in one direction",
+        ActionKind::Axis2D => "moves in two directions",
+    }
+}
+
+/// Checks what a script gave `game.input.bind` as bindings: spelt right, and
+/// all of one kind. Gives that kind, or the whole error to show.
+fn check_bindings(name: &str, bindings: &[String], example: &str) -> Result<ActionKind, String> {
+    let mut first: Option<(&str, ActionKind)> = None;
     for text in bindings {
-        let binding: Binding = text.parse().map_err(|source| MapError::UnknownBinding {
-            action: name.to_owned(),
-            source,
+        let binding: Binding = text.parse().map_err(|source| {
+            format!(
+                "game.input.bind: {} Write it like this: {example}",
+                MapError::UnknownBinding {
+                    action: name.to_owned(),
+                    source,
+                }
+            )
         })?;
-        if binding.kind() != ActionKind::Button {
-            return Err(MapError::WrongKind {
-                action: name.to_owned(),
-                kind: ActionKind::Button,
-                binding,
-            });
+        match first {
+            None => first = Some((text, binding.kind())),
+            Some((before, kind)) if kind != binding.kind() => {
+                return Err(format!(
+                    "game.input.bind(\"{name}\", ...): \"{before}\" {} but \"{text}\" {}. \
+                     Give an action buttons only, or directions only: \
+                     {{ \"WASD\", \"LeftStick\" }}",
+                    moves(kind),
+                    moves(binding.kind()),
+                ));
+            }
+            Some(_) => {}
         }
     }
-    Ok(())
+    Ok(first.map_or(ActionKind::Button, |(_, kind)| kind))
 }
 
 /// The sets of a map, written for an error: `"gameplay", "menu"`.
@@ -1327,18 +1348,35 @@ fn bind_set(
 /// Whether a game's buttons cover a keyboard or mouse and a gamepad: every
 /// action must, so that nothing ships for one device only. Gives the mistake
 /// to put right.
-fn device_gap(name: &str, bindings: &[String]) -> Option<String> {
+fn device_gap(name: &str, kind: ActionKind, bindings: &[String]) -> Option<String> {
     let parsed: Vec<Binding> = bindings.iter().filter_map(|b| b.parse().ok()).collect();
+    // What is missing, and one example of it, for each device.
+    let (pad, keys) = match kind {
+        ActionKind::Button => (
+            ("a gamepad button", FREE_GAMEPAD_BUTTON),
+            ("a keyboard or mouse button", "F1\" or \"MouseMiddle"),
+        ),
+        ActionKind::Axis1D => (
+            ("a gamepad direction", "LeftStickX"),
+            ("a keyboard direction", "A/D"),
+        ),
+        ActionKind::Axis2D => (
+            ("a gamepad direction", "LeftStick"),
+            ("a keyboard or mouse direction", "WASD"),
+        ),
+    };
     if !parsed.iter().any(|binding| binding.is_gamepad()) {
+        let (what, example) = pad;
         return Some(format!(
-            "game.input.bind(\"{name}\", ...) needs a gamepad button too, so a player with a \
-             controller can use it. Add one such as \"{FREE_GAMEPAD_BUTTON}\".",
+            "game.input.bind(\"{name}\", ...) needs {what} too, so a player with a \
+             controller can use it. Add one such as \"{example}\"."
         ));
     }
     if !parsed.iter().any(|binding| !binding.is_gamepad()) {
+        let (what, example) = keys;
         return Some(format!(
-            "game.input.bind(\"{name}\", ...) needs a keyboard or mouse button too, so a \
-             player without a controller can use it. Add one such as \"F1\" or \"MouseMiddle\"."
+            "game.input.bind(\"{name}\", ...) needs {what} too, so a player without a \
+             controller can use it. Add one such as \"{example}\"."
         ));
     }
     None
@@ -1382,12 +1420,10 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             ));
         }
         let bindings = bindings_of(lua, &list, EXAMPLE)?;
-        if let Err(problem) = check_bindings(&name, &bindings) {
-            return Err(fail(
-                lua,
-                format!("game.input.bind: {problem} Write it like this: {EXAMPLE}"),
-            ));
-        }
+        let kind = match check_bindings(&name, &bindings, EXAMPLE) {
+            Ok(kind) => kind,
+            Err(problem) => return Err(fail(lua, problem)),
+        };
         if shared.bound.borrow().contains(&name) {
             return Err(fail(
                 lua,
@@ -1411,13 +1447,13 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             ));
         }
         let set = bind_set(lua, &map, &options)?;
-        if let Some(gap) = device_gap(&name, &bindings) {
+        if let Some(gap) = device_gap(&name, kind, &bindings) {
             return Err(fail(lua, gap));
         }
         if map.action(&name).is_err() {
             let made = match set {
-                Some(set) => map.own_button_in(&name, &bindings, set),
-                None => map.own_button(&name, &bindings),
+                Some(set) => map.own_action_in(&name, kind, &bindings, set),
+                None => map.own_action(&name, kind, &bindings),
             };
             if let Err(problem) = made {
                 return Err(fail(

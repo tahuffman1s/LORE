@@ -433,7 +433,9 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     let two = Reads::TwoDirections;
     input.set(
         "axis",
-        reader(lua, shared, "axis", two, |s| (s.axis[0], s.axis[1]))?,
+        reader(lua, shared, "axis", Reads::Directions, |s| {
+            (s.axis[0], s.axis[1])
+        })?,
     )?;
     input.set(
         "mouse",
@@ -618,6 +620,8 @@ enum Reads {
     OneDirection,
     /// Two-direction axes such as move and look: an x and a y.
     TwoDirections,
+    /// Any axis: two directions read as x and y, one direction as x with y 0.
+    Directions,
 }
 
 /// Why `function` cannot read an action of this `kind`, if it cannot. Reading
@@ -637,6 +641,12 @@ fn wrong_shape(
         Reads::TwoDirections if !two => Some(format!(
             "\"{action}\" has no x and y, so game.input.{function} cannot read it. \
              Write: game.input.pressed(\"{action}\") or game.input.value(\"{action}\")"
+        )),
+        Reads::Directions if kind == Some(ActionKind::Button) => Some(format!(
+            "\"{action}\" is a button, so game.input.axis cannot read it. \
+             Write: game.input.pressed(\"{action}\"). To read directions, give the \
+             action directions when you bind it: game.input.bind(\"{action}\", \
+             {{ \"WASD\", \"LeftStick\" }})"
         )),
         _ => None,
     }

@@ -403,9 +403,33 @@ impl ActionMap {
     where
         I: IntoIterator<Item: AsRef<str>>,
     {
+        self.own_action(name, ActionKind::Button, bindings)
+    }
+
+    /// Adds an action a game makes for itself, of any kind: a button, a
+    /// one-direction axis such as `"A/D"`, or a two-direction one such as
+    /// `"WASD"` and `"LeftStick"`.
+    ///
+    /// It is kept like [`own_button`](Self::own_button): live in every set,
+    /// and written under `[game_bindings]`. A player's file may rebind it only
+    /// with bindings of the same kind.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the name is taken or empty, or if a binding is misspelled or
+    /// is not of `kind`.
+    pub fn own_action<I>(
+        &mut self,
+        name: &str,
+        kind: ActionKind,
+        bindings: I,
+    ) -> Result<ActionId, MapError>
+    where
+        I: IntoIterator<Item: AsRef<str>>,
+    {
         let before = self.adding_to;
         self.adding_to = Self::GAMEPLAY;
-        let made = self.add_named(name, ActionKind::Button, bindings, true);
+        let made = self.add_named(name, kind, bindings, true);
         self.adding_to = before;
         made
     }
@@ -432,13 +456,32 @@ impl ActionMap {
     where
         I: IntoIterator<Item: AsRef<str>>,
     {
+        self.own_action_in(name, ActionKind::Button, bindings, set)
+    }
+
+    /// [`own_action`](Self::own_action) that is heard only while `set` is live.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the name is taken or empty, or if a binding is misspelled or
+    /// is not of `kind`.
+    pub fn own_action_in<I>(
+        &mut self,
+        name: &str,
+        kind: ActionKind,
+        bindings: I,
+        set: ActionSetId,
+    ) -> Result<ActionId, MapError>
+    where
+        I: IntoIterator<Item: AsRef<str>>,
+    {
         let before = self.adding_to;
         self.adding_to = if self.mouse_mode(set).is_some() {
             set
         } else {
             Self::GAMEPLAY
         };
-        let made = self.add_named(name, ActionKind::Button, bindings, true);
+        let made = self.add_named(name, kind, bindings, true);
         self.adding_to = before;
         if let Ok(id) = made {
             self.actions[id.0].everywhere = false;

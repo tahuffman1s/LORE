@@ -280,6 +280,77 @@ fn a_button_with_no_gamepad_button_is_a_mistake_and_a_clash_a_warning() {
 }
 
 #[test]
+fn a_script_can_declare_an_action_with_two_directions_and_read_it_with_axis() {
+    let mut host = game(
+        r#"game.input.bind("ride", { "WASD", "LeftStick" })
+        game.onTick(function()
+            local x, y = game.input.axis("ride")
+            print(x, y, game.input.pressed("ride"))
+        end)"#,
+    );
+    let mut input = Input::new(host.actions());
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["0 0 false"]);
+    input.press(Key::D);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["1 0 true"]);
+}
+
+#[test]
+fn a_script_can_declare_an_action_with_one_direction() {
+    let mut host = game(
+        r#"game.input.bind("steer", { "A/D", "LeftStickX" })
+        game.input.bind("turn_page", { "Q/E", "LeftBumper/RightBumper" })
+        game.onTick(function()
+            local x, y = game.input.axis("steer")
+            print(x, y, game.input.value("steer"), game.input.value("turn_page"))
+        end)"#,
+    );
+    let mut input = Input::new(host.actions());
+    input.press(Key::A);
+    input.press(Key::E);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["-1 0 -1 1"]);
+}
+
+#[test]
+fn an_action_that_mixes_buttons_and_directions_says_what_to_write() {
+    let message = load_mistake(r#"game.input.bind("ride", { "WASD", "Space" })"#);
+    assert!(
+        message.contains(
+            "game.input.bind(\"ride\", ...): \"WASD\" moves in two directions but \"Space\" \
+             is a button. Give an action buttons only, or directions only: \
+             { \"WASD\", \"LeftStick\" }"
+        ),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("ride", { "A/D", "LeftStick" })"#);
+    assert!(message.contains("moves in one direction but"), "{message}");
+}
+
+#[test]
+fn a_direction_with_no_gamepad_or_no_keyboard_is_a_mistake() {
+    let message = load_mistake(r#"game.input.bind("ride", { "WASD", "ArrowKeys" })"#);
+    assert!(
+        message.contains("needs a gamepad direction too") && message.contains("\"LeftStick\""),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("steer", { "LeftStickX", "Dpad" })"#);
+    assert!(message.contains("moves in one direction but"), "{message}");
+    let message = load_mistake(r#"game.input.bind("steer", { "LeftStickX" })"#);
+    assert!(
+        message.contains("needs a keyboard direction too") && message.contains("\"A/D\""),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("ride", { "Dpad", "LeftStick" })"#);
+    assert!(
+        message.contains("needs a keyboard or mouse direction too"),
+        "{message}"
+    );
+    let _host = game(r#"game.input.bind("scope", { "MouseMotion", "RightStick" })"#);
+}
+
+#[test]
 fn the_pointer_and_the_wheel_come_from_this_ticks_input() {
     let mut host = game(
         r#"game.onTick(function()

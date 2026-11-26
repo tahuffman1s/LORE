@@ -3538,7 +3538,9 @@ declare game: {
         value: (action: string) -> number,
 
         --- The x and y of a two-direction action, "move" or "look", each from
-        --- -1 to 1. Right and up are positive.
+        --- -1 to 1. Right and up are positive. An action with one direction
+        --- (made with `bind`, such as { "A/D", "LeftStickX" }) gives its
+        --- number as x and 0 as y. A button is read with `pressed`.
         --- Example: local x, y = game.input.axis("move")
         axis: (action: string) -> (number, number),
 
@@ -3603,6 +3605,14 @@ declare game: {
         --- with `{ set = "riding" }` it is heard only while that set is live
         --- (one of the engine's, or one made above it with `addSet`).
         --- Example: if game.input.justPressed("open_map") then mapShown = not mapShown end
+        --- An action can have directions instead of buttons, read with `axis`:
+        --- "WASD", "ArrowKeys", "LeftStick", "Dpad" and "MouseMotion" are two
+        --- directions; "A/D", "LeftStickX" and a pair such as
+        --- "LeftBumper/RightBumper" are one (the first button pushes toward -1).
+        --- An action is buttons only or directions only, and still needs a
+        --- keyboard or mouse binding and a gamepad binding.
+        --- Example: game.input.bind("ride", { "WASD", "LeftStick" }, { set = "riding" })
+        --- Example: game.input.bind("steer", { "A/D", "LeftStickX" })
         bind: (name: string, bindings: { string }, options: { set: string? }?) -> (),
 
         --- Makes a set of actions of the game's own, such as "riding" for
