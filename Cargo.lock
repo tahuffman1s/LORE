@@ -1560,6 +1560,7 @@ dependencies = [
  "lore-audio",
  "lore-fluid",
  "lore-input",
+ "lore-nav",
  "lore-pack",
  "lore-physics",
  "lore-render",
@@ -1635,6 +1636,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-nav"
+version = "0.0.0"
+dependencies = [
+ "glam 0.33.12",
+ "libm",
+ "rerecast",
+]
+
+[[package]]
 name = "lore-pack"
 version = "0.0.0"
 
@@ -1677,6 +1687,7 @@ dependencies = [
  "lore-fluid",
  "lore-input",
  "lore-markup",
+ "lore-nav",
  "lore-shader",
  "lore-sky",
  "lore-ui",
@@ -2709,6 +2720,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rerecast"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71fb021f09acc9f578681db0a54ba16e952565fdc07ab963278d0f93a6b07b14"
+dependencies = [
+ "bitflags 2.13.2",
+ "glam 0.33.12",
+ "libm",
+ "slotmap",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "robust"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3242,6 +3267,9 @@ name = "tracing-core"
 version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
+dependencies = [
+ "once_cell",
+]
 
 [[package]]
 name = "ttf-parser"

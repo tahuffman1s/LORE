@@ -63,8 +63,8 @@ pub struct Mixer {
     listener: Listener,
     volume: f32,
     volume_now: f32,
-    /// How loud each [`Group`] is, effects and then music.
-    groups: [f32; 2],
+    /// How loud each [`Group`] is: effects, music and then speech.
+    groups: [f32; Group::COUNT],
     /// Keeps streamed sounds decoded ahead of where they are playing.
     streamer: Streamer,
     /// How much a gain may change from one sample to the next.
@@ -120,7 +120,7 @@ impl Mixer {
             listener: Listener::default(),
             volume: 1.0,
             volume_now: 1.0,
-            groups: [1.0; 2],
+            groups: [1.0; Group::COUNT],
             streamer: Streamer::default(),
             slew: 1.0 / fade_frames,
             dulling: 1.0 - (-TAU * BEHIND_CUTOFF / rate as f32).exp(),
@@ -239,8 +239,9 @@ impl Mixer {
 
     /// Sets the volume of one group of sounds, from 0 (silent) to 1
     /// (full): [`Group::Music`] for what was played as
-    /// [music](Play::music), [`Group::Effects`] for everything else. It is
-    /// on top of [`set_volume`](Self::set_volume), which turns both down.
+    /// [music](Play::music), [`Group::Speech`] for [speech](Play::speech),
+    /// [`Group::Effects`] for everything else. It is on top of
+    /// [`set_volume`](Self::set_volume), which turns all of them down.
     pub fn set_group_volume(&mut self, group: Group, volume: f32) {
         self.groups[group as usize] = if volume.is_finite() {
             volume.clamp(0.0, 1.0)

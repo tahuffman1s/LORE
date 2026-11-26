@@ -845,8 +845,20 @@ declare extern type Noise with
     heardWithin: number
     --- True for the player's own steps and weapon; false for what the
     --- world makes: thunder, dripping, an explosion's blast, a bullet strike.
+    --- Shorthand for `noise.by == game.player`. A blast or a strike is the
+    --- world's even when the player fired it.
     --- Example: if not noise.byPlayer then print("the world made a noise") end
     byPlayer: boolean
+    --- The weapon that made it, by its name as in `game.weapon("bow", ...)`
+    --- or `game.player:giveWeapon`: a shot, a dry click or a reload. Nil for
+    --- anything else, a blast or a strike included.
+    --- Example: if noise.weapon == "bow" then print("an arrow loosed") end
+    weapon: string?
+    --- Who made it: `game.player` for their steps, landings, shots and
+    --- splashes; nil for what the world makes (thunder, dripping, a blast).
+    --- Only the player makes noises today.
+    --- Example: if noise.by == game.player then print("you made that") end
+    by: Character?
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -2649,6 +2661,24 @@ declare game: {
     --- Example: local order = game.shuffle({ 1, 2, 3, 4 })
     shuffle: <T>(list: { T }) -> { T },
 
+    --- Whether a person can walk from `from` to `to` in the level, each a
+    --- place in metres such as `game.player.position`: up steps of 0.4 m and
+    --- slopes of 45° at most, through gaps 0.7 m wide or more, crouching where
+    --- it is low, and not through a door that is shut. Each place is taken
+    --- to the ground nearest it, within 2 m. False too when the game has no
+    --- ground yet; `game.findWay` says why there is no way.
+    --- Example: if game.canWalk(game.player.position, vector.create(4, 0, -6)) then print("You can get there") end
+    canWalk: (from: vector, to: vector) -> boolean,
+
+    --- The way a person would walk from `from` to `to` (places in metres):
+    --- the corners to walk to, in order, the first where it starts and the
+    --- last where it ends, each on the ground. A trail to a quest's goal can
+    --- be drawn along it. With no way it gives nil and a sentence saying
+    --- why, to print, such as `the door "Cellar door" is shut: open it first`.
+    --- Example: local corners, why = game.findWay(game.player.position, vector.create(4, 0, -6))
+    --- Example: if not corners then print("No way there: " .. why) end
+    findWay: (from: vector, to: vector) -> ({ vector }?, string?),
+
     --- True while the game is paused with `game.pause`.
     --- Example: game.onTick(function() if game.paused() then return end; moveEnemies() end)
     paused: () -> boolean,
@@ -3338,29 +3368,72 @@ declare game: {
     --- Example: game.onDrop(function(thing, thrown) if thrown then game.audio.playAt("whoosh", thing.position) end end)
     onDrop: (handler: (thing: Thing, thrown: boolean) -> ()) -> (),
 
-    --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
-    --- inside the game's folder, named without the folder and without `.wav`
-    --- or `.ogg`: `sounds/door.wav` is "door" and `sounds/ui/click.ogg` is
-    --- "ui/click".
-    ---
-    --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
-    --- is "music/theme". The sounds in that folder, and a sound called
-    --- "music", follow the player's music volume (see `game.settings`); every
-    --- other sound follows their effects volume. Music can be as long as you
-    --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
-    --- little at a time as it plays. A WAV file is held in memory whole, so
-    --- export long sounds as Ogg Vorbis.
-    --- The engine also has starter sounds a new game can use straight away:
-    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", for
-    --- menus "menu-move" and "menu-choose", and for
-    --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
-    --- "bubbles", "drip", "sizzle" and "underwater"; and the weather's, which the
-    --- engine plays by itself: "rain", "wind", "thunder" and "thunder-far".
-    --- A file of your own with one of those names replaces the starter
-    --- sound.
-    ---
-    --- Sounds are played from functions that run while the game is on, such
-    --- as `game.onStart` and `game.onTick`, not while the script loads.
+    --- The world's clock: what time of day it is, how long a day lasts and
+    --- which day it is. The sky, people's days and a shop's opening hours
+    --- all read this one clock (`game.sky` sets the same one). A game that
+    --- never sets it has no day and night, and its fields read nil. The
+    --- hours pass on the game's ticks, so the clock stops while the game is
+    --- paused and runs fast with `game.setTimeSpeed`. Which to use: `time`
+    --- to show, `hour` to compare, `day` to count, `skipTo` to sleep or wait.
+    clock: {
+        --- How many minutes of play a whole day and night last, up to
+        --- 100000; 0 (as made) stops the hours where they are. 24 is a game
+        --- hour a minute. If no time has been set yet the first day begins
+        --- at noon.
+        --- Example: game.clock.dayLength = 20
+        dayLength: number,
+
+        --- The time of day on a 24-hour clock, as text: "8:00" is eight in
+        --- the morning, "20:30" half past eight at night. Setting it sets
+        --- the clock to that time today, earlier or later, as a watch is
+        --- set, and tells `onHour` nothing; the day stays. Set it at the top
+        --- of the file for the time the game starts at. Only time passing
+        --- (the day going by, or `skipTo`) moves the day on. It takes text from
+        --- "0:00" to "23:59" ("24:00" is midnight too); for a number, set
+        --- `hour`. To pass time, use `game.clock.skipTo`. nil until set.
+        --- Example: game.clock.time = "8:00"
+        --- Example: clockText.text = game.clock.time or ""
+        time: string?,
+
+        --- The hour of the day as a number, from 0 up to 24: 13.5 is half
+        --- past one in the afternoon. Setting it does what setting `time`
+        --- does. nil until set.
+        --- Example: if (game.clock.hour or 12) >= 20 then lights.on = true end
+        --- Example: game.clock.hour = 6.5
+        hour: number?,
+
+        --- Which day it is, counting the first as 1; it moves on at
+        --- midnight. Setting the time never moves it, nor does
+        --- `game.sky.setDate`; `game.sky.setHour` past 24 moves it a day on
+        --- for each 24. Read only. nil until the clock is set.
+        --- Example: if game.clock.day == 3 then game.thing("Ship").visible = true end
+        day: number?,
+
+        --- Passes time to the next time it is `time` (as `game.clock.time`
+        --- takes it): later today, or tomorrow if that has gone by. It
+        --- never goes back. The hours passed are told to `onHour`, each
+        --- once and in order, before the next `game.onTick`, so a shop that
+        --- opens at 8 opens after a night's sleep. A clock never set starts
+        --- at that time on day 1.
+        --- Example: game.clock.skipTo("8:00") -- sleep until morning
+        skipTo: (time: string | number) -> (),
+
+        --- Calls `handler` when the clock comes to `hour` o'clock (0 is
+        --- midnight, 20 eight at night) each day, or, with no hour, at
+        --- every hour; `handler` is given the hour. Hours passed by
+        --- `skipTo`, or by a short day in one tick, are each told once, in
+        --- order; `game.clock.time` then reads the time it came to. Setting
+        --- `time` or `hour` tells nothing. Hours passed in a tick are told
+        --- before that tick's `game.onTick`; while the game is paused they
+        --- wait. A jump of more than a day in one tick tells only the last
+        --- 24 hours. A function that sets the time stops the hours after
+        --- its own from being told; one that skips on has the hours it
+        --- passed told next.
+        --- Example: game.clock.onHour(20, function() print("Night falls") end)
+        --- Example: game.clock.onHour(function(hour) print("It is " .. hour .. " o'clock") end)
+        onHour: (hour: number | (hour: number) -> (), handler: ((hour: number) -> ())?) -> (),
+    },
+
     sky: {
         --- Says what hour of the day it is: 12 is noon, 18 is the sun
         --- setting, 24 is midnight, and hours past 24 run on into the next
@@ -3369,12 +3442,18 @@ declare game: {
         --- reddens, night falls, the stars come out and the moon lights
         --- the land. Until a script says the hour it is always day, in the
         --- level's own light. To make time pass, say how long a day lasts
-        --- with game.sky.setDayLength.
+        --- with game.sky.setDayLength. It sets the world's clock, the same
+        --- one `game.clock` reads, as a watch is set: it tells
+        --- `game.clock.onHour` nothing. The hour counts from midnight at the
+        --- start of the date last given to `setDate`, so an hour below 24
+        --- is that date and keeps `game.clock.day` where it is, and each 24
+        --- past it is a day later on both. `game.clock` is the easier way.
         --- Example: game.sky.setHour(18.5)
         setHour: (hour: number) -> (),
 
         --- The hour it is, or nil if the script has said none. Past
-        --- midnight it runs on over 24: use `% 24` for the hour of the day.
+        --- midnight it runs on over 24: `game.clock.hour` is the hour of
+        --- the day.
         --- Example: local hour = (game.sky.hour() or 12) % 24
         hour: () -> number?,
 
@@ -3382,7 +3461,8 @@ declare game: {
         --- from then on the hours pass by themselves: the sun crosses the
         --- sky, sets, and rises again. 24 is a day in twenty-four minutes,
         --- a game hour a minute. 0 stops the hours where they are. If no
-        --- hour has been said yet the day begins at noon.
+        --- hour has been said yet the day begins at noon. The same as
+        --- `game.clock.dayLength = 24`.
         --- Example: game.sky.setDayLength(24)
         setDayLength: (minutes: number) -> (),
 
@@ -3528,7 +3608,10 @@ declare game: {
         --- Says what day it is: the year, the month (1 to 12) and the day.
         --- The moon has the phase it had that night, the sun the height of
         --- that season, and the date moves on at each midnight as the hours
-        --- pass. An hour said past 24 is kept as that hour of this day.
+        --- pass. Today becomes that date: `game.sky.hour()` keeps its time
+        --- of day and drops the days it had run on over 24, and
+        --- `game.clock.day` and the time stay as they were. It can come
+        --- before or after `setHour`.
         --- Example: game.sky.setDate(2026, 3, 20)
         setDate: (year: number, month: number, day: number) -> (),
 
@@ -3915,6 +3998,30 @@ declare game: {
         stopTornado: () -> (),
     },
 
+    --- Sound. A sound is a WAV or Ogg Vorbis file in a folder called `sounds`
+    --- inside the game's folder, named without the folder and without `.wav`
+    --- or `.ogg`: `sounds/door.wav` is "door" and `sounds/ui/click.ogg` is
+    --- "ui/click".
+    ---
+    --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
+    --- is "music/theme". The sounds in that folder, and a sound called
+    --- "music", follow the player's music volume (see `game.settings`); the
+    --- sounds in `sounds/speech` (voice lines: "speech/greeting") follow
+    --- their speech volume; every other sound follows their effects volume. Music can be as long as you
+    --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
+    --- little at a time as it plays. A WAV file is held in memory whole, so
+    --- export long sounds as Ogg Vorbis.
+    --- The engine also has starter sounds a new game can use straight away:
+    --- "footstep", "gunshot", "landing", "dry-fire" and "reload", for
+    --- menus "menu-move" and "menu-choose", and for
+    --- water "splash", "splash-small", "wade", "swim-stroke", "surface",
+    --- "bubbles", "drip", "sizzle" and "underwater"; and the weather's, which the
+    --- engine plays by itself: "rain", "wind", "thunder" and "thunder-far".
+    --- A file of your own with one of those names replaces the starter
+    --- sound.
+    ---
+    --- Sounds are played from functions that run while the game is on, such
+    --- as `game.onStart` and `game.onTick`, not while the script loads.
     audio: {
         --- Plays a sound that is not in the world: it is as loud wherever the
         --- player stands. For music, menus and announcements. Options, all
@@ -3924,7 +4031,8 @@ declare game: {
         ---     as fast and an octave higher, 0.5 half as fast. From 0.25 to 4.
         ---   loop: true to start again at the end, until it is stopped.
         --- A volume or pitch outside its range is brought into it.
-        --- A sound in `sounds/music` follows the player's music volume.
+        --- A sound in `sounds/music` follows the player's music volume, and
+        --- one in `sounds/speech` their speech volume.
         --- Example: game.audio.play("gunshot")
         --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
@@ -4195,8 +4303,13 @@ declare game: {
         --- "LeftBumper"... Give at least one keyboard or mouse button and one
         --- gamepad button; without both, bind stops with an error. A
         --- gamepad has two buttons LORE leaves free for a game:
-        --- GamepadSelect and LeftBumper. Sharing any other button with an
-        --- engine action works, but the player is told of the clash. Write
+        --- GamepadSelect and LeftBumper. They are the engine's switch_view
+        --- and lock_on buttons, which do nothing until the game turns them
+        --- on (`allowViewSwitch`, `setAbility("lockOn")`); the Controls page
+        --- shows no clash until then, and a game that turns one on after
+        --- giving its button away is warned in the log. Sharing any other
+        --- button with an engine action works, but the player is told of
+        --- the clash. Write
         --- it at the top of the file, outside any function; once made, read
         --- it like any action. Bind each action once: a name written twice is
         --- an error. A saved script's actions are in use at once: no need to
@@ -4311,7 +4424,9 @@ declare game: {
         --- rebind takes a button that does something else. A button that is
         --- one of the keys of a direction counts: "W" is used by "move".
         --- Sticks and directions are named too ("LeftStick", "WASD"). Gives
-        --- an empty list when nothing uses it.
+        --- an empty list when nothing uses it. An engine action the game
+        --- has not turned on (block, dodge, lock_on, switch_view) uses no
+        --- button yet and is left out.
         --- Example: print(table.concat(game.input.usedBy("Space"), ", "))
         --- Example: game.input.usedBy("W") -- { "move" }
         usedBy: (button: string) -> { string },
@@ -4414,7 +4529,7 @@ declare game: {
     --- The settings today, by name: "difficulty" (0 to 100, where a new
     --- game's dial starts and following it; `game.difficulty.name` turns
     --- this game's), "game_speed" (50 to 100 percent) and "fall_damage"
-    --- (true or false); "volume", "music_volume" and
+    --- (true or false); "volume", "music_volume", "speech_volume" and
     --- "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);

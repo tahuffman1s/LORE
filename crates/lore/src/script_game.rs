@@ -491,6 +491,23 @@ impl ScriptGame {
         actions: &ActionMap,
         settings: Settings,
     ) -> Self {
+        Self::from_pack_parts_with_fonts(scripts, images, Vec::new(), map, actions, settings)
+    }
+
+    /// Runs a packaged game as [`from_pack_parts`](Self::from_pack_parts)
+    /// does, with its `fonts`: each font file's name in the pack and its
+    /// bytes, read as a game's `fonts` folder is.
+    #[must_use]
+    pub fn from_pack_parts_with_fonts(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<(String, lore_render::HudImage)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        map: Map,
+        actions: &ActionMap,
+        settings: Settings,
+    ) -> Self {
+        let families =
+            lore_script::font_families_of(fonts.iter().map(|(_, bytes)| bytes.as_slice()));
         let mut infos: Vec<lore_script::HudImageInfo> = images
             .iter()
             .map(|(name, image)| lore_script::HudImageInfo {
@@ -499,14 +516,20 @@ impl ScriptGame {
             })
             .collect();
         infos.sort_by(|a, b| a.name.cmp(&b.name));
-        let host = ScriptHost::from_sources_with_placed(
+        let host = ScriptHost::from_sources_with_fonts(
             scripts,
             infos,
+            families,
             actions.clone(),
             settings.described(),
             placed_of(&map),
         );
         let mut game = Self::without_files(host, settings);
+        if !fonts.is_empty() {
+            game.fonts = crate::hud_fonts::HudFonts::in_pack(fonts);
+            game.host.set_text_measure(Box::new(game.fonts.measuring()));
+            game.hud = ScriptHud::measuring(game.fonts.measuring());
+        }
         game.pictures = crate::hud_images::HudPictures::given(images);
         game.map = map;
         game.tell_solid_things();
@@ -600,6 +623,10 @@ impl Game for ScriptGame {
 
     fn listening_ended(&mut self) {
         self.host.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.host.take_listening()
     }
 
     fn frame(&mut self, frame: &mut Frame) {
@@ -697,9 +724,6 @@ impl Game for ScriptGame {
         }
         if let Some(on) = self.host.take_typing() {
             frame.set_typing(on);
-        }
-        if let Some(hears) = self.host.take_listening() {
-            frame.set_listening(hears);
         }
         for ask in self.host.take_binding_asks() {
             frame.ask_bindings(ask);

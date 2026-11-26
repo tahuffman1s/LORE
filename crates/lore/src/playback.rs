@@ -79,6 +79,10 @@ impl<G: Game, S, F: FnMut(&G) -> S> Game for Watched<'_, G, S, F> {
     fn frame(&mut self, frame: &mut Frame) {
         self.game.frame(frame);
     }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.game.take_listening()
+    }
 }
 
 fn hand_over(input: &mut Input, done: &[Did]) {

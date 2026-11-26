@@ -68,6 +68,11 @@ game.audio.replace("footstep", nil)
 game.onNoise(function(noise)
     local loud: number = noise.loudness
     print(noise.sound, noise.position.x, loud, noise.heardWithin, noise.byPlayer)
+    local weapon: string? = noise.weapon
+    local maker: Character? = noise.by
+    if weapon == "bow" and maker == game.player then
+        print("an arrow loosed")
+    end
     if noise.sound == "thunder" then
         return false
     end
@@ -308,6 +313,17 @@ local stepLevel: number = game.difficulty.level
 print(#stepNames, stepNow, stepLevel, game.difficulty.scale(20), game.difficulty.scale(5, 2, 0.5))
 game.difficulty.name = "Fair"
 game.difficulty.onChange(function(now, before) print(now .. " from " .. before) end)
+game.clock.dayLength = 20
+game.clock.time = "8:00"
+game.clock.hour = 6.5
+game.clock.skipTo("8:00")
+game.clock.skipTo(20)
+local clockText: string = game.clock.time or ""
+local hourNow: number = game.clock.hour or 12
+local dayNow: number = game.clock.day or 1
+print(clockText, hourNow, dayNow, game.clock.dayLength)
+game.clock.onHour(20, function(hour: number) print("Night falls at " .. hour) end)
+game.clock.onHour(function(hour) print("It is " .. hour .. " o'clock") end)
 game.sky.setLatitude(61)
 game.sky.setNorth(90)
 game.sky.setDate(2026, 3, 20)
@@ -827,7 +843,9 @@ game.onStart(function()
     local lucky: boolean = game.chance(0.25)
     local prize: string? = game.pick({ "coin", "heart" })
     local order: { number } = game.shuffle({ 1, 2, 3 })
-    print(seed, lucky, prize, order, math.random(1, 6))
+    local reachable: boolean = game.canWalk(game.player.position, vector.create(4, 0, -6))
+    local corners: { vector }?, why: string? = game.findWay(game.player.position, vector.create(4, 0, -6))
+    print(seed, lucky, prize, order, math.random(1, 6), reachable, corners, why)
 end)
 
 -- Carrying several weapons.

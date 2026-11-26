@@ -28,6 +28,7 @@ mod fluids;
 mod ground;
 mod spawn;
 mod trail;
+mod walk;
 mod wet;
 
 pub(crate) use bodies::{Body, Dummy};
@@ -70,6 +71,8 @@ pub struct World {
     walking: Walking,
     /// The noises the player made in the newest tick.
     noises: Vec<Noise>,
+    /// The sound and weapon names those noises carry by id.
+    names: crate::noise::Names,
     /// What the player did to the water in the newest tick.
     marks: Vec<WaterMark>,
     /// The trail the player is leaving in the snow, and where they pressed
@@ -234,7 +237,7 @@ impl World {
 
     /// The world of `game` on `ground`, with the player's feet at `here`
     /// or, with `None`, at a spawn point, facing the way it does.
-    fn on(mut game: ScriptGame, ground: Ground, here: Option<[f32; 3]>) -> Self {
+    fn on(mut game: ScriptGame, mut ground: Ground, here: Option<[f32; 3]>) -> Self {
         let spawned = 1;
         let player = match here {
             Some(here) => Player::at(here, &ground.rules),
@@ -248,6 +251,7 @@ impl World {
         game.host_mut()
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
         let things = Self::things_of(&game, &ground);
+        ground.walk_round(&things);
         let ladders = crate::script_game::ladders_of(game.map());
         let mut world = Self {
             game,
@@ -259,6 +263,7 @@ impl World {
             shooting: Shooting::default(),
             walking: Walking::default(),
             noises: Vec::new(),
+            names: crate::noise::Names::default(),
             marks: Vec::new(),
             trail: trail::Trail::default(),
             treads: Vec::with_capacity(8),
@@ -287,6 +292,8 @@ impl World {
         // world given its level some other way once had none.
         (world.fluids).take_level(&world.ground.level, world.game.host_mut());
         world.tell_things();
+        let doors = walk::door_names(&world.things, world.game.map());
+        (world.ground).tell_walking(doors, world.game.host_mut());
         world
     }
 
@@ -368,8 +375,30 @@ impl World {
         self.ground = ground;
         // Solid things stand on the new shapes, back where the map has them.
         self.things = Self::things_of(&self.game, &self.ground);
+        self.ground.walk_round(&self.things);
+        let doors = walk::door_names(&self.things, self.game.map());
+        (self.ground).tell_walking(doors, self.game.host_mut());
         self.tell_things();
         (self.fluids).take_level(&self.ground.level, self.game.host_mut());
+    }
+
+    /// Where a person can walk in the level: the ground, worked out from
+    /// the level's shapes and the solid things in it that never move, with
+    /// each door a gate ([`openings`](Self::openings) says which are open).
+    /// The flat floor of a game with no level is one open square.
+    ///
+    /// It is built on a thread of its own when the level is loaded or
+    /// saved; the first time it is asked for, this waits until it is done.
+    /// What it holds is the same however long that takes.
+    pub fn walkable(&self) -> &lore_nav::Walkable {
+        self.ground.walkable()
+    }
+
+    /// Which ways on the [`walkable`](Self::walkable) ground are open: a
+    /// door's gate is open while the door is open, as of the last tick.
+    #[must_use]
+    pub fn openings(&self) -> &lore_nav::Openings {
+        self.ground.openings()
     }
 
     /// The game being played.
@@ -520,6 +549,26 @@ impl World {
         self.game.host().difficulty_scales()
     }
 
+    /// The hour of the day on the world's clock, from 0 up to 24 (13.5 is
+    /// half past one in the afternoon), or `None` in a game with no time of
+    /// day: one whose script never set `game.clock`. Plain data that moves
+    /// only on ticks, so it is paused and sped up with the game, the same in
+    /// a replay, and what anything in the world that keeps hours (people's
+    /// days, shops) reads. The script's part of a tick moves it on, so
+    /// during [`tick`](crate::game::Game::tick) it is the hour the last tick
+    /// left.
+    #[must_use]
+    pub fn time_of_day(&self) -> Option<f64> {
+        self.game.host().time_of_day()
+    }
+
+    /// The day it is on the world's clock, counting the first as 1, or
+    /// `None` in a game with no time of day.
+    #[must_use]
+    pub fn day(&self) -> Option<u32> {
+        self.game.host().day()
+    }
+
     /// How many ticks the world has run.
     #[must_use]
     pub fn tick_number(&self) -> u32 {
@@ -555,6 +604,12 @@ impl World {
     #[must_use]
     pub fn noises(&self) -> &[Noise] {
         &self.noises
+    }
+
+    /// The names the noises of this world carry by id.
+    #[must_use]
+    pub fn names(&self) -> &crate::noise::Names {
+        &self.names
     }
 
     /// What the player did to the water in the newest tick, in the order
@@ -704,6 +759,18 @@ impl Game for World {
         self.change_level(level);
     }
 
+    fn typing_ended(&mut self) {
+        self.game.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.game.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.game.take_listening()
+    }
+
     /// Steps the world by one tick. `input` is what the game's script reads
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
@@ -777,6 +844,10 @@ impl Game for World {
             &self.player.player,
             (self.climate.water_rise(), self.climate.ice()),
         );
+        // Which doors are open, for whoever finds a way this tick: as the
+        // script and the use button left them by the end of the last.
+        self.ground.follow_doors(&self.things);
+        self.game.host_mut().set_openings(self.ground.openings());
         let Ground {
             level,
             rules,
@@ -1167,6 +1238,7 @@ impl Game for World {
             *tick,
             self.game.host_mut(),
             &mut self.noises,
+            &mut self.names,
         );
         // The script hears how much fluid there is and what the player
         // stands in, before its own tick. Only someone walking with their
@@ -1192,7 +1264,7 @@ impl Game for World {
         // The script hears each noise of the tick, in the order made; one
         // it answers `false` to is kept in the list but not played.
         for noise in &mut self.noises {
-            if !self.game.host_mut().noise_made(&noise.told()) {
+            if !self.game.host_mut().noise_made(&noise.told(&self.names)) {
                 noise.silenced = true;
             }
         }
@@ -2184,6 +2256,18 @@ impl Game for Playing {
         self.world.change_level(level);
     }
 
+    fn typing_ended(&mut self) {
+        self.world.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.world.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.world.take_listening()
+    }
+
     fn tick(&mut self, input: &InputFrame, step: f32) {
         let before = self.eye;
         let mut asked = self
@@ -2360,9 +2444,10 @@ impl Game for Playing {
             if !fresh(&noise, now, tick_rate) {
                 continue;
             }
-            let tweak = self.world.game.host().sound_tweak(noise.sound_name());
+            let names = &self.world.names;
+            let tweak = self.world.game.host().sound_tweak(noise.sound_name(names));
             let sounds = self.world.game.sounds_mut();
-            if let Some(play) = noise::play(&noise, nth, sounds, tweak) {
+            if let Some(play) = noise::play(&noise, nth, names, sounds, tweak) {
                 frame.sound(SoundAsk::Once(play));
             }
         }

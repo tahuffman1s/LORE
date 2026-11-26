@@ -320,16 +320,23 @@ fn a_weapon_names_its_sounds_and_how_far_its_shot_is_heard() {
     let script = "game.weapon(\"bow\", { from = \"rifle\", fireSound = \"twang\", \
         reloadSound = \"nock\", emptySound = \"creak\", heardWithin = 20, magazineSize = 1, \
         reserve = 5, reloadTime = 0.5 })\n\
-        game.onSpawn(function() game.player:giveWeapon(\"bow\") end)";
+        game.onSpawn(function() game.player:giveWeapon(\"bow\") end)\n\
+        game.onNoise(function(noise) \
+            if noise.weapon == \"bow\" and noise.by == game.player then \
+                game.player:setJumpHeight(3) \
+            end \
+        end)";
     let mut world = world(script);
     play(&mut world, 40);
     ask(&mut world, |asked| asked.fire = true);
     let heard = heard_over(&mut world, 30);
+    // The script was told the weapon and who.
+    assert_eq!(world.game().host().moves().jump_height, 3.0);
     let shot = heard
         .iter()
         .find(|noise| noise.kind == NoiseKind::Gunshot)
         .unwrap();
-    assert_eq!(shot.sound_name(), "twang");
+    assert_eq!(shot.sound_name(world.names()), "twang");
     assert!((shot.range.far - 20.0).abs() < 1e-4, "{:?}", shot.range);
     // Near scales in proportion to the engine's gunfire (4 of 150).
     assert!((shot.range.near - 20.0 * 4.0 / 150.0).abs() < 1e-4);
@@ -337,7 +344,11 @@ fn a_weapon_names_its_sounds_and_how_far_its_shot_is_heard() {
         .iter()
         .find(|noise| noise.kind == NoiseKind::Reload)
         .unwrap();
-    assert_eq!(reload.sound_name(), "nock");
+    assert_eq!(reload.sound_name(world.names()), "nock");
+    // The noise says which weapon made it and who, by short ids.
+    assert_eq!(world.names().get(shot.weapon.unwrap()), "bow");
+    assert_eq!(world.names().get(reload.weapon.unwrap()), "bow");
+    assert_eq!(shot.by, Some(lore::script::CharacterId::PLAYER));
     assert_eq!(reload.range, NoiseKind::Reload.range());
 }
 
@@ -352,7 +363,7 @@ fn a_game_that_names_no_sounds_keeps_the_engines_own() {
         .iter()
         .find(|noise| noise.kind == NoiseKind::Gunshot)
         .unwrap();
-    assert_eq!(shot.sound_name(), "gunshot");
+    assert_eq!(shot.sound_name(world.names()), "gunshot");
     assert_eq!(shot.range, lore::audio::Range::GUNFIRE);
 }
 
@@ -394,7 +405,7 @@ fn a_bullet_striking_the_floor_and_a_bomb_going_off_are_heard_where_they_happene
         strike.position[2] < -1.0 && strike.position[2] > -10.0,
         "{strike:?}"
     );
-    assert_eq!(strike.sound_name(), "impact");
+    assert_eq!(strike.sound_name(world.names()), "impact");
 
     // A bomb goes off a second after it was thrown.
     let script = TELLS_ALL.replace(

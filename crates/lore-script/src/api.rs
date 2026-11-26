@@ -65,6 +65,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "chance",
     "pick",
     "shuffle",
+    "canWalk",
+    "findWay",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -149,6 +151,9 @@ pub(crate) struct Handlers {
     pub controls_changed: Vec<Function>,
     /// `game.difficulty.onChange`.
     pub difficulty: Vec<Function>,
+    /// `game.clock.onHour`: each with the hour of the day it listens for,
+    /// or none for every hour.
+    pub hour: Vec<(Option<u8>, Function)>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -272,6 +277,9 @@ pub(crate) struct Shared {
     pub body: Rc<crate::body_api::BodyState>,
     /// The hurts the script has not yet heard of. They outlive this version.
     pub health: Rc<crate::health_api::HealthState>,
+    /// The walkable ground of the level, and which doors are open. It
+    /// outlives this version of the script.
+    pub walk: Rc<crate::walk_api::WalkState>,
     /// The functions this version is waiting to call, from `game.after` and
     /// `game.every`, oldest first.
     pub timers: RefCell<Vec<Timer>>,
@@ -427,6 +435,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
     crate::dice_api::install(lua, shared, &game)?;
+    crate::walk_api::install(lua, shared, &game)?;
     fluid_api::install(lua, shared, &game)?;
     crate::lamp_api::install(lua, shared, &game)?;
     settings_api::install(lua, shared, &game)?;
@@ -508,6 +517,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         "difficulty",
         crate::difficulty_api::difficulty(lua, shared)?,
     )?;
+    game.set("clock", crate::clock_api::clock(lua, shared)?)?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
     let camera = crate::camera_api::camera(lua, shared)?;
@@ -543,6 +553,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.push("audio");
     members.push("camera");
     members.push("difficulty");
+    members.push("clock");
     members.push("fluids");
     members.push("frames");
     members.push("hud");
@@ -987,7 +998,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 65] = [
+        let groups: [(&str, &[&str]); 66] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1014,6 +1025,7 @@ mod tests {
             ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
             ("game.difficulty.", crate::difficulty_api::DIFFICULTY_FIELDS),
+            ("game.clock.", crate::clock_api::CLOCK_FIELDS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),

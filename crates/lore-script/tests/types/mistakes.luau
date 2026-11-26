@@ -95,3 +95,7 @@ game.input.onControlsChanged(5) -- wrong: it takes a function
 -- Difficulty is a dial of named steps: its level is read, its name set.
 game.difficulty.name = 2 -- wrong: a step is named in text
 print(game.difficulty.scale("hard")) -- wrong: it scales a number
+
+-- The clock's time is text, and its day is counted, not set.
+game.clock.onHour("eight", function() end) -- wrong: the hour is a number
+game.clock.time = true -- wrong: the time is text like "8:00"

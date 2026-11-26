@@ -22,7 +22,7 @@ game.onTick(function()
     if #names == 0 then
         names = game.lamps.names()
     end
-    local hour = (game.sky.hour() or 12) % 24
+    local hour = game.clock.hour or 12
     local dark = hour >= DUSK or hour < DAWN
     local now = game.time()
     for _, name in names do
