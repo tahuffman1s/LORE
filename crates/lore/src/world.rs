@@ -11,7 +11,7 @@
 use lore_assets::Scene;
 use lore_input::{ActionId, ActionMap, InputFrame};
 use lore_physics::{MoveInput, MoveMode, MoveSettings, Player};
-use lore_script::{CharacterId, Motion, Movement};
+use lore_script::{CharacterId, Motion, Movement, ScriptHost};
 
 use crate::blend;
 use crate::character::{Boom, Character, Facing, View};
@@ -1924,34 +1924,7 @@ impl Playing {
     /// else. The dead and those out of reach are passed over.
     fn next_lock(&mut self) {
         let eye = self.world.player().eye_position();
-        let (sin, cos) = self.yaw.sin_cos();
-        let host = self.world.game.host();
-        let sides = host.sides();
-        let mut near: Vec<(bool, f32, CharacterId)> = Vec::new();
-        host.each_character(|who, feet, health| {
-            if who == CharacterId::PLAYER || health <= 0.0 {
-                return;
-            }
-            let (x, z) = (feet[0] - eye[0], feet[2] - eye[2]);
-            let far = x.hypot(z);
-            let up = feet[1] - eye[1];
-            // In reach, and in the half of the world they are looking at.
-            if far > 0.2 && far.hypot(up) <= LOCK_REACH && (x * -sin + z * -cos) / far > 0.25 {
-                // Whom the player counts as an enemy, or who counts them one.
-                let (me, them) = (CharacterId::PLAYER.number(), who.number());
-                let friendly = !(sides.is_enemy(me, them) || sides.is_enemy(them, me));
-                near.push((friendly, far, who));
-            }
-        });
-        drop(sides);
-        near.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        let next = match host.locked_on() {
-            Some(now) => (near.iter())
-                .position(|(_, _, who)| *who == now)
-                .and_then(|at| near.get(at + 1))
-                .map(|(_, _, who)| *who),
-            None => near.first().map(|(_, _, who)| *who),
-        };
+        let next = lock_after(self.world.game.host(), eye, self.yaw);
         self.world.game.host_mut().lock_on(next);
     }
 
@@ -2571,6 +2544,40 @@ mod third_person;
 mod tools;
 #[cfg(test)]
 mod wetted;
+
+/// Whom the lock-on holds next, for a player whose eyes are at `eye`
+/// looking along `yaw`: the nearest character in front of them and in
+/// reach, then the next nearest each time it is asked, and after the last,
+/// nobody; the player's enemies (`game.sides`) before anyone else. The dead
+/// and those out of reach are passed over.
+fn lock_after(host: &ScriptHost, eye: [f32; 3], yaw: f32) -> Option<CharacterId> {
+    let (sin, cos) = yaw.sin_cos();
+    let sides = host.sides();
+    let mut near: Vec<(bool, f32, CharacterId)> = Vec::new();
+    host.each_character(|who, feet, health| {
+        if who == CharacterId::PLAYER || health <= 0.0 {
+            return;
+        }
+        let (x, z) = (feet[0] - eye[0], feet[2] - eye[2]);
+        let far = x.hypot(z);
+        let up = feet[1] - eye[1];
+        // In reach, and in the half of the world they are looking at.
+        if far > 0.2 && far.hypot(up) <= LOCK_REACH && (x * -sin + z * -cos) / far > 0.25 {
+            // Whom the player counts as an enemy, or who counts them one.
+            let (me, them) = (CharacterId::PLAYER.number(), who.number());
+            let friendly = !(sides.is_enemy(me, them) || sides.is_enemy(them, me));
+            near.push((friendly, far, who));
+        }
+    });
+    near.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    match host.locked_on() {
+        Some(now) => (near.iter())
+            .position(|(_, _, who)| *who == now)
+            .and_then(|at| near.get(at + 1))
+            .map(|(_, _, who)| *who),
+        None => near.first().map(|(_, _, who)| *who),
+    }
+}
 
 #[cfg(test)]
 mod tests {

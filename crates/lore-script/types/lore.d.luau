@@ -613,7 +613,10 @@ declare extern type Character with
     --- a grudge against: someone who hurt them, whom they saw hurt a
     --- friend, or whom a friend of their side told them of. A grudge lasts
     --- as long as their side `remembers` (five minutes unless it says),
-    --- or until `forgive`. Everyone is their own friend.
+    --- or until `forgive`. Each person holds at most 4 grudges; a new one
+    --- takes the place of the least important (one for a killing goes only
+    --- for another killing). A grudge against someone ends when they fall
+    --- or are removed. Everyone is their own friend.
     --- Example: if guard:feelsAbout(game.player) == "enemy" then print("Halt, thief!") end
     function feelsAbout(self, who: Character): Feeling
 
@@ -1080,18 +1083,26 @@ type NpcOptions = { name: string, at: string | vector | Thing, facing: number?, 
 type Feeling = "friend" | "neutral" | "enemy"
 
 --- Who a side's feeling is toward: a side's name, "everyone" (every other
---- side, and everyone on none), or a list of side names (`{ "everyone" }`
---- works too).
+--- side, and everyone on none), or a list of side names in quotes with no
+--- `=` (`{ "Outlaws", "Wolves" }`; `{ Outlaws = true }` is an error).
 type SideNames = string | { string }
 
 --- One side in `game.sides { ... }`: who it counts as friends, as
 --- enemies, and as neutral (when it would otherwise feel as they feel
---- about it); `forgives`, how many blows from a friend it forgives, a
---- whole number from 0 (none) to 100 (2 unless given; a killing blow
---- never); and `remembers`, how many seconds its people hold a grudge
---- (300 unless given; `math.huge` keeps it until forgiven).
+--- about it); `forgives`, how many blows from a friend within half a
+--- minute it forgives, a whole number from 0 (none) to 100, or `true`
+--- for every blow from a friend (2 unless given; a killing blow never);
+--- and `remembers`, how many seconds its people hold a grudge (300 unless
+--- given; `math.huge` keeps it until forgiven). The key `everyone` takes
+--- only `forgives` and `remembers`: what every side has unless it says its
+--- own, and people on no side.
 --- Example: Town = { friends = { "Guards" }, enemies = { "Outlaws" }, forgives = 0, remembers = 600 }
-type SideOptions = { friends: SideNames?, enemies: SideNames?, neutral: SideNames?, forgives: number?, remembers: number? }
+--- Example: everyone = { forgives = true } -- friends never hold a stray hit against anyone
+type SideOptions = { friends: SideNames?, enemies: SideNames?, neutral: SideNames?, forgives: (number | boolean)?, remembers: number? }
+
+--- What `setFeeling` takes after the feeling. `bothWays = true` sets how
+--- both sides feel about each other at once, whatever either said before.
+type FeelingOptions = { bothWays: boolean? }
 
 --- One side of the game: what `game.side("Town")` gives. It is looked up
 --- by its name each time it is used, so it keeps working when the file is
@@ -1109,10 +1120,14 @@ declare extern type Side with
 
     --- Makes this side feel `feeling` about `other`. It holds the other
     --- way round too, unless `other` said its own feeling about this side
-    --- (in `game.sides` or with `setFeeling`). `game.onFeelingChange`
-    --- hears of each feeling that changed, before the next `game.onTick`.
+    --- (in `game.sides` or with `setFeeling`): if the town named the
+    --- outlaws its enemies, the outlaws making friends leaves the town an
+    --- enemy. `{ bothWays = true }` sets both sides at once, whatever either
+    --- said: peace, or war, agreed by both. `game.onFeelingChange` hears of
+    --- each feeling that changed, before the next `game.onTick`.
     --- Example: game.side("Town"):setFeeling("Outlaws", "friend")
-    function setFeeling(self, other: string | Side, feeling: Feeling): ()
+    --- Example: game.side("Town"):setFeeling("Outlaws", "friend", { bothWays = true }) -- peace is made
+    function setFeeling(self, other: string | Side, feeling: Feeling, options: FeelingOptions?): ()
 
     --- Everyone on this side is on `other` from now on: the side joins
     --- the other. The side itself stays in the table, with no one on it.
@@ -2912,10 +2927,21 @@ declare game: {
     --- holds both ways unless the other side says its own, so a fight is
     --- mutual. Every side is named here, `Guards = {}` for one that says
     --- nothing; a name in a list that is not a side is an error that lists
-    --- the sides. Two people on one side are friends. Someone on no side
-    --- is neutral to everyone, except to a side whose enemies are
-    --- "everyone". Call it once, at the top of the file, before giving
-    --- anyone a side.
+    --- the sides, with the closest suggested. Two people on one side are
+    --- friends. Someone on no side is neutral to everyone, except to a side
+    --- whose enemies are "everyone". When a side says "everyone" and
+    --- another names that side, each feels what it said: with Wolves =
+    --- { enemies = "everyone" } and Deer = { friends = { "Wolves" } }, the
+    --- wolves hunt the deer and the deer count them friends.
+    --- Call it once, at the top of the file (outside any function), before
+    --- giving anyone a side. Saving the script reads the table again: the
+    --- file wins, so feelings changed with `setFeeling` go back to what the
+    --- table says (and a file with no `game.sides` has no sides); whatever
+    --- the top of the file sets is so again (`game.player.side = ...`, and
+    --- an NPC made by `game.npc { }` takes its line's `side`, none if the
+    --- line gives none); a side given otherwise (while playing, or by
+    --- `join`) is kept while the table still names it. Grudges are kept, as
+    --- health is.
     --- Example: game.sides { Town = { friends = { "Guards" }, enemies = { "Outlaws" } }, Guards = {}, Outlaws = {}, Wolves = { enemies = "everyone" } }
     sides: (sides: { [string]: SideOptions }) -> (),
 

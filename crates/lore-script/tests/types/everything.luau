@@ -716,6 +716,7 @@ if false then
         Guards = {},
         Outlaws = { neutral = "Wolves", remembers = math.huge },
         Wolves = { enemies = "everyone" },
+        everyone = { forgives = true },
     }
     game.player.side = "Town"
     local guard: Npc = game.npc { name = "Guard", at = "Gate", side = "Guards" }
@@ -726,6 +727,7 @@ if false then
     local townFeels: Feeling = town:feelsAbout("Outlaws")
     print(sideName, feeling, town.name, townFeels, town:feelsAbout(game.side("Guards")))
     town:setFeeling("Outlaws", "friend")
+    town:setFeeling("Outlaws", "friend", { bothWays = true })
     game.side("Outlaws"):join(town)
     town:forgive(game.player)
     game.onFeelingChange(function(side: string, toward: string, now: Feeling, before: Feeling)

@@ -73,7 +73,8 @@ impl Feeling {
 pub struct Temper {
     /// How many blows from a friend are forgiven, within
     /// [`FORGIVING_SECONDS`] of each other, before the next one makes them
-    /// an enemy. 0 forgives none. A blow that kills is never forgiven.
+    /// an enemy. 0 forgives none; [`FORGIVES_ALL`] forgives every blow from
+    /// a friend. A blow that kills is never forgiven.
     pub forgives: u8,
     /// How long a grudge is held, in seconds, unless forgiven sooner.
     /// Infinite holds it until forgiven.
@@ -91,6 +92,9 @@ impl Default for Temper {
 
 /// How many blows from a friend a side forgives, until the game says.
 pub const DEFAULT_FORGIVES: u8 = 2;
+/// [`Temper::forgives`] that forgives every blow from a friend but one
+/// that kills: friendly fire is never held against anyone.
+pub const FORGIVES_ALL: u8 = u8::MAX;
 /// How long a grudge is held, in seconds, until the game says: five
 /// minutes.
 pub const DEFAULT_REMEMBERS: f32 = 300.0;
@@ -99,8 +103,8 @@ pub const DEFAULT_REMEMBERS: f32 = 300.0;
 pub const FORGIVING_SECONDS: f32 = 30.0;
 /// The most sides a game can have: more than a world needs.
 pub const MOST_SIDES: usize = 63;
-/// The most grudges one person holds at once. A new one pushes out the
-/// one that would end first.
+/// The most grudges one person holds at once. When all are taken, a new
+/// one takes the place of the least important (see [`Sides::suffered`]).
 pub const GRUDGES: usize = 4;
 /// The longest name of a side, in characters.
 pub const LONGEST_NAME: usize = 32;
@@ -207,7 +211,31 @@ pub enum Act {
         victim: u32,
         /// Who hurt them.
         by: u32,
+        /// Whether the blow took the last of the victim's health.
+        killed: bool,
     },
+}
+
+/// What came of a blow for the one it hurt ([`Sides::suffered`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Taken {
+    /// Not held against anyone: a friend's blow that is forgiven, or one's
+    /// own.
+    Forgiven,
+    /// Held: the one hurt counts whoever did it an enemy.
+    Held,
+    /// Minded, but not kept: every grudge the one hurt can hold is already
+    /// for a killing, and only a killing takes the place of one of those.
+    NoRoom,
+}
+
+impl Taken {
+    /// Whether the blow was held against whoever dealt it, kept or not:
+    /// when anyone who saw it minds too.
+    #[must_use]
+    pub fn minded(self) -> bool {
+        self != Self::Forgiven
+    }
 }
 
 /// Who the number `against` a grudge slot holds is when it holds nobody.
@@ -227,6 +255,8 @@ struct Grudge {
     /// The tick it was taken up, by being hurt, seeing or being told: it is
     /// passed on only after, so word goes one person at a time.
     heard: u32,
+    /// Whether it is for a killing: only another killing pushes it out.
+    killing: bool,
 }
 
 impl Grudge {
@@ -236,18 +266,57 @@ impl Grudge {
         last_hit: 0,
         until: 0,
         heard: 0,
+        killing: false,
     };
 
     fn held(&self, now: u32) -> bool {
         self.against != NOBODY && self.until > now
     }
+
+    /// Whether it was taken up as a grudge, worn off or not: what
+    /// [`Sides::grudges`] counts until it is cleared away.
+    fn taken(&self) -> bool {
+        self.against != NOBODY && self.until > 0
+    }
+
+    /// How much it matters to keep, least first: what a full set of slots
+    /// gives up for something new. Nothing at all (empty, worn off, or
+    /// blows counted too long ago), then blows from a friend being
+    /// counted, then a grudge not for a killing, then one for a killing;
+    /// within each, the one that ends soonest, then the one taken up
+    /// longest ago. (A grudge against someone who has gone down or left
+    /// the world is not here to give up: it ended when they did.)
+    fn worth(&self, now: u32, window: u32) -> (u8, u32, u32) {
+        let rank = if self.held(now) {
+            if self.killing { KILLING } else { GRUDGE }
+        } else if self.against != NOBODY
+            && self.until == 0
+            && self.hits > 0
+            && now.saturating_sub(self.last_hit) <= window
+        {
+            COUNTING
+        } else {
+            0
+        };
+        (rank, self.until, self.heard)
+    }
 }
 
-/// One person: their side and what they hold against whom.
+/// The ranks of [`Grudge::worth`]. Something new may push out what ranks
+/// no higher than itself.
+const COUNTING: u8 = 1;
+const GRUDGE: u8 = 2;
+const KILLING: u8 = 3;
+
+/// One person: their side, whether they are down, and what they hold
+/// against whom.
 #[derive(Debug, Clone, PartialEq)]
 struct Person {
     who: u32,
     side: Side,
+    /// Down (no health left) as the world last said: nobody takes up a
+    /// grudge against them, and those held against them ended as they fell.
+    down: bool,
     grudges: [Grudge; GRUDGES],
 }
 
@@ -280,6 +349,9 @@ pub struct Sides {
     tempers: Vec<Temper>,
     /// Everyone on a side or holding a grudge, in the order of their ids.
     people: Vec<Person>,
+    /// How many grudge slots are taken, worn off or not, across everyone:
+    /// while none is, word has nothing to carry.
+    held: u32,
     /// The tick it is, counted from 1, and how long a tick is in seconds.
     now: u32,
     tick_seconds: f32,
@@ -293,6 +365,7 @@ impl Default for Sides {
             said: vec![false],
             tempers: vec![Temper::default()],
             people: Vec::new(),
+            held: 0,
             now: 0,
             tick_seconds: 1.0 / 60.0,
         }
@@ -353,6 +426,20 @@ impl Sides {
     /// feeling about a side the table does not name, or two feelings about
     /// one side.
     pub fn declare(&mut self, said: &[SideSaid]) -> Result<Vec<(u32, String)>, SidesError> {
+        self.declare_with(said, Temper::default())
+    }
+
+    /// [`declare`](Self::declare), with `everyone` the temper of people on
+    /// no side (each side's own is in what it said).
+    ///
+    /// # Errors
+    ///
+    /// As [`declare`](Self::declare).
+    pub fn declare_with(
+        &mut self,
+        said: &[SideSaid],
+        everyone: Temper,
+    ) -> Result<Vec<(u32, String)>, SidesError> {
         if said.len() > MOST_SIDES {
             return Err(SidesError::TooMany(said.len()));
         }
@@ -385,7 +472,7 @@ impl Sides {
         let count = next.count();
         next.feel = vec![Feeling::Neutral; count * count];
         next.said = vec![false; count * count];
-        next.tempers = std::iter::once(Temper::default())
+        next.tempers = std::iter::once(everyone)
             .chain(order.iter().map(|side| side.temper))
             .collect();
         for index in 1..count {
@@ -466,6 +553,7 @@ impl Sides {
             person.side = side;
         }
         next.people = people;
+        next.held = self.held;
         *self = next;
         Ok(lost)
     }
@@ -515,6 +603,29 @@ impl Sides {
         changed
     }
 
+    /// Sets how `side` feels about `about` and how `about` feels about
+    /// `side`, both at once, whatever either said before: peace, or war,
+    /// agreed by both. Gives each feeling that changed, `side`'s first.
+    pub fn set_both(
+        &mut self,
+        side: Side,
+        about: Side,
+        feeling: Feeling,
+    ) -> [Option<FeelingChange>; 2] {
+        let count = self.count();
+        if side.index() >= count || about.index() >= count {
+            return [None, None];
+        }
+        let [first, back] = self.set_between(side, about, feeling);
+        if side == about {
+            return [first, None];
+        }
+        // The other way round may have changed already, if `about` had not
+        // said its own; now it has.
+        let [second, _] = self.set_between(about, side, feeling);
+        [first, back.or(second)]
+    }
+
     /// How a side's people take what is done to them.
     #[must_use]
     pub fn temper(&self, side: Side) -> Temper {
@@ -526,8 +637,10 @@ impl Sides {
         self.people.get(at)
     }
 
-    fn person_mut(&mut self, who: u32) -> &mut Person {
-        let at = match self.people.binary_search_by_key(&who, |p| p.who) {
+    /// Where `who` is in [`people`](Self::people), added on no side if
+    /// they are not there yet.
+    fn index_of(&mut self, who: u32) -> usize {
+        match self.people.binary_search_by_key(&who, |p| p.who) {
             Ok(at) => at,
             Err(at) => {
                 self.people.insert(
@@ -535,13 +648,40 @@ impl Sides {
                     Person {
                         who,
                         side: Side::NONE,
+                        down: false,
                         grudges: [Grudge::EMPTY; GRUDGES],
                     },
                 );
                 at
             }
-        };
-        &mut self.people[at]
+        }
+    }
+
+    /// Puts `grudge` in slot `slot` of person `at`, keeping
+    /// [`held`](Self::held) counted.
+    fn put(&mut self, at: usize, slot: usize, grudge: Grudge) {
+        let old = std::mem::replace(&mut self.people[at].grudges[slot], grudge);
+        self.held = (self.held + u32::from(grudge.taken())).saturating_sub(u32::from(old.taken()));
+    }
+
+    /// Empties every slot of person `at` that `clear` picks.
+    fn clear_where(&mut self, at: usize, clear: impl Fn(&Grudge) -> bool) {
+        for slot in 0..GRUDGES {
+            if clear(&self.people[at].grudges[slot]) {
+                self.put(at, slot, Grudge::EMPTY);
+            }
+        }
+    }
+
+    /// Empties every slot, of anyone, that holds something against
+    /// `against`.
+    fn clear_against(&mut self, against: u32) {
+        if against == NOBODY {
+            return;
+        }
+        for at in 0..self.people.len() {
+            self.clear_where(at, |g| g.against == against);
+        }
     }
 
     /// The side `who` is on.
@@ -554,7 +694,8 @@ impl Sides {
     /// they keep.
     pub fn set_side(&mut self, who: u32, side: Side) {
         if side.index() < self.count() {
-            self.person_mut(who).side = side;
+            let at = self.index_of(who);
+            self.people[at].side = side;
         }
     }
 
@@ -572,9 +713,43 @@ impl Sides {
         moved
     }
 
-    /// Forgets `who`, who has left the world: their side and grudges.
+    /// Forgets `who`, who has left the world: their side, their grudges,
+    /// and every grudge anyone held against them.
     pub fn forget(&mut self, who: u32) {
-        self.people.retain(|person| person.who != who);
+        if let Ok(at) = self.people.binary_search_by_key(&who, |p| p.who) {
+            self.clear_where(at, |_| true);
+            self.people.remove(at);
+        }
+        self.clear_against(who);
+    }
+
+    /// Says whether `who` is down (no health left). Going down ends every
+    /// grudge held against them, and none is taken up against them while
+    /// they stay down; standing again, they start with a clean slate. What
+    /// they hold against others they keep. The world says it of each NPC
+    /// while anyone holds a grudge, and before what was done in a tick.
+    pub fn set_down(&mut self, who: u32, down: bool) {
+        let at = match self.people.binary_search_by_key(&who, |p| p.who) {
+            Ok(at) => at,
+            Err(_) if !down => return,
+            Err(_) => self.index_of(who),
+        };
+        let was = std::mem::replace(&mut self.people[at].down, down);
+        if down && !was {
+            self.clear_against(who);
+        }
+    }
+
+    fn is_down(&self, who: u32) -> bool {
+        self.person(who).is_some_and(|p| p.down)
+    }
+
+    /// How many grudges are held across everyone (some may have worn off
+    /// and not yet been cleared away). While it is 0 nobody has anything to
+    /// tell, and [`tell_near`](Self::tell_near) costs nothing.
+    #[must_use]
+    pub fn grudges(&self) -> u32 {
+        self.held
     }
 
     /// How `who` feels about `about`: an enemy if they hold a grudge
@@ -619,106 +794,140 @@ impl Sides {
         ticks
     }
 
-    /// The slot of `who`'s grudges for `against`: theirs if they have one,
-    /// else an empty or finished one, else the one that ends first.
-    fn slot(grudges: &[Grudge; GRUDGES], against: u32, now: u32, window: u32) -> usize {
-        let live =
-            |g: &Grudge| g.held(now) || (g.hits > 0 && now.saturating_sub(g.last_hit) <= window);
-        (grudges.iter().position(|g| g.against == against))
-            .or_else(|| grudges.iter().position(|g| g.against == NOBODY || !live(g)))
-            .unwrap_or_else(|| {
-                (0..GRUDGES)
-                    .min_by_key(|&i| (grudges[i].until, i))
-                    .unwrap_or(0)
-            })
+    /// The slot of person `at` for something new against `against` of rank
+    /// `rank`: theirs if they have one, else the least worth keeping
+    /// ([`Grudge::worth`]) if it ranks no higher than `rank`, else none.
+    fn slot(&self, at: usize, against: u32, rank: u8) -> Option<usize> {
+        let grudges = &self.people[at].grudges;
+        if let Some(slot) = grudges.iter().position(|g| g.against == against) {
+            return Some(slot);
+        }
+        let (now, window) = (self.now, self.ticks(FORGIVING_SECONDS));
+        let least = (0..GRUDGES).min_by_key(|&slot| (grudges[slot].worth(now, window), slot))?;
+        let worth = grudges[least].worth(now, window).0;
+        (worth <= rank).then_some(least)
     }
 
     /// Takes up a grudge of `who` against `against` that lasts until
-    /// `until`, heard now, unless one held already lasts as long.
-    fn hold(&mut self, who: u32, against: u32, until: u32) {
-        if who == against {
-            return;
+    /// `until`, heard now (one already held keeps the later end and a
+    /// killing). Gives whether it is held: not against oneself or someone
+    /// down, nor when every slot holds a grudge for a killing and this is
+    /// not one.
+    fn hold(&mut self, who: u32, against: u32, until: u32, killing: bool) -> bool {
+        if who == against || against == NOBODY || self.is_down(against) {
+            return false;
         }
-        let (now, window) = (self.now, self.ticks(FORGIVING_SECONDS));
-        let grudges = &mut self.person_mut(who).grudges;
-        let at = Self::slot(grudges, against, now, window);
-        let grudge = &mut grudges[at];
-        if grudge.against == against && grudge.held(now) && grudge.until >= until {
-            return;
-        }
-        if grudge.against != against && grudge.held(now) && grudge.until >= until {
-            // Every slot holds a grudge that outlasts this one.
-            return;
-        }
-        *grudge = Grudge {
+        let at = self.index_of(who);
+        let rank = if killing { KILLING } else { GRUDGE };
+        let Some(slot) = self.slot(at, against, rank) else {
+            return false;
+        };
+        let now = self.now;
+        let old = self.people[at].grudges[slot];
+        let mut grudge = Grudge {
             against,
             hits: 0,
             last_hit: now,
             until,
             heard: now,
+            killing,
         };
+        if old.against == against && old.held(now) {
+            if old.until >= until && (old.killing || !killing) {
+                // Held already, as long and as gravely: nothing new to tell.
+                return true;
+            }
+            grudge.until = grudge.until.max(old.until);
+            grudge.killing |= old.killing;
+        }
+        self.put(at, slot, grudge);
+        true
     }
 
     /// `victim` was hurt by `by` (and `killed`, if it took the last of
     /// their health). Unless `by` is a friend whose blow is forgiven, the
-    /// victim holds it against them: gives whether they do, which is when
-    /// anyone who saw it minds ([`perceive`](Self::perceive)).
-    pub fn suffered(&mut self, victim: u32, by: u32, killed: bool) -> bool {
+    /// victim holds it against them.
+    ///
+    /// Each person holds at most [`GRUDGES`] grudges. When all are taken, a
+    /// new one takes the place of the least important: first one that has
+    /// worn off, then blows from a friend still being counted, then a
+    /// grudge not for a killing, then one for a killing; among those alike,
+    /// the one that ends soonest, then the one taken up longest ago. A
+    /// grudge for a killing is pushed out only by another killing, so a
+    /// crowd cannot make anyone forget a murder; when every slot holds a
+    /// killing, a lesser grudge is minded but not kept ([`Taken::NoRoom`]).
+    /// Grudges against someone who went down or left ended then
+    /// ([`set_down`](Self::set_down), [`forget`](Self::forget)), so they
+    /// fill no slot.
+    pub fn suffered(&mut self, victim: u32, by: u32, killed: bool) -> Taken {
         if victim == by {
-            return false;
+            return Taken::Forgiven;
         }
         let side = self.side_of(victim);
         let temper = self.temper(side);
         let friends = self.between(side, self.side_of(by)) == Feeling::Friend;
         let already = self.holds_grudge(victim, by);
         let until = self.now.saturating_add(self.ticks(temper.remembers));
+        let held = |sides: &mut Self| {
+            if sides.hold(victim, by, until, killed) {
+                Taken::Held
+            } else {
+                Taken::NoRoom
+            }
+        };
         if !friends || killed || already || temper.forgives == 0 {
-            self.hold(victim, by, until);
-            return true;
+            return held(self);
+        }
+        if temper.forgives == FORGIVES_ALL {
+            return Taken::Forgiven;
         }
         let (now, window) = (self.now, self.ticks(FORGIVING_SECONDS));
-        let grudges = &mut self.person_mut(victim).grudges;
-        let at = Self::slot(grudges, by, now, window);
-        let grudge = &mut grudges[at];
-        if grudge.against != by && grudge.held(now) {
-            // Every slot holds a grudge against someone else: the blow is
-            // forgiven uncounted rather than one of those forgotten.
-            return false;
-        }
+        let at = self.index_of(victim);
+        let Some(slot) = self.slot(at, by, COUNTING) else {
+            // Every slot holds a grudge, or blows being counted: this blow
+            // is forgiven uncounted rather than one of those forgotten.
+            return Taken::Forgiven;
+        };
+        let grudge = self.people[at].grudges[slot];
         let counted = if grudge.against == by && now.saturating_sub(grudge.last_hit) <= window {
             grudge.hits
         } else {
             0
         };
         if counted < temper.forgives {
-            *grudge = Grudge {
-                against: by,
-                hits: counted + 1,
-                last_hit: now,
-                until: 0,
-                heard: now,
-            };
-            return false;
+            self.put(
+                at,
+                slot,
+                Grudge {
+                    against: by,
+                    hits: counted + 1,
+                    last_hit: now,
+                    until: 0,
+                    heard: now,
+                    killing: false,
+                },
+            );
+            return Taken::Forgiven;
         }
-        self.hold(victim, by, until);
-        true
+        held(self)
     }
 
     /// `witness` perceived `act`: if it was done to a friend of theirs,
-    /// they hold it against whoever did it, as their side remembers. The
-    /// world calls it for each person who saw something done.
-    pub fn perceive(&mut self, witness: u32, act: Act) {
+    /// they hold it against whoever did it, as their side remembers. Gives
+    /// whether they do. The world calls it for each person who saw
+    /// something done.
+    pub fn perceive(&mut self, witness: u32, act: Act) -> bool {
         match act {
-            Act::Hurt { victim, by } => {
+            Act::Hurt { victim, by, killed } => {
                 if witness == victim
                     || witness == by
                     || self.feels(witness, victim) != Feeling::Friend
                 {
-                    return;
+                    return false;
                 }
                 let temper = self.temper(self.side_of(witness));
                 let until = self.now.saturating_add(self.ticks(temper.remembers));
-                self.hold(witness, by, until);
+                self.hold(witness, by, until, killed)
             }
         }
     }
@@ -727,9 +936,17 @@ impl Sides {
     /// ids) tells everyone of their own side within `within` metres of
     /// them of the grudges they hold, as long as they last. What one heard
     /// this tick waits for the next telling, so word goes from person to
-    /// person. People on no side tell nobody.
+    /// person. People on no side tell nobody. While nobody holds a grudge
+    /// ([`grudges`](Self::grudges) is 0) it does nothing at all; else it
+    /// first clears away grudges that have worn off.
     pub fn tell_near(&mut self, near: &[(u32, [f32; 3])], within: f32) {
+        if self.held == 0 {
+            return;
+        }
         let now = self.now;
+        for at in 0..self.people.len() {
+            self.clear_where(at, |g| g.taken() && !g.held(now));
+        }
         let reach = within * within;
         for &(teller, at) in near {
             let Some(person) = self.person(teller) else {
@@ -749,7 +966,7 @@ impl Sides {
                         .map(|i| (there[i] - at[i]) * (there[i] - at[i]))
                         .sum();
                     if away <= reach {
-                        self.hold(hearer, grudge.against, grudge.until);
+                        self.hold(hearer, grudge.against, grudge.until, grudge.killing);
                     }
                 }
             }
@@ -758,23 +975,16 @@ impl Sides {
 
     /// `who` forgives `against`: the grudge and the blows counted go.
     pub fn forgive(&mut self, who: u32, against: u32) {
-        let Ok(at) = self.people.binary_search_by_key(&who, |p| p.who) else {
-            return;
-        };
-        for grudge in &mut self.people[at].grudges {
-            if grudge.against == against {
-                *grudge = Grudge::EMPTY;
-            }
+        if let Ok(at) = self.people.binary_search_by_key(&who, |p| p.who) {
+            self.clear_where(at, |g| g.against == against);
         }
     }
 
     /// Everyone on `side` forgives `against`.
     pub fn forgive_all(&mut self, side: Side, against: u32) {
-        for person in self.people.iter_mut().filter(|p| p.side == side) {
-            for grudge in &mut person.grudges {
-                if grudge.against == against {
-                    *grudge = Grudge::EMPTY;
-                }
+        for at in 0..self.people.len() {
+            if self.people[at].side == side {
+                self.clear_where(at, |g| g.against == against);
             }
         }
     }
@@ -982,7 +1192,7 @@ mod tests {
         let mut sides = town();
         let (villager, stranger) = (1, 2);
         sides.set_side(villager, of(&sides, "Town"));
-        assert!(sides.suffered(villager, stranger, false));
+        assert_eq!(sides.suffered(villager, stranger, false), Taken::Held);
         assert!(sides.is_enemy(villager, stranger));
         // Their feeling is theirs alone: the stranger feels as before.
         assert_eq!(sides.feels(stranger, villager), Feeling::Neutral);
@@ -1000,19 +1210,23 @@ mod tests {
         let (villager, guard) = (1, 2);
         sides.set_side(villager, of(&sides, "Town"));
         sides.set_side(guard, of(&sides, "Guards"));
-        assert!(!sides.suffered(villager, guard, false));
-        assert!(!sides.suffered(villager, guard, false));
+        assert_eq!(sides.suffered(villager, guard, false), Taken::Forgiven);
+        assert_eq!(sides.suffered(villager, guard, false), Taken::Forgiven);
         assert_eq!(sides.feels(villager, guard), Feeling::Friend);
-        assert!(sides.suffered(villager, guard, false), "the third counts");
+        assert_eq!(
+            sides.suffered(villager, guard, false),
+            Taken::Held,
+            "the third counts"
+        );
         assert!(sides.is_enemy(villager, guard));
         // Blows far apart are counted afresh.
         sides.forgive(villager, guard);
         for tick in [100, 100 + 31 * 60, 100 + 62 * 60] {
             sides.set_time(tick, 1.0 / 60.0);
-            assert!(!sides.suffered(villager, guard, false));
+            assert_eq!(sides.suffered(villager, guard, false), Taken::Forgiven);
         }
         // A killing blow is never forgiven.
-        assert!(sides.suffered(villager, guard, true));
+        assert_eq!(sides.suffered(villager, guard, true), Taken::Held);
     }
 
     #[test]
@@ -1030,7 +1244,7 @@ mod tests {
         let town = of(&sides, "Town");
         sides.set_side(1, town);
         sides.set_side(2, town);
-        assert!(sides.suffered(1, 2, false));
+        assert_eq!(sides.suffered(1, 2, false), Taken::Held);
         sides.set_time(u32::MAX - 1, 1.0 / 60.0);
         assert!(sides.is_enemy(1, 2), "held until forgiven");
     }
@@ -1047,6 +1261,7 @@ mod tests {
             Act::Hurt {
                 victim: villager,
                 by: PLAYER,
+                killed: false,
             },
         );
         assert!(sides.is_enemy(guard, PLAYER));
@@ -1056,6 +1271,7 @@ mod tests {
             Act::Hurt {
                 victim: outlaw,
                 by: PLAYER,
+                killed: false,
             },
         );
         assert!(!sides.is_enemy(guard, PLAYER));
@@ -1078,7 +1294,7 @@ mod tests {
             (c, [4.0, 0.0, 0.0]),
             (outlaw, [1.0, 0.0, 0.0]),
         ];
-        assert!(sides.suffered(a, PLAYER, false));
+        assert_eq!(sides.suffered(a, PLAYER, false), Taken::Held);
         // Heard this tick: not told yet.
         sides.tell_near(&near, 3.0);
         assert!(!sides.is_enemy(b, PLAYER));
@@ -1100,10 +1316,185 @@ mod tests {
         let mut sides = town();
         for (tick, against) in (10..).zip(10..10 + GRUDGES as u32 + 1) {
             sides.set_time(tick, 1.0 / 60.0);
-            sides.suffered(1, against, false);
+            assert_eq!(sides.suffered(1, against, false), Taken::Held);
         }
         assert!(!sides.is_enemy(1, 10), "the oldest went");
         assert!((11..10 + GRUDGES as u32 + 1).all(|who| sides.is_enemy(1, who)));
+    }
+
+    #[test]
+    fn a_victim_who_holds_for_ever_still_counts_a_new_attacker_an_enemy() {
+        let mut sides = Sides::default();
+        sides
+            .declare(&[SideSaid {
+                temper: Temper {
+                    remembers: f32::INFINITY,
+                    ..Temper::default()
+                },
+                ..side("Town")
+            }])
+            .unwrap_or_else(|e| panic!("{e}"));
+        sides.set_time(1, 1.0 / 60.0);
+        sides.set_side(1, of(&sides, "Town"));
+        for attacker in 10..10 + GRUDGES as u32 {
+            assert_eq!(sides.suffered(1, attacker, false), Taken::Held);
+        }
+        // Four held for ever; a fifth still takes a place, truthfully.
+        assert_eq!(sides.suffered(1, PLAYER, false), Taken::Held);
+        assert!(sides.is_enemy(1, PLAYER));
+        assert!(!sides.is_enemy(1, 10), "the one taken up longest ago went");
+    }
+
+    #[test]
+    fn a_grudge_for_a_killing_is_pushed_out_only_by_another_killing() {
+        let mut sides = town();
+        let (villager, guard, witness) = (1, 2, 3);
+        for who in [villager, witness] {
+            sides.set_side(who, of(&sides, "Town"));
+        }
+        sides.set_side(guard, of(&sides, "Guards"));
+        // The player kills a villager in front of a witness...
+        assert_eq!(sides.suffered(villager, PLAYER, true), Taken::Held);
+        assert!(sides.perceive(
+            witness,
+            Act::Hurt {
+                victim: villager,
+                by: PLAYER,
+                killed: true
+            }
+        ));
+        // ...who is then hurt by a crowd of others, later and later.
+        for (tick, attacker) in (20..).zip(10..10 + 2 * GRUDGES as u32) {
+            sides.set_time(tick, 1.0 / 60.0);
+            assert_eq!(sides.suffered(witness, attacker, false), Taken::Held);
+        }
+        assert!(
+            sides.is_enemy(witness, PLAYER),
+            "a crowd cannot wipe a murder"
+        );
+        // Four killings fill every place: a lesser grudge is minded, not kept.
+        for (tick, killer) in (40..).zip(30..30 + GRUDGES as u32 - 1) {
+            sides.set_time(tick, 1.0 / 60.0);
+            assert!(sides.perceive(
+                witness,
+                Act::Hurt {
+                    victim: villager,
+                    by: killer,
+                    killed: true
+                }
+            ));
+        }
+        assert_eq!(sides.suffered(witness, 99, false), Taken::NoRoom);
+        assert!(Taken::NoRoom.minded());
+        assert!(!sides.is_enemy(witness, 99));
+        assert!(sides.is_enemy(witness, PLAYER));
+        // A fifth killing gives up the oldest killing: the player's.
+        sides.set_time(60, 1.0 / 60.0);
+        assert_eq!(sides.suffered(witness, 98, true), Taken::Held);
+        assert!(!sides.is_enemy(witness, PLAYER));
+        assert!(sides.is_enemy(witness, 98));
+    }
+
+    #[test]
+    fn grudges_against_the_fallen_and_the_gone_end_and_fill_no_place() {
+        let mut sides = town();
+        let guard = 1;
+        sides.set_side(guard, of(&sides, "Guards"));
+        let wolves = 10..10 + GRUDGES as u32;
+        for wolf in wolves.clone() {
+            sides.suffered(guard, wolf, false);
+        }
+        assert_eq!(sides.grudges(), GRUDGES as u32);
+        // Two wolves fall, one is removed from the world.
+        sides.set_down(10, true);
+        sides.set_down(11, true);
+        sides.forget(12);
+        assert!(!sides.is_enemy(guard, 10) && !sides.is_enemy(guard, 12));
+        assert_eq!(sides.grudges(), 1);
+        // A fallen wolf is no grudge to take up, and its own are kept.
+        assert_eq!(sides.suffered(guard, 10, false), Taken::NoRoom);
+        // Room for three new ones beside the wolf still standing.
+        for attacker in 20..23 {
+            assert_eq!(sides.suffered(guard, attacker, false), Taken::Held);
+        }
+        assert!(sides.is_enemy(guard, 13));
+        // Standing again, a wolf starts with a clean slate.
+        sides.set_down(10, false);
+        assert!(!sides.is_enemy(guard, 10));
+        // Forgetting someone takes what they held, and what was held
+        // against them, out of the count.
+        sides.forget(guard);
+        assert_eq!(sides.grudges(), 0);
+    }
+
+    #[test]
+    fn worn_off_grudges_are_cleared_and_a_crowd_with_no_quarrel_tells_nothing() {
+        let mut sides = town();
+        sides.set_side(1, of(&sides, "Town"));
+        sides.set_side(2, of(&sides, "Town"));
+        let near = [(1, [0.0; 3]), (2, [1.0, 0.0, 0.0])];
+        sides.tell_near(&near, 3.0);
+        assert_eq!(sides.grudges(), 0);
+        sides.suffered(1, PLAYER, false);
+        sides.set_time(2, 1.0 / 60.0);
+        sides.tell_near(&near, 3.0);
+        assert_eq!(sides.grudges(), 2);
+        sides.set_time(10 + 300 * 60, 1.0 / 60.0);
+        sides.tell_near(&near, 3.0);
+        assert_eq!(sides.grudges(), 0, "worn off and cleared away");
+    }
+
+    #[test]
+    fn friendly_fire_can_be_forgiven_always() {
+        let mut sides = Sides::default();
+        sides
+            .declare_with(
+                &[side("Town")],
+                Temper {
+                    forgives: FORGIVES_ALL,
+                    ..Temper::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        let town = of(&sides, "Town");
+        sides.set_side(1, town);
+        sides.set_side(2, town);
+        // The side keeps its own temper; people on no side take everyone's.
+        assert_eq!(sides.temper(Side::NONE).forgives, FORGIVES_ALL);
+        let mut sides_all = Sides::default();
+        sides_all
+            .declare(&[SideSaid {
+                temper: Temper {
+                    forgives: FORGIVES_ALL,
+                    ..Temper::default()
+                },
+                ..side("Town")
+            }])
+            .unwrap_or_else(|e| panic!("{e}"));
+        sides_all.set_side(1, town);
+        sides_all.set_side(2, town);
+        for _ in 0..300 {
+            assert_eq!(sides_all.suffered(1, 2, false), Taken::Forgiven);
+        }
+        assert!(!sides_all.is_enemy(1, 2));
+        assert_eq!(sides_all.suffered(1, 2, true), Taken::Held, "not a killing");
+    }
+
+    #[test]
+    fn peace_agreed_by_both_holds_both_ways_whatever_either_said() {
+        let mut sides = town();
+        let (t, o) = (of(&sides, "Town"), of(&sides, "Outlaws"));
+        // The town said its own; the outlaws making friends is one way.
+        sides.set_between(o, t, Feeling::Friend);
+        assert_eq!(sides.between(t, o), Feeling::Enemy);
+        let changed = sides.set_both(o, t, Feeling::Friend);
+        assert_eq!(changed[0], None, "the outlaws already felt so");
+        assert!(changed[1].is_some_and(|c| c.side == t && c.before == Feeling::Enemy));
+        assert_eq!(sides.between(t, o), Feeling::Friend);
+        assert_eq!(sides.between(o, t), Feeling::Friend);
+        // Both say it now: a later one-way change stays one way.
+        sides.set_between(t, o, Feeling::Neutral);
+        assert_eq!(sides.between(o, t), Feeling::Friend);
     }
 
     #[test]

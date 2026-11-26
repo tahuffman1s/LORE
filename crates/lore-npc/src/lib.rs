@@ -28,6 +28,7 @@ pub use apart::{Upright, push_out};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
 pub use mind::{Around, Mind};
 pub use sides::{
-    Act, DEFAULT_FORGIVES, DEFAULT_REMEMBERS, FORGIVING_SECONDS, Feeling, FeelingChange, GRUDGES,
-    LONGEST_NAME, MOST_SIDES, Side, SideSaid, Sides, SidesError, Temper, Toward,
+    Act, DEFAULT_FORGIVES, DEFAULT_REMEMBERS, FORGIVES_ALL, FORGIVING_SECONDS, Feeling,
+    FeelingChange, GRUDGES, LONGEST_NAME, MOST_SIDES, Side, SideSaid, Sides, SidesError, Taken,
+    Temper, Toward,
 };

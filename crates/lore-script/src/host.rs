@@ -2672,6 +2672,9 @@ impl ScriptHost {
     /// Builds a version from the game's scripts and makes it the running one.
     fn install(&mut self) -> Result<(), ScriptError> {
         let before = self.shaders.begin_load();
+        // The file says what the sides are: a version that does not call
+        // game.sides has none.
+        self.sides.declared.set(false);
         let (touched, built) = self.build();
         // A version that failed is fixed by saving one of the files it read,
         // or one the running version did.
@@ -2700,6 +2703,9 @@ impl ScriptHost {
                              have started again."
                         );
                     }
+                }
+                if !self.sides.declared.get() {
+                    crate::sides_api::none_declared(&version.shared);
                 }
                 self.follow_actions(&version.shared.actions);
                 self.running = Some(version);

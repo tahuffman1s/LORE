@@ -24,7 +24,9 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use lore_npc::{Feeling, FeelingChange, Side, SideSaid, Sides, Temper, Toward};
+use lore_npc::{
+    FORGIVES_ALL, Feeling, FeelingChange, Side, SideSaid, Sides, SidesError, Temper, Toward,
+};
 use mlua::{AnyUserData, Lua, MetaMethod, Table, UserData, UserDataMethods, Value};
 
 use crate::api::{Shared, describe, fail};
@@ -33,6 +35,14 @@ use crate::error::closest;
 
 /// What a side written in `game.sides { ... }` takes.
 const SIDE_KEYS: &[&str] = &["friends", "enemies", "neutral", "forgives", "remembers"];
+
+/// What `everyone = { ... }` in `game.sides` takes: how every side takes
+/// what is done to it, unless the side says its own.
+const TEMPER_KEYS: &[&str] = &["forgives", "remembers"];
+
+/// The most blows from a friend a side can count before the next makes an
+/// enemy; `true` forgives every one.
+const MOST_FORGIVEN: i64 = 100;
 
 /// What can be read on a `game.side(...)`.
 pub(crate) const SIDE_FIELDS: &[&str] = &["name"];
@@ -65,6 +75,9 @@ pub(crate) struct Changed {
 #[derive(Debug, Default)]
 pub(crate) struct SidesState {
     pub table: RefCell<Sides>,
+    /// Whether the version of the script loading now has called
+    /// `game.sides`: one that loads without it has no sides.
+    pub declared: std::cell::Cell<bool>,
     waiting: RefCell<Vec<Changed>>,
 }
 
@@ -120,7 +133,39 @@ fn towards(lua: &Lua, side: &str, key: &str, value: &Value) -> mlua::Result<Vec<
     match value {
         Value::String(_) => Ok(text(value).map(one).into_iter().collect()),
         Value::Table(list) => {
-            let mut names = Vec::new();
+            // A list is names at 1, 2, 3 and nothing else: a name written
+            // as a key (`{ Outlaws = true }`) would otherwise be skipped.
+            let length = list.raw_len();
+            let mut keys: Vec<String> = Vec::new();
+            for pair in list.pairs::<Value, Value>() {
+                let (given, _) = pair?;
+                let at = match given {
+                    Value::Integer(at) => usize::try_from(at).ok(),
+                    // Luau's numbers are all fractions; a whole one counts.
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    Value::Number(at) if at.fract() == 0.0 && at >= 1.0 => Some(at as usize),
+                    _ => None,
+                };
+                if !at.is_some_and(|at| (1..=length).contains(&at)) {
+                    keys.push(text(&given).unwrap_or_else(|| describe(&given).to_owned()));
+                }
+            }
+            // The first in the order of their names, so the message is the
+            // same every time.
+            keys.sort();
+            if let Some(given) = keys.first() {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "game.sides: \"{side}\"'s {key} is a list of side names, but it was \
+                         given `{given}` as a key (with `=`), and a list has no keys, so it \
+                         would be ignored. Write the names in quotes, with no `=`: \
+                         {side} = {{ {key} = {{ \"{given}\" }} }}, or one name alone: \
+                         {side} = {{ {key} = \"{given}\" }}"
+                    ),
+                ));
+            }
+            let mut names = Vec::with_capacity(length);
             for entry in list.sequence_values::<Value>() {
                 let entry = entry?;
                 names.push(one(text(&entry).ok_or_else(|| wrong(&entry))?));
@@ -131,8 +176,10 @@ fn towards(lua: &Lua, side: &str, key: &str, value: &Value) -> mlua::Result<Vec<
     }
 }
 
-/// One side as `game.sides { ... }` wrote it.
-fn side_said(lua: &Lua, name: &str, value: &Value) -> mlua::Result<SideSaid> {
+/// One side as `game.sides { ... }` wrote it, with `base` the temper of a
+/// side that does not say its own; or, for `everyone`, only that temper.
+fn side_said(lua: &Lua, name: &str, value: &Value, base: Temper) -> mlua::Result<SideSaid> {
+    let everyone = name.eq_ignore_ascii_case(EVERYONE);
     let Value::Table(table) = value else {
         return Err(fail(
             lua,
@@ -144,26 +191,56 @@ fn side_said(lua: &Lua, name: &str, value: &Value) -> mlua::Result<SideSaid> {
         ));
     };
     let mut keys: Vec<String> = Vec::new();
+    let mut listed: Vec<String> = Vec::new();
     for pair in table.pairs::<Value, Value>() {
-        let (key, _) = pair?;
-        keys.push(text(&key).unwrap_or_else(|| key.to_string().unwrap_or_default()));
+        let (key, value) = pair?;
+        match text(&key) {
+            Some(key) => keys.push(key),
+            // `Town = { "Guards" }`: a name with no feeling.
+            None => listed.push(text(&value).unwrap_or_else(|| describe(&value).to_owned())),
+        }
     }
     keys.sort();
-    if let Some(key) = keys.iter().find(|key| !SIDE_KEYS.contains(&key.as_str())) {
+    listed.sort();
+    if let Some(other) = listed.first() {
+        return Err(fail(
+            lua,
+            format!(
+                "game.sides: \"{name}\" lists \"{other}\" without saying how it feels about \
+                 them. Put the name in friends, enemies or neutral: {name} = {{ friends = {{ \
+                 \"{other}\" }} }}"
+            ),
+        ));
+    }
+    let takes: &[&str] = if everyone { TEMPER_KEYS } else { SIDE_KEYS };
+    if let Some(key) = keys.iter().find(|key| !takes.contains(&key.as_str())) {
+        if everyone && SIDE_KEYS.contains(&key.as_str()) {
+            return Err(fail(
+                lua,
+                format!(
+                    "game.sides: {EVERYONE} = {{ ... }} takes only forgives and remembers, how \
+                     every side takes what is done to it unless the side says its own. To make a \
+                     side feel something about everyone, say it in that side: \
+                     Wolves = {{ {key} = \"{EVERYONE}\" }}"
+                ),
+            ));
+        }
         let mut message = format!("game.sides: \"{name}\" does not take `{key}`.");
         // Words a person reaches for first, and the one each means.
         let meant = match key.to_ascii_lowercase().as_str() {
+            _ if everyone => None,
             "friend" | "likes" | "allies" | "ally" => Some("friends"),
             "enemy" | "dislikes" | "hates" | "foes" => Some("enemies"),
             "ignores" | "neutrals" => Some("neutral"),
             _ => None,
         };
-        match meant.or_else(|| closest(key, SIDE_KEYS.iter().copied())) {
+        match meant.or_else(|| closest(key, takes.iter().copied())) {
             Some(near) => {
                 let _ = write!(message, " Did you mean `{near}`?");
             }
             None => {
-                let _ = write!(message, " A side takes {}.", SIDE_KEYS.join(", "));
+                let what = if everyone { "everyone" } else { "A side" };
+                let _ = write!(message, " {what} takes {}.", takes.join(", "));
             }
         }
         let _ = write!(message, " Write it like this: {EXAMPLE}");
@@ -183,14 +260,19 @@ fn side_said(lua: &Lua, name: &str, value: &Value) -> mlua::Result<SideSaid> {
             *list = towards(lua, name, key, &value)?;
         }
     }
-    said.temper = Temper::default();
+    said.temper = base;
     match table.raw_get::<Value>("forgives")? {
         Value::Nil => {}
-        Value::Integer(n) if (0..=100).contains(&n) => {
+        Value::Boolean(all) => {
+            said.temper.forgives = if all { FORGIVES_ALL } else { 0 };
+        }
+        Value::Integer(n) if (0..=MOST_FORGIVEN).contains(&n) => {
             said.temper.forgives = u8::try_from(n).unwrap_or(0);
         }
-        Value::Number(n) if n.fract() == 0.0 && (0.0..=100.0).contains(&n) => {
-            // A whole number from 0 to 100.
+        Value::Number(n) if n == f64::INFINITY => said.temper.forgives = FORGIVES_ALL,
+        #[allow(clippy::cast_precision_loss)]
+        Value::Number(n) if n.fract() == 0.0 && (0.0..=MOST_FORGIVEN as f64).contains(&n) => {
+            // A whole number from 0 to MOST_FORGIVEN.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let n = n as u8;
             said.temper.forgives = n;
@@ -200,8 +282,9 @@ fn side_said(lua: &Lua, name: &str, value: &Value) -> mlua::Result<SideSaid> {
                 lua,
                 format!(
                     "game.sides: \"{name}\"'s forgives is how many blows from a friend are \
-                     forgiven before the next makes them an enemy, a whole number from 0 (none) \
-                     to 100, but it was given {}. Write it like this: game.sides {{ {name} = {{ forgives = 0 }} }}",
+                     forgiven before the next makes them an enemy: a whole number from 0 (none) \
+                     to {MOST_FORGIVEN}, or true for every blow but one that kills, but it was \
+                     given {}. Write it like this: game.sides {{ {name} = {{ forgives = true }} }}",
                     match &other {
                         Value::Integer(n) => n.to_string(),
                         Value::Number(n) => n.to_string(),
@@ -258,8 +341,16 @@ fn declare(lua: &Lua, shared: &Rc<Shared>, value: &Value) -> mlua::Result<()> {
             ),
         ));
     };
-    crate::time_api::rules_only(lua, shared, "game.sides")?;
+    if !shared.loading.get() {
+        return Err(fail(
+            lua,
+            "game.sides names the game's sides at the top of the file, outside any function, \
+             where saving the script reads them again. To change a feeling while playing, \
+             write game.side(\"Town\"):setFeeling(\"Outlaws\", \"enemy\").",
+        ));
+    }
     let mut written: Vec<(String, Value)> = Vec::new();
+    let mut everyone = Temper::default();
     for pair in table.pairs::<Value, Value>() {
         let (key, value) = pair?;
         let Some(name) = text(&key) else {
@@ -273,13 +364,8 @@ fn declare(lua: &Lua, shared: &Rc<Shared>, value: &Value) -> mlua::Result<()> {
             ));
         };
         if name.eq_ignore_ascii_case(EVERYONE) {
-            return Err(fail(
-                lua,
-                format!(
-                    "game.sides: \"{EVERYONE}\" cannot be a side's name: it means every side. \
-                     Call the side something else."
-                ),
-            ));
+            everyone = side_said(lua, &name, &value, Temper::default())?.temper;
+            continue;
         }
         written.push((name, value));
     }
@@ -288,30 +374,53 @@ fn declare(lua: &Lua, shared: &Rc<Shared>, value: &Value) -> mlua::Result<()> {
     written.sort_by(|a, b| a.0.cmp(&b.0));
     let mut said = Vec::with_capacity(written.len());
     for (name, value) in &written {
-        said.push(side_said(lua, name, value)?);
+        said.push(side_said(lua, name, value, everyone)?);
     }
-    let lost = shared
-        .sides
-        .table
-        .borrow_mut()
-        .declare(&said)
-        .map_err(|why| {
-            fail(
-                lua,
-                format!("game.sides: {why}. Write it like this: {EXAMPLE}"),
-            )
-        })?;
+    let mut table = shared.sides.table.borrow_mut();
+    let lost = table.declare_with(&said, everyone).map_err(|why| {
+        // The closest side to a misspelt one, as everywhere a side is named.
+        let near = match &why {
+            SidesError::Unknown { name, sides, .. } => {
+                closest(name, sides.iter().map(String::as_str))
+                    .map(|near| format!(" Did you mean \"{near}\"?"))
+            }
+            _ => None,
+        };
+        fail(
+            lua,
+            format!(
+                "game.sides: {why}.{} Write it like this: {EXAMPLE}",
+                near.unwrap_or_default()
+            ),
+        )
+    })?;
+    drop(table);
+    shared.sides.declared.set(true);
     for (who, side) in lost {
-        let name = (shared
-            .characters
-            .name_and_place(CharacterId::from_number(who)))
-        .map_or_else(|| "someone".to_owned(), |(name, _)| name);
-        log::warn!(
-            "{name} was on the side \"{side}\", which game.sides no longer names, so they are \
-             on no side now. Add \"{side}\" to game.sides, or give them another side."
-        );
+        tell_lost(shared, who, &side);
     }
     Ok(())
+}
+
+/// A version of the script loaded without calling `game.sides`: the game
+/// has no sides now, as its file says. Grudges are kept.
+pub(crate) fn none_declared(shared: &Shared) {
+    let lost = shared.sides.table.borrow_mut().declare(&[]);
+    for (who, side) in lost.unwrap_or_default() {
+        tell_lost(shared, who, &side);
+    }
+}
+
+/// Warns that `who` was on `side`, which the table no longer names.
+fn tell_lost(shared: &Shared, who: u32, side: &str) {
+    let name = (shared
+        .characters
+        .name_and_place(CharacterId::from_number(who)))
+    .map_or_else(|| "someone".to_owned(), |(name, _)| name);
+    log::warn!(
+        "{name} was on the side \"{side}\", which game.sides no longer names, so they are \
+         on no side now. Add \"{side}\" to game.sides, or give them another side."
+    );
 }
 
 /// The side a script named, as `what` takes it: an error that lists the
@@ -439,6 +548,53 @@ fn feeling_said(lua: &Lua, value: &Value) -> mlua::Result<Feeling> {
     })
 }
 
+/// What `setFeeling`'s options say: whether the feeling is set both ways.
+fn both_ways(lua: &Lua, options: &Value) -> mlua::Result<bool> {
+    const EXAMPLE: &str =
+        "game.side(\"Town\"):setFeeling(\"Outlaws\", \"friend\", { bothWays = true })";
+    let table = match options {
+        Value::Nil => return Ok(false),
+        Value::Table(table) => table,
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "setFeeling's options are a table, such as {{ bothWays = true }}, but it was \
+                     given {}. Write it like this: {EXAMPLE}",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    let mut keys: Vec<String> = Vec::new();
+    for pair in table.pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        keys.push(text(&key).unwrap_or_else(|| describe(&key).to_owned()));
+    }
+    keys.sort();
+    if let Some(key) = keys.iter().find(|key| key.as_str() != "bothWays") {
+        return Err(fail(
+            lua,
+            format!(
+                "setFeeling does not take `{key}`; it takes bothWays = true, to set how both \
+                 sides feel about each other at once. Write it like this: {EXAMPLE}"
+            ),
+        ));
+    }
+    match table.raw_get::<Value>("bothWays")? {
+        Value::Nil => Ok(false),
+        Value::Boolean(both) => Ok(both),
+        other => Err(fail(
+            lua,
+            format!(
+                "setFeeling's bothWays is true or false, but it was given {}. Write it like \
+                 this: {EXAMPLE}",
+                describe(&other)
+            ),
+        )),
+    }
+}
+
 /// What a script holds for one side: its name, looked up each time, so a
 /// reload that names the sides again keeps it working.
 struct SideRef(Rc<str>);
@@ -491,15 +647,21 @@ impl UserData for SideRef {
         });
         methods.add_function(
             "setFeeling",
-            |lua, (this, other, feeling): (Value, Value, Value)| {
+            |lua, (this, other, feeling, options): (Value, Value, Value, Value)| {
                 let this = side_receiver(lua, &this, "setFeeling", "(\"Outlaws\", \"enemy\")")?;
                 let shared = shared_of(lua)?;
                 let me = SideRef(this).side(lua, &shared)?;
                 let other = side_named(lua, &shared, "setFeeling", &other)?;
                 let feeling = feeling_said(lua, &feeling)?;
+                let both = both_ways(lua, &options)?;
                 crate::time_api::rules_only(lua, &shared, "setFeeling")?;
                 let mut sides = shared.sides.table.borrow_mut();
-                for change in sides.set_between(me, other, feeling) {
+                let changed = if both {
+                    sides.set_both(me, other, feeling)
+                } else {
+                    sides.set_between(me, other, feeling)
+                };
+                for change in changed {
                     shared.sides.tell(&sides, change);
                 }
                 Ok(())
@@ -735,5 +897,165 @@ mod tests {
              assert(bandit.side == nil)\n"
         );
         assert_eq!(error_of(&source), "");
+    }
+
+    #[test]
+    fn names_written_as_keys_are_an_error_and_one_name_alone_is_a_list() {
+        let error =
+            error_of("game.sides { Town = { friends = { Outlaws = true } }, Outlaws = {} }");
+        assert!(
+            error.contains(
+                "\"Town\"'s friends is a list of side names, but it was given `Outlaws` as a key"
+            ) && error.contains("Town = { friends = { \"Outlaws\" } }"),
+            "{error}"
+        );
+        let error = error_of(
+            "game.sides { Town = { enemies = { \"Wolves\", Outlaws = true } }, Outlaws = {}, Wolves = {} }",
+        );
+        assert!(error.contains("given `Outlaws` as a key"), "{error}");
+        let error = error_of("game.sides { Town = { \"Outlaws\" }, Outlaws = {} }");
+        assert!(
+            error.contains("\"Town\" lists \"Outlaws\" without saying how it feels"),
+            "{error}"
+        );
+        let host = host(
+            "game.sides { Town = { enemies = \"Outlaws\", neutral = \"everyone\" }, Outlaws = {} }",
+        );
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        let sides = host.sides();
+        let (town, outlaws) = (sides.find("Town"), sides.find("Outlaws"));
+        assert_eq!(
+            sides.between(town.unwrap_or_default(), outlaws.unwrap_or_default()),
+            lore_npc::Feeling::Enemy
+        );
+    }
+
+    #[test]
+    fn a_misspelt_side_inside_the_table_suggests_the_closest() {
+        let error = error_of("game.sides { Town = { enemies = { \"Outlaw\" } }, Outlaws = {} }");
+        assert!(
+            error.contains("\"Town\" names \"Outlaw\", which is not one of the sides")
+                && error.contains("Did you mean \"Outlaws\"?"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn friendly_fire_is_forgiven_in_one_line_for_a_side_or_for_everyone() {
+        let host = host(
+            "game.sides { everyone = { forgives = true, remembers = 60 }, \
+             Town = {}, Guards = { forgives = 0 }, Wolves = { forgives = math.huge } }",
+        );
+        assert!(host.last_error().is_none(), "{:?}", host.last_error());
+        let sides = host.sides();
+        let temper = |name: &str| sides.temper(sides.find(name).unwrap_or_default());
+        assert_eq!(temper("Town").forgives, lore_npc::FORGIVES_ALL);
+        assert!((temper("Town").remembers - 60.0).abs() < f32::EPSILON);
+        assert_eq!(temper("Guards").forgives, 0);
+        assert!((temper("Guards").remembers - 60.0).abs() < f32::EPSILON);
+        assert_eq!(temper("Wolves").forgives, lore_npc::FORGIVES_ALL);
+        assert_eq!(
+            sides.temper(lore_npc::Side::NONE).forgives,
+            lore_npc::FORGIVES_ALL
+        );
+        drop(sides);
+        let error = error_of("game.sides { everyone = { enemies = \"Wolves\" }, Wolves = {} }");
+        assert!(
+            error.contains("everyone = { ... } takes only forgives and remembers"),
+            "{error}"
+        );
+        let error = error_of("game.sides { Town = { forgives = \"yes\" } }");
+        assert!(error.contains("or true for every blow"), "{error}");
+    }
+
+    #[test]
+    fn peace_is_made_both_ways_in_one_call() {
+        let source = format!(
+            "{TABLE}\
+             local outlaws = game.side(\"Outlaws\")\n\
+             outlaws:setFeeling(\"Town\", \"friend\")\n\
+             assert(game.side(\"Town\"):feelsAbout(\"Outlaws\") == \"enemy\")\n\
+             outlaws:setFeeling(\"Town\", \"friend\", {{ bothWays = true }})\n\
+             assert(game.side(\"Town\"):feelsAbout(\"Outlaws\") == \"friend\")\n\
+             assert(outlaws:feelsAbout(\"Town\") == \"friend\")\n"
+        );
+        assert_eq!(error_of(&source), "");
+        let error = error_of(&format!(
+            "{TABLE}game.side(\"Town\"):setFeeling(\"Outlaws\", \"friend\", {{ both = true }})"
+        ));
+        assert!(error.contains("setFeeling does not take `both`"), "{error}");
+    }
+
+    #[test]
+    fn the_sides_are_named_at_the_top_of_the_file_only() {
+        let mut host = host("game.onStart(function() game.sides { Town = {} } end)");
+        host.tick(&lore_input::InputFrame::default(), 1.0 / 60.0);
+        let error = host
+            .last_error()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("at the top of the file"), "{error}");
+    }
+
+    /// A game in a folder of its own, its `main.luau` saying `source`.
+    fn on_disk(test: &str, source: &str) -> (ScriptHost, std::path::PathBuf) {
+        let folder =
+            std::env::temp_dir().join(format!("lore-script-sides-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+        let main = folder.join(crate::ENTRY_SCRIPT);
+        std::fs::write(&main, source).unwrap_or_else(|e| panic!("{e}"));
+        let host = ScriptHost::open(&folder, lore_input::ActionMap::standard())
+            .unwrap_or_else(|e| panic!("{e}"));
+        (host, main)
+    }
+
+    fn feeling(host: &ScriptHost, side: &str, about: &str) -> lore_npc::Feeling {
+        let sides = host.sides();
+        match (sides.find(side), sides.find(about)) {
+            (Some(side), Some(about)) => sides.between(side, about),
+            _ => panic!("no side {side} or {about}"),
+        }
+    }
+
+    #[test]
+    fn saving_the_script_reads_the_table_again_and_keeps_grudges() {
+        let source = format!(
+            "{TABLE}game.player.side = \"Town\"\n\
+             game.onStart(function() game.side(\"Town\"):setFeeling(\"Outlaws\", \"friend\") end)\n"
+        );
+        let (mut host, main) = on_disk("reload", &source);
+        host.tick(&lore_input::InputFrame::default(), 1.0 / 60.0);
+        assert_eq!(feeling(&host, "Town", "Outlaws"), lore_npc::Feeling::Friend);
+        // Someone on no side hurts the player: a grudge.
+        let stranger = 77;
+        assert_eq!(
+            host.sides_mut().suffered(0, stranger, false),
+            lore_npc::Taken::Held
+        );
+        // A save: the file wins, and the grudge is kept.
+        host.reload().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(feeling(&host, "Town", "Outlaws"), lore_npc::Feeling::Enemy);
+        assert!(host.sides().holds_grudge(0, stranger));
+        // A save that fails to load leaves the table as it was.
+        let (town, wolves) = {
+            let sides = host.sides();
+            (sides.find("Town"), sides.find("Wolves"))
+        };
+        host.sides_mut().set_between(
+            town.unwrap_or_default(),
+            wolves.unwrap_or_default(),
+            lore_npc::Feeling::Neutral,
+        );
+        std::fs::write(&main, "game.sides { ").unwrap_or_else(|e| panic!("{e}"));
+        assert!(host.reload().is_err());
+        assert_eq!(feeling(&host, "Town", "Wolves"), lore_npc::Feeling::Neutral);
+        assert!(host.sides().holds_grudge(0, stranger));
+        // A save with no game.sides has no sides: the file wins there too.
+        std::fs::write(&main, "-- no sides").unwrap_or_else(|e| panic!("{e}"));
+        host.reload().unwrap_or_else(|e| panic!("{e}"));
+        let _ = std::fs::remove_dir_all(main.parent().unwrap_or(&main));
+        assert_eq!(host.sides().names().count(), 0);
+        assert_eq!(host.sides().side_of(0), lore_npc::Side::NONE);
+        assert!(host.sides().holds_grudge(0, stranger), "grudges outlive it");
     }
 }

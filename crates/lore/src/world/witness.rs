@@ -13,7 +13,7 @@
 //! Who saw what is decided by [`sees`], a stand-in until NPCs have senses
 //! of their own (#55): the one place to swap.
 
-use lore_npc::Act;
+use lore_npc::{Act, Feeling};
 use lore_physics::Level;
 use lore_script::{CharacterId, Deed, ScriptHost};
 
@@ -76,9 +76,20 @@ impl Witnessing {
     ) {
         host.sides_mut().set_time(tick, step);
         host.take_deeds(&mut self.deeds);
+        // Who is down matters only to grudges: while nobody holds one and
+        // nothing was done, a crowd with no quarrel pays nothing.
+        if self.deeds.is_empty() && host.sides().grudges() == 0 {
+            return;
+        }
+        {
+            let mut sides = host.sides_mut();
+            for npc in npcs {
+                sides.set_down(npc.who.number(), npc.down);
+            }
+        }
         for deed in &self.deeds {
-            let (victim, by) = (deed.victim.number(), deed.by.number());
-            if !host.sides_mut().suffered(victim, by, deed.killed) {
+            let (victim, by, killed) = (deed.victim.number(), deed.by.number(), deed.killed);
+            if !host.sides_mut().suffered(victim, by, killed).minded() {
                 continue;
             }
             // Where the one who did it is seen: their eyes.
@@ -96,12 +107,18 @@ impl Witnessing {
                 if npc.down || npc.who == deed.victim || npc.who == deed.by {
                     continue;
                 }
+                // Only what is done to a friend is minded: asked before the
+                // look, which costs a ray.
+                let witness = npc.who.number();
+                if sides.feels(witness, victim) != Feeling::Friend {
+                    continue;
+                }
                 if sees(npc, at, level) {
-                    sides.perceive(npc.who.number(), Act::Hurt { victim, by });
+                    sides.perceive(witness, Act::Hurt { victim, by, killed });
                 }
             }
         }
-        if tick % TELL_EVERY == 0 {
+        if tick % TELL_EVERY == 0 && host.sides().grudges() > 0 {
             self.near.clear();
             (self.near).extend(
                 (npcs.iter())
@@ -221,5 +238,76 @@ mod tests {
         let first = run();
         assert_eq!(first, run());
         assert!(first.iter().any(|(_, [_, _, walled])| *walled));
+    }
+
+    /// The lock-on in front of a player at the middle looking north: a
+    /// villager 3 m off and a wolf 6 m off, with or without sides.
+    fn first_locks(sides: &str) -> Vec<String> {
+        let script = format!(
+            r#"
+            {sides}
+            game.npc {{ name = "Villager", at = vector.create(0, 0, -3), side = VILLAGER }}
+            game.npc {{ name = "Wolf", at = vector.create(0.5, 0, -6), side = WOLF }}
+            game.onStart(function() game.player:teleport(vector.create(0, 0, 0)) end)
+            "#
+        );
+        let level = blocks(&[([-10.0, -0.2, -10.0], [10.0, 0.0, 10.0])]);
+        let game = ScriptGame::from_source(&script, &ActionMap::standard());
+        let mut world = World::new(game, 60).with_level(&level);
+        for _ in 0..3 {
+            world.tick(&InputFrame::default(), 1.0 / 60.0);
+        }
+        assert_eq!(world.game.host().last_error(), None);
+        let eye = world.player().eye_position();
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            let next = super::super::lock_after(world.game.host(), eye, 0.0);
+            world.game.host_mut().lock_on(next);
+            names.push(
+                next.and_then(|who| {
+                    world
+                        .npcs()
+                        .iter()
+                        .position(|npc| npc.who == who)
+                        .map(|at| ["Villager", "Wolf"][at].to_owned())
+                })
+                .unwrap_or_else(|| "nobody".to_owned()),
+            );
+        }
+        names
+    }
+
+    #[test]
+    fn the_lock_on_picks_enemies_first_and_the_nearest_without_sides() {
+        assert_eq!(
+            first_locks(
+                r#"game.sides { Town = { enemies = "Wolves" }, Wolves = {} }
+                game.player.side = "Town"
+                VILLAGER, WOLF = "Town", "Wolves""#
+            ),
+            ["Wolf", "Villager", "nobody"]
+        );
+        assert_eq!(
+            first_locks("VILLAGER, WOLF = nil, nil"),
+            ["Villager", "Wolf", "nobody"]
+        );
+    }
+
+    #[test]
+    fn a_quiet_crowd_holds_no_grudges_and_one_who_falls_is_no_longer_minded() {
+        let mut world = world();
+        let still = InputFrame::default();
+        for _ in 0..4 {
+            world.tick(&still, 1.0 / 60.0);
+        }
+        assert_eq!(world.game.host().sides().grudges(), 0, "nothing done yet");
+        for _ in 0..70 {
+            world.tick(&still, 1.0 / 60.0);
+        }
+        assert!(world.game.host().sides().grudges() >= 3);
+        // Grudges against someone who leaves the world end with them.
+        world.game.host_mut().sides_mut().forget(0);
+        assert_eq!(world.game.host().sides().grudges(), 0);
+        assert_eq!(enemies(&world), [false; 3]);
     }
 }
