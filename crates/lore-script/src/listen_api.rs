@@ -9,7 +9,7 @@ use lore_input::{ActionKind, ActionMap, Binding, Button, Heard, Hears};
 use mlua::{Function, Table, Value};
 
 use crate::api::{Shared, describe, fail};
-use crate::tools_api::{bindings_of, check_bindings, device_gap, find, moves};
+use crate::tools_api::{bindings_of, check_bindings, device_gap, find, idle, moves};
 
 /// How long `listenForButton` waits, in seconds, when it is not told.
 const DEFAULT_SECONDS: f64 = 5.0;
@@ -448,11 +448,14 @@ pub(crate) fn install(lua: &mlua::Lua, shared: &Rc<Shared>, input: &Table) -> ml
                 },
             };
             let own = state.actions.borrow();
+            // An engine action the game has not turned on uses no button
+            // yet: a game's own action may have it with no clash.
             let names: Vec<String> = state.tools.with_controls(|controls| {
                 let map: &ActionMap = controls.unwrap_or(&own);
                 map.actions_bound_to(binding)
                     .into_iter()
                     .map(|id| map.name(id).to_owned())
+                    .filter(|name| !idle(&state, name))
                     .collect()
             });
             lua.create_sequence_from(names)

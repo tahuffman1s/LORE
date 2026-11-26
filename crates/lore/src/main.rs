@@ -618,7 +618,8 @@ fn check(folder: &Path) -> Result<(), String> {
                 position: [DUMMY_AT[0], 0.0, DUMMY_AT[2]],
                 loudness,
                 heard_within,
-                by_player: true,
+                by: Some(lore_script::CharacterId::PLAYER),
+                weapon: None,
             });
         }
         game.tick(input.tick(), step);

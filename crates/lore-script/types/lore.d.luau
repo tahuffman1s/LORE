@@ -845,8 +845,20 @@ declare extern type Noise with
     heardWithin: number
     --- True for the player's own steps and weapon; false for what the
     --- world makes: thunder, dripping, an explosion's blast, a bullet strike.
+    --- Shorthand for `noise.by == game.player`. A blast or a strike is the
+    --- world's even when the player fired it.
     --- Example: if not noise.byPlayer then print("the world made a noise") end
     byPlayer: boolean
+    --- The weapon that made it, by its name as in `game.weapon("bow", ...)`
+    --- or `game.player:giveWeapon`: a shot, a dry click or a reload. Nil for
+    --- anything else, a blast or a strike included.
+    --- Example: if noise.weapon == "bow" then print("an arrow loosed") end
+    weapon: string?
+    --- Who made it: `game.player` for their steps, landings, shots and
+    --- splashes; nil for what the world makes (thunder, dripping, a blast).
+    --- Only the player makes noises today.
+    --- Example: if noise.by == game.player then print("you made that") end
+    by: Character?
 end
 
 --- A hurt: what a `game.onDamage` function is handed.
@@ -2649,6 +2661,24 @@ declare game: {
     --- Example: local order = game.shuffle({ 1, 2, 3, 4 })
     shuffle: <T>(list: { T }) -> { T },
 
+    --- Whether a person can walk from `from` to `to` in the level, each a
+    --- place in metres such as `game.player.position`: up steps of 0.4 m and
+    --- slopes of 45° at most, through gaps 0.7 m wide or more, crouching where
+    --- it is low, and not through a door that is shut. Each place is taken
+    --- to the ground nearest it, within 2 m. False too when the game has no
+    --- ground yet; `game.findWay` says why there is no way.
+    --- Example: if game.canWalk(game.player.position, vector.create(4, 0, -6)) then print("You can get there") end
+    canWalk: (from: vector, to: vector) -> boolean,
+
+    --- The way a person would walk from `from` to `to` (places in metres):
+    --- the corners to walk to, in order, the first where it starts and the
+    --- last where it ends, each on the ground. A trail to a quest's goal can
+    --- be drawn along it. With no way it gives nil and a sentence saying
+    --- why, to print, such as `the door "Cellar door" is shut: open it first`.
+    --- Example: local corners, why = game.findWay(game.player.position, vector.create(4, 0, -6))
+    --- Example: if not corners then print("No way there: " .. why) end
+    findWay: (from: vector, to: vector) -> ({ vector }?, string?),
+
     --- True while the game is paused with `game.pause`.
     --- Example: game.onTick(function() if game.paused() then return end; moveEnemies() end)
     paused: () -> boolean,
@@ -3918,8 +3948,9 @@ declare game: {
     ---
     --- Music goes in `sounds/music`, as Ogg Vorbis: `sounds/music/theme.ogg`
     --- is "music/theme". The sounds in that folder, and a sound called
-    --- "music", follow the player's music volume (see `game.settings`); every
-    --- other sound follows their effects volume. Music can be as long as you
+    --- "music", follow the player's music volume (see `game.settings`); the
+    --- sounds in `sounds/speech` (voice lines: "speech/greeting") follow
+    --- their speech volume; every other sound follows their effects volume. Music can be as long as you
     --- like if it is Ogg Vorbis: a file longer than ten seconds is read a
     --- little at a time as it plays. A WAV file is held in memory whole, so
     --- export long sounds as Ogg Vorbis.
@@ -3943,7 +3974,8 @@ declare game: {
         ---     as fast and an octave higher, 0.5 half as fast. From 0.25 to 4.
         ---   loop: true to start again at the end, until it is stopped.
         --- A volume or pitch outside its range is brought into it.
-        --- A sound in `sounds/music` follows the player's music volume.
+        --- A sound in `sounds/music` follows the player's music volume, and
+        --- one in `sounds/speech` their speech volume.
         --- Example: game.audio.play("gunshot")
         --- Example: local music = game.audio.play("music/theme", { volume = 0.4, loop = true })
         play: (name: string, options: { volume: number?, pitch: number?, loop: boolean? }?) -> Sound,
@@ -4214,8 +4246,13 @@ declare game: {
         --- "LeftBumper"... Give at least one keyboard or mouse button and one
         --- gamepad button; without both, bind stops with an error. A
         --- gamepad has two buttons LORE leaves free for a game:
-        --- GamepadSelect and LeftBumper. Sharing any other button with an
-        --- engine action works, but the player is told of the clash. Write
+        --- GamepadSelect and LeftBumper. They are the engine's switch_view
+        --- and lock_on buttons, which do nothing until the game turns them
+        --- on (`allowViewSwitch`, `setAbility("lockOn")`); the Controls page
+        --- shows no clash until then, and a game that turns one on after
+        --- giving its button away is warned in the log. Sharing any other
+        --- button with an engine action works, but the player is told of
+        --- the clash. Write
         --- it at the top of the file, outside any function; once made, read
         --- it like any action. Bind each action once: a name written twice is
         --- an error. A saved script's actions are in use at once: no need to
@@ -4330,7 +4367,9 @@ declare game: {
         --- rebind takes a button that does something else. A button that is
         --- one of the keys of a direction counts: "W" is used by "move".
         --- Sticks and directions are named too ("LeftStick", "WASD"). Gives
-        --- an empty list when nothing uses it.
+        --- an empty list when nothing uses it. An engine action the game
+        --- has not turned on (block, dodge, lock_on, switch_view) uses no
+        --- button yet and is left out.
         --- Example: print(table.concat(game.input.usedBy("Space"), ", "))
         --- Example: game.input.usedBy("W") -- { "move" }
         usedBy: (button: string) -> { string },
@@ -4430,8 +4469,8 @@ declare game: {
     --- A change is in force at once, and the engine saves it to the
     --- player's settings file: a script never deals with files.
     ---
-    --- The settings today, by name: "volume", "music_volume" and
-    --- "effects_volume" (0 to 100); "mouse_sensitivity" and
+    --- The settings today, by name: "volume", "music_volume",
+    --- "speech_volume" and "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"

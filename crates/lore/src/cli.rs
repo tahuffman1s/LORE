@@ -562,21 +562,36 @@ fn holds_function(code: &str, name: &str) -> bool {
 /// player can start at every spawn point, or what to change, a line each.
 #[must_use]
 pub fn walked(check: &crate::world::WalkCheck) -> String {
-    if check.problems.is_empty() {
+    let mut said = if check.problems.is_empty() {
         let places = match check.spawn_points {
             1 => "its one spawn point".to_owned(),
             many => format!("each of its {many} spawn points"),
         };
-        return format!(
+        format!(
             "The player can walk it: started at {places}, they landed on the floor every \
              time. They stood still there, so walk it yourself with `lore run`.\n"
-        );
+        )
+    } else {
+        check
+            .problems
+            .iter()
+            .map(|problem| format!("Warning: {problem}\n"))
+            .collect()
+    };
+    for place in &check.unreachable {
+        said.push_str(&format!("Warning: {place}\n"));
     }
-    check
-        .problems
-        .iter()
-        .map(|problem| format!("Warning: {problem}\n"))
-        .collect()
+    if check.unreachable.is_empty() && check.places > 0 {
+        let places = match check.places {
+            1 => "its one named place".to_owned(),
+            many => format!("each of its {many} named places"),
+        };
+        said.push_str(&format!(
+            "A person can walk to {places} in {} from where the player starts.\n",
+            crate::map::MAP_FILE
+        ));
+    }
+    said
 }
 
 /// Checks that `folder` is a folder, or says what a command wants instead.

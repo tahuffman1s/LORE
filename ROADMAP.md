@@ -19,6 +19,7 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 - No game modes, teams, rounds or scores to win: a script that asks for one is told LORE has none and what to write instead (#279)
 - One player, who is `game.player` to a script from its first line: no list of players, no joining or leaving, and a script that asks for them is told what to write instead. `lore check` tells a script of pretend shots at a training dummy and at a wall, and of the player dying (#280)
 - The standard controls are an adventure's: `use_item`, `next_item`, `previous_item`, `map` and `inventory`, and no `scoreboard` or `grenade` (#313, #317)
+- Walkable ground worked out from the level with nothing to place: doors that shut ways, `game.canWalk` and `game.findWay`, and `lore check` naming places that cannot be reached (#53)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
 
@@ -78,7 +79,6 @@ One player in first or third person: move, look, use things, fight, hear and pau
 NPCs. They stand in the world, find their way with nothing placed by hand, see and hear, follow a readable list of rules, and can say why they did what they did. Then the ones a game is built around: enemies described as kinds, bosses with phases, enemies that fly, and companions who take orders and get back up.
 
 - An NPC is one call: someone stands in the world, breathes, and looks at you (#52)
-- NPCs know where they can walk: worked out from the level, with nothing to place (#53)
 - NPCs walk to places: round corners, through doors, and past each other (#54)
 - NPCs see and hear: sight that walls block, and the very sounds the player hears (#55)
 - NPCs notice bit by bit: curious, searching, alarmed, and calm again (#56)
@@ -107,7 +107,6 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - Companions take orders: wait, follow, go there, attack that — one button and a look (#271)
 - Companions fight beside you, go down instead of dying, and can be helped back up (#272)
 - Companions notice things: remarks about places, fights and what you did, and they point the way (#273)
-- A speech volume: spoken lines follow a slider of their own (#275)
 
 ## M3 — Stories
 

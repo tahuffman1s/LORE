@@ -8,6 +8,8 @@ use lore_assets::{Marker, Scene};
 use lore_physics::{Level, MoveInput, MoveSettings, Player};
 
 use super::spawn;
+use super::things::Things;
+use super::walk::{self, Walk};
 use crate::map::{MAP_FILE, Map};
 use crate::scaffold::LEVEL_FILE;
 
@@ -47,6 +49,11 @@ pub(crate) struct Ground {
     pub(crate) tick_rate: u32,
     /// Seconds in one tick.
     pub(super) step: f32,
+    /// Where a person can walk on it, and which of its doors are open.
+    walk: Walk,
+    openings: lore_nav::Openings,
+    /// Whether it is a level's, and not the flat floor of a game with none.
+    from_level: bool,
 }
 
 impl Ground {
@@ -56,18 +63,27 @@ impl Ground {
         let r = FLOOR_REACH;
         let corners = [[-r, 0.0, -r], [r, 0.0, -r], [r, 0.0, r], [-r, 0.0, r]];
         let [a, b, c, d] = corners;
-        Self::new(
+        let mut ground = Self::new(
             Level::from_triangles(&[[a, b, c], [a, c, d]]),
             &[],
             tick_rate,
-        )
+        );
+        ground.walk = Walk::ready(lore_nav::Walkable::flat(
+            [-r, -r],
+            [r, r],
+            0.0,
+            walk::body_of(&ground.rules),
+        ));
+        ground
     }
 
     /// The ground of a game's level: every shape in it is solid, and the
     /// player starts at its spawn markers, or at its middle if it has none.
     fn from_level(level: &Scene, tick_rate: u32) -> Self {
         let spawns: Vec<&Marker> = spawn_markers(level).collect();
-        Self::new(Level::from_scene(level), &spawns, tick_rate)
+        let mut ground = Self::new(Level::from_scene(level), &spawns, tick_rate);
+        ground.from_level = true;
+        ground
     }
 
     fn new(level: Level, markers: &[&Marker], tick_rate: u32) -> Self {
@@ -77,14 +93,54 @@ impl Ground {
             spawns.push([0.0; 3]);
             facing.push(0.0);
         }
+        let rules = MoveSettings::default();
         Self {
             level: Arc::new(level),
             spawns: spawns.into(),
             facing: facing.into(),
-            rules: MoveSettings::default(),
+            rules,
             tick_rate,
             step: 1.0 / tick_rate.max(1) as f32,
+            walk: Walk::ready(lore_nav::Walkable::none(walk::body_of(&rules))),
+            openings: lore_nav::Openings::all_open(),
+            from_level: false,
         }
+    }
+
+    /// Starts working out where a person can walk on this ground, round
+    /// `things`, the solid things on it: on a thread of its own, so this
+    /// returns at once. The flat floor of a game with no level is ready
+    /// already, and stays as it is.
+    pub(super) fn walk_round(&mut self, things: &Things) {
+        if self.from_level {
+            self.walk = Walk::start(&self.level, things, walk::body_of(&self.rules));
+        }
+        self.openings = lore_nav::Openings::all_open();
+        self.follow_doors(things);
+    }
+
+    /// Hands `host` this ground's walkable ground, for `game.canWalk` and
+    /// `game.findWay`, with what each door is called
+    /// ([`walk::door_names`]).
+    pub(super) fn tell_walking(&self, doors: Vec<String>, host: &mut lore_script::ScriptHost) {
+        host.set_walking_ground(std::rc::Rc::new(self.walk.clone()), doors);
+        host.set_openings(&self.openings);
+    }
+
+    /// Says which doors are open now: a shut one is a way shut.
+    pub(super) fn follow_doors(&mut self, things: &Things) {
+        walk::follow_doors(&mut self.openings, things);
+    }
+
+    /// Where a person can walk on this ground: see
+    /// [`World::walkable`](super::World::walkable).
+    pub(super) fn walkable(&self) -> &lore_nav::Walkable {
+        self.walk.get()
+    }
+
+    /// Which doors on this ground are open.
+    pub(super) fn openings(&self) -> &lore_nav::Openings {
+        &self.openings
     }
 
     /// The ground of a game with `level`, or the flat floor of a game with
@@ -296,6 +352,13 @@ pub struct WalkCheck {
     /// What its maker should change, a sentence each. Empty when a player
     /// can start at every spawn point and land on something.
     pub problems: Vec<String>,
+    /// How many named places in the map were looked at to see whether a
+    /// person can walk to them from where the player starts.
+    pub places: usize,
+    /// The named places a person cannot walk to from where the player
+    /// starts, with every door open, and those not on walkable ground at
+    /// all: a sentence each.
+    pub unreachable: Vec<String>,
 }
 
 /// Tries `level` out for walking, with no window: starts a
@@ -306,12 +369,30 @@ pub struct WalkCheck {
 /// ([`ScriptGame::map`](crate::ScriptGame::map)) if it has any, else the
 /// level's markers whose names begin with `spawn`, else the middle of the
 /// level.
+///
+/// It also works out the level's walkable ground, round the map's solid
+/// things that the engine has models for, and says which named places in
+/// the map cannot be walked to from where the player starts.
 #[must_use]
 pub fn try_walking(level: &Scene, map: &Map) -> WalkCheck {
-    let ground = Ground::from_level(level, 60);
+    let mut ground = Ground::from_level(level, 60);
+    let starts = starts(level, map);
+    let middle = [(String::new(), [0.0; 3])];
+    let from = if starts.is_empty() {
+        &middle[..]
+    } else {
+        &starts[..]
+    };
+    // A model of the game's own is not read here: the things made of one
+    // are left out of the ground.
+    let (things, _) = Things::of(map, &ground.level, 60, |_| Err(String::new()));
+    ground.walk_round(&things);
+    let (unreachable, places) = walk::unreachable(ground.walkable(), map, from);
     WalkCheck {
-        spawn_points: starts(level, map).len(),
+        spawn_points: starts.len(),
         problems: ground.problems(level, map),
+        places,
+        unreachable,
     }
 }
 

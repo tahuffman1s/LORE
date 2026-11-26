@@ -282,7 +282,9 @@ impl ActionMap {
     /// `interact`, `melee`, `use_item`, `next_item`, `previous_item`,
     /// `map` and `inventory` are there for a game's script to read, so that
     /// every game calls them the same and a player binds them once. The
-    /// left bumper is left for a game's own action.
+    /// left bumper (`lock_on`) and Select (`switch_view`) are left for a
+    /// game's own action: the engine uses them only in a game that turns
+    /// the ability on.
     ///
     /// A second set, `"menu"`, holds the actions menus are worked with. The
     /// mouse points in it. `menu_click` is a click on a script's menu, and a
