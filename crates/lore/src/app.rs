@@ -1361,9 +1361,6 @@ impl<G: Game> App<G> {
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
         }
-        if let Some(hears) = frame.listening() {
-            self.input.set_listening(hears);
-        }
         let asks = frame.take_binding_asks();
         if !asks.is_empty() {
             self.follow_binding_asks(&asks);

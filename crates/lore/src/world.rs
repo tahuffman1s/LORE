@@ -704,6 +704,18 @@ impl Game for World {
         self.change_level(level);
     }
 
+    fn typing_ended(&mut self) {
+        self.game.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.game.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.game.take_listening()
+    }
+
     /// Steps the world by one tick. `input` is what the game's script reads
     /// (`game.input`); the player moves by what was asked of them
     /// ([`World::ask`]).
@@ -2179,6 +2191,18 @@ impl Playing {
 impl Game for Playing {
     fn level_saved(&mut self, level: &Scene) {
         self.world.change_level(level);
+    }
+
+    fn typing_ended(&mut self) {
+        self.world.typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        self.world.listening_ended();
+    }
+
+    fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.world.take_listening()
     }
 
     fn tick(&mut self, input: &InputFrame, step: f32) {
