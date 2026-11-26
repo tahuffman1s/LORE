@@ -29,6 +29,7 @@ mod ground;
 mod npcs;
 mod spawn;
 mod trail;
+mod walk;
 mod wet;
 
 pub(crate) use bodies::{Body, Dummy, Standing};
@@ -244,7 +245,7 @@ impl World {
 
     /// The world of `game` on `ground`, with the player's feet at `here`
     /// or, with `None`, at a spawn point, facing the way it does.
-    fn on(mut game: ScriptGame, ground: Ground, here: Option<[f32; 3]>) -> Self {
+    fn on(mut game: ScriptGame, mut ground: Ground, here: Option<[f32; 3]>) -> Self {
         let spawned = 1;
         let player = match here {
             Some(here) => Player::at(here, &ground.rules),
@@ -258,6 +259,7 @@ impl World {
         game.host_mut()
             .set_motion(CharacterId::PLAYER, motion_of(&player, aim));
         let things = Self::things_of(&game, &ground);
+        ground.walk_round(&things);
         let ladders = crate::script_game::ladders_of(game.map());
         // Every NPC the game has stands in the world from its first tick,
         // however the world was made.
@@ -305,6 +307,8 @@ impl World {
         // world given its level some other way once had none.
         (world.fluids).take_level(&world.ground.level, world.game.host_mut());
         world.tell_things();
+        let doors = walk::door_names(&world.things, world.game.map());
+        (world.ground).tell_walking(doors, world.game.host_mut());
         world
     }
 
@@ -386,8 +390,30 @@ impl World {
         self.ground = ground;
         // Solid things stand on the new shapes, back where the map has them.
         self.things = Self::things_of(&self.game, &self.ground);
+        self.ground.walk_round(&self.things);
+        let doors = walk::door_names(&self.things, self.game.map());
+        (self.ground).tell_walking(doors, self.game.host_mut());
         self.tell_things();
         (self.fluids).take_level(&self.ground.level, self.game.host_mut());
+    }
+
+    /// Where a person can walk in the level: the ground, worked out from
+    /// the level's shapes and the solid things in it that never move, with
+    /// each door a gate ([`openings`](Self::openings) says which are open).
+    /// The flat floor of a game with no level is one open square.
+    ///
+    /// It is built on a thread of its own when the level is loaded or
+    /// saved; the first time it is asked for, this waits until it is done.
+    /// What it holds is the same however long that takes.
+    pub fn walkable(&self) -> &lore_nav::Walkable {
+        self.ground.walkable()
+    }
+
+    /// Which ways on the [`walkable`](Self::walkable) ground are open: a
+    /// door's gate is open while the door is open, as of the last tick.
+    #[must_use]
+    pub fn openings(&self) -> &lore_nav::Openings {
+        self.ground.openings()
     }
 
     /// The game being played.
@@ -818,6 +844,10 @@ impl Game for World {
             &self.player.player,
             (self.climate.water_rise(), self.climate.ice()),
         );
+        // Which doors are open, for whoever finds a way this tick: as the
+        // script and the use button left them by the end of the last.
+        self.ground.follow_doors(&self.things);
+        self.game.host_mut().set_openings(self.ground.openings());
         let Ground {
             level,
             rules,

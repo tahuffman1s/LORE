@@ -67,6 +67,8 @@ pub(crate) const GAME_FUNCTIONS: &[&str] = &[
     "chance",
     "pick",
     "shuffle",
+    "canWalk",
+    "findWay",
 ];
 
 /// What `game` holds that is neither a function nor a table of them.
@@ -276,6 +278,9 @@ pub(crate) struct Shared {
     pub body: Rc<crate::body_api::BodyState>,
     /// The hurts the script has not yet heard of. They outlive this version.
     pub health: Rc<crate::health_api::HealthState>,
+    /// The walkable ground of the level, and which doors are open. It
+    /// outlives this version of the script.
+    pub walk: Rc<crate::walk_api::WalkState>,
     /// The functions this version is waiting to call, from `game.after` and
     /// `game.every`, oldest first.
     pub timers: RefCell<Vec<Timer>>,
@@ -431,6 +436,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     weapon_api::install(lua, shared, &game)?;
     time_api::install(lua, shared, &game)?;
     crate::dice_api::install(lua, shared, &game)?;
+    crate::walk_api::install(lua, shared, &game)?;
     fluid_api::install(lua, shared, &game)?;
     crate::lamp_api::install(lua, shared, &game)?;
     settings_api::install(lua, shared, &game)?;

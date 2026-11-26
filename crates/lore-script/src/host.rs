@@ -171,6 +171,8 @@ pub struct ScriptHost {
     clock: Rc<Clock>,
     /// The game's dice: what `math.random` rolls.
     dice: Rc<crate::dice_api::Dice>,
+    /// The level's walkable ground and which doors are open.
+    walk: Rc<crate::walk_api::WalkState>,
     /// The action set the script chose, shared with each version of it.
     live_set: Rc<LiveSet>,
     /// What the script said of the weather; it outlives a reload too.
@@ -507,6 +509,7 @@ impl ScriptHost {
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
             dice: Rc::default(),
+            walk: Rc::default(),
             live_set: Rc::default(),
             weather: Rc::default(),
             fluids: Rc::default(),
@@ -1725,6 +1728,22 @@ impl ScriptHost {
         }
     }
 
+    /// Hands the script the level's walkable ground, for `game.canWalk`
+    /// and `game.findWay`, with what each door is called in the map, in
+    /// the order of their gates. Every door is open until
+    /// [`set_openings`](Self::set_openings) says otherwise.
+    pub fn set_walking_ground(&mut self, ground: Rc<dyn crate::WalkingGround>, doors: Vec<String>) {
+        *self.walk.ground.borrow_mut() = Some(ground);
+        *self.walk.doors.borrow_mut() = doors;
+        *self.walk.openings.borrow_mut() = lore_nav::Openings::all_open();
+    }
+
+    /// Says which doors are open now. Call it each tick, before the script
+    /// runs; it sets no memory aside once the doors are known.
+    pub fn set_openings(&mut self, openings: &lore_nav::Openings) {
+        self.walk.openings.borrow_mut().clone_from(openings);
+    }
+
     /// Says how the solid thing placed as `id` is moving and where it has
     /// got to: what a script reads as its `position`, `velocity`, `moves`,
     /// `weight` and `resting`. Call it each tick for things that move.
@@ -2458,6 +2477,7 @@ impl ScriptHost {
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
             dice: Rc::clone(&self.dice),
+            walk: Rc::clone(&self.walk),
             timers: RefCell::new(Vec::new()),
             next_timer: Cell::new(0),
         });

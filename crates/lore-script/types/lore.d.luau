@@ -2745,6 +2745,24 @@ declare game: {
     --- Example: local order = game.shuffle({ 1, 2, 3, 4 })
     shuffle: <T>(list: { T }) -> { T },
 
+    --- Whether a person can walk from `from` to `to` in the level, each a
+    --- place in metres such as `game.player.position`: up steps of 0.4 m and
+    --- slopes of 45° at most, through gaps 0.7 m wide or more, crouching where
+    --- it is low, and not through a door that is shut. Each place is taken
+    --- to the ground nearest it, within 2 m. False too when the game has no
+    --- ground yet; `game.findWay` says why there is no way.
+    --- Example: if game.canWalk(game.player.position, vector.create(4, 0, -6)) then print("You can get there") end
+    canWalk: (from: vector, to: vector) -> boolean,
+
+    --- The way a person would walk from `from` to `to` (places in metres):
+    --- the corners to walk to, in order, the first where it starts and the
+    --- last where it ends, each on the ground. A trail to a quest's goal can
+    --- be drawn along it. With no way it gives nil and a sentence saying
+    --- why, to print, such as `the door "Cellar door" is shut: open it first`.
+    --- Example: local corners, why = game.findWay(game.player.position, vector.create(4, 0, -6))
+    --- Example: if not corners then print("No way there: " .. why) end
+    findWay: (from: vector, to: vector) -> ({ vector }?, string?),
+
     --- True while the game is paused with `game.pause`.
     --- Example: game.onTick(function() if game.paused() then return end; moveEnemies() end)
     paused: () -> boolean,
