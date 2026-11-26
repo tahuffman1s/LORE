@@ -408,18 +408,18 @@ Every part of it is a class you add to an element:
 
 | For | Classes |
 | --- | --- |
-| Rows and columns | `row`, `col`, `wrap`, `center`, `between`, `around`, `start`, `end`, `grow`, `items-start`, `items-center`, `items-end`, `items-stretch` |
-| Size and place | `screen` (the whole window), `full`, `w-full`, `h-full`, `w-half`, `w-third`, `w-quarter`, `fill-10` to `fill-90`, `abs`, `rel`, `hidden`, `clip`, `scroll-y` |
-| Pinned to the parent | `tl`, `tr`, `bl`, `br` (corners), `tc`, `bc` (top and bottom middle), `mid`, `centred-screen` |
+| Rows and columns | `row`, `col`, `wrap`, `center`, `between`, `around`, `start`, `end`, `grow`, `shrink-0`, `items-start`, `items-center`, `items-end`, `items-stretch` |
+| Size and place | `screen` (the whole window, whatever it is inside), `full`, `w-full`, `h-full`, `w-half`, `w-third`, `w-quarter`, `w-10` to `w-90`, `abs`, `rel`, `hidden`, `clip`, `scroll-y` |
+| Pinned to the parent, 48 pixels in | `tl`, `tr`, `bl`, `br` (corners), `tc`, `bc` (the middle half of the top and of the bottom) |
 | Space | `gap-1` to `gap-8`, `p-1` to `p-8`, `px-`, `py-`, `m-`, `mt-`, `mb-`, `ml-`, `mr-` with the same numbers (4, 8, 12, 16, 24, 32, 48 and 64 pixels), `p-0`, `m-0`, `ml-auto`, `mr-auto`, `mt-auto` |
-| Text | `text-xs`, `text-sm`, `text-md`, `text-lg`, `text-xl`, `text-xxl`, `text-huge`, `upper`, `lower`, `bold`, `italic`, `text-left`, `text-center`, `text-right`, `wide`, `nowrap`, `dim`, `accent`, `danger`, `good`, `light`, `dark`, `glow-text`, `shadow-text` |
-| Surfaces | `bg-panel`, `bg-dark`, `bg-faint`, `bg-ink`, `bg-danger`, `border`, `border-dim`, `border-t`, `border-b`, `round`, `round-lg`, `round-full`, `glow`, `glow-inner`, `shadow`, `vignette`, `opacity-50`, `opacity-75`, `faded` |
-| Pieces | `panel` with `panel-title`; `btn` with `btn-solid`, `btn-ghost`, `btn-danger`, `btn-lg`, `btn-sm`, `btn-left`; `key` for a `<kbd>`; `chip` (add `on`); `badge`; `toast` (add `out` to send it away); `tabs` holding `tab` (add `current`); `list-row`; `stat-row`; `slot` (add `selected`); `divider` |
-| Bars | `bar` holding a `fill`, and a `ghost` before it for the part just lost; `bar-thin`, `bar-fat`; `fill danger`, `fill good`. Set the width of the fill from the script. |
-| Hover and focus | `hover-bright`, `hover-grow`, `hover-glow`, `hover-dim`, `smooth`, `fast` |
+| Text | `text-xs`, `text-sm`, `text-md`, `text-lg`, `text-xl`, `text-xxl`, `text-huge`, `upper`, `lower`, `bold`, `italic`, `text-left`, `text-center`, `text-right`, `wide`, `tight`, `nowrap`, `dim`, `danger`, `good`, `text-white`, `text-on-ink`, `glow-text`, `shadow-text` |
+| Surfaces | `bg-panel`, `bg-dark`, `bg-faint`, `bg-ink`, `bg-danger`, `bg-none`, `border`, `border-dim`, `border-t`, `border-b`, `border-none`, `round`, `round-lg`, `round-full`, `glow`, `glow-inner`, `shadow`, `vignette`, `opacity-50`, `opacity-75`, `faded` |
+| Pieces | `panel` with `panel-title`; `btn` with `btn-solid`, `btn-ghost`, `btn-danger`, `btn-lg`, `btn-sm`, `btn-left`; `field` for a text box or a drop-down; `key` for a `<kbd>`; `chip` (add `on`); `badge`; `toast` (add `out` to send it away); `tabs` holding `tab` (add `current`); `list-row`; `stat-row`; `slot` (add `selected`); `divider` |
+| Bars | `bar` holding a `fill`, and a `ghost` before it for the part just lost; `bar-thin`, `bar-fat`; `danger` or `good` on the fill. Set the width of the fill from the script. |
+| Hover and focus | `hover-bright`, `hover-grow`, `hover-glow`, `hover-dim`; `ease-smooth` and `ease-fast` make what a class changes (colour, size, opacity) ease in |
 | Motion, once | `anim-fade-in`, `anim-fade-out`, `anim-rise`, `anim-drop`, `anim-slide-in-left`, `anim-slide-in-right`, `anim-zoom-in`, `anim-pop`, `anim-bounce`, `anim-shake`, `anim-beat`, `anim-flash`, `anim-warm` |
 | Motion, for ever | `anim-pulse`, `anim-spin`, `anim-beat-loop` |
-| Timing of motion | `slow`, `quick`, `delay-1` to `delay-4` |
+| Timing of motion | `anim-slow`, `anim-quick`, `delay-1` to `delay-4` |
 
 A bar follows a number when the script sets the width of its fill. The fill slides
 there by itself, and the ghost follows a moment later:
@@ -447,11 +447,16 @@ body {
 colour let through less, `--glow` is the light around panels, `--panel` and
 `--panel-top` are the panel's background, `--on-ink` is text on a filled button,
 `--danger` and `--good` are the two warning colours, `--line` is how thick borders
-are and `--radius` how round the corners.
+are and `--radius` how round the corners. Sliders, tick boxes, scroll bars and the
+ring round an input that has focus take the colour as well.
 
 The file is part of your game, not of the engine. Change it, take classes out, or
 delete it: nothing else needs it. The starter's title screen does not link it and has
 its own small sheet, so you can read one screen from top to bottom.
+
+`examples/terminal` in the LORE repository is a whole small game built on it: a HUD
+with a compass, objectives, health and a weapon, a pause screen, a pack in three tabs
+and a settings screen, in six colours.
 
 ## Hot reload
 
@@ -496,7 +501,7 @@ A file that does not parse still gives a screen. It draws nothing, and the mista
 the error panel. A missing file says to create it or check the name. Save the fixed
 file and it loads.
 
-`lore check` reads every screen your script loaded:
+`lore check` reads every screen your script loaded, and says so when they are fine:
 
 - A mistake in the HTML or CSS, or a missing file, fails the check. It is printed with its
   file and line.

@@ -1,0 +1,62 @@
+<!-- Settings. The volume and the field of view are the player's own settings,
+     tied to their sliders by screen:bind in main.luau. The rest are this
+     game's, answered by the names in onchange and onclick. -->
+<link rel="stylesheet" href="lore.css">
+<link rel="stylesheet" href="terminal.css">
+<link rel="stylesheet" href="settings.css">
+
+<div class="screen veil col center">
+  <div class="card panel frame" id="settings">
+    <div class="corner nw"></div><div class="corner ne"></div>
+    <div class="corner sw"></div><div class="corner se"></div>
+    <div class="kicker">Field terminal</div>
+    <h1>Settings</h1>
+
+    <div class="setting">
+      <span>Colour</span>
+      <div class="control">
+        <button class="swatch amber" onclick="themeAmber" autofocus></button>
+        <button class="swatch green" onclick="themeGreen"></button>
+        <button class="swatch blue" onclick="themeBlue"></button>
+        <button class="swatch white" onclick="themeWhite"></button>
+        <button class="swatch rose" onclick="themeRose"></button>
+        <button class="swatch violet" onclick="themeViolet"></button>
+      </div>
+    </div>
+    <div class="setting">
+      <span>Volume</span>
+      <div class="control">
+        <input type="range" name="volume" min="0" max="100" oninput="showVolume">
+        <span class="value" id="volume-value">0</span>
+      </div>
+    </div>
+    <div class="setting">
+      <span>Field of view</span>
+      <div class="control">
+        <input type="range" name="field_of_view" min="50" max="110" oninput="showFieldOfView">
+        <span class="value" id="fov-value">0</span>
+      </div>
+    </div>
+    <div class="setting">
+      <span>HUD strength</span>
+      <div class="control">
+        <input type="range" name="opacity" min="30" max="100" step="5" value="100" oninput="setOpacity">
+        <span class="value" id="opacity-value">100</span>
+      </div>
+    </div>
+    <div class="setting">
+      <span>Crosshair</span>
+      <div class="control"><input type="checkbox" name="crosshair" checked onchange="setCrosshair"></div>
+    </div>
+    <div class="setting">
+      <span>Reduce motion</span>
+      <div class="control"><input type="checkbox" name="calm" onchange="setCalm"></div>
+    </div>
+
+    <button class="item" id="done" onclick="back"><span>Done</span><span class="go">&gt;&gt;</span></button>
+    <div class="hints">
+      <span class="hint"><kbd class="key" action="menu_move"></kbd><span>Move and change</span></span>
+      <span class="hint"><kbd class="key" action="menu_back"></kbd><span>Back</span></span>
+    </div>
+  </div>
+</div>

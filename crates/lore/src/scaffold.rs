@@ -567,6 +567,15 @@ mod tests {
         );
         assert_eq!(example("title.css"), TITLE_CSS);
         assert_eq!(example("lore.css"), STARTER_CSS);
+        // The terminal example is built on the same sheet, unchanged.
+        let terminal = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/terminal/ui/lore.css"),
+        )
+        .unwrap();
+        assert!(
+            terminal == STARTER_CSS,
+            "copy template/ui/lore.css over examples/terminal/ui/lore.css"
+        );
     }
 
     /// One of everything the starter stylesheet has a component for.

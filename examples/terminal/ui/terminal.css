@@ -1,0 +1,101 @@
+/* What every screen of this game shares. It is linked after lore.css, the
+   starter stylesheet, and adds the look of a field terminal to it: capitals,
+   wide letters, a faint glow, and frames with marked corners. */
+
+body {
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px var(--glow);
+}
+
+/* A panel with its corners marked. Put four .corner boxes inside it. */
+.frame { border-color: var(--ink-dim); }
+.corner { position: absolute; width: 16px; height: 16px; border: 0px solid var(--ink); }
+.corner.nw { left: -7px; top: -7px; border-left-width: 3px; border-top-width: 3px; }
+.corner.ne { right: -7px; top: -7px; border-right-width: 3px; border-top-width: 3px; }
+.corner.sw { left: -7px; bottom: -7px; border-left-width: 3px; border-bottom-width: 3px; }
+.corner.se { right: -7px; bottom: -7px; border-right-width: 3px; border-bottom-width: 3px; }
+
+/* The small line over a title. */
+.kicker { font-size: 16px; letter-spacing: 4px; color: var(--ink-dim); }
+
+/* A key or button with what it does beside it. */
+.hint { display: flex; align-items: center; gap: 8px; }
+.key { font-size: 16px; padding: 1px 8px; }
+
+/* One objective in a list: a box that fills when it is done. */
+.step {
+  display: flex; align-items: center; gap: 12px;
+  padding: 4px 0; font-size: 19px; color: var(--ink-dim);
+  transition: color 0.3s;
+}
+.step .box {
+  width: 14px; height: 14px; flex-shrink: 0;
+  border: var(--line) solid var(--ink-dim);
+  transition: background-color 0.3s, border-color 0.3s;
+}
+.step .far { margin-left: auto; flex-shrink: 0; font-size: 16px; white-space: nowrap; }
+.step.now { color: var(--ink); }
+.step.now .box { border-color: var(--ink); box-shadow: 0 0 10px var(--ink); animation: pulse 1.4s ease-in-out infinite; }
+.step.done .box { background-color: var(--ink-dim); }
+
+/* ---------- menus: the pause, pack and settings screens ---------- */
+
+/* Dims the game behind a menu, darker towards the edges. */
+.veil {
+  background: radial-gradient(circle, rgba(10, 7, 2, 0.74), rgba(0, 0, 0, 0.93));
+  animation: fade-in 0.2s ease-out both;
+}
+
+.card { width: 580px; padding: 28px 34px 22px 34px; animation: zoom-in 0.22s ease-out both; }
+.card h1 {
+  margin: 4px 0 18px 0;
+  padding-bottom: 12px;
+  font-size: 44px;
+  font-weight: normal;
+  letter-spacing: 6px;
+  border-bottom: var(--line) solid var(--ink);
+}
+
+/* A row of a menu to press. It fills and slides a little when it has focus,
+   for the mouse and for the d-pad alike. */
+.item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin: 0 0 6px 0;
+  padding: 10px 16px;
+  font-size: 26px;
+  color: var(--ink);
+  background-color: transparent;
+  border: var(--line) solid transparent;
+  border-radius: 0px;
+  transition: background-color 0.12s, color 0.12s, padding-left 0.12s;
+  /* Rows are one under the other: left and right go nowhere. */
+  nav-left: none;
+  nav-right: none;
+}
+.item:hover, .item:focus {
+  padding-left: 30px;
+  color: var(--on-ink);
+  background-color: var(--ink);
+  text-shadow: none;
+  outline: 0px solid transparent;
+}
+.item:active { transform: scale(0.985); }
+.item .go { opacity: 0; transition: opacity 0.12s; }
+.item:hover .go, .item:focus .go { opacity: 1; }
+.item.leave { color: var(--danger); }
+.item.leave:hover, .item.leave:focus { color: #ffffff; background-color: var(--danger); }
+
+.hints {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  margin-top: 16px;
+  padding-top: 14px;
+  font-size: 16px;
+  color: var(--ink-dim);
+  border-top: var(--line) solid var(--ink-faint);
+}

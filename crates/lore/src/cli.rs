@@ -303,6 +303,42 @@ pub fn check_ui(host: &lore_script::ScriptHost) -> lore_script::ScreensChecked {
     host.check_screens()
 }
 
+/// What `lore check` says of screens that have no mistake in them, or
+/// nothing for a game that loads none.
+#[must_use]
+pub fn screens_line(found: &lore_script::ScreensChecked) -> Option<String> {
+    if found.screens == 0 || !found.mistakes.is_empty() {
+        return None;
+    }
+    let one = found.screens == 1;
+    let screens = if one {
+        "screen".to_owned()
+    } else {
+        format!("{} screens", found.screens)
+    };
+    let (its, it_was, it) = if one {
+        ("its", "It was", "it")
+    } else {
+        ("their", "They were", "them")
+    };
+    let said = if found.warnings.is_empty() {
+        format!(
+            "The game's {screens} {} fine: {its} HTML and CSS loaded with no mistakes, a \
+             gamepad reaches every control, and every name in an onclick, onchange, oninput \
+             or onfocus is answered by the script.",
+            if one { "is" } else { "are" },
+        )
+    } else {
+        format!(
+            "The game's {screens} loaded: {its} HTML and CSS have no mistakes, but read the \
+             warnings above.",
+        )
+    };
+    Some(format!(
+        "{said} {it_was} not drawn, so look at {it} with `lore run`."
+    ))
+}
+
 /// What `lore check` found out about a game's shaders.
 #[derive(Debug, Default, PartialEq)]
 pub struct ShadersChecked {
@@ -1304,6 +1340,51 @@ mod tests {
         let found = check_ui(game.host());
         let _ = std::fs::remove_dir_all(&folder);
         found
+    }
+
+    #[test]
+    fn the_terminal_example_loads_its_four_screens_with_nothing_to_warn_of() {
+        let folder =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/terminal");
+        let mut game = open_game(&folder, &ActionMap::standard(), "lore check").unwrap();
+        assert_eq!(game.host().last_error(), None);
+        let found = check_ui(game.host());
+        assert_eq!(found.mistakes, Vec::<String>::new());
+        assert_eq!(found.warnings, Vec::<String>::new());
+        assert_eq!(found.screens, 4);
+        // A second of play: the HUD is filled in every tick.
+        let mut input = Input::new(ActionMap::standard());
+        for _ in 0..60 {
+            game.host_mut().tick(input.tick(), 1.0 / 60.0);
+        }
+        assert_eq!(game.host().last_error(), None);
+    }
+
+    #[test]
+    fn a_check_says_what_it_read_of_the_screens() {
+        let checked = |screens, warnings: &[&str], mistakes: &[&str]| lore_script::ScreensChecked {
+            screens,
+            mistakes: mistakes.iter().map(|&m| m.to_owned()).collect(),
+            warnings: warnings.iter().map(|&w| w.to_owned()).collect(),
+        };
+        assert_eq!(screens_line(&checked(0, &[], &[])), None);
+        assert_eq!(screens_line(&checked(2, &[], &["ui/a.html:1: no"])), None);
+        let one = screens_line(&checked(1, &[], &[])).unwrap();
+        assert!(
+            one.starts_with("The game's screen is fine: its HTML and CSS loaded"),
+            "{one}"
+        );
+        assert!(one.contains("a gamepad reaches every control"), "{one}");
+        assert!(
+            one.ends_with("It was not drawn, so look at it with `lore run`."),
+            "{one}"
+        );
+        let four = screens_line(&checked(4, &["ui/a.html:3: unreachable"], &[])).unwrap();
+        assert_eq!(
+            four,
+            "The game's 4 screens loaded: their HTML and CSS have no mistakes, but read the \
+             warnings above. They were not drawn, so look at them with `lore run`."
+        );
     }
 
     const MAIN_HTML: &str = "<link rel=\"stylesheet\" href=\"main.css\">\n\

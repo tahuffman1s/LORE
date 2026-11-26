@@ -1,0 +1,55 @@
+# What is placed in this game's level: spawn points, zones and objectives.
+# `lore edit` writes this file. It can be changed by hand as well: a game
+# that is running, and the editor, pick up a save by themselves.
+#
+# Every entity keeps its id for good. To add one by hand, give it any id no
+# other entity here has.
+
+version = 1
+
+[[entity]]
+id = "trm2start"
+type = "spawn"
+name = "Start"
+position = [0.0, 0.0, 0.0]
+facing = 0.0
+
+[[entity]]
+id = "trm3crate"
+type = "cache"
+name = "Supply crate"
+position = [0.0, 0.0, -7.0]
+facing = 20.0
+
+[entity.properties]
+model = "crate"
+
+[[entity]]
+id = "trm4marker"
+type = "marker"
+name = "Survey marker"
+position = [-9.0, 0.0, -24.0]
+facing = 0.0
+
+[entity.properties]
+model = "barrel"
+
+[[entity]]
+id = "trm5drum"
+type = "hazard"
+name = "Leaking drum"
+position = [0.5, 0.0, -38.0]
+facing = 0.0
+
+[entity.properties]
+model = "barrel"
+
+[[entity]]
+id = "trm6relay"
+type = "relay"
+name = "Relay"
+position = [10.0, 0.0, -52.0]
+facing = 200.0
+
+[entity.properties]
+model = "crate"

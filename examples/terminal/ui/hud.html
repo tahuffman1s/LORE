@@ -1,0 +1,115 @@
+<!-- The HUD: what is on the screen while you play. Nothing here can be
+     pressed, so the game keeps the keys. main.luau fills it in by id. -->
+<link rel="stylesheet" href="lore.css">
+<link rel="stylesheet" href="terminal.css">
+<link rel="stylesheet" href="hud.css">
+
+<!-- `screen` fills the window, whatever it sits in. -->
+<div id="hud" class="screen">
+  <div id="vignette" class="screen"></div>
+
+  <!-- The compass. The script fills the strip and slides it sideways. -->
+  <div id="top">
+    <div id="compass">
+      <div id="strip"></div>
+      <div id="waypoint"></div>
+      <div id="needle"></div>
+    </div>
+    <div id="readout">
+      <span id="heading">N 000</span>
+      <span id="target" class="dim"></span>
+    </div>
+  </div>
+
+  <div id="quest" class="tl panel frame">
+    <div class="corner nw"></div><div class="corner ne"></div>
+    <div class="corner sw"></div><div class="corner se"></div>
+    <div class="kicker">Objective</div>
+    <div class="panel-title" id="quest-title">Broken signal</div>
+    <div id="objectives"></div>
+  </div>
+
+  <div id="toasts" class="tr col gap-2"></div>
+
+  <!-- The line across the screen when an objective is done. The script puts
+       a new one in each time, so that it fades in and out each time. -->
+  <div id="banner-layer"></div>
+
+  <div id="aim">
+    <div id="cross">
+      <div class="tick up"></div><div class="tick down"></div>
+      <div class="tick left"></div><div class="tick right"></div>
+      <div class="dot"></div>
+      <div id="hitmark">
+        <div class="tick up"></div><div class="tick down"></div>
+        <div class="tick left"></div><div class="tick right"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- What you are looking at, and how far through using it you are. -->
+  <div id="prompt-layer">
+    <div id="prompt" class="panel" hidden>
+      <div class="row center gap-2">
+        <kbd class="key" action="interact"></kbd>
+        <span id="prompt-verb">Use</span>
+        <span id="prompt-name" class="dim"></span>
+      </div>
+      <div class="bar bar-thin" id="prompt-hold" hidden><div class="fill" id="prompt-fill"></div></div>
+    </div>
+  </div>
+
+  <div id="vitals" class="bl">
+    <div class="vital" id="hp">
+      <span class="tag">HP</span>
+      <div class="bar grow">
+        <div class="ghost" id="hp-ghost"></div>
+        <div class="fill" id="hp-fill"></div>
+        <div class="segments">
+          <div></div><div></div><div></div><div></div><div></div>
+          <div></div><div></div><div></div><div></div><div></div>
+        </div>
+      </div>
+      <span class="num" id="hp-num">100</span>
+    </div>
+    <div class="vital" id="sta">
+      <span class="tag">STA</span>
+      <div class="bar bar-thin grow">
+        <div class="ghost" id="sta-ghost"></div>
+        <div class="fill" id="sta-fill"></div>
+      </div>
+      <span class="num dim" id="sta-num">100</span>
+    </div>
+    <div class="row gap-2" id="chips">
+      <span class="chip" id="chip-sprint">Sprint</span>
+      <span class="chip" id="chip-crouch">Crouch</span>
+      <span class="chip" id="chip-air">Air</span>
+      <span class="chip warn" id="chip-winded" hidden>Winded</span>
+      <span class="chip warn" id="chip-heat" hidden>Heat</span>
+      <span class="hint ml-auto text-xs">
+        <kbd class="key" action="use_item"></kbd>
+        <span>Ration</span>
+        <span class="badge" id="rations">0</span>
+      </span>
+    </div>
+  </div>
+
+  <div id="weapon" class="br panel frame">
+    <div class="corner nw"></div><div class="corner ne"></div>
+    <div class="corner sw"></div><div class="corner se"></div>
+    <div class="row between">
+      <span id="weapon-name" class="text-lg">Unarmed</span>
+      <span id="clock" class="text-xs dim">T+00:00</span>
+    </div>
+    <div class="divider"></div>
+    <div id="rounds">
+      <span id="mag">0</span>
+      <span id="reserve" class="text-lg dim">/ 0</span>
+    </div>
+    <div class="bar bar-thin" id="mag-bar"><div class="fill" id="mag-fill"></div></div>
+    <div class="row gap-4 text-xs dim" id="weapon-hints">
+      <span class="hint"><kbd class="key" action="fire"></kbd><span>Fire</span></span>
+      <span class="hint"><kbd class="key" action="reload"></kbd><span>Reload</span></span>
+    </div>
+  </div>
+</div>

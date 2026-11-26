@@ -1,0 +1,20 @@
+<!-- The pause screen. main.luau answers the names in each onclick. -->
+<link rel="stylesheet" href="lore.css">
+<link rel="stylesheet" href="terminal.css">
+
+<div class="screen veil col center">
+  <div class="card panel frame">
+    <div class="corner nw"></div><div class="corner ne"></div>
+    <div class="corner sw"></div><div class="corner se"></div>
+    <div class="kicker">Field terminal</div>
+    <h1>Paused</h1>
+    <button class="item" onclick="resume" autofocus><span>Resume</span><span class="go">&gt;&gt;</span></button>
+    <button class="item" onclick="openPack"><span>Pack</span><span class="go">&gt;&gt;</span></button>
+    <button class="item" onclick="openSettings"><span>Settings</span><span class="go">&gt;&gt;</span></button>
+    <button class="item leave" onclick="quit"><span>Quit</span><span class="go">&gt;&gt;</span></button>
+    <div class="hints">
+      <span class="hint"><kbd class="key" action="menu_confirm"></kbd><span>Choose</span></span>
+      <span class="hint"><kbd class="key" action="menu_back"></kbd><span>Resume</span></span>
+    </div>
+  </div>
+</div>

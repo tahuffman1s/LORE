@@ -1,0 +1,95 @@
+<!-- The pack: three tabs. main.luau fills the list, the objectives and the
+     readings, and shows one tab at a time. -->
+<link rel="stylesheet" href="lore.css">
+<link rel="stylesheet" href="terminal.css">
+<link rel="stylesheet" href="pack.css">
+
+<div class="screen veil">
+  <div id="shell">
+    <div id="head">
+      <div>
+        <div class="kicker">Field terminal</div>
+        <div id="title">Pack</div>
+      </div>
+      <div id="load" class="dim">Load 0.0 / 40 kg</div>
+    </div>
+
+    <div class="row">
+      <span class="hint dim"><kbd class="key" action="menu_previous_tab"></kbd></span>
+      <div class="tabs grow" id="tabs">
+        <button class="tab current" id="tab-pack" onclick="showPack" autofocus>Pack</button>
+        <button class="tab" id="tab-journal" onclick="showJournal">Journal</button>
+        <button class="tab" id="tab-readings" onclick="showReadings">Readings</button>
+      </div>
+      <span class="hint dim"><kbd class="key" action="menu_next_tab"></kbd></span>
+    </div>
+
+    <div id="views">
+      <div class="view" id="view-pack">
+        <div id="list"></div>
+        <div id="detail" class="panel frame">
+          <div class="corner nw"></div><div class="corner ne"></div>
+          <div class="corner sw"></div><div class="corner se"></div>
+          <div class="kicker" id="item-kind">Tool</div>
+          <div class="panel-title" id="item-name">Nothing chosen</div>
+          <div class="stat-row"><span class="dim">Carried</span><span id="item-count">0</span></div>
+          <div class="stat-row"><span class="dim">Weight each</span><span id="item-weight">0.0 kg</span></div>
+          <div class="stat-row"><span class="dim">Worth</span><span id="item-value">0</span></div>
+          <p id="item-note"></p>
+          <div class="hint" id="item-use" hidden>
+            <kbd class="key" action="menu_confirm"></kbd><span>Use it</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="view" id="view-journal" hidden>
+        <div class="column panel frame">
+          <div class="corner nw"></div><div class="corner ne"></div>
+          <div class="corner sw"></div><div class="corner se"></div>
+          <div class="kicker">Objective</div>
+          <div class="panel-title">Broken signal</div>
+          <p>The relay on the flats went quiet in the night. Walk the line, find out why,
+            and bring it back on the air.</p>
+          <div id="journal-steps"></div>
+        </div>
+        <div class="column panel frame">
+          <div class="corner nw"></div><div class="corner ne"></div>
+          <div class="corner sw"></div><div class="corner se"></div>
+          <div class="kicker">Survey</div>
+          <div class="panel-title">Places</div>
+          <div id="places"></div>
+        </div>
+      </div>
+
+      <div class="view" id="view-readings" hidden>
+        <div class="column panel frame">
+          <div class="corner nw"></div><div class="corner ne"></div>
+          <div class="corner sw"></div><div class="corner se"></div>
+          <div class="kicker">Surveyor</div>
+          <div class="panel-title">Body</div>
+          <div class="stat-row"><span class="dim">Health</span><span id="read-health">100 / 100</span></div>
+          <div class="bar"><div class="fill" id="read-health-fill"></div></div>
+          <div class="stat-row"><span class="dim">Stamina</span><span id="read-stamina">100 / 100</span></div>
+          <div class="bar"><div class="fill" id="read-stamina-fill"></div></div>
+        </div>
+        <div class="column panel frame">
+          <div class="corner nw"></div><div class="corner ne"></div>
+          <div class="corner sw"></div><div class="corner se"></div>
+          <div class="kicker">Instruments</div>
+          <div class="panel-title">Position</div>
+          <div class="stat-row"><span class="dim">Heading</span><span id="read-heading">N 000</span></div>
+          <div class="stat-row"><span class="dim">East</span><span id="read-east">0 m</span></div>
+          <div class="stat-row"><span class="dim">North</span><span id="read-north">0 m</span></div>
+          <div class="stat-row"><span class="dim">Walked</span><span id="read-walked">0 m</span></div>
+          <div class="stat-row"><span class="dim">Time out</span><span id="read-time">00:00</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="foot">
+      <span class="hint"><kbd class="key" action="menu_move"></kbd><span>Move</span></span>
+      <span class="hint"><kbd class="key" action="menu_confirm"></kbd><span>Choose</span></span>
+      <span class="hint"><kbd class="key" action="menu_back"></kbd><span>Close</span></span>
+    </div>
+  </div>
+</div>

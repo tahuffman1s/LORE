@@ -1,0 +1,31 @@
+/* The settings screen: a name on the left, what changes it on the right. */
+
+#settings { width: 760px; }
+
+.setting {
+  display: flex; justify-content: space-between; align-items: center;
+  min-height: 52px; padding: 6px 4px;
+  border-bottom: var(--line) solid var(--ink-faint);
+}
+.control { display: flex; align-items: center; gap: 12px; }
+.control input { margin: 0; }
+.setting .value { width: 56px; text-align: right; color: var(--ink-dim); }
+
+/* Each colour is a small button of that colour. The one in use has a ring. */
+.swatch {
+  width: 46px; height: 28px; margin: 0; padding: 0;
+  border: 2px solid rgba(0, 0, 0, 0.6); border-radius: 0px;
+  transition: transform 0.12s ease-out, border-color 0.12s;
+}
+.swatch:hover, .swatch:focus { transform: scale(1.18); border-color: #ffffff; outline: 0px solid transparent; }
+.swatch.on { box-shadow: 0 0 0 2px var(--on-ink), 0 0 0 4px var(--ink); }
+/* Left of the first and right of the last there is nothing: the d-pad stays put
+   and does not jump to the Done button. */
+.swatch.amber { background-color: rgb(255, 182, 65); nav-left: none; }
+.swatch.green { background-color: rgb(77, 255, 124); }
+.swatch.blue { background-color: rgb(92, 200, 255); }
+.swatch.white { background-color: rgb(242, 242, 242); }
+.swatch.rose { background-color: rgb(255, 120, 160); }
+.swatch.violet { background-color: rgb(180, 140, 255); nav-right: none; }
+
+#done { margin-top: 18px; }

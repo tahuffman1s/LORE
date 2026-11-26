@@ -964,6 +964,9 @@ fn check(folder: &Path) -> Result<(), String> {
              `lore run`."
         );
     }
+    if let Some(line) = cli::screens_line(&screens) {
+        println!("{line}");
+    }
     if !game.map().is_empty() {
         println!(
             "{MAP_FILE} is fine: {}. The player starts at one of its spawn points.",
