@@ -1,5 +1,7 @@
 //! How the HUD and menus look: colours, sizes and spacing.
 
+use crate::fill::FontFace;
+
 /// A colour: red, green, blue and how solid it is, each from 0 to 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -123,6 +125,14 @@ impl Default for Theme {
 pub trait TextMeasure {
     /// The width of `text` drawn `size` high, in the same units as `size`.
     fn width(&self, text: &str, size: f32) -> f32;
+
+    /// The width of `text` drawn `size` high in `font`, with
+    /// `letter_spacing` added after every character. The default ignores
+    /// the face and measures with [`width`](Self::width).
+    fn width_styled(&self, text: &str, size: f32, font: FontFace, letter_spacing: f32) -> f32 {
+        let _ = font;
+        self.width(text, size) + letter_spacing * text.chars().count() as f32
+    }
 }
 
 /// Guesses text width as a little over half the height for every character.

@@ -1576,7 +1576,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }

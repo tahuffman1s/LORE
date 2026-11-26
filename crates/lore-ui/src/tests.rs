@@ -83,7 +83,9 @@ fn rects(ui: &Ui) -> Vec<([f32; 2], [f32; 2], Color)> {
                 color,
                 ..
             } => Some((position, size, color)),
-            Draw::Text { .. } | Draw::Turned { .. } => None,
+            Draw::Text { .. } | Draw::Turned { .. } | Draw::Box { .. } | Draw::Shadow { .. } => {
+                None
+            }
         })
         .collect()
 }
@@ -93,7 +95,9 @@ fn texts(ui: &Ui) -> Vec<String> {
         .iter()
         .filter_map(|draw| match draw {
             Draw::Text { text, .. } => Some(text.to_owned()),
-            Draw::Rect { .. } | Draw::Turned { .. } => None,
+            Draw::Rect { .. } | Draw::Turned { .. } | Draw::Box { .. } | Draw::Shadow { .. } => {
+                None
+            }
         })
         .collect()
 }
@@ -1854,4 +1858,260 @@ fn a_turned_box_and_an_image_are_drawn_turned_and_resized() {
     let words = ui.hud_text(Anchor::TopLeft, [0.0, 0.0], 20.0, "hi");
     assert!(ui.set_angle(words, 1.0).is_err());
     assert!(ui.set_size(words, [1.0, 1.0]).is_err());
+}
+
+mod styled_drawing {
+    use crate::draw::{Command, Painter};
+    use crate::node::Rect;
+    use crate::{
+        Clip, Color, Draw, DrawBuffer, DrawList, EstimatedText, Fill, FontFace, Stop, TextMeasure,
+        Transform,
+    };
+
+    fn stop(at: f32) -> Stop {
+        Stop {
+            color: Color::rgb(at, 0.0, 0.0),
+            at,
+        }
+    }
+
+    #[test]
+    fn a_turn_about_a_point_keeps_the_point_and_then_chains() {
+        let turned = Transform::about([100.0, 100.0], 1.0, std::f32::consts::FRAC_PI_2);
+        let [x, y] = turned.apply([100.0, 100.0]);
+        assert!((x - 100.0).abs() < 1e-4 && (y - 100.0).abs() < 1e-4);
+        // Clockwise as seen: right of the point goes below it.
+        let [x, y] = turned.apply([110.0, 100.0]);
+        assert!((x - 100.0).abs() < 1e-4 && (y - 110.0).abs() < 1e-4);
+
+        let moved = Transform::translate([5.0, 7.0]);
+        let both = turned.then(moved);
+        let [x, y] = both.apply([110.0, 100.0]);
+        assert!((x - 105.0).abs() < 1e-4 && (y - 117.0).abs() < 1e-4);
+        assert!(Transform::default().is_identity());
+        assert_eq!(Transform::identity().apply([3.0, 4.0]), [3.0, 4.0]);
+    }
+
+    /// A painter that draws into `commands`, `text` and `stops` at `scale`.
+    fn painted(
+        scale: f32,
+        paint: impl FnOnce(&mut Painter<'_>),
+    ) -> (Vec<Command>, String, Vec<Stop>) {
+        let (mut commands, mut text, mut stops) = (Vec::new(), String::new(), Vec::new());
+        paint(&mut Painter {
+            commands: &mut commands,
+            text: &mut text,
+            stops: &mut stops,
+            scale,
+            clip: None,
+        });
+        (commands, text, stops)
+    }
+
+    #[test]
+    fn the_painter_keeps_gradient_stops_in_one_list_and_scales_to_real_pixels() {
+        let stops = [stop(0.0), stop(0.5), stop(1.0)];
+        let clip = Clip {
+            position: [1.0, 2.0],
+            size: [3.0, 4.0],
+            radii: [1.0; 4],
+        };
+        let (commands, _, kept) = painted(2.0, |painter| {
+            painter.styled_box(
+                Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 30.0,
+                    h: 40.0,
+                },
+                [4.0; 4],
+                Fill::Linear {
+                    angle: 90.0,
+                    stops: &stops,
+                },
+                [1.0; 4],
+                Color::WHITE,
+                Transform::translate([5.0, 5.0]),
+                Some(clip),
+            );
+            painter.styled_box(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                },
+                [0.0; 4],
+                Fill::Radial {
+                    center: [0.5; 2],
+                    radius: [0.5; 2],
+                    stops: &stops[..2],
+                },
+                [0.0; 4],
+                Color::WHITE,
+                Transform::IDENTITY,
+                None,
+            );
+        });
+        assert_eq!(kept.len(), 5);
+        let list = DrawList {
+            commands: &commands,
+            text: "",
+            stops: &kept,
+        };
+        let drawn: Vec<_> = list.iter().collect();
+        let Draw::Box {
+            position,
+            size,
+            radii,
+            fill,
+            border_widths,
+            transform,
+            clip: Some(clip),
+            ..
+        } = drawn[0]
+        else {
+            panic!("{:?}", drawn[0]);
+        };
+        assert_eq!(
+            (position, size, radii),
+            ([20.0, 40.0], [60.0, 80.0], [8.0; 4])
+        );
+        assert_eq!(border_widths, [2.0; 4]);
+        assert_eq!(transform.matrix[4..], [10.0, 10.0]);
+        assert_eq!(
+            (clip.position, clip.size, clip.radii),
+            ([2.0, 4.0], [6.0, 8.0], [2.0; 4])
+        );
+        assert_eq!(
+            fill,
+            Fill::Linear {
+                angle: 90.0,
+                stops: &stops
+            }
+        );
+        let Draw::Box { fill, .. } = drawn[1] else {
+            panic!()
+        };
+        assert_eq!(
+            fill,
+            Fill::Radial {
+                center: [0.5; 2],
+                radius: [0.5; 2],
+                stops: &stops[..2]
+            }
+        );
+    }
+
+    #[test]
+    fn a_buffer_keeps_each_lists_stops_and_words_straight() {
+        let stops = [stop(0.0), stop(1.0)];
+        let make = |words: &str| {
+            painted(1.0, |painter| {
+                painter.styled_text(
+                    [0.0, 0.0],
+                    30.0,
+                    Color::WHITE,
+                    words,
+                    FontFace {
+                        family: 2,
+                        weight: 700,
+                        italic: true,
+                    },
+                    1.5,
+                    4.0,
+                    Transform::IDENTITY,
+                    None,
+                );
+                painter.styled_box(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 5.0,
+                        h: 5.0,
+                    },
+                    [0.0; 4],
+                    Fill::Linear {
+                        angle: 180.0,
+                        stops: &stops,
+                    },
+                    [0.0; 4],
+                    Color::WHITE,
+                    Transform::IDENTITY,
+                    None,
+                );
+                painter.shadow(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 5.0,
+                        h: 5.0,
+                    },
+                    [0.0; 4],
+                    Color::BLACK,
+                    [1.0, 2.0],
+                    6.0,
+                    1.0,
+                    true,
+                    Transform::IDENTITY,
+                    None,
+                );
+            })
+        };
+        let (first, first_text, first_stops) = make("one");
+        let (second, second_text, second_stops) = make("two");
+        let mut buffer = DrawBuffer::default();
+        for (commands, text, stops) in [
+            (&first, &first_text, &first_stops),
+            (&second, &second_text, &second_stops),
+        ] {
+            buffer.add(DrawList {
+                commands,
+                text,
+                stops,
+            });
+        }
+        let drawn: Vec<_> = buffer.draw().iter().collect();
+        assert_eq!(drawn.len(), 6);
+        let words: Vec<_> = drawn
+            .iter()
+            .filter_map(|draw| match draw {
+                Draw::Text {
+                    text,
+                    font,
+                    letter_spacing,
+                    blur,
+                    ..
+                } => {
+                    assert_eq!(font.family, 2);
+                    assert_eq!((*letter_spacing, *blur), (1.5, 4.0));
+                    Some(*text)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(words, ["one", "two"]);
+        for draw in &drawn {
+            if let Draw::Box { fill, .. } = draw {
+                assert_eq!(
+                    *fill,
+                    Fill::Linear {
+                        angle: 180.0,
+                        stops: &stops
+                    }
+                );
+            }
+        }
+        // Cleared, it is empty and keeps what it learned.
+        buffer.clear();
+        assert!(buffer.draw().is_empty());
+    }
+
+    #[test]
+    fn measuring_with_a_face_defaults_to_the_plain_width_plus_the_spacing() {
+        let plain = EstimatedText.width("abcd", 20.0);
+        let wide = EstimatedText.width_styled("abcd", 20.0, FontFace::default(), 3.0);
+        assert!((wide - (plain + 12.0)).abs() < 1e-4);
+        assert_eq!(FontFace::default().weight, 400);
+    }
 }

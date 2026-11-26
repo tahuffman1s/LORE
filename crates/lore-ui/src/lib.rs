@@ -71,6 +71,7 @@
 mod build;
 mod draw;
 mod error;
+mod fill;
 mod focus;
 mod input;
 mod layout;
@@ -84,6 +85,7 @@ mod ui;
 pub use build::ScreenBuilder;
 pub use draw::{Draw, DrawBuffer, DrawIter, DrawList};
 pub use error::UiError;
+pub use fill::{Clip, Fill, FontFace, Stop, Transform};
 pub use input::{Direction, InputMode, UiInput};
 pub use layout::{hud_area, hud_line, hud_text_size};
 pub use node::{Anchor, ScreenId, WidgetId};

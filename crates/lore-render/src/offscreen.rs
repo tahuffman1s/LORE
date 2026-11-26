@@ -1291,3 +1291,174 @@ fn a_menu_has_round_corners_and_new_letters_reach_the_graphics_card() {
     }
     finish(gpu);
 }
+
+#[test]
+fn boxes_have_borders_gradients_shadows_soft_text_and_clips() {
+    use lore_ui::{Clip, DrawBuffer, Fill, FontFace, Stop, Transform as Turn};
+
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let red = Color::rgb(1.0, 0.0, 0.0);
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let blue = Color::rgb(0.0, 0.0, 1.0);
+    let stops = [
+        Stop {
+            color: red,
+            at: 0.0,
+        },
+        Stop {
+            color: green,
+            at: 0.5,
+        },
+        Stop {
+            color: blue,
+            at: 1.0,
+        },
+    ];
+    let plain = |position: [f32; 2], size: [f32; 2], fill, border: f32| Draw::Box {
+        position,
+        size,
+        radii: [0.0; 4],
+        fill,
+        border_widths: [border; 4],
+        border_color: Color::WHITE,
+        transform: Turn::IDENTITY,
+        clip: None,
+    };
+    let line = |position: [f32; 2], blur: f32, clip: Option<Clip>| Draw::Text {
+        position,
+        size: 60.0,
+        color: Color::WHITE,
+        text: "HI",
+        font: FontFace::default(),
+        letter_spacing: 0.0,
+        blur,
+        transform: Turn::IDENTITY,
+        clip,
+    };
+
+    let mut buffer = DrawBuffer::default();
+    // A red box with a white border six pixels thick.
+    buffer.push(plain([20.0, 20.0], [100.0, 60.0], Fill::Color(red), 6.0));
+    // Red, green and blue from left to right.
+    buffer.push(plain(
+        [160.0, 20.0],
+        [100.0, 60.0],
+        Fill::Linear {
+            angle: 90.0,
+            stops: &stops,
+        },
+        0.0,
+    ));
+    // A white glow below a dark box: the glow, then the box on top of it.
+    buffer.push(Draw::Shadow {
+        position: [320.0, 20.0],
+        size: [80.0, 40.0],
+        radii: [0.0; 4],
+        color: Color::WHITE,
+        offset: [0.0, 10.0],
+        blur: 24.0,
+        spread: 0.0,
+        inset: false,
+        transform: Turn::IDENTITY,
+        clip: None,
+    });
+    buffer.push(plain(
+        [320.0, 20.0],
+        [80.0, 40.0],
+        Fill::Color(Color::BLACK),
+        0.0,
+    ));
+    // Sharp text, soft text, and text cut down to a box.
+    buffer.push(line([20.0, 150.0], 0.0, None));
+    buffer.push(line([160.0, 150.0], 10.0, None));
+    let half = Clip {
+        position: [300.0, 150.0],
+        size: [30.0, 70.0],
+        radii: [0.0; 4],
+    };
+    buffer.push(line([300.0, 150.0], 0.0, Some(half)));
+
+    for format in WINDOW_FORMATS {
+        let shots = overlaid(&gpu, format, &[buffer.draw()]);
+        let shot = &shots[0];
+        let at = |x: f32, y: f32| wide_pixel(shot, x, y);
+
+        // Border and fill, with nothing outside.
+        assert!(close(at(22.0, 50.0), [255, 255, 255]), "{format:?}: border");
+        assert!(close(at(70.0, 50.0), [255, 0, 0]), "{format:?}: fill");
+        assert!(is_background(at(14.0, 50.0)), "{format:?}: outside");
+
+        // Each stop is where it says.
+        let [r, g, b] = at(162.0, 50.0);
+        assert!(r > 230 && g < 25 && b < 5, "{format:?}: start {r},{g},{b}");
+        let [r, g, b] = at(210.0, 50.0);
+        assert!(
+            g > 230 && r < 15 && b < 15,
+            "{format:?}: middle {r},{g},{b}"
+        );
+        let [r, g, b] = at(257.0, 50.0);
+        assert!(b > 230 && r < 15 && g < 25, "{format:?}: end {r},{g},{b}");
+
+        // The glow fades with the distance below the box, and is gone far off.
+        let near = at(360.0, 70.0)[0];
+        let further = at(360.0, 84.0)[0];
+        let far = at(360.0, 100.0)[0];
+        assert!(
+            near > further && further > far,
+            "{format:?}: {near} {further} {far}"
+        );
+        assert!(near > 60, "{format:?}: glow is faint at {near}");
+        assert!(
+            is_background(at(360.0, 160.0)),
+            "{format:?}: glow reaches too far"
+        );
+        // The box on top is not lit.
+        assert!(
+            close(at(360.0, 40.0), [0, 0, 0]),
+            "{format:?}: box under glow"
+        );
+
+        // Soft text spreads wider and fainter than sharp text.
+        let ink = |x: f32| -> (usize, u8) {
+            let mut most = 0;
+            let mut lit = 0;
+            for y in 140..225 {
+                for column in x as u32..x as u32 + 120 {
+                    let [red, ..] = wide_pixel(shot, column as f32, y as f32);
+                    if red > 40 {
+                        lit += 1;
+                    }
+                    most = most.max(red);
+                }
+            }
+            (lit, most)
+        };
+        let (sharp_lit, sharp_most) = ink(10.0);
+        let (soft_lit, soft_most) = ink(150.0);
+        assert!(sharp_most > 240, "{format:?}: sharp text is {sharp_most}");
+        assert!(
+            soft_lit > sharp_lit,
+            "{format:?}: {soft_lit} against {sharp_lit}"
+        );
+        assert!(
+            soft_most < sharp_most,
+            "{format:?}: {soft_most} against {sharp_most}"
+        );
+
+        // Only the left thirty pixels of the clipped text are drawn.
+        let lit_in = |from: u32, to: u32| {
+            (140..225_u32)
+                .flat_map(|y| (from..to).map(move |x| (x, y)))
+                .filter(|&(x, y)| wide_pixel(shot, x as f32, y as f32)[0] > 200)
+                .count()
+        };
+        assert!(
+            lit_in(300, 330) > 100,
+            "{format:?}: nothing inside the clip"
+        );
+        assert_eq!(lit_in(331, 420), 0, "{format:?}: text outside the clip");
+    }
+    finish(gpu);
+}

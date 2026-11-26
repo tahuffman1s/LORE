@@ -777,7 +777,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_owned()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -841,7 +844,10 @@ mod tests {
                     color,
                     ..
                 } => Some((position, size, color)),
-                Draw::Text { .. } | Draw::Turned { .. } => None,
+                Draw::Text { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -986,7 +992,10 @@ mod tests {
                 Draw::Rect {
                     position, color, ..
                 } => Some((position, color)),
-                Draw::Text { .. } | Draw::Turned { .. } => None,
+                Draw::Text { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect()
     }
@@ -1051,7 +1060,10 @@ mod tests {
             .iter()
             .find_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .unwrap_or_default();
         assert_eq!(said, "Cross");
@@ -1349,7 +1361,10 @@ mod tests {
             .iter()
             .filter_map(|draw| match draw {
                 Draw::Text { text, .. } => Some(text.to_string()),
-                Draw::Rect { .. } | Draw::Turned { .. } => None,
+                Draw::Rect { .. }
+                | Draw::Turned { .. }
+                | Draw::Box { .. }
+                | Draw::Shadow { .. } => None,
             })
             .collect();
         rig.list = frame.take_shader_list();

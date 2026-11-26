@@ -3,6 +3,7 @@
 use crate::build::{ScreenBuilder, index, snap};
 use crate::draw::{Command, DrawList, Painter};
 use crate::error::UiError;
+use crate::fill::Stop;
 use crate::focus;
 use crate::input::{Direction, InputMode, Repeater, UiInput, held_direction};
 use crate::layout::{measure_screen, place_hud, place_screen, safe_area, slider_track, tab_width};
@@ -146,6 +147,7 @@ pub struct Ui {
     events: Vec<UiEvent>,
     commands: Vec<Command>,
     draw_text: String,
+    draw_stops: Vec<Stop>,
     /// Real pixels per reference pixel.
     scale: f32,
     /// The screen in reference pixels.
@@ -184,6 +186,7 @@ impl Ui {
             events: Vec::with_capacity(MOST_EVENTS),
             commands: Vec::new(),
             draw_text: String::new(),
+            draw_stops: Vec::new(),
             scale: 1.0,
             size: [1920.0, REFERENCE_HEIGHT],
         }
@@ -826,6 +829,7 @@ impl Ui {
         DrawList {
             commands: &self.commands,
             text: &self.draw_text,
+            stops: &self.draw_stops,
         }
     }
 
@@ -1317,10 +1321,12 @@ impl Ui {
     fn paint(&mut self) {
         self.commands.clear();
         self.draw_text.clear();
+        self.draw_stops.clear();
         let clip = self.clip();
         let mut painter = Painter {
             commands: &mut self.commands,
             text: &mut self.draw_text,
+            stops: &mut self.draw_stops,
             scale: self.scale,
             clip: None,
         };
