@@ -38,10 +38,19 @@ pub(crate) const NPC_FIELDS: &[&str] = &[
     "useSeconds",
     "usable",
     "lookDistance",
+    "destination",
 ];
 
 /// What an NPC can be asked, besides what every character can.
-pub(crate) const NPC_METHODS: &[&str] = &["onUse", "remove"];
+pub(crate) const NPC_METHODS: &[&str] = &[
+    "onUse",
+    "remove",
+    "goTo",
+    "follow",
+    "stop",
+    "onArrive",
+    "onCannotReach",
+];
 
 /// What `game.npc { ... }` takes.
 const NPC_OPTIONS: &[&str] = &["name", "at", "facing"];
@@ -101,6 +110,19 @@ pub enum NpcAsk {
         /// Who it was.
         id: CharacterId,
     },
+    /// An NPC is to walk somewhere, or follow someone (`npc:goTo`,
+    /// `npc:follow`), in place of whatever it was doing.
+    Walk {
+        /// Who it is.
+        id: CharacterId,
+        /// Where to, and how.
+        walk: WalkAsk,
+    },
+    /// An NPC is to stop where it is (`npc:stop`).
+    Stop {
+        /// Who it is.
+        id: CharacterId,
+    },
 }
 
 /// One NPC as the engine is told of it: who, where its feet are now and the
@@ -152,6 +174,9 @@ pub(crate) struct NpcState {
     /// does not bring them back.
     left: RefCell<Vec<String>>,
     asks: RefCell<Vec<NpcAsk>>,
+    /// The NPCs on their way somewhere, and where, in the order they were
+    /// sent.
+    walks: RefCell<Vec<Walking>>,
 }
 
 /// What one NPC was made with, or found as, while a version of the script
@@ -330,6 +355,10 @@ impl NpcState {
     }
 
     fn ask(&self, ask: NpcAsk) {
+        // One put somewhere else, or gone, stops walking.
+        if let NpcAsk::Put { id, .. } | NpcAsk::Removed { id } = ask {
+            self.stand(id);
+        }
         self.asks.borrow_mut().push(ask);
     }
 
@@ -904,6 +933,7 @@ pub(crate) fn get(lua: &Lua, id: CharacterId, field: &str) -> mlua::Result<Value
             Value::Boolean(used.usable && used.handled && alive)
         }
         "lookDistance" => Value::Number(f64::from(look)),
+        "destination" => destination(lua, id)?,
         _ => Value::Nil,
     })
 }
@@ -981,6 +1011,16 @@ pub(crate) fn set(lua: &Lua, id: CharacterId, field: &str, value: &Value) -> mlu
             .clamp(LOOK_DISTANCES.0, LOOK_DISTANCES.1);
             version.change(id, &name, |said| said.look = look);
         }
+        "destination" => {
+            return Err(fail(
+                lua,
+                format!(
+                    "An NPC's `destination` is only read: it is where the NPC is walking. To \
+                     send {name} somewhere, write {} or stop it with {}",
+                    "guard:goTo(\"Gate\")", "guard:stop()"
+                ),
+            ));
+        }
         _ => {}
     }
     Ok(())
@@ -1017,4 +1057,540 @@ pub(crate) fn remove(lua: &Lua, id: CharacterId) -> mlua::Result<()> {
     shared.handles.forget(id);
     shared.weapons.forget(id);
     Ok(())
+}
+
+// Walking: `npc:goTo`, `npc:follow`, `npc:stop`, `npc.destination`,
+// `npc:onArrive` and `npc:onCannotReach`.
+
+/// What an NPC is asked to walk to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Toward {
+    /// A place, in metres.
+    Place([f32; 3]),
+    /// Someone, wherever they are as it walks.
+    Who(CharacterId),
+}
+
+/// A walk the script asked an NPC to take.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WalkAsk {
+    /// Where to.
+    pub to: Toward,
+    /// How close to it, across the ground, is there, in metres.
+    pub within: f32,
+    /// Which way to face on arriving, in radians turning left from -Z;
+    /// `None` faces whoever it walked to, or the way it walked.
+    pub facing: Option<f32>,
+    /// Whether to run.
+    pub run: bool,
+    /// Whether to keep following, rather than arrive and stop.
+    pub follow: bool,
+}
+
+/// How close an NPC comes to a place before it is there, until the script
+/// says otherwise, in metres.
+const ARRIVE_WITHIN: f32 = 0.5;
+/// How close it comes to someone it walks up to, in metres: near enough
+/// to talk.
+const MEET_WITHIN: f32 = 1.5;
+/// How far behind someone a follower keeps, until the script says
+/// otherwise, in metres.
+const FOLLOW_DISTANCE: f32 = 3.0;
+/// The distances a script may give, in metres.
+const WALK_DISTANCES: (f32, f32) = (0.1, 100.0);
+
+/// What `npc:goTo` takes in its options, and `npc:follow`.
+const GO_OPTIONS: &[&str] = &["run", "within", "facing"];
+const FOLLOW_OPTIONS: &[&str] = &["run", "distance"];
+
+/// What a script said an NPC walks to, as `npc.destination` reads it and
+/// `onArrive` hands back.
+#[derive(Debug, Clone, PartialEq)]
+enum Destination {
+    /// A place in the map, by the name the script gave.
+    Named(String),
+    /// A position.
+    At([f32; 3]),
+    /// A thing placed in the map, by its id.
+    Thing(Rc<str>),
+    /// Someone.
+    Who(CharacterId),
+}
+
+/// One NPC on its way somewhere.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Walking {
+    id: CharacterId,
+    to: Destination,
+    follow: bool,
+    /// What the world was asked to do.
+    ask: WalkAsk,
+}
+
+impl NpcState {
+    /// Where the NPC `id` is walking, if anywhere.
+    fn walking(&self, id: CharacterId) -> Option<Walking> {
+        (self.walks.borrow().iter())
+            .find(|walk| walk.id == id)
+            .cloned()
+    }
+
+    /// The NPC `id` stops: what it was walking to is forgotten.
+    pub(crate) fn stand(&self, id: CharacterId) {
+        self.walks.borrow_mut().retain(|walk| walk.id != id);
+    }
+
+    fn walk(&self, walking: Walking) {
+        let ask = NpcAsk::Walk {
+            id: walking.id,
+            walk: walking.ask,
+        };
+        let mut walks = self.walks.borrow_mut();
+        walks.retain(|walk| walk.id != walking.id);
+        walks.push(walking);
+        drop(walks);
+        self.ask(ask);
+    }
+
+    /// Calls `see` with every NPC on its way somewhere, and how, in the
+    /// order they were sent.
+    pub(crate) fn each_walk(&self, mut see: impl FnMut(CharacterId, WalkAsk)) {
+        for walk in self.walks.borrow().iter() {
+            see(walk.id, walk.ask);
+        }
+    }
+}
+
+/// Reads an option table `given` for `function`, which takes `known`: an
+/// error for anything else, with what to write instead.
+fn options_of(
+    lua: &Lua,
+    given: &Value,
+    function: &str,
+    known: &[&str],
+    example: &str,
+) -> mlua::Result<Option<Table>> {
+    let options = match given {
+        Value::Nil => return Ok(None),
+        Value::Table(options) => options.clone(),
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "{function}'s options are a table, such as {{ run = true }}, but it was given \
+                     {}. Write it like this: {example}",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    let mut unknown: Vec<String> = Vec::new();
+    for pair in options.pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        let key = match &key {
+            Value::String(key) => key.to_string_lossy(),
+            other => other.to_string().unwrap_or_default(),
+        };
+        if !known.contains(&key.as_str()) {
+            unknown.push(key);
+        }
+    }
+    unknown.sort();
+    if let Some(key) = unknown.first() {
+        let mut message = format!("{function} does not take `{key}`.");
+        match closest(key, known.iter().copied()) {
+            Some(near) => {
+                let _ = write!(message, " Did you mean `{near}`?");
+            }
+            None => {
+                let _ = write!(message, " It takes {}.", known.join(", "));
+            }
+        }
+        let _ = write!(message, " Write it like this: {example}");
+        return Err(fail(lua, message));
+    }
+    Ok(Some(options))
+}
+
+/// The option `key` of `options`: true or false, false if not given.
+fn flag(
+    lua: &Lua,
+    options: Option<&Table>,
+    key: &str,
+    function: &str,
+    example: &str,
+) -> mlua::Result<bool> {
+    match options.map(|o| o.raw_get::<Value>(key)).transpose()? {
+        None | Some(Value::Nil) => Ok(false),
+        Some(Value::Boolean(on)) => Ok(on),
+        Some(other) => Err(fail(
+            lua,
+            format!(
+                "{function}'s `{key}` is true or false, but it was given {}. Write it like this: \
+                 {example}",
+                describe(&other)
+            ),
+        )),
+    }
+}
+
+/// The distance `key` of `options`, in metres, or `default`.
+fn distance(
+    lua: &Lua,
+    options: Option<&Table>,
+    key: &str,
+    default: f32,
+    (function, takes, example): (&str, &str, &str),
+) -> mlua::Result<f32> {
+    match options.map(|o| o.raw_get::<Value>(key)).transpose()? {
+        None | Some(Value::Nil) => Ok(default),
+        Some(given) => Ok(number(
+            lua,
+            &format!("{function}'s `{key}`"),
+            Some(&given),
+            takes,
+            example,
+        )?
+        .clamp(WALK_DISTANCES.0, WALK_DISTANCES.1)),
+    }
+}
+
+/// `npc:goTo(where, options)`: the NPC walks to a place in the map by its
+/// name, a position, a thing, or someone, and returns at once.
+pub(crate) fn go_to(
+    lua: &Lua,
+    id: CharacterId,
+    place: &Value,
+    options: &Value,
+) -> mlua::Result<()> {
+    const EXAMPLE: &str = "guard:goTo(\"Gate\") or guard:goTo(game.player, { run = true })";
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "goTo")?;
+    crate::time_api::rules_only(lua, &shared, "npc:goTo")?;
+    let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
+    let options = options_of(
+        lua,
+        options,
+        "goTo",
+        GO_OPTIONS,
+        "guard:goTo(\"Gate\", { run = true })",
+    )?;
+    let options = options.as_ref();
+    let run = flag(
+        lua,
+        options,
+        "run",
+        "goTo",
+        "guard:goTo(\"Gate\", { run = true })",
+    )?;
+    let facing = match options.map(|o| o.raw_get::<Value>("facing")).transpose()? {
+        None | Some(Value::Nil) => None,
+        Some(given) => Some(facing_of(number(
+            lua,
+            "goTo's `facing`",
+            Some(&given),
+            "the way to face on arriving: degrees turned to the left, as the map writes it",
+            "guard:goTo(\"Gate\", { facing = 90 })",
+        )?)),
+    };
+    let (to, said, place_facing, near) = match place {
+        Value::String(wanted) => {
+            let wanted = wanted.to_string_lossy();
+            let wanted = wanted.trim();
+            let placed = place_named(&shared.things, wanted)
+                .map_err(|why| fail(lua, format!("{name} cannot go to \"{wanted}\": {why}")))?;
+            // A marker of type "place" faces the way to stand there.
+            let faces = (placed.kind == "place").then(|| facing_of(placed.facing));
+            (
+                Toward::Place(placed.position),
+                Destination::Named(wanted.to_owned()),
+                faces,
+                ARRIVE_WITHIN,
+            )
+        }
+        Value::Vector(at) => {
+            let at = [at.x(), at.y(), at.z()];
+            if !at
+                .iter()
+                .all(|part| part.is_finite() && part.abs() <= FURTHEST_PLACE)
+            {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "goTo was given a position with a number in it that is too far off or \
+                         has no size (infinity, or 0 / 0). Keep it inside the level. Write it \
+                         like this: {EXAMPLE}"
+                    ),
+                ));
+            }
+            (Toward::Place(at), Destination::At(at), None, ARRIVE_WITHIN)
+        }
+        Value::UserData(value) => {
+            if let Some(who) = crate::character_api::id_of_value(lua, place) {
+                if who == id {
+                    return Err(fail(
+                        lua,
+                        format!(
+                            "{name} cannot go to themselves. Give goTo a place, or someone else: \
+                             {EXAMPLE}"
+                        ),
+                    ));
+                }
+                (Toward::Who(who), Destination::Who(who), None, MEET_WITHIN)
+            } else if let Some((thing, at)) = crate::thing_api::id_and_place(&shared, value) {
+                (
+                    Toward::Place(at),
+                    Destination::Thing(thing),
+                    None,
+                    MEET_WITHIN,
+                )
+            } else {
+                return Err(fail(
+                    lua,
+                    format!(
+                        "goTo takes a place, but it was given something that is neither a \
+                         character nor a thing placed in the map. Write it like this: {EXAMPLE}"
+                    ),
+                ));
+            }
+        }
+        other => {
+            return Err(fail(
+                lua,
+                format!(
+                    "goTo takes where to walk: the name of a place in the map, a position, a \
+                     thing or someone, but it was given {}. Write it like this: {EXAMPLE}",
+                    describe(other)
+                ),
+            ));
+        }
+    };
+    let within = distance(
+        lua,
+        options,
+        "within",
+        near,
+        (
+            "goTo",
+            "how close to the place is there, in metres, from 0.1 to 100",
+            "guard:goTo(\"Gate\", { within = 2 })",
+        ),
+    )?;
+    shared.npcs.walk(Walking {
+        id,
+        to: said,
+        follow: false,
+        ask: WalkAsk {
+            to,
+            within,
+            facing: facing.or(place_facing),
+            run,
+            follow: false,
+        },
+    });
+    Ok(())
+}
+
+/// `npc:follow(who, options)`: the NPC keeps near someone until told to
+/// stop.
+pub(crate) fn follow(lua: &Lua, id: CharacterId, who: &Value, options: &Value) -> mlua::Result<()> {
+    const EXAMPLE: &str = "guard:follow(game.player, { distance = 3 })";
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "follow")?;
+    crate::time_api::rules_only(lua, &shared, "npc:follow")?;
+    let name = (shared.characters.name_and_place(id)).map_or_else(String::new, |(n, _)| n);
+    let Some(leader) = crate::character_api::id_of_value(lua, who) else {
+        let also = if matches!(who, Value::String(_) | Value::Vector(_)) {
+            " To walk to a place, use goTo: guard:goTo(\"Gate\")."
+        } else {
+            ""
+        };
+        return Err(fail(
+            lua,
+            format!(
+                "follow takes someone to follow (game.player, or an NPC), but it was given \
+                 {}.{also} Write it like this: {EXAMPLE}",
+                describe(who)
+            ),
+        ));
+    };
+    if leader == id {
+        return Err(fail(
+            lua,
+            format!("{name} cannot follow themselves. Write it like this: {EXAMPLE}"),
+        ));
+    }
+    let options = options_of(lua, options, "follow", FOLLOW_OPTIONS, EXAMPLE)?;
+    let options = options.as_ref();
+    let run = flag(
+        lua,
+        options,
+        "run",
+        "follow",
+        "guard:follow(game.player, { run = true })",
+    )?;
+    let within = distance(
+        lua,
+        options,
+        "distance",
+        FOLLOW_DISTANCE,
+        (
+            "follow",
+            "how far behind to keep, in metres, from 0.1 to 100",
+            EXAMPLE,
+        ),
+    )?;
+    shared.npcs.walk(Walking {
+        id,
+        to: Destination::Who(leader),
+        follow: true,
+        ask: WalkAsk {
+            to: Toward::Who(leader),
+            within,
+            facing: None,
+            run,
+            follow: true,
+        },
+    });
+    Ok(())
+}
+
+/// `npc:stop()`: the NPC stops where it is.
+pub(crate) fn stop(lua: &Lua, id: CharacterId) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "stop")?;
+    crate::time_api::rules_only(lua, &shared, "npc:stop")?;
+    shared.npcs.stand(id);
+    shared.npcs.ask(NpcAsk::Stop { id });
+    Ok(())
+}
+
+/// What `destination` is as a script value.
+fn destination_value(lua: &Lua, shared: &Shared, to: &Destination) -> mlua::Result<Value> {
+    Ok(match to {
+        Destination::Named(name) => Value::String(lua.create_string(name)?),
+        Destination::At([x, y, z]) => Value::Vector(mlua::Vector::new(*x, *y, *z)),
+        Destination::Thing(id) => Value::UserData(crate::thing_api::handle(lua, shared, id)?),
+        Destination::Who(who) if shared.characters.has(*who) => {
+            Value::UserData(shared.handles.character(lua, *who)?)
+        }
+        Destination::Who(_) => Value::Nil,
+    })
+}
+
+/// `npc.destination`: what it is walking to or following, as the script
+/// gave it; nil while it stands.
+pub(crate) fn destination(lua: &Lua, id: CharacterId) -> mlua::Result<Value> {
+    let shared = shared_of(lua)?;
+    only_npc(lua, &shared, id, "destination")?;
+    match shared.npcs.walking(id) {
+        Some(walking) => destination_value(lua, &shared, &walking.to),
+        None => Ok(Value::Nil),
+    }
+}
+
+/// `npc:onArrive(function(npc, where) end)` and
+/// `npc:onCannotReach(function(npc, why) end)`.
+pub(crate) fn on_walk(
+    lua: &Lua,
+    id: CharacterId,
+    arrive: bool,
+    handler: Value,
+) -> mlua::Result<()> {
+    let shared = shared_of(lua)?;
+    let (method, example) = if arrive {
+        (
+            "onArrive",
+            "guard:onArrive(function(guard, where) print(guard.name .. \" is at \" .. tostring(where)) end)",
+        )
+    } else {
+        (
+            "onCannotReach",
+            "guard:onCannotReach(function(guard, why) print(why) end)",
+        )
+    };
+    only_npc(lua, &shared, id, method)?;
+    let Value::Function(handler) = handler else {
+        return Err(fail(
+            lua,
+            format!(
+                "{method} needs the function to call, but it was given {}. Write it like this: \
+                 {example}",
+                describe(&handler)
+            ),
+        ));
+    };
+    let mut handlers = shared.handlers.borrow_mut();
+    let list = if arrive {
+        &mut handlers.npc_arrived
+    } else {
+        &mut handlers.npc_unreached
+    };
+    list.push((id, handler));
+    Ok(())
+}
+
+/// The functions to call when the NPC `id` arrives (`arrive`) or cannot.
+pub(crate) fn walk_handlers(shared: &Shared, id: CharacterId, arrive: bool) -> Vec<Function> {
+    let handlers = shared.handlers.borrow();
+    let list = if arrive {
+        &handlers.npc_arrived
+    } else {
+        &handlers.npc_unreached
+    };
+    (list.iter())
+        .filter(|(known, _)| *known == id)
+        .map(|(_, handler)| handler.clone())
+        .collect()
+}
+
+/// The NPCs that have a function for arriving (`arrive`) or for not
+/// being able to, in the order of their ids: for `lore check`.
+pub(crate) fn walk_watched(shared: &Shared, arrive: bool) -> Vec<CharacterId> {
+    let handlers = shared.handlers.borrow();
+    let list = if arrive {
+        &handlers.npc_arrived
+    } else {
+        &handlers.npc_unreached
+    };
+    let mut ids: Vec<CharacterId> = list.iter().map(|(id, _)| *id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|id| shared.npcs.has(*id));
+    ids
+}
+
+/// The NPC `id` got where it was walking: it is forgotten, and what it
+/// was walking to is given, as the script's value, to hand to `onArrive`.
+pub(crate) fn arrived(lua: &Lua, shared: &Shared, id: CharacterId) -> mlua::Result<Value> {
+    let Some(walking) = shared.npcs.walking(id) else {
+        return Ok(Value::Nil);
+    };
+    if !walking.follow {
+        shared.npcs.stand(id);
+    }
+    destination_value(lua, shared, &walking.to)
+}
+
+/// The sentence for the NPC `id`, which cannot get where it was walking
+/// for `cause`: who, where to, and why. A walk to a place is forgotten;
+/// a follower goes on following.
+pub(crate) fn cannot_reach(shared: &Shared, id: CharacterId, cause: &str) -> String {
+    let name =
+        (shared.characters.name_and_place(id)).map_or_else(|| "An NPC".to_owned(), |(n, _)| n);
+    let Some(walking) = shared.npcs.walking(id) else {
+        return format!("{name} cannot get there: {cause}");
+    };
+    if !walking.follow {
+        shared.npcs.stand(id);
+    }
+    let place = match &walking.to {
+        Destination::Named(place) => place.clone(),
+        Destination::At([x, y, z]) => format!("({x:.1}, {y:.1}, {z:.1})"),
+        Destination::Thing(thing) => crate::thing_api::called_by_id(shared, thing),
+        Destination::Who(who) if *who == CharacterId::PLAYER => "the player".to_owned(),
+        Destination::Who(who) => (shared.characters.name_and_place(*who))
+            .map_or_else(|| "someone who left".to_owned(), |(n, _)| n),
+    };
+    format!("{name} cannot reach {place}: {cause}")
 }

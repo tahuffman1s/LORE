@@ -1959,6 +1959,13 @@ impl ScriptHost {
         self.npcs.each(&self.characters, see);
     }
 
+    /// Calls `see` with every NPC the scripts have sent walking that has
+    /// not yet got there, been stopped or given up, and how: a world made
+    /// for the game sends each off again.
+    pub fn each_npc_walk(&self, see: impl FnMut(CharacterId, crate::WalkAsk)) {
+        self.npcs.each_walk(see);
+    }
+
     /// Whether `id` is an NPC in the game.
     #[must_use]
     pub fn is_npc(&self, id: CharacterId) -> bool {
@@ -1985,8 +1992,15 @@ impl ScriptHost {
     }
 
     /// Tells the script the player used the thing placed as `id`: its
-    /// `onUse` functions are called with the thing.
+    /// `onUse` functions are called with the thing and the player.
     pub fn use_thing(&mut self, id: &str) {
+        self.use_thing_by(id, CharacterId::PLAYER);
+    }
+
+    /// Tells the script `who` used the thing placed as `id` (an NPC
+    /// opening a door on its way): its `onUse` functions are called with
+    /// the thing and who used it, as for the player.
+    pub fn use_thing_by(&mut self, id: &str, who: CharacterId) {
         let Some(version) = &self.running else { return };
         let shared = Rc::clone(&version.shared);
         let handlers = crate::thing_api::handlers_for(&shared, id);
@@ -1996,11 +2010,106 @@ impl ScriptHost {
         let Ok(thing) = crate::thing_api::handle(&version.vm, &shared, id) else {
             return;
         };
+        let Ok(user) = shared.handles.character(&version.vm, who) else {
+            return;
+        };
         for handler in handlers {
-            if self.paused || !self.call(&shared, &handler, thing.clone()) {
+            if self.paused || !self.call(&shared, &handler, (thing.clone(), user.clone())) {
                 break;
             }
         }
+    }
+
+    /// Whether someone may open the door placed as `id` by using it: the
+    /// script has not switched it off (`door.usable = false`, which is how
+    /// a door is locked). The player is shown no prompt for a door they
+    /// may not open, and an NPC walks no way through it.
+    #[must_use]
+    pub fn door_may_open(&self, id: &str) -> bool {
+        (self.running.as_ref()).is_none_or(|version| version.shared.thing_uses.usable(id))
+    }
+
+    /// What the door that is gate `gate` of the walkable ground is called
+    /// in the map: its name, or its id.
+    #[must_use]
+    pub fn door_name(&self, gate: u32) -> Option<String> {
+        self.walk.doors.borrow().get(gate as usize).cloned()
+    }
+
+    /// Tells the script the NPC `id` got where it was walking
+    /// (`npc:onArrive`). One that was following someone goes on following.
+    pub fn npc_arrived(&mut self, id: CharacterId) {
+        let Some(version) = &self.running else {
+            return;
+        };
+        let shared = Rc::clone(&version.shared);
+        let Ok(where_to) = crate::npc_api::arrived(&version.vm, &shared, id) else {
+            return;
+        };
+        let handlers = crate::npc_api::walk_handlers(&shared, id, true);
+        let Ok(npc) = shared.handles.character(&version.vm, id) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, (npc.clone(), where_to.clone())) {
+                break;
+            }
+        }
+    }
+
+    /// Tells the script the NPC `id` cannot get where it was walking, and
+    /// why (`cause`, which follows "Guard cannot reach Gate: "): its
+    /// `npc:onCannotReach` functions are called with the whole sentence,
+    /// or with none the log says it. A walk to a place ends; one that
+    /// follows someone goes on, and tries again.
+    pub fn npc_cannot_reach(&mut self, id: CharacterId, cause: &str) {
+        let Some(version) = &self.running else {
+            return;
+        };
+        let shared = Rc::clone(&version.shared);
+        let said = crate::npc_api::cannot_reach(&shared, id, cause);
+        let handlers = crate::npc_api::walk_handlers(&shared, id, false);
+        if handlers.is_empty() {
+            log::warn!(
+                "{said}. To answer it in the game, write guard:onCannotReach(function(guard, \
+                 why) ... end)."
+            );
+            return;
+        }
+        let Ok(npc) = shared.handles.character(&version.vm, id) else {
+            return;
+        };
+        let Ok(why) = version.vm.create_string(&said) else {
+            return;
+        };
+        for handler in handlers {
+            if self.paused || !self.call(&shared, &handler, (npc.clone(), why.clone())) {
+                break;
+            }
+        }
+    }
+
+    /// Tells the script that each NPC it listens to arrived where it was
+    /// walking, and could not reach it, though nothing walked: for `lore
+    /// check`, so those functions are run. Says how many NPCs.
+    pub fn pretend_npc_walks(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let shared = Rc::clone(&version.shared);
+        let arrive = crate::npc_api::walk_watched(&shared, true);
+        let unreached = crate::npc_api::walk_watched(&shared, false);
+        for id in &arrive {
+            self.npc_arrived(*id);
+        }
+        for id in &unreached {
+            self.npc_cannot_reach(
+                *id,
+                "something is in the way at (0.0, 0.0, 0.0), and it found no way round (this is \
+                 lore check pretending)",
+            );
+        }
+        arrive.len() + unreached.iter().filter(|id| !arrive.contains(id)).count()
     }
 
     /// Tells the script who walked into a zone it watches and who left

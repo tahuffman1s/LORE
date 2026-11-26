@@ -881,6 +881,42 @@ impl UserData for CharacterRef {
             this.read(lua, "remove")?;
             crate::npc_api::remove(lua, this.0)
         });
+        // Walking: an NPC's own.
+        methods.add_function(
+            "goTo",
+            |lua, (this, place, options): (Value, Value, Value)| {
+                let this = npc_receiver(lua, &this, "goTo", "(\"Gate\")")?;
+                this.read(lua, "goTo")?;
+                crate::npc_api::go_to(lua, this.0, &place, &options)
+            },
+        );
+        methods.add_function(
+            "follow",
+            |lua, (this, who, options): (Value, Value, Value)| {
+                let this = npc_receiver(lua, &this, "follow", "(game.player)")?;
+                this.read(lua, "follow")?;
+                crate::npc_api::follow(lua, this.0, &who, &options)
+            },
+        );
+        methods.add_function("stop", |lua, this: Value| {
+            let this = npc_receiver(lua, &this, "stop", "()")?;
+            this.read(lua, "stop")?;
+            crate::npc_api::stop(lua, this.0)
+        });
+        for (method, arrive, arguments) in [
+            ("onArrive", true, "(function(guard, where) end)"),
+            (
+                "onCannotReach",
+                false,
+                "(function(guard, why) print(why) end)",
+            ),
+        ] {
+            methods.add_function(method, move |lua, (this, handler): (Value, Value)| {
+                let this = npc_receiver(lua, &this, method, arguments)?;
+                this.read(lua, method)?;
+                crate::npc_api::on_walk(lua, this.0, arrive, handler)
+            });
+        }
         methods.add_meta_function(MetaMethod::ToString, |lua, this: AnyUserData| {
             let this = *this.borrow::<Self>()?;
             Ok(this
