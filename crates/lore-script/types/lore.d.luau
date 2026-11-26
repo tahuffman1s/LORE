@@ -4163,8 +4163,13 @@ declare game: {
         --- "LeftBumper"... Give at least one keyboard or mouse button and one
         --- gamepad button; without both, bind stops with an error. A
         --- gamepad has two buttons LORE leaves free for a game:
-        --- GamepadSelect and LeftBumper. Sharing any other button with an
-        --- engine action works, but the player is told of the clash. Write
+        --- GamepadSelect and LeftBumper. They are the engine's switch_view
+        --- and lock_on buttons, which do nothing until the game turns them
+        --- on (`allowViewSwitch`, `setAbility("lockOn")`); the Controls page
+        --- shows no clash until then, and a game that turns one on after
+        --- giving its button away is warned in the log. Sharing any other
+        --- button with an engine action works, but the player is told of
+        --- the clash. Write
         --- it at the top of the file, outside any function; once made, read
         --- it like any action. Bind each action once: a name written twice is
         --- an error. A saved script's actions are in use at once: no need to
@@ -4279,7 +4284,9 @@ declare game: {
         --- rebind takes a button that does something else. A button that is
         --- one of the keys of a direction counts: "W" is used by "move".
         --- Sticks and directions are named too ("LeftStick", "WASD"). Gives
-        --- an empty list when nothing uses it.
+        --- an empty list when nothing uses it. An engine action the game
+        --- has not turned on (block, dodge, lock_on, switch_view) uses no
+        --- button yet and is left out.
         --- Example: print(table.concat(game.input.usedBy("Space"), ", "))
         --- Example: game.input.usedBy("W") -- { "move" }
         usedBy: (button: string) -> { string },
