@@ -52,6 +52,7 @@ pub use body_api::{AnimationAsk, BUILT_IN_HELD, BUILT_IN_MODELS, CameraView, Hel
 mod character_api;
 mod clock_api;
 mod dice_api;
+mod difficulty_api;
 mod error;
 mod fluid_api;
 mod fonts;
@@ -84,6 +85,7 @@ pub use camera_api::{CameraSaid, CameraTarget, MOST_PATH_POINTS, ShotSaid};
 pub use character_api::CharacterId;
 pub use clock_api::WorldClock;
 pub use dice_api::{Dice, seed_new_games};
+pub use difficulty_api::{DIFFICULTY_SETTING, DifficultyScales};
 pub use error::{OpenError, ScriptError};
 pub use fluid_api::{FluidAsk, FluidKind, FluidLook, FluidUnder, MOST_FLUID_ASKS, PoolTold};
 pub use fonts::{

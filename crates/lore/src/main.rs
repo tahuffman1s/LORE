@@ -121,7 +121,7 @@ enum Command {
                       it.\nPresses every action in turn, so code that reads input is run \
                       too. Then stands a\npretend training dummy in front of the player and \
                       tells the script of a pretend shot\nthat hits it, one that hits a wall, \
-                      a reload, the player dying,\nstanding in a burning puddle, each NPC seeing and hearing the player, and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
+                      a reload, the player dying,\nstanding in a burning puddle, each NPC seeing and hearing the player,\nthe difficulty being turned and a whole day passing.\nAnything the script prints is shown first. Prints any script error and fails if there was one, so it can be \
                       used by scripts,\nautomated checks and AI assistants. The start of the \
                       game is then played again with pictures\ndrawn at other paces, and the \
                       check fails if its rules depend on the frame rate.\nThe game's level, \
@@ -538,6 +538,7 @@ fn check(folder: &Path) -> Result<(), String> {
     let mut sensing = 0;
     let mut carrying = false;
     let mut slides = 0;
+    let mut turned = 0;
     let mut hours = 0;
     // Where an onHour function moved the clock to, if one did.
     let mut moved_to: Option<String> = None;
@@ -716,6 +717,10 @@ fn check(folder: &Path) -> Result<(), String> {
         // and to have found the player in its way.
         slides = game.host_mut().pretend_slides();
         game.tick(input.tick(), step);
+        // And the difficulty is said to be turned, so each
+        // game.difficulty.onChange function runs.
+        turned = game.host_mut().pretend_difficulty_change();
+        game.tick(input.tick(), step);
         // And a whole day is said to pass, so each game.clock.onHour
         // function hears its hour.
         let before = game.host().world_clock();
@@ -880,6 +885,14 @@ fn check(folder: &Path) -> Result<(), String> {
              {} said to have arrived, or to have found the player in the way, with no \
              errors. Nothing really moved.",
             if slides == 1 { "was" } else { "were" }
+        );
+    }
+    if turned > 0 {
+        println!(
+            "The difficulty was said to be turned one step, so {} game.difficulty.onChange \
+             function{} ran, with no errors. The game stayed at the step it was at.",
+            if turned == 1 { "the one" } else { "every" },
+            if turned == 1 { "" } else { "s" },
         );
     }
     if hours > 0 {

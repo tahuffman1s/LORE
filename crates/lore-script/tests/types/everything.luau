@@ -306,6 +306,13 @@ end
 
 game.sky.setHour(18.5)
 game.sky.setDayLength(24)
+game.difficulty.steps = { "Gentle", "Fair", "Cruel" }
+local stepNames: { string } = game.difficulty.steps
+local stepNow: string = game.difficulty.name
+local stepLevel: number = game.difficulty.level
+print(#stepNames, stepNow, stepLevel, game.difficulty.scale(20), game.difficulty.scale(5, 2, 0.5))
+game.difficulty.name = "Fair"
+game.difficulty.onChange(function(now, before) print(now .. " from " .. before) end)
 game.clock.dayLength = 20
 game.clock.time = "8:00"
 game.clock.hour = 6.5

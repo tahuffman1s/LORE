@@ -22,6 +22,7 @@ An overview only. Progress is tracked in [GitHub issues](https://github.com/tahu
 - Walkable ground worked out from the level with nothing to place: doors that shut ways, `game.canWalk` and `game.findWay`, and `lore check` naming places that cannot be reached (#53)
 - One clock for the world and its sky: a game says how long a day lasts and what time it is, skips to a time to sleep or wait, counts the days, and hears each hour that passes with `game.clock.onHour` (#59)
 - An NPC in one line (`game.npc`), or placed in `map.toml`: a solid body that can be shot, struck, used and locked on to, falls at no health, stands idle and turns its head to the player (#52)
+- How hard the game is: one dial of named steps a game reads, scales its numbers by and can name its own, which the player turns at any time on the pause menu's Gameplay tab beside the assists "Game speed" and "Fall damage" (#63)
 - The start of the editor: fly camera, entity list, `map.toml`, placing and dragging, play from where you stand
 
 
@@ -88,7 +89,6 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - NPCs have a day: where they are at each hour, written as a timetable (#60)
 - NPCs fight with the player's own weapons, and miss the way people do (#61)
 - NPCs use cover and go round, on cover the level already has (#62)
-- Difficulty is one dial the game reads, and the player can turn it mid-game (#63)
 - Who likes whom: one table of sides, and NPCs that remember what you did (#64)
 - A companion who follows, keeps up, and never blocks the door (#65)
 - NPCs say what they are doing: short spoken lines, with subtitles (#66)
