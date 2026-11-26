@@ -1,0 +1,21 @@
+[package]
+name = "lore-nav"
+description = "Walkable ground for LORE: where a body of a given size can walk in a level, and the way from one place to another"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Builds walkable polygons from triangles. Pinned: what it gives for the same
+# triangles is part of what makes a game play the same way twice. `libm` swaps
+# the platform's maths for software functions with the same digits everywhere.
+rerecast = { version = "=1.0.0", default-features = false, features = ["std", "libm"] }
+# The vectors `rerecast` takes. The same version as its own.
+glam = { version = "0.33", default-features = false, features = ["std"] }
+
+# Sine and cosine that give the same digits on every machine.
+libm = "0.2"
+
+[lints]
+workspace = true

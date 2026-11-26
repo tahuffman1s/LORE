@@ -825,7 +825,9 @@ game.onStart(function()
     local lucky: boolean = game.chance(0.25)
     local prize: string? = game.pick({ "coin", "heart" })
     local order: { number } = game.shuffle({ 1, 2, 3 })
-    print(seed, lucky, prize, order, math.random(1, 6))
+    local reachable: boolean = game.canWalk(game.player.position, vector.create(4, 0, -6))
+    local corners: { vector }?, why: string? = game.findWay(game.player.position, vector.create(4, 0, -6))
+    print(seed, lucky, prize, order, math.random(1, 6), reachable, corners, why)
 end)
 
 -- Carrying several weapons.

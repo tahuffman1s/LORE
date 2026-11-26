@@ -160,7 +160,7 @@ pub struct ScriptHost {
     /// The HUD images the running version knows.
     images: Rc<Vec<crate::images::HudImageInfo>>,
     /// The font families of a game given as text, which has no folder to
-    /// look in: see [`with_hud_fonts`](Self::with_hud_fonts).
+    /// look in: see [`from_sources_with_fonts`](Self::from_sources_with_fonts).
     given_fonts: Rc<Vec<String>>,
     /// The font families the running version knows.
     fonts: Rc<Vec<String>>,
@@ -171,6 +171,8 @@ pub struct ScriptHost {
     clock: Rc<Clock>,
     /// The game's dice: what `math.random` rolls.
     dice: Rc<crate::dice_api::Dice>,
+    /// The level's walkable ground and which doors are open.
+    walk: Rc<crate::walk_api::WalkState>,
     /// The action set the script chose, shared with each version of it.
     live_set: Rc<LiveSet>,
     /// What the script said of the weather; it outlives a reload too.
@@ -336,6 +338,7 @@ impl ScriptHost {
             settings,
             Vec::new(),
             placed,
+            Vec::new(),
         ))
     }
 
@@ -395,7 +398,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, Vec::new(), Vec::new())
+        Self::with_files(files, actions, settings, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -410,7 +413,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, Vec::new())
+        Self::with_files(files, actions, settings, images, Vec::new(), Vec::new())
     }
 
     /// Runs a game whose scripts are given as text, as
@@ -426,7 +429,25 @@ impl ScriptHost {
         placed: Vec<crate::Placed>,
     ) -> Self {
         let files = Files::Memory(scripts.into_iter().collect());
-        Self::with_files(files, actions, settings, images, placed)
+        Self::with_files(files, actions, settings, images, placed, Vec::new())
+    }
+
+    /// Runs a game whose scripts are given as text, as
+    /// [`from_sources_with_placed`](Self::from_sources_with_placed) does,
+    /// with the font `families` it has (sorted): a packaged game's, read
+    /// from the font files in its pack, as a game on disk has them read
+    /// from its `fonts` folder.
+    #[must_use]
+    pub fn from_sources_with_fonts(
+        scripts: impl IntoIterator<Item = (String, String)>,
+        images: Vec<crate::images::HudImageInfo>,
+        families: Vec<String>,
+        actions: ActionMap,
+        settings: Vec<Setting>,
+        placed: Vec<crate::Placed>,
+    ) -> Self {
+        let files = Files::Memory(scripts.into_iter().collect());
+        Self::with_files(files, actions, settings, images, placed, families)
     }
 
     /// The game's HUD images, by name, sorted, as the running script knows
@@ -447,14 +468,6 @@ impl ScriptHost {
         &self.fonts
     }
 
-    /// Gives a game run from text the font families it has: a packaged
-    /// game's, as a game on disk has them read from its `fonts` folder.
-    #[must_use]
-    pub fn with_hud_fonts(mut self, families: Vec<String>) -> Self {
-        self.given_fonts = Rc::new(families);
-        self
-    }
-
     /// A host running the `main.luau` in `files`.
     fn with_files(
         files: Files,
@@ -462,6 +475,7 @@ impl ScriptHost {
         settings: Vec<Setting>,
         images: Vec<crate::images::HudImageInfo>,
         placed: Vec<crate::Placed>,
+        families: Vec<String>,
     ) -> Self {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
@@ -495,11 +509,12 @@ impl ScriptHost {
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
-            given_fonts: Rc::default(),
+            given_fonts: Rc::new(families),
             fonts: Rc::default(),
             weapons: Rc::new(WeaponState::new()),
             clock: Rc::default(),
             dice: Rc::default(),
+            walk: Rc::default(),
             live_set: Rc::default(),
             weather: Rc::default(),
             fluids: Rc::default(),
@@ -1713,6 +1728,22 @@ impl ScriptHost {
         }
     }
 
+    /// Hands the script the level's walkable ground, for `game.canWalk`
+    /// and `game.findWay`, with what each door is called in the map, in
+    /// the order of their gates. Every door is open until
+    /// [`set_openings`](Self::set_openings) says otherwise.
+    pub fn set_walking_ground(&mut self, ground: Rc<dyn crate::WalkingGround>, doors: Vec<String>) {
+        *self.walk.ground.borrow_mut() = Some(ground);
+        *self.walk.doors.borrow_mut() = doors;
+        *self.walk.openings.borrow_mut() = lore_nav::Openings::all_open();
+    }
+
+    /// Says which doors are open now. Call it each tick, before the script
+    /// runs; it sets no memory aside once the doors are known.
+    pub fn set_openings(&mut self, openings: &lore_nav::Openings) {
+        self.walk.openings.borrow_mut().clone_from(openings);
+    }
+
     /// Says how the solid thing placed as `id` is moving and where it has
     /// got to: what a script reads as its `position`, `velocity`, `moves`,
     /// `weight` and `resting`. Call it each tick for things that move.
@@ -2371,6 +2402,7 @@ impl ScriptHost {
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
             dice: Rc::clone(&self.dice),
+            walk: Rc::clone(&self.walk),
             timers: RefCell::new(Vec::new()),
             next_timer: Cell::new(0),
         });

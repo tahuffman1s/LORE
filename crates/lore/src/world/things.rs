@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use lore_assets::{Scene, Transform};
-use lore_physics::{Bodies, BodySpec, BodyState, Level, MoveSettings, Player};
+use lore_physics::{Bodies, BodyShape, BodySpec, BodyState, Level, MoveSettings, Player};
 
 use crate::game::Frame;
 use crate::map::{Map, Value};
@@ -38,6 +38,7 @@ struct Stood {
     /// The id it is placed under in the map.
     id: String,
     model: Arc<Scene>,
+    shape: BodyShape,
     /// Where its shape's middle is from where it is placed, in its own space.
     middle: [f32; 3],
     /// Where it was on the tick before the newest, and where it is now.
@@ -128,7 +129,7 @@ const FASTEST_THROW: f32 = 13.0;
 pub(super) type Problems = Vec<String>;
 
 /// A vector turned by the unit quaternion `q` (x, y, z, w).
-fn turned(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+pub(super) fn turned(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let [x, y, z, w] = q;
     // v + 2w(q × v) + 2 q × (q × v)
     let cross = |a: [f32; 3], b: [f32; 3]| {
@@ -245,6 +246,7 @@ impl Things {
             stood.push(Stood {
                 id: entity.id.clone(),
                 model: solid.model,
+                shape: solid.shape,
                 middle: solid.middle,
                 before: state,
                 now: state,
@@ -417,6 +419,31 @@ impl Things {
             gone: 0.0,
         });
         Ok(())
+    }
+
+    /// Calls `see` with every thing that nothing pushes about, in the
+    /// order the map lists them: its shape, where its middle is and how it
+    /// is turned, and for a door whether it is open. What walkable ground
+    /// is worked out round.
+    pub(super) fn each_fixed(&self, mut see: impl FnMut(BodyShape, &BodyState, Option<bool>)) {
+        for stood in self.stood.iter().filter(|stood| stood.placed.is_some()) {
+            see(stood.shape, &stood.now, stood.door.map(|door| door.is_open));
+        }
+    }
+
+    /// Whether each door is open (or on its way to being), in the order
+    /// the map lists them.
+    pub(super) fn doors_open(&self) -> impl Iterator<Item = bool> + '_ {
+        (self.stood.iter())
+            .filter(|stood| stood.placed.is_some())
+            .filter_map(|stood| stood.door.map(|door| door.is_open))
+    }
+
+    /// The id each door is placed under, in the order the map lists them.
+    pub(super) fn door_ids(&self) -> impl Iterator<Item = &str> + '_ {
+        (self.stood.iter())
+            .filter(|stood| stood.placed.is_some() && stood.door.is_some())
+            .map(|stood| stood.id.as_str())
     }
 
     /// Whether the thing placed as `id` opens as a door does, and if so

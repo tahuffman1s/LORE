@@ -677,6 +677,28 @@ impl Level {
         self.triangles
     }
 
+    /// Every triangle the player can collide with, each three corners in
+    /// metres: the level's own shapes, not the things that move about in
+    /// it. What walkable ground is worked out from.
+    #[must_use]
+    pub fn triangles(&self) -> Vec<[[f32; 3]; 3]> {
+        let Some(mesh) = &self.mesh else {
+            return Vec::new();
+        };
+        let points = mesh.vertices();
+        // Corners that were single precision to begin with.
+        #[allow(clippy::cast_possible_truncation)]
+        let corner = |i: u32| {
+            points
+                .get(i as usize)
+                .map_or([0.0; 3], |p| [p.x as f32, p.y as f32, p.z as f32])
+        };
+        mesh.indices()
+            .iter()
+            .map(|&[a, b, c]| [corner(a), corner(b), corner(c)])
+            .collect()
+    }
+
     /// Looks from `from` along `direction` and reports the first surface in
     /// the way, no further off than `reach` metres: what a bullet hits.
     ///
