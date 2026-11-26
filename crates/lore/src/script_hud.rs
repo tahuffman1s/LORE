@@ -51,6 +51,8 @@ pub(crate) struct ScriptHud {
     ids: Vec<u64>,
     /// What [`ScriptHost::hud_layout`] was when `ui` was built.
     layout: Option<u64>,
+    /// The font text is measured with, if the game's own is shared.
+    font: Option<lore_render::Font>,
 }
 
 /// What one piece of the script's HUD is drawn with.
@@ -198,6 +200,14 @@ impl std::fmt::Debug for ScriptHud {
 }
 
 impl ScriptHud {
+    /// A HUD that measures text with `font`, which follows the game's fonts.
+    pub(crate) fn measuring(font: lore_render::Font) -> Self {
+        Self {
+            font: Some(font),
+            ..Self::default()
+        }
+    }
+
     /// Draws the HUD `host`'s script has made over this frame.
     pub(crate) fn show(&mut self, host: &mut ScriptHost, frame: &mut Frame) {
         let layout = host.hud_layout();
@@ -222,7 +232,10 @@ impl ScriptHud {
             // A piece was made or removed, or the script was saved: build
             // the HUD again from the script's list.
             let mut ui = Ui::default();
-            ui.set_text_measure(crate::error_overlay::measure());
+            match &self.font {
+                Some(font) => ui.set_text_measure(Box::new(font.clone())),
+                None => ui.set_text_measure(crate::error_overlay::measure()),
+            }
             self.widgets.clear();
             self.ids.clear();
             host.each_hud_piece(|_, piece| {

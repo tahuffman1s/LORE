@@ -2487,6 +2487,29 @@ mod hud_styles {
     }
 
     #[test]
+    fn a_turned_clip_box_cuts_to_the_box_round_its_turn() {
+        let mut ui = Ui::default();
+        let panel = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [100.0, 50.0], Color::WHITE);
+        ui.set_angle(panel, std::f32::consts::FRAC_PI_2).unwrap();
+        let bar = ui.hud_bar(Anchor::TopLeft, [0.0, 0.0], [40.0, 10.0], Color::WHITE, 1.0);
+        ui.set_style(
+            bar,
+            Some(&HudStyle {
+                clip: Some(panel),
+                ..HudStyle::default()
+            }),
+        )
+        .unwrap();
+        let all = draws(&mut ui);
+        let Draw::Box { clip, .. } = all[all.len() - 1] else {
+            panic!("{all:?}")
+        };
+        let clip = clip.unwrap();
+        assert!((clip.size[0] - 50.0).abs() < 1e-3, "{:?}", clip.size);
+        assert!((clip.size[1] - 100.0).abs() < 1e-3, "{:?}", clip.size);
+    }
+
+    #[test]
     fn a_style_is_set_only_on_a_hud_piece_and_in_place() {
         let mut ui = Ui::default();
         ui.add_screen("Menu", |screen| {

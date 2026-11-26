@@ -477,12 +477,19 @@ impl Font {
 
     /// Replaces the game's families with `families`, for every copy of
     /// this font. The engine's own stays family 0.
-    pub(crate) fn replace(&self, families: &[HudFontFamily]) {
+    pub fn replace(&self, families: &[HudFontFamily]) {
         let set = Arc::new(Set::with_families(families));
         match self.shared.write() {
             Ok(mut now) => *now = set,
             Err(poisoned) => *poisoned.into_inner() = set,
         }
+    }
+
+    /// How many of the game's families this font has, not counting the
+    /// engine's own.
+    #[must_use]
+    pub fn game_families(&self) -> usize {
+        self.set().families.len().saturating_sub(1)
     }
 
     /// Whether the engine's own font has a shape for `character`.

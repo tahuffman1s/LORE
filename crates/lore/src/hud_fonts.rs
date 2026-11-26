@@ -6,14 +6,18 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use lore_render::{HudFontFamily, font_file_info};
+use lore_render::{Font, HudFontFamily, font_file_info};
 use lore_script::{FONTS_FOLDER, ScriptHost};
 
 use crate::game::Frame;
 
 /// Where a game's HUD fonts come from, and the families last handed over.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct HudFonts {
+    /// What text is measured with: shares its faces with every copy, and
+    /// is given the families handed to the renderer, so that text is
+    /// measured in the fonts it is drawn in.
+    measuring: Font,
     /// The game's folder; a game given as text has none.
     folder: Option<PathBuf>,
     shown: Option<Vec<String>>,
@@ -31,6 +35,19 @@ pub(crate) struct HudFonts {
 /// a second.
 const LOOK_EVERY: u32 = 60;
 
+impl Default for HudFonts {
+    fn default() -> Self {
+        Self {
+            measuring: Font::bundled(),
+            folder: None,
+            shown: None,
+            changed: Vec::new(),
+            handed: false,
+            since_look: 0,
+        }
+    }
+}
+
 impl HudFonts {
     /// The fonts in `folder`'s `fonts` folder.
     pub(crate) fn in_folder(folder: &Path) -> Self {
@@ -40,10 +57,16 @@ impl HudFonts {
         }
     }
 
+    /// A handle to measure text with, in the fonts handed over so far and
+    /// whichever come later.
+    pub(crate) fn measuring(&self) -> Font {
+        self.measuring.clone()
+    }
+
     /// Hands the frame the fonts of the families the script now knows, if
     /// they are not the ones handed over last.
     pub(crate) fn follow(&mut self, host: &ScriptHost, frame: &mut Frame) {
-        let Some(folder) = self.folder.clone() else {
+        let Some(folder) = self.folder.as_deref() else {
             return;
         };
         let now = host.hud_fonts();
@@ -53,17 +76,19 @@ impl HudFonts {
                 return;
             }
             self.since_look = 0;
-            if font_files(&folder) == self.changed {
+            if font_files(folder) == self.changed {
                 return;
             }
         }
-        self.changed = font_files(&folder);
+        self.changed = font_files(folder);
         self.shown = Some(now.to_vec());
         if now.is_empty() && !self.handed {
             return;
         }
         self.handed = !now.is_empty();
-        frame.set_hud_fonts(read_families(&self.changed, now));
+        let families = read_families(&self.changed, now);
+        self.measuring.replace(&families);
+        frame.set_hud_fonts(families);
     }
 }
 
@@ -164,5 +189,43 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out[0].files.is_empty());
         assert_eq!(out[1].files.len(), 1);
+    }
+
+    #[test]
+    fn the_measuring_handle_follows_the_fonts_handed_over() {
+        let dir =
+            std::env::temp_dir().join(format!("lore-hud-fonts-measure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = font_file_info(lore_render::Font::bundled_file())
+            .unwrap()
+            .family;
+        std::fs::create_dir_all(dir.join(FONTS_FOLDER)).unwrap();
+        std::fs::write(
+            dir.join(FONTS_FOLDER).join("a.ttf"),
+            lore_render::Font::bundled_file(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.luau"), "").unwrap();
+        let mut fonts = HudFonts::in_folder(&dir);
+        let measuring = fonts.measuring();
+        assert_eq!(measuring.game_families(), 0);
+        let host = ScriptHost::open(&dir, lore_input::ActionMap::default()).unwrap();
+        assert_eq!(host.hud_fonts(), [real]);
+        let mut frame = Frame::default();
+        fonts.follow(&host, &mut frame);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(measuring.game_families(), 1);
+        assert!(
+            lore_ui::TextMeasure::width_styled(
+                &measuring,
+                "Hi",
+                20.0,
+                lore_ui::FontFace {
+                    family: 1,
+                    ..lore_ui::FontFace::default()
+                },
+                0.0
+            ) > 0.0
+        );
     }
 }

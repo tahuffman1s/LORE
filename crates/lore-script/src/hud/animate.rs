@@ -148,6 +148,9 @@ pub(crate) struct Animation {
     on_done: Option<Function>,
     /// How many ticks it has been stepped.
     elapsed: u64,
+    /// The delay and the length in ticks, counted at the rate of its first
+    /// step so a change of rate does not make it jump.
+    ticks: Option<(u64, u64)>,
 }
 
 /// Seconds as a number of ticks: the first tick that is not before the
@@ -195,11 +198,15 @@ impl HudState {
         let mut done = self.done.borrow_mut();
         running.retain_mut(|animation| {
             animation.elapsed += 1;
-            let delay = ticks(animation.delay, rate, 0);
+            let (delay, total) = *animation.ticks.get_or_insert_with(|| {
+                (
+                    ticks(animation.delay, rate, 0),
+                    ticks(animation.seconds, rate, 1),
+                )
+            });
             if animation.elapsed <= delay {
                 return true;
             }
-            let total = ticks(animation.seconds, rate, 1);
             let run = animation.elapsed - delay;
             let finished = run >= total;
             #[allow(clippy::cast_precision_loss)]
@@ -464,6 +471,7 @@ pub(super) fn animate(
         ease,
         on_done,
         elapsed: 0,
+        ticks: None,
     });
     Ok(())
 }
@@ -574,6 +582,50 @@ mod tests {
                 last = value;
             }
         }
+    }
+
+    #[test]
+    fn a_change_of_rate_does_not_make_a_running_animation_jump() {
+        let state = HudState::default();
+        let id = state
+            .add(
+                crate::hud::HudPiece {
+                    id: 0,
+                    shape: crate::hud::HudShape::Box { size: [1.0, 1.0] },
+                    anchor: lore_ui::Anchor::TopLeft,
+                    offset: [0.0; 2],
+                    color: Color::WHITE,
+                    visible: true,
+                    layer: 0,
+                    style: None,
+                },
+                String::new(),
+                None,
+            )
+            .unwrap();
+        state.start_animation(Animation {
+            id,
+            goals: vec![Goal {
+                field: "right",
+                target: Target::Number {
+                    from: 0.0,
+                    to: 100.0,
+                },
+                live: true,
+            }],
+            seconds: 1.0,
+            delay: 0.0,
+            ease: Ease::Linear,
+            on_done: None,
+            elapsed: 0,
+            ticks: None,
+        });
+        for _ in 0..5 {
+            state.step_animations(10.0);
+        }
+        state.step_animations(100.0);
+        let right = state.with(id, |entry| (entry.piece.offset[0], false));
+        assert_eq!(right, Some(60.0));
     }
 
     #[test]

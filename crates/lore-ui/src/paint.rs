@@ -69,7 +69,14 @@ fn clip_of(style: &HudStyle, nodes: &[Node]) -> Option<Clip> {
         });
     }
     let own = target.style.as_deref();
-    let transform = own.map_or(Transform::IDENTITY, |own| transform_of(own, rect, 0.0));
+    let angle = match target.kind {
+        Kind::HudRect { angle, .. } | Kind::HudImage { angle, .. } => angle,
+        _ => 0.0,
+    };
+    let transform = own.map_or_else(
+        || transform_of(&HudStyle::default(), rect, angle),
+        |own| transform_of(own, rect, angle),
+    );
     let corners = [
         [rect.x, rect.y],
         [rect.right(), rect.y],

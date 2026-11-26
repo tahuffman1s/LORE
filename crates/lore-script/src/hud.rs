@@ -753,6 +753,20 @@ impl HudState {
         let mut pieces = self.pieces.borrow_mut();
         if let Ok(place) = pieces.binary_search_by_key(&id, |entry| entry.id) {
             pieces.remove(place);
+            // Pieces cut to it are cut to nothing now: they draw uncut.
+            let mut cleared = false;
+            for entry in pieces.iter_mut() {
+                if let Some(held) = entry.piece.style.as_deref_mut()
+                    && held.clip_to == Some(id)
+                {
+                    held.clip_to = None;
+                    entry.changed = true;
+                    cleared = true;
+                }
+            }
+            if cleared {
+                self.changed.set(true);
+            }
             // Its animations end without calling their `onDone`.
             self.animations
                 .borrow_mut()
@@ -2241,6 +2255,32 @@ mod layer_tests {
         assert_eq!(drawn(&state), [5, 10, 20]);
         state.remove(high);
         assert_eq!(drawn(&state), [5, 20]);
+    }
+
+    #[test]
+    fn removing_a_piece_frees_the_pieces_cut_to_it() {
+        let state = HudState::default();
+        let target = state.add(piece(0), String::new(), None).unwrap();
+        let mut cut = piece(1);
+        cut.style = Some(Box::new(HudStyle {
+            clip_to: Some(target),
+            ..HudStyle::default()
+        }));
+        let cut = state.add(cut, String::new(), None).unwrap();
+        state.take_changes(|_, _| {});
+        state.remove(target);
+        let mut seen = Vec::new();
+        state.take_changes(|_, piece| {
+            seen.push(piece.style.as_deref().and_then(|held| held.clip_to));
+        });
+        assert_eq!(seen, [None]);
+        let held = state.with(cut, |entry| {
+            (
+                entry.piece.style.as_deref().and_then(|held| held.clip_to),
+                false,
+            )
+        });
+        assert_eq!(held, Some(None));
     }
 
     #[test]

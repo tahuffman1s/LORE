@@ -142,16 +142,17 @@ impl ScriptGame {
     /// A game running `host` with no files behind it: it has the starter
     /// sounds, and nothing placed in its level.
     fn without_files(mut host: ScriptHost, settings: Settings) -> Self {
-        host.set_text_measure(crate::error_overlay::measure());
+        let fonts = crate::hud_fonts::HudFonts::default();
+        host.set_text_measure(Box::new(fonts.measuring()));
         let mut game = Self {
             host,
             errors: None,
             notice: None,
-            hud: ScriptHud::default(),
+            hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::starter(),
             pictures: crate::hud_images::HudPictures::default(),
-            fonts: crate::hud_fonts::HudFonts::default(),
+            fonts,
             map: Map::default(),
             map_file: None,
             map_error: None,
@@ -372,7 +373,8 @@ impl ScriptGame {
             settings.described(),
             placed_of(&map),
         )?;
-        host.set_text_measure(crate::error_overlay::measure());
+        let fonts = crate::hud_fonts::HudFonts::in_folder(folder);
+        host.set_text_measure(Box::new(fonts.measuring()));
         // Said once the game is known to be there to open.
         match &map_error {
             None => said_of(&map),
@@ -382,11 +384,11 @@ impl ScriptGame {
             host,
             errors: Some(ErrorOverlay::default()),
             notice: None,
-            hud: ScriptHud::default(),
+            hud: ScriptHud::measuring(fonts.measuring()),
             use_prompt: crate::use_prompt::UsePrompt::default(),
             sounds: Sounds::in_folder(folder),
             pictures: crate::hud_images::HudPictures::in_folder(folder),
-            fonts: crate::hud_fonts::HudFonts::in_folder(folder),
+            fonts,
             map,
             map_file: Some(map_file),
             map_error,

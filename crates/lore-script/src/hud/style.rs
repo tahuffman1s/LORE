@@ -950,6 +950,8 @@ pub(super) fn read(
             table.set("stops", list(lua, &at)?)?;
             if gradient.radial {
                 table.set("radial", true)?;
+            }
+            if gradient.radial || gradient.center != [0.5, 0.5] {
                 table.set("center", list(lua, &gradient.center)?)?;
             }
             Ok(Value::Table(table))
