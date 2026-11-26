@@ -2878,6 +2878,62 @@ declare game: {
     --- Example: game.lamp("street lamp 1").on = false
     lamp: (name: string, settings: LampSettings?) -> Lamp,
 
+    --- How hard the game is: one dial with named steps, easiest first. The
+    --- engine's own are "Story" (for a game played for its story),
+    --- "Standard" and "Hard"; a game can name its own. The player turns it
+    --- in the pause menu's Gameplay settings at any time, with keys or a
+    --- gamepad, and a new game starts where they left it. What it changes
+    --- is the game's to say, with `game.difficulty.scale`. The same tab
+    --- has the player's assists, which work at any difficulty: "Game
+    --- speed" (the whole game slower) and "Fall damage" (off lands from any
+    --- height unhurt).
+    difficulty: {
+        --- The names of the steps, easiest first: 1 to 10 of them. Set it
+        --- at the top of the file. The game starts at the step nearest
+        --- where the player left the dial.
+        --- Example: game.difficulty.steps = { "Gentle", "Fair", "Cruel" }
+        steps: { string },
+
+        --- The step the game is at. Setting it turns the dial, as the
+        --- player can in the pause menu, and `onChange` hears of it.
+        --- Example: if game.difficulty.name == "Story" then game.player.maxHealth = 200 end
+        --- Example: game.difficulty.name = "Hard"
+        name: string,
+
+        --- Where the step stands, from 0 (the easiest) to 1 (the hardest),
+        --- evenly spread: "Story" 0, "Standard" 0.5, "Hard" 1. Read only.
+        --- Example: local share = 0.2 + 0.6 * game.difficulty.level
+        level: number,
+
+        --- `value` made harder or easier: multiplied by `easiest` (0.5
+        --- unless given) at the easiest step, by 1 at the middle and by
+        --- `hardest` (1.5 unless given) at the hardest, along a straight
+        --- line between. With the engine's steps, 20 is 10 at "Story", 20
+        --- at "Standard" and 30 at "Hard". Give the ends as the number to
+        --- multiply by at the easiest step, then at the hardest; nil for
+        --- one keeps its usual.
+        --- The middle of the dial is always 1 times, not the first step.
+        --- With two steps, { "Normal", "Hard" }, "Normal" is the easiest
+        --- and is 0.5 times. To keep a step at 1 times, pass the range:
+        --- `scale(10, 1, 1.5)` is 10 at "Normal" and 15 at "Hard". Put
+        --- `easiest` and `hardest` either side of 1 (or one of them at 1),
+        --- or the middle step is not between them.
+        --- For damage the player deals, which an easier game makes bigger,
+        --- turn the ends round: `scale(10, 1.5, 0.5)`.
+        --- `game.difficulty:scale(10)` works the same.
+        --- Example: enemy.damage = game.difficulty.scale(20)
+        --- Example: local wait = game.difficulty.scale(5, 2, 0.5) -- easier waits longer
+        --- Example: local hit = game.difficulty.scale(10, 1.5, 0.5) -- the player's blows
+        scale: (value: number, easiest: number?, hardest: number?) -> number,
+
+        --- Calls `handler` when the dial is turned, with the step's name
+        --- now and before, before the next `game.onTick`, even while the
+        --- game is paused. It is not called as the game starts: read
+        --- `game.difficulty.name` for that.
+        --- Example: game.difficulty.onChange(function(now, before) print("Now " .. now) end)
+        onChange: (handler: (now: string, before: string) -> ()) -> (),
+    },
+
     --- How the picture is exposed for the light there is. Light in a game
     --- is real light, and the picture is drawn as an eye sees it: the sky
     --- of each hour as an eye used to it sees it, and a view darker or
@@ -4603,8 +4659,11 @@ declare game: {
     --- A change is in force at once, and the engine saves it to the
     --- player's settings file: a script never deals with files.
     ---
-    --- The settings today, by name: "volume", "music_volume",
-    --- "speech_volume" and "effects_volume" (0 to 100); "mouse_sensitivity" and
+    --- The settings today, by name: "difficulty" (0 to 100, where a new
+    --- game's dial starts and following it; `game.difficulty.name` turns
+    --- this game's), "game_speed" (50 to 100 percent) and "fall_damage"
+    --- (true or false); "volume", "music_volume", "speech_volume" and
+    --- "effects_volume" (0 to 100); "mouse_sensitivity" and
     --- "stick_sensitivity" (how fast each turns the view, 0.05 to 5),
     --- "invert_look" (true or false) and "rumble" (0 to 100);
     --- "ui_size" (the HUD and menus, 75 to 150 percent), "field_of_view"
