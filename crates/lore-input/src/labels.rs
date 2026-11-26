@@ -5,7 +5,7 @@
 //! sees on the button in their hand, which depends on who made it.
 
 use crate::binding::{Binding, Button};
-use crate::devices::{GamepadButton, Key, MouseButton, MouseWheel};
+use crate::devices::{GamepadButton, Key, MouseButton, MouseWheel, Stick, StickAxis};
 use crate::map::{ActionId, ActionMap, Device};
 
 /// Whose letters are printed on a gamepad's buttons.
@@ -187,6 +187,12 @@ impl Binding {
                 format!("{} / {}", label(negative), label(positive))
             }
             Self::Directions {
+                up: Button::Gamepad(GamepadButton::DpadUp),
+                down: Button::Gamepad(GamepadButton::DpadDown),
+                left: Button::Gamepad(GamepadButton::DpadLeft),
+                right: Button::Gamepad(GamepadButton::DpadRight),
+            } => "D-pad".to_owned(),
+            Self::Directions {
                 up,
                 down,
                 left,
@@ -198,8 +204,19 @@ impl Binding {
                 label(down),
                 label(right)
             ),
-            other => other.to_string(),
+            Self::Stick(stick) => stick_label(stick).to_owned(),
+            Self::StickAxis(stick, StickAxis::X) => format!("{} X", stick_label(stick)),
+            Self::StickAxis(stick, StickAxis::Y) => format!("{} Y", stick_label(stick)),
+            Self::MouseMotion => "Mouse".to_owned(),
         }
+    }
+}
+
+/// How a thumbstick reads in a hint.
+const fn stick_label(stick: Stick) -> &'static str {
+    match stick {
+        Stick::LeftStick => "Left stick",
+        Stick::RightStick => "Right stick",
     }
 }
 
@@ -219,9 +236,44 @@ impl ActionMap {
     }
 }
 
+impl ActionMap {
+    /// What to show for `action` on one device only: every binding it has
+    /// there, printed and joined with `", "`; empty when it has none there.
+    #[must_use]
+    pub fn label_on(&self, action: ActionId, gamepad: bool, style: GamepadStyle) -> String {
+        let bindings = self.bindings(action);
+        let shown: Vec<String> = bindings
+            .iter()
+            .filter(|binding| binding.is_gamepad() == gamepad)
+            .map(|binding| binding.label(style))
+            .collect();
+        shown.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_binding_is_printed_for_a_player() {
+        let style = GamepadStyle::PlayStation;
+        let label = |text: &str| text.parse::<Binding>().unwrap().label(style);
+        assert_eq!(label("Dpad"), "D-pad");
+        assert_eq!(label("LeftStick"), "Left stick");
+        assert_eq!(label("RightStickX"), "Right stick X");
+        assert_eq!(label("MouseMotion"), "Mouse");
+        assert_eq!(label("Q/E"), "Q / E");
+    }
+
+    #[test]
+    fn a_label_can_ask_for_one_device() {
+        let mut map = ActionMap::new();
+        let jump = map.button("jump", ["Space", "GamepadSouth"]).unwrap();
+        let style = GamepadStyle::PlayStation;
+        assert_eq!(map.label_on(jump, false, style), "Space");
+        assert_eq!(map.label_on(jump, true, style), "Cross");
+    }
 
     const STYLES: [GamepadStyle; 3] = [
         GamepadStyle::Xbox,

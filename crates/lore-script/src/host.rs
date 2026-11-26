@@ -521,7 +521,9 @@ impl ScriptHost {
         // A frame made for the actions before a save is for other ids than
         // the script's now: until the engine has the new ones, nothing is
         // pressed, rather than the wrong thing.
-        let blank = InputFrame::default();
+        // What was heard still counts: listening must not hang on it.
+        let mut blank = InputFrame::default();
+        blank.heard = input.heard;
         let input = if input.layout == self.layout {
             input
         } else {
@@ -559,6 +561,7 @@ impl ScriptHost {
         }
         self.meteors_due();
         self.controls_due();
+        self.listening_due(input, step);
         self.moments_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
@@ -883,6 +886,25 @@ impl ScriptHost {
     #[must_use]
     pub fn controls_notice_shown(&self) -> bool {
         self.controls_notice.get()
+    }
+
+    /// Tells the handlers of `game.input.listenForButton` what the tick
+    /// heard, that nothing was pressed in time, or that listening was
+    /// stopped.
+    fn listening_due(&mut self, input: &InputFrame, step: f32) {
+        if self.paused {
+            return;
+        }
+        let Some(version) = &self.running else { return };
+        let shared = Rc::clone(&version.shared);
+        for handler in self.tools.listen.take_closing() {
+            if !self.call(&shared, &handler, Option::<&str>::None) {
+                return;
+            }
+        }
+        if let Some((handler, told)) = self.tools.listen.due(input.heard, step) {
+            self.call(&shared, &handler, told);
+        }
     }
 
     /// Hands the script the rereads of the controls it has not heard of.
@@ -1417,6 +1439,30 @@ impl ScriptHost {
     /// ([`Input::set_typing`](lore_input::Input::set_typing)).
     pub fn take_typing(&mut self) -> Option<bool> {
         self.tools.typing.take()
+    }
+
+    /// Whether the script started (`Some(Some(hears))`) or stopped
+    /// (`Some(None)`) listening for a button since this was last called, for
+    /// whoever owns the input to follow
+    /// ([`Input::set_listening`](lore_input::Input::set_listening)). Listening
+    /// ends by itself on the tick that hears a button.
+    pub fn take_listening(&mut self) -> Option<Option<lore_input::Hears>> {
+        self.tools.listen.take()
+    }
+
+    /// Listening ended from outside (focus lost, a new level, the window
+    /// closing): `isListening` reads false and the handler of
+    /// `game.input.listenForButton` hears nil on the next tick.
+    pub fn listening_ended(&mut self) {
+        self.tools.listen.ended_by_engine();
+    }
+
+    /// The changes of bindings the script asked for with
+    /// `game.input.rebind` and `resetBindings` since this was last called,
+    /// oldest first, for whoever owns the player's controls to put in force
+    /// and save. The script already reads them from `game.input.bindings`.
+    pub fn take_binding_asks(&mut self) -> Vec<crate::BindingAsk> {
+        self.tools.listen.take_asks()
     }
 
     /// Typing ended from outside (focus lost, a new level, the window
@@ -2136,6 +2182,7 @@ impl ScriptHost {
         }
         // A text box of the old version is gone: the keyboard is the player's.
         self.tools.typing.reset();
+        self.tools.listen.reset();
         if had_version {
             log::info!("{}", reloaded(saved));
         }
@@ -2427,6 +2474,7 @@ impl ScriptHost {
         // A failing script may never reach its Enter: the keyboard goes back
         // to the player, and the kit's text box finds out on its next tick.
         self.tools.typing.reset();
+        self.tools.listen.reset();
         // Calling it again would freeze the game for the whole time limit
         // on every tick.
         self.paused = too_long;

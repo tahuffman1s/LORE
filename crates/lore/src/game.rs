@@ -35,6 +35,11 @@ pub trait Game {
     /// typing (the window lost focus, or a new level came in), so the game
     /// does not think it is still taking text. The default does nothing.
     fn typing_ended(&mut self) {}
+
+    /// Called when the engine stopped listening for a button on the game's
+    /// behalf (the window lost focus, or a new level came in), so the game
+    /// does not think it is still waiting for one. The default does nothing.
+    fn listening_ended(&mut self) {}
 }
 
 /// A borrowed game is a game, so one can be run and looked at afterwards.
@@ -53,6 +58,10 @@ impl<G: Game + ?Sized> Game for &mut G {
 
     fn typing_ended(&mut self) {
         (**self).typing_ended();
+    }
+
+    fn listening_ended(&mut self) {
+        (**self).listening_ended();
     }
 }
 
@@ -103,6 +112,11 @@ pub struct Frame {
     action_set: Option<ActionSetId>,
     /// Whether the keyboard is for typing text, if the game said since the last frame.
     typing: Option<bool>,
+    /// Whether the input is to listen for the next button (`Some(Some(device))`)
+    /// or stop (`Some(None)`), if the game said since the last frame.
+    listening: Option<Option<lore_input::Hears>>,
+    /// Changes of the player's bindings the game asked for, oldest first.
+    binding_asks: Vec<lore_script::BindingAsk>,
     /// The game's actions, when a change to the game made new ones.
     new_actions: Option<ActionMap>,
     rumble: Option<Rumble>,
@@ -280,6 +294,8 @@ impl Frame {
             view: None,
             action_set: None,
             typing: None,
+            listening: None,
+            binding_asks: Vec::new(),
             new_actions: None,
             rumble: None,
             sounds: Vec::new(),
@@ -861,6 +877,28 @@ impl Frame {
         self.typing = Some(on);
     }
 
+    /// Says the input is to listen for the next button the player presses
+    /// (`Some`, hearing that device) or to stop (`None`): what
+    /// `game.input.listenForButton` and `stopListening` do. The button heard
+    /// reaches the game in the next tick's
+    /// [`InputFrame::heard`](lore_input::InputFrame::heard).
+    pub(crate) fn set_listening(&mut self, hears: Option<lore_input::Hears>) {
+        self.listening = Some(hears);
+    }
+
+    /// Asks for the player's buttons for an action to change, as
+    /// `game.input.rebind` and `resetBindings` do. The window puts the
+    /// change in force from the next tick and saves it in the game's own
+    /// bindings file. A game run with no window ignores this.
+    pub(crate) fn ask_bindings(&mut self, ask: lore_script::BindingAsk) {
+        self.binding_asks.push(ask);
+    }
+
+    /// The changes of bindings the game asked for this frame.
+    pub(crate) fn take_binding_asks(&mut self) -> Vec<lore_script::BindingAsk> {
+        std::mem::take(&mut self.binding_asks)
+    }
+
     /// Shakes the gamepad the player is holding: `Rumble::new(strong, weak,
     /// seconds)`.
     ///
@@ -926,6 +964,11 @@ impl Frame {
     /// The action set requested this frame, if any.
     pub(crate) fn action_set(&self) -> Option<ActionSetId> {
         self.action_set
+    }
+
+    /// Whether listening for a button was started or stopped this frame, if it was.
+    pub(crate) fn listening(&self) -> Option<Option<lore_input::Hears>> {
+        self.listening
     }
 
     /// Whether typing was turned on or off this frame, if it was.

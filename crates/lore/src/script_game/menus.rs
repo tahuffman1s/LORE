@@ -99,6 +99,9 @@ impl Played {
         if let Some(on) = frame.typing() {
             self.input.set_typing(on);
         }
+        if let Some(hears) = frame.listening() {
+            self.input.set_listening(hears);
+        }
         if let Some(settings) = frame.take_settings() {
             self.settings = settings;
             self.changes += 1;
@@ -1137,11 +1140,11 @@ fn the_pause_menu_refuses_what_it_cannot_do_and_says_what_to_write() {
             end
         end
         says(function() pause.enable = false end, "enabled", "title", "game.pauseMenu.enabled = false")
-        says(function() pause.colour = "red" end, "enabled and title")
+        says(function() pause.colour = "red" end, "enabled, title and controls")
         says(function() pause.isOpen = true end, "read only", "open()", "close()")
         says(function() pause.enabled = "no" end, "true or false")
         says(function() pause.title = 3 end, "words in quotes")
-        says(function() pause.open = function() end end, "enabled and title")
+        says(function() pause.open = function() end end, "enabled, title and controls")
         pause.enabled = false
         says(
             function() pause.open() end,
@@ -1765,4 +1768,452 @@ fn start_typing_from_a_script_opens_the_keyboard_for_a_gamepad_as_a_press_does()
     played.tap(GamepadButton::GamepadSouth);
     assert!(played.shows("Space"), "{:?}", played.words());
     assert!(!played.input.is_typing());
+}
+
+/// A game with actions of its own, and a line for each that says what it is
+/// bound to as the script reads it, for the tests of the rebind rows on the Controls tab.
+const BINDINGS_GAME: &str = r#"
+    game.input.bind("open_map", { "F1", "GamepadSelect" })
+    game.input.bind("ride", { "I/K/J/L", "LeftStick" })
+    game.input.bind("lean", { "Q/E", "LeftStickX" })
+    local names = { "move", "look", "open_map", "ride", "lean", "jump" }
+    local lines = {}
+    for number, name in names do
+        lines[number] = game.hud.text("", { right = 1200, down = 60 + number * 30 })
+    end
+    game.onDraw(function()
+        for number, name in names do
+            lines[number].text = "has " .. name .. "=" .. table.concat(game.input.bindings(name), ",")
+        end
+    end)
+"#;
+
+impl Played {
+    /// Opens the pause menu, its settings, and the Controls tab.
+    fn on_bindings_page(main: &str) -> Self {
+        let mut played = Self::with_main(main, Settings::default());
+        played.tap(Key::Escape);
+        played.tap(Key::ArrowDown);
+        played.tap(Key::Enter);
+        for _ in 0..12 {
+            if played.shows("Mouse sensitivity") {
+                return played;
+            }
+            played.tap(Key::E);
+        }
+        panic!("no Controls tab among {:?}", played.words());
+    }
+
+    /// Scrolls the tab, with the down arrow, to the row `row`: more rows
+    /// than a screen takes scroll, going round at the end.
+    fn go_to(&mut self, row: &str) {
+        for _ in 0..80 {
+            if self.shows(row) {
+                return;
+            }
+            self.tap(Key::ArrowDown);
+        }
+        panic!("{row} is not on the tab among {:?}", self.words());
+    }
+
+    /// Chooses the row so that a gamepad's A presses it: a click on it
+    /// chooses it (and starts the wait for a key, which Escape ends).
+    fn pad_choose(&mut self, row: &str) {
+        self.go_to(row);
+        self.click(row);
+        self.tap(Key::Escape);
+    }
+
+    fn press_row(&mut self, row: &str) {
+        self.go_to(row);
+        self.click(row);
+    }
+
+    fn page_value(&mut self, row: &str) -> String {
+        self.go_to(row);
+        self.value_of(row)
+    }
+
+    /// What the script reads `action` as bound to.
+    fn bound(&self, action: &str) -> String {
+        let start = format!("has {action}=");
+        (self.words().iter())
+            .find_map(|text| text.strip_prefix(start.as_str()))
+            .unwrap_or_else(|| panic!("no line for {action} among {:?}", self.words()))
+            .to_owned()
+    }
+}
+
+fn bindings_game() -> String {
+    BINDINGS_GAME.to_owned()
+}
+
+#[test]
+fn the_controls_tab_lists_what_a_player_can_rebind_and_leaves_the_menu_keys_out() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    for row in [
+        "Jump", "Move", "Look", "Use item", "Open map", "Ride", "Lean",
+    ] {
+        played.go_to(row);
+    }
+    // The settings come first, then the buttons.
+    played.go_to("Invert look");
+    played.go_to("Buttons");
+    for row in ["Menu confirm", "Menu move", "Menu back"] {
+        for _ in 0..40 {
+            assert!(!played.shows(row), "{row} in {:?}", played.words());
+            played.tap(Key::ArrowDown);
+        }
+    }
+    // The keys of the device in use, as a player reads them.
+    assert_eq!(played.page_value("Jump"), "Space");
+    assert_eq!(played.page_value("Move"), "W A S D");
+    assert_eq!(played.page_value("Look"), "Mouse");
+    assert_eq!(played.page_value("Open map"), "F1");
+    assert_eq!(played.page_value("Lean"), "Q / E");
+}
+
+#[test]
+fn the_controls_tab_follows_the_device_the_player_uses() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.go_to("Open map");
+    assert_eq!(played.value_of("Open map"), "F1");
+    played.tap(GamepadButton::DpadDown);
+    // Select is the standard "switch_view" button too, which the page says.
+    assert_eq!(played.value_of("Open map"), "View  (also Switch view)");
+    played.tap(Key::ArrowDown);
+    assert_eq!(played.value_of("Open map"), "F1");
+}
+
+#[test]
+fn a_game_hides_the_buttons_or_one_action_from_the_controls_tab() {
+    let hidden = format!(
+        "game.pauseMenu.hideControl('jump')\ngame.pauseMenu.hideControl('no_such_thing')\n{}",
+        bindings_game()
+    );
+    let mut played = Played::on_bindings_page(&hidden);
+    played.go_to("Move");
+    played.go_to("Open map");
+    for _ in 0..40 {
+        assert!(!played.shows("Jump"), "{:?}", played.words());
+        played.tap(Key::ArrowDown);
+    }
+
+    let none = format!("game.pauseMenu.controls = false\n{}", bindings_game());
+    let mut played = Played::with_main(&none, Settings::default());
+    played.tap(Key::Escape);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    // The Controls tab keeps its settings and loses the buttons.
+    for _ in 0..12 {
+        if played.shows("Mouse sensitivity") {
+            break;
+        }
+        played.tap(Key::E);
+    }
+    assert!(played.shows("Mouse sensitivity"), "{:?}", played.words());
+    for _ in 0..40 {
+        for row in ["Buttons", "Jump", "Open map"] {
+            assert!(!played.shows(row), "{row} in {:?}", played.words());
+        }
+        played.tap(Key::ArrowDown);
+    }
+    assert!(played.shows("Reset all to defaults"));
+}
+
+#[test]
+fn pressing_a_row_then_a_key_rebinds_and_escape_changes_nothing() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.press_row("Open map");
+    assert_eq!(
+        played.page_value("Open map"),
+        "Press a key or mouse button (Escape to cancel)"
+    );
+    // Escape ends the wait, and the menu is still there.
+    played.tap(Key::Escape);
+    assert_eq!(played.page_value("Open map"), "F1");
+    assert_eq!(played.bound("open_map"), "F1,GamepadSelect");
+    assert!(played.shows("Mouse sensitivity") || played.shows("Open map"));
+
+    played.press_row("Open map");
+    played.tap(Key::F2);
+    assert_eq!(played.page_value("Open map"), "F2");
+    assert_eq!(played.bound("open_map"), "GamepadSelect,F2");
+    assert!(played.host().last_error().is_none());
+
+    // A click is a button too.
+    played.press_row("Jump");
+    played.tap(MouseButton::MouseMiddle);
+    assert_eq!(played.page_value("Jump"), "Middle click");
+}
+
+#[test]
+fn a_gamepad_hears_its_own_buttons_and_leaves_the_keys_be() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.pad_choose("Open map");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(
+        played.page_value("Open map"),
+        "Press a button (Start to cancel)"
+    );
+    // A key is not what it listens for.
+    played.tap(Key::F5);
+    assert!(played.shows("Press a button (Start to cancel)"));
+    played.tap(GamepadButton::LeftBumper);
+    // Lock on has it too, which the page says.
+    assert_eq!(played.page_value("Open map"), "LB  (also Lock on)");
+    assert_eq!(played.bound("open_map"), "F1,LeftBumper");
+}
+
+#[test]
+fn a_direction_takes_a_key_for_each_way_in_turn_on_a_keyboard() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.press_row("Move");
+    for (way, key) in [("up", Key::I), ("down", Key::K), ("left", Key::J)] {
+        assert_eq!(
+            played.page_value("Move"),
+            format!("Press the key for {way} (Escape to cancel)")
+        );
+        played.tap(key);
+    }
+    assert_eq!(
+        played.page_value("Move"),
+        "Press the key for right (Escape to cancel)"
+    );
+    played.tap(Key::L);
+    assert_eq!(played.bound("move"), "LeftStick,I/K/J/L");
+    assert_eq!(played.page_value("Move"), "I J K L  (also Ride)");
+
+    // One direction takes two: the way that lessens, then the way that adds.
+    played.press_row("Lean");
+    assert_eq!(
+        played.page_value("Lean"),
+        "Press the key for left (Escape to cancel)"
+    );
+    played.tap(Key::Z);
+    played.tap(Key::C);
+    assert_eq!(played.bound("lean"), "LeftStickX,Z/C");
+
+    // Look follows the mouse: that is said, not changed.
+    played.press_row("Look");
+    played.go_to(
+        "Look follows the mouse, so there is no key to change. Press it on a gamepad to pick a stick",
+    );
+    assert!(played.shows("Look follows the mouse, so there is no key to change. Press it on a gamepad to pick a stick"));
+    assert_eq!(played.bound("look"), "MouseMotion,RightStick");
+}
+
+#[test]
+fn pressing_a_direction_on_a_gamepad_goes_through_the_sticks() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.pad_choose("Move");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.bound("move"), "WASD,RightStick");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.bound("move"), "WASD,Dpad");
+    assert_eq!(played.page_value("Move"), "D-pad");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.bound("move"), "WASD,LeftStick");
+    // One direction goes from one stick's side to the other's.
+    played.pad_choose("Lean");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.bound("lean"), "Q/E,RightStickX");
+    played.tap(GamepadButton::GamepadSouth);
+    assert_eq!(played.bound("lean"), "Q/E,LeftStickX");
+}
+
+#[test]
+fn the_page_says_when_a_button_is_used_twice_and_marks_both_rows() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.press_row("Open map");
+    // M is the standard "map" key, and both are heard in the game.
+    played.tap(Key::M);
+    played.step();
+    played.go_to("M is also used by Map");
+    assert!(
+        played.shows("M is also used by Map"),
+        "{:?}",
+        played.words()
+    );
+    assert_eq!(played.page_value("Open map"), "M  (also Map)");
+    assert_eq!(played.page_value("Map"), "M  (also Open map)");
+    // A button nothing else has is not told off.
+    played.press_row("Open map");
+    played.tap(Key::F9);
+    played.step();
+    assert!(!played.words().iter().any(|text| text.contains("also used")));
+    assert_eq!(played.page_value("Open map"), "F9");
+}
+
+#[test]
+fn every_clash_that_stands_is_marked_but_not_the_pairs_the_engine_shares() {
+    let main = format!(
+        "{}\ngame.input.bind(\"wave\", {{ \"M\", \"LeftBumper\" }})",
+        bindings_game()
+    );
+    let mut played = Played::on_bindings_page(&main);
+    // Nothing was rebound on the page: the clash is there from the start.
+    assert_eq!(played.page_value("Wave"), "M  (also Map)");
+    assert_eq!(played.page_value("Map"), "M  (also Wave)");
+    // Aim and Block share right click on purpose.
+    assert_eq!(played.page_value("Aim"), "Right click");
+    assert_eq!(played.page_value("Block"), "Right click");
+    // The keyboard's clash is not on the gamepad's view.
+    played.go_to("Wave");
+    played.tap(GamepadButton::DpadDown);
+    assert_eq!(played.value_of("Wave"), "LB  (also Lock on)");
+}
+
+#[test]
+fn putting_back_the_defaults_resets_every_action() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    played.press_row("Open map");
+    played.tap(Key::F2);
+    assert_eq!(played.bound("open_map"), "GamepadSelect,F2");
+    played.press_row("Reset all to defaults");
+    assert!(played.shows("Every control is back to the defaults"));
+    assert_eq!(played.bound("open_map"), "F1,GamepadSelect");
+    assert_eq!(played.page_value("Open map"), "F1");
+}
+
+/// A menu of `count` buttons called "Row 1", "Row 2" and so on, open.
+fn rows_game(count: u32) -> String {
+    format!(
+        r#"local rows = {{}}
+        for number = 1, {count} do
+            rows[number] = game.menu.button("Row " .. number)
+        end
+        game.menu.new("Long", rows):open()"#
+    )
+}
+
+#[test]
+fn a_long_menu_scrolls_to_keep_the_chosen_row_in_view() {
+    let mut played = Played::with_main(&rows_game(30), Settings::default());
+    assert!(played.shows("Row 1"), "{:?}", played.words());
+    assert!(!played.shows("Row 30"));
+    assert!(played.shows("… more below") && !played.shows("… more above"));
+
+    // Down past the bottom of the window: the chosen row is always drawn.
+    for number in 2..=30 {
+        played.tap(Key::ArrowDown);
+        assert!(
+            played.shows(&format!("Row {number}")),
+            "{:?}",
+            played.words()
+        );
+    }
+    assert!(!played.shows("Row 1"));
+    assert!(played.shows("… more above") && !played.shows("… more below"));
+    // Down once more goes round to the first row, and back up to the last.
+    played.tap(Key::ArrowDown);
+    assert!(played.shows("Row 1") && !played.shows("Row 30"));
+    played.tap(Key::ArrowUp);
+    assert!(played.shows("Row 30"), "{:?}", played.words());
+    for number in (1..=29).rev() {
+        played.tap(Key::ArrowUp);
+        assert!(
+            played.shows(&format!("Row {number}")),
+            "{:?}",
+            played.words()
+        );
+    }
+    assert!(played.shows("Row 1") && !played.shows("… more above"));
+}
+
+#[test]
+fn a_menu_held_down_on_a_pad_scrolls_too() {
+    let mut played = Played::with_main(&rows_game(40), Settings::default());
+    for _ in 0..39 {
+        played.tap(GamepadButton::DpadDown);
+    }
+    assert!(played.shows("Row 40"), "{:?}", played.words());
+    assert!(!played.shows("Row 1"));
+}
+
+#[test]
+fn the_wheel_scrolls_a_long_menu() {
+    let mut played = Played::with_main(&rows_game(30), Settings::default());
+    let top = played.find("Row 1").1;
+    played.input.roll_wheel(-1.0);
+    played.step();
+    assert!(!played.shows("Row 1"), "{:?}", played.words());
+    assert!(played.shows("… more above     … more below"));
+    // The first row on show is where the first was, three rows on, and the
+    // chosen row came into view with it.
+    assert_eq!(played.find("Row 4").1, top);
+    played.input.roll_wheel(1.0);
+    played.step();
+    assert_eq!(played.find("Row 1").1, top);
+    // The wheel stops at the ends.
+    played.input.roll_wheel(5.0);
+    played.step();
+    assert_eq!(played.find("Row 1").1, top);
+    played.input.roll_wheel(-50.0);
+    played.step();
+    assert!(played.shows("Row 30") && !played.shows("… more below"));
+}
+
+#[test]
+fn the_wheel_scrolls_with_the_pointer_resting_on_the_chosen_button() {
+    let mut played = Played::with_main(&rows_game(30), Settings::default());
+    played.point_at("Row 1");
+    played.input.roll_wheel(-1.0);
+    played.step();
+    assert!(!played.shows("Row 1"), "{:?}", played.words());
+}
+
+#[test]
+fn a_menu_of_two_rows_far_down_the_screen_still_opens() {
+    let main = r#"game.menu.new("Low", { game.menu.button("Row 1"), game.menu.button("Row 2") }, { down = 1000 }):open()"#;
+    let played = Played::with_main(main, Settings::default());
+    assert!(
+        played.shows("Row 1") && played.shows("Row 2"),
+        "{:?}",
+        played.words()
+    );
+}
+
+#[test]
+fn a_scrolling_menus_message_stays_on_the_fixed_line() {
+    let main = r#"local rows = {}
+        for number = 1, 30 do rows[number] = game.menu.button("Row " .. number) end
+        local m = game.menu.new("Long", rows)
+        m.message = function() return "Saved for good" end
+        m:open()"#;
+    let mut played = Played::with_main(main, Settings::default());
+    assert!(played.shows("Saved for good"), "{:?}", played.words());
+    played.input.roll_wheel(-50.0);
+    played.step();
+    assert!(played.shows("Saved for good") && !played.shows("Row 1"));
+}
+
+#[test]
+fn a_short_menu_is_laid_out_as_it_always_was() {
+    let mut played = Played::with_main(&rows_game(3), Settings::default());
+    let [x, y] = played.find("Row 1").1;
+    // The rows are a row apart and start under the tabs; a menu of more
+    // rows starts the same.
+    for (number, row) in ["Row 1", "Row 2", "Row 3"].into_iter().enumerate() {
+        assert_eq!(played.find(row).1, [x, y + 34.0 * number as f32], "{row}");
+    }
+    assert!(!played.shows("… more below") && !played.shows("… more above"));
+    played.input.roll_wheel(-1.0);
+    played.step();
+    assert_eq!(played.find("Row 1").1, [x, y]);
+    let long = Played::with_main(&rows_game(30), Settings::default());
+    assert_eq!(long.find("Row 1").1, [x, y]);
+}
+
+#[test]
+fn the_controls_tab_holds_the_settings_and_the_buttons_to_rebind() {
+    let mut played = Played::on_bindings_page(&bindings_game());
+    assert!(played.shows("Mouse sensitivity"));
+    played.go_to("Jump");
+    played.go_to("Buttons");
+    played.go_to("Mouse sensitivity");
+    for tab in ["Sound", "Controls", "Graphics"] {
+        assert!(played.shows(tab));
+    }
+    assert!(!played.shows("Bindings"));
 }

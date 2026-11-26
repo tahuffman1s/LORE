@@ -1,5 +1,6 @@
 //! The per-tick snapshot of every action.
 
+use crate::listen::Heard;
 use crate::map::{ActionId, Device};
 use crate::typing::TypedKey;
 
@@ -45,6 +46,11 @@ pub struct InputFrame {
     /// Backspace, Enter and Escape, in the order pressed since the previous
     /// tick, while a script takes text.
     pub typed_keys: Vec<TypedKey>,
+    /// The button the player pressed while a script was listening for one
+    /// (see [`Input::set_listening`](crate::Input::set_listening)), or that
+    /// they gave up. `None` on every other tick. A recording carries it, so
+    /// a replay hears the same button on the same tick.
+    pub heard: Option<Heard>,
     /// The device the player last used on purpose, as of this tick.
     pub device: Device,
     /// The [`ActionMap::layout`](crate::ActionMap::layout) of the map the frame was made from, so that
@@ -72,6 +78,7 @@ impl Clone for InputFrame {
             wheel: self.wheel,
             typed: self.typed.clone(),
             typed_keys: self.typed_keys.clone(),
+            heard: self.heard,
             device: self.device,
             layout: self.layout,
             actions: self.actions.clone(),
@@ -87,6 +94,7 @@ impl Clone for InputFrame {
         self.wheel = source.wheel;
         self.typed.clone_from(&source.typed);
         self.typed_keys.clone_from(&source.typed_keys);
+        self.heard = source.heard;
         self.device = source.device;
         self.layout = source.layout;
         self.actions.clone_from(&source.actions);
@@ -103,6 +111,7 @@ impl InputFrame {
             wheel: 0.0,
             typed: String::new(),
             typed_keys: Vec::new(),
+            heard: None,
             device: Device::KeyboardAndMouse,
             layout: 0,
             actions: vec![ActionState::default(); actions],

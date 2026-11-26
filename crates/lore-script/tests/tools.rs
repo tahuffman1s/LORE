@@ -9,12 +9,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use lore_input::{
-    ActionMap, Device, GamepadButton, GamepadStyle, Input, InputFrame, Key, MouseButton,
+    ActionMap, Device, GamepadButton, GamepadStyle, Hears, Input, InputFrame, Key, MouseButton,
 };
 use lore_script::weapons::Zone;
 use lore_script::{
-    BindingChange, CharacterId, ControlsChange, ENTRY_SCRIPT, HudShape, Motion, Movement,
-    ScriptHost, Teleport, WeaponHit,
+    BindingAsk, BindingChange, CharacterId, ControlsChange, ENTRY_SCRIPT, HudShape, Motion,
+    Movement, ScriptHost, Teleport, WeaponHit,
 };
 
 thread_local! {
@@ -280,6 +280,77 @@ fn a_button_with_no_gamepad_button_is_a_mistake_and_a_clash_a_warning() {
 }
 
 #[test]
+fn a_script_can_declare_an_action_with_two_directions_and_read_it_with_axis() {
+    let mut host = game(
+        r#"game.input.bind("ride", { "WASD", "LeftStick" })
+        game.onTick(function()
+            local x, y = game.input.axis("ride")
+            print(x, y, game.input.pressed("ride"))
+        end)"#,
+    );
+    let mut input = Input::new(host.actions());
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["0 0 false"]);
+    input.press(Key::D);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["1 0 true"]);
+}
+
+#[test]
+fn a_script_can_declare_an_action_with_one_direction() {
+    let mut host = game(
+        r#"game.input.bind("steer", { "A/D", "LeftStickX" })
+        game.input.bind("turn_page", { "Q/E", "LeftBumper/RightBumper" })
+        game.onTick(function()
+            local x, y = game.input.axis("steer")
+            print(x, y, game.input.value("steer"), game.input.value("turn_page"))
+        end)"#,
+    );
+    let mut input = Input::new(host.actions());
+    input.press(Key::A);
+    input.press(Key::E);
+    host.tick(input.tick(), STEP);
+    assert_eq!(printed(), ["-1 0 -1 1"]);
+}
+
+#[test]
+fn an_action_that_mixes_buttons_and_directions_says_what_to_write() {
+    let message = load_mistake(r#"game.input.bind("ride", { "WASD", "Space" })"#);
+    assert!(
+        message.contains(
+            "game.input.bind(\"ride\", ...): \"WASD\" moves in two directions but \"Space\" \
+             is a button. Give an action buttons only, or directions only: \
+             { \"WASD\", \"LeftStick\" }"
+        ),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("ride", { "A/D", "LeftStick" })"#);
+    assert!(message.contains("moves in one direction but"), "{message}");
+}
+
+#[test]
+fn a_direction_with_no_gamepad_or_no_keyboard_is_a_mistake() {
+    let message = load_mistake(r#"game.input.bind("ride", { "WASD", "ArrowKeys" })"#);
+    assert!(
+        message.contains("needs a gamepad direction too") && message.contains("\"LeftStick\""),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("steer", { "LeftStickX", "Dpad" })"#);
+    assert!(message.contains("moves in one direction but"), "{message}");
+    let message = load_mistake(r#"game.input.bind("steer", { "LeftStickX" })"#);
+    assert!(
+        message.contains("needs a keyboard direction too") && message.contains("\"A/D\""),
+        "{message}"
+    );
+    let message = load_mistake(r#"game.input.bind("ride", { "Dpad", "LeftStick" })"#);
+    assert!(
+        message.contains("needs a keyboard or mouse direction too"),
+        "{message}"
+    );
+    let _host = game(r#"game.input.bind("scope", { "MouseMotion", "RightStick" })"#);
+}
+
+#[test]
 fn the_pointer_and_the_wheel_come_from_this_ticks_input() {
     let mut host = game(
         r#"game.onTick(function()
@@ -416,7 +487,7 @@ fn a_label_names_what_the_player_presses_on_the_device_they_use() {
 
     host.set_device(Device::Gamepad, GamepadStyle::PlayStation);
     host.draw(1.0);
-    assert_eq!(hud_text(&host), "Cross|LeftStick");
+    assert_eq!(hud_text(&host), "Cross|Left stick");
 
     // What the player changed is what the label says.
     let mut controls = ActionMap::standard();
@@ -426,6 +497,30 @@ fn a_label_names_what_the_player_presses_on_the_device_they_use() {
     host.set_device(Device::KeyboardAndMouse, GamepadStyle::Xbox);
     host.draw(1.0);
     assert!(hud_text(&host).starts_with("F|"), "{}", hud_text(&host));
+}
+
+#[test]
+fn a_label_can_ask_for_one_device_whichever_the_player_uses() {
+    let mut host = game(
+        r#"local hint = game.hud.text("")
+        game.onDraw(function()
+            hint.text = game.input.label("jump", "keyboard") .. "|" .. game.input.label("jump", "gamepad")
+                .. "|" .. game.input.label("look", "keyboard") .. "|" .. game.input.label("move", "gamepad")
+        end)"#,
+    );
+    run(&mut host, 1);
+    host.set_device(Device::Gamepad, GamepadStyle::PlayStation);
+    host.draw(1.0);
+    assert_eq!(hud_text(&host), "Space|Cross|Mouse|Left stick");
+
+    let mut host = game(r#"game.onDraw(function() game.input.label("jump", "pad") end)"#);
+    run(&mut host, 1);
+    host.draw(1.0);
+    let message = mistake(&host);
+    assert!(
+        message.contains("\"keyboard\" or \"gamepad\"") && message.contains("pad"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -1405,4 +1500,414 @@ fn step_loudness_goes_no_higher_than_four() {
     host.tick(&InputFrame::default(), 1.0 / 60.0);
     assert_eq!(host.last_error(), None);
     assert_eq!(host.moves().step_loudness, 4.0);
+}
+
+/// One tick of `host` with what `input` has now.
+fn tick_with(host: &mut ScriptHost, input: &mut Input) {
+    host.tick(input.tick(), STEP);
+}
+
+/// The first line the script printed that says what a refused call said.
+fn refusal(call: &str) -> String {
+    let mut host = game(&format!(
+        "game.onTick(function() local ok, e = pcall(function() {call} end) print(tostring(e)) end)"
+    ));
+    run(&mut host, 1);
+    printed().pop().unwrap_or_default()
+}
+
+#[test]
+fn rebind_is_read_back_at_once_and_asked_of_the_engine() {
+    let mut host = game(
+        r#"game.input.bind("open_map", { "F1", "LeftBumper" })
+        local done = false
+        game.onTick(function()
+            print(table.concat(game.input.bindings("jump"), ","))
+            if not done then
+                done = true
+                game.input.rebind("jump", { "F", "GamepadSouth" })
+                game.input.rebind("open_map", { "M", "GamepadNorth" })
+            end
+        end)"#,
+    );
+    run(&mut host, 2);
+    assert_eq!(printed(), ["Space,GamepadSouth", "F,GamepadSouth"]);
+    assert_eq!(
+        host.take_binding_asks(),
+        [
+            BindingAsk::Set {
+                action: "jump".into(),
+                buttons: vec!["F".into(), "GamepadSouth".into()]
+            },
+            BindingAsk::Set {
+                action: "open_map".into(),
+                buttons: vec!["M".into(), "GamepadNorth".into()]
+            }
+        ]
+    );
+    assert!(host.take_binding_asks().is_empty());
+}
+
+#[test]
+fn rebind_refuses_what_bind_refuses_in_words_for_rebind() {
+    let kind = refusal(r#"game.input.rebind("jump", { "WASD", "LeftStick" })"#);
+    assert!(
+        kind.contains("\"jump\" is a button but the buttons you gave moves in two directions"),
+        "{kind}"
+    );
+    assert!(
+        kind.contains("such as: { \"Space\", \"GamepadSouth\" }"),
+        "{kind}"
+    );
+    let mixed = refusal(r#"game.input.rebind("move", { "WASD", "GamepadSouth" })"#);
+    assert!(
+        mixed.contains("Give an action buttons only, or directions only"),
+        "{mixed}"
+    );
+    let typo = refusal(r#"game.input.rebind("jump", { "Spce", "GamepadSouth" })"#);
+    assert!(typo.contains("Did you mean \"Space\"?"), "{typo}");
+    let action = refusal(r#"game.input.rebind("jmp", { "F", "GamepadSouth" })"#);
+    assert!(action.contains("Did you mean \"jump\"?"), "{action}");
+    let empty = refusal(r#"game.input.rebind("jump", {})"#);
+    assert!(
+        empty.contains("game.input.rebind was given an empty list"),
+        "{empty}"
+    );
+    let text = refusal(r#"game.input.rebind("jump", "F")"#);
+    assert!(
+        text.contains("game.input.rebind needs a list of button names"),
+        "{text}"
+    );
+}
+
+#[test]
+fn rebind_with_one_device_keeps_the_other_and_both_devices_replace_all() {
+    let mut host = game(
+        r#"game.input.bind("open_map", { "F1", "LeftBumper" })
+        local step = 0
+        game.onTick(function()
+            step += 1
+            if step == 1 then
+                game.input.rebind("jump", { "F" })
+            elseif step == 2 then
+                game.input.rebind("jump", { "GamepadNorth" })
+            elseif step == 3 then
+                game.input.rebind("jump", { "G", "GamepadWest" })
+            elseif step == 4 then
+                game.input.rebind("move", { "ArrowKeys" })
+            elseif step == 5 then
+                game.input.rebind("move", { "RightStick" })
+            elseif step == 6 then
+                game.input.rebind("open_map", { "F1" })
+            end
+            print(table.concat(game.input.bindings("jump"), ",") .. "|" .. table.concat(game.input.bindings("move"), ",") .. "|" .. table.concat(game.input.bindings("open_map"), ","))
+        end)"#,
+    );
+    run(&mut host, 6);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(
+        printed(),
+        [
+            "GamepadSouth,F|WASD,LeftStick|F1,LeftBumper",
+            "F,GamepadNorth|WASD,LeftStick|F1,LeftBumper",
+            "G,GamepadWest|WASD,LeftStick|F1,LeftBumper",
+            "G,GamepadWest|LeftStick,ArrowKeys|F1,LeftBumper",
+            "G,GamepadWest|ArrowKeys,RightStick|F1,LeftBumper",
+            "G,GamepadWest|ArrowKeys,RightStick|F1,LeftBumper",
+        ]
+    );
+    let asks = host.take_binding_asks();
+    assert_eq!(
+        asks[0],
+        BindingAsk::Set {
+            action: "jump".into(),
+            buttons: vec!["GamepadSouth".into(), "F".into()]
+        }
+    );
+}
+
+#[test]
+fn a_button_another_action_uses_is_allowed_and_both_hear_it() {
+    let mut host = game(
+        r#"game.onTick(function()
+            game.input.rebind("jump", { "E" })
+            print(table.concat(game.input.usedBy("E"), ","))
+        end)"#,
+    );
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    let used = printed().pop().unwrap_or_default();
+    assert!(used.contains("jump") && used.contains(','), "{used}");
+}
+
+#[test]
+fn a_refused_rebind_changes_and_asks_nothing() {
+    let mut host = game(
+        r#"game.onTick(function()
+            pcall(game.input.rebind, "jump", { "WASD" })
+            print(table.concat(game.input.bindings("jump"), ","))
+        end)"#,
+    );
+    run(&mut host, 1);
+    assert_eq!(printed(), ["Space,GamepadSouth"]);
+    assert!(host.take_binding_asks().is_empty());
+}
+
+#[test]
+fn rebind_takes_directions_for_a_direction_action() {
+    let mut host = game(
+        r#"game.input.bind("ride", { "WASD", "LeftStick" })
+        game.onTick(function()
+            game.input.rebind("ride", { "ArrowKeys", "RightStick" })
+            game.input.rebind("move", { "I/K/J/L", "LeftStick" })
+            print(table.concat(game.input.bindings("ride"), ","))
+        end)"#,
+    );
+    run(&mut host, 1);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(printed(), ["ArrowKeys,RightStick"]);
+}
+
+#[test]
+fn reset_puts_one_action_or_all_back_to_the_games_own() {
+    let mut host = game(
+        r#"game.input.bind("open_map", { "F1", "LeftBumper" })
+        local step = 0
+        game.onTick(function()
+            step += 1
+            if step == 1 then
+                game.input.rebind("jump", { "F", "GamepadSouth" })
+                game.input.rebind("open_map", { "M", "GamepadNorth" })
+            elseif step == 2 then
+                game.input.resetBindings("jump")
+            elseif step == 3 then
+                game.input.resetBindings()
+            end
+            print(table.concat(game.input.bindings("jump"), ",") .. "|" .. table.concat(game.input.bindings("open_map"), ","))
+        end)"#,
+    );
+    run(&mut host, 4);
+    assert_eq!(
+        printed(),
+        [
+            "F,GamepadSouth|M,GamepadNorth",
+            "Space,GamepadSouth|M,GamepadNorth",
+            "Space,GamepadSouth|F1,LeftBumper",
+            "Space,GamepadSouth|F1,LeftBumper",
+        ]
+    );
+    let asks = host.take_binding_asks();
+    assert_eq!(asks.len(), 4);
+    assert_eq!(asks[2], BindingAsk::Reset(Some("jump".into())));
+    assert_eq!(asks[3], BindingAsk::Reset(None));
+    let unknown = refusal(r#"game.input.resetBindings("jmp")"#);
+    assert!(unknown.contains("Did you mean \"jump\"?"), "{unknown}");
+}
+
+#[test]
+fn used_by_lists_the_actions_a_button_presses() {
+    let mut host = game(
+        r#"game.input.bind("open_map", { "F1", "LeftBumper" })
+        local step = 0
+        game.onTick(function()
+            step += 1
+            if step == 2 then game.input.rebind("open_map", { "Space", "LeftBumper" }) end
+            print(table.concat(game.input.usedBy("Space"), ",")
+                .. "|" .. table.concat(game.input.usedBy("W"), ",")
+                .. "|" .. table.concat(game.input.usedBy("LeftStick"), ",")
+                .. "|" .. #game.input.usedBy("F12"))
+        end)"#,
+    );
+    run(&mut host, 2);
+    assert_eq!(
+        printed(),
+        [
+            "jump,menu_confirm|move,menu_move|move,menu_move|0",
+            "jump,menu_confirm,open_map|move,menu_move|move,menu_move|0"
+        ]
+    );
+    let typo = refusal(r#"game.input.usedBy("Spce")"#);
+    assert!(
+        typo.contains("\"Spce\" is not a known key or button. Did you mean \"Space\"?"),
+        "{typo}"
+    );
+}
+
+#[test]
+fn listening_hears_the_next_key_and_the_next_gamepad_button() {
+    let mut host = game(
+        r#"local count = 0
+        game.onTick(function()
+            if count == 0 and not game.input.isListening() then
+                game.input.listenForButton(function(button) count += 1 print(tostring(button)) end)
+            end
+        end)"#,
+    );
+    let mut input = Input::new(ActionMap::standard());
+    run(&mut host, 1);
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    input.set_listening(Some(Hears::Any));
+    input.press(Key::F);
+    tick_with(&mut host, &mut input);
+    assert_eq!(printed(), ["F"]);
+    assert_eq!(
+        host.take_listening(),
+        None,
+        "the engine's listening ended by itself"
+    );
+
+    let mut host = game(
+        r#"game.input.listenForButton(function(button) print(tostring(button)) end)
+        game.onTick(function() print(tostring(game.input.isListening())) end)"#,
+    );
+    input.release(Key::F);
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    input.set_listening(Some(Hears::Any));
+    tick_with(&mut host, &mut input);
+    input.press(GamepadButton::LeftBumper);
+    tick_with(&mut host, &mut input);
+    tick_with(&mut host, &mut input);
+    assert_eq!(printed(), ["true", "LeftBumper", "false", "false"]);
+}
+
+#[test]
+fn listening_takes_a_device_and_hears_escape_and_start_as_nil() {
+    let mut host = game(
+        r#"game.input.listenForButton(function(button) print(tostring(button)) end, { device = "keyboard" })"#,
+    );
+    assert_eq!(host.take_listening(), Some(Some(Hears::Keyboard)));
+    let mut input = Input::new(ActionMap::standard());
+    input.set_listening(Some(Hears::Keyboard));
+    input.press(Key::Escape);
+    tick_with(&mut host, &mut input);
+    assert_eq!(printed(), ["nil"]);
+
+    let mut host = game(
+        r#"game.input.listenForButton(function(button) print(tostring(button)) end, { device = "gamepad" })"#,
+    );
+    assert_eq!(host.take_listening(), Some(Some(Hears::Gamepad)));
+    input.release(Key::Escape);
+    input.set_listening(Some(Hears::Gamepad));
+    input.press(GamepadButton::GamepadStart);
+    tick_with(&mut host, &mut input);
+    assert_eq!(printed(), ["nil"]);
+}
+
+#[test]
+fn listening_gives_up_after_its_seconds_and_asks_the_engine_to_stop() {
+    let mut host = game(
+        r#"game.input.listenForButton(function(button) print("late " .. tostring(button)) end, { seconds = 0.5 })
+        game.onTick(function() end)"#,
+    );
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    run(&mut host, 29);
+    assert_eq!(printed(), Vec::<String>::new());
+    run(&mut host, 2);
+    assert_eq!(printed(), ["late nil"]);
+    assert_eq!(host.take_listening(), Some(None));
+    run(&mut host, 100);
+    assert_eq!(printed(), Vec::<String>::new(), "it is told once");
+}
+
+#[test]
+fn listening_waits_five_seconds_when_not_told() {
+    let mut host =
+        game(r#"game.input.listenForButton(function(button) print(tostring(button)) end)"#);
+    run(&mut host, 299);
+    assert_eq!(printed(), Vec::<String>::new());
+    run(&mut host, 2);
+    assert_eq!(printed(), ["nil"]);
+}
+
+#[test]
+fn stop_listening_and_a_second_listen_tell_the_handler_nil_on_the_next_tick() {
+    let mut host = game(
+        r#"local step = 0
+        game.onTick(function()
+            step += 1
+            if step == 1 then
+                game.input.listenForButton(function(button) print("first " .. tostring(button)) end)
+            elseif step == 2 then
+                game.input.listenForButton(function(button) print("second " .. tostring(button)) end)
+            elseif step == 4 then
+                game.input.stopListening()
+                print("listening " .. tostring(game.input.isListening()))
+            end
+        end)"#,
+    );
+    run(&mut host, 3);
+    assert_eq!(printed(), ["first nil"]);
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    run(&mut host, 1);
+    assert_eq!(printed(), ["listening false"]);
+    assert_eq!(host.take_listening(), Some(None));
+    run(&mut host, 1);
+    assert_eq!(printed(), ["second nil"]);
+    run(&mut host, 1);
+    assert_eq!(printed(), Vec::<String>::new());
+    // Nothing listens: stopping again does nothing.
+    assert_eq!(host.take_listening(), None);
+}
+
+#[test]
+fn the_engine_ending_listening_tells_the_handler_nil_and_asks_nothing() {
+    let mut host =
+        game(r#"game.input.listenForButton(function(button) print(tostring(button)) end)"#);
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    host.listening_ended();
+    assert_eq!(host.take_listening(), None);
+    run(&mut host, 1);
+    assert_eq!(printed(), ["nil"]);
+}
+
+#[test]
+fn a_script_that_fails_while_listening_gives_the_buttons_back() {
+    let mut host = game(
+        r#"game.input.listenForButton(function(button) print("never") end)
+        game.onTick(function() error("boom") end)"#,
+    );
+    assert_eq!(host.take_listening(), Some(Some(Hears::Any)));
+    run(&mut host, 1);
+    assert!(host.last_error().is_some());
+    assert_eq!(host.take_listening(), Some(None));
+    assert_eq!(printed(), Vec::<String>::new());
+}
+
+#[test]
+fn listening_refuses_what_it_cannot_do_in_plain_words() {
+    let none = refusal("game.input.listenForButton(function() end, { seconds = 0 })");
+    assert!(
+        none.contains("seconds more than 0, but it was given 0"),
+        "{none}"
+    );
+    let negative = refusal("game.input.listenForButton(function() end, { seconds = -2 })");
+    assert!(negative.contains("more than 0"), "{negative}");
+    let device = refusal(r#"game.input.listenForButton(function() end, { device = "mouse" })"#);
+    assert!(
+        device.contains("\"keyboard\" (keys and the mouse) or \"gamepad\""),
+        "{device}"
+    );
+    let option = refusal("game.input.listenForButton(function() end, { second = 3 })");
+    assert!(option.contains("no option called \"second\""), "{option}");
+    let handler = refusal(r#"game.input.listenForButton("Space")"#);
+    assert!(
+        handler.contains("needs a function to call with the button"),
+        "{handler}"
+    );
+}
+
+#[test]
+fn actions_read_as_let_go_while_listening() {
+    let mut host = game(
+        r#"game.onTick(function()
+            print(tostring(game.input.pressed("jump")) .. " " .. tostring(game.input.justPressed("jump")))
+        end)"#,
+    );
+    let mut input = Input::new(ActionMap::standard());
+    input.press(Key::Space);
+    tick_with(&mut host, &mut input);
+    input.set_listening(Some(Hears::Any));
+    input.press(Key::F);
+    tick_with(&mut host, &mut input);
+    assert_eq!(printed(), ["true true", "false false"]);
 }

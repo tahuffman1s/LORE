@@ -422,6 +422,81 @@ impl ActionMap {
         Some(text)
     }
 
+    /// The text of a game's own bindings file with only what differs from
+    /// `baseline` (the bindings the game would have without the file): the
+    /// standard actions that differ under `[bindings]`, the game's own under
+    /// `[game_bindings]`. Reading it onto `baseline` gives `self`'s bindings
+    /// again, and a file with nothing to change is the header alone.
+    ///
+    /// ```
+    /// use lore_input::ActionMap;
+    ///
+    /// let defaults = ActionMap::standard();
+    /// let mut map = defaults.clone();
+    /// map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]")?;
+    ///
+    /// let text = map.write_game_changes(&defaults);
+    /// assert!(text.contains("\njump = [\"F\", \"GamepadSouth\"]\n"));
+    /// assert!(!text.contains("fire"));
+    /// # Ok::<(), lore_input::BindingsError>(())
+    /// ```
+    #[must_use]
+    pub fn write_game_changes(&self, baseline: &Self) -> String {
+        self.write_game_changes_keeping(baseline, "")
+    }
+
+    /// [`write_game_changes`](Self::write_game_changes) for a file that
+    /// already exists: lines in `existing` for actions this map does not
+    /// know (another version of the game may have them) are carried over as
+    /// they were written. An `existing` that is not TOML keeps nothing.
+    #[must_use]
+    pub fn write_game_changes_keeping(&self, baseline: &Self, existing: &str) -> String {
+        let document = DeTable::parse(existing).ok();
+        let mut text = format!("{GAME_HEADER}\n");
+        for (table, own) in [(TABLE, false), (GAME_TABLE, true)] {
+            let mut lines = String::new();
+            for action in self.actions().filter(|action| self.is_own(*action) == own) {
+                let name = self.name(action);
+                let bindings = self.bindings(action);
+                let same = baseline
+                    .action(name)
+                    .is_ok_and(|other| baseline.bindings(other) == bindings);
+                if same {
+                    continue;
+                }
+                write_key(&mut lines, name);
+                lines.push_str(" = [");
+                for (index, binding) in bindings.iter().enumerate() {
+                    let comma = if index == 0 { "" } else { ", " };
+                    // Writing to a `String` cannot fail.
+                    let _ = write!(lines, "{comma}\"{binding}\"");
+                }
+                lines.push_str("]\n");
+            }
+            let entries = document.as_ref().and_then(|document| {
+                match document.get_ref().get(table)?.get_ref() {
+                    DeValue::Table(entries) => Some(entries),
+                    _ => None,
+                }
+            });
+            for (action, list) in entries.into_iter().flatten() {
+                let name: &str = action.get_ref();
+                if self.action(name).is_ok() || self.renamed(name).is_some() {
+                    continue;
+                }
+                let (key, value) = (action.span(), list.span());
+                if let (Some(key), Some(value)) = (existing.get(key), existing.get(value)) {
+                    let _ = writeln!(lines, "{key} = {value}");
+                }
+            }
+            if !lines.is_empty() {
+                // Writing to a `String` cannot fail.
+                let _ = write!(text, "[{table}]\n{lines}\n");
+            }
+        }
+        text
+    }
+
     /// Writes one line for each action that is (`own`) or is not a game's own.
     fn write_table(&self, text: &mut String, defaults: &Self, own: bool) {
         for action in self.actions().filter(|action| self.is_own(*action) == own) {
@@ -820,6 +895,54 @@ mod tests {
     }
 
     #[test]
+    fn a_games_own_axis_actions_read_back_and_keep_their_kind() {
+        let mut defaults = game_map();
+        defaults
+            .own_action("ride", ActionKind::Axis2D, ["WASD", "LeftStick"])
+            .unwrap();
+        defaults
+            .own_action("steer", ActionKind::Axis1D, ["A/D", "LeftStickX"])
+            .unwrap();
+        let mut map = defaults.clone();
+        let ride = map.action("ride").unwrap();
+        map.set_bindings(
+            ride,
+            ["ArrowKeys", "RightStick"].map(|text| text.parse().unwrap()),
+        )
+        .unwrap();
+
+        let text = map.write_bindings(&defaults);
+        assert!(
+            text.contains("\nride = [\"ArrowKeys\", \"RightStick\"]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n# steer = [\"A/D\", \"LeftStickX\"]\n"),
+            "{text}"
+        );
+        let mut read = defaults.clone();
+        assert_eq!(read.read_bindings(&text), Ok(Vec::new()));
+        assert_eq!(read, map);
+
+        // A player's file may rebind an axis only with the same kind.
+        let mut read = defaults.clone();
+        let problems = read
+            .read_bindings(
+                "[game_bindings]\nride = [\"Space\", \"GamepadSouth\"]\nsteer = [\"WASD\"]\n",
+            )
+            .unwrap();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems[0]
+                .to_string()
+                .contains("is a 2D axis (a direction), but \"Space\""),
+            "{}",
+            problems[0]
+        );
+        assert_eq!(read, defaults);
+    }
+
+    #[test]
     fn a_games_own_file_has_its_actions_and_reads_back_with_standard_overrides() {
         let defaults = game_map();
         let text = defaults.write_game_bindings(&defaults).unwrap();
@@ -877,5 +1000,62 @@ mod tests {
         // Forgiving: an own action under [bindings] is still read.
         let menu = map.action("weather menu").unwrap();
         assert_eq!(map.bindings(menu)[0], Binding::Button(Key::F7.into()));
+    }
+
+    #[test]
+    fn a_games_changes_are_only_what_differs_from_the_baseline_and_read_back() {
+        let baseline = game_map();
+        let mut map = baseline.clone();
+        assert_eq!(
+            map.read_bindings(
+                "[bindings]\njump = [\"F\", \"GamepadSouth\"]\n[game_bindings]\nzoom = [\"F6\", \"GamepadSelect\"]\n"
+            ),
+            Ok(Vec::new())
+        );
+        let text = map.write_game_changes(&baseline);
+        assert!(
+            text.contains("\n[bindings]\njump = [\"F\", \"GamepadSouth\"]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n[game_bindings]\nzoom = [\"F6\", \"GamepadSelect\"]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("fire") && !text.contains("move"), "{text}");
+        let mut read = baseline.clone();
+        assert_eq!(read.read_bindings(&text), Ok(Vec::new()));
+        assert_eq!(read, map);
+
+        // Nothing differs: no tables, only the header.
+        let none = baseline.write_game_changes(&baseline);
+        assert!(!none.contains("\n["), "{none}");
+        let mut read = baseline.clone();
+        assert_eq!(read.read_bindings(&none), Ok(Vec::new()));
+        assert_eq!(read, baseline);
+    }
+    #[test]
+    fn a_rewrite_keeps_lines_for_actions_this_map_does_not_know() {
+        let baseline = game_map();
+        let mut map = baseline.clone();
+        assert_eq!(
+            map.read_bindings("[bindings]\njump = [\"F\", \"GamepadSouth\"]\n"),
+            Ok(Vec::new())
+        );
+        let existing = "[bindings]\nlevitate = [\"L\", \"GamepadNorth\"]\njump = [\"G\"]\n\
+                        [game_bindings]\n\"old thing\" = [\"F9\"]\n";
+        let text = map.write_game_changes_keeping(&baseline, existing);
+        assert!(
+            text.contains("levitate = [\"L\", \"GamepadNorth\"]\n"),
+            "{text}"
+        );
+        assert!(text.contains("\"old thing\" = [\"F9\"]\n"), "{text}");
+        assert!(
+            text.contains("jump = [\"F\", \"GamepadSouth\"]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("\"G\""), "{text}");
+        // Not TOML: nothing is kept, and nothing breaks.
+        let plain = map.write_game_changes_keeping(&baseline, "[bindings");
+        assert!(!plain.contains("levitate"), "{plain}");
     }
 }

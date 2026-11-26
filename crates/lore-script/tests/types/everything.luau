@@ -337,6 +337,10 @@ end)
 -- A button of the game's own, the pointer and the wheel, and stepping
 -- through a menu.
 game.input.bind("open_map", { "F1", "GamepadSelect" })
+game.input.bind("ride", { "WASD", "LeftStick" })
+game.input.bind("steer", { "A/D", "LeftStickX" })
+local rideX, rideY = game.input.axis("ride")
+local steerX, steerY = game.input.axis("steer")
 game.input.addSet("riding", { mouse = "look" })
 game.input.addSet("shop", { mouse = "pointer" })
 game.input.bind("gallop", { "H", "LeftBumper" }, { set = "riding" })
@@ -344,6 +348,19 @@ for _, setName in game.input.sets() do
     print(setName, #game.input.actions(setName), #game.input.actions())
 end
 print(table.concat(game.input.bindings("gallop"), ", "))
+game.input.rebind("jump", { "F", "GamepadSouth" })
+game.input.rebind("move", { "ArrowKeys", "LeftStick" })
+game.input.resetBindings("jump")
+game.input.resetBindings()
+game.input.listenForButton(function(button: string?)
+    if button then
+        print(table.concat(game.input.usedBy(button), ", "))
+    end
+end, { device = "keyboard", seconds = 3 })
+game.input.listenForButton(function(_button) end)
+if game.input.isListening() then
+    game.input.stopListening()
+end
 local mapShown = false
 local selected = 1
 local scroll = 0
@@ -387,6 +404,7 @@ game.onDraw(function()
     fps.text = math.floor(game.frames.rate()) .. " fps, " .. string.format("%.1f ms", game.frames.lastTime() * 1000)
     fps.text ..= " slowest " .. string.format("%.1f ms", game.frames.slowestTime() * 1000) .. " low " .. game.frames.lowRate()
     hint.text = "Press " .. game.input.label("interact") .. " to open"
+    local padWords: string = game.input.label("interact", "gamepad")
     if slider.pressed then
         slider.value = math.clamp(slider:pointerAt(), 0, 1)
     end
@@ -828,6 +846,8 @@ local tabsOf: MenuTabs = game.menu.tabs({ soundMenu, videoMenu })
 soundMenu.title = "Sound and music"
 soundMenu.chosen = 2
 soundMenu.backWord = "close"
+soundMenu.message = function() return "Saved" end
+soundMenu.message = nil
 tabsOf:open(videoMenu)
 tabsOf:open()
 tabsOf:toggle(soundMenu)
@@ -854,6 +874,9 @@ print(onTop, anyMenuOpen, rowShown, rowWords)
 game.pauseMenu.enabled = true
 game.pauseMenu.title = "Game paused"
 game.pauseMenu.addRow(game.menu.button("Photo mode", { onPress = function() print("click") end }))
+game.pauseMenu.controls = false
+local controlsPage: boolean = game.pauseMenu.controls
+game.pauseMenu.hideControl("melee")
 game.pauseMenu.open()
 game.pauseMenu.close()
 game.pauseMenu:open()

@@ -18,6 +18,15 @@
 -- with `if game.paused() then return end`. The player works it as any
 -- game.menu: arrows or d-pad, Enter or A, Escape or B to go back.
 --
+-- The settings' Controls tab is sensitivity and the like, then a row for each
+-- action the player can rebind, the engine's (jump, move, look) and the game's
+-- own. Press a row, then the key or button wanted; a tab that is longer than
+-- the screen scrolls. A game hides the buttons a player can rebind, or one
+-- action from them:
+--
+--     game.pauseMenu.controls = false
+--     game.pauseMenu.hideControl("melee")
+--
 -- A game that carries its own pause_menu.luau (an older game) turns this one
 -- off by requiring it. The screens are built the first time the menu opens, so
 -- a game that never opens it pays nothing, and `game.menu.style` (look and
@@ -66,7 +75,7 @@ type Setting = {
 }
 
 -- Where the menu is, in pixels on a screen 1080 high.
-local PLACE: { right: number?, down: number?, width: number? } = { right = 40, down = 40, width = 820 }
+local PLACE: { right: number?, down: number?, width: number? } = { right = 40, down = 40, width = 900 }
 
 -- What the gamepad does when the rumble setting is changed, so the player
 -- feels how strong they have made it: both motors, then seconds.
@@ -102,6 +111,11 @@ local resumes = true
 -- a game's actions are all made when its script is first read.
 local canPause: boolean? = nil
 
+-- Whether the Controls tab has the buttons a player can rebind, and the actions the game hid
+-- from it with hideControl: each with the place it was said, for a message.
+local controlsOn = true
+local hiddenControls: { { name: string, at: string } } = {}
+
 -- The screens, built the first time the menu opens, because the game's own
 -- scripts have run by then.
 local built = false
@@ -135,6 +149,297 @@ local function rowFor(setting: Setting): Row
         return menu.choice(setting.label, { options = setting.options or {}, get = get, set = set })
     end
     return menu.toggle(setting.label, { get = get, set = set })
+end
+
+-- How many letters apart two words are, to tell a near miss from a wrong guess.
+local function apart(a: string, b: string): number
+    local row = {}
+    for j = 0, #b do
+        row[j] = j
+    end
+    for i = 1, #a do
+        local diagonal = row[0]
+        row[0] = i
+        for j = 1, #b do
+            local above = row[j]
+            local same = if string.byte(a, i) == string.byte(b, j) then 0 else 1
+            row[j] = math.min(row[j] + 1, row[j - 1] + 1, diagonal + same)
+            diagonal = above
+        end
+    end
+    return row[#b]
+end
+
+-- ---------------------------------------------------------------- Controls
+
+-- The words that only a gamepad's buttons and sticks have in their names.
+local PAD_WORDS = { "Gamepad", "Stick", "Dpad", "Bumper", "Trigger" }
+-- Bindings that point somewhere, in two directions at once.
+local TWO_DIRECTIONS = { wasd = true, arrowkeys = true, dpad = true, leftstick = true, rightstick = true, mousemotion = true }
+-- What pressing a direction action's row on a gamepad goes through.
+local STICKS = { two = { "LeftStick", "RightStick", "Dpad" }, one = { "LeftStickX", "RightStickX" } }
+
+-- What the player is pressing a key for now, and the words that say so.
+local busy: { name: string, words: string }? = nil
+-- A line for the foot of the page: what was not done, or why.
+local note: string? = nil
+-- The button an action was just given, to say if something else has it too.
+local watch: { name: string, button: string }? = nil
+-- Rows with a button on the device shown that another action heard in the
+-- same set also has, and who. Worked out again only when bindings change,
+-- the device switches or a button was just given (`clashDirty` and the two
+-- that follow it say when).
+local clashed: { [string]: { string } } = {}
+local clashLine: string? = nil
+local clashDirty = true
+local clashDevice = ""
+local clashWatch: { name: string, button: string }? = nil
+-- Pairs the engine's own controls share a button on purpose (aim and block,
+-- crouch and dodge): not marked, as they are not a mistake.
+local SHARED = { aim = "block", block = "aim", crouch = "dodge", dodge = "crouch" }
+-- The sets (other than the menu's) each action is heard in.
+local setsOf: { [string]: { [string]: boolean } } = {}
+
+-- "use_item" as a player reads it: "Use item".
+local function nice(name: string): string
+    local spaced = string.gsub(name, "_", " ")
+    return string.upper(string.sub(spaced, 1, 1)) .. string.sub(spaced, 2)
+end
+
+local function device(): string
+    return if game.input.usingGamepad() then "gamepad" else "keyboard"
+end
+
+-- Whether a binding such as "Space" or "LeftStick" is on a gamepad.
+local function onPad(binding: string): boolean
+    local first = string.match(binding, "^[^/]+") or binding
+    for _, word in PAD_WORDS do
+        if string.find(first, word, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- "button", "two" (a direction: move, look) or "one" (a number along a line)
+-- for what an action reads, from the way it is bound.
+local function kindOf(name: string): string
+    for _, binding in game.input.bindings(name) do
+        local _, slashes = string.gsub(binding, "/", "")
+        local lower = string.lower(binding)
+        if slashes == 3 or TWO_DIRECTIONS[lower] then
+            return "two"
+        elseif slashes == 1 or string.match(lower, "^%a+stick[xy]$") then
+            return "one"
+        end
+    end
+    return "button"
+end
+
+-- Rebinds, and says why when the engine will not.
+local function apply(name: string, bindings: { string }): boolean
+    clashDirty = true
+    local ok, problem = pcall(game.input.rebind, name, bindings)
+    if not ok then
+        local said = tostring(problem)
+        note = if #said > 70 then string.sub(said, 1, 67) .. "..." else said
+    end
+    return ok
+end
+
+local function listenFor(name: string, on: string)
+    local mine = {
+        name = name,
+        words = if on == "gamepad" then "Press a button (Start to cancel)" else "Press a key or mouse button (Escape to cancel)",
+    }
+    busy = mine
+    game.input.listenForButton(function(button)
+        if busy == mine then
+            busy = nil
+        end
+        if button == nil then
+            return
+        end
+        if apply(name, { button }) then
+            watch = { name = name, button = button }
+        end
+    end, { device = on, seconds = 10 })
+end
+
+-- On a keyboard a direction takes a key for each way, one after another.
+local function listenForDirections(name: string, kind: string)
+    local ways = if kind == "two" then { "up", "down", "left", "right" } else { "left", "right" }
+    local keys: { string } = {}
+    local mine = { name = name, words = "" }
+    busy = mine
+    local function ask()
+        mine.words = string.format("Press the key for %s (Escape to cancel)", ways[#keys + 1])
+        game.input.listenForButton(function(button)
+            if button == nil then
+                if busy == mine then
+                    busy = nil
+                end
+                return
+            end
+            table.insert(keys, button)
+            if #keys < #ways then
+                ask()
+                return
+            end
+            busy = nil
+            apply(name, { table.concat(keys, "/") })
+        end, { device = "keyboard", seconds = 10 })
+    end
+    ask()
+end
+
+-- What pressing the row of an action does.
+local function pressControl(name: string)
+    local on = device()
+    local kind = kindOf(name)
+    note = nil
+    if kind == "button" then
+        listenFor(name, on)
+    elseif on == "gamepad" then
+        local current: string? = nil
+        for _, binding in game.input.bindings(name) do
+            if onPad(binding) then
+                current = binding
+                break
+            end
+        end
+        local sticks = STICKS[kind]
+        local at = if current then table.find(sticks, current) else nil
+        apply(name, { sticks[(at or 0) % #sticks + 1] })
+    else
+        for _, binding in game.input.bindings(name) do
+            if not onPad(binding) and string.lower(binding) == "mousemotion" then
+                note = nice(name) .. " follows the mouse, so there is no key to change. Press it on a gamepad to pick a stick"
+                return
+            end
+        end
+        listenForDirections(name, kind)
+    end
+end
+
+-- Works out which rows share a button on the device shown with another
+-- action heard in the same set, when something changed since last time.
+local function refreshClash()
+    local on = device()
+    if not clashDirty and clashDevice == on and clashWatch == watch then
+        return
+    end
+    clashDirty, clashDevice, clashWatch = false, on, watch
+    table.clear(clashed)
+    clashLine = nil
+    for name, mine in setsOf do
+        local found: { string } = {}
+        local seen: { [string]: boolean } = {}
+        for _, binding in game.input.bindings(name) do
+            if onPad(binding) == (on == "gamepad") then
+                for _, other in game.input.usedBy(binding) do
+                    local theirs = setsOf[other]
+                    if other ~= name and theirs and not seen[other] and SHARED[name] ~= other then
+                        for set in mine do
+                            if theirs[set] then
+                                seen[other] = true
+                                table.insert(found, nice(other))
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if #found > 0 then
+            clashed[name] = found
+        end
+    end
+    local watched = watch
+    local others = if watched then clashed[watched.name] else nil
+    if watched and others then
+        clashLine = string.format("%s is also used by %s", game.input.label(watched.name, on), table.concat(others, " and "))
+    end
+end
+
+local function controlRow(name: string): Row
+    return menu.button(nice(name), {
+        onPress = function()
+            pressControl(name)
+        end,
+        text = function()
+            local asking = busy
+            if asking and asking.name == name then
+                return asking.words
+            end
+            local words = game.input.label(name, device())
+            if words == "" then
+                words = "not set"
+            end
+            refreshClash()
+            local also = clashed[name]
+            return if also then words .. "  (also " .. table.concat(also, ", ") .. ")" else words
+        end,
+    })
+end
+
+-- The rows that rebind: a heading, a row for each action the player can
+-- rebind, and a line for what to know. Empty when there is no action to show.
+local function controlRows(): { Row }
+    setsOf = {}
+    for _, set in game.input.sets() do
+        if set ~= "menu" then
+            for _, action in game.input.actions(set) do
+                setsOf[action] = setsOf[action] or {}
+                setsOf[action][set] = true
+            end
+        end
+    end
+    local names: { string } = {}
+    local hidden: { [string]: boolean } = {}
+    for _, each in game.input.actions() do
+        table.insert(names, each)
+    end
+    for _, gone in hiddenControls do
+        if table.find(names, gone.name) then
+            hidden[gone.name] = true
+        else
+            local message = string.format('game.pauseMenu.hideControl("%s") (%s): the game has no action called "%s".', gone.name, gone.at, gone.name)
+            for _, known in names do
+                if apart(string.lower(gone.name), known) <= 2 then
+                    message ..= string.format(' Did you mean game.pauseMenu.hideControl("%s")?', known)
+                    break
+                end
+            end
+            print(message .. " Its actions are: " .. table.concat(names, ", "))
+        end
+    end
+    local shown: { string } = {}
+    for _, each in names do
+        if setsOf[each] and not hidden[each] then
+            table.insert(shown, each)
+        end
+    end
+
+    local rows: { Row } = {}
+    if #shown == 0 then
+        return rows
+    end
+    table.insert(rows, menu.info("Buttons"))
+    for _, each in shown do
+        table.insert(rows, controlRow(each))
+    end
+    -- A line for what to know, drawn from its name so it can be long.
+    local line: Row
+    line = menu.info("", {
+        text = function()
+            refreshClash()
+            line.label = note or clashLine or ""
+            return ""
+        end,
+    })
+    table.insert(rows, line)
+    return rows
 end
 
 -- Makes the screens, once.
@@ -186,12 +491,51 @@ local function build()
         end
         table.insert(rowsUnder[setting.group], rowFor(setting))
     end
+    -- The Controls tab holds the buttons to rebind too, after its settings;
+    -- a game with no such group gets a tab of its own, last.
+    local buttons: { Row } = {}
+    if controlsOn then
+        busy, note, watch = nil, nil, nil
+        buttons = controlRows()
+    end
+    if #buttons > 0 and not rowsUnder["Controls"] then
+        rowsUnder["Controls"] = {}
+        table.insert(headings, "Controls")
+    end
     local pages: { Menu } = {}
     for _, heading in headings do
         local under = rowsUnder[heading]
-        table.insert(under, menu.button("Reset all to defaults", { onPress = function() game.settings.reset() end }))
+        local withButtons = heading == "Controls" and #buttons > 0
+        if withButtons then
+            for _, row in buttons do
+                table.insert(under, row)
+            end
+        end
+        table.insert(
+            under,
+            menu.button("Reset all to defaults", {
+                onPress = function()
+                    game.settings.reset()
+                    if withButtons then
+                        game.input.stopListening()
+                        busy, watch = nil, nil
+                        clashDirty = true
+                        game.input.resetBindings()
+                        note = "Every control is back to the defaults"
+                    end
+                end,
+            })
+        )
         table.insert(under, menu.button("Back", { onPress = function() if settings then settings:close() end end }))
-        table.insert(pages, menu.new(heading, under, PLACE))
+        local page = menu.new(heading, under, PLACE)
+        if withButtons then
+            -- The rebind messages stay on the fixed line when the rows scroll.
+            page.message = function()
+                refreshClash()
+                return note or clashLine or ""
+            end
+        end
+        table.insert(pages, page)
     end
 
     -- The screen that asks before the game is left.
@@ -227,6 +571,7 @@ local function teardown()
         dim:remove()
     end
     first, settings, settingsStart, quit, dim = nil, nil, nil, nil, nil
+    busy, watch = nil, nil
 end
 
 -- Adds a row of the game's own to the first screen, above Quit.
@@ -243,6 +588,22 @@ function methods.addRow(row: Row)
     teardown()
 end
 
+-- Hides one action from the buttons on the Controls tab. The name is checked when the page
+-- is built, so this can be said at the top of main.luau before the game's own
+-- actions exist.
+-- Example: game.pauseMenu.hideControl("melee")
+function methods.hideControl(name: string)
+    if type(name) ~= "string" then
+        error('game.pauseMenu.hideControl needs the name of an action in quotes: game.pauseMenu.hideControl("melee")', 2)
+    end
+    if open then
+        error("game.pauseMenu.hideControl: the pause menu is open now. Hide controls at the top of main.luau, before it opens", 2)
+    end
+    local source, line = debug.info(2, "sl")
+    table.insert(hiddenControls, { name = name, at = string.format("%s:%d", tostring(source), line or 0) })
+    teardown()
+end
+
 -- Opens the menu at its first screen and pauses the game. Works written
 -- game.pauseMenu.open() or game.pauseMenu:open().
 -- Example: game.pauseMenu.open()
@@ -256,6 +617,8 @@ function methods.open()
     build()
     open = true
     resumes = not game.paused()
+    note, watch = nil, nil
+    clashDirty = true
     game.pause()
     -- A rumble that was playing would shake a hand that is now reading.
     game.input.rumble(0, 0)
@@ -275,6 +638,10 @@ function methods.close()
         return
     end
     open = false
+    if busy then
+        game.input.stopListening()
+        busy = nil
+    end
     if first then
         first:close()
     end
@@ -292,29 +659,10 @@ function methods.close()
     end
 end
 
--- How many letters apart two words are, to tell a near miss from a wrong guess.
-local function apart(a: string, b: string): number
-    local row = {}
-    for j = 0, #b do
-        row[j] = j
-    end
-    for i = 1, #a do
-        local diagonal = row[0]
-        row[0] = i
-        for j = 1, #b do
-            local above = row[j]
-            local same = if string.byte(a, i) == string.byte(b, j) then 0 else 1
-            row[j] = math.min(row[j] + 1, row[j - 1] + 1, diagonal + same)
-            diagonal = above
-        end
-    end
-    return row[#b]
-end
-
 -- `game.pauseMenu` has `enabled` and `title` to read and set, `isOpen` to
 -- read, and the functions in `methods`. `title` changes the first screen at
 -- once if it is built.
-local SETTABLE = { "enabled", "title" }
+local SETTABLE = { "enabled", "title", "controls" }
 setmetatable(pauseMenu, {
     __index = function(_, key)
         if key == "enabled" then
@@ -323,6 +671,8 @@ setmetatable(pauseMenu, {
             return title
         elseif key == "isOpen" then
             return open
+        elseif key == "controls" then
+            return controlsOn
         end
         return methods[key]
     end,
@@ -340,14 +690,23 @@ setmetatable(pauseMenu, {
             if first then
                 first.title = value
             end
+        elseif key == "controls" then
+            if type(value) ~= "boolean" then
+                error("game.pauseMenu.controls is true or false, not " .. type(value) .. ": game.pauseMenu.controls = false", 2)
+            end
+            if open then
+                error("game.pauseMenu.controls: the pause menu is open now. Say it at the top of main.luau, before it opens", 2)
+            end
+            controlsOn = value
+            teardown()
         elseif key == "isOpen" then
             error("game.pauseMenu.isOpen is read only: to open or close the pause menu call game.pauseMenu.open() or game.pauseMenu.close()", 2)
         else
             local name = tostring(key)
-            local message = string.format("game.pauseMenu has no setting called \"%s\". Its settings are enabled and title", name)
+            local message = string.format("game.pauseMenu has no setting called \"%s\". Its settings are enabled, title and controls", name)
             for _, known in SETTABLE do
                 if apart(string.lower(name), known) <= 2 then
-                    message ..= string.format(". Did you mean game.pauseMenu.%s = %s?", known, if known == "enabled" then "false" else '"Paused"')
+                    message ..= string.format(". Did you mean game.pauseMenu.%s = %s?", known, if known == "title" then '"Paused"' else "false")
                     break
                 end
             end
