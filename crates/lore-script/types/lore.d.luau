@@ -1715,8 +1715,9 @@ export type MenuRow = {
     --- Example: volume.value = 0.5
     value: any,
 
-    --- The words beside a button or an info line: words, or a function that
-    --- gives them, read again for every picture.
+    --- The words beside a button or an info line (buttons and info lines
+    --- only): words, or a function that gives them, read again for every
+    --- picture.
     --- Example: status.text = function() return "Ready" end
     text: string | (() -> string),
 
@@ -1726,7 +1727,9 @@ export type MenuRow = {
     onPress: (self: MenuRow, handler: () -> ()) -> MenuRow,
 
     --- Adds a function called, on a tick, when the player changes a toggle,
-    --- slider or choice, and given the new value. Gives the row back.
+    --- slider or choice, and given the new value: a number for a slider, true
+    --- or false for a toggle, the chosen word (a string) for a choice. Gives
+    --- the row back.
     --- Example: volume:onChange(function(value) print(value) end)
     onChange: (self: MenuRow, handler: (value: any) -> ()) -> MenuRow,
 }
@@ -1801,7 +1804,8 @@ export type MenuTabs = {
 }
 
 --- How every menu looks: colours (names or hex codes, as the HUD takes them)
---- and the HUD layer. Set before making menus.
+--- and the HUD layer. They apply to menus made afterwards, so set them
+--- before making menus; the pause menu is made on its first opening.
 --- Example: game.menu.style.back = "#101830e0"
 export type MenuStyle = {
     --- Behind the whole menu.
@@ -3558,7 +3562,8 @@ declare game: {
         --- Example: crosshair.visible = not game.menu.anyOpen()
         anyOpen: () -> boolean,
 
-        --- How menus look. Set before making menus.
+        --- How menus look. It applies to menus made afterwards (the pause
+        --- menu is made on its first opening), so set it before making menus.
         --- Example: game.menu.style.accent = "#ffd27a"
         style: MenuStyle,
 
@@ -3583,7 +3588,8 @@ declare game: {
     --- Example: game.pauseMenu.title = "Game paused"
     pauseMenu: {
         --- False turns the pause menu off (true). A game that makes its own
-        --- should say so at the top of the script.
+        --- should say so at the top of the script. While it is false,
+        --- `open()` is a mistake. Only `enabled` and `title` can be set.
         --- Example: game.pauseMenu.enabled = false
         enabled: boolean,
 
@@ -3591,17 +3597,19 @@ declare game: {
         --- Example: game.pauseMenu.title = "Game paused"
         title: string,
 
-        --- Opens it at the first screen and pauses the game.
+        --- Opens it at the first screen and pauses the game. Written
+        --- `game.pauseMenu.open()` or `game.pauseMenu:open()`.
         --- Example: game.pauseMenu.open()
-        open: () -> (),
+        open: (self: any?) -> (),
 
-        --- Closes it and lets the game go on.
+        --- Closes it and lets the game go on. Written `game.pauseMenu.close()`
+        --- or `game.pauseMenu:close()`.
         --- Example: game.pauseMenu.close()
-        close: () -> (),
+        close: (self: any?) -> (),
 
-        --- True while it is open.
-        --- Example: if game.pauseMenu.isOpen() then crosshair.visible = false end
-        isOpen: () -> boolean,
+        --- True while it is open. Read only: use `open()` and `close()`.
+        --- Example: if game.pauseMenu.isOpen then crosshair.visible = false end
+        isOpen: boolean,
 
         --- Adds a row of the game's own to the first screen, above Quit. Add
         --- rows at the top of the script, before it first opens.

@@ -3,7 +3,7 @@
 //! pause menu, `game.pauseMenu`.
 //!
 //! They are ordinary scripts. A mistake in one is reported like a mistake
-//! in the game's own, naming the file as `lore/menu.luau`.
+//! in the game's own, naming the file as `<lore>/menu.luau`: a name no game file can have.
 
 use std::rc::Rc;
 
@@ -22,11 +22,11 @@ struct Builtin {
 /// In the order they run: the pause menu is built on the menu kit.
 const BUILTINS: [Builtin; 2] = [
     Builtin {
-        name: "lore/menu.luau",
+        name: "<lore>/menu.luau",
         source: include_str!("../luau/menu.luau"),
     },
     Builtin {
-        name: "lore/pause_menu.luau",
+        name: "<lore>/pause_menu.luau",
         source: include_str!("../luau/pause_menu.luau"),
     },
 ];
@@ -105,6 +105,28 @@ mod tests {
     fn built_ins_are_not_empty() {
         for builtin in &BUILTINS {
             assert!(builtin.source.contains("return"), "{}", builtin.name);
+        }
+    }
+
+    #[test]
+    fn a_mistake_in_a_built_in_shows_its_line_under_a_name_no_game_file_has() {
+        let sources: std::collections::HashMap<String, String> = BUILTINS
+            .iter()
+            .map(|builtin| (builtin.name.to_owned(), builtin.source.to_owned()))
+            .collect();
+        let line = 3;
+        let error = mlua::Error::RuntimeError(format!("<lore>/menu.luau:{line}: boom"));
+        let error = crate::error::ScriptError::from_lua(&error, "main.luau", &sources);
+        assert_eq!(error.file, "<lore>/menu.luau");
+        assert_eq!(error.line, Some(line));
+        assert_eq!(error.message, "boom");
+        assert!(error.source_line.is_some(), "{error}");
+        for builtin in &BUILTINS {
+            assert!(
+                builtin.name.starts_with('<'),
+                "{} could be a game file",
+                builtin.name
+            );
         }
     }
 }

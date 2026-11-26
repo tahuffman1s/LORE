@@ -1,59 +1,26 @@
 -- Menus on the HUD that keys, a gamepad and the mouse all work. The engine
--- runs this file for every game before main.luau, and what it makes is
--- `game.menu` (written `menu` below). Nothing to copy, nothing to call
--- every tick: make a menu, open it, and it hears the player and draws itself.
+-- runs this file for every game before main.luau; it makes `game.menu`. Nothing
+-- to copy, nothing to call each tick: make a menu, open it, and it hears the
+-- player and draws itself. A menu is a title and rows: button, toggle, slider,
+-- choice and info. A row holds its own value, and `onChange` hears the player
+-- change it (setting `row.value` from a script does not call it).
 --
--- A menu is a title and a list of rows. A row is one of five kinds:
---
---   menu.button  something that happens when it is pressed
---   menu.toggle  on or off
---   menu.slider  a number between two ends, with a bar to drag
---   menu.choice  one of a few words, gone through with left and right
---   menu.info    a line that only tells, and cannot be chosen
---
--- A row holds its own value. Give it `onChange` to hear the player change
--- it, or `get` and `set` to show and change a value that lives elsewhere
--- (a setting, say). It is a table you can read and set from a script:
--- `row.label`, `row.value` and `row.text` change what the screen shows, and
--- setting `row.value` does not call `onChange` (that is for the player).
---
+--     local menu = game.menu
 --     local music = menu.toggle("Music", { value = true, onChange = function(on) print(on) end })
 --     local volume = menu.slider("Volume", { value = 0.8, step = 0.1, format = menu.percent })
---     volume:onChange(function(v) game.audio.play("click", { volume = v }) end)
---     local quiet = menu.button("Quiet", { onPress = function() volume.value = 0 end })
---
---     local sound = menu.new("Sound", { music, volume, quiet })
+--     local sound = menu.new("Sound", { music, volume })
 --     game.input.bind("sound_menu", { "F2", "GamepadSelect" })
 --     game.onTick(function()
 --         if game.input.justPressed("sound_menu") then sound:toggle() end
 --     end)
 --
--- Several menus can be tabs of one screen: `menu.tabs({ sound, video })`
--- gives tabs with the same `open`, `close` and `toggle`, and `sound:open()`
--- opens its tabs with `sound` in front.
---
--- Screens stack. Opening one puts it on top; only the top one hears the
--- player (a button's `onPress` and a row's `onChange` are called on a tick,
--- never while drawing); closing it shows the one below again; closing the
--- last gives the player's own controls back, in the action set the game was
--- in before the first opened. The pause menu is on the same stack, so a menu
--- of yours can open over it. `menu.top()` is the screen on top (or nil) and
--- `menu.anyOpen()` whether there is one.
---
--- What the player does in it (the engine's "menu" set of actions):
---   choose a row:  up and down (arrow keys, W and S, the d-pad or the left
---                  stick), or move the pointer over it
---   change it:     left and right, the mouse wheel, or a click; press on a
---                  slider's bar and drag
---   press it:      Enter, Space, A on a gamepad, or a click
---   change tab:    Q and E, the bumpers, or a click on the tab
---   go back:       Escape, or B on a gamepad: closes the screen on top
---   close all:     P, or Start on a gamepad
--- An action the game made with game.input.bind, such as "sound_menu" above,
--- is heard in every set, so the same key can close the menu it opened.
---
--- Look and sound: `menu.style` (colours, and the HUD layer) and
--- `menu.sounds` below. Change them before making menus.
+-- Screens stack: opening one puts it on top and only the top one hears the
+-- player; closing it shows the one below (the pause menu is on the same stack).
+-- `menu.tabs({ sound, video })` makes several menus tabs of one screen.
+-- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
+-- Change them before making menus: they apply to menus made afterwards.
+-- The player: arrows, d-pad or pointer choose; Enter, A or a click press;
+-- Escape or B go back; Q and E change tab; P or Start close everything.
 
 local menu = game.menu
 
@@ -66,7 +33,8 @@ local LABEL_WIDE = 270 -- the room for a row's name; its value starts after it
 local BAR_WIDE = 210 -- a slider's bar, at the right of the row
 
 -- How the menus look. A game can change any of these before it makes its
--- menus, to give every menu, the pause menu's too, a look of its own:
+-- menus, to give every menu a look of its own. They apply to menus made
+-- afterwards (the pause menu is made on its first opening):
 --
 --     game.menu.style.back = "#101830e0"
 --     game.menu.style.accent = "#ffd27a" -- a line along the top and a mark by the chosen row
@@ -908,6 +876,8 @@ MenuMeta.__newindex = function(self: any, key: any, value: any)
             error('menu.backWord is a word in quotes, such as "resume", or nil', 2)
         end
         m.backWord = value
+    elseif key == "isOpen" then
+        error("menu.isOpen is read only: open or close the menu with menu:open() and menu:close()", 2)
     else
         error(string.format('A menu has a title, chosen and backWord to set; "%s" is not one of them', tostring(key)), 2)
     end
@@ -1012,6 +982,11 @@ TabsMeta.__index = function(self: any, key: any): any
 end
 
 TabsMeta.__newindex = function(_self: any, key: any, _value: any)
+    if key == "isOpen" then
+        error("tabs.isOpen is read only: open or close the tabs with tabs:open() and tabs:close()", 2)
+    elseif key == "current" then
+        error("tabs.current is read only: bring a tab to the front with tabs:open(menu)", 2)
+    end
     error(string.format('Tabs have nothing to set ("%s"): open and close them with tabs:open() and tabs:close()', tostring(key)), 2)
 end
 
@@ -1127,7 +1102,7 @@ end
 
 -- Hears the player for a menu in front, with whether the pointer moved
 -- since the last tick.
-local function hearMenu(m: MenuState, pointerMoved: boolean)
+local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
     -- A choice's words are set here too, not only while drawing, so that
     -- a click can tell its "<" from its ">".
     for _, row in m.rows do
@@ -1155,21 +1130,32 @@ local function hearMenu(m: MenuState, pointerMoved: boolean)
     if x ~= 0 and row.kind ~= "button" and row.kind ~= "info" then
         change(row, x)
         sound(menu.sounds.move)
+        if stack[#stack] ~= ts then
+            return
+        end
     end
     local wheel = game.input.wheel()
     if wheel ~= 0 and (row.kind == "slider" or row.kind == "choice") then
         change(row, if wheel > 0 then 1 else -1)
         sound(menu.sounds.move)
+        if stack[#stack] ~= ts then
+            return
+        end
     end
     if game.input.justPressed("menu_confirm") then
         -- Before the press, which may close the menu.
         sound(menu.sounds.choose)
         press(row)
+        -- A press may have closed this screen or opened another over it:
+        -- then the rest of the tick belongs to the screen now on top.
+        if m.removed or stack[#stack] ~= ts then
+            return
+        end
     end
     if game.input.justPressed("menu_click") then
         for number, clicked in m.rows do
-            -- A press may have removed the menu.
-            if m.removed then
+            -- A press may have removed the menu or closed the screen.
+            if m.removed or stack[#stack] ~= ts then
                 return
             end
             if clicked.kind ~= "info" and hovered(clicked) then
@@ -1241,7 +1227,7 @@ local function hear(ts: TabsState)
     local moved = ts.pointerSeen and x ~= nil and (x ~= ts.lastX or y ~= ts.lastY)
     ts.pointerSeen = ts.pointerSeen or x ~= nil
     ts.lastX, ts.lastY = x, y
-    hearMenu(ts.current, moved)
+    hearMenu(ts, ts.current, moved)
 end
 
 -- Shows what each row of a menu is now.

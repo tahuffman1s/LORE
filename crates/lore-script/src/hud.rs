@@ -679,6 +679,23 @@ impl UserData for PieceRef {
                 let shared = hud_of(lua)?;
                 let set = match key.as_str() {
                     "text" if kind == Kind::Text => {
+                        // The menu kit sets the words every frame: the same
+                        // words are found out before anything is made.
+                        if let Value::String(written) = &value {
+                            let same = shared.hud.with(id, |entry| {
+                                let same = matches!(
+                                    &entry.piece.shape,
+                                    HudShape::Text { text, .. }
+                                        if text.as_bytes() == &*written.as_bytes()
+                                );
+                                (same, false)
+                            });
+                            match same {
+                                Some(true) => return Ok(()),
+                                None => return Err(removed(lua, kind)),
+                                Some(false) => {}
+                            }
+                        }
                         let what = format!("{}'s `text`", capitalised(kind.name()));
                         let new = text_of(lua, &what, &value, "ammo.text = \"29 / 90\"")?;
                         shared.hud.with(id, |entry| match &mut entry.piece.shape {
@@ -729,6 +746,19 @@ impl UserData for PieceRef {
                         ));
                     }
                     "color" if kind != Kind::Graph => {
+                        // The same colour as written before: nothing to parse.
+                        if let Value::String(text) = &value {
+                            let same = shared.hud.with(id, |entry| {
+                                let same = !entry.color.is_empty()
+                                    && entry.color.as_bytes() == &*text.as_bytes();
+                                (same, false)
+                            });
+                            match same {
+                                Some(true) => return Ok(()),
+                                None => return Err(removed(lua, kind)),
+                                Some(false) => {}
+                            }
+                        }
                         let (new, written) = color_of(
                             lua,
                             &format!("{}'s `color`", capitalised(kind.name())),
@@ -1111,7 +1141,6 @@ fn image_named(lua: &Lua, shared: &Shared, name: &str) -> mlua::Result<u32> {
     Err(fail(lua, message))
 }
 
-/// A number for a piece's field `key`, finite.
 /// The most a layer can be, either way: far more than any game needs, and
 /// small enough to keep whole.
 const FARTHEST_LAYER: f64 = 1_000_000.0;
@@ -1141,6 +1170,7 @@ fn layer_of(lua: &Lua, kind: Kind, value: &Value, example: &str) -> mlua::Result
     Ok(number.round().clamp(-FARTHEST_LAYER, FARTHEST_LAYER) as i32)
 }
 
+/// A number for a piece's field `key`, finite.
 fn field_number(
     lua: &Lua,
     kind: Kind,

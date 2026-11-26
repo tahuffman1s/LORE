@@ -1068,3 +1068,224 @@ fn a_menu_asked_for_wrongly_says_what_to_write() {
     "#;
     Played::with_main(main, Settings::default());
 }
+
+#[test]
+fn the_pause_menu_is_read_with_is_open_and_opened_with_either_call() {
+    let main = r#"
+        local pause = game.pauseMenu
+        assert(pause.isOpen == false, "isOpen is a boolean")
+        game.input.bind("go", { "F6" })
+        game.input.bind("stop", { "F5" })
+        game.onTick(function()
+            if game.input.justPressed("go") then pause:open() end
+            if game.input.justPressed("stop") then pause.close() end
+        end)
+        assert(pause.enabled == true and pause.title == "Paused")
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::F6);
+    assert!(played.shows("Resume") && played.host().paused());
+    played.tap(Key::F5);
+    assert!(!played.shows("Resume") && !played.host().paused());
+    played.tap(Key::F6);
+    assert!(played.shows("Resume"));
+}
+
+#[test]
+fn the_pause_menu_refuses_what_it_cannot_do_and_says_what_to_write() {
+    let main = r#"
+        local pause = game.pauseMenu
+        local function says(set, ...)
+            local ok, message = pcall(set)
+            assert(not ok, "no error")
+            for _, part in { ... } do
+                assert(string.find(message, part, 1, true), message)
+            end
+        end
+        says(function() pause.enable = false end, "enabled", "title", "game.pauseMenu.enabled = false")
+        says(function() pause.colour = "red" end, "enabled and title")
+        says(function() pause.isOpen = true end, "read only", "open()", "close()")
+        says(function() pause.enabled = "no" end, "true or false")
+        says(function() pause.title = 3 end, "words in quotes")
+        says(function() pause.open = function() end end, "enabled and title")
+        pause.enabled = false
+        says(
+            function() pause.open() end,
+            "the pause menu is off (game.pauseMenu.enabled = false); set it to true to open it"
+        )
+        pause.enabled = true
+        pause:open()
+        assert(pause.isOpen)
+        pause:close()
+        assert(not pause.isOpen)
+    "#;
+    Played::with_main(main, Settings::default());
+}
+
+#[test]
+fn a_game_that_says_the_pause_menu_is_off_stays_off_to_the_player() {
+    let main = "game.pauseMenu.enabled = false";
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    assert!(!played.shows("Resume") && !played.host().paused());
+}
+
+#[test]
+fn a_pause_menu_of_the_games_own_in_a_folder_turns_the_engines_off() {
+    let scripts = [
+        (
+            "main.luau".to_owned(),
+            "require('./ui/pause_menu')\nassert(game.pauseMenu.enabled == false)".to_owned(),
+        ),
+        (
+            "ui/pause_menu.luau".to_owned(),
+            "game.hud.text('Our own pause menu', { at = 'center' })".to_owned(),
+        ),
+    ];
+    let game = ScriptGame::from_sources_with_settings(
+        scripts,
+        &ActionMap::standard(),
+        Settings::default(),
+    );
+    let mut played = Played::of(game, Settings::default(), true);
+    assert!(played.shows("Our own pause menu"), "{:?}", played.words());
+    played.tap(Key::Escape);
+    assert!(!played.host().paused() && !played.shows("Resume"));
+}
+
+#[test]
+fn a_menu_and_tabs_say_that_open_and_current_are_read_only() {
+    let main = r#"
+        local menu = game.menu.new("One", { game.menu.info("Hi", { text = "x" }) })
+        local tabs = game.menu.tabs({ menu, game.menu.new("Two", { game.menu.info("Yo") }) })
+        local function says(set, ...)
+            local ok, message = pcall(set)
+            assert(not ok, "no error")
+            for _, part in { ... } do
+                assert(string.find(message, part, 1, true), message)
+            end
+        end
+        says(function() menu.isOpen = true end, "read only", "menu:open()", "menu:close()")
+        says(function() tabs.isOpen = true end, "read only", "tabs:open()", "tabs:close()")
+        says(function() tabs.current = menu end, "read only", "tabs:open(menu)")
+    "#;
+    Played::with_main(main, Settings::default());
+}
+
+#[test]
+fn a_confirm_and_a_click_in_one_tick_cannot_press_a_row_of_a_closed_screen() {
+    let main = r#"
+        game.input.bind("open", { "F6" })
+        local told = game.hud.text("none", { at = "bottom" })
+        local count = 0
+        local screen
+        screen = game.menu.new("Screen", {
+            game.menu.button("Close", { onPress = function() screen:close() end }),
+            game.menu.button("Count", { onPress = function()
+                count += 1
+                told.text = "counted " .. count
+            end }),
+        })
+        game.onTick(function()
+            if game.input.justPressed("open") then screen:open() end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::F6);
+    // The pointer rests over "Count" while the first row, "Close", is chosen.
+    played.point_at("Count");
+    assert!(played.shows("Close"), "{:?}", played.words());
+    played.input.press(Key::Enter);
+    played.input.press(MouseButton::MouseLeft);
+    played.step();
+    assert!(!played.shows("Close"), "the screen closed");
+    played.input.release(Key::Enter);
+    played.input.release(MouseButton::MouseLeft);
+    played.step();
+    assert!(!played.shows("counted 1"), "{:?}", played.words());
+    assert_eq!(played.set(), "gameplay");
+}
+
+#[test]
+fn closing_a_script_menu_with_escape_or_b_does_not_open_the_pause_menu() {
+    let mut played = Played::with_main(SCRIPT_MENU, Settings::default());
+    played.tap(Key::F6);
+    played.input.press(Key::Escape);
+    played.step();
+    assert!(!played.shows("Quiet") && !played.shows("Resume"));
+    assert!(!played.host().paused());
+    // Held for another tick, and let go: still no pause menu.
+    played.step();
+    played.input.release(Key::Escape);
+    played.step();
+    assert!(!played.shows("Resume") && !played.host().paused());
+
+    played.tap(Key::F6);
+    played.input.press(GamepadButton::GamepadEast);
+    played.step();
+    assert!(!played.shows("Quiet") && !played.shows("Resume"));
+    assert!(!played.host().paused());
+    played.step();
+    played.input.release(GamepadButton::GamepadEast);
+    played.step();
+    assert!(!played.shows("Resume") && !played.host().paused());
+    assert_eq!(played.set(), "gameplay");
+}
+
+#[test]
+fn changing_tabs_over_the_pause_menu_hides_the_last_tab_and_shows_the_next() {
+    let main = r#"
+        game.input.bind("tabs", { "F6" })
+        local sound = game.menu.new("Sound", { game.menu.info("Music row", { text = "on" }) })
+        local video = game.menu.new("Video", { game.menu.info("Shadows row", { text = "high" }) })
+        local options = game.menu.tabs({ sound, video })
+        game.onTick(function()
+            if game.input.justPressed("tabs") then options:toggle() end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::Escape);
+    assert!(played.shows("Resume"));
+    played.tap(Key::F6);
+    assert!(played.shows("Music row") && !played.shows("Shadows row"));
+    assert!(!played.shows("Resume"), "{:?}", played.words());
+    played.tap(Key::E);
+    assert!(played.shows("Shadows row") && !played.shows("Music row"));
+    assert!(!played.shows("Resume"), "{:?}", played.words());
+    played.tap(Key::Q);
+    assert!(played.shows("Music row") && !played.shows("Shadows row"));
+    // Closing the tabs gives the pause menu back.
+    played.tap(Key::Escape);
+    assert!(played.shows("Resume") && !played.shows("Music row"));
+}
+
+#[test]
+fn a_change_that_closes_the_screen_is_not_followed_by_a_press_on_it() {
+    let main = r#"
+        game.input.bind("open", { "F6" })
+        local told = game.hud.text("none", { at = "bottom" })
+        local heard = 0
+        local screen
+        local toggle = game.menu.toggle("Music", { onChange = function(on)
+            heard += 1
+            told.text = "heard " .. heard
+            screen:close()
+        end })
+        screen = game.menu.new("Screen", { toggle })
+        game.onTick(function()
+            if game.input.justPressed("open") then screen:open() end
+        end)
+    "#;
+    let mut played = Played::with_main(main, Settings::default());
+    played.tap(Key::F6);
+    // Right changes the toggle, whose handler closes the screen; Enter in
+    // the same tick would press the toggle again on a screen that is gone.
+    played.input.press(Key::ArrowRight);
+    played.input.press(Key::Enter);
+    played.step();
+    played.input.release(Key::ArrowRight);
+    played.input.release(Key::Enter);
+    played.step();
+    assert!(played.shows("heard 1"), "{:?}", played.words());
+    assert_eq!(played.set(), "gameplay");
+}

@@ -91,7 +91,7 @@ end)
 
 game.onTick(function(step)
     -- While the game is paused, the keys are the pause menu's.
-    if pauseMenu.isOpen() then
+    if pauseMenu.isOpen then
         return
     end
     if game.input.justPressed(RESPAWN) then
@@ -111,7 +111,7 @@ game.onTick(function(step)
 end)
 
 game.onDraw(function()
-    local playing = not pauseMenu.isOpen()
+    local playing = not pauseMenu.isOpen
     gun.draw(playing)
     lab.draw(playing)
     band.visible, keys.visible, sky.visible = playing, playing, playing

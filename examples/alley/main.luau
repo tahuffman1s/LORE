@@ -65,7 +65,7 @@ end)
 
 game.onTick(function(step)
     -- While the game is paused, the keys are the pause menu's.
-    if pauseMenu.isOpen() then
+    if pauseMenu.isOpen then
         return
     end
     if game.input.justPressed("weather_menu") then
@@ -90,7 +90,7 @@ game.onTick(function(step)
 end)
 
 game.onDraw(function()
-    local playing = not tabs.isOpen and not pauseMenu.isOpen() -- no menu is open
+    local playing = not tabs.isOpen and not pauseMenu.isOpen -- no menu is open
     meter.draw()
     debugMenu.draw(playing)
     debugMenu.drawShaders()

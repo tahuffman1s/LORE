@@ -109,7 +109,7 @@ end)
 local labelsAt = table.find(view.labelChoices, view.labels()) or 1
 
 game.onTick(function(step)
-    local paused = pauseMenu.isOpen()
+    local paused = pauseMenu.isOpen
     view.update(paused)
     if paused then
         return
@@ -182,7 +182,7 @@ local function whatIsHappening(): string
 end
 
 game.onDraw(function()
-    local playing = not tabs.isOpen and not pauseMenu.isOpen()
+    local playing = not tabs.isOpen and not pauseMenu.isOpen
     view.startFrame()
     -- Labels before the constellations' names, which give way to them.
     view.beginLabels(hud.areas())
