@@ -7,7 +7,8 @@
 //! script writes decides which file is read.
 //!
 //! Music is the sound `music` and every sound in `sounds/music`: it follows
-//! the player's music volume, where the rest follow the volume of effects.
+//! the player's music volume. Every sound in `sounds/speech` follows the
+//! speech volume. The rest follow the volume of effects.
 //! A long Ogg Vorbis file, music or not, is decoded as it plays and not
 //! held in memory whole; that is `lore_audio`'s doing.
 
@@ -69,6 +70,8 @@ const OTHER_SOUND_ENDINGS: [&str; 8] = ["mp3", "flac", "opus", "m4a", "aac", "ai
 
 /// The sound, and the folder of sounds, that are music.
 const MUSIC: &str = "music";
+/// The folder of sounds that are speech.
+const SPEECH: &str = "speech";
 
 /// How far a drip or a burst of bubbles carries: across a room.
 const DRIP: Range = Range {
@@ -437,11 +440,14 @@ fn name_of(within: &str, problems: &mut Vec<String>) -> Option<String> {
 }
 
 /// Which volume setting the sound called `name` follows: music for
-/// `music` itself and for everything in the `music` folder.
+/// `music` itself and for everything in the `music` folder, speech for
+/// everything in the `speech` folder.
 fn group_of(name: &str) -> Group {
     let folder = name.split('/').next().unwrap_or(name);
     if folder.eq_ignore_ascii_case(MUSIC) {
         Group::Music
+    } else if folder.eq_ignore_ascii_case(SPEECH) && name.contains('/') {
+        Group::Speech
     } else {
         Group::Effects
     }
@@ -755,6 +761,29 @@ mod tests {
         // However the folder is capitalised: on Windows and macOS `Music`
         // and `music` are one folder, so this is asked of the name alone.
         assert_eq!(group_of("Music/win"), Group::Music);
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_sound_in_the_speech_folder_is_speech_and_the_rest_is_not() {
+        let wav = test_wav(&[1000; 480]);
+        let folder = game(
+            "speech",
+            &[
+                ("sounds/speech/greeting.wav", &wav),
+                ("sounds/speech.wav", &wav),
+                ("sounds/ui/speech/hello.wav", &wav),
+            ],
+        );
+        let mut sounds = Sounds::in_folder(&folder);
+        sounds.load();
+        assert!(sounds.problems().is_empty(), "{:?}", sounds.problems());
+        let mut group = |name: &str| sounds.play(&request(name)).unwrap().group;
+        assert_eq!(group("speech/greeting"), Group::Speech);
+        assert_eq!(group("speech"), Group::Effects);
+        assert_eq!(group("ui/speech/hello"), Group::Effects);
+        assert_eq!(group("gunshot"), Group::Effects);
+        assert_eq!(group_of("Speech/hello"), Group::Speech);
         let _ = fs::remove_dir_all(folder);
     }
 

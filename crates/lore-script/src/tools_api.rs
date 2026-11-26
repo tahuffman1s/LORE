@@ -200,6 +200,19 @@ pub(crate) fn set_ability(
     rules_only(lua, shared, "game.player:setAbility")?;
     shared.clock.note(ABILITIES[which]);
     let mut can = shared.tools.abilities.get();
+    // Block, dodge and lock-on have buttons of their own, free for a game
+    // until now: say so if the game gave one of them to its own action.
+    let button = [
+        (can.block, "block", "blocks too"),
+        (can.dodge, "dodge", "dodges too"),
+        (can.lock_on, "lock_on", "locks on to a target too"),
+    ];
+    if let Some(&(was_on, action, now)) = which.checked_sub(4).and_then(|at| button.get(at))
+        && *on
+        && !was_on
+    {
+        warn_if_shared(shared, action, now);
+    }
     *[
         &mut can.vault,
         &mut can.climb,
@@ -1128,9 +1141,38 @@ fn fixed_name(name: &str) -> String {
 /// The engine's action for switching between first and third person.
 pub(crate) const SWITCH_VIEW: &str = "switch_view";
 
+/// Whether the engine's action `name` does nothing in this game yet: block,
+/// dodge, lock-on and the view switch wait for the game to turn them on, and
+/// until then their buttons are free for a game's own actions.
+pub(crate) fn idle(shared: &Shared, name: &str) -> bool {
+    let can = shared.tools.abilities.get();
+    match name {
+        "block" => !can.block,
+        "dodge" => !can.dodge,
+        "lock_on" => !can.lock_on,
+        SWITCH_VIEW => !shared.body.view.get().switchable,
+        _ => false,
+    }
+}
+
+/// Says so if one of the game's own actions shares a button with the
+/// engine's action `name`, which the game has just turned on: `now` says
+/// what that button does from here on.
+pub(crate) fn warn_if_shared(shared: &Shared, name: &str, now: &str) {
+    let map = shared.actions.borrow();
+    for clash in map
+        .conflicts()
+        .iter()
+        .filter(|clash| clash.first == name || clash.second == name)
+    {
+        log::warn!("{clash} In this game that button now {now}.");
+    }
+}
+
 /// The gamepad button to suggest for an action that has none. Every button
 /// is in the standard map; this is the one the engine leaves for games
-/// (`GamepadSelect` is `switch_view`).
+/// (`GamepadSelect` is `switch_view`; it and the bumper's `lock_on` do
+/// nothing until the game turns them on, so a game may use either).
 const FREE_GAMEPAD_BUTTON: &str = "LeftBumper";
 
 /// How a binding is told apart in an error: what it does.
@@ -1517,12 +1559,12 @@ fn bind(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             if let Some(set) = set {
                 shared.clock.note(map.set_name(set));
             }
-            // `switch_view` only does anything in a game that lets the
-            // player switch views; that game is warned when it does.
+            // An engine action the game has not turned on uses no button
+            // yet; the game is warned when it turns one on.
             for clash in map.conflicts().iter().filter(|clash| {
                 (clash.first == name || clash.second == name)
-                    && clash.first != SWITCH_VIEW
-                    && clash.second != SWITCH_VIEW
+                    && !idle(&shared, &clash.first)
+                    && !idle(&shared, &clash.second)
             }) {
                 log::warn!("{clash}");
             }

@@ -107,7 +107,6 @@ NPCs. They stand in the world, find their way with nothing placed by hand, see a
 - Companions take orders: wait, follow, go there, attack that — one button and a look (#271)
 - Companions fight beside you, go down instead of dying, and can be helped back up (#272)
 - Companions notice things: remarks about places, fights and what you did, and they point the way (#273)
-- A speech volume: spoken lines follow a slider of their own (#275)
 
 ## M3 — Stories
 
