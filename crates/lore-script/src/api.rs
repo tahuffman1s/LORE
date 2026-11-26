@@ -85,6 +85,11 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "wheel",
     "stepped",
     "label",
+    "typed",
+    "startTyping",
+    "stopTyping",
+    "isTyping",
+    "usingGamepad",
 ];
 
 /// How many functions one event accepts. Far more than a game needs: reaching
@@ -433,6 +438,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
         })?,
     )?;
     tools_api::install_input(lua, shared, &input)?;
+    crate::typing_api::install(lua, shared, &input)?;
     strict(lua, &input, "game.input", INPUT_FUNCTIONS)?;
     game.set("input", input)?;
 

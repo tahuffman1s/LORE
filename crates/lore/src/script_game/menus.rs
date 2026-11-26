@@ -92,6 +92,9 @@ impl Played {
         if let Some(set) = frame.action_set() {
             self.input.set_active_set(set);
         }
+        if let Some(on) = frame.typing() {
+            self.input.set_typing(on);
+        }
         if let Some(settings) = frame.take_settings() {
             self.settings = settings;
             self.changes += 1;
@@ -1288,4 +1291,156 @@ fn a_change_that_closes_the_screen_is_not_followed_by_a_press_on_it() {
     played.step();
     assert!(played.shows("heard 1"), "{:?}", played.words());
     assert_eq!(played.set(), "gameplay");
+}
+
+const TEXT_BOX: &str = r#"
+    game.input.bind("form", { "F6" })
+    local log = "none"
+    local changes = 0
+    local menu
+    local name = game.menu.textBox("Name", {
+        placeholder = "Your name",
+        maxLength = 5,
+        onChange = function(text)
+            changes += 1
+            if text == "!" then menu:close() end
+        end,
+        onFinish = function(text) log = "done " .. text end,
+    })
+    local fill = game.menu.button("Fill", { onPress = function() name.value = "Bob" end })
+    local tell = game.menu.info("Log", { text = function()
+        return log .. " c" .. changes .. (if name.typing then " typing" else "")
+    end })
+    menu = game.menu.new("Form", { name, fill, tell })
+    game.onTick(function()
+        if game.input.justPressed("form") then menu:toggle() end
+    end)
+"#;
+
+impl Played {
+    /// The player types `text` (with marks for Backspace, Enter, Escape),
+    /// and a tick hears it.
+    fn type_text(&mut self, text: &str) {
+        self.input.type_text(text);
+        self.step();
+    }
+
+    /// A text box game with its menu open and its box pressed to type.
+    fn typing_in_a_box() -> Self {
+        let mut played = Played::with_main(TEXT_BOX, Settings::default());
+        played.tap(Key::F6);
+        played.tap(Key::Enter);
+        assert!(played.input.is_typing(), "{:?}", played.words());
+        played
+    }
+}
+
+#[test]
+fn typing_into_a_text_box_then_enter_finishes_it() {
+    let mut played = Played::with_main(TEXT_BOX, Settings::default());
+    played.tap(Key::F6);
+    assert_eq!(played.value_of("Name"), "Your name", "dimmed when empty");
+    assert!(!played.input.is_typing());
+    played.tap(Key::Enter);
+    assert!(played.input.is_typing());
+    assert!(played.shows("none c0 typing"), "{:?}", played.words());
+    played.type_text("Ada");
+    assert!(played.value_of("Name").starts_with("Ada"));
+    assert!(played.shows("none c3 typing"), "onChange for each letter");
+    played.type_text("\n");
+    assert!(!played.input.is_typing());
+    assert_eq!(played.value_of("Name"), "Ada");
+    assert!(played.shows("done Ada c3"), "{:?}", played.words());
+}
+
+#[test]
+fn backspace_takes_off_a_letter_and_escape_puts_the_old_text_back() {
+    let mut played = Played::typing_in_a_box();
+    played.type_text("Adx\u{8}a\u{8}é");
+    assert!(played.value_of("Name").starts_with("Adé"));
+    played.type_text("\u{8}\u{8}\u{8}\u{8}");
+    assert!(played.value_of("Name").starts_with('|') || played.value_of("Name").is_empty());
+    played.type_text("Ada\n");
+    assert!(played.shows("done Ada c13"), "{:?}", played.words());
+    // Again: Escape goes back to "Ada", and finishes nothing.
+    played.tap(Key::Enter);
+    assert!(played.input.is_typing());
+    played.type_text("zz");
+    assert!(played.value_of("Name").starts_with("Adazz"));
+    played.type_text("\u{1b}");
+    assert!(!played.input.is_typing());
+    assert_eq!(played.value_of("Name"), "Ada");
+    assert!(played.shows("done Ada c16"), "{:?}", played.words());
+}
+
+#[test]
+fn a_text_box_takes_no_more_letters_than_its_max_length() {
+    let mut played = Played::typing_in_a_box();
+    played.type_text("abcdefgh");
+    played.type_text("\n");
+    assert_eq!(played.value_of("Name"), "abcde");
+    assert!(played.shows("done abcde c5"), "{:?}", played.words());
+}
+
+#[test]
+fn keys_do_not_drive_the_menu_while_typing_but_typed_letters_go_in() {
+    let mut played = Played::typing_in_a_box();
+    played.tap(Key::ArrowDown);
+    played.tap(Key::S);
+    played.tap(Key::Escape);
+    played.tap(Key::Q);
+    assert!(
+        played.input.is_typing(),
+        "Escape the key is not Escape typed"
+    );
+    assert_eq!(played.set(), "menu");
+    played.type_text("w");
+    played.type_text("\n");
+    assert_eq!(played.value_of("Name"), "w");
+    // The row did not move: Enter types into the same box again.
+    played.tap(Key::Enter);
+    assert!(played.input.is_typing());
+    played.type_text("\u{1b}");
+    // And with typing over the keys work again.
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert!(!played.input.is_typing(), "Fill is a button");
+    played.tap(Key::Escape);
+    assert_eq!(played.set(), "gameplay");
+}
+
+#[test]
+fn a_click_on_a_text_box_starts_typing() {
+    let mut played = Played::with_main(TEXT_BOX, Settings::default());
+    played.tap(Key::F6);
+    played.click("Your name");
+    assert!(played.input.is_typing(), "{:?}", played.words());
+    played.type_text("Bo");
+    played.type_text("\n");
+    assert!(played.shows("done Bo c2"), "{:?}", played.words());
+}
+
+#[test]
+fn a_script_setting_a_text_box_value_does_not_call_on_change() {
+    let mut played = Played::with_main(TEXT_BOX, Settings::default());
+    played.tap(Key::F6);
+    played.tap(Key::ArrowDown);
+    played.tap(Key::Enter);
+    assert_eq!(played.value_of("Name"), "Bob");
+    assert!(played.shows("none c0"), "{:?}", played.words());
+}
+
+#[test]
+fn leaving_the_menu_while_typing_stops_typing_and_puts_the_old_text_back() {
+    let mut played = Played::typing_in_a_box();
+    // The first letter "!" makes the game's onChange close the menu.
+    played.type_text("!");
+    assert_eq!(played.set(), "gameplay", "the handler closed the menu");
+    assert!(
+        !played.input.is_typing(),
+        "the keyboard is the game's again"
+    );
+    played.tap(Key::F6);
+    assert_eq!(played.set(), "menu", "keys drive actions again");
+    assert_eq!(played.value_of("Name"), "Your name", "the old text is back");
 }

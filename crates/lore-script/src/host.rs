@@ -1297,6 +1297,13 @@ impl ScriptHost {
         (self.live_set.asked.take()).then(|| self.live_set.live.get())
     }
 
+    /// Whether the script turned typing on (`Some(true)`) or off since this
+    /// was last called, for whoever owns the input to follow
+    /// ([`Input::set_typing`](lore_input::Input::set_typing)).
+    pub fn take_typing(&mut self) -> Option<bool> {
+        self.tools.typing.take()
+    }
+
     /// The action set the script's game is in: `gameplay` until the script
     /// chooses another. It is what `game.input.currentSet()` gives a script.
     #[must_use]
@@ -1938,6 +1945,8 @@ impl ScriptHost {
         if self.live_set.live.get() != before {
             self.live_set.asked.set(true);
         }
+        // A text box of the old version is gone: the keyboard is the player's.
+        self.tools.typing.reset();
         if had_version {
             log::info!("{}", reloaded(saved));
         }

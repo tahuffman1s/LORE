@@ -641,6 +641,8 @@ pub(crate) struct Tools {
     view: Cell<Option<ViewTold>>,
     /// Whether the engine has asked for the actions to run the game with.
     handed_out: Cell<bool>,
+    /// Whether the script is taking typed text.
+    pub(crate) typing: crate::typing_api::Typing,
 }
 
 impl Default for Tools {
@@ -658,6 +660,7 @@ impl Default for Tools {
             moves: Cell::new(MoveSaid::default()),
             abilities: Cell::new(Abilities::default()),
             view: Cell::new(None),
+            typing: crate::typing_api::Typing::default(),
             handed_out: Cell::new(false),
         }
     }
@@ -679,6 +682,11 @@ impl Tools {
 
     pub fn set_controls(&self, controls: &ActionMap) {
         *self.controls.borrow_mut() = Some(controls.clone());
+    }
+
+    /// Whether the player last used a gamepad.
+    pub fn gamepad_in_use(&self) -> bool {
+        self.device.get() == Device::Gamepad
     }
 
     pub fn set_device(&self, device: Device, style: GamepadStyle) {

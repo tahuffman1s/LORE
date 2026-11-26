@@ -1732,6 +1732,37 @@ export type MenuRow = {
     --- the row back.
     --- Example: volume:onChange(function(value) print(value) end)
     onChange: (self: MenuRow, handler: (value: any) -> ()) -> MenuRow,
+
+    --- What shows in a text box while it is empty and not being typed into,
+    --- dimmed. Text boxes only.
+    --- Example: name.placeholder = "Your name"
+    placeholder: string,
+
+    --- The most characters a text box takes (counted as letters, not bytes);
+    --- nil for no limit. Text boxes only.
+    --- Example: name.maxLength = 12
+    maxLength: number?,
+
+    --- True while the player is typing into a text box. Read only: use
+    --- `startTyping` and `stopTyping`.
+    --- Example: if name.typing then print("typing") end
+    typing: boolean,
+
+    --- Adds a function called, on a tick, when the player finishes a text
+    --- box with Enter, given the text. Escape puts the old text back and does
+    --- not call it. Gives the row back.
+    --- Example: name:onFinish(function(text) print("Hello, " .. text) end)
+    onFinish: (self: MenuRow, handler: (text: string) -> ()) -> MenuRow,
+
+    --- Starts typing into a text box, as pressing it does. Its menu must be
+    --- open and in front.
+    --- Example: name:startTyping()
+    startTyping: (self: MenuRow) -> (),
+
+    --- Stops typing into a text box and keeps the text; `onFinish` is not
+    --- called.
+    --- Example: name:stopTyping()
+    stopTyping: (self: MenuRow) -> (),
 }
 
 --- A menu on the HUD: a title and its rows, made by `game.menu.new`. It hears
@@ -3443,6 +3474,33 @@ declare game: {
         --- read while drawing, in `game.onDraw`.
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
+
+        --- What the player typed since the last tick: letters as they are,
+        --- "\8" for Backspace, "\n" for Enter and "\27" for Escape. It is
+        --- empty unless `startTyping` was called. A `game.menu.textBox` reads
+        --- it for you; use this for a text field of your own.
+        --- Example: local typed = game.input.typed()
+        typed: () -> string,
+
+        --- Turns the keyboard into a text input: keys no longer press
+        --- actions (held keys are let go), the mouse and gamepad still do,
+        --- and `typed` hears the text. Call `stopTyping` when done.
+        --- Example: game.input.startTyping()
+        startTyping: () -> (),
+
+        --- Gives the keyboard back to the actions.
+        --- Example: game.input.stopTyping()
+        stopTyping: () -> (),
+
+        --- Whether the keyboard is a text input now.
+        --- Example: if game.input.isTyping() then return end
+        isTyping: () -> boolean,
+
+        --- Whether the player last used a gamepad (not the keyboard and
+        --- mouse). A gamepad cannot type letters, so show an on-screen
+        --- keyboard.
+        --- Example: if game.input.usingGamepad() then openOnScreenKeyboard() end
+        usingGamepad: () -> boolean,
     },
 
     --- The player's settings: how loud the game is, how the view turns,
@@ -3538,6 +3596,15 @@ declare game: {
         --- function that gives them.
         --- Example: game.menu.info("Speed", { text = function() return string.format("%.1f m/s", vector.magnitude(game.player.velocity)) end })
         info: (label: string, options: { text: (string | (() -> string))? }?) -> MenuRow,
+
+        --- Words the player types on the keyboard. Press the row (Enter or a
+        --- click), type, Enter finishes (`onFinish`), Escape puts back the
+        --- old text. `value` is the text ("" if left out), `placeholder` is
+        --- dimmed while it is empty, `maxLength` the most characters.
+        --- `onChange` hears each change. A gamepad opens an on-screen
+        --- keyboard instead.
+        --- Example: game.menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
+        textBox: (label: string, options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())? }?) -> MenuRow,
 
         --- A share from 0 to 1 as a percentage, for a slider's `format`:
         --- 0.25 is "25%".

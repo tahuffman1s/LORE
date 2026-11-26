@@ -41,11 +41,23 @@ pub(crate) const GAME_TABLES: [&str; 2] = ["menu", "pauseMenu"];
 /// has to go on.
 #[cfg(test)]
 pub(crate) const MENU_FUNCTIONS: &[&str] = &[
-    "button", "toggle", "slider", "choice", "info", "percent", "new", "tabs", "top", "anyOpen",
-    "style",
+    "button", "toggle", "slider", "choice", "info", "textBox", "percent", "new", "tabs", "top",
+    "anyOpen", "style",
 ];
 #[cfg(test)]
-pub(crate) const MENU_ROW_FIELDS: &[&str] = &["label", "value", "text", "onPress", "onChange"];
+pub(crate) const MENU_ROW_FIELDS: &[&str] = &[
+    "label",
+    "value",
+    "text",
+    "onPress",
+    "onChange",
+    "placeholder",
+    "maxLength",
+    "typing",
+    "onFinish",
+    "startTyping",
+    "stopTyping",
+];
 #[cfg(test)]
 pub(crate) const MENU_FIELDS: &[&str] = &[
     "title", "isOpen", "chosen", "backWord", "open", "close", "toggle", "remove",

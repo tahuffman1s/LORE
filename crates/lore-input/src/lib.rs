@@ -45,6 +45,7 @@ mod map;
 mod names;
 mod rumble;
 mod shaping;
+mod typing;
 
 pub use binding::{ActionKind, Binding, Button};
 pub use devices::{GamepadButton, Key, MouseButton, MouseWheel, Stick, StickAxis};

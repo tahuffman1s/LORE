@@ -8,9 +8,11 @@ use lore_input::{ActionMap, ActionSetId, Input, InputFrame, MouseMode, MouseWhee
 use lore_render::{Camera, RenderConfig, RenderError, Renderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::controls;
@@ -723,6 +725,27 @@ impl<G: Game> App<G> {
         }
     }
 
+    /// Hands the text of a key press to a script that is taking text:
+    /// letters as they are, and marks for Backspace, Enter and Escape.
+    /// Repeats count, so a held key goes on typing.
+    fn type_key(&mut self, event: &KeyEvent) {
+        match &event.logical_key {
+            Key::Named(NamedKey::Backspace) => self.input.type_text("\u{8}"),
+            // Only a new press of these two: a held Enter that started the
+            // typing must not finish it again.
+            Key::Named(NamedKey::Enter) if !event.repeat => self.input.type_text("\n"),
+            Key::Named(NamedKey::Escape) if !event.repeat => self.input.type_text("\u{1b}"),
+            Key::Named(NamedKey::Enter | NamedKey::Escape) => {}
+            _ => {
+                if let Some(text) = &event.text
+                    && text.chars().all(|c| !c.is_control())
+                {
+                    self.input.type_text(text);
+                }
+            }
+        }
+    }
+
     /// Gives the cursor back to the desktop.
     fn release_mouse(&mut self) {
         if let Some(window) = &self.window {
@@ -1168,6 +1191,14 @@ impl<G: Game> App<G> {
         if let Some(set) = frame.action_set() {
             self.use_action_set(set);
         }
+        if let Some(on) = frame.typing() {
+            self.input.set_typing(on);
+            if let Some(window) = &self.window {
+                // Typed text from an input method (accents, other scripts)
+                // arrives as a commit only while one is allowed.
+                window.set_ime_allowed(on);
+            }
+        }
         // Like every other gamepad event, rumble is for the window in front.
         if let Some(rumble) = frame.rumble_requested()
             && self.focused
@@ -1303,10 +1334,13 @@ impl<G: Game> ApplicationHandler for App<G> {
                 is_synthetic,
                 ..
             } => {
+                let pressed = event.state == ElementState::Pressed;
+                if pressed && !is_synthetic && self.input.is_typing() {
+                    self.type_key(&event);
+                }
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
-                let pressed = event.state == ElementState::Pressed;
                 // Escape always frees the mouse, whatever the live action
                 // set does with it, so a player can never be trapped in the
                 // window. It still reaches the action map.
@@ -1326,6 +1360,7 @@ impl<G: Game> ApplicationHandler for App<G> {
                     self.input.press(key);
                 }
             }
+            WindowEvent::Ime(Ime::Commit(text)) => self.input.type_text(&text),
             // In pixels, as the window's size is, so a menu can tell what
             // the pointer is over.
             #[allow(clippy::cast_possible_truncation)]

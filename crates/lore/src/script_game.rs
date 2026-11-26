@@ -669,6 +669,9 @@ impl Game for ScriptGame {
         if let Some(set) = self.host.take_action_set() {
             frame.use_action_set(set);
         }
+        if let Some(on) = self.host.take_typing() {
+            frame.set_typing(on);
+        }
         if self.host.take_quit() {
             frame.close();
         }

@@ -334,6 +334,14 @@ game.onTick(function()
         print(px + py)
     end
     scroll += game.input.wheel()
+    local typed: string = game.input.typed()
+    local typingNow: boolean = game.input.isTyping()
+    local onPad: boolean = game.input.usingGamepad()
+    if typed == "" and typingNow and onPad then
+        game.input.stopTyping()
+    elseif typed == "x" then
+        game.input.startTyping()
+    end
     local sx, sy = game.input.stepped("menu_move")
     if sy ~= 0 then
         selected = (selected - sy - 1) % 4 + 1
@@ -766,6 +774,13 @@ local linkedRow: MenuRow = game.menu.toggle("Lamp", { get = function() return la
 local sizeRow: MenuRow = game.menu.choice("Size", { options = { "small", "large" }, value = "large", wraps = true, format = string.upper })
 local fogRow: MenuRow = game.menu.slider("Fog", { get = function() return 0.5 end, set = function(v: number) print(v) end })
 local quietRow: MenuRow = game.menu.button("Quiet", { onPress = function() loudRow.value = 0 end, text = "now" })
+local nameRow: MenuRow = game.menu.textBox("Name", { value = "", placeholder = "Your name", maxLength = 20, onChange = function(text: string) print(text) end, onFinish = function(text: string) print(text) end })
+nameRow.placeholder = "Who?"
+nameRow.maxLength = 12
+nameRow:onFinish(function(text: string) print(text) end)
+nameRow:startTyping()
+nameRow:stopTyping()
+print(nameRow.typing, nameRow.placeholder, nameRow.maxLength)
 local speedRow: MenuRow = game.menu.info("Speed", { text = function() return "fast" end })
 quietRow:onPress(function() print("pressed") end):onChange(function(value: any) print(value) end)
 loudRow:onChange(function(value: any) print(value) end)

@@ -2,7 +2,7 @@
 -- runs this file for every game before main.luau; it makes `game.menu`. Nothing
 -- to copy, nothing to call each tick: make a menu, open it, and it hears the
 -- player and draws itself. A menu is a title and rows: button, toggle, slider,
--- choice and info. A row holds its own value, and `onChange` hears the player
+-- choice, textBox and info. A row holds its own value, and `onChange` hears the player
 -- change it (setting `row.value` from a script does not call it).
 --
 --     local menu = game.menu
@@ -17,6 +17,9 @@
 -- Screens stack: opening one puts it on top and only the top one hears the
 -- player; closing it shows the one below (the pause menu is on the same stack).
 -- `menu.tabs({ sound, video })` makes several menus tabs of one screen.
+-- A text box takes words typed on the keyboard: press it, type, Enter to
+-- finish or Escape to put back what was there:
+-- `menu.textBox("Name", { placeholder = "Your name", onFinish = function(text) print(text) end })`
 -- Style and sounds: `menu.style` (colours, HUD layer) and `menu.sounds` below.
 -- Change them before making menus: they apply to menus made afterwards.
 -- The player: arrows, d-pad or pointer choose; Enter, A or a click press;
@@ -105,6 +108,15 @@ type RowState = {
     color: string?,
     pressed: { () -> () },
     changed: { (any) -> () },
+    -- A text box: what shows while it is empty, the most characters it
+    -- takes, who hears it finished, whether it is being typed into, the
+    -- text from before typing began, and the tick the caret last restarted.
+    placeholder: string,
+    maxLength: number?,
+    finished: { (string) -> () },
+    typing: boolean,
+    before: string,
+    blink: number,
     -- The menu it is in, once it is in one.
     owner: any,
     box: any,
@@ -125,6 +137,7 @@ local ALLOWED: { [string]: { string } } = {
     toggle = { "value", "onChange", "get", "set" },
     slider = { "min", "max", "step", "value", "wraps", "format", "color", "onChange", "get", "set" },
     choice = { "options", "value", "wraps", "format", "onChange", "get", "set" },
+    textBox = { "value", "placeholder", "maxLength", "onChange", "onFinish" },
     info = { "text" },
 }
 
@@ -135,6 +148,13 @@ local INSTEAD: { [string]: string } = {
     change = "onChange",
     changed = "onChange",
     onchange = "onChange",
+    onfinish = "onFinish",
+    finish = "onFinish",
+    done = "onFinish",
+    hint = "placeholder",
+    maxlength = "maxLength",
+    max = "maxLength",
+    length = "maxLength",
     default = "value",
     initial = "value",
     choices = "options",
@@ -160,6 +180,8 @@ local function valueProblem(s: RowState, value: any): string?
         return string.format('"%s" is a slider, so its value is a number, not %s', s.label, type(value))
     elseif s.kind == "choice" and not table.find(s.options, value) then
         return string.format('"%s" has no choice %s. Its choices are: %s', s.label, tostring(value), table.concat(s.options, ", "))
+    elseif s.kind == "textBox" and type(value) ~= "string" then
+        return string.format('"%s" is a text box, so its value is words in quotes, not %s', s.label, type(value))
     elseif s.kind == "button" or s.kind == "info" then
         return string.format('"%s" is a %s and has no value. Set its text instead: row.text = "..."', s.label, s.kind)
     end
@@ -177,10 +199,18 @@ local function optionProblem(fname: string, key: string, value: any): string?
         end
         return string.format("%s: %s must be a %s, not %s", fname, key, table.concat({ ... }, " or a "), kind)
     end
-    if key == "onPress" or key == "onChange" or key == "get" or key == "set" or key == "format" then
+    if key == "onPress" or key == "onChange" or key == "onFinish" or key == "get" or key == "set" or key == "format" then
         return must("function")
     elseif key == "text" then
         return must("string", "function")
+    elseif key == "placeholder" then
+        return must("string")
+    elseif key == "maxLength" then
+        local problem = must("number")
+        if problem == nil and (value < 1 or value ~= math.floor(value)) then
+            return string.format("%s: maxLength must be a whole number of characters, 1 or more, not %s", fname, tostring(value))
+        end
+        return problem
     elseif key == "min" or key == "max" or key == "step" then
         return must("number")
     elseif key == "wraps" then
@@ -239,6 +269,12 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
         color = options.color,
         pressed = {},
         changed = {},
+        placeholder = options.placeholder or "",
+        maxLength = options.maxLength,
+        finished = {},
+        typing = false,
+        before = "",
+        blink = 0,
         owner = nil,
         pieces = {},
     }
@@ -271,6 +307,8 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
         s.value = s.options[1]
     elseif kind == "toggle" then
         s.value = false
+    elseif kind == "textBox" then
+        s.value = ""
     end
     if options.value ~= nil then
         local problem = valueProblem(s, options.value)
@@ -286,8 +324,19 @@ local function build(fname: string, kind: string, label: any, given: any): RowSt
     if change then
         table.insert(s.changed, change)
     end
+    if options.onFinish then
+        table.insert(s.finished, options.onFinish)
+    end
     return s
 end
+
+-- The text box being typed into, if one is (only one at a time), and what
+-- starts and ends it. They are made below, where a row's value can change.
+local typingRow: RowState? = nil
+local beginTyping: (RowState) -> ()
+local endTyping: (RowState, boolean) -> ()
+-- Ticks heard so far, for the caret to blink by: the same on every run.
+local ticks = 0
 
 -- What the table a script holds answers for, and what it refuses.
 local RowMethods = {}
@@ -301,6 +350,12 @@ RowMeta.__index = function(self: any, key: any): any
         return current(s)
     elseif key == "text" then
         return s.text
+    elseif key == "placeholder" and s.kind == "textBox" then
+        return s.placeholder
+    elseif key == "maxLength" and s.kind == "textBox" then
+        return s.maxLength
+    elseif key == "typing" and s.kind == "textBox" then
+        return s.typing
     end
     return RowMethods[key]
 end
@@ -335,6 +390,21 @@ RowMeta.__newindex = function(self: any, key: any, value: any)
             error('A row\'s text is words in quotes or a function that gives them: row.text = "Ready"', 2)
         end
         s.text = value
+    elseif key == "placeholder" or key == "maxLength" then
+        if s.kind ~= "textBox" then
+            error(string.format('"%s" is a %s: only a text box has a %s', s.label, s.kind, key), 2)
+        end
+        local problem = optionProblem("row." .. key, key, value)
+        if problem then
+            error(problem, 2)
+        end
+        if key == "placeholder" then
+            s.placeholder = value
+        else
+            s.maxLength = value
+        end
+    elseif key == "typing" then
+        error(string.format('"%s".typing is only read. Use row:startTyping() and row:stopTyping()', s.label), 2)
     else
         error(string.format('A row has label, value and text to set; "%s" is not one of them', tostring(key)), 2)
     end
@@ -370,6 +440,46 @@ function RowMethods.onChange(self: any, handler: (any) -> ()): any
     return self
 end
 
+-- Adds a handler for the player finishing a text box (Enter); it is told the
+-- text. Escape puts the old text back and does not call it.
+-- Example: name:onFinish(function(text) print("Hello, " .. text) end)
+function RowMethods.onFinish(self: any, handler: (string) -> ()): any
+    local s = states[self]
+    if s.kind ~= "textBox" then
+        error(string.format('"%s" is a %s, so it is not finished: onFinish is for a text box', s.label, s.kind), 2)
+    end
+    if type(handler) ~= "function" then
+        error("row:onFinish needs a function: row:onFinish(function(text) ... end)", 2)
+    end
+    table.insert(s.finished, handler)
+    return self
+end
+
+-- Starts typing into a text box, as pressing it does. Its menu must be open
+-- and in front. The keyboard is for the box until Enter, Escape or
+-- `stopTyping`.
+-- Example: name:startTyping()
+function RowMethods.startTyping(self: any)
+    local s = states[self]
+    if s.kind ~= "textBox" then
+        error(string.format('"%s" is a %s, so there is nothing to type into: use a menu.textBox', s.label, s.kind), 2)
+    end
+    beginTyping(s)
+end
+
+-- Stops typing into a text box and keeps what was typed. The finish
+-- handlers are not called: that is Enter, which the player presses.
+-- Example: name:stopTyping()
+function RowMethods.stopTyping(self: any)
+    local s = states[self]
+    if s.kind ~= "textBox" then
+        error(string.format('"%s" is a %s, so there is nothing to stop typing into', s.label, s.kind), 2)
+    end
+    if typingRow == s then
+        endTyping(s, false)
+    end
+end
+
 -- A row of `kind` that a script may hold.
 local function make(fname: string, kind: string, label: any, given: any): any
     local state = build(fname, kind, label, given)
@@ -392,6 +502,21 @@ end
 -- Example: menu.toggle("Subtitles", { value = true, onChange = function(on) print(on) end })
 function menu.toggle(label: string, options: { value: boolean?, onChange: ((boolean) -> ())?, get: (() -> boolean)?, set: ((boolean) -> ())? }?): any
     local row = make("menu.toggle", "toggle", label, options)
+    return row
+end
+
+-- Words the player types on the keyboard: press the row (Enter or a click),
+-- type, and Enter finishes or Escape puts back the old text. `value` is the
+-- text ("" to start), `placeholder` shows dimmed while it is empty,
+-- `maxLength` is the most characters it takes. `onChange` hears each change
+-- and `onFinish` the finished text. A gamepad opens an on-screen keyboard
+-- instead.
+-- Example: menu.textBox("Name", { placeholder = "Your name", maxLength = 20, onFinish = function(text) print(text) end })
+function menu.textBox(
+    label: string,
+    options: { value: string?, placeholder: string?, maxLength: number?, onChange: ((string) -> ())?, onFinish: ((string) -> ())? }?
+): any
+    local row = make("menu.textBox", "textBox", label, options)
     return row
 end
 
@@ -714,6 +839,10 @@ end
 
 -- Puts `ts` on top of the stack with `shown` in front, showing only it.
 local function push(ts: TabsState, shown: MenuState)
+    local typing = typingRow
+    if typing and typing.owner.tabs ~= ts then
+        endTyping(typing, true)
+    end
     local wasEmpty = #stack == 0
     local top = stack[#stack]
     if top and top ~= ts then
@@ -740,6 +869,10 @@ local function pop(ts: TabsState)
     if not at then
         return
     end
+    local typing = typingRow
+    if typing and typing.owner.tabs == ts then
+        endTyping(typing, true)
+    end
     table.remove(stack, at)
     ts.current.dragging = nil
     showScreen(ts, false)
@@ -758,6 +891,10 @@ end
 local function popAll()
     if #stack == 0 then
         return
+    end
+    local typing = typingRow
+    if typing then
+        endTyping(typing, true)
     end
     for _, ts in stack do
         ts.current.dragging = nil
@@ -1065,9 +1202,21 @@ local function change(row: RowState, way: number)
     end
 end
 
+-- The on-screen keyboard, for a gamepad pressing a text box. Not made yet:
+-- until it is, a gamepad cannot type into a box.
+local function openKeyboard(row: RowState)
+    local _ = row
+end
+
 -- What Enter or a click does to a row.
 local function press(row: RowState)
-    if row.kind == "button" then
+    if row.kind == "textBox" then
+        if game.input.usingGamepad() then
+            openKeyboard(row)
+        else
+            beginTyping(row)
+        end
+    elseif row.kind == "button" then
         for _, handler in row.pressed do
             handler()
         end
@@ -1087,6 +1236,13 @@ local function words(row: RowState): string
         return text or ""
     end
     local now = current(row)
+    if row.kind == "textBox" then
+        if row.typing then
+            -- The caret blinks: on for half a second, off for half.
+            return now .. (if (ticks - row.blink) // 30 % 2 == 0 then "|" else "")
+        end
+        return if now == "" then row.placeholder else now
+    end
     if row.kind == "toggle" then
         return if now then "on" else "off"
     end
@@ -1098,6 +1254,97 @@ local function words(row: RowState): string
         return "<  " .. said .. "  >"
     end
     return said
+end
+
+-- Starts typing into a text box. The menu it is in must be open and in front.
+beginTyping = function(s: RowState)
+    local owner = s.owner
+    local ts = if owner then owner.tabs else nil
+    if not ts or stack[#stack] ~= ts or ts.current ~= owner then
+        error(string.format('"%s" is not on a menu that is open, so it cannot be typed into. Open its menu first', s.label), 3)
+    end
+    if typingRow == s then
+        return
+    end
+    local other = typingRow
+    if other then
+        endTyping(other, true)
+    end
+    s.typing = true
+    s.before = s.value
+    s.blink = ticks
+    typingRow = s
+    game.input.startTyping()
+end
+
+-- Stops typing. With `cancel` the text from before typing began is put back
+-- (and onChange told); the player's Escape, or leaving the menu, does that.
+endTyping = function(s: RowState, cancel: boolean)
+    if typingRow ~= s then
+        return
+    end
+    typingRow = nil
+    s.typing = false
+    game.input.stopTyping()
+    if cancel and s.value ~= s.before then
+        s.value = s.before
+        for _, handler in s.changed do
+            handler(s.value)
+        end
+    end
+end
+
+-- Takes typed text into the box: letters in at the end, "\8" takes one
+-- off, "\n" finishes and "\27" puts the old text back.
+local function hearTyping(ts: TabsState, s: RowState)
+    local function stillTyping(): boolean
+        return typingRow == s and stack[#stack] == ts
+    end
+    for _, code in utf8.codes(game.input.typed()) do
+        local text: string = s.value
+        if code == 10 then
+            endTyping(s, false)
+            for _, handler in s.finished do
+                handler(s.value)
+            end
+            return
+        elseif code == 27 then
+            endTyping(s, true)
+            return
+        elseif code == 8 then
+            local last = utf8.offset(text, -1)
+            if last then
+                s.value = string.sub(text, 1, last - 1)
+                s.blink = ticks
+                for _, handler in s.changed do
+                    handler(s.value)
+                end
+            end
+        elseif code >= 32 and code ~= 127 and (not s.maxLength or (utf8.len(text) :: number) < s.maxLength) then
+            s.value = text .. utf8.char(code)
+            s.blink = ticks
+            for _, handler in s.changed do
+                handler(s.value)
+            end
+        end
+        if not stillTyping() then
+            return
+        end
+    end
+    -- A gamepad button, or the pointer, can still end it.
+    if game.input.justPressed("menu_confirm") then
+        endTyping(s, false)
+        for _, handler in s.finished do
+            handler(s.value)
+        end
+    elseif game.input.justPressed("menu_back") then
+        endTyping(s, true)
+    elseif game.input.justPressed("menu_click") and not hovered(s) then
+        endTyping(s, false)
+        for _, handler in s.finished do
+            handler(s.value)
+        end
+    end
 end
 
 -- Hears the player for a menu in front, with whether the pointer moved
@@ -1127,7 +1374,7 @@ local function hearMenu(ts: TabsState, m: MenuState, pointerMoved: boolean)
         end
     end
     local row = m.rows[m.chosen]
-    if x ~= 0 and row.kind ~= "button" and row.kind ~= "info" then
+    if x ~= 0 and row.kind ~= "button" and row.kind ~= "info" and row.kind ~= "textBox" then
         change(row, x)
         sound(menu.sounds.move)
         if stack[#stack] ~= ts then
@@ -1191,6 +1438,13 @@ end
 
 -- Hears the player for the screen on top.
 local function hear(ts: TabsState)
+    -- A text box being typed into hears everything: the rows do not move and
+    -- no tab is changed until it is done.
+    local typing = typingRow
+    if typing and typing.owner.tabs == ts then
+        hearTyping(ts, typing)
+        return
+    end
     if game.input.justPressed("menu_close") then
         popAll()
         return
@@ -1246,7 +1500,8 @@ local function drawMenu(m: MenuState)
         if name and shown then
             name.color = if chosen then style.chosenWords elseif row.kind == "info" then style.quiet else style.words
             shown.text = words(row)
-            shown.color = if row.kind == "toggle" and not current(row) then style.off
+            shown.color = if row.kind == "textBox" and not row.typing and current(row) == "" then style.quiet
+                elseif row.kind == "toggle" and not current(row) then style.off
                 elseif row.kind == "toggle" then style.on
                 else style.words
         end
@@ -1273,6 +1528,11 @@ local function draw(ts: TabsState)
     local tabs = if #ts.menus > 1
         then string.format("   %s %s tabs", label("menu_previous_tab"), label("menu_next_tab"))
         else ""
+    local typing = typingRow
+    if typing and typing.owner.tabs == ts then
+        ts.keys.text = "type   Enter done   Escape put the old words back"
+        return
+    end
     ts.keys.text = string.format(
         "%s choose and change   %s press%s   %s %s",
         label("menu_move"),
@@ -1286,6 +1546,7 @@ end
 -- The kit hears the player and draws by itself, for as long as a screen is
 -- open: a script has nothing to call.
 game.onTick(function()
+    ticks += 1
     local ts = stack[#stack]
     if ts then
         hear(ts)

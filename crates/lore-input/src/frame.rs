@@ -37,6 +37,11 @@ pub struct InputFrame {
     /// Notches the wheel rolled over the free pointer since the previous tick.
     /// Above zero is away from the player. A touchpad gives parts of a notch.
     pub wheel: f32,
+    /// What the player typed since the previous tick, while a script takes
+    /// text (see [`Input::set_typing`](crate::Input::set_typing)): letters as
+    /// they are, `"\u{8}"` for Backspace, `"\n"` for Enter, `"\u{1b}"` for
+    /// Escape. Empty when nothing was typed.
+    pub typed: String,
     pub(crate) actions: Vec<ActionState>,
 }
 
@@ -56,6 +61,7 @@ impl Clone for InputFrame {
             pointer: self.pointer,
             screen: self.screen,
             wheel: self.wheel,
+            typed: self.typed.clone(),
             actions: self.actions.clone(),
         }
     }
@@ -67,6 +73,7 @@ impl Clone for InputFrame {
         self.pointer = source.pointer;
         self.screen = source.screen;
         self.wheel = source.wheel;
+        self.typed.clone_from(&source.typed);
         self.actions.clone_from(&source.actions);
     }
 }
@@ -79,6 +86,7 @@ impl InputFrame {
             pointer: None,
             screen: DEFAULT_SCREEN,
             wheel: 0.0,
+            typed: String::new(),
             actions: vec![ActionState::default(); actions],
         }
     }

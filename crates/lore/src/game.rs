@@ -88,6 +88,8 @@ pub struct Frame {
     close: bool,
     view: Option<View>,
     action_set: Option<ActionSetId>,
+    /// Whether the keyboard is for typing text, if the game said since the last frame.
+    typing: Option<bool>,
     rumble: Option<Rumble>,
     /// The sounds to start and stop. Empty, and so without memory of its
     /// own, in a frame that asks for none.
@@ -260,6 +262,7 @@ impl Frame {
             close: false,
             view: None,
             action_set: None,
+            typing: None,
             rumble: None,
             sounds: Vec::new(),
             splashes: Vec::new(),
@@ -806,6 +809,13 @@ impl Frame {
         self.action_set = Some(set);
     }
 
+    /// Says the keyboard is for typing text (`true`) or for the game's
+    /// actions again (`false`): what `game.input.startTyping` does. While
+    /// typing, keys press no actions and the text typed reaches the game.
+    pub(crate) fn set_typing(&mut self, on: bool) {
+        self.typing = Some(on);
+    }
+
     /// Shakes the gamepad the player is holding: `Rumble::new(strong, weak,
     /// seconds)`.
     ///
@@ -852,6 +862,11 @@ impl Frame {
     /// The action set requested this frame, if any.
     pub(crate) fn action_set(&self) -> Option<ActionSetId> {
         self.action_set
+    }
+
+    /// Whether typing was turned on or off this frame, if it was.
+    pub(crate) fn typing(&self) -> Option<bool> {
+        self.typing
     }
 
     /// The rumble requested this frame, if any.
