@@ -27,18 +27,28 @@ pub(crate) struct Interaction {
     pub hover: Option<ElementId>,
     pub focus: Option<ElementId>,
     pub active: Option<ElementId>,
+    /// The hovered element and its ancestors: `:hover` applies to all.
+    pub hover_chain: Vec<ElementId>,
+    /// The pressed element and its ancestors: `:active` applies to all.
+    pub active_chain: Vec<ElementId>,
+    /// What is held down right now, and by what.
+    pub pressed: Option<crate::focus::Press>,
+    /// Events waiting for `take_events`.
+    pub events: Vec<crate::focus::Event>,
+    /// Whether the `autofocus` element has been looked for yet.
+    pub autofocus_done: bool,
     checked: HashSet<ElementId>,
 }
 
 impl ElementState for Interaction {
     fn hovered(&self, e: ElementId) -> bool {
-        self.hover == Some(e)
+        self.hover_chain.contains(&e)
     }
     fn focused(&self, e: ElementId) -> bool {
         self.focus == Some(e)
     }
     fn active(&self, e: ElementId) -> bool {
-        self.active == Some(e)
+        self.active_chain.contains(&e)
     }
     fn checked(&self, e: ElementId) -> bool {
         self.checked.contains(&e)
@@ -209,8 +219,8 @@ impl Screen {
         self.dirty = true;
     }
 
-    /// Gives focus to `id` (or takes it away) and restyles both elements.
-    /// The input part replaces this with real focus handling.
+    /// Gives focus to `id` (or takes it away) and restyles both elements,
+    /// without events or checks: a test hook.
     #[allow(dead_code)]
     pub(crate) fn set_focus_raw(&mut self, id: Option<ElementId>) {
         let dirty = Dirty {
@@ -232,8 +242,15 @@ impl Screen {
     /// the last call, otherwise the same one again.
     pub fn frame(&mut self, measure: &mut impl TextMeasure) -> &Frame {
         if self.dirty {
-            self.refresh(measure);
-            self.dirty = false;
+            // Settling focus can change styles (a focused element that went
+            // away), so look again; a few rounds is always enough.
+            for _ in 0..3 {
+                self.refresh(measure);
+                self.dirty = false;
+                if !self.after_refresh() {
+                    break;
+                }
+            }
         }
         &self.frame
     }

@@ -324,7 +324,7 @@ fn translate(x: f32, y: f32) -> [f32; 6] {
     [1.0, 0.0, 0.0, 1.0, x, y]
 }
 
-fn bbox(m: &[f32; 6], r: &Rect) -> Rect {
+pub(crate) fn bbox(m: &[f32; 6], r: &Rect) -> Rect {
     let pts = [
         apply(m, r.x, r.y),
         apply(m, r.right(), r.y),
@@ -1354,7 +1354,7 @@ impl Painter<'_, '_> {
     }
 }
 
-fn is_interactive(node: &Node) -> bool {
+pub(crate) fn is_interactive(node: &Node) -> bool {
     matches!(
         node.kind,
         NodeKind::Element(Tag::Button | Tag::Input | Tag::Select)

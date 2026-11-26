@@ -17,6 +17,7 @@
 pub mod css;
 pub mod dom;
 pub mod error;
+pub mod focus;
 pub mod html;
 pub mod intern;
 pub mod layout;
@@ -30,6 +31,7 @@ pub use dom::{
     NodeKind, SourceText, Tag,
 };
 pub use error::{MarkupError, did_you_mean};
+pub use focus::{Direction, Event, EventKind, EventValue, Unreachable};
 pub use html::{Parsed, StyleBlock, StylesheetLink, parse, parse_fragment};
 pub use intern::{Atom, Interner};
 pub use layout::{FontRef, TextMeasure};
@@ -42,3 +44,6 @@ pub use style::{AnimValue, ComputedStyle, StyleChange, Styles};
 
 #[cfg(test)]
 mod screen_tests;
+
+#[cfg(test)]
+mod focus_tests;
