@@ -99,66 +99,67 @@ fn a_dummy_stands_where_it_is_put_while_the_player_walks() {
     assert!(host.last_error().is_none(), "{:?}", host.last_error());
 }
 
-/// The level `lore new` writes: a 32 m floor with a wall around it at
-/// 16 m, and three places to start at each end, 14 m from the middle.
+/// The level `lore new` writes: a walled garden, 28 m across, with one
+/// place to start, 10 m south of the middle, facing the tower to the north.
 fn starter_level() -> lore::assets::Scene {
     lore::level::from_bytes("level.glb", scaffold::STARTER_LEVEL).unwrap()
 }
 
 #[test]
-fn a_game_with_a_level_starts_at_a_spawn_point_and_its_walls_are_solid() {
+fn a_game_with_a_level_starts_at_its_spawn_point_and_its_walls_are_solid() {
     let actions = ActionMap::standard();
     let level = starter_level();
     let mut game = Playing::start(new_game("level"), Some(&level), &actions, TICK_RATE);
     let mut input = Input::new(actions);
 
-    // Settled at one of the six spawn points, looking at the other end.
+    // Settled at the one start, on the path, looking north at the tower.
     play(&mut game, &mut input, 30);
     let start = feet(game.world());
-    assert!(start[1].abs() < 0.02, "on the floor: {start:?}");
-    assert!((start[2].abs() - 14.0).abs() < 0.01, "{start:?}");
-    assert!([0.0, 6.0].contains(&start[0].abs().round()), "{start:?}");
-    let yaw = game.yaw();
-    let faces_south = (yaw - std::f32::consts::PI).abs() < 0.001;
+    assert!(start[1].abs() < 0.02, "on the path: {start:?}");
     assert!(
-        if start[2] < 0.0 {
-            faces_south
-        } else {
-            yaw == 0.0
-        },
-        "at {start:?} facing {yaw}"
+        start[0].abs() < 0.01 && (start[2] - 10.0).abs() < 0.01,
+        "{start:?}"
     );
+    assert_eq!(game.yaw(), 0.0);
 
-    // Backing away from the middle, the wall around the level is 2 m behind.
-    // Two seconds of walking would be 9 m on a flat floor.
+    // Walking forward for a second goes a few metres up the path, and
+    // stays on it.
+    input.press(Key::W);
+    play(&mut game, &mut input, 60);
+    input.release(Key::W);
+    play(&mut game, &mut input, 30);
+    let ahead = feet(game.world());
+    assert!(ahead[2] < start[2] - 3.0, "walked north: {ahead:?}");
+    assert!(ahead[1].abs() < 0.3, "{ahead:?}");
+
+    // Backing away, the cliff at the south edge stops the player a body's
+    // width short of 14 m. Five seconds of walking would be 20 m.
     input.press(Key::S);
-    play(&mut game, &mut input, 120);
+    play(&mut game, &mut input, 300);
     input.release(Key::S);
     play(&mut game, &mut input, 60);
-
     let here = feet(game.world());
-    let out = here[2].abs();
-    assert!(out > 15.5 && out < 15.7, "stopped by the wall: {here:?}");
+    assert!(
+        here[2] > 13.3 && here[2] < 14.0,
+        "stopped by the cliff: {here:?}"
+    );
     assert!((here[0] - start[0]).abs() < 0.01, "{here:?}");
-    assert!(here[1].abs() < 0.02, "on the floor: {here:?}");
+    assert!(here[1].abs() < 0.3, "{here:?}");
 }
 
 #[test]
-fn a_player_who_dies_is_put_at_the_end_nobody_is_standing_at() {
+fn a_player_who_dies_is_put_back_at_the_start() {
     let level = starter_level();
     let mut world = World::new(new_game("apart"), TICK_RATE).with_level(&level);
     run(&mut world, 30);
     let first = feet(&world);
-    assert!((first[2].abs() - 14.0).abs() < 0.01, "{first:?}");
+    assert!((first[2] - 10.0).abs() < 0.01, "{first:?}");
 
-    // A dummy is stood right where the player started, and the player
-    // dies: they come back at the other end, not inside it.
-    world.add_dummy(first);
-    for _ in 0..20 {
+    for _ in 0..5 {
         world.game_mut().host_mut().player_died();
         run(&mut world, 30);
         let back = feet(&world);
-        assert!((back[2] + first[2]).abs() < 0.01, "{first:?} and {back:?}");
+        assert!(distance(first, back) < 0.01, "{first:?} and {back:?}");
     }
 }
 

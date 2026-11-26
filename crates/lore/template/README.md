@@ -11,13 +11,13 @@ lore run
 ```
 
 Click the window to capture the mouse; Escape frees it.
-The window shows the game's level: a small arena with a red end and a blue end. What the game does is printed in the terminal.
+The window shows the game's level: a small walled garden: a tower to walk to, steps to climb and a house to look into. What the game does is printed in the terminal.
 
 ## The level
 
 The level is `level.glb` in this folder. To make your own, build it in Blender (or another 3D tool), then export it over that file: File > Export > glTF 2.0, with the format set to glTF Binary (.glb). One unit is one metre, and a player is 1.8 m tall. `lore edit` flies around the level, and `lore check` says what to change if it cannot be read. Start the game again to see a level you have saved.
 
-Spawn points are placed with `lore edit`: "Place a spawn here" (or A on a gamepad) puts one on the ground where the camera looks, and its mark in the picture can be dragged to move it. They are saved in `map.toml` in this folder, a text file you can also change by hand, and a game that is running picks up a save. Until you place one, the player starts at one of the spawn markers the level itself has (empty objects whose names begin with `spawn`; the starter level has three at each end), or in the middle of a level with none. Once `map.toml` has a spawn point, only its spawn points are used.
+Spawn points are placed with `lore edit`: "Place a spawn here" (or A on a gamepad) puts one on the ground where the camera looks, and its mark in the picture can be dragged to move it. They are saved in `map.toml` in this folder, a text file you can also change by hand, and a game that is running picks up a save. Until you place one, the player starts at one of the spawn markers the level itself has (empty objects whose names begin with `spawn`; the starter level has one, in the garden, facing the tower), or in the middle of a level with none. Once `map.toml` has a spawn point, only its spawn points are used.
 
 The level is drawn in its materials' colours, and every shape in it is solid: the player walks its floors and ramps and is stopped by its walls.
 

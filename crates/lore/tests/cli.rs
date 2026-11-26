@@ -838,14 +838,14 @@ fn check_passes_a_new_game_without_a_window() {
     );
     // The level `lore new` made was loaded too.
     assert!(
-        stdout(&output).contains("level.glb is fine: it loaded with 22 shapes placed"),
+        stdout(&output).contains("level.glb is fine: it loaded with 49 shapes placed"),
         "{}",
         stdout(&output)
     );
-    // And a player was stood at each place the level has to start from.
+    // And a player was stood at the one place the level starts from.
     assert!(
         stdout(&output)
-            .contains("The player can walk it: started at each of its 6 spawn points, they landed"),
+            .contains("The player can walk it: started at its one spawn point, they landed"),
         "{}",
         stdout(&output)
     );
