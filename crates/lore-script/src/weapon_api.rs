@@ -104,8 +104,15 @@ pub(crate) const HIT_FIELDS: &[&str] = &[
 
 /// What the table handed to a `game.onNoise` function holds.
 #[cfg(test)]
-pub(crate) const NOISE_FIELDS: &[&str] =
-    &["sound", "position", "loudness", "heardWithin", "byPlayer"];
+pub(crate) const NOISE_FIELDS: &[&str] = &[
+    "sound",
+    "position",
+    "loudness",
+    "heardWithin",
+    "byPlayer",
+    "weapon",
+    "by",
+];
 
 /// The longest name a weapon can have, in bytes.
 const LONGEST_NAME: usize = 64;
@@ -954,19 +961,27 @@ pub struct NoiseTold<'a> {
     pub loudness: f32,
     /// How many metres away it can be heard.
     pub heard_within: f32,
-    /// Whether the player made it, as against the world.
-    pub by_player: bool,
+    /// Who made it, when someone did: the player for their steps and shots.
+    pub by: Option<CharacterId>,
+    /// The weapon that made it, when one did.
+    pub weapon: Option<&'a str>,
 }
 
 /// The table a `game.onNoise` function is handed.
-pub(crate) fn noise_table(lua: &Lua, noise: &NoiseTold) -> mlua::Result<Table> {
-    let table = lua.create_table_with_capacity(0, 5)?;
+pub(crate) fn noise_table(lua: &Lua, shared: &Shared, noise: &NoiseTold) -> mlua::Result<Table> {
+    let table = lua.create_table_with_capacity(0, 7)?;
     table.raw_set("sound", noise.sound)?;
     let [x, y, z] = noise.position;
     table.raw_set("position", mlua::Vector::new(x, y, z))?;
     table.raw_set("loudness", noise.loudness)?;
     table.raw_set("heardWithin", noise.heard_within)?;
-    table.raw_set("byPlayer", noise.by_player)?;
+    table.raw_set("byPlayer", noise.by == Some(CharacterId::PLAYER))?;
+    if let Some(by) = noise.by {
+        table.raw_set("by", shared.handles.character(lua, by)?)?;
+    }
+    if let Some(weapon) = noise.weapon {
+        table.raw_set("weapon", weapon)?;
+    }
     // Every function given to game.onNoise is handed the same table.
     table.set_readonly(true);
     Ok(table)
