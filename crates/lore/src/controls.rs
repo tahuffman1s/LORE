@@ -115,7 +115,17 @@ pub fn load(path: &Path, actions: &mut ActionMap) -> Vec<String> {
 /// the player, as [`load`] does. Each problem names the file it is in.
 #[must_use]
 pub fn load_both(player: &Path, game: Option<&Path>, actions: &mut ActionMap) -> Vec<String> {
+    load_both_told(player, game, actions).0
+}
+
+/// [`load_both`], and the same problems told as a [`Problem`] each.
+fn load_both_told(
+    player: &Path,
+    game: Option<&Path>,
+    actions: &mut ActionMap,
+) -> (Vec<String>, Vec<Problem>) {
     let mut read = read_both(player, game, actions);
+    let problems = std::mem::take(&mut read.problems);
     let unused = read.unused.iter().map(|unused| match unused {
         Unused::Unreadable(said) => format!(
             "{said}, so the game's own controls are used. Check that the file is yours to \
@@ -127,7 +137,52 @@ pub fn load_both(player: &Path, game: Option<&Path>, actions: &mut ActionMap) ->
     });
     let mut said: Vec<String> = unused.collect();
     said.append(&mut read.said);
-    said
+    (said, problems)
+}
+
+/// One thing wrong with a bindings file, for the player to read on the
+/// screen: where it is and what to do, apart from what the engine did about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Problem {
+    /// The file it is in.
+    pub file: PathBuf,
+    /// The line, when there is one to point at.
+    pub line: Option<usize>,
+    /// What is wrong and what to write instead.
+    pub text: String,
+    /// None of the file could be used, so the controls are not the file's.
+    pub whole_file: bool,
+}
+
+impl Problem {
+    /// The file's name with enough of its path to tell the player's from
+    /// a game's: `bindings.toml` or `games/hello/bindings.toml`.
+    pub(crate) fn file_name(&self) -> String {
+        short_name(&self.file)
+    }
+}
+
+/// `file` named by its last folders when it is a game's, else by its name.
+pub(crate) fn short_name(file: &Path) -> String {
+    let name = file
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let game = file.parent().and_then(|folder| {
+        let id = folder.file_name()?;
+        let games = folder.parent()?.file_name()?;
+        (games == "games").then(|| format!("games/{}/{name}", id.to_string_lossy()))
+    });
+    game.unwrap_or(name)
+}
+
+/// What a problem of `Display` text `shown` says without its place: the
+/// "Line N: " it starts with is left off, because the notice names the line.
+fn without_place(shown: &str) -> String {
+    let rest = shown.strip_prefix("Line ").unwrap_or(shown);
+    match rest.split_once(": ") {
+        Some((place, text)) if place.chars().all(|c| c.is_ascii_digit()) => text.to_owned(),
+        _ => shown.to_owned(),
+    }
 }
 
 /// Why none of a bindings file was used. Each holds the start of what to
@@ -139,12 +194,24 @@ enum Unused {
     NotToml(String),
 }
 
+/// What to tell the player of a file none of which was used.
+fn whole_file(file: &Path, line: Option<usize>, text: String) -> Problem {
+    Problem {
+        file: file.to_owned(),
+        line,
+        text,
+        whole_file: true,
+    }
+}
+
 /// What reading the player's file and the game's file came to.
 struct Read {
     /// Problems in the parts of the files that were used, then shared keys.
     said: Vec<String>,
     /// Files none of which could be used.
     unused: Vec<Unused>,
+    /// All of the above and the shared keys, told one by one.
+    problems: Vec<Problem>,
 }
 
 /// Gives `actions` the bindings in the player's file, then the game's, so
@@ -153,35 +220,81 @@ fn read_both(player: &Path, game: Option<&Path>, actions: &mut ActionMap) -> Rea
     let mut read = Read {
         said: Vec::new(),
         unused: Vec::new(),
+        problems: Vec::new(),
     };
+    let mut told = Vec::new();
     for path in std::iter::once(player).chain(game) {
-        match read_file(path, actions) {
+        match read_file(path, actions, &mut told) {
             Ok(said) => read.said.extend(said),
             Err(unused) => read.unused.push(unused),
         }
     }
-    read.said
-        .extend(actions.conflicts().iter().map(ToString::to_string));
+    // A file none of which was used is told first, as it is said first.
+    let (whole, partial): (Vec<Problem>, Vec<Problem>) =
+        told.into_iter().partition(|problem| problem.whole_file);
+    read.problems.extend(whole);
+    read.problems.extend(partial);
+    for conflict in actions.conflicts() {
+        read.said.push(conflict.to_string());
+        read.problems.push(Problem {
+            file: player.to_owned(),
+            line: None,
+            text: conflict.to_string(),
+            whole_file: false,
+        });
+    }
     read
 }
 
 /// Gives `actions` the bindings in the file at `path`, and returns what is
 /// wrong with parts of it. When none of the file could be used, `actions`
 /// is as it was.
-fn read_file(path: &Path, actions: &mut ActionMap) -> Result<Vec<String>, Unused> {
+fn read_file(
+    path: &Path,
+    actions: &mut ActionMap,
+    told: &mut Vec<Problem>,
+) -> Result<Vec<String>, Unused> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(Unused::Unreadable(format!(
+            let unused = Unused::Unreadable(format!(
                 "Your controls in {} could not be read ({error})",
                 path.display()
-            )));
+            ));
+            told.push(whole_file(
+                path,
+                None,
+                format!(
+                    "could not be read ({error}). Check that the file is yours to read and is \
+                     plain text."
+                ),
+            ));
+            return Err(unused);
         }
     };
-    let problems = actions
-        .read_bindings(&text)
-        .map_err(|error| Unused::NotToml(format!("{}: {error}", path.display())))?;
+    let problems = match actions.read_bindings(&text) {
+        Ok(problems) => problems,
+        Err(error) => {
+            let unused = Unused::NotToml(format!("{}: {error}", path.display()));
+            told.push(whole_file(
+                path,
+                Some(error.line),
+                without_place(&error.to_string().replacen(
+                    &format!(", column {}", error.column),
+                    "",
+                    1,
+                )),
+            ));
+            return Err(unused);
+        }
+    };
+    told.extend(problems.iter().map(|problem| Problem {
+        file: path.to_owned(),
+        line: Some(problem.line),
+        text: without_place(&problem.to_string()),
+        whole_file: false,
+    }));
     Ok(problems
         .iter()
         .map(|problem| format!("{}: {problem}", path.display()))
@@ -202,8 +315,11 @@ pub(crate) struct Live {
     /// The files as they were when last read: player-wide, then the game's.
     known: [Option<Stamp>; 2],
     /// A newer state seen once, waiting to be seen again.
-    pending: [Option<Stamp>; 2],
+    pending: Option<[Option<Stamp>; 2]>,
     next_poll: Instant,
+    /// What was wrong with the files when they were first read, until the
+    /// game takes it.
+    start_problems: Vec<Problem>,
 }
 
 /// What newly saved bindings files came to.
@@ -214,6 +330,8 @@ pub(crate) struct Reread {
     pub controls: Option<ActionMap>,
     /// What to tell the player, as [`load`] returns.
     pub said: Vec<String>,
+    /// The same, one [`Problem`] each, for the screen.
+    pub problems: Vec<Problem>,
 }
 
 impl Live {
@@ -231,13 +349,26 @@ impl Live {
             game,
             own,
             known: [None; 2],
-            pending: [None; 2],
+            pending: None,
             next_poll: Instant::now() + POLL_EVERY,
+            start_problems: Vec::new(),
         };
         // Looked at before it is read: a save in between is seen as a change.
         live.known = live.stamps();
-        let said = load_both(&live.player, live.game.as_deref(), actions);
+        let (said, problems) = load_both_told(&live.player, live.game.as_deref(), actions);
+        live.start_problems = problems;
         (live, said)
+    }
+
+    /// The player's own file.
+    pub(crate) fn file(&self) -> PathBuf {
+        self.player.clone()
+    }
+
+    /// What was wrong with the files when they were first read. Asking
+    /// again gives nothing.
+    pub(crate) fn take_start_problems(&mut self) -> Vec<Problem> {
+        std::mem::take(&mut self.start_problems)
     }
 
     /// How the files look now: the player-wide one, then the game's.
@@ -253,7 +384,7 @@ impl Live {
     pub(crate) fn rebase(&mut self, own: ActionMap) -> (ActionMap, Vec<String>) {
         // Looked at before it is read: a save in between is seen as a change.
         self.known = self.stamps();
-        self.pending = [None; 2];
+        self.pending = None;
         let mut controls = own.clone();
         self.own = own;
         let said = load_both(&self.player, self.game.as_deref(), &mut controls);
@@ -265,10 +396,12 @@ impl Live {
     ///
     /// Call this every frame; it looks at the files at most ten times a
     /// second. A change must look the same on two looks in a row, so a file
-    /// caught half-written is not read. A file that is gone is not a change
-    /// (some tools save by deleting and renaming): the controls stay as they
-    /// are. So do they when a saved file cannot be read or is not TOML,
-    /// which is what a file looks like halfway through being edited.
+    /// caught half-written is not read, and neither is one that is gone for
+    /// a moment (some tools save by deleting and renaming). A file that stays
+    /// gone is read as missing: its bindings and problems go, and the other
+    /// file, or the game's own controls, are what is left. The controls stay
+    /// as they are when a saved file cannot be read or is not TOML, which is
+    /// what a file looks like halfway through being edited.
     pub(crate) fn changed(&mut self) -> Option<Reread> {
         let now = Instant::now();
         if now < self.next_poll {
@@ -280,25 +413,24 @@ impl Live {
 
     /// One look at the files: see [`changed`](Self::changed).
     fn look(&mut self) -> Option<Reread> {
-        let seen = self.stamps();
-        // A file that is gone counts as it was.
-        let now = [seen[0].or(self.known[0]), seen[1].or(self.known[1])];
+        let now = self.stamps();
         if now == self.known {
-            self.pending = [None; 2];
+            self.pending = None;
             return None;
         }
-        if now != self.pending {
-            self.pending = now;
+        if self.pending != Some(now) {
+            self.pending = Some(now);
             return None;
         }
         self.known = now;
-        self.pending = [None; 2];
+        self.pending = None;
         let mut controls = self.own.clone();
         let read = read_both(&self.player, self.game.as_deref(), &mut controls);
         if read.unused.is_empty() {
             return Some(Reread {
                 controls: Some(controls),
                 said: read.said,
+                problems: read.problems,
             });
         }
         let mut said: Vec<String> = read
@@ -319,6 +451,7 @@ impl Live {
         Some(Reread {
             controls: None,
             said,
+            problems: read.problems,
         })
     }
 }
@@ -457,6 +590,60 @@ mod tests {
         );
     }
 
+    /// The reading of a file just saved: the first look sees the change, the
+    /// second sees it hold still.
+    fn reread_of(live: &mut Live) -> Reread {
+        assert!(live.look().is_none(), "one look could be half a file");
+        live.look().expect("the second look reads the file")
+    }
+
+    #[test]
+    fn problems_come_with_their_file_line_and_whether_the_file_was_used() {
+        let path = scratch("told").join("bindings.toml");
+        fs::write(&path, "[bindings]\njmup = [\"F\"]\n").unwrap();
+        let mut actions = ActionMap::standard();
+        let (mut live, _) = Live::start(path.clone(), None, &mut actions);
+        let started = live.take_start_problems();
+        assert_eq!(started.len(), 1, "{started:?}");
+        assert_eq!((started[0].line, started[0].whole_file), (Some(2), false));
+        assert_eq!(started[0].file, path);
+        assert!(
+            started[0].text.starts_with("\"jmup\""),
+            "{:?}",
+            started[0].text
+        );
+        assert!(live.take_start_problems().is_empty(), "taken once");
+
+        fs::write(&path, "[bindings\n").unwrap();
+        let reread = reread_of(&mut live);
+        assert!(reread.controls.is_none());
+        assert_eq!(reread.problems.len(), 1, "{:?}", reread.problems);
+        assert_eq!(reread.problems[0].line, Some(1));
+        assert!(reread.problems[0].whole_file);
+        assert!(
+            !reread.problems[0].text.starts_with("Line"),
+            "{:?}",
+            reread.problems[0].text
+        );
+
+        fs::write(&path, "[bindings]\njump = [\"Space\", \"GamepadSouth\"]\n").unwrap();
+        let reread = reread_of(&mut live);
+        assert!(reread.controls.is_some(), "{:?}", reread.problems);
+        assert!(reread.problems.is_empty(), "{:?}", reread.problems);
+    }
+
+    #[test]
+    fn a_games_file_is_named_with_its_folders() {
+        assert_eq!(
+            short_name(Path::new("/h/.config/lore/games/hello/bindings.toml")),
+            "games/hello/bindings.toml"
+        );
+        assert_eq!(
+            short_name(Path::new("/h/.config/lore/bindings.toml")),
+            "bindings.toml"
+        );
+    }
+
     #[test]
     fn a_file_that_is_not_toml_leaves_the_games_own_controls() {
         let path = scratch("broken").join("bindings.toml");
@@ -532,14 +719,43 @@ mod tests {
         assert!(live.look().is_none(), "said once");
 
         fs::remove_file(&path).unwrap();
-        assert!(live.look().is_none());
-        assert!(live.look().is_none(), "a file that is gone is not a change");
+        let gone = reread_of(&mut live);
+        assert_eq!(gone.controls, Some(ActionMap::standard()));
+        assert!(gone.problems.is_empty(), "{:?}", gone.problems);
+        assert!(live.look().is_none(), "read once");
 
         // Made after the game started, as `lore controls` does.
         fs::write(&path, "[bindings]\njump = [\"J\", \"GamepadSouth\"]\n").unwrap();
         assert!(live.look().is_none());
         let controls = live.look().unwrap().controls.unwrap();
         assert_ne!(controls, ActionMap::standard());
+    }
+
+    #[test]
+    fn a_bad_file_taken_away_clears_its_problems_but_a_save_by_rename_is_safe() {
+        let folder = scratch("gone");
+        let (player, game) = (folder.join("bindings.toml"), folder.join("game.toml"));
+        fs::write(&player, "[bindings]\njmup = [\"F\"]\n").unwrap();
+        fs::write(&game, "[bindings]\njump = [\"J\", \"GamepadSouth\"]\n").unwrap();
+        let mut actions = ActionMap::standard();
+        let (mut live, _) = Live::start(player.clone(), Some(game.clone()), &mut actions);
+        assert_eq!(live.take_start_problems().len(), 1);
+
+        // Saved by rename: gone for a look, then back as it was.
+        let moved = folder.join("moved");
+        fs::rename(&player, &moved).unwrap();
+        assert!(live.look().is_none());
+        fs::rename(&moved, &player).unwrap();
+        assert!(live.look().is_none(), "back as it was is no change");
+        assert!(live.look().is_none());
+
+        // Gone for good: what remains is the game's file, and no problems.
+        fs::remove_file(&player).unwrap();
+        let reread = reread_of(&mut live);
+        assert!(reread.problems.is_empty(), "{:?}", reread.problems);
+        let controls = reread.controls.unwrap();
+        let jump = controls.action("jump").unwrap();
+        assert_eq!(controls.bindings(jump)[0].to_string(), "J");
     }
 
     /// The standard map with an action of the game's own and a set to put it in.

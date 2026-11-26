@@ -11,8 +11,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use lore_input::{
-    ActionId, ActionKind, ActionMap, Binding, Button, Device, GamepadStyle, InputFrame, MapError,
-    MouseMode,
+    ActionId, ActionKind, ActionMap, Binding, Device, GamepadStyle, InputFrame, MapError, MouseMode,
 };
 use lore_ui::{EstimatedText, TextMeasure};
 use mlua::{Function, Lua, MultiValue, Table, Value};
@@ -729,7 +728,7 @@ impl Tools {
         let map = controls.as_ref().unwrap_or(own);
         map.action(name).map_or_else(
             |_| String::new(),
-            |action| label_of(map, action, self.device.get(), self.style.get()),
+            |action| map.label(action, self.device.get(), self.style.get()),
         )
     }
 
@@ -951,40 +950,60 @@ pub(crate) fn frames(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     Ok(table)
 }
 
-/// What a binding is called on a button, for showing the player.
-fn describe_binding(binding: Binding, style: GamepadStyle) -> String {
-    let label = |button: Button| button.label(style);
-    match binding {
-        Binding::Button(button) => label(button).to_owned(),
-        Binding::Axis { negative, positive } => {
-            format!("{} / {}", label(negative), label(positive))
-        }
-        Binding::Directions {
-            up,
-            down,
-            left,
-            right,
-        } => format!(
-            "{} {} {} {}",
-            label(up),
-            label(left),
-            label(down),
-            label(right)
-        ),
-        other => other.to_string(),
-    }
+/// The fields of the table `game.input.onControlsChanged` is handed.
+#[cfg(test)]
+pub(crate) const CONTROLS_CHANGE_FIELDS: &[&str] =
+    &["message", "changes", "problem", "file", "line"];
+
+/// The fields of one of its `changes`.
+#[cfg(test)]
+pub(crate) const BINDING_CHANGE_FIELDS: &[&str] = &["action", "before", "after"];
+
+/// One action whose bindings the player's file changed, as the player reads
+/// them: the printed names of the buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingChange {
+    /// The action's name, as the script knows it.
+    pub action: String,
+    /// What it was bound to.
+    pub before: String,
+    /// What it is bound to now.
+    pub after: String,
 }
 
-/// What to show for `action` on the device the player uses, then on the other.
-fn label_of(map: &ActionMap, action: ActionId, device: Device, style: GamepadStyle) -> String {
-    let wants_gamepad = device == Device::Gamepad;
-    let bindings = map.bindings(action);
-    for gamepad in [wants_gamepad, !wants_gamepad] {
-        if let Some(binding) = bindings.iter().find(|b| b.is_gamepad() == gamepad) {
-            return describe_binding(*binding, style);
-        }
+/// What reading the player's bindings file again came to, as
+/// `game.input.onControlsChanged` hears of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlsChange {
+    /// Exactly what the engine's own notice says.
+    pub message: String,
+    /// The actions whose bindings changed. Empty when none did.
+    pub changes: Vec<BindingChange>,
+    /// What is wrong with the file, or `None` when it was good.
+    pub problem: Option<String>,
+    /// The file, with enough of its path to tell the player's from the game's.
+    pub file: String,
+    /// The line of the problem, when it has one.
+    pub line: Option<usize>,
+}
+
+/// The table `game.input.onControlsChanged` functions are handed.
+pub(crate) fn controls_table(lua: &Lua, change: &ControlsChange) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("message", change.message.as_str())?;
+    let changes = lua.create_table_with_capacity(change.changes.len(), 0)?;
+    for one in &change.changes {
+        let entry = lua.create_table_with_capacity(0, 3)?;
+        entry.set("action", one.action.as_str())?;
+        entry.set("before", one.before.as_str())?;
+        entry.set("after", one.after.as_str())?;
+        changes.raw_push(entry)?;
     }
-    String::new()
+    table.set("changes", changes)?;
+    table.set("problem", change.problem.as_deref())?;
+    table.set("file", change.file.as_str())?;
+    table.set("line", change.line)?;
+    Ok(table)
 }
 
 /// The names of the actions a game made for itself are written like the
@@ -1454,6 +1473,36 @@ fn find(
 /// Puts `bind`, `pointer`, `wheel`, `stepped` and `label` on `game.input`.
 pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> mlua::Result<()> {
     input.set("bind", bind(lua, shared)?)?;
+    let list: fn(&mut crate::api::Handlers) -> &mut Vec<Function> =
+        |handlers| &mut handlers.controls_changed;
+    input.set(
+        "onControlsChanged",
+        crate::api::on_event(
+            lua,
+            shared,
+            "input.onControlsChanged",
+            "game.input.onControlsChanged(function(change) ... end)",
+            list,
+        )?,
+    )?;
+    let notice = Rc::clone(shared);
+    input.set(
+        "showControlsNotice",
+        lua.create_function(move |lua, value: Value| match value {
+            Value::Boolean(shown) => {
+                notice.controls_notice.set(shown);
+                Ok(())
+            }
+            other => Err(fail(
+                lua,
+                format!(
+                    "game.input.showControlsNotice needs true or false, but it was given {}. \
+                     Write it like this: game.input.showControlsNotice(false)",
+                    describe(&other)
+                ),
+            )),
+        })?,
+    )?;
     input.set("addSet", add_set(lua, shared)?)?;
 
     let rules = Rc::clone(shared);
@@ -1562,7 +1611,7 @@ pub(crate) fn install_input(lua: &Lua, shared: &Rc<Shared>, input: &Table) -> ml
                 }
             };
             let (id, _) = find(lua, map, "label", &value)?;
-            Ok(label_of(map, id, tools.device.get(), tools.style.get()))
+            Ok(map.label(id, tools.device.get(), tools.style.get()))
         })?,
     )?;
     Ok(())

@@ -29,12 +29,15 @@ use crate::modules::{Files, Modules, Touched, Watch, stamp};
 use crate::settings_api::{Setting, SettingValue, SettingsState};
 use crate::shader_api::{ShaderSaid, ShaderState};
 use crate::time_api::Clock;
-use crate::tools_api::{Motion, Movement, Teleport, Tools};
+use crate::tools_api::{ControlsChange, Motion, Movement, Teleport, Tools};
 use crate::weapon_api::{self, HeldWeapon, WeaponHit, WeaponState};
 use crate::weather_api::{TornadoAsk, WeatherHere, WeatherSaid};
 
 /// The file every game starts from, inside the game's folder.
 pub const ENTRY_SCRIPT: &str = "main.luau";
+
+/// How many rereads of the controls wait to be told to a script.
+const MOST_CONTROL_NEWS: usize = 8;
 
 /// How much memory one script may use.
 const MEMORY_LIMIT: usize = 256 * 1024 * 1024;
@@ -143,6 +146,11 @@ pub struct ScriptHost {
     spawn_due: bool,
     /// The game's time the last meteors were looked for at, in seconds.
     meteors_seen: Option<f64>,
+    /// Rereads of the player's controls the script has not been told of.
+    controls_told: Vec<ControlsChange>,
+    /// Whether the engine draws its own notice of those: it outlives this
+    /// version of the script.
+    controls_notice: Rc<Cell<bool>>,
     /// The sounds the game has, and the ones the script asked for that the
     /// engine has not yet taken. Kept here so a save loses none of them.
     audio: Rc<AudioState>,
@@ -447,6 +455,8 @@ impl ScriptHost {
             respawn: false,
             spawn_due: false,
             meteors_seen: None,
+            controls_told: Vec::new(),
+            controls_notice: Rc::new(Cell::new(true)),
             audio: Rc::default(),
             given_images: Rc::new(images),
             images: Rc::default(),
@@ -545,6 +555,7 @@ impl ScriptHost {
             self.weather.step(step);
         }
         self.meteors_due();
+        self.controls_due();
         self.moments_due();
         self.start();
         if std::mem::take(&mut self.spawn_due) {
@@ -850,6 +861,40 @@ impl ScriptHost {
                 ),
             );
         });
+    }
+
+    /// Tells the script that the player's bindings file was read again, or
+    /// could not be: its `game.input.onControlsChanged` functions hear of it
+    /// on the next tick. Call it once for each reading. At most
+    /// [`MOST_CONTROL_NEWS`] wait at once; a script that never ticks hears
+    /// only the newest.
+    pub fn controls_changed(&mut self, change: ControlsChange) {
+        if self.controls_told.len() >= MOST_CONTROL_NEWS {
+            self.controls_told.remove(0);
+        }
+        self.controls_told.push(change);
+    }
+
+    /// Whether the engine should draw its own notice of a reread of the
+    /// controls: true until the script calls `game.input.showControlsNotice(false)`.
+    #[must_use]
+    pub fn controls_notice_shown(&self) -> bool {
+        self.controls_notice.get()
+    }
+
+    /// Hands the script the rereads of the controls it has not heard of.
+    fn controls_due(&mut self) {
+        if self.controls_told.is_empty() {
+            return;
+        }
+        let told = std::mem::take(&mut self.controls_told);
+        let Some(version) = &self.running else { return };
+        let vm = version.vm.clone();
+        for change in &told {
+            if let Ok(table) = crate::tools_api::controls_table(&vm, change) {
+                self.call_all(|handlers| &handlers.controls_changed, table);
+            }
+        }
     }
 
     /// Tells the script of the moments the body's clips passed since the
@@ -2160,6 +2205,7 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            controls_notice: Rc::clone(&self.controls_notice),
             kinds: RefCell::new(Vec::new()),
             clock: Rc::clone(&self.clock),
             dice: Rc::clone(&self.dice),

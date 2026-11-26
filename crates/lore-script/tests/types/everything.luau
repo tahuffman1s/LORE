@@ -759,3 +759,14 @@ game.onTick(function()
     print(held)
 end)
 game.weapon("carbine", { from = "rifle", hands = "two", support = vector.create(0, -0.03, -0.2), action = "bolt", ejects = true, ejectAt = vector.create(0.02, 0.05, -0.1) })
+
+game.input.showControlsNotice(false)
+game.input.onControlsChanged(function(change)
+    hint.text = change.message
+    for _, one in change.changes do
+        print(one.action, one.before, one.after)
+    end
+    if change.problem then
+        print(change.file, change.line or 0, change.problem)
+    end
+end)

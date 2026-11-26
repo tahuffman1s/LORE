@@ -14,6 +14,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::controls;
+use crate::controls_notice::{self, ControlsNotice};
 use crate::game::{Frame, Game, View};
 use crate::gamepad::Gamepads;
 use crate::pace::{FramePacer, WATCH};
@@ -339,7 +340,7 @@ pub(crate) fn run_editor(mut config: Config, game: impl Game) -> Result<(), AppE
 fn start(
     mut config: Config,
     game: impl Game,
-    controls: Option<controls::Live>,
+    mut controls: Option<controls::Live>,
     editing: bool,
 ) -> Result<(), AppError> {
     for gap in config.actions.parity_gaps() {
@@ -359,7 +360,19 @@ fn start(
         .level_folder
         .take()
         .map(|folder| crate::level::LevelFile::watch(&folder));
+    let mut controls_notice = ControlsNotice::default();
+    let mut controls_change = None;
+    let at_start = controls
+        .as_mut()
+        .map(|live| (live.take_start_problems(), live.file()));
+    if let Some((problems, file)) = at_start.filter(|(problems, _)| !problems.is_empty()) {
+        let change = controls_notice::change_told(Vec::new(), &problems, true, &file);
+        controls_notice.read(None, change.problem.clone(), Instant::now());
+        controls_change = Some(change);
+    }
     let mut app = App {
+        controls_notice,
+        controls_change,
         level_file,
         level_problem: None,
         clock: TickClock::new(config.tick_rate),
@@ -443,6 +456,11 @@ struct App<G> {
     /// Controls read from that file since the last frame, for the game to
     /// hear of.
     new_controls: Option<ActionMap>,
+    /// What the player is told when the files are read again.
+    controls_notice: ControlsNotice,
+    /// What the last reading came to, for the game to hear of in the next
+    /// frame.
+    controls_change: Option<lore_script::ControlsChange>,
     /// The size the HUD and menus are drawn at, which is also what turns
     /// the pointer's pixels into HUD units. It is the player's setting,
     /// but not while the mouse is held down: see [`App::follow_ui_size`].
@@ -874,13 +892,39 @@ impl<G: Game> App<G> {
         for problem in &reread.said {
             log::warn!("{problem}");
         }
-        let Some(controls) = reread.controls else {
-            return;
+        let file = self
+            .controls
+            .as_ref()
+            .map(controls::Live::file)
+            .unwrap_or_default();
+        let told = match reread.controls {
+            Some(controls) => {
+                let changes = controls_notice::changes(
+                    self.input.map(),
+                    &controls,
+                    self.input.last_device(),
+                    self.gamepads.style(),
+                );
+                self.input
+                    .set_bindings(self.keep_settings(controls.clone()));
+                self.new_controls = Some(controls);
+                log::info!("Your controls were saved, so they were read again and are in use.");
+                let told = controls_notice::change_told(changes, &reread.problems, false, &file);
+                // The controls were used, so the notice says what changed, and
+                // any part of the file that was not used stays on show.
+                let good = controls_notice::good_message(&told.changes);
+                self.controls_notice
+                    .read(Some(good), told.problem.clone(), Instant::now());
+                told
+            }
+            None => {
+                let told = controls_notice::change_told(Vec::new(), &reread.problems, false, &file);
+                self.controls_notice
+                    .read(None, told.problem.clone(), Instant::now());
+                told
+            }
         };
-        self.input
-            .set_bindings(self.keep_settings(controls.clone()));
-        self.new_controls = Some(controls);
-        log::info!("Your controls were saved, so they were read again and are in use.");
+        self.controls_change = Some(told);
     }
 
     /// `controls` with the player's own settings kept: how fast the view
@@ -993,6 +1037,7 @@ impl<G: Game> App<G> {
             .with_wheel(wheel)
             .with_device(self.input.last_device(), self.gamepads.style())
             .with_controls(self.new_controls.take())
+            .with_controls_change(self.controls_change.take())
             .with_settings(self.config.settings);
         frame.set_ui_scale(self.ui_scale);
         #[cfg(feature = "editor")]
@@ -1001,6 +1046,7 @@ impl<G: Game> App<G> {
             frame = frame.with_panels(panels.context.clone(), input);
         }
         self.game.frame(&mut frame);
+        self.controls_notice.show(&mut frame, Instant::now());
         #[cfg(feature = "editor")]
         if let Some(output) = frame.take_panels() {
             self.show_panels(output);

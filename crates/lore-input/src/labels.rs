@@ -4,8 +4,9 @@
 //! so one file works on every gamepad. A hint has to say what the player
 //! sees on the button in their hand, which depends on who made it.
 
-use crate::binding::Button;
+use crate::binding::{Binding, Button};
 use crate::devices::{GamepadButton, Key, MouseButton, MouseWheel};
+use crate::map::{ActionId, ActionMap, Device};
 
 /// Whose letters are printed on a gamepad's buttons.
 ///
@@ -171,6 +172,50 @@ impl Button {
             Self::Wheel(MouseWheel::MouseWheelDown) => "Wheel down",
             Self::Gamepad(button) => button.label(style),
         }
+    }
+}
+
+impl Binding {
+    /// What to show for this binding on a hint: the printed name of its
+    /// button, or of each button of a pair or a set of four.
+    #[must_use]
+    pub fn label(self, style: GamepadStyle) -> String {
+        let label = |button: Button| button.label(style);
+        match self {
+            Self::Button(button) => label(button).to_owned(),
+            Self::Axis { negative, positive } => {
+                format!("{} / {}", label(negative), label(positive))
+            }
+            Self::Directions {
+                up,
+                down,
+                left,
+                right,
+            } => format!(
+                "{} {} {} {}",
+                label(up),
+                label(left),
+                label(down),
+                label(right)
+            ),
+            other => other.to_string(),
+        }
+    }
+}
+
+impl ActionMap {
+    /// What to show for `action` on the device the player uses, then on
+    /// the other; empty when it is bound to nothing.
+    #[must_use]
+    pub fn label(&self, action: ActionId, device: Device, style: GamepadStyle) -> String {
+        let wants_gamepad = device == Device::Gamepad;
+        let bindings = self.bindings(action);
+        for gamepad in [wants_gamepad, !wants_gamepad] {
+            if let Some(binding) = bindings.iter().find(|b| b.is_gamepad() == gamepad) {
+                return binding.label(style);
+            }
+        }
+        String::new()
     }
 }
 

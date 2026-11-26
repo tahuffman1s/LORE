@@ -1628,6 +1628,35 @@ declare extern type Shader with
     function remove(self): ()
 end
 
+--- What `game.input.onControlsChanged` is handed when the player's controls
+--- file was read again, or could not be.
+--- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+export type ControlsChange = {
+    --- The same sentence the engine's notice shows, e.g. "Controls updated: jump Space to F".
+    message: string,
+    --- Each action whose buttons changed; empty when none did.
+    changes: { BindingChange },
+    --- What is wrong with the file, or nil when it was good.
+    problem: string?,
+    --- The file the problem is in, or, when the file was fine, the player's own
+    --- controls file ("bindings.toml"), with enough of its path to tell the player's from the game's.
+    file: string,
+    --- The line of the problem, or nil when there is none to point at.
+    line: number?,
+}
+
+--- One action whose buttons the player changed, named as `game.input.label`
+--- names them.
+--- Example: for _, one in change.changes do print(one.action, one.before, one.after) end
+export type BindingChange = {
+    --- The action's name: "jump".
+    action: string,
+    --- What it was bound to: "Space".
+    before: string,
+    --- What it is bound to now: "F".
+    after: string,
+}
+
 --- One of the player's settings, as `game.settings.list()` describes it:
 --- enough for a menu to build a row for it without knowing its name.
 --- Example: for _, setting in game.settings.list() do print(setting.label, setting.value) end
@@ -3301,6 +3330,21 @@ declare game: {
         --- read while drawing, in `game.onDraw`.
         --- Example: game.onDraw(function() hint.text = "Press " .. game.input.label("interact") end)
         label: (action: string) -> string,
+
+        --- Calls `handler` when the player's controls file is saved and read again, and once at start if it is wrong.
+        --- `change.message` is the sentence the engine's notice shows, `change.changes` lists
+        --- each action that changed (`action`, `before`, `after`; empty when none did),
+        --- `change.problem` says what is wrong (nil when the file was good), and `change.file`
+        --- and `change.line` say where (`line` is nil when unknown). The last good controls stay in use.
+        --- Call it once, at the top of the file.
+        --- Example: game.input.onControlsChanged(function(change) toast.text = change.message end)
+        onControlsChanged: (handler: (change: ControlsChange) -> ()) -> (),
+
+        --- `false` hides the engine's own controls notice, both the short notice and the
+        --- error bar, so a game can show `change.message` its own way; `true` brings it back.
+        --- It lasts until set back, including across a saved script.
+        --- Example: game.input.showControlsNotice(false)
+        showControlsNotice: (shown: boolean) -> (),
     },
 
     --- The player's settings: how loud the game is, how the view turns,

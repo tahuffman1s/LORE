@@ -292,7 +292,7 @@ impl ProblemNotice {
 
 /// How wide a panel is on a `screen` of that many pixels, and how wide its
 /// text may be.
-fn panel_width(screen: [u32; 2]) -> (f32, f32) {
+pub(crate) fn panel_width(screen: [u32; 2]) -> (f32, f32) {
     // The UI lays out on a screen 1080 high and keeps its middle 90%.
     #[allow(
         clippy::cast_precision_loss,
@@ -469,7 +469,7 @@ fn cut_short(lines: &mut Vec<Line>) {
 /// `text` as one run of words that can be drawn: line breaks, tabs and
 /// other characters with no shape become spaces, and text past
 /// [`MOST_CHARACTERS`] is left out with `...` in its place.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     let mut cleaned: String = text
         .chars()
         .take(MOST_CHARACTERS)
@@ -490,7 +490,13 @@ fn clean(text: &str) -> String {
 /// Splits `text` into lines no wider than `width` when drawn `size` high,
 /// between words where it can. A word wider than a whole line is split
 /// wherever the line ends.
-fn wrap(text: &str, width: f32, size: f32, measure: &dyn TextMeasure, lines: &mut Vec<String>) {
+pub(crate) fn wrap(
+    text: &str,
+    width: f32,
+    size: f32,
+    measure: &dyn TextMeasure,
+    lines: &mut Vec<String>,
+) {
     let fits = |line: &str| measure.width(line, size) <= width;
     let mut line = String::new();
     for word in text.split_whitespace() {

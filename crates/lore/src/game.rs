@@ -74,6 +74,10 @@ pub struct Frame {
     gamepad_style: GamepadStyle,
     /// The controls, in the one frame after they changed.
     controls: Option<ActionMap>,
+    /// What reading the controls again came to, in the one frame after.
+    controls_change: Option<lore_script::ControlsChange>,
+    /// Whether the game turned the engine's notice of that off.
+    controls_notice_hidden: bool,
     /// The player's own size for the HUD and menus.
     ui_scale: f32,
     /// How fast game time runs, if the game said this frame.
@@ -253,6 +257,8 @@ impl Frame {
             device: Device::KeyboardAndMouse,
             gamepad_style: GamepadStyle::Xbox,
             controls: None,
+            controls_change: None,
+            controls_notice_hidden: false,
             ui_scale: 1.0,
             time_speed: None,
             settings: None,
@@ -552,6 +558,33 @@ impl Frame {
     pub(crate) fn with_controls(mut self, controls: Option<ActionMap>) -> Self {
         self.controls = controls;
         self
+    }
+
+    /// What reading the player's bindings file again came to, in the one
+    /// frame after: the actions that changed, or what is wrong with the file.
+    /// `None` in every other frame.
+    #[must_use]
+    pub fn controls_change(&self) -> Option<&lore_script::ControlsChange> {
+        self.controls_change.as_ref()
+    }
+
+    pub(crate) fn with_controls_change(
+        mut self,
+        change: Option<lore_script::ControlsChange>,
+    ) -> Self {
+        self.controls_change = change;
+        self
+    }
+
+    /// Turns the engine's own notice of a reread of the controls off (or
+    /// back on), for a game that shows it its own way.
+    pub fn hide_controls_notice(&mut self, hidden: bool) {
+        self.controls_notice_hidden = hidden;
+    }
+
+    /// Whether the game turned the engine's notice of the controls off.
+    pub(crate) fn controls_notice_hidden(&self) -> bool {
+        self.controls_notice_hidden
     }
 
     /// Says how far the wheel was rolled over the free pointer.

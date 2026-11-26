@@ -89,3 +89,5 @@ game.pause(true) -- wrong: it takes nothing; game.resume() lets the game go on
 game.shaders.screen(5) -- wrong: a shader is named in quotes
 game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's name before the values
 game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes
+game.input.showControlsNotice("off") -- wrong: it takes true or false
+game.input.onControlsChanged(5) -- wrong: it takes a function

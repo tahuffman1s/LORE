@@ -89,6 +89,8 @@ pub(crate) const INPUT_FUNCTIONS: &[&str] = &[
     "wheel",
     "stepped",
     "label",
+    "onControlsChanged",
+    "showControlsNotice",
 ];
 
 /// How many functions one event accepts. Far more than a game needs: reaching
@@ -129,6 +131,8 @@ pub(crate) struct Handlers {
     /// `game.onPickUp` and `game.onDrop`.
     pub picked_up: Vec<Function>,
     pub dropped: Vec<Function>,
+    /// `game.input.onControlsChanged`.
+    pub controls_changed: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -228,6 +232,10 @@ pub(crate) struct Shared {
     /// The player's settings as the script reads and changes them. They
     /// outlive this version of the script.
     pub settings: Rc<SettingsState>,
+    /// Whether the engine shows its own notice when the player's controls are
+    /// read again: `game.input.showControlsNotice`. It outlives this version
+    /// of the script.
+    pub controls_notice: Rc<Cell<bool>>,
     /// The game's time. It outlives this version of the script.
     pub clock: Rc<Clock>,
     /// The game's dice. They outlive this version of the script.
@@ -924,7 +932,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 47] = [
+        let groups: [(&str, &[&str]); 49] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -945,6 +953,8 @@ mod tests {
             ("HudImage:", hud::PIECE_METHODS),
             ("game.frames.", FRAMES_FUNCTIONS),
             ("game.input.", INPUT_FUNCTIONS),
+            ("ControlsChange.", crate::tools_api::CONTROLS_CHANGE_FIELDS),
+            ("BindingChange.", crate::tools_api::BINDING_CHANGE_FIELDS),
             ("game.settings.", SETTINGS_FUNCTIONS),
             ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),

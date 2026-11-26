@@ -599,6 +599,10 @@ impl Game for ScriptGame {
         if let Some(controls) = frame.new_controls() {
             self.host.set_controls(controls);
         }
+        if let Some(change) = frame.controls_change() {
+            self.host.controls_changed(change.clone());
+        }
+        frame.hide_controls_notice(!self.host.controls_notice_shown());
         frame.set_time_speed(self.host.time_speed());
         self.follow_settings(frame);
         // After those, so what the script asks for while drawing is in this frame.

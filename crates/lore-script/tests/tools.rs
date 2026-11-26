@@ -13,7 +13,8 @@ use lore_input::{
 };
 use lore_script::weapons::Zone;
 use lore_script::{
-    CharacterId, ENTRY_SCRIPT, HudShape, Motion, Movement, ScriptHost, Teleport, WeaponHit,
+    BindingChange, CharacterId, ControlsChange, ENTRY_SCRIPT, HudShape, Motion, Movement,
+    ScriptHost, Teleport, WeaponHit,
 };
 
 thread_local! {
@@ -1213,4 +1214,120 @@ fn abilities_are_switches_and_their_numbers_sit_beside_the_others() {
         let message = &host.last_error().unwrap().message;
         assert!(message.contains(part), "{call}: {message}");
     }
+}
+
+fn reread(problem: Option<&str>) -> ControlsChange {
+    ControlsChange {
+        message: problem.map_or_else(
+            || "Controls updated: jump Space to F".to_owned(),
+            str::to_owned,
+        ),
+        changes: vec![BindingChange {
+            action: "jump".to_owned(),
+            before: "Space".to_owned(),
+            after: "F".to_owned(),
+        }],
+        problem: problem.map(str::to_owned),
+        file: "bindings.toml".to_owned(),
+        line: problem.map(|_| 4),
+    }
+}
+
+const HEAR_CONTROLS: &str = r#"
+    game.input.onControlsChanged(function(change)
+        local one = change.changes[1]
+        print(change.message, one.action, one.before, one.after, change.file,
+            tostring(change.line), tostring(change.problem))
+    end)
+"#;
+
+#[test]
+fn a_script_hears_that_the_controls_were_read_again_with_what_changed() {
+    let mut host = game(HEAR_CONTROLS);
+    host.controls_changed(reread(None));
+    assert_eq!(printed(), Vec::<String>::new(), "told on the next tick");
+    run(&mut host, 1);
+    assert_eq!(
+        printed(),
+        ["Controls updated: jump Space to F jump Space F bindings.toml nil nil"]
+    );
+    run(&mut host, 1);
+    assert_eq!(printed(), Vec::<String>::new(), "told once");
+}
+
+#[test]
+fn a_script_hears_of_a_bad_file_with_its_line_and_what_is_wrong() {
+    let mut host = game(HEAR_CONTROLS);
+    host.controls_changed(reread(Some(
+        "bindings.toml line 4: \"Spcae\" is not a button",
+    )));
+    run(&mut host, 1);
+    let said = printed();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].ends_with(" bindings.toml 4 bindings.toml line 4: \"Spcae\" is not a button"));
+}
+
+#[test]
+fn rereads_are_told_in_order_one_by_one() {
+    let mut host = game(
+        r#"
+        local heard = 0
+        game.input.onControlsChanged(function(change)
+            heard += 1
+            print(heard, change.message)
+        end)
+    "#,
+    );
+    host.controls_changed(reread(None));
+    host.controls_changed(reread(Some("bad")));
+    run(&mut host, 1);
+    assert_eq!(printed(), ["1 Controls updated: jump Space to F", "2 bad"]);
+}
+
+#[test]
+fn the_engines_own_notice_is_on_until_the_script_turns_it_off() {
+    let mut host = game("game.onTick(function() end)");
+    assert!(host.controls_notice_shown());
+    let host2 = game("game.input.showControlsNotice(false)");
+    assert!(!host2.controls_notice_shown());
+    let again = game("game.input.showControlsNotice(false) game.input.showControlsNotice(true)");
+    assert!(again.controls_notice_shown());
+    run(&mut host, 1);
+    assert!(host.controls_notice_shown());
+}
+
+#[test]
+fn turning_the_notice_off_survives_a_saved_script() {
+    let folder = GameFolder::new("game.input.showControlsNotice(false)");
+    let mut host = folder.open();
+    assert!(!host.controls_notice_shown());
+    folder.write("game.onTick(function() end)");
+    host.reload().unwrap();
+    assert!(!host.controls_notice_shown(), "lasts until set back");
+    folder.write("game.input.showControlsNotice(true)");
+    host.reload().unwrap();
+    assert!(host.controls_notice_shown());
+}
+
+#[test]
+fn the_notice_and_the_event_are_checked_for_what_they_take() {
+    let folder = GameFolder::new("\ngame.input.showControlsNotice(\"off\")");
+    let host = folder.open();
+    let error = host.last_error().unwrap();
+    assert_eq!(
+        (error.file.as_str(), error.line),
+        ("main.luau", Some(2)),
+        "names the script line: {error:?}"
+    );
+    let said = load_mistake("game.input.showControlsNotice(\"off\")");
+    assert!(said.contains("needs true or false"), "{said}");
+    assert!(
+        said.contains("game.input.showControlsNotice(false)"),
+        "{said}"
+    );
+    let said = load_mistake("game.input.onControlsChanged(5)");
+    assert!(
+        said.contains("game.input.onControlsChanged needs a function"),
+        "{said}"
+    );
 }
