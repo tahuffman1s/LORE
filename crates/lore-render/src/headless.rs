@@ -871,7 +871,8 @@ impl Headless {
                 let read = self
                     .shaders
                     .record_screen(self.commands, 0, &self.view, camera);
-                self.ui.prepare(self.commands, 0, &mut self.overlay)?;
+                self.ui
+                    .prepare(self.commands, 0, &mut self.overlay, self.extent)?;
                 self.tonemap.record(
                     self.commands,
                     Canvas {

@@ -4,7 +4,9 @@
 //! upscaled and tone mapped, so text and boxes are drawn at the full size
 //! of the window and are never blurred by upscaling or dimmed by exposure.
 //! What to draw is worked out by [`Overlay`]; this file hands it to the
-//! graphics card.
+//! graphics card. Groups faded as one are drawn first, before that pass
+//! begins, each into a [layer](crate::ui_layers::Layers) the size of the
+//! screen, which the pass then lays over the picture.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -14,10 +16,13 @@ use ash::vk;
 use crate::buffer::{Buffer, once};
 use crate::error::RenderError;
 use crate::gpu::Gpu;
-use crate::overlay::{ATLAS_HEIGHT, ATLAS_WIDTH, ImageAtlas, MOST_QUADS, Overlay, QUAD_BYTES};
+use crate::overlay::{
+    ATLAS_HEIGHT, ATLAS_WIDTH, ImageAtlas, LayerPass, MOST_LAYERS, MOST_QUADS, Overlay, QUAD_BYTES,
+};
 use crate::scene::Picture;
 use crate::swapchain::COLOUR;
 use crate::tonemap::stores_srgb;
+use crate::ui_layers::Layers;
 
 /// The shaders, compiled from `shaders/ui.wgsl` by the build script.
 const SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.spv"));
@@ -32,6 +37,14 @@ const ATLAS_FORMAT: vk::Format = vk::Format::R8_UNORM;
 /// The game's HUD images: four bytes a pixel, the colours as stored, with
 /// the sRGB curve, as box and letter colours are handed to the shader.
 const IMAGES_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+
+/// How many descriptor sets there are: the picture's, which reads every
+/// layer, and one for drawing into each layer, which reads a blank picture
+/// in that layer's place.
+const SETS: usize = 1 + MOST_LAYERS as usize;
+
+/// The first binding of the layers; they take one each from it on.
+const FIRST_LAYER: u32 = 3;
 
 /// What one frame in progress needs for itself.
 struct Slot {
@@ -49,13 +62,22 @@ pub(crate) struct UiPass {
     set_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    /// The same, for drawing into a layer: it keeps how solid each pixel
+    /// is, which the picture's own pipeline leaves alone.
+    layer_pipeline: vk::Pipeline,
+    /// The same with no blending, for clearing a group's part of a layer.
+    clear_pipeline: vk::Pipeline,
     pool: vk::DescriptorPool,
-    /// Points the shader at the atlas.
-    set: vk::DescriptorSet,
+    /// Point the shader at the atlas, the images and the layers: the first
+    /// for the picture, then one for drawing into each layer.
+    sets: [vk::DescriptorSet; SETS],
     sampler: vk::Sampler,
     atlas: Picture,
     /// The game's HUD images, packed; one clear pixel until there are any.
     images: Picture,
+    /// What faded groups are drawn into; one clear pixel until a group needs
+    /// them.
+    layers: Layers,
     /// Whether the atlas on the graphics card has been given anything yet.
     filled: bool,
     /// Which slot the frame being recorded uses and how many quads it has.
@@ -87,11 +109,14 @@ impl UiPass {
             set_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
+            layer_pipeline: vk::Pipeline::null(),
+            clear_pipeline: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
-            set: vk::DescriptorSet::null(),
+            sets: [vk::DescriptorSet::null(); SETS],
             sampler: vk::Sampler::null(),
             atlas: Picture::null(),
             images: Picture::null(),
+            layers: Layers::null(),
             filled: false,
             frame: None,
             format,
@@ -143,13 +168,23 @@ impl UiPass {
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
+        let layer_bindings: [vk::DescriptorSetLayoutBinding; MOST_LAYERS as usize] =
+            std::array::from_fn(|index| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(FIRST_LAYER + index as u32)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            });
+        let bindings: Vec<vk::DescriptorSetLayoutBinding> =
+            bindings.into_iter().chain(layer_bindings).collect();
         let sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(2),
+                .descriptor_count((2 + MOST_LAYERS) * SETS as u32),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLER)
-                .descriptor_count(1),
+                .descriptor_count(SETS as u32),
         ];
         let ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -167,6 +202,7 @@ impl UiPass {
                 )
                 .map_err(RenderError::driver(doing))?;
             let set_layouts = [pass.set_layout];
+            let all_layouts = [pass.set_layout; SETS];
             pass.layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -178,21 +214,21 @@ impl UiPass {
             pass.pool = device
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(1)
+                        .max_sets(SETS as u32)
                         .pool_sizes(&sizes),
                     None,
                 )
                 .map_err(RenderError::driver(doing))?;
-            pass.set = device
+            let sets = device
                 .allocate_descriptor_sets(
                     &vk::DescriptorSetAllocateInfo::default()
                         .descriptor_pool(pass.pool)
-                        .set_layouts(&set_layouts),
+                        .set_layouts(&all_layouts),
                 )
-                .map_err(RenderError::driver(doing))?
-                .first()
-                .copied()
-                .unwrap_or_default();
+                .map_err(RenderError::driver(doing))?;
+            for (kept, set) in pass.sets.iter_mut().zip(sets) {
+                *kept = set;
+            }
             // Letters are drawn pixel for pixel, where smoothing changes
             // nothing; it only shows on text larger than the largest kept.
             pass.sampler = device
@@ -210,22 +246,32 @@ impl UiPass {
                 .image_view(pass.atlas.view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
             let samplers = [vk::DescriptorImageInfo::default().sampler(pass.sampler)];
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(pass.set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(&images),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(pass.set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .image_info(&samplers),
-            ];
-            device.update_descriptor_sets(&writes, &[]);
+            for set in pass.sets {
+                let writes = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&images),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&samplers),
+                ];
+                device.update_descriptor_sets(&writes, &[]);
+            }
         }
-        // Until the game gives pictures, the shader reads one clear pixel.
+        // Until the game gives pictures, the shader reads one clear pixel,
+        // and until a group is faded, a blank picture for every layer.
         pass.set_images(&ImageAtlas::default())?;
+        pass.set_layers(
+            vk::Extent2D {
+                width: 0,
+                height: 0,
+            },
+            0,
+        )?;
 
         // SAFETY: `code` is SPIR-V produced and validated by naga at build time.
         let module = unsafe {
@@ -248,8 +294,8 @@ impl UiPass {
             .binding(0)
             .stride(QUAD_BYTES as u32)
             .input_rate(vk::VertexInputRate::INSTANCE)];
-        // Twelve groups of four numbers: see `QUAD_BYTES`.
-        let attributes: [vk::VertexInputAttributeDescription; 12] = std::array::from_fn(|index| {
+        // Fourteen groups of four numbers: see `QUAD_BYTES`.
+        let attributes: [vk::VertexInputAttributeDescription; 14] = std::array::from_fn(|index| {
             vk::VertexInputAttributeDescription::default()
                 .location(index as u32)
                 .format(vk::Format::R32G32B32A32_SFLOAT)
@@ -285,6 +331,26 @@ impl UiPass {
                     | vk::ColorComponentFlags::B,
             )];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&attachments);
+        // Into a layer, which starts clear, alpha is kept too: the layer
+        // then holds each colour multiplied by how solid it is, and how
+        // solid the group is at each pixel.
+        let layer_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let layer_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&layer_attachments);
+        // Clearing replaces what is there.
+        let clear_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let clear_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&clear_attachments);
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
         let formats = [format];
@@ -301,22 +367,51 @@ impl UiPass {
             .dynamic_state(&dynamic)
             .layout(pass.layout)
             .push_next(&mut rendering);
+        let mut layer_rendering =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+        let layer_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&assembly)
+            .viewport_state(&viewport)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .color_blend_state(&layer_blend)
+            .dynamic_state(&dynamic)
+            .layout(pass.layout)
+            .push_next(&mut layer_rendering);
+        let mut clear_rendering =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+        let clear_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&assembly)
+            .viewport_state(&viewport)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .color_blend_state(&clear_blend)
+            .dynamic_state(&dynamic)
+            .layout(pass.layout)
+            .push_next(&mut clear_rendering);
 
-        // SAFETY: `info` and everything it points to are alive for the call;
-        // the shader module holds both entry points named in `stages`. The
-        // module is only needed while the pipeline is being created.
+        // SAFETY: `info`, `layer_info` and everything they point to are
+        // alive for the call; the shader module holds both entry points
+        // named in `stages`. The module is only needed while the pipelines
+        // are being created.
         let created = unsafe {
             let created = device.create_graphics_pipelines(
                 vk::PipelineCache::null(),
-                std::slice::from_ref(&info),
+                &[info, layer_info, clear_info],
                 None,
             );
             device.destroy_shader_module(module, None);
             created
         };
         match created {
-            Ok(pipelines) if !pipelines.is_empty() => {
+            Ok(pipelines) if pipelines.len() == 3 => {
                 pass.pipeline = pipelines[0];
+                pass.layer_pipeline = pipelines[1];
+                pass.clear_pipeline = pipelines[2];
                 Ok(pass)
             }
             failed => {
@@ -436,21 +531,69 @@ impl UiPass {
             let images = [vk::DescriptorImageInfo::default()
                 .image_view(picture.view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-            let writes = [vk::WriteDescriptorSet::default()
-                .dst_set(self.set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(&images)];
-            device.update_descriptor_sets(&writes, &[]);
+            for set in self.sets {
+                let writes = [vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&images)];
+                device.update_descriptor_sets(&writes, &[]);
+            }
             self.images.destroy(&gpu);
         }
         self.images = picture;
         Ok(())
     }
 
+    /// Makes `count` layers `extent` in size in place of those there were,
+    /// and points the shader at them. Waits for the graphics card to finish
+    /// what it was doing first: this happens when the window changes size
+    /// or more groups overlap than before, not every frame.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the graphics driver reports a failure.
+    fn set_layers(&mut self, extent: vk::Extent2D, count: u32) -> Result<(), RenderError> {
+        let doing = "making room to draw faded groups of the HUD and menus";
+        let gpu = Arc::clone(&self.gpu);
+        let device = gpu.device();
+        let layers = Layers::create(&gpu, extent, count, self.format)?;
+        // SAFETY: waiting for the device to go idle means no frame still
+        // reads the old layers through the set, and the set is not bound in
+        // any command buffer being recorded: it is bound after this. The new
+        // layers are in a layout the shader reads.
+        unsafe {
+            if let Err(code) = device.device_wait_idle() {
+                let mut layers = layers;
+                layers.destroy(&gpu);
+                return Err(RenderError::driver(doing)(code));
+            }
+            // The picture's set reads every layer; the set for drawing into
+            // a layer reads the blank picture in its place.
+            for (which, set) in self.sets.into_iter().enumerate() {
+                let drawing = which.checked_sub(1);
+                for index in 0..MOST_LAYERS as usize {
+                    let images = [vk::DescriptorImageInfo::default()
+                        .image_view(layers.view(index, drawing))
+                        .image_layout(vk::ImageLayout::GENERAL)];
+                    let writes = [vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(FIRST_LAYER + index as u32)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&images)];
+                    device.update_descriptor_sets(&writes, &[]);
+                }
+            }
+            self.layers.destroy(&gpu);
+        }
+        self.layers = layers;
+        Ok(())
+    }
+
     /// Gets `overlay` ready to be drawn by the frame being recorded: its
     /// boxes and letters go to the graphics card, with any letters it has
-    /// not seen before.
+    /// not seen before, and its faded groups are drawn into layers for a
+    /// picture `extent` pixels in size.
     ///
     /// Call this before the pass that [`draw`](Self::draw) is recorded in
     /// begins.
@@ -465,12 +608,14 @@ impl UiPass {
     /// being recorded, outside a render pass. `frame` picks which of the
     /// pass's frames this is, and the commands last recorded with the same
     /// `frame` must have finished. The pass must stay alive until the
-    /// commands have run.
+    /// commands have run, and the picture [`draw`](Self::draw) is then
+    /// recorded over must be `extent` in size.
     pub(crate) unsafe fn prepare(
         &mut self,
         commands: vk::CommandBuffer,
         frame: usize,
         overlay: &mut Overlay,
+        extent: vk::Extent2D,
     ) -> Result<(), RenderError> {
         self.frame = None;
         if let Some(images) = overlay.take_images() {
@@ -485,10 +630,12 @@ impl UiPass {
             // Nothing reads the atlas, so new letters can wait.
             return Ok(());
         }
+        let (layered, _) = overlay.layers();
         // SAFETY: the buffer was made writable and long enough for the most
-        // quads an overlay holds, and the caller guarantees the commands
-        // that read it last have finished.
-        unsafe { slot.quads.write(overlay.quads()) }?;
+        // quads an overlay holds, those it draws and those of its groups
+        // together, and the caller guarantees the commands that read it
+        // last have finished.
+        unsafe { slot.quads.write_parts(&[overlay.quads(), layered]) }?;
 
         let new = if self.filled {
             overlay.changed()
@@ -579,6 +726,19 @@ impl UiPass {
             overlay.sent();
             self.filled = true;
         }
+        let passes = overlay.layer_passes();
+        if !passes.is_empty() {
+            let needed = passes.iter().map(|pass| pass.layer + 1).max().unwrap_or(1);
+            let room = extent.width > 0 && extent.height > 0;
+            if room && (self.layers.extent != extent || self.layers.count() < needed) {
+                let count = needed.max(self.layers.count()).min(MOST_LAYERS);
+                self.set_layers(extent, count)?;
+            }
+            // SAFETY: the caller guarantees `commands` is recording outside
+            // a render pass, and the frame's buffer holds the groups' quads
+            // after the `count` it draws.
+            unsafe { self.draw_layers(commands, index, passes, count, extent) };
+        }
         self.frame = Some((index, count));
         Ok(())
     }
@@ -599,25 +759,8 @@ impl UiPass {
             return;
         };
         let device = self.gpu.device();
-        let area = vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent,
-        };
-        // Sizes are far below the point where f32 stops being exact.
-        #[allow(clippy::cast_precision_loss)]
-        let (width, height) = (extent.width as f32, extent.height as f32);
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let mut screen = [0_u8; SCREEN_BYTES];
-        screen[..4].copy_from_slice(&width.to_ne_bytes());
-        screen[4..8].copy_from_slice(&height.to_ne_bytes());
-        screen[8..12].copy_from_slice(&u32::from(stores_srgb(self.format)).to_ne_bytes());
+        let (area, viewport) = whole(extent);
+        let screen = self.screen(extent);
 
         // SAFETY: the caller guarantees the command buffer is recording
         // inside a matching render pass; the pipeline, set and buffer are
@@ -630,7 +773,7 @@ impl UiPass {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.layout,
                 0,
-                &[self.set],
+                &self.sets[..1],
                 &[],
             );
             device.cmd_push_constants(
@@ -648,6 +791,157 @@ impl UiPass {
     }
 }
 
+impl UiPass {
+    /// The push constants for drawing into a picture `extent` in size.
+    fn screen(&self, extent: vk::Extent2D) -> [u8; SCREEN_BYTES] {
+        // Sizes are far below the point where f32 stops being exact.
+        #[allow(clippy::cast_precision_loss)]
+        let (width, height) = (extent.width as f32, extent.height as f32);
+        let mut screen = [0_u8; SCREEN_BYTES];
+        screen[..4].copy_from_slice(&width.to_ne_bytes());
+        screen[4..8].copy_from_slice(&height.to_ne_bytes());
+        screen[8..12].copy_from_slice(&u32::from(stores_srgb(self.format)).to_ne_bytes());
+        screen
+    }
+
+    /// Records the passes that draw faded groups into their layers, in
+    /// order: a group inside another is drawn before the one it is in,
+    /// which reads it. Each pass clears its groups' parts of its layer and
+    /// draws them, over only the part of the layer they cover; between
+    /// passes, and after the last, a barrier makes what was drawn ready to
+    /// be read.
+    ///
+    /// # Safety
+    ///
+    /// `commands` must be recording, outside a render pass, and slot
+    /// `index`'s buffer must hold the groups' quads from quad `first` on.
+    /// The layers must be `extent` in size and as many as the passes use.
+    unsafe fn draw_layers(
+        &self,
+        commands: vk::CommandBuffer,
+        index: usize,
+        passes: &[LayerPass],
+        first: u32,
+        extent: vk::Extent2D,
+    ) {
+        let Some(slot) = self.slots.get(index) else {
+            return;
+        };
+        let device = self.gpu.device();
+        let (_, viewport) = whole(extent);
+        let screen = self.screen(extent);
+        let barrier = [Layers::barrier()];
+        let barrier = vk::DependencyInfo::default().memory_barriers(&barrier);
+        // SAFETY: the caller guarantees the command buffer is recording
+        // outside a render pass; the layers, pipelines, set and buffer are
+        // this pass's own, the layers in the general layout, which they
+        // are drawn into and read in. Each pass draws into one layer and
+        // reads only the others, and every struct passed lives until its
+        // call returns.
+        unsafe {
+            for pass in passes {
+                let (Some(layer), Some(&set)) = (
+                    self.layers.each.get(pass.layer as usize),
+                    self.sets.get(pass.layer as usize + 1),
+                ) else {
+                    continue;
+                };
+                let view = layer.view;
+                let Some(area) = on_screen(pass.area, extent) else {
+                    continue;
+                };
+                device.cmd_pipeline_barrier2(commands, &barrier);
+                let target = [vk::RenderingAttachmentInfo::default()
+                    .image_view(view)
+                    .image_layout(vk::ImageLayout::GENERAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                device.cmd_begin_rendering(
+                    commands,
+                    &vk::RenderingInfo::default()
+                        .render_area(area)
+                        .layer_count(1)
+                        .color_attachments(&target),
+                );
+                device.cmd_bind_descriptor_sets(
+                    commands,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    0,
+                    &[set],
+                    &[],
+                );
+                device.cmd_push_constants(
+                    commands,
+                    self.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &screen,
+                );
+                device.cmd_set_viewport(commands, 0, &[viewport]);
+                device.cmd_set_scissor(commands, 0, &[area]);
+                device.cmd_bind_vertex_buffers(commands, 0, &[slot.quads.handle], &[0]);
+                // The groups never overlap in a pass, so all are cleared
+                // first and then all drawn.
+                for (pipeline, quads) in [
+                    (self.clear_pipeline, &pass.clears),
+                    (self.layer_pipeline, &pass.quads),
+                ] {
+                    device.cmd_bind_pipeline(commands, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                    device.cmd_draw(
+                        commands,
+                        4,
+                        quads.end.saturating_sub(quads.start),
+                        0,
+                        first + quads.start,
+                    );
+                }
+                device.cmd_end_rendering(commands);
+            }
+            device.cmd_pipeline_barrier2(commands, &barrier);
+        }
+    }
+}
+
+/// The whole of a picture `extent` in size, as an area and a viewport.
+fn whole(extent: vk::Extent2D) -> (vk::Rect2D, vk::Viewport) {
+    // Sizes are far below the point where f32 stops being exact.
+    #[allow(clippy::cast_precision_loss)]
+    let (width, height) = (extent.width as f32, extent.height as f32);
+    (
+        vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent,
+        },
+        vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+    )
+}
+
+/// The part of `area`, left, top, right and bottom in pixels, that is on a
+/// picture `extent` in size; `None` if none of it is.
+fn on_screen(area: [i32; 4], extent: vk::Extent2D) -> Option<vk::Rect2D> {
+    let width = i32::try_from(extent.width).unwrap_or(i32::MAX);
+    let height = i32::try_from(extent.height).unwrap_or(i32::MAX);
+    let left = area[0].clamp(0, width);
+    let top = area[1].clamp(0, height);
+    let right = area[2].clamp(0, width);
+    let bottom = area[3].clamp(0, height);
+    (right > left && bottom > top).then(|| vk::Rect2D {
+        offset: vk::Offset2D { x: left, y: top },
+        extent: vk::Extent2D {
+            width: u32::try_from(right - left).unwrap_or(0),
+            height: u32::try_from(bottom - top).unwrap_or(0),
+        },
+    })
+}
+
 impl Drop for UiPass {
     fn drop(&mut self) {
         // SAFETY: the owner waits for the graphics card to go idle before
@@ -656,12 +950,15 @@ impl Drop for UiPass {
         unsafe {
             let device = self.gpu.device();
             device.destroy_pipeline(self.pipeline, None);
+            device.destroy_pipeline(self.layer_pipeline, None);
+            device.destroy_pipeline(self.clear_pipeline, None);
             device.destroy_descriptor_pool(self.pool, None);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_sampler(self.sampler, None);
             self.atlas.destroy(&self.gpu);
             self.images.destroy(&self.gpu);
+            self.layers.destroy(&self.gpu);
         }
     }
 }

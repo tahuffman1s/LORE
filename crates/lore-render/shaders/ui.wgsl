@@ -8,7 +8,10 @@
 // the rectangle's own space, before the transform, so shapes stay sharp
 // however they are turned. Positions and sizes are in pixels of the
 // picture, from its top-left corner. Every kind is cut by a clip: a rounded
-// box on the screen, which is huge when there is none.
+// box with a transform of its own, which is huge when there is none, and a
+// straight box on the screen. A group faded as one is drawn first into a
+// layer, a picture the size of the screen, and laid over the picture by a
+// quad of its own.
 
 struct Screen {
     // The size of the picture being drawn into, in pixels.
@@ -27,6 +30,13 @@ var<immediate> screen: Screen;
 // The game's HUD images, packed into one picture: red, green, blue and
 // alpha, the colours with the sRGB curve, as a PNG holds them.
 @group(0) @binding(2) var images: texture_2d<f32>;
+// The layers groups are drawn into, each the size of the screen, colours
+// multiplied by how solid they are. While a group is drawn into one, that
+// one is a blank pixel here.
+@group(0) @binding(3) var layer0: texture_2d<f32>;
+@group(0) @binding(4) var layer1: texture_2d<f32>;
+@group(0) @binding(5) var layer2: texture_2d<f32>;
+@group(0) @binding(6) var layer3: texture_2d<f32>;
 
 // What a quad is.
 const BOX = 0;
@@ -37,6 +47,8 @@ const LINEAR = 4;
 const RADIAL = 5;
 const SHADOW = 6;
 const INSET = 7;
+const LAYER = 8;
+const CLEAR = 9;
 
 struct Corner {
     @builtin(position) position: vec4<f32>,
@@ -53,12 +65,16 @@ struct Corner {
     // Left, top, width and height in the atlas; where a gradient segment starts and ends.
     @location(6) @interpolate(flat) source: vec4<f32>,
     @location(7) @interpolate(flat) params: vec4<f32>,
-    // The clip, then its corners.
+    // The clip's middle on the screen and half its size, its corners, its
+    // turn from the screen into its own space, and the straight box on the
+    // screen it is inside: left, top, right, bottom.
     @location(8) @interpolate(flat) clip: vec4<f32>,
     @location(9) @interpolate(flat) clip_radii: vec4<f32>,
+    @location(10) @interpolate(flat) clip_turn: vec4<f32>,
+    @location(11) @interpolate(flat) within: vec4<f32>,
     // The kind, where a gradient segment's band starts and ends, and how
     // much the transform stretches lengths.
-    @location(10) @interpolate(flat) kind: vec4<f32>,
+    @location(12) @interpolate(flat) kind: vec4<f32>,
 }
 
 @vertex
@@ -79,8 +95,10 @@ fn vertex(
     @location(8) params: vec4<f32>,
     @location(9) clip: vec4<f32>,
     @location(10) clip_radii: vec4<f32>,
+    @location(11) clip_turn: vec4<f32>,
+    @location(12) within: vec4<f32>,
     // The kind, how far it grows past the rectangle, and the stretch.
-    @location(11) kind: vec4<f32>,
+    @location(13) kind: vec4<f32>,
 ) -> Corner {
     // 0,0 then 1,0 then 0,1 then 1,1: a strip of two triangles.
     let unit = vec2<f32>(f32(index & 1u), f32(index >> 1u));
@@ -109,6 +127,8 @@ fn vertex(
     corner.params = params;
     corner.clip = clip;
     corner.clip_radii = clip_radii;
+    corner.clip_turn = clip_turn;
+    corner.within = within;
     corner.kind = vec4<f32>(kind.x, move_and_band.z, move_and_band.w, kind.z);
     return corner;
 }
@@ -277,16 +297,53 @@ fn letter_cover(at: vec2<f32>, source: vec4<f32>, blur: f32, bold: f32) -> f32 {
     return sum / weights;
 }
 
+// Layer `index`'s pixel at `at`.
+fn layer_texel(index: i32, at: vec2<i32>) -> vec4<f32> {
+    switch index {
+        case 0: {
+            return textureLoad(layer0, at, 0);
+        }
+        case 1: {
+            return textureLoad(layer1, at, 0);
+        }
+        case 2: {
+            return textureLoad(layer2, at, 0);
+        }
+        default: {
+            return textureLoad(layer3, at, 0);
+        }
+    }
+}
+
 @fragment
 fn fragment(corner: Corner) -> @location(0) vec4<f32> {
     let kind = i32(corner.kind.x + 0.5);
+    // Clearing a group's part of its layer, and laying a layer over the
+    // picture, need nothing that follows. Every pixel of a quad takes the
+    // same path, as the reads of how values change between pixels below
+    // need: a quad is one kind all over.
+    if kind == CLEAR {
+        // Drawn with no blending.
+        return vec4<f32>(0.0);
+    }
+    if kind == LAYER {
+        // A group drawn into a layer: what is there, pixel for pixel, at
+        // the group's opacity. The layer is already in the picture's own
+        // colours, so it is not decoded again.
+        let texel = layer_texel(i32(corner.params.x + 0.5), vec2<i32>(floor(corner.position.xy)));
+        if texel.a <= 0.0 {
+            discard;
+        }
+        return vec4<f32>(texel.rgb / texel.a, texel.a * corner.colour.a);
+    }
     let scale = corner.kind.w;
     var covered = 1.0;
     var colour = corner.colour;
     // Where in the atlas this pixel reads, and how far one pixel of the
-    // screen reaches there, across and down. Worked out here, before any
-    // branch, as the shader may only ask how a value changes from pixel to
-    // pixel where every pixel takes the same path.
+    // screen reaches there, across and down. Worked out here, before the
+    // branches that differ from pixel to pixel, as the shader may only ask
+    // how a value changes from pixel to pixel where every pixel takes the
+    // same path.
     let atlas_raw = atlas_position(corner, kind);
     let step_x = dpdx(atlas_raw);
     let step_y = dpdy(atlas_raw);
@@ -374,8 +431,13 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
     } else if kind == SHADOW {
         // The shadow of a box, blurred. `half_size` is the box's own,
-        // grown by the spread; the rectangle is larger still.
+        // grown by the spread; the rectangle is larger still. It is not
+        // drawn under the box it falls from, so it never shows through a
+        // box that is see-through; under the box's soft edge it is, so the
+        // edge of a solid box does not show a light seam.
         covered = blurred_box(corner.offset, corner.params.xy, corner.params.z, corner.radii);
+        let under = outside_round_box(corner.offset - corner.border.xy, corner.source.xy, corner.colour2);
+        covered *= 1.0 - covers(under * scale + 1.0);
     } else if kind == INSET {
         // Inside the box and outside the blurred hole.
         let inside = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
@@ -388,10 +450,16 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
         covered = covers(outside_round_box(corner.offset, corner.half_size, corner.radii) * scale);
     }
 
-    // Cut by the clip, a rounded box on the screen.
-    let clip_half = corner.clip.zw * 0.5;
-    let clip_middle = corner.clip.xy + clip_half;
-    covered *= covers(outside_round_box(corner.position.xy - clip_middle, clip_half, corner.clip_radii));
+    // Cut by the clip: a rounded box turned with its transform, in its own
+    // space scaled to screen pixels, and a straight box on the screen.
+    let from_clip = corner.position.xy - corner.clip.xy;
+    let in_clip = vec2<f32>(
+        corner.clip_turn.x * from_clip.x + corner.clip_turn.z * from_clip.y,
+        corner.clip_turn.y * from_clip.x + corner.clip_turn.w * from_clip.y,
+    );
+    covered *= covers(outside_round_box(in_clip, corner.clip.zw, corner.clip_radii));
+    let past = max(corner.within.xy - corner.position.xy, corner.position.xy - corner.within.zw);
+    covered *= covers(max(past.x, past.y));
 
     var rgb = colour.rgb;
     if screen.decode == 1u {

@@ -83,9 +83,12 @@ fn rects(ui: &Ui) -> Vec<([f32; 2], [f32; 2], Color)> {
                 color,
                 ..
             } => Some((position, size, color)),
-            Draw::Text { .. } | Draw::Turned { .. } | Draw::Box { .. } | Draw::Shadow { .. } => {
-                None
-            }
+            Draw::Text { .. }
+            | Draw::Turned { .. }
+            | Draw::Box { .. }
+            | Draw::Shadow { .. }
+            | Draw::Group { .. }
+            | Draw::EndGroup => None,
         })
         .collect()
 }
@@ -95,9 +98,12 @@ fn texts(ui: &Ui) -> Vec<String> {
         .iter()
         .filter_map(|draw| match draw {
             Draw::Text { text, .. } => Some(text.to_owned()),
-            Draw::Rect { .. } | Draw::Turned { .. } | Draw::Box { .. } | Draw::Shadow { .. } => {
-                None
-            }
+            Draw::Rect { .. }
+            | Draw::Turned { .. }
+            | Draw::Box { .. }
+            | Draw::Shadow { .. }
+            | Draw::Group { .. }
+            | Draw::EndGroup => None,
         })
         .collect()
 }
@@ -1912,9 +1918,9 @@ mod styled_drawing {
     fn the_painter_keeps_gradient_stops_in_one_list_and_scales_to_real_pixels() {
         let stops = [stop(0.0), stop(0.5), stop(1.0)];
         let clip = Clip {
-            position: [1.0, 2.0],
-            size: [3.0, 4.0],
-            radii: [1.0; 4],
+            transform: Transform::translate([1.0, 1.0]),
+            within: Some([0.0, 0.0, 10.0, 10.0]),
+            ..Clip::new([1.0, 2.0], [3.0, 4.0], [1.0; 4])
         };
         let (commands, _, kept) = painted(2.0, |painter| {
             painter.styled_box(
@@ -1983,6 +1989,8 @@ mod styled_drawing {
             (clip.position, clip.size, clip.radii),
             ([2.0, 4.0], [6.0, 8.0], [2.0; 4])
         );
+        assert_eq!(clip.transform.matrix[4..], [2.0, 2.0]);
+        assert_eq!(clip.within, Some([0.0, 0.0, 20.0, 20.0]));
         assert_eq!(
             fill,
             Fill::Linear {
@@ -2167,7 +2175,7 @@ mod hud_styles {
     }
 
     #[test]
-    fn a_styled_box_has_its_radii_border_and_faded_colours() {
+    fn a_styled_box_has_its_radii_and_border_and_fades_as_one() {
         let mut ui = boxed(HudStyle {
             opacity: 0.5,
             radii: [1.0, 2.0, 3.0, 4.0],
@@ -2176,7 +2184,11 @@ mod hud_styles {
             ..HudStyle::default()
         });
         let all = draws(&mut ui);
-        assert_eq!(all.len(), 1);
+        assert_eq!(all.len(), 3);
+        // Its fill and border are drawn as one picture, faded as a whole,
+        // so the fill does not show through the border.
+        assert_eq!(all[0], Draw::Group { opacity: 0.5 });
+        assert_eq!(all[2], Draw::EndGroup);
         let Draw::Box {
             size,
             radii,
@@ -2185,20 +2197,20 @@ mod hud_styles {
             border_color,
             clip,
             ..
-        } = all[0]
+        } = all[1]
         else {
             panic!("{all:?}")
         };
         assert_eq!(size, [100.0, 50.0]);
         assert_eq!(radii, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(border_widths, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(border_color.a, 0.5);
-        assert_eq!(fill, Fill::Color(Color::rgba(1.0, 1.0, 1.0, 0.5)));
+        assert_eq!(border_color.a, 1.0);
+        assert_eq!(fill, Fill::Color(Color::WHITE));
         assert_eq!(clip, None);
     }
 
     #[test]
-    fn a_gradient_fills_with_its_stops_faded() {
+    fn a_gradient_fills_with_its_stops_in_a_faded_group() {
         let stops = [
             Stop {
                 color: Color::rgb(1.0, 0.0, 0.0),
@@ -2215,16 +2227,17 @@ mod hud_styles {
             ..HudStyle::default()
         });
         let all = draws(&mut ui);
+        assert_eq!(all[0], Draw::Group { opacity: 0.5 });
         let Draw::Box {
             fill: Fill::Linear { angle, stops },
             ..
-        } = all[0]
+        } = all[1]
         else {
             panic!("{all:?}")
         };
         assert_eq!(angle, 90.0);
         assert_eq!(stops.len(), 2);
-        assert_eq!(stops[1].color, Color::rgba(0.0, 0.0, 1.0, 0.5));
+        assert_eq!(stops[1].color, Color::rgb(0.0, 0.0, 1.0));
         // A radial one reaches the farthest corner.
         let mut ui = boxed(HudStyle {
             gradient: Some(Gradient::new(stops, 0.0, true, [0.0, 0.5])),
@@ -2334,7 +2347,7 @@ mod hud_styles {
     }
 
     #[test]
-    fn text_with_a_shadow_draws_a_blurred_copy_under_it_and_fades_both() {
+    fn text_with_a_shadow_draws_a_blurred_copy_under_it_and_fades_both_as_one() {
         let mut ui = Ui::default();
         let words = ui.hud_text(Anchor::TopLeft, [0.0, 0.0], 30.0, "hi");
         ui.set_style(
@@ -2358,7 +2371,11 @@ mod hud_styles {
         )
         .unwrap();
         let all = draws(&mut ui);
-        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(all.len(), 4, "{all:?}");
+        assert_eq!(
+            (all[0], all[3]),
+            (Draw::Group { opacity: 0.5 }, Draw::EndGroup)
+        );
         let (
             Draw::Text {
                 position: under,
@@ -2374,13 +2391,13 @@ mod hud_styles {
                 letter_spacing,
                 ..
             },
-        ) = (all[0], all[1])
+        ) = (all[1], all[2])
         else {
             panic!("{all:?}")
         };
         assert_eq!([under[0] - over[0], under[1] - over[1]], [2.0, 3.0]);
         assert_eq!((soft, sharp), (4.0, 0.0));
-        assert_eq!((dark.a, color.a), (0.5, 0.5));
+        assert_eq!((dark.a, color.a), (1.0, 1.0));
         assert_eq!(font.family, 2);
         assert_eq!(letter_spacing, 3.0);
     }
@@ -2439,11 +2456,7 @@ mod hud_styles {
         };
         assert_eq!(
             clip,
-            Some(Clip {
-                position,
-                size: [100.0, 50.0],
-                radii: [8.0, 8.0, 0.0, 0.0],
-            })
+            Some(Clip::new(position, [100.0, 50.0], [8.0, 8.0, 0.0, 0.0]))
         );
         // A hidden box cuts everything off.
         ui.set_shown(panel, false).unwrap();
@@ -2482,12 +2495,18 @@ mod hud_styles {
             panic!("{all:?}")
         };
         let clip = clip.unwrap();
-        assert_eq!(clip.size, [200.0, 100.0]);
-        assert_eq!(clip.radii, [20.0; 4]);
+        // The box and its corners as they are, scaled twice as large about
+        // its top-left corner by the clip's own transform.
+        assert_eq!(clip.size, [100.0, 50.0]);
+        assert_eq!(clip.radii, [10.0; 4]);
+        let at = |dx: f32, dy: f32| clip.contains([clip.position[0] + dx, clip.position[1] + dy]);
+        assert!(at(190.0, 50.0) && at(100.0, 95.0));
+        // The round corner is scaled too: twenty across.
+        assert!(!at(2.0, 2.0) && at(10.0, 10.0));
     }
 
     #[test]
-    fn a_turned_clip_box_cuts_to_the_box_round_its_turn() {
+    fn a_turned_clip_box_cuts_to_its_turned_shape() {
         let mut ui = Ui::default();
         let panel = ui.hud_rect(Anchor::TopLeft, [0.0, 0.0], [100.0, 50.0], Color::WHITE);
         ui.set_angle(panel, std::f32::consts::FRAC_PI_2).unwrap();
@@ -2505,8 +2524,14 @@ mod hud_styles {
             panic!("{all:?}")
         };
         let clip = clip.unwrap();
-        assert!((clip.size[0] - 50.0).abs() < 1e-3, "{:?}", clip.size);
-        assert!((clip.size[1] - 100.0).abs() < 1e-3, "{:?}", clip.size);
+        // The box itself, turned a quarter about its middle: 100 by 50
+        // standing up, it reaches 25 either side of the middle across and
+        // 50 up and down.
+        assert_eq!(clip.size, [100.0, 50.0]);
+        let [x, y] = [clip.position[0] + 50.0, clip.position[1] + 25.0];
+        let at = |dx: f32, dy: f32| clip.contains([x + dx, y + dy]);
+        assert!(at(0.0, 45.0) && at(-20.0, -45.0));
+        assert!(!at(40.0, 0.0) && !at(-40.0, 0.0));
     }
 
     #[test]

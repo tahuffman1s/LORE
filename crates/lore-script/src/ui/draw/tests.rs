@@ -87,7 +87,7 @@ fn near(a: f32, b: f32) -> bool {
 }
 
 #[test]
-fn a_rectangle_is_scaled_and_its_opacity_goes_into_alpha() {
+fn a_rectangle_is_scaled_and_keeps_its_colours_as_its_group_fades() {
     let paint = rect_paint(PageFill::Color(RED), [2.0; 4], [BLUE; 4], common(0.5));
     let (_, draws, _) = map(&frame_of(vec![paint]), 2.0);
     let [
@@ -108,11 +108,12 @@ fn a_rectangle_is_scaled_and_its_opacity_goes_into_alpha() {
     assert_eq!(*size, [200.0, 100.0]);
     assert_eq!(*radii, [8.0, 0.0, 0.0, 0.0]);
     assert_eq!(*border_widths, [4.0; 4]);
-    assert!(near(border_color.a, 0.4), "{border_color:?}");
+    // Fading is the group's: the colours are as the page gave them.
+    assert!(near(border_color.a, 0.8), "{border_color:?}");
     let Fill::Color(color) = fill else {
         panic!("a colour fill expected, got {fill:?}");
     };
-    assert!(near(color.a, 0.5) && near(color.r, 1.0), "{color:?}");
+    assert!(near(color.a, 1.0) && near(color.r, 1.0), "{color:?}");
 }
 
 #[test]
@@ -177,6 +178,13 @@ fn a_transform_moves_by_scaled_pixels_and_a_clip_is_scaled() {
             h: 40.0,
         },
         radii: [2.0; 4],
+        transform: [0.0, 1.0, -1.0, 0.0, 5.0, -7.0],
+        within: Some(Rect {
+            x: 0.0,
+            y: 1.0,
+            w: 10.0,
+            h: 20.0,
+        }),
     });
     let (_, draws, _) = map(
         &frame_of(vec![rect_paint(
@@ -198,6 +206,22 @@ fn a_transform_moves_by_scaled_pixels_and_a_clip_is_scaled() {
     assert_eq!(clip.position, [3.0, 6.0]);
     assert_eq!(clip.size, [90.0, 120.0]);
     assert_eq!(clip.radii, [6.0; 4]);
+    // A clip turns with its box: its transform comes too, moved as far.
+    assert_eq!(clip.transform.matrix, [0.0, 1.0, -1.0, 0.0, 15.0, -21.0]);
+    assert_eq!(clip.within, Some([0.0, 3.0, 30.0, 60.0]));
+}
+
+#[test]
+fn a_group_that_fades_is_passed_on_around_its_paints() {
+    let paint = rect_paint(PageFill::Color(RED), [0.0; 4], [RED; 4], common(0.5));
+    let (_, draws, _) = map(
+        &frame_of(vec![Paint::Group { opacity: 0.5 }, paint, Paint::EndGroup]),
+        1.0,
+    );
+    assert_eq!(draws.len(), 3);
+    assert_eq!(draws[0], Draw::Group { opacity: 0.5 });
+    assert!(matches!(draws[1], Draw::Box { .. }));
+    assert_eq!(draws[2], Draw::EndGroup);
 }
 
 #[test]
@@ -236,7 +260,7 @@ fn a_shadow_is_scaled() {
         (offset, blur, spread, inset),
         ([0.0, 8.0], 12.0, -2.0, true)
     );
-    assert!(near(color.a, 0.25));
+    assert!(near(color.a, 0.5));
 }
 
 #[test]
@@ -286,7 +310,7 @@ fn a_picture_is_a_box_and_a_nine_slice_keeps_its_edges_the_same_size() {
     assert_eq!(slice, Some([8.0; 4]));
     // 16 units of border at 2 pixels each, cut from 8 picture pixels.
     assert!(near(slice_scale, 4.0));
-    assert!(near(tint.a, 0.5));
+    assert!(near(tint.a, 1.0));
     let Draw::Box {
         fill: Fill::Image { slice, .. },
         ..
@@ -340,7 +364,7 @@ fn text_is_drawn_by_its_top_with_its_shadows_first() {
     assert_eq!(text, "Hello");
     assert_eq!(position, [22.0, 2.0 * 52.0 - 32.0]);
     assert_eq!((size, blur, letter_spacing), (40.0, 6.0, 2.0));
-    assert!(near(color.a, 0.5));
+    assert!(near(color.a, 1.0));
     assert_eq!(
         font,
         FontFace {
@@ -360,7 +384,7 @@ fn text_is_drawn_by_its_top_with_its_shadows_first() {
     };
     assert_eq!(position, [20.0, 100.0 - 32.0]);
     assert_eq!(blur, 0.0);
-    assert!(near(color.r, 1.0) && near(color.a, 0.5));
+    assert!(near(color.r, 1.0) && near(color.a, 1.0));
 }
 
 #[test]
@@ -407,7 +431,7 @@ fn gradients_keep_their_stops_and_radial_ones_turn_into_shares_of_the_box() {
     };
     assert_eq!(angle, 90.0);
     assert_eq!(stops.len(), 2);
-    assert!(near(stops[1].color.a, 0.4) && stops[1].at == 1.0);
+    assert!(near(stops[1].color.a, 0.8) && stops[1].at == 1.0);
     let Draw::Box {
         fill: Fill::Radial {
             center,

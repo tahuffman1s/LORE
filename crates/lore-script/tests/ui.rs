@@ -73,7 +73,8 @@ fn run(host: &mut ScriptHost, ticks: u32) {
     }
 }
 
-/// What a frame of the screens draws: the box fills' colours and the text.
+/// What a frame of the screens draws: the box fills' colours, faded by the
+/// groups they are in, and the text.
 #[derive(Debug, Default)]
 struct Seen {
     boxes: Vec<[f32; 4]>,
@@ -84,12 +85,18 @@ fn draw(host: &ScriptHost) -> Seen {
     let mut out = DrawBuffer::default();
     host.draw_screens(&mut out, [1920.0, 1080.0], 1.0);
     let mut seen = Seen::default();
+    let mut fades: Vec<f32> = Vec::new();
     for item in out.draw() {
+        let faded: f32 = fades.iter().product();
         match item {
+            Draw::Group { opacity } => fades.push(opacity),
+            Draw::EndGroup => {
+                fades.pop();
+            }
             Draw::Box {
                 fill: Fill::Color(c),
                 ..
-            } if c.a > 0.0 => seen.boxes.push([c.r, c.g, c.b, c.a]),
+            } if c.a * faded > 0.0 => seen.boxes.push([c.r, c.g, c.b, c.a * faded]),
             Draw::Text { text, .. } => seen.texts.push(text.to_owned()),
             _ => {}
         }

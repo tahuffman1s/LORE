@@ -27,7 +27,7 @@ pub(crate) const ATLAS_HEIGHT: u32 = 1024;
 pub(crate) const MOST_QUADS: usize = 16_384;
 
 /// The bytes one box or letter takes in the buffer the shader reads:
-/// forty-eight `f32`s, twelve groups of four, laid out as
+/// fifty-six `f32`s, fourteen groups of four, laid out as
 /// `shaders/ui.wgsl` expects:
 ///
 /// | floats | what |
@@ -38,13 +38,18 @@ pub(crate) const MOST_QUADS: usize = 16_384;
 /// | 12..16 | `radii`: top-left, top-right, bottom-right, bottom-left |
 /// | 16..20 | border widths top, right, bottom, left; a picture's slice; a shadow's offset |
 /// | 20..24 | `colour` |
-/// | 24..28 | `colour2`: the end of a gradient segment; an inside shadow's hole radii |
-/// | 28..32 | `source`: left, top, width, height in the atlas; a gradient segment's stop places |
+/// | 24..28 | `colour2`: the end of a gradient segment; an inside shadow's hole radii; the corners of the box an outside shadow falls from |
+/// | 28..32 | `source`: left, top, width, height in the atlas; a gradient segment's stop places; half the size of the box an outside shadow falls from |
 /// | 32..36 | `params`: what each kind needs besides these |
-/// | 36..40 | the clip: left, top, width, height on the screen |
+/// | 36..40 | the clip: its middle on the screen, then half its width and height |
 /// | 40..44 | the clip's `radii` |
-/// | 44..48 | kind, how far the quad grows past `rect`, how much the transform scales, spare |
-pub(crate) const QUAD_BYTES: usize = 192;
+/// | 44..48 | the clip's turn: from the screen back into the clip's own space |
+/// | 48..52 | the straight box the clip is also inside: left, top, right, bottom |
+/// | 52..56 | kind, how far the quad grows past `rect`, how much the transform scales, spare |
+///
+/// The clip's own space is scaled to screen pixels, so that its soft edge is
+/// a pixel wide however the clip is scaled.
+pub(crate) const QUAD_BYTES: usize = 224;
 
 /// What a quad is, as the shader's `kind` says it.
 const BOX: f32 = 0.0;
@@ -55,7 +60,25 @@ const LINEAR: f32 = 4.0;
 const RADIAL: f32 = 5.0;
 const SHADOW: f32 = 6.0;
 const INSET: f32 = 7.0;
+/// A group drawn into a layer, laid over the picture.
+const LAYER: f32 = 8.0;
+/// Clears the part of a layer a group is drawn into.
+const CLEAR: f32 = 9.0;
 
+/// How many layers a frame may draw groups into. Groups that overlap need
+/// a layer each, and a group inside a group needs another; past this, a
+/// group is faded piece by piece instead.
+pub(crate) const MOST_LAYERS: u32 = 4;
+
+/// Groups of more pieces than this are taken to have pieces on top of each
+/// other, rather than each pair being checked.
+const MOST_CHECKED: usize = 64;
+
+/// Where the colour's alpha is in a quad, in floats, and the second colour's.
+const ALPHA: usize = 23;
+const ALPHA2: usize = 27;
+/// Where the kind is.
+const KIND: usize = 52;
 /// A band edge that no pixel of a gradient reaches.
 const FAR: f32 = 1e30;
 /// How far text may be blurred, in pixels.
@@ -413,6 +436,74 @@ impl Instance {
     }
 }
 
+/// A group still being added to: see `Draw::Group`.
+#[derive(Debug, Clone, Copy)]
+struct Open {
+    opacity: f32,
+    /// Its first quad.
+    start: usize,
+    /// The first layer job made after it began: the jobs of the groups
+    /// inside it.
+    first_job: usize,
+}
+
+/// A group drawn into a layer before the picture: its quads, which part of
+/// the screen they cover, and which layer they go to.
+///
+/// Groups are drawn a level at a time: first every group with no group in
+/// a layer inside it (level 0), then those whose inner groups are all of
+/// level 0, and so on, a layer at a time within a level. So a group is
+/// drawn after those it reads, and groups of one level and one layer, such
+/// as a row of faded buttons, are drawn in one pass.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LayerJob {
+    /// Which of `Overlay::layered`'s quads are drawn.
+    pub(crate) quads: Range<u32>,
+    /// Which of them clears its part of the layer first. The clearing quads
+    /// of groups listed one after another are one after another too.
+    pub(crate) clear: u32,
+    /// The part of the screen it covers, in whole pixels: left, top, right,
+    /// bottom, never empty.
+    pub(crate) area: [i32; 4],
+    /// Which layer.
+    pub(crate) layer: u32,
+    /// Its level: see above.
+    pub(crate) level: u32,
+    /// The level of the group in a layer that reads it, once that group
+    /// has ended; `None` while it has not, or when the picture itself reads
+    /// it, after every level.
+    read_at: Option<u32>,
+}
+
+/// One pass that draws groups into a layer: the quads that clear their
+/// parts of it, then their own quads, all in `Overlay::layered`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LayerPass {
+    /// Which layer.
+    pub(crate) layer: u32,
+    /// The quads that clear, drawn with no blending.
+    pub(crate) clears: Range<u32>,
+    /// The groups' quads, one group after another.
+    pub(crate) quads: Range<u32>,
+    /// The part of the screen they cover, left, top, right, bottom.
+    pub(crate) area: [i32; 4],
+}
+
+/// Where [`Overlay::push_to`] adds a quad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Into {
+    /// The quads drawn over the picture.
+    Picture,
+    /// The list the layers' quads are put in order in, with room kept for
+    /// it already.
+    Sorting,
+}
+
+/// Whether two areas, left, top, right, bottom, share any of the screen.
+fn overlap(one: [f32; 4], other: [f32; 4]) -> bool {
+    one[0] < other[2] && other[0] < one[2] && one[1] < other[3] && other[1] < one[3]
+}
+
 /// What a line of text is drawn with, besides its letters.
 #[derive(Debug, Clone, Copy)]
 struct TextStyle {
@@ -460,6 +551,70 @@ fn rgba(color: Color) -> [f32; 4] {
     })
 }
 
+/// Which of a quad's numbers are alphas that fade with it: its colour's,
+/// and a gradient's second colour's.
+fn alphas(kind: f32) -> impl Iterator<Item = usize> {
+    let gradient = kind == LINEAR || kind == RADIAL;
+    std::iter::once(ALPHA).chain(gradient.then_some(ALPHA2))
+}
+
+/// The four groups of numbers the shader gets for a clip: its middle and
+/// half its size, its corners, its turn back from the screen and the
+/// straight box it is also inside, all in screen pixels; `None` if
+/// nothing is inside it. No clip is a huge one.
+fn clip_numbers(clip: Option<Clip>) -> Option<[[f32; 4]; 4]> {
+    const HUGE: f32 = 1e6;
+    let Some(clip) = clip else {
+        return Some([
+            [0.0, 0.0, HUGE, HUGE],
+            [0.0; 4],
+            [1.0, 0.0, 0.0, 1.0],
+            [-HUGE, -HUGE, HUGE, HUGE],
+        ]);
+    };
+    if !(finite(&clip.position) && finite(&clip.size)) || clip.size[0] <= 0.0 || clip.size[1] <= 0.0
+    {
+        return None;
+    }
+    let transform = if finite(&clip.transform.matrix) {
+        clip.transform
+    } else {
+        Transform::IDENTITY
+    };
+    let back = transform.inverse()?;
+    let [a, b, c, d, ..] = transform.matrix;
+    let scale = (a * d - b * c).abs().sqrt();
+    if scale < 1e-4 {
+        return None;
+    }
+    let middle = transform.apply([
+        clip.position[0] + clip.size[0] / 2.0,
+        clip.position[1] + clip.size[1] / 2.0,
+    ]);
+    let [ia, ib, ic, id, ..] = back.matrix;
+    let within = match clip.within {
+        None => [-HUGE, -HUGE, HUGE, HUGE],
+        Some(within) if finite(&within) && within[2] > 0.0 && within[3] > 0.0 => [
+            within[0],
+            within[1],
+            within[0] + within[2],
+            within[1] + within[3],
+        ],
+        Some(_) => return None,
+    };
+    Some([
+        [
+            middle[0],
+            middle[1],
+            clip.size[0] / 2.0 * scale,
+            clip.size[1] / 2.0 * scale,
+        ],
+        fit_radii(clip.radii, clip.size).map(|radius| radius * scale),
+        [ia * scale, ib * scale, ic * scale, id * scale],
+        within,
+    ])
+}
+
 /// Whether every number is a real one.
 fn finite(values: &[f32]) -> bool {
     values.iter().all(|value| value.is_finite())
@@ -475,8 +630,25 @@ pub(crate) struct Overlay {
     images_changed: bool,
     /// `QUAD_BYTES` for each box and letter, back to front.
     quads: Vec<u8>,
+    /// For each of `quads`, the part of the screen it may touch: left, top,
+    /// right, bottom.
+    bounds: Vec<[f32; 4]>,
+    /// The groups being added to, the innermost last.
+    open: Vec<Open>,
+    /// The quads of groups drawn into layers, one group after another.
+    layered: Vec<u8>,
+    /// Those groups, inner ones before the groups they are in until the
+    /// list is finished, then in the order they are drawn.
+    jobs: Vec<LayerJob>,
+    /// The passes that draw them, in order.
+    passes: Vec<LayerPass>,
+    /// Where `layered` is put in the order the passes draw it, kept from
+    /// frame to frame.
+    sorting: Vec<u8>,
     /// Whether leaving something out has been logged, so it is said once.
     warned: bool,
+    /// Whether running out of layers has been logged.
+    warned_layers: bool,
 }
 
 impl Overlay {
@@ -487,7 +659,14 @@ impl Overlay {
             images: ImageAtlas::default(),
             images_changed: false,
             quads: Vec::new(),
+            bounds: Vec::new(),
+            open: Vec::new(),
+            layered: Vec::new(),
+            jobs: Vec::new(),
+            passes: Vec::new(),
+            sorting: Vec::new(),
             warned: false,
+            warned_layers: false,
         }
     }
 
@@ -532,9 +711,26 @@ impl Overlay {
     /// for are left out; without, the first one stops the work.
     fn build<'a>(&mut self, draws: impl Iterator<Item = Draw<'a>>, skip: bool) -> Result<(), Full> {
         self.quads.clear();
+        self.bounds.clear();
+        self.open.clear();
+        self.layered.clear();
+        self.jobs.clear();
+        self.passes.clear();
         let mut left_out = false;
         for draw in draws {
             match draw {
+                Draw::Group { opacity } => {
+                    self.open.push(Open {
+                        opacity: if opacity.is_finite() {
+                            opacity.clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        },
+                        start: self.bounds.len(),
+                        first_job: self.jobs.len(),
+                    });
+                }
+                Draw::EndGroup => self.end_group(),
                 Draw::Rect {
                     position,
                     size,
@@ -688,8 +884,13 @@ impl Overlay {
                                 0.0
                             }
                         });
+                        // The box it falls from, from the shadow's middle,
+                        // which the shadow is not drawn under.
                         Instance {
                             radii: fit_radii(grown, [width, height]),
+                            border: [-offset[0], -offset[1], 0.0, 0.0],
+                            colour2: radii,
+                            source: [size[0] / 2.0, size[1] / 2.0, 0.0, 0.0],
                             params: [width / 2.0, height / 2.0, sigma, 0.0],
                             grow: 3.0 * sigma + 1.0,
                             ..Instance::new(
@@ -742,6 +943,10 @@ impl Overlay {
                 }
             }
         }
+        while !self.open.is_empty() {
+            self.end_group();
+        }
+        self.sort_layers();
         if left_out && !self.warned {
             self.warned = true;
             log::warn!(
@@ -1012,7 +1217,12 @@ impl Overlay {
     /// Adds one quad, unless the frame is full. Returns whether it was
     /// added or meant to be drawn as nothing; `false` means left out.
     fn push(&mut self, instance: Instance) -> bool {
-        if self.quads.len() >= MOST_QUADS * QUAD_BYTES {
+        self.push_to(instance, Into::Picture)
+    }
+
+    /// Adds one quad, as [`push`](Self::push) does, to the list `into`.
+    fn push_to(&mut self, instance: Instance, into: Into) -> bool {
+        if into == Into::Picture && self.used() >= MOST_QUADS * QUAD_BYTES {
             return false;
         }
         let matrix = if finite(&instance.transform.matrix) {
@@ -1023,26 +1233,9 @@ impl Overlay {
         let [a, b, c, d, e, f] = matrix;
         // How much the transform stretches a length, on average.
         let scale = (a * d - b * c).abs().sqrt();
-        let (clip, clip_radii) = match instance.clip {
-            None => ([-1e6, -1e6, 2e6, 2e6], [0.0; 4]),
-            Some(clip) => {
-                if !(finite(&clip.position) && finite(&clip.size))
-                    || clip.size[0] <= 0.0
-                    || clip.size[1] <= 0.0
-                {
-                    // Nothing is inside it.
-                    return true;
-                }
-                (
-                    [
-                        clip.position[0],
-                        clip.position[1],
-                        clip.size[0],
-                        clip.size[1],
-                    ],
-                    fit_radii(clip.radii, clip.size),
-                )
-            }
+        let Some(clip) = clip_numbers(instance.clip) else {
+            // Nothing is inside it.
+            return true;
         };
         if scale < 1e-4 || !finite(&instance.rect) {
             // Squashed flat: nothing to see.
@@ -1055,6 +1248,10 @@ impl Overlay {
         } else {
             0.0
         };
+        let list = match into {
+            Into::Picture => &mut self.quads,
+            Into::Sorting => &mut self.sorting,
+        };
         for value in instance
             .rect
             .iter()
@@ -1065,13 +1262,269 @@ impl Overlay {
             .chain(&clean(instance.colour2))
             .chain(&clean(instance.source))
             .chain(&clean(instance.params))
-            .chain(&clip)
-            .chain(&clip_radii)
+            .chain(clip.iter().flatten())
             .chain(&[instance.kind, grow, scale, 0.0])
         {
-            self.quads.extend_from_slice(&value.to_ne_bytes());
+            list.extend_from_slice(&value.to_ne_bytes());
         }
+        if into != Into::Picture {
+            return true;
+        }
+        // The part of the screen it may touch: its rectangle grown as the
+        // shader grows it, moved by the transform.
+        let reach = grow / scale;
+        let [x, y, w, h] = instance.rect;
+        let (mut low, mut high) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for [px, py] in [
+            [x - reach, y - reach],
+            [x + w + reach, y - reach],
+            [x - reach, y + h + reach],
+            [x + w + reach, y + h + reach],
+        ] {
+            let on_screen = [a * px + c * py + e, b * px + d * py + f];
+            low = [low[0].min(on_screen[0]), low[1].min(on_screen[1])];
+            high = [high[0].max(on_screen[0]), high[1].max(on_screen[1])];
+        }
+        self.bounds.push([low[0], low[1], high[0], high[1]]);
         true
+    }
+
+    /// Puts the groups drawn into layers in the order they are drawn, a
+    /// level at a time and a layer at a time, and their quads in the same
+    /// order, each pass's after quads that clear its groups' parts of the
+    /// layer: so a pass is two draws, however many groups it holds.
+    fn sort_layers(&mut self) {
+        self.jobs
+            .sort_unstable_by_key(|job| (job.level, job.layer, job.quads.start));
+        self.sorting.clear();
+        let mut first = 0;
+        while first < self.jobs.len() {
+            let (layer, level) = (self.jobs[first].layer, self.jobs[first].level);
+            let end = self.jobs[first..]
+                .iter()
+                .position(|job| (job.layer, job.level) != (layer, level))
+                .map_or(self.jobs.len(), |run| first + run);
+            let at = |list: &Vec<u8>| u32::try_from(list.len() / QUAD_BYTES).unwrap_or(u32::MAX);
+            let clears = at(&self.sorting);
+            let mut area = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
+            for index in first..end {
+                let job_area = self.jobs[index].area;
+                area = [
+                    area[0].min(job_area[0]),
+                    area[1].min(job_area[1]),
+                    area[2].max(job_area[2]),
+                    area[3].max(job_area[3]),
+                ];
+                #[allow(clippy::cast_precision_loss)]
+                let rect = [
+                    job_area[0] as f32,
+                    job_area[1] as f32,
+                    (job_area[2] - job_area[0]) as f32,
+                    (job_area[3] - job_area[1]) as f32,
+                ];
+                // Room was kept for it when the group ended.
+                self.push_to(
+                    Instance {
+                        grow: 0.0,
+                        ..Instance::new(CLEAR, rect, Color::rgba(0.0, 0.0, 0.0, 0.0))
+                    },
+                    Into::Sorting,
+                );
+                self.jobs[index].clear = at(&self.sorting) - 1;
+            }
+            let quads = at(&self.sorting);
+            for index in first..end {
+                let range = self.jobs[index].quads.clone();
+                let bytes = range.start as usize * QUAD_BYTES..range.end as usize * QUAD_BYTES;
+                let start = at(&self.sorting);
+                if let Some(bytes) = self.layered.get(bytes) {
+                    self.sorting.extend_from_slice(bytes);
+                }
+                self.jobs[index].quads = start..at(&self.sorting);
+            }
+            self.passes.push(LayerPass {
+                layer,
+                clears: clears..quads,
+                quads: quads..at(&self.sorting),
+                area,
+            });
+            first = end;
+        }
+        std::mem::swap(&mut self.layered, &mut self.sorting);
+    }
+
+    /// The bytes of the frame's buffer taken: the picture's quads, the
+    /// layers' quads, and room kept for the quad that clears each group's
+    /// part of its layer, which is added when the list is finished.
+    fn used(&self) -> usize {
+        self.quads.len() + self.layered.len() + self.jobs.len() * QUAD_BYTES
+    }
+
+    /// Ends the innermost group still open. If no two of its pieces touch
+    /// the same pixel, fading each piece fades the group exactly, at no
+    /// cost; otherwise it is drawn into a layer of its own, and a quad that
+    /// lays that layer over the picture takes its place.
+    fn end_group(&mut self) {
+        let Some(group) = self.open.pop() else {
+            return;
+        };
+        let start = group.start.min(self.bounds.len());
+        let pieces = &self.bounds[start..];
+        if pieces.is_empty() || group.opacity >= 1.0 {
+            return;
+        }
+        if group.opacity <= 0.0 {
+            // Nothing of it shows, nor of the groups inside it.
+            self.quads.truncate(start * QUAD_BYTES);
+            self.bounds.truncate(start);
+            if let Some(first) = self.jobs.get(group.first_job) {
+                let keep = first.quads.start as usize * QUAD_BYTES;
+                self.layered.truncate(keep);
+                self.jobs.truncate(group.first_job);
+            }
+            return;
+        }
+        let apart = pieces.len() <= MOST_CHECKED
+            && pieces.iter().enumerate().all(|(index, one)| {
+                pieces[index + 1..]
+                    .iter()
+                    .all(|other| !overlap(*one, *other))
+            });
+        let area = pieces
+            .iter()
+            .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |all, one| {
+                [
+                    all[0].min(one[0]),
+                    all[1].min(one[1]),
+                    all[2].max(one[2]),
+                    all[3].max(one[3]),
+                ]
+            });
+        // Room for the quad that lays the layer over the picture, and the
+        // one that clears its part of the layer.
+        let room = self.used() + 2 * QUAD_BYTES <= MOST_QUADS * QUAD_BYTES;
+        let layer = if apart || !room {
+            None
+        } else {
+            self.free_layer(&group, area)
+        };
+        let level = self
+            .jobs
+            .get(group.first_job..)
+            .unwrap_or_default()
+            .iter()
+            .filter(|job| job.read_at.is_none())
+            .map(|job| job.level + 1)
+            .max()
+            .unwrap_or(0);
+        let Some(layer) = layer else {
+            if !apart && !self.warned_layers {
+                self.warned_layers = true;
+                log::warn!(
+                    "More faded groups of the HUD or a screen overlap, or sit inside each \
+                     other, than the {MOST_LAYERS} layers a frame has, so some are faded \
+                     piece by piece, and their pieces show through each other. Fade fewer \
+                     at once, or fade the pieces one by one."
+                );
+            }
+            self.fade(start, group.opacity);
+            return;
+        };
+        // The group's quads move to the layers' list, in their order.
+        let first = u32::try_from(self.layered.len() / QUAD_BYTES).unwrap_or(u32::MAX);
+        self.layered
+            .extend_from_slice(&self.quads[start * QUAD_BYTES..]);
+        let last = u32::try_from(self.layered.len() / QUAD_BYTES).unwrap_or(u32::MAX);
+        self.quads.truncate(start * QUAD_BYTES);
+        self.bounds.truncate(start);
+        // The groups inside it not yet read by one inside it are read by
+        // it, a level after the deepest of them.
+        for inner in self.jobs.iter_mut().skip(group.first_job) {
+            if inner.read_at.is_none() {
+                inner.read_at = Some(level);
+            }
+        }
+        // Whole pixels, so the layer is read pixel for pixel.
+        #[allow(clippy::cast_possible_truncation)]
+        let whole = [
+            area[0].floor().clamp(-1e6, 1e6) as i32,
+            area[1].floor().clamp(-1e6, 1e6) as i32,
+            area[2].ceil().clamp(-1e6, 1e6) as i32,
+            area[3].ceil().clamp(-1e6, 1e6) as i32,
+        ];
+        self.jobs.push(LayerJob {
+            quads: first..last,
+            area: whole,
+            layer,
+            level,
+            read_at: None,
+            clear: 0,
+        });
+        #[allow(clippy::cast_precision_loss)]
+        let (rect, number) = (
+            [
+                whole[0] as f32,
+                whole[1] as f32,
+                (whole[2] - whole[0]) as f32,
+                (whole[3] - whole[1]) as f32,
+            ],
+            layer as f32,
+        );
+        self.push(Instance {
+            params: [number, 0.0, 0.0, 0.0],
+            grow: 0.0,
+            ..Instance::new(LAYER, rect, Color::rgba(1.0, 1.0, 1.0, group.opacity))
+        });
+    }
+
+    /// A layer a group covering `area` can be drawn into: not one the
+    /// groups inside it are in, as it reads them while it is drawn, and not
+    /// one where another group covers any of the same pixels, unless that
+    /// one is read at a level before this one's.
+    fn free_layer(&self, group: &Open, area: [f32; 4]) -> Option<u32> {
+        let inside = self.jobs.get(group.first_job..).unwrap_or_default();
+        let level = inside
+            .iter()
+            .filter(|job| job.read_at.is_none())
+            .map(|job| job.level + 1)
+            .max()
+            .unwrap_or(0);
+        (0..MOST_LAYERS).find(|&layer| {
+            let reads = inside
+                .iter()
+                .any(|job| job.read_at.is_none() && job.layer == layer);
+            let taken = self.jobs.iter().any(|job| {
+                #[allow(clippy::cast_precision_loss)]
+                let covers = job.area.map(|edge| edge as f32);
+                let gone = job.read_at.is_some_and(|read| read < level);
+                job.layer == layer && !gone && overlap(covers, area)
+            });
+            !reads && !taken
+        })
+    }
+
+    /// Fades the quads from `start` on by `opacity`, each on its own.
+    fn fade(&mut self, start: usize, opacity: f32) {
+        const FLOAT: usize = std::mem::size_of::<f32>();
+        let read = |quad: &[u8], at: usize| {
+            quad.get(at * FLOAT..(at + 1) * FLOAT)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map_or(0.0, f32::from_ne_bytes)
+        };
+        let quads = self
+            .quads
+            .get_mut(start * QUAD_BYTES..)
+            .unwrap_or_default()
+            .as_chunks_mut::<QUAD_BYTES>()
+            .0;
+        for quad in quads {
+            for at in alphas(read(quad, KIND)) {
+                let faded = read(quad, at) * opacity;
+                if let Some(bytes) = quad.get_mut(at * FLOAT..(at + 1) * FLOAT) {
+                    bytes.copy_from_slice(&faded.to_ne_bytes());
+                }
+            }
+        }
     }
 
     /// The quads to draw, `QUAD_BYTES` each, back to front.
@@ -1082,6 +1535,17 @@ impl Overlay {
     /// How many quads there are to draw.
     pub(crate) fn count(&self) -> u32 {
         u32::try_from(self.quads.len() / QUAD_BYTES).unwrap_or(0)
+    }
+
+    /// The quads of groups drawn into layers before the picture, and the
+    /// groups, in the order they are to be drawn.
+    pub(crate) fn layers(&self) -> (&[u8], &[LayerJob]) {
+        (&self.layered, &self.jobs)
+    }
+
+    /// The passes that draw the groups into layers, in order.
+    pub(crate) fn layer_passes(&self) -> &[LayerPass] {
+        &self.passes
     }
 
     /// The rows of the atlas that changed since [`sent`](Self::sent) was
@@ -1128,6 +1592,8 @@ mod tests {
         params: [f32; 4],
         clip: [f32; 4],
         clip_radii: [f32; 4],
+        clip_turn: [f32; 4],
+        within: [f32; 4],
         kind: f32,
         grow: f32,
         corner: f32,
@@ -1137,8 +1603,16 @@ mod tests {
     }
 
     fn quads(overlay: &Overlay) -> Vec<Quad> {
-        overlay
-            .quads()
+        decoded(overlay.quads())
+    }
+
+    /// The quads of the groups drawn into layers.
+    fn layered(overlay: &Overlay) -> Vec<Quad> {
+        decoded(overlay.layers().0)
+    }
+
+    fn decoded(bytes: &[u8]) -> Vec<Quad> {
+        bytes
             .as_chunks::<QUAD_BYTES>()
             .0
             .iter()
@@ -1166,11 +1640,13 @@ mod tests {
                     params: four(32),
                     clip: four(36),
                     clip_radii: four(40),
-                    kind: number(44),
-                    grow: number(45),
+                    clip_turn: four(44),
+                    within: four(48),
+                    kind: number(52),
+                    grow: number(53),
                     corner: number(12),
-                    letter: number(44) == 1.0,
-                    image: number(44) == 2.0,
+                    letter: number(52) == 1.0,
+                    image: number(52) == 2.0,
                     angle: number(5).atan2(number(4)),
                 }
             })
@@ -1299,7 +1775,9 @@ mod tests {
                 Draw::Text { .. }
                 | Draw::Turned { .. }
                 | Draw::Box { .. }
-                | Draw::Shadow { .. } => None,
+                | Draw::Shadow { .. }
+                | Draw::Group { .. }
+                | Draw::EndGroup => None,
             })
             .collect();
         let boxes: Vec<_> = drawn.iter().filter(|quad| !quad.letter).collect();
@@ -1513,8 +1991,8 @@ mod tests {
     }
 
     #[test]
-    fn a_quad_is_forty_eight_numbers() {
-        assert_eq!(QUAD_BYTES, 48 * 4);
+    fn a_quad_is_fifty_six_numbers() {
+        assert_eq!(QUAD_BYTES, 56 * 4);
     }
 
     #[test]
@@ -1747,11 +2225,7 @@ mod tests {
 
     #[test]
     fn a_clip_goes_to_every_kind_and_an_empty_one_draws_nothing() {
-        let clip = Clip {
-            position: [5.0, 6.0],
-            size: [30.0, 40.0],
-            radii: [10.0, 0.0, 0.0, 99.0],
-        };
+        let clip = Clip::new([5.0, 6.0], [30.0, 40.0], [10.0, 0.0, 0.0, 99.0]);
         let stops = [stop(RED, 0.0), stop(BLUE, 1.0)];
         let fills = [
             Fill::Color(RED),
@@ -1764,7 +2238,9 @@ mod tests {
             let out = drawn(&[clipped(a_box(fill, [1.0; 4]), clip)]);
             assert!(out.len() >= 2);
             for quad in out {
-                assert_eq!(quad.clip, [5.0, 6.0, 30.0, 40.0]);
+                // Its middle and half its size, straight.
+                assert_eq!(quad.clip, [20.0, 26.0, 15.0, 20.0]);
+                assert_eq!(quad.clip_turn, [1.0, 0.0, 0.0, 1.0]);
                 // Shrunk to fit: 99 on a side 30 wide.
                 assert!(
                     (quad.clip_radii[0] - 10.0 * 30.0 / 99.0).abs() < 1e-3,
@@ -1775,7 +2251,7 @@ mod tests {
         }
         // No clip is a huge one.
         let out = drawn(&[a_box(Fill::Color(RED), [0.0; 4])]);
-        assert!(out[0].clip[2] > 1e5 && out[0].clip[0] < -1e5);
+        assert!(out[0].clip[2] > 1e5 && out[0].within[0] < -1e5 && out[0].within[2] > 1e5);
         // Nothing is inside an empty one.
         let empty = Clip {
             size: [0.0, 10.0],
@@ -1798,7 +2274,7 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(
             out.iter()
-                .all(|quad| quad.letter && quad.clip == [5.0, 6.0, 30.0, 40.0])
+                .all(|quad| quad.letter && quad.clip == [20.0, 26.0, 15.0, 20.0])
         );
     }
 
@@ -1897,6 +2373,11 @@ mod tests {
         assert_eq!(quad.params, [52.0, 27.0, 5.0, 0.0]);
         assert_eq!(quad.grow, 16.0);
         assert_eq!(quad.colour, [0.0, 0.0, 0.0, 0.5]);
+        // The box it falls from, which it is not drawn under: from the
+        // shadow's middle back by the offset, its own half size and corners.
+        assert_eq!(quad.border[..2], [-3.0, -4.0]);
+        assert_eq!(quad.from[..2], [50.0, 25.0]);
+        assert_eq!(quad.colour2, [8.0; 4]);
 
         let out = drawn(&[shadow(true)]);
         let quad = out[0];
@@ -1998,5 +2479,226 @@ mod tests {
         .apply([35.0, 11.0]);
         assert!((moved[0] - 35.0).abs() < 1e-3 && (moved[1] - 11.0).abs() < 1e-3);
         assert!((out[0].angle - 0.75).abs() < 1e-6);
+    }
+
+    /// A plain box of `color` at `position`, 40 by 40.
+    fn square(position: [f32; 2], color: Color) -> Draw<'static> {
+        Draw::Box {
+            position,
+            size: [40.0, 40.0],
+            radii: [0.0; 4],
+            fill: Fill::Color(color),
+            border_widths: [0.0; 4],
+            border_color: Color::WHITE,
+            transform: Transform::IDENTITY,
+            clip: None,
+        }
+    }
+
+    fn built(draws: &[Draw<'_>]) -> Overlay {
+        let mut overlay = Overlay::new(Font::bundled());
+        overlay.build(draws.iter().copied(), false).unwrap();
+        overlay
+    }
+
+    #[test]
+    fn a_group_whose_pieces_are_apart_is_faded_piece_by_piece_for_nothing() {
+        let stops = [stop(RED, 0.0), stop(BLUE, 1.0)];
+        let gradient = Draw::Box {
+            position: [200.0, 0.0],
+            size: [40.0, 40.0],
+            radii: [0.0; 4],
+            fill: Fill::Linear {
+                angle: 90.0,
+                stops: &stops,
+            },
+            border_widths: [0.0; 4],
+            border_color: Color::WHITE,
+            transform: Transform::IDENTITY,
+            clip: None,
+        };
+        let overlay = built(&[
+            Draw::Group { opacity: 0.5 },
+            square([0.0, 0.0], RED),
+            square([100.0, 0.0], GREEN),
+            gradient,
+            Draw::EndGroup,
+        ]);
+        let out = quads(&overlay);
+        assert!(overlay.layers().1.is_empty());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].colour, [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(out[1].colour, [0.0, 1.0, 0.0, 0.5]);
+        // Both ends of a gradient fade.
+        assert_eq!((out[2].colour[3], out[2].colour2[3]), (0.5, 0.5));
+        // A group that does not fade, or has nothing in it, changes nothing.
+        let overlay = built(&[
+            Draw::Group { opacity: 1.0 },
+            square([0.0, 0.0], RED),
+            square([10.0, 0.0], GREEN),
+            Draw::EndGroup,
+            Draw::Group { opacity: 0.5 },
+            Draw::EndGroup,
+            Draw::EndGroup,
+        ]);
+        assert_eq!(quads(&overlay).len(), 2);
+        assert!(overlay.layers().1.is_empty());
+        // One faded to nothing draws nothing.
+        let overlay = built(&[
+            Draw::Group { opacity: 0.0 },
+            square([0.0, 0.0], RED),
+            Draw::EndGroup,
+            square([0.0, 0.0], GREEN),
+        ]);
+        assert_eq!(quads(&overlay).len(), 1);
+    }
+
+    #[test]
+    fn a_group_whose_pieces_overlap_is_drawn_into_a_layer_laid_over_at_its_opacity() {
+        let overlay = built(&[
+            square([0.0, 0.0], BLUE),
+            Draw::Group { opacity: 0.25 },
+            square([10.0, 10.0], RED),
+            square([30.0, 30.0], GREEN),
+            // Left open: closed at the end.
+        ]);
+        let out = quads(&overlay);
+        let (_, jobs) = overlay.layers();
+        let inside = layered(&overlay);
+        // The pieces go to the layer as they are, unfaded, after a quad
+        // that clears their part of it, in one pass.
+        assert_eq!(inside.len(), 3);
+        assert_eq!(
+            (inside[0].kind, inside[0].rect),
+            (CLEAR, [9.0, 9.0, 62.0, 62.0])
+        );
+        assert_eq!(inside[1].colour, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].clear, jobs[0].quads.clone()), (0, 1..3));
+        assert_eq!(
+            overlay.layer_passes(),
+            [LayerPass {
+                layer: 0,
+                clears: 0..1,
+                quads: 1..3,
+                area: [9, 9, 71, 71],
+            }]
+        );
+        assert_eq!(jobs[0].layer, 0);
+        // The part of the screen they cover, a pixel of soft edge round.
+        assert_eq!(jobs[0].area, [9, 9, 71, 71]);
+        // The picture draws the box under it, then the layer at a quarter.
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].kind, LAYER);
+        assert_eq!(out[1].rect, [9.0, 9.0, 62.0, 62.0]);
+        assert_eq!(out[1].colour[3], 0.25);
+        assert_eq!(out[1].params[0], 0.0);
+    }
+
+    #[test]
+    fn groups_that_overlap_or_sit_inside_each_other_take_different_layers() {
+        let pair = |at: f32| [square([at, at], RED), square([at + 10.0, at + 10.0], GREEN)];
+        let [a, b] = pair(0.0);
+        let [c, d] = pair(20.0);
+        let [e, f] = pair(500.0);
+        let [g, h] = pair(5.0);
+        let overlay = built(&[
+            // One group, then one over it, then one far off.
+            Draw::Group { opacity: 0.5 },
+            a,
+            b,
+            Draw::EndGroup,
+            Draw::Group { opacity: 0.5 },
+            c,
+            d,
+            Draw::EndGroup,
+            Draw::Group { opacity: 0.5 },
+            e,
+            f,
+            Draw::EndGroup,
+            // A group with one inside it.
+            Draw::Group { opacity: 0.5 },
+            g,
+            Draw::Group { opacity: 0.5 },
+            h,
+            square([8.0, 8.0], BLUE),
+            Draw::EndGroup,
+            Draw::EndGroup,
+        ]);
+        let (_, jobs) = overlay.layers();
+        let layers: Vec<(u32, u32)> = jobs.iter().map(|job| (job.level, job.layer)).collect();
+        // The second covers the first, so takes another layer; the far one
+        // shares the first's. The inner group covers the first two; the
+        // group it is in covers them too and reads it, so cannot share its
+        // layer either, and is drawn a level later. They are listed in the
+        // order they are drawn: a level, then a layer, at a time, so the
+        // first and the far one are drawn in one pass.
+        assert_eq!(layers, [(0, 0), (0, 0), (0, 1), (0, 2), (1, 3)]);
+        // The outer group's own quads: its square, then the inner layer.
+        let inside = layered(&overlay);
+        let outer = &inside[jobs[4].quads.start as usize..jobs[4].quads.end as usize];
+        assert_eq!(outer.len(), 2);
+        assert_eq!((outer[1].kind, outer[1].params[0]), (LAYER, 2.0));
+        // On the picture: one layer quad for each of the four outer groups.
+        let out = quads(&overlay);
+        assert_eq!(out.len(), 4);
+        assert!(out.iter().all(|quad| quad.kind == LAYER));
+        // With every layer taken, a fifth group over them all is faded
+        // piece by piece.
+        let [i, j] = pair(2.0);
+        let mut more: Vec<Draw<'_>> = Vec::new();
+        for _ in 0..MOST_LAYERS + 1 {
+            more.extend([Draw::Group { opacity: 0.5 }, i, j, Draw::EndGroup]);
+        }
+        let overlay = built(&more);
+        assert_eq!(overlay.layers().1.len(), MOST_LAYERS as usize);
+        let out = quads(&overlay);
+        assert_eq!(out.len(), MOST_LAYERS as usize + 2);
+        assert_eq!(out[out.len() - 1].colour[3], 0.5);
+    }
+
+    #[test]
+    fn a_turned_clip_carries_its_middle_its_turn_back_and_the_box_it_is_within() {
+        let clip = lore_ui::Clip {
+            transform: Transform::about([50.0, 50.0], 2.0, std::f32::consts::FRAC_PI_2),
+            within: Some([1.0, 2.0, 3.0, 4.0]),
+            ..Clip::new([0.0, 0.0], [100.0, 60.0], [10.0; 4])
+        };
+        let out = drawn(&[clipped(a_box(Fill::Color(RED), [0.0; 4]), clip)]);
+        let quad = out[0];
+        // The middle (50, 30) turned a quarter and doubled about (50, 50).
+        assert!(
+            (quad.clip[0] - 90.0).abs() < 1e-3 && (quad.clip[1] - 50.0).abs() < 1e-3,
+            "{:?}",
+            quad.clip
+        );
+        // Half the size and the corners, in screen pixels.
+        assert_eq!(quad.clip[2..], [100.0, 60.0]);
+        assert_eq!(quad.clip_radii, [20.0; 4]);
+        // Back a quarter turn, scaled to screen pixels.
+        let turn = quad.clip_turn.map(|value| (value * 1e3).round() / 1e3);
+        assert_eq!(turn, [0.0, -1.0, 1.0, 0.0]);
+        assert_eq!(quad.within, [1.0, 2.0, 4.0, 6.0]);
+        // A clip squashed flat has nothing inside it.
+        let flat = lore_ui::Clip {
+            transform: Transform::about([0.0, 0.0], 0.0, 0.0),
+            ..clip
+        };
+        assert!(drawn(&[clipped(a_box(Fill::Color(RED), [0.0; 4]), flat)]).is_empty());
+    }
+
+    #[test]
+    fn a_frame_full_to_the_last_quad_keeps_room_for_its_groups_clearing_quads() {
+        let mut draws = vec![
+            Draw::Group { opacity: 0.5 },
+            square([0.0, 0.0], RED),
+            square([10.0, 10.0], GREEN),
+            Draw::EndGroup,
+        ];
+        draws.extend((0..MOST_QUADS).map(|n| square([n as f32 * 50.0, 300.0], BLUE)));
+        let overlay = built(&draws);
+        let (layered, jobs) = overlay.layers();
+        assert_eq!(jobs.len(), 1);
+        assert!(overlay.quads().len() + layered.len() <= MOST_QUADS * QUAD_BYTES);
     }
 }

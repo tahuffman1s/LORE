@@ -1355,7 +1355,12 @@ impl Renderer {
             let read = self
                 .shaders
                 .record_screen(slot.commands, self.next, view, &self.camera);
-            ui.prepare(slot.commands, self.next, &mut self.overlay)?;
+            ui.prepare(
+                slot.commands,
+                self.next,
+                &mut self.overlay,
+                swapchain.extent,
+            )?;
             tonemap.record(
                 slot.commands,
                 Canvas {

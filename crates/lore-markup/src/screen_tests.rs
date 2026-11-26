@@ -369,6 +369,8 @@ fn draw_order_shadow_background_children_outline() {
             Paint::Rect { .. } => "rect",
             Paint::Image { .. } => "image",
             Paint::Text { .. } => "text",
+            Paint::Group { .. } => "group",
+            Paint::EndGroup => "end",
         })
         .collect();
     assert_eq!(kinds, ["shadow", "rect", "rect", "ring"], "{kinds:?}");

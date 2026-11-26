@@ -2,8 +2,8 @@
 //!
 //! Nothing here draws. The [`Frame`] it fills is the whole contract with the
 //! drawing layer: rectangles, shadows, pictures and text runs back to front,
-//! each with its transform, opacity and clip, plus the areas that react to
-//! the pointer, front to back.
+//! each with its transform, opacity and clip, groups faded as one, plus the
+//! areas that react to the pointer, front to back.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -76,13 +76,64 @@ impl Rect {
     }
 }
 
-/// A clip: a rectangle with rounded corners, in screen space.
+/// A clip: a rectangle with rounded corners, moved and turned by its own
+/// transform as the box it belongs to is, so a turned box clips along its
+/// turned edges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clip {
-    /// The area kept.
+    /// The area kept, before `transform`.
     pub rect: Rect,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
     pub radii: [f32; 4],
+    /// 2D affine `[a, b, c, d, e, f]`, as [`Common::transform`].
+    pub transform: [f32; 6],
+    /// A straight rectangle on the screen that is kept as well: what is left
+    /// of the clips round this one that are turned another way. `None` is
+    /// everything.
+    pub within: Option<Rect>,
+}
+
+impl Clip {
+    /// Whether the screen point is kept.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        if self.within.is_some_and(|within| !within.contains(x, y)) {
+            return false;
+        }
+        let Some(back) = invert(&self.transform) else {
+            return false;
+        };
+        let [lx, ly] = apply(&back, x, y);
+        inside_rounded(&self.rect, self.radii, lx, ly)
+    }
+}
+
+/// Whether a point is inside a rectangle with round corners `radii`,
+/// top-left, top-right, bottom-right, bottom-left.
+pub(crate) fn inside_rounded(rect: &Rect, radii: [f32; 4], x: f32, y: f32) -> bool {
+    if !rect.contains(x, y) {
+        return false;
+    }
+    let (left, top) = (x < rect.x + rect.w / 2.0, y < rect.y + rect.h / 2.0);
+    let radius = match (left, top) {
+        (true, true) => radii[0],
+        (false, true) => radii[1],
+        (false, false) => radii[2],
+        (true, false) => radii[3],
+    }
+    .clamp(0.0, rect.w.min(rect.h) / 2.0);
+    let cx = if left {
+        rect.x + radius
+    } else {
+        rect.right() - radius
+    };
+    let cy = if top {
+        rect.y + radius
+    } else {
+        rect.bottom() - radius
+    };
+    let (dx, dy) = (x - cx, y - cy);
+    let in_corner = (dx < 0.0) == left && (dy < 0.0) == top;
+    !in_corner || dx * dx + dy * dy <= radius * radius
 }
 
 /// What every paint carries.
@@ -90,7 +141,9 @@ pub struct Clip {
 pub struct Common {
     /// 2D affine `[a, b, c, d, e, f]`: `x' = a*x + c*y + e`, `y' = b*x + d*y + f`.
     pub transform: [f32; 6],
-    /// 0 to 1, already multiplied down the tree.
+    /// 0 to 1, already multiplied down the tree: what a drawer that does
+    /// not draw [`Paint::Group`]s as one picture multiplies colours by. One
+    /// that does uses the groups instead.
     pub opacity: f32,
     /// Where drawing may happen.
     pub clip: Option<Clip>,
@@ -227,6 +280,15 @@ pub enum Paint {
         /// Transform, opacity, clip.
         common: Common,
     },
+    /// The paints up to the matching [`Paint::EndGroup`] are one picture,
+    /// laid over what is behind at `opacity`: an element whose `opacity` is
+    /// below 1, with everything in it.
+    Group {
+        /// The element's own opacity, 0 to 1.
+        opacity: f32,
+    },
+    /// The end of the last group begun.
+    EndGroup,
 }
 
 /// An area that reacts to the pointer.
@@ -345,23 +407,52 @@ pub(crate) fn bbox(m: &[f32; 6], r: &Rect) -> Rect {
     }
 }
 
-fn plain(m: &[f32; 6]) -> bool {
-    m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0
+/// A clip to `rect`, with round corners `radii`, moved by `m`.
+fn clip_to(m: [f32; 6], rect: Rect, radii: [f32; 4]) -> Clip {
+    Clip {
+        rect,
+        radii,
+        transform: m,
+        within: None,
+    }
 }
 
+/// What is inside both `a` and `b`, `b` being inside `a`. Clips turned the
+/// same way meet exactly. When `a` is turned another way, `b` is kept as it
+/// is and only the straight box round `a` on the screen is kept of `a`,
+/// which is exact when `a` is straight with square corners.
 fn intersect_clip(a: Option<Clip>, b: Clip) -> Clip {
-    match a {
-        None => b,
-        Some(a) => {
-            let rect = a.rect.intersect(&b.rect);
-            let radii = if rect == b.rect {
-                b.radii
-            } else if rect == a.rect {
-                a.radii
-            } else {
-                [0.0; 4]
-            };
-            Clip { rect, radii }
+    let Some(a) = a else {
+        return b;
+    };
+    let within = |extra: Option<Rect>| match (a.within, extra) {
+        (Some(one), Some(other)) => Some(one.intersect(&other)),
+        (one, other) => one.or(other),
+    };
+    if a.transform == b.transform {
+        let rect = a.rect.intersect(&b.rect);
+        let radii = if rect == b.rect {
+            b.radii
+        } else if rect == a.rect {
+            a.radii
+        } else {
+            [0.0; 4]
+        };
+        Clip {
+            rect,
+            radii,
+            transform: b.transform,
+            within: within(b.within),
+        }
+    } else {
+        let round_a = bbox(&a.transform, &a.rect);
+        let kept = within(Some(round_a));
+        Clip {
+            within: match (kept, b.within) {
+                (Some(one), Some(other)) => Some(one.intersect(&other)),
+                (one, other) => one.or(other),
+            },
+            ..b
         }
     }
 }
@@ -571,6 +662,7 @@ impl Painter<'_, '_> {
         if let Some(n) = self.nodes.get_mut(i) {
             n.rect = brect;
             n.matrix = m;
+            n.cut = pc.clip;
         }
 
         // Hit area before the element's own paints and children, so the list
@@ -589,6 +681,14 @@ impl Painter<'_, '_> {
             });
         }
 
+        // An element that fades fades as one picture, with all that is in
+        // it, so its parts do not show through each other.
+        let group = opacity > 0.0 && cs.opacity < 1.0;
+        if group {
+            self.frame.paints.push(Paint::Group {
+                opacity: cs.opacity,
+            });
+        }
         if visible {
             self.own_paints(cs, brect, prect, radii, b, &self_common);
         }
@@ -596,14 +696,9 @@ impl Painter<'_, '_> {
         // Clip and scroll of the content.
         let clips = cs.overflow_x != Overflow::Visible || cs.overflow_y != Overflow::Visible;
         let child_clip = if clips {
-            let inner = shrink_radii(radii, b);
-            let rect = bbox(&m, &prect);
             Some(intersect_clip(
                 pc.clip,
-                Clip {
-                    rect,
-                    radii: if plain(&m) { inner } else { [0.0; 4] },
-                },
+                clip_to(m, prect, shrink_radii(radii, b)),
             ))
         } else {
             pc.clip
@@ -685,6 +780,9 @@ impl Painter<'_, '_> {
         if visible {
             self.scroll_bars(cs, &layout, scroll, prect, radii, b, &self_common);
             self.outline(el, cs, brect, radii, &self_common);
+        }
+        if group {
+            self.frame.paints.push(Paint::EndGroup);
         }
     }
 
@@ -852,14 +950,7 @@ impl Painter<'_, '_> {
         let picture = self.frame.push_text(pname);
         let clip = intersect_clip(
             common.clip,
-            Clip {
-                rect: bbox(&common.transform, &prect),
-                radii: if plain(&common.transform) {
-                    shrink_radii(radii, b)
-                } else {
-                    [0.0; 4]
-                },
-            },
+            clip_to(common.transform, prect, shrink_radii(radii, b)),
         );
         self.frame.paints.push(Paint::Image {
             rect,
@@ -1045,6 +1136,7 @@ impl Painter<'_, '_> {
         if let Some(n) = self.nodes.get_mut(i) {
             n.rect = rect;
             n.matrix = pc.m;
+            n.cut = pc.clip;
         }
         let common = Common {
             transform: pc.m,
@@ -1207,13 +1299,7 @@ impl Painter<'_, '_> {
                     TextAlign::Right => (crect.w - w).max(0.0),
                 };
                 let baseline = crect.y + (crect.h - lh) / 2.0 + (lh - (asc + desc)) / 2.0 + asc;
-                let clip = intersect_clip(
-                    common.clip,
-                    Clip {
-                        rect: bbox(&common.transform, &crect),
-                        radii: [0.0; 4],
-                    },
-                );
+                let clip = intersect_clip(common.clip, clip_to(common.transform, crect, [0.0; 4]));
                 self.text_run(cs, [crect.x + x, baseline], text, color, Some(clip), common);
             }
             Control::Checkbox => {

@@ -94,6 +94,21 @@ impl Transform {
         ]
     }
 
+    /// The transform that puts everything back where it was, or `None` if
+    /// this squashes everything flat.
+    #[must_use]
+    pub fn inverse(self) -> Option<Self> {
+        let [a, b, c, d, e, f] = self.matrix;
+        let det = a * d - b * c;
+        if !det.is_finite() || det.abs() < 1e-12 {
+            return None;
+        }
+        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+        Some(Self {
+            matrix: [ia, ib, ic, id, -(ia * e + ic * f), -(ib * e + id * f)],
+        })
+    }
+
     /// Whether this leaves everything where it is.
     #[must_use]
     pub fn is_identity(self) -> bool {
@@ -111,17 +126,111 @@ impl Transform {
     }
 }
 
-/// Only what is inside this rounded box is drawn. It is not turned: it
-/// is a box on the screen, in real pixels.
+/// Only what is inside this rounded box is drawn. The box is moved, turned
+/// and scaled by its own `transform`, as the piece it is the box of is, so
+/// a clip to a turned box cuts along the turned edges and corners.
+///
+/// ```
+/// use lore_ui::{Clip, Transform};
+///
+/// // A 100 by 100 box turned an eighth of a turn about its middle.
+/// let clip = Clip {
+///     transform: Transform::about([50.0, 50.0], 1.0, std::f32::consts::FRAC_PI_4),
+///     ..Clip::new([0.0, 0.0], [100.0, 100.0], [0.0; 4])
+/// };
+/// assert!(clip.contains([50.0, 50.0]));
+/// // The corner of the straight box is outside the turned one.
+/// assert!(!clip.contains([3.0, 3.0]));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Clip {
-    /// The top-left corner.
+    /// The top-left corner, before `transform`.
     pub position: [f32; 2],
-    /// Width and height.
+    /// Width and height, before `transform`.
     pub size: [f32; 2],
     /// How round each corner is: top-left, top-right, bottom-right,
     /// bottom-left. 0 is square.
     pub radii: [f32; 4],
+    /// How the box is moved, turned and scaled on the screen.
+    pub transform: Transform,
+    /// A straight box on the screen, left, top, width and height, that
+    /// what is drawn must be inside as well: what is left of the clips
+    /// round this one when they are not turned the same way. `None` is the
+    /// whole screen.
+    pub within: Option<[f32; 4]>,
+}
+
+impl Clip {
+    /// A straight box on the screen with corners `radii`, and nothing else
+    /// to be inside.
+    #[must_use]
+    pub const fn new(position: [f32; 2], size: [f32; 2], radii: [f32; 4]) -> Self {
+        Self {
+            position,
+            size,
+            radii,
+            transform: Transform::IDENTITY,
+            within: None,
+        }
+    }
+
+    /// Whether `point`, on the screen, is inside: inside the turned box and
+    /// its round corners, and inside `within`.
+    #[must_use]
+    pub fn contains(&self, point: [f32; 2]) -> bool {
+        if let Some([left, top, width, height]) = self.within
+            && !(point[0] >= left
+                && point[0] < left + width
+                && point[1] >= top
+                && point[1] < top + height)
+        {
+            return false;
+        }
+        let Some(back) = self.transform.inverse() else {
+            return false;
+        };
+        let [x, y] = back.apply(point);
+        inside_round_box(
+            [x - self.position[0], y - self.position[1]],
+            self.size,
+            self.radii,
+        )
+    }
+}
+
+/// Whether `point`, measured from a box's top-left corner, is inside the box
+/// `size` with round corners `radii` (top-left, top-right, bottom-right,
+/// bottom-left).
+pub(crate) fn inside_round_box(point: [f32; 2], size: [f32; 2], radii: [f32; 4]) -> bool {
+    let [x, y] = point;
+    let [w, h] = size;
+    if !(x >= 0.0 && x < w && y >= 0.0 && y < h) {
+        return false;
+    }
+    let most = (w.min(h) / 2.0).max(0.0);
+    let [tl, tr, br, bl] = radii.map(|radius| radius.clamp(0.0, most));
+    // The corner the point is in, and the middle of its circle.
+    let (radius, middle) = match (x < w / 2.0, y < h / 2.0) {
+        (true, true) => (tl, [tl, tl]),
+        (false, true) => (tr, [w - tr, tr]),
+        (false, false) => (br, [w - br, h - br]),
+        (true, false) => (bl, [bl, h - bl]),
+    };
+    let beyond_x = if x < w / 2.0 {
+        x < middle[0]
+    } else {
+        x > middle[0]
+    };
+    let beyond_y = if y < h / 2.0 {
+        y < middle[1]
+    } else {
+        y > middle[1]
+    };
+    if radius <= 0.0 || !(beyond_x && beyond_y) {
+        return true;
+    }
+    let (dx, dy) = (x - middle[0], y - middle[1]);
+    dx * dx + dy * dy <= radius * radius
 }
 
 /// One colour of a gradient, and where along it the colour is.

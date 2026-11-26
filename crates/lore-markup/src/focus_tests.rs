@@ -544,3 +544,60 @@ fn a_label_wrapped_round_a_control_stands_for_it() {
     assert_eq!(s.checked(id(&s, "c")), Some(true));
     assert_eq!(s.focused(), Some(id(&s, "c")));
 }
+
+#[test]
+fn the_pointer_is_cut_by_a_turned_clip_along_its_turned_edges() {
+    // A 100px square turned an eighth of a turn about its middle (150,
+    // 150), with a child much larger than it.
+    let mut s = page(
+        "body{margin:0} #t{position:absolute;left:100px;top:100px;width:100px;height:100px;
+         overflow:hidden;transform:rotate(45deg)}
+         #big{position:absolute;left:-100px;top:-100px;width:300px;height:300px}",
+        "<div id=t><div id=big></div></div>",
+    );
+    s.frame(&mut M);
+    // The middle is the child's.
+    s.pointer_move(150.0, 150.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "big")));
+    // The corner of the straight box round the turn is outside it: what
+    // is under it is the page.
+    s.pointer_move(102.0, 102.0);
+    assert_ne!(s.ix.hover, Some(id(&s, "big")));
+    assert_ne!(s.ix.hover, Some(id(&s, "t")));
+    // Just inside a point of the turned square, beyond the straight box.
+    s.pointer_move(150.0, 85.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "big")));
+}
+
+#[test]
+fn the_pointer_misses_the_round_corners_of_a_box() {
+    let mut s = page(
+        "body{margin:0} #r{width:100px;height:100px;border-radius:50px}",
+        "<div id=r></div>",
+    );
+    s.frame(&mut M);
+    s.pointer_move(50.0, 50.0);
+    assert_eq!(s.ix.hover, Some(id(&s, "r")));
+    s.pointer_move(5.0, 5.0);
+    assert_ne!(s.ix.hover, Some(id(&s, "r")));
+}
+
+#[test]
+fn an_element_that_fades_is_one_group_round_its_paints_and_its_children() {
+    let mut s = page(
+        "body{margin:0} #p{opacity:0.5;width:50px;height:50px;background-color:#f00}
+         #c{width:10px;height:10px;background-color:#00f}",
+        "<div id=p><div id=c></div></div>",
+    );
+    let f = s.frame(&mut M);
+    let kinds: Vec<String> = f
+        .paints
+        .iter()
+        .map(|p| match p {
+            Paint::Group { opacity } => format!("group {opacity}"),
+            Paint::EndGroup => "end".to_owned(),
+            _ => "paint".to_owned(),
+        })
+        .collect();
+    assert_eq!(kinds, ["group 0.5", "paint", "paint", "end"], "{kinds:?}");
+}
