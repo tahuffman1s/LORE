@@ -91,3 +91,7 @@ game.shaders.surface("lava", { glow = 2 }) -- wrong: it needs the material's nam
 game.shaders.screen("heat"):set(5, 0.8) -- wrong: a value is named in quotes
 game.input.showControlsNotice("off") -- wrong: it takes true or false
 game.input.onControlsChanged(5) -- wrong: it takes a function
+
+-- Difficulty is a dial of named steps: its level is read, its name set.
+game.difficulty.name = 2 -- wrong: a step is named in text
+print(game.difficulty.scale("hard")) -- wrong: it scales a number

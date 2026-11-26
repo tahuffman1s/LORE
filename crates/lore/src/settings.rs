@@ -1,5 +1,6 @@
-//! The player's own settings: how loud (everything, and music and effects
-//! each), how fast the view turns, which way up, how hard the gamepad
+//! The player's own settings: how hard games start and the assists they
+//! keep (game speed, fall damage), how loud (everything, and music and
+//! effects each), how fast the view turns, which way up, how hard the gamepad
 //! shakes, how big the HUD and menus are, and how the picture is drawn.
 //! One file on their computer that every game played with LORE reads when
 //! it starts, and that the engine writes when a game's settings menu
@@ -251,6 +252,20 @@ macro_rules! settings {
 }
 
 settings! {
+    /// How hard a new game starts, from 0 (its easiest step) through 50
+    /// (its middle) to 100 (its hardest): each game names its own steps
+    /// and starts at the one nearest this. The pause menu shows it as the
+    /// game's steps by name, and turning it there changes the game at once
+    /// and this for the next game.
+    difficulty: f32 = 50.0, Shape::Number(Settings::DIFFICULTY), "Gameplay", "Difficulty";
+    /// How fast the game runs, in percent, from 50 to 100: slower gives
+    /// more time to aim, dodge and read. Everything in the world slows
+    /// together, its sounds lower with it; music and menus do not. The
+    /// game's rules stay the same: only the pace is slower.
+    game_speed: f32 = 100.0, Shape::Number(Settings::GAME_SPEED), "Gameplay", "Game speed";
+    /// true hurts the player who lands from high up; false lets them land
+    /// from any height unhurt.
+    fall_damage: bool = true, Shape::Toggle, "Gameplay", "Fall damage";
     /// How loud everything is, from 0 (silent) to 100 (full).
     volume: f32 = 100.0, Shape::Number(Settings::VOLUME), "Sound", "Volume";
     /// How loud music is, from 0 (off) to 100 (full). It is turned down by
@@ -390,6 +405,19 @@ impl Settings {
         lowest: 0.05,
         highest: 5.0,
         step: 0.05,
+    };
+    /// What [`difficulty`](Self::difficulty) can be: a step in a menu is
+    /// the next of the engine's own three steps.
+    pub const DIFFICULTY: Range = Range {
+        lowest: 0.0,
+        highest: 100.0,
+        step: 50.0,
+    };
+    /// What [`game_speed`](Self::game_speed) can be.
+    pub const GAME_SPEED: Range = Range {
+        lowest: 50.0,
+        highest: 100.0,
+        step: 10.0,
     };
     /// What [`rumble`](Self::rumble) can be.
     pub const RUMBLE: Range = Range {
@@ -540,8 +568,8 @@ impl Settings {
     /// use lore::settings::Settings;
     ///
     /// let told = Settings::default().described();
-    /// assert_eq!(told[0].name, "volume");
-    /// assert_eq!(told[0].label, "Volume");
+    /// assert_eq!(told[0].name, "difficulty");
+    /// assert_eq!(told[0].label, "Difficulty");
     /// ```
     #[must_use]
     pub fn described(&self) -> Vec<Setting> {
@@ -1038,6 +1066,9 @@ mod tests {
     #[test]
     fn what_is_written_is_read_back_the_same() {
         let chosen = Settings {
+            difficulty: 100.0,
+            game_speed: 70.0,
+            fall_damage: false,
             volume: 35.0,
             music_volume: 0.0,
             effects_volume: 80.0,
@@ -1200,7 +1231,8 @@ mod tests {
                 "line 1: `volume` must be a number from 0 to 100. It keeps its usual value, 100.",
                 "line 2: `sensitivity` goes from 0.05 to 5, so 9 was changed to 5.",
                 "line 3: `fov` is not a setting, so the line was skipped. The settings are \
-                 `volume`, `music_volume`, `effects_volume`, `mouse_sensitivity`, \
+                 `difficulty`, `game_speed`, `fall_damage`, `volume`, `music_volume`, \
+                 `effects_volume`, `mouse_sensitivity`, \
                  `stick_sensitivity`, `invert_look`, \
                  `rumble`, `ui_size`, `field_of_view`, `brightness`, `night_brightness`, \
                  `upscaling`, `vsync`, `frame_rate_limit`, `reflections`, `light_shafts`, `lamp_shadows`, `bounce`, \

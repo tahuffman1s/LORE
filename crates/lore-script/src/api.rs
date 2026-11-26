@@ -147,6 +147,8 @@ pub(crate) struct Handlers {
     pub dropped: Vec<Function>,
     /// `game.input.onControlsChanged`.
     pub controls_changed: Vec<Function>,
+    /// `game.difficulty.onChange`.
+    pub difficulty: Vec<Function>,
 }
 
 /// The action set the script has made live with `game.input.useSet`. The
@@ -250,6 +252,9 @@ pub(crate) struct Shared {
     /// The player's settings as the script reads and changes them. They
     /// outlive this version of the script.
     pub settings: Rc<SettingsState>,
+    /// Where the difficulty dial stands. It outlives this version of the
+    /// script.
+    pub difficulty: Rc<crate::difficulty_api::DifficultyState>,
     /// The screens of `game.ui`. They outlive this version of the script.
     pub ui: Rc<crate::ui::UiState>,
     /// The functions of this version that answer a screen's events.
@@ -499,6 +504,10 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     )?;
 
     game.set("sky", weather_api::sky(lua, shared)?)?;
+    game.set(
+        "difficulty",
+        crate::difficulty_api::difficulty(lua, shared)?,
+    )?;
     game.set("lighting", crate::lighting_api::lighting(lua, shared)?)?;
     game.set("look", crate::look_api::look(lua, shared)?)?;
     let camera = crate::camera_api::camera(lua, shared)?;
@@ -533,6 +542,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<()> {
     members.extend_from_slice(GAME_VALUES);
     members.push("audio");
     members.push("camera");
+    members.push("difficulty");
     members.push("fluids");
     members.push("frames");
     members.push("hud");
@@ -977,7 +987,7 @@ mod tests {
     fn type_definitions_describe_exactly_the_real_api() {
         use crate::character_api::{CHARACTER_FIELDS, CHARACTER_METHODS};
         use crate::weapon_api::{HIT_FIELDS, NOISE_FIELDS, PROJECTILE_SETTINGS, WEAPON_SETTINGS};
-        let groups: [(&str, &[&str]); 64] = [
+        let groups: [(&str, &[&str]); 65] = [
             ("game.", GAME_FUNCTIONS),
             ("Hurt.", crate::health_api::HURT_FIELDS),
             ("game.", GAME_VALUES),
@@ -1003,6 +1013,7 @@ mod tests {
             ("game.settings.", SETTINGS_FUNCTIONS),
             ("Setting.", settings_api::SETTING_FIELDS),
             ("game.sky.", crate::weather_api::SKY_FUNCTIONS),
+            ("game.difficulty.", crate::difficulty_api::DIFFICULTY_FIELDS),
             ("game.weather.", crate::weather_api::WEATHER_FUNCTIONS),
             ("Character.", CHARACTER_FIELDS),
             ("Character:", CHARACTER_METHODS),

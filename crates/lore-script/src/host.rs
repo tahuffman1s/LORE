@@ -199,6 +199,8 @@ pub struct ScriptHost {
     /// The player's settings, as the engine handed them over and as the
     /// script has changed them since. Kept here so a save loses no change.
     settings: Rc<SettingsState>,
+    /// Where the difficulty dial stands; it outlives a reload too.
+    difficulty: Rc<crate::difficulty_api::DifficultyState>,
     /// The screens of `game.ui`, which outlive a reload too.
     ui: Rc<crate::ui::UiState>,
     /// The mistake in a screen's files that is on `last_error` now.
@@ -466,6 +468,8 @@ impl ScriptHost {
         let files = Rc::new(files);
         let things = Rc::<crate::thing_api::ThingState>::default();
         things.set_placed(placed);
+        let settings = Rc::new(SettingsState::new(settings));
+        let difficulty = Rc::new(crate::difficulty_api::DifficultyState::new(&settings));
         let mut host = Self {
             shaders: Rc::new(ShaderState::new(Rc::clone(&files))),
             ui: Rc::new(crate::ui::UiState::new(Rc::clone(&files))),
@@ -512,7 +516,8 @@ impl ScriptHost {
             things,
             versions: 0,
             tools: Rc::default(),
-            settings: Rc::new(SettingsState::new(settings)),
+            settings,
+            difficulty,
         };
         // A script error is already logged and kept in `last_error`.
         let _ = host.install();
@@ -612,6 +617,9 @@ impl ScriptHost {
         self.run_screens(input);
         self.hurts_due();
         self.switches_due();
+        // A turn of the dial is heard even while paused: the pause menu is
+        // where the player turns it.
+        self.difficulty_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
         self.hurts_due();
         self.switches_due();
@@ -1156,6 +1164,83 @@ impl ScriptHost {
     #[must_use]
     pub fn hour(&self) -> Option<f64> {
         self.weather.hour()
+    }
+
+    /// Whether the player's on-or-off setting called `name` is on, as the
+    /// script reads it (`game.settings.get`); `None` if there is no such
+    /// setting. It changes on a tick when the settings menu turns it.
+    #[must_use]
+    pub fn setting_on(&self, name: &str) -> Option<bool> {
+        match self.settings.value_of(name)? {
+            SettingValue::Toggle(on) => Some(on),
+            _ => None,
+        }
+    }
+
+    /// How hard the game is, from 0 (its easiest step) to 1 (its hardest):
+    /// where `game.difficulty` stands. It changes only on a tick, so a
+    /// replay of the same input reads the same.
+    #[must_use]
+    pub fn difficulty_level(&self) -> f64 {
+        self.difficulty.level()
+    }
+
+    /// The name of the step of difficulty the game is at (`game.difficulty.name`).
+    #[must_use]
+    pub fn difficulty_name(&self) -> Rc<str> {
+        self.difficulty.name()
+    }
+
+    /// The numbers the engine's own people follow at this difficulty: how
+    /// much they hurt the player, how fast they notice and how well they
+    /// aim. Each is 1 at the middle of the dial.
+    #[must_use]
+    pub fn difficulty_scales(&self) -> crate::DifficultyScales {
+        self.difficulty.scales()
+    }
+
+    /// Calls every `game.difficulty.onChange` function as if the player had
+    /// turned the dial one step harder (or, at the hardest, one easier),
+    /// without turning it, so that `lore check` runs them. Gives how many
+    /// there are.
+    pub fn pretend_difficulty_change(&mut self) -> usize {
+        let Some(version) = &self.running else {
+            return 0;
+        };
+        let count = version.shared.handlers.borrow().difficulty.len();
+        let steps = self.difficulty.steps();
+        let at = steps
+            .iter()
+            .position(|step| *step == self.difficulty.name())
+            .unwrap_or(0);
+        let other = if at + 1 < steps.len() {
+            at + 1
+        } else {
+            at.saturating_sub(1)
+        };
+        // A dial of one step cannot be turned.
+        if other == at {
+            return count;
+        }
+        if let (Some(now), Some(before)) = (steps.get(other), steps.get(at)) {
+            let told = (now.to_string(), before.to_string());
+            self.call_all(|handlers| &handlers.difficulty, told);
+        }
+        count
+    }
+
+    /// Tells `game.difficulty.onChange` functions of each turn of the dial
+    /// since the last tick.
+    fn difficulty_due(&mut self) {
+        if self.paused || self.running.is_none() {
+            return;
+        }
+        for (now, before) in self.difficulty.take_waiting() {
+            self.call_all(
+                |handlers| &handlers.difficulty,
+                (now.to_string(), before.to_string()),
+            );
+        }
     }
 
     /// The weather as the script has said it and as it now is: on its way,
@@ -2216,9 +2301,13 @@ impl ScriptHost {
         let before = self.live_set.live.replace(ActionMap::GAMEPLAY);
         let was_paused = self.clock.is_paused();
         self.clock.set_paused(false);
+        // The new version names its own steps of difficulty, or has the
+        // engine's if it names none.
+        let steps = self.difficulty.usual_steps();
         if let Err(error) = self.install() {
             self.live_set.live.set(before);
             self.clock.set_paused(was_paused);
+            self.difficulty.restore_steps(steps);
             return Err(error);
         }
         if self.live_set.live.get() != before {
@@ -2365,6 +2454,7 @@ impl ScriptHost {
             store: Rc::clone(&self.kept),
             weapons: Rc::clone(&self.weapons),
             settings: Rc::clone(&self.settings),
+            difficulty: Rc::clone(&self.difficulty),
             ui: Rc::clone(&self.ui),
             ui_handlers: RefCell::default(),
             controls_notice: Rc::clone(&self.controls_notice),

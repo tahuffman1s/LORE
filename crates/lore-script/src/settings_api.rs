@@ -453,6 +453,11 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                 setting.value = new;
                 state.note_changed(&name);
             }
+            drop(list);
+            // The difficulty setting and the dial are one.
+            if name == crate::DIFFICULTY_SETTING {
+                rules.difficulty.follow_setting(&state);
+            }
             Ok(())
         })?,
     )?;
@@ -486,6 +491,12 @@ pub(crate) fn table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     setting.value = setting.default.clone();
                     state.note_changed(&setting.name);
                 }
+            }
+            if only
+                .as_deref()
+                .is_none_or(|only| only == crate::DIFFICULTY_SETTING)
+            {
+                rules.difficulty.follow_setting(&state);
             }
             Ok(())
         })?,

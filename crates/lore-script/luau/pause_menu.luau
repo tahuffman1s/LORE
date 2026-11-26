@@ -133,6 +133,19 @@ end
 -- number, left and right through the words of a choice, on or off.
 local function rowFor(setting: Setting): Row
     local name = setting.name
+    -- Difficulty is the game's own steps by name. Turning it changes this
+    -- game at once, and the player's setting with it for the next game.
+    if name == "difficulty" then
+        return menu.choice(setting.label, {
+            options = game.difficulty.steps,
+            get = function()
+                return game.difficulty.name
+            end,
+            set = function(step)
+                game.difficulty.name = step
+            end,
+        })
+    end
     local function get()
         return game.settings.get(name)
     end

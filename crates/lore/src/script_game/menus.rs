@@ -295,10 +295,12 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     played.tap(GamepadButton::DpadDown);
     played.tap(GamepadButton::GamepadSouth);
     // One tab for each heading, the first in front.
-    for heading in ["Sound", "Controls", "Graphics"] {
+    for heading in ["Gameplay", "Sound", "Controls", "Graphics"] {
         assert!(played.shows(heading), "{:?}", played.words());
     }
-    assert!(played.shows("Music volume") && !played.shows("Vsync"));
+    assert!(played.shows("Difficulty") && !played.shows("Music volume"));
+    // The difficulty row reads the game's own steps by name.
+    assert_eq!(played.value_of("Difficulty"), "<  Standard  >");
 
     // Left on every row of every tab: a number goes down a step, a choice
     // back a word, and a toggle over. Night brightness starts at its least,
@@ -323,6 +325,10 @@ fn a_gamepad_alone_changes_every_setting_and_the_file_keeps_them() {
     assert_eq!(
         chosen,
         Settings {
+            // Left from "Standard" is "Story", the easiest.
+            difficulty: 0.0,
+            game_speed: 90.0,
+            fall_damage: false,
             volume: 95.0,
             music_volume: 95.0,
             effects_volume: 95.0,
@@ -399,6 +405,8 @@ fn the_menu_starts_with_the_settings_the_player_has() {
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
     played.tap(Key::Enter);
+    // Past the Gameplay tab to Sound.
+    played.tap(Key::E);
     assert_eq!(played.value_of("Volume"), "40");
     played.tap(Key::E);
     played.tap(Key::E);
@@ -467,6 +475,8 @@ fn a_game_opened_with_other_settings_changes_only_what_its_menu_changes() {
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
     played.tap(Key::Enter);
+    // Past the Gameplay tab to Sound.
+    played.tap(Key::E);
     played.tap(Key::ArrowLeft);
     assert_eq!(played.value_of("Volume"), "95");
     // The volume changed, and nothing else went back to what the game was
@@ -498,6 +508,8 @@ fn a_frame_rate_limit_of_0_is_shown_as_no_limit() {
     played.tap(Key::Escape);
     played.tap(Key::ArrowDown);
     played.tap(Key::Enter);
+    // Past the Gameplay tab to Sound.
+    played.tap(Key::E);
     played.tap(Key::E);
     played.tap(Key::E);
     assert_eq!(played.value_of("Frame rate limit"), "30");
@@ -518,6 +530,8 @@ fn a_mouse_alone_works_the_menu() {
     let mut played = Played::new();
     played.tap(Key::Escape);
     played.click("Settings");
+    assert!(played.shows("Difficulty"), "{:?}", played.words());
+    played.click("Sound");
     assert!(played.shows("Effects volume"), "{:?}", played.words());
     // A click on a tab brings it to the front.
     played.click("Graphics");
