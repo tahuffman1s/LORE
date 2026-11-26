@@ -992,7 +992,12 @@ impl Game for World {
         }
         // Then each NPC, in the order of their ids, and the player is kept
         // out of those on their feet: a person is walked into, not through.
-        (self.npcs).step(self.game.host(), level, &npc_rules, *tick);
+        let this_tick = npcs::Tick {
+            ground: &self.ground,
+            tick: self.tick,
+            player: player.position,
+        };
+        (self.npcs).step(self.game.host(), &this_tick, *tick);
         if walking {
             self.npcs.keep_out(player, rules, level);
         }

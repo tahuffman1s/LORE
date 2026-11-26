@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 lore-physics = { path = "../lore-physics" }
+# Where a body can walk in the level, for the minds that find a way across it.
+lore-nav = { path = "../lore-nav" }
 # Sine, cosine and arctangent that give the same digits on every machine.
 libm = "0.2"
 

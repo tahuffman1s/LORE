@@ -98,7 +98,7 @@ fn an_npc_made_in_one_line_stands_on_the_floor_at_its_place() {
     // The guard and the smith placed in the map, in the order they came.
     assert_eq!(world.npcs().len(), 2);
     play(&mut world, 30);
-    let guard = world.npcs()[1];
+    let guard = world.npcs()[1].clone();
     assert!(guard.body.grounded);
     assert!((guard.body.position[1]).abs() < 0.05, "{:?}", guard.body);
     // The gate faces back the way the player came, and so does the guard.
@@ -109,7 +109,7 @@ fn an_npc_made_in_one_line_stands_on_the_floor_at_its_place() {
 fn an_npc_dropped_in_the_air_falls_to_the_floor() {
     let mut world = world(r#"game.npc { name = "Guard", at = vector.create(0, 3, -5) }"#);
     play(&mut world, 120);
-    let guard = world.npcs()[1];
+    let guard = world.npcs()[1].clone();
     assert!(guard.body.grounded, "{:?}", guard.body);
     assert!(guard.body.position[1].abs() < 0.05, "{:?}", guard.body);
 }
@@ -175,7 +175,7 @@ fn a_shot_npc_is_hurt_dies_falls_and_is_shot_no_more() {
             .collect::<Vec<_>>(),
         ["died Guard Player true"]
     );
-    let guard = world.npcs()[1];
+    let guard = world.npcs()[1].clone();
     assert!(guard.down);
     // Fallen, it is walked over rather than into.
     ask(&mut world, |asked| {
@@ -254,7 +254,7 @@ fn play_from_the_editor_has_the_npcs_where_the_editor_moved_them() {
         r#"game.onTick(function() print(game.npc("Smith").position.x) end)"#,
         map_with_smith_at(Some([-4.0, 0.0, 2.0])),
     );
-    let smith = world.npcs()[0];
+    let smith = world.npcs()[0].clone();
     assert_eq!(smith.body.position, [-4.0, 0.0, 2.0]);
     assert_eq!(smith.facing(), 0.0);
     printed();

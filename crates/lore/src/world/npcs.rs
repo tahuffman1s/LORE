@@ -11,16 +11,16 @@
 //! ([`NpcAsk`]) for bodies to make, move and take out, and a new world
 //! makes a body for every NPC the host has. Everything here happens in the
 //! tick, NPCs in the order of their ids, so the same input gives the same
-//! NPCs. Each NPC is plain `Copy` data: what a save will keep of it.
+//! NPCs. Each NPC is plain data: what a save will keep of it.
 
-use lore_npc::{Mind, Upright};
+use lore_npc::{Around, Mind, Upright};
 use lore_physics::{Level, MoveSettings, Player};
 use lore_script::{CharacterId, NpcAsk, ScriptHost};
 
 use super::bodies::Standing;
 
-/// One NPC in a world.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// One NPC in a world. Not `Copy`: its mind will hold the way it is going.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Npc {
     /// Who it is to the game's script.
     pub who: CharacterId,
@@ -72,6 +72,20 @@ fn height_of(body: &Player, rules: &MoveSettings) -> f32 {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Npcs {
     list: Vec<Npc>,
+    /// Where each stood as the last tick began, for their minds to read:
+    /// kept so a tick sets no memory aside.
+    places: Vec<[f32; 3]>,
+}
+
+/// What the world says of a tick to the NPCs' minds.
+pub(crate) struct Tick<'a> {
+    /// The ground: the level's shapes, where a body can walk on them and
+    /// which doors are open.
+    pub(crate) ground: &'a super::ground::Ground,
+    /// Which tick this is.
+    pub(crate) tick: u32,
+    /// Where the player's feet are.
+    pub(crate) player: [f32; 3],
 }
 
 impl Npcs {
@@ -130,9 +144,29 @@ impl Npcs {
     }
 
     /// Moves every NPC on by a tick of `dt` seconds, in the order of their
-    /// ids: each asks its mind what to do and its body does it. One whose
-    /// health is gone asks for nothing and falls where it stands.
-    pub(crate) fn step(&mut self, host: &ScriptHost, level: &Level, rules: &MoveSettings, dt: f32) {
+    /// ids: each asks its mind what to do, knowing what `world` says of the
+    /// tick, and its body does it. One whose health is gone asks for
+    /// nothing and falls where it stands.
+    pub(crate) fn step(&mut self, host: &ScriptHost, world: &Tick<'_>, dt: f32) {
+        let rules = &world.ground.rules;
+        if self.list.is_empty() {
+            return;
+        }
+        // Where everyone stands as the tick begins, in a list kept from one
+        // tick to the next: no memory is set aside once it is long enough.
+        self.places.clear();
+        (self.places).extend(self.list.iter().map(|npc| npc.body.position));
+        // The walkable ground is built on a thread of its own when the
+        // level loads; the first tick with an NPC waits for it, so every
+        // mind reads the same ground on every run.
+        let around = Around {
+            level: &world.ground.level,
+            walkable: world.ground.walkable(),
+            openings: world.ground.openings(),
+            tick: world.tick,
+            player: world.player,
+            npcs: &self.places,
+        };
         for npc in &mut self.list {
             npc.down = host.health(npc.who).is_none_or(|(now, _)| now <= 0.0);
             let asked = if npc.down {
@@ -141,9 +175,9 @@ impl Npcs {
                     ..Default::default()
                 }
             } else {
-                npc.mind.steer(&npc.body)
+                npc.mind.steer(&npc.body, &around)
             };
-            npc.body.step(level, rules, &asked, dt);
+            npc.body.step(&world.ground.level, rules, &asked, dt);
         }
     }
 

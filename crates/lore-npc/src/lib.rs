@@ -20,4 +20,4 @@ mod mind;
 
 pub use apart::{Upright, push_out};
 pub use gaze::{Gaze, HUMAN, NeckLimits, SHARES};
-pub use mind::Mind;
+pub use mind::{Around, Mind};
