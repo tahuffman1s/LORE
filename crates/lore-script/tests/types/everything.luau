@@ -720,6 +720,8 @@ if false then
     watcher:onHear(function(noise: Noise) print(noise.sound, noise.by, noise.weapon, noise.loudness) end)
     local sees: boolean = watcher:canSee(game.player)
     print(sees)
+    local seen: { Character } = watcher:inSight()
+    for _, who: Character in seen do print(who.name) end
     game.audio.playAt("landing", watcher.position, { npcsHear = false })
 end
 game.showUsePrompt(true)

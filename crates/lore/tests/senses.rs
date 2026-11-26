@@ -268,8 +268,9 @@ fn the_same_input_tells_the_same_events_on_the_same_ticks() {
 }
 
 /// A hundred NPCs standing about the starter level, the player walking
-/// among them: how long a tick takes and how many rays the senses cast.
-/// Run with `--release --nocapture` for the numbers.
+/// among them: how long a tick takes and how many rays the senses cast,
+/// failing on a gross slip. Run with `--release --nocapture` for the
+/// numbers.
 #[test]
 fn a_hundred_npcs_sense_cheaply() {
     let crowd = |senses: &str| {
@@ -309,4 +310,208 @@ fn a_hundred_npcs_sense_cheaply() {
     // Spread over the ticks: no tick casts more than a few times the
     // usual.
     assert!(most < rays * 4 + 50, "{rays} {most}");
+    // A whole tick of a hundred NPCs, sensing and all, took about 2 ms in a
+    // debug build on 2026-11-26 (1.2 ms of it the rest of the tick). Other
+    // builds share the machine, so the bound only catches a gross slip.
+    assert!(
+        sensing < std::time::Duration::from_millis(25),
+        "a tick of 100 NPCs took {sensing:?}"
+    );
+}
+
+/// Each line printed that starts with `start`.
+fn lines(said: &[String], start: &str) -> usize {
+    said.iter().filter(|line| line.starts_with(start)).count()
+}
+
+#[test]
+fn a_crowd_in_view_neither_hides_the_player_nor_churns() {
+    // A guard looking along -Z at nine villagers standing still in a three
+    // by three grid, and the player crouched beyond them, between their
+    // lines.
+    let mut world = world(
+        r#"local guard = game.npc { name = "Guard", at = vector.create(0, 0, 8), facing = 0 }
+        for row = 0, 2 do
+            for column = 0, 2 do
+                game.npc { name = "Villager " .. row .. column,
+                    at = vector.create(column * 3 - 3, 0, 4 - row * 2), facing = 0 }
+            end
+        end
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 1 then game.player:teleport(vector.create(1.5, 0.2, -4)) end
+        end)
+        guard:onSee(function(who) print("see " .. who.name) end)
+        guard:onLoseSight(function(who) print("lost " .. who.name) end)"#,
+    );
+    ask(&mut world, |asked| asked.movement.crouch = true);
+    play(&mut world, 120);
+    let said = printed();
+    assert_eq!(lines(&said, "see Player"), 1, "{said:?}");
+    assert_eq!(lines(&said, "see "), lore_npc::MOST_SIGHTED, "{said:?}");
+    assert_eq!(lines(&said, "lost "), 0, "{said:?}");
+    assert!(
+        world.npcs()[0]
+            .senses
+            .sees(lore::script::CharacterId::PLAYER)
+    );
+    // The player creeps along behind them: still seen, never lost.
+    ask(&mut world, |asked| asked.movement.right = 0.3);
+    play(&mut world, 60);
+    let said = printed();
+    assert_eq!(lines(&said, "lost Player"), 0, "{said:?}");
+    assert!(
+        world.npcs()[0]
+            .senses
+            .sees(lore::script::CharacterId::PLAYER)
+    );
+}
+
+#[test]
+fn someone_taken_out_of_the_world_in_view_is_lost_first_once() {
+    let mut world = world(
+        r#"local guard = game.npc { name = "Guard", at = vector.create(0, 0, 8), facing = 0 }
+        local villager = game.npc { name = "Villager", at = vector.create(2, 0, 2), facing = 0 }
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 30 then villager:remove() end
+        end)
+        guard:onSee(function(who) print("see " .. who.name) end)
+        guard:onLoseSight(function(who, at) print("lost " .. who.name .. " " .. ticks .. " " .. math.round(at.x)) end)"#,
+    );
+    play(&mut world, 90);
+    let said = printed();
+    assert!(said.contains(&"see Villager".to_owned()), "{said:?}");
+    assert_eq!(
+        said.iter()
+            .filter(|line| line.starts_with("lost Villager"))
+            .collect::<Vec<_>>(),
+        ["lost Villager 30 2"],
+        "{said:?}"
+    );
+    assert!(
+        world.npcs()[0]
+            .senses
+            .in_view()
+            .all(|seen| seen.who == lore::script::CharacterId::PLAYER)
+    );
+}
+
+#[test]
+fn the_player_going_down_in_view_is_kept_with_the_tick() {
+    let mut world = world(
+        r#"local guard = game.npc { name = "Guard", at = vector.create(0, 0, -4), facing = 180 }
+        local ticks = 0
+        game.onTick(function()
+            ticks += 1
+            if ticks == 30 then game.player:damage(1000) end
+        end)
+        guard:onSee(function(who) print("see " .. who.name .. " " .. tostring(who.dead)) end)
+        guard:onLoseSight(function(who) print("lost " .. who.name) end)"#,
+    );
+    play(&mut world, 60);
+    let said = printed();
+    assert_eq!(said, ["see Player false"]);
+    let seen = world.npcs()[0]
+        .senses
+        .sighting(lore::script::CharacterId::PLAYER)
+        .copied()
+        .unwrap();
+    assert!(seen.in_view, "{seen:?}");
+    let fell = seen.down_since.unwrap();
+    assert!((30..=43).contains(&fell), "{seen:?}");
+}
+
+#[test]
+fn a_lamp_lights_the_dark_for_the_eyes() {
+    let script = |lamp: &str| {
+        format!(
+            r#"game.clock.time = "0:00"
+            local guard = game.npc {{ name = "Guard", at = vector.create(0, 0, 8), facing = 0 }}
+            game.npc {{ name = "Villager", at = vector.create(0, 0, -4), facing = 0 }}
+            game.onTick(function() game.player:teleport(vector.create(10, 0.2, 10)) end)
+            {lamp}
+            guard:onSee(function(who) print("see " .. who.name) end)"#
+        )
+    };
+    let mut dark = world(&script(""));
+    play(&mut dark, 60);
+    assert_eq!(printed(), Vec::<String>::new());
+    let mut lit = world(&script(
+        r#"game.lamp("post", { lumens = 20000, at = vector.create(0, 3, -4) })"#,
+    ));
+    play(&mut lit, 60);
+    assert_eq!(printed(), ["see Villager"]);
+}
+
+#[test]
+fn a_noise_game_on_noise_silences_is_not_heard() {
+    let mut world = world(
+        r#"game.weapon("quiet", { from = "pistol", heardWithin = 10 })
+        game.onSpawn(function() game.player:giveWeapon("quiet") end)
+        game.onNoise(function(noise) if noise.sound == "gunshot" then return false end end)
+        local near = game.npc { name = "Near", at = vector.create(-7, 0, 2), facing = 270 }
+        near:onHear(function(noise) print("heard " .. noise.sound) end)"#,
+    );
+    play(&mut world, 60);
+    printed();
+    ask(&mut world, |asked| asked.fire = true);
+    play(&mut world, 2);
+    ask(&mut world, |asked| asked.fire = false);
+    play(&mut world, 30);
+    let said = printed();
+    assert!(said.iter().all(|line| line != "heard gunshot"), "{said:?}");
+}
+
+#[test]
+fn on_hear_is_handed_the_very_table_game_on_noise_was() {
+    let mut world = world(
+        r#"local told = {}
+        game.onNoise(function(noise) told[noise] = true end)
+        local near = game.npc { name = "Near", at = vector.create(-3, 0, 2), facing = 270 }
+        local other = game.npc { name = "Other", at = vector.create(3, 0, 2), facing = 90 }
+        for _, npc in { near, other } do
+            npc:onHear(function(noise)
+                if noise.sound == "footstep" then print(npc.name .. " " .. tostring(told[noise] == true)) end
+            end)
+        end"#,
+    );
+    ask(&mut world, |asked| asked.movement.forward = 1.0);
+    play(&mut world, 90);
+    let said = printed();
+    assert!(said.contains(&"Near true".to_owned()), "{said:?}");
+    assert!(said.contains(&"Other true".to_owned()), "{said:?}");
+    assert!(said.iter().all(|line| line.ends_with("true")), "{said:?}");
+}
+
+#[test]
+fn a_sound_played_while_drawing_plays_but_no_npc_hears_it() {
+    let script = r#"local listener = game.npc { name = "Listener", at = vector.create(-4, 0, -4), facing = 0 }
+        local ticks = 0
+        listener:onHear(function(noise) print(noise.sound .. " " .. ticks) end)
+        game.onTick(function()
+            ticks += 1
+            if ticks % 20 == 0 then game.audio.playAt("impact", vector.create(-4, 0, -6)) end
+        end)
+        game.onDraw(function() game.audio.playAt("splash", vector.create(-4, 0, -6)) end)"#;
+    // The same ticks with no picture, one a tick and three a tick.
+    let run = |draws: u32| {
+        let mut world = world(script);
+        let nothing = Input::new(ActionMap::standard());
+        let mut frame = lore::Frame::default();
+        for _ in 0..60 {
+            world.tick(nothing.frame(), STEP);
+            for _ in 0..draws {
+                world.frame(&mut frame);
+            }
+        }
+        assert!(world.game().host().last_error().is_none());
+        printed()
+    };
+    let none = run(0);
+    assert_eq!(none, ["impact 20", "impact 40", "impact 60"]);
+    assert_eq!(run(1), none);
+    assert_eq!(run(3), none);
 }
