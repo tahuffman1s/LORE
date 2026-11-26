@@ -17,6 +17,7 @@
 pub mod anim;
 pub mod css;
 pub mod dom;
+mod edit;
 pub mod error;
 pub mod focus;
 pub mod html;
@@ -51,3 +52,6 @@ mod focus_tests;
 
 #[cfg(test)]
 mod anim_tests;
+
+#[cfg(test)]
+mod edit_tests;

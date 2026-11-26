@@ -588,10 +588,11 @@ fn controls_paint_their_state() {
         .filter(|r| r.1 == Fill::Color(accent))
         .map(|r| r.0)
         .collect();
-    // Slider fill (half of 200), tick (60% of 20), progress fill (quarter).
+    // Slider fill (half of 200), tick (60% of the 16 inside the 2px border),
+    // progress fill (quarter).
     assert!(fills.iter().any(|r| near(r.w, 100.0)), "{fills:?}");
     assert!(
-        fills.iter().any(|r| near(r.w, 12.0) && near(r.h, 12.0)),
+        fills.iter().any(|r| near(r.w, 9.6) && near(r.h, 9.6)),
         "{fills:?}"
     );
     assert!(
@@ -692,7 +693,7 @@ fn a_whole_menu_at_two_sizes() {
     assert!(f.hits.iter().any(|h| h.element == vol));
     // The range sits right of its label inside the panel.
     assert!(r.x > settings.x && r.right() <= settings.right(), "{r:?}");
-    assert!(near(r.w, 160.0));
+    assert!(near(r.w, 200.0), "{r:?}");
     // Text inside the buttons is centred.
     let play = f.paints.iter().find_map(|p| match p {
         Paint::Text { run, origin, .. } if f.str(run) == "Play" => Some(*origin),

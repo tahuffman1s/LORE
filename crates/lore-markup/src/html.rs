@@ -112,6 +112,51 @@ pub fn parse_fragment(
     Ok(added)
 }
 
+/// Gives `element` exactly the attributes in `attrs`, checked as the parser
+/// checks them (allowed names for the tag, value shapes, unique ids). On an
+/// error the element is unchanged. Form state is rebuilt from the
+/// attributes. A boolean attribute is written with an empty value.
+pub(crate) fn apply_attributes(
+    doc: &mut Document,
+    element: ElementId,
+    file: &str,
+    attrs: &[(String, String)],
+) -> Result<(), MarkupError> {
+    let Some(tag) = doc.get(element).and_then(crate::dom::Node::tag) else {
+        return Err(MarkupError::new(
+            file,
+            1,
+            1,
+            "this is text or no longer exists, so it has no attributes",
+            "find the element again",
+        ));
+    };
+    let raw: Vec<RawAttr> = attrs
+        .iter()
+        .map(|(name, value)| RawAttr {
+            name: name.clone(),
+            value: if BOOLEAN_ATTRS.contains(&name.as_str()) {
+                None
+            } else {
+                Some(value.clone())
+            },
+            line: 1,
+            col: 1,
+            vline: 1,
+            vcol: 1,
+        })
+        .collect();
+    let new_id = raw
+        .iter()
+        .find(|a| a.name == "id")
+        .and_then(|a| a.value.clone());
+    let mut p = Parser::new(file, "", doc, element, Mode::Fragment);
+    p.fill(element, tag, &raw, (1, 1))?;
+    let atom = new_id.map(|v| doc.intern(&v));
+    doc.set_id(element, atom);
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Page,
@@ -1135,7 +1180,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     let atom = self.doc.intern(&text);
-                    if let Some(other) = self.doc.find_by_id(atom) {
+                    if let Some(other) = self.doc.find_by_id(atom).filter(|o| *o != el) {
                         let (l, c) = self.doc.get(other).map_or((0, 0), |n| (n.line, n.column));
                         return Err(self.attr_err(
                             a,

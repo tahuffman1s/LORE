@@ -75,7 +75,7 @@ pub struct Screen {
     dirty: bool,
     changes: Vec<StyleChange>,
     touched: Vec<ElementId>,
-    file: String,
+    pub(crate) file: String,
     pub(crate) anim: Animator,
     scratch: PaintScratch,
 }
@@ -250,13 +250,11 @@ impl Screen {
 
     /// Something changed: lay out and paint again at the next
     /// [`frame`](Screen::frame).
-    #[allow(dead_code)]
     pub(crate) fn invalidate(&mut self) {
         self.dirty = true;
     }
 
     /// Elements were added or removed: build the box tree again.
-    #[allow(dead_code)]
     pub(crate) fn invalidate_structure(&mut self) {
         self.layout.invalidate_structure();
         self.dirty = true;

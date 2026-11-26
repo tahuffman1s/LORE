@@ -58,6 +58,10 @@ pub enum PseudoClass {
     FirstChild,
     LastChild,
     NthChild(Nth),
+    /// The kind of `<input>`. Internal: only the built-in sheet can write it
+    /// (as `:-lore-range` and `:-lore-checkbox`), so range sliders and tick
+    /// boxes get their own starting look that any author rule overrides.
+    InputKind(crate::dom::InputType),
     /// `:not(<compound>)`.
     Not(Box<Compound>),
 }
@@ -256,6 +260,9 @@ fn pseudo_matches<S: ElementState + ?Sized>(
         PseudoClass::FirstChild => position_among_elements(doc, el, false) == 1,
         PseudoClass::LastChild => position_among_elements(doc, el, true) == 1,
         PseudoClass::NthChild(n) => n.matches(position_among_elements(doc, el, false)),
+        PseudoClass::InputKind(kind) => doc
+            .get(el)
+            .is_some_and(|n| n.tag() == Some(crate::dom::Tag::Input) && n.form.input_type == *kind),
         PseudoClass::Not(inner) => !compound_matches(inner, doc, el, st),
     }
 }

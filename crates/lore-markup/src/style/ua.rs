@@ -21,6 +21,25 @@ button, input, select {
 button { text-align: center; cursor: pointer; }
 select { cursor: pointer; }
 input { cursor: text; }
+input:-lore-range {
+  width: 200px;
+  height: 8px;
+  padding: 0;
+  border: 0 solid transparent;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.18);
+  accent-color: #ffd75e;
+  cursor: pointer;
+}
+input:-lore-checkbox {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  border-radius: 6px;
+  accent-color: #ffd75e;
+  cursor: pointer;
+}
 button:hover, select:hover { background-color: rgba(255, 255, 255, 0.22); }
 button:active { background-color: rgba(255, 255, 255, 0.32); }
 progress {

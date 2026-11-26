@@ -28,7 +28,7 @@ use crate::css::{
 use crate::dom::{Dirty, Document, ElementId, Tag};
 use crate::error::MarkupError;
 use crate::intern::{Atom, Interner};
-use crate::selector::{ElementState, Specificity, matches};
+use crate::selector::{ElementState, PseudoClass, Specificity, matches};
 
 /// Most warnings kept; later ones are dropped so a broken sheet cannot grow
 /// the list without end.
@@ -240,6 +240,8 @@ pub struct Styles {
     scratch: Vec<Matched>,
     stack: Vec<(ElementId, bool)>,
     changes: Vec<StyleChange>,
+    /// Elements styled so far, one per cascade run (a test hook).
+    pub(crate) restyled: usize,
 }
 
 impl Styles {
@@ -247,7 +249,7 @@ impl Styles {
     /// the page's file name, used in messages about `style` attributes.
     /// Fails only if the built-in sheet is broken, which is a bug.
     pub fn new(inline_file: &str, interner: &mut Interner) -> Result<Styles, MarkupError> {
-        let sheet = parse_stylesheet("(built-in styles)", UA_CSS, 1, 1, interner)?;
+        let sheet = parse_stylesheet(crate::css::parse::UA_FILE, UA_CSS, 1, 1, interner)?;
         let mut initial = ComputedStyle::blank();
         let screen = [1920.0, 1080.0];
         let base = initial.clone();
@@ -259,7 +261,7 @@ impl Styles {
         initial.finish();
         Ok(Styles {
             ua: Sheet {
-                file: "(built-in styles)".to_owned(),
+                file: crate::css::parse::UA_FILE.to_owned(),
                 sheet,
                 key: 0,
             },
@@ -274,6 +276,7 @@ impl Styles {
             scratch: Vec::new(),
             stack: Vec::new(),
             changes: Vec::new(),
+            restyled: 0,
         })
     }
 
@@ -330,6 +333,23 @@ impl Styles {
     /// first restyle that reaches it.
     pub fn style(&self, id: ElementId) -> Option<&ComputedStyle> {
         self.entry(id).map(|e| &e.style)
+    }
+
+    /// Whether any rule uses `:first-child`, `:last-child` or `:nth-child`,
+    /// which makes an element's style depend on its siblings.
+    pub(crate) fn uses_structural_selectors(&self) -> bool {
+        fn structural(c: &crate::selector::Compound) -> bool {
+            c.pseudos.iter().any(|p| match p {
+                PseudoClass::FirstChild | PseudoClass::LastChild | PseudoClass::NthChild(_) => true,
+                PseudoClass::Not(inner) => structural(inner),
+                _ => false,
+            })
+        }
+        std::iter::once(&self.ua)
+            .chain(self.author.iter())
+            .flat_map(|s| s.sheet.rules.iter())
+            .flat_map(|r| r.selectors.iter())
+            .any(|sel| sel.compounds.iter().any(structural))
     }
 
     /// The root font size in pixels (what `rem` means).
@@ -472,6 +492,7 @@ impl Styles {
         state: &S,
         id: ElementId,
     ) {
+        self.restyled += 1;
         let parent_style = doc
             .parent(id)
             .and_then(|p| self.entry(p))
@@ -575,10 +596,26 @@ impl Styles {
 
         if !is_element {
             style.finish();
+            // The root has no style of its own, but custom properties set
+            // on it (a theme for the whole screen) reach every element.
+            let mut custom = parent_custom;
+            let mut inline = None;
+            if doc.parent(id).is_none() {
+                inline = self.inline_for(doc, id, cached_inline);
+                if let Some(inl) = &inline {
+                    for d in inl.decls.iter() {
+                        if let DeclValue::Custom { name, tokens } = &d.value {
+                            let mut map = custom.as_deref().cloned().unwrap_or_default();
+                            map.insert(*name, tokens.clone());
+                            custom = Some(Arc::new(map));
+                        }
+                    }
+                }
+            }
             return Computed {
                 style,
-                custom: parent_custom,
-                inline: None,
+                custom,
+                inline,
                 focus_rule: false,
             };
         }

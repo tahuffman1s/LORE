@@ -1236,6 +1236,9 @@ fn parse_selectors(
     p.list()
 }
 
+/// The file name of the built-in sheet, which may use internal pseudo-classes.
+pub(crate) const UA_FILE: &str = "(built-in styles)";
+
 const PSEUDO_CLASSES: [&str; 9] = [
     "hover",
     "focus",
@@ -1468,6 +1471,12 @@ impl SelParser<'_> {
                     "checked" => PseudoClass::Checked,
                     "first-child" => PseudoClass::FirstChild,
                     "last-child" => PseudoClass::LastChild,
+                    "-lore-range" if self.file == UA_FILE => {
+                        PseudoClass::InputKind(crate::dom::InputType::Range)
+                    }
+                    "-lore-checkbox" if self.file == UA_FILE => {
+                        PseudoClass::InputKind(crate::dom::InputType::Checkbox)
+                    }
                     "before" | "after" | "first-line" | "first-letter" | "selection"
                     | "placeholder" => {
                         return Err(self.fail(

@@ -12,9 +12,9 @@
 //! restart, not a shortened reversal.
 
 use crate::css::PropId;
-use crate::css::parse::{Declaration, KeyframeStop};
+use crate::css::parse::{DeclValue, Declaration, KeyframeStop};
 use crate::css::value::{
-    AnimDirection, FillMode, IterationCount, PlayState, StepPos, Timing, TransProp,
+    AnimDirection, FillMode, IterationCount, PlayState, StepPos, Timing, TransProp, Value,
 };
 use crate::dom::{Document, ElementId};
 use crate::error::MarkupError;
@@ -128,6 +128,9 @@ struct Running {
 struct Key {
     offset: f32,
     value: AnimValue,
+    /// `animation-timing-function` written in this keyframe: it shapes the
+    /// interval that starts here.
+    timing: Option<Timing>,
 }
 
 #[derive(Clone)]
@@ -242,7 +245,7 @@ fn track_value(track: &Track, progress: f64, timing: Timing) -> Option<AnimValue
     Some(AnimValue::lerp(
         a.value,
         b.value,
-        ease(timing, local) as f32,
+        ease(a.timing.unwrap_or(timing), local) as f32,
     ))
 }
 
@@ -604,6 +607,14 @@ impl Animator {
         for stop in &stops {
             self.values.clear();
             let decls: &[Declaration] = &stop.declarations;
+            let stop_timing = decls.iter().rev().find_map(|d| match &d.value {
+                DeclValue::Value(Value::Timings(l))
+                    if d.prop == PropId::AnimationTimingFunction =>
+                {
+                    l.first().copied()
+                }
+                _ => None,
+            });
             let mut out = std::mem::take(&mut self.values);
             styles.declared_values(doc, el, &file, decls, &mut out);
             for (prop, value) in out.drain(..) {
@@ -619,10 +630,14 @@ impl Animator {
                 };
                 if let Some(track) = tracks.get_mut(at) {
                     match track.keys.iter_mut().find(|k| k.offset == stop.offset) {
-                        Some(k) => k.value = value,
+                        Some(k) => {
+                            k.value = value;
+                            k.timing = stop_timing;
+                        }
                         None => track.keys.push(Key {
                             offset: stop.offset,
                             value,
+                            timing: stop_timing,
                         }),
                     }
                 }
@@ -637,6 +652,7 @@ impl Animator {
                         Key {
                             offset: 0.0,
                             value: b,
+                            timing: None,
                         },
                     );
                 }
@@ -644,6 +660,7 @@ impl Animator {
                     track.keys.push(Key {
                         offset: 1.0,
                         value: b,
+                        timing: None,
                     });
                 }
             }

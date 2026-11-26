@@ -7,8 +7,7 @@
 //!
 //! Notes on what differs from a browser, as the docs state them:
 //! `position: absolute` is placed against its parent box, `position: fixed`
-//! against the screen; a `span` is text, never a box; `range` and `checkbox`
-//! have no padding or border of their own.
+//! against the screen; a `span` is text, never a box.
 
 use std::ops::Range;
 
@@ -262,6 +261,8 @@ enum Item {
 /// The box tree and its bookkeeping.
 pub(crate) struct Layouter {
     pub nodes: Vec<LNode>,
+    /// How many times the box tree was laid out (a test hook).
+    pub runs: usize,
     elem: Vec<u32>,
     owner: Vec<u32>,
     calcs: Vec<LenPct>,
@@ -283,6 +284,7 @@ impl Layouter {
     pub fn new() -> Layouter {
         Layouter {
             nodes: Vec::new(),
+            runs: 0,
             elem: Vec::new(),
             owner: Vec::new(),
             calcs: Vec::new(),
@@ -513,11 +515,10 @@ impl Layouter {
                 ..Style::default()
             }
         } else if let Some(el) = element {
-            let chrome_free = matches!(kind, Kind::Control(Control::Range | Control::Checkbox));
             Mapper {
                 calcs: &mut self.calcs,
             }
-            .style(env.style(el), chrome_free)
+            .style(env.style(el))
         } else {
             block_style()
         };
@@ -553,6 +554,7 @@ impl Layouter {
 
     /// Lays everything out for a screen of `size`.
     pub fn compute(&mut self, env: &Env, measure: &mut dyn TextMeasure, size: [f32; 2]) {
+        self.runs += 1;
         self.missing.clear();
         // Pictures keep their proportion when only one side is given.
         for i in 0..self.nodes.len() {
@@ -710,46 +712,26 @@ impl Mapper<'_> {
         }
     }
 
-    fn style(&mut self, cs: &ComputedStyle, chrome_free: bool) -> Style {
+    fn style(&mut self, cs: &ComputedStyle) -> Style {
         let ov = |o: COverflow| match o {
             COverflow::Visible => t::Overflow::Visible,
             COverflow::Hidden => t::Overflow::Hidden,
             COverflow::Scroll => t::Overflow::Scroll,
         };
-        let zero = LengthPercentage::length(0.0);
-        let (padding, border) = if chrome_free {
-            (
-                t::Rect {
-                    left: zero,
-                    right: zero,
-                    top: zero,
-                    bottom: zero,
-                },
-                t::Rect {
-                    left: zero,
-                    right: zero,
-                    top: zero,
-                    bottom: zero,
-                },
-            )
-        } else {
-            let bw = |w: f32, s: LineStyle| {
-                LengthPercentage::length(if s == LineStyle::None { 0.0 } else { w })
-            };
-            (
-                t::Rect {
-                    left: self.lp(cs.padding_left),
-                    right: self.lp(cs.padding_right),
-                    top: self.lp(cs.padding_top),
-                    bottom: self.lp(cs.padding_bottom),
-                },
-                t::Rect {
-                    left: bw(cs.border_left_width, cs.border_left_style),
-                    right: bw(cs.border_right_width, cs.border_right_style),
-                    top: bw(cs.border_top_width, cs.border_top_style),
-                    bottom: bw(cs.border_bottom_width, cs.border_bottom_style),
-                },
-            )
+        let bw = |w: f32, s: LineStyle| {
+            LengthPercentage::length(if s == LineStyle::None { 0.0 } else { w })
+        };
+        let padding = t::Rect {
+            left: self.lp(cs.padding_left),
+            right: self.lp(cs.padding_right),
+            top: self.lp(cs.padding_top),
+            bottom: self.lp(cs.padding_bottom),
+        };
+        let border = t::Rect {
+            left: bw(cs.border_left_width, cs.border_left_style),
+            right: bw(cs.border_right_width, cs.border_right_style),
+            top: bw(cs.border_top_width, cs.border_top_style),
+            bottom: bw(cs.border_bottom_width, cs.border_bottom_style),
         };
         let margin = t::Rect {
             left: self.auto_or(cs.margin_left),
