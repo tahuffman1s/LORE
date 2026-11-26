@@ -593,8 +593,9 @@ impl ScriptHost {
         }
         if !stopped {
             self.run_timers();
-            self.run_animations();
         }
+        // Menus open while the game is paused and need to move.
+        self.run_animations();
         self.hurts_due();
         self.switches_due();
         self.call_all(|handlers| &handlers.tick, if stopped { 0.0 } else { step });
@@ -2466,7 +2467,10 @@ impl ScriptHost {
     }
 
     /// Moves the HUD animations on one tick, then calls the `onDone`
-    /// functions of those that finished, oldest first.
+    /// functions of those that finished, oldest first. They run every tick
+    /// the script is running, also while the game is paused or its time is
+    /// stopped, so a menu can move; each tick counts, so it is the same on
+    /// every run.
     fn run_animations(&mut self) {
         if self.paused {
             return;

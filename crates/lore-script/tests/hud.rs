@@ -890,7 +890,9 @@ fn a_bad_clip_target_is_explained() {
 fn an_unknown_font_family_names_the_fonts_folder_and_the_closest_family() {
     let error = fail_with(r#"local t = game.hud.text("x") t.fontFamily = "Cinzel""#);
     assert!(
-        error.contains("no font family called \"Cinzel\"") && error.contains("folder called fonts"),
+        error.contains("no font family called that")
+            && error.contains("\"Cinzel\"")
+            && error.contains("folder called fonts"),
         "{error}"
     );
     let host =
@@ -1013,6 +1015,51 @@ fn an_animation_of_other_fields_leaves_the_first_running() {
     );
     ticks(&mut host, 60);
     assert_eq!(pieces(&host)[0].offset, [60.0, 30.0]);
+}
+
+#[test]
+fn corner_reads_back_as_border_radius_does() {
+    let mut host = saying(
+        r#"local box = game.hud.box({ corner = { 1, 2, 3, 4 } })
+        say(#box.corner, box.corner[2], type(box.borderRadius))
+        box.corner = 5
+        say(box.corner, type(box.borderRadius))"#,
+    );
+    tick(&mut host);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(said(&host), ["4,2,table", "5,number"]);
+}
+
+#[test]
+fn a_style_field_of_another_kind_of_piece_says_which_it_is_for() {
+    let error = fail_with(r#"local t = game.hud.text("x") t.gradient = {}"#);
+    assert!(
+        error.contains("`gradient` is for boxes, not text."),
+        "{error}"
+    );
+    let error = fail_with(r#"local t = game.hud.text("x", { boxShadow = {} })"#);
+    assert!(
+        error.contains("`boxShadow` is for boxes and images, not text."),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_animation_keeps_moving_while_the_game_is_paused() {
+    let mut host = saying(
+        r#"local bar = game.hud.bar(0)
+        game.onStart(function()
+            game.pause()
+            bar:animate({ value = 1 }, { seconds = 1, ease = "linear", onDone = function() say("done") end })
+        end)"#,
+    );
+    ticks(&mut host, 31);
+    let half = bar_value(&host, 1);
+    assert!((half - 0.5).abs() < 0.05, "{half}");
+    ticks(&mut host, 40);
+    assert!(host.last_error().is_none(), "{:?}", host.last_error());
+    assert_eq!(bar_value(&host, 1), 1.0);
+    assert_eq!(said(&host), ["done"]);
 }
 
 #[test]

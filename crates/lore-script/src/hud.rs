@@ -832,6 +832,9 @@ fn removed(lua: &Lua, kind: Kind) -> mlua::Error {
 fn no_such_field(lua: &Lua, kind: Kind, key: &str) -> mlua::Error {
     let word = kind.word();
     let mut message = format!("{} has nothing called `{key}`.", capitalised(kind.name()));
+    if let Some(hint) = style::other_kind_hint(kind, key) {
+        let _ = write!(message, " {hint}");
+    }
     let fields = kind.fields();
     match closest(
         key,
@@ -1912,6 +1915,9 @@ fn read_options(lua: &Lua, shared: &Shared, kind: Kind, options: &Value) -> mlua
             }
             _ => {
                 let mut message = format!("{function} has no option called `{key}`.");
+                if let Some(hint) = style::other_kind_hint(kind, &key) {
+                    let _ = write!(message, " {hint}");
+                }
                 match closest(&key, kind.options().iter().copied()) {
                     Some(near) => {
                         let _ = write!(message, " Did you mean `{near}`?");

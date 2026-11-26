@@ -362,7 +362,7 @@ pub(super) fn parse(ctx: &Ctx<'_>, key: &str, value: &Value) -> mlua::Result<Par
                 "the name of a font family in quotes",
                 "\"Cinzel\"",
             )?;
-            Parsed::Family(family_named(ctx.lua, ctx.shared, &name)?)
+            Parsed::Family(family_named(ctx.lua, ctx.shared, ctx, key, &name)?)
         }
         "fontWeight" if nil => Parsed::Weight(400),
         "fontWeight" => Parsed::Weight(weight_of(ctx, key, value)?),
@@ -437,8 +437,66 @@ pub(super) fn parse(ctx: &Ctx<'_>, key: &str, value: &Value) -> mlua::Result<Par
         )?)),
         "boxShadow" if nil => Parsed::BoxShadow(None),
         "boxShadow" => Parsed::BoxShadow(Some(box_shadow(ctx, key, value)?)),
-        _ => return Err(fail(ctx.lua, format!("{} is not a style field.", ctx.who(key)))),
+        _ => return Err(not_a_style_field(ctx, key)),
     })
+}
+
+/// What pieces of `kind` are called in a sentence about a field's use.
+fn plural(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Text => "text",
+        Kind::Box => "boxes",
+        Kind::Image => "images",
+        Kind::Bar => "bars",
+        Kind::Line => "lines",
+        Kind::Graph => "graphs",
+    }
+}
+
+/// When `key` is a style field of another kind of piece than `kind`, a
+/// sentence that says which, such as "`gradient` is for boxes, not text."
+pub(super) fn other_kind_hint(kind: Kind, key: &str) -> Option<String> {
+    if has(kind, key) {
+        return None;
+    }
+    let others: Vec<&str> = [Kind::Text, Kind::Box, Kind::Image]
+        .into_iter()
+        .filter(|other| *other != kind && has(*other, key))
+        .map(plural)
+        .collect();
+    (!others.is_empty()).then(|| {
+        format!(
+            "`{key}` is for {}, not {}.",
+            others.join(" and "),
+            plural(kind)
+        )
+    })
+}
+
+/// The mistake for a key that is not a style field of this kind of piece:
+/// the closest field, or all of them, and the kind it is for if it is a
+/// style field of another.
+fn not_a_style_field(ctx: &Ctx<'_>, key: &str) -> mlua::Error {
+    let mut message = format!("{} is not a style field.", ctx.who(key));
+    if let Some(hint) = other_kind_hint(ctx.kind, key) {
+        let _ = write!(message, " {hint}");
+    }
+    let own: &[&str] = match ctx.kind {
+        Kind::Text => TEXT,
+        Kind::Box => BOX,
+        Kind::Image => IMAGE,
+        Kind::Bar | Kind::Line | Kind::Graph => &[],
+    };
+    let known: Vec<&str> = COMMON.iter().chain(own).copied().collect();
+    match closest(key, known.iter().copied()) {
+        Some(near) => {
+            let _ = write!(message, " Did you mean `{near}`?");
+        }
+        None => {
+            let _ = write!(message, " The style fields are: {}.", known.join(", "));
+        }
+    }
+    fail(ctx.lua, message)
 }
 
 fn weight_of(ctx: &Ctx<'_>, key: &str, value: &Value) -> mlua::Result<u16> {
@@ -468,7 +526,13 @@ fn weight_of(ctx: &Ctx<'_>, key: &str, value: &Value) -> mlua::Result<u16> {
 
 /// Which family `name` is, counting the engine's own font as 0, or a
 /// mistake that says where fonts go and which families there are.
-pub(super) fn family_named(lua: &Lua, shared: &Shared, name: &str) -> mlua::Result<u16> {
+pub(super) fn family_named(
+    lua: &Lua,
+    shared: &Shared,
+    ctx: &Ctx<'_>,
+    key: &str,
+    name: &str,
+) -> mlua::Result<u16> {
     let wanted = name.trim().to_lowercase();
     if let Some(place) = shared
         .fonts
@@ -479,7 +543,10 @@ pub(super) fn family_named(lua: &Lua, shared: &Shared, name: &str) -> mlua::Resu
         #[allow(clippy::cast_possible_truncation)]
         return Ok(place as u16 + 1);
     }
-    let mut message = format!("There is no font family called \"{name}\".");
+    let mut message = format!(
+        "{} was given \"{name}\", but there is no font family called that.",
+        ctx.who(key)
+    );
     if let Some(near) = closest(&wanted, shared.fonts.iter().map(String::as_str)) {
         let _ = write!(message, " Did you mean \"{near}\"?");
     } else if !shared.fonts.is_empty() {
@@ -863,8 +930,7 @@ pub(super) fn read(
             )?;
             Ok(Value::Table(table))
         }),
-        "borderRadius" => sides(lua, look.radii, texts.listed[0]),
-        "corner" => number(look.radii[0]),
+        "borderRadius" | "corner" => sides(lua, look.radii, texts.listed[0]),
         "borderWidth" => sides(lua, look.border_widths, texts.listed[1]),
         "borderColor" => string(&written_or_hex(&texts.border_color, look.border_color)),
         "gradient" => look.gradient.map_or(Ok(Value::Nil), |gradient| {
